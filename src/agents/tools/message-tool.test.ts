@@ -2817,7 +2817,7 @@ describe("message tool reasoning tag sanitization", () => {
     });
   });
 
-  it("sanitizes table captions, headers, and string cells while preserving numbers", async () => {
+  it("sanitizes mixed-case table captions, headers, and string cells", async () => {
     mockSendResult({ channel: "slack", to: "slack:C123" });
 
     const call = await executeSend({
@@ -2826,7 +2826,7 @@ describe("message tool reasoning tag sanitization", () => {
         presentation: {
           blocks: [
             {
-              type: "table",
+              type: "Table",
               caption: "  <think>caption rationale</think>Pipeline report  ",
               headers: [" <think>header rationale</think>Account ", " ARR "],
               rows: [
@@ -2843,7 +2843,7 @@ describe("message tool reasoning tag sanitization", () => {
     expect(call?.params?.presentation).toEqual({
       blocks: [
         {
-          type: "table",
+          type: "Table",
           caption: "Pipeline report",
           headers: ["Account", "ARR"],
           rows: [

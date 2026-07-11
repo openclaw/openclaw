@@ -83,6 +83,27 @@ function comparableText(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
+/** True when text already contains every attached native-data fallback in full. */
+export function hasCompleteSlackNativeDataFallbackText(
+  text: string,
+  blocks?: readonly unknown[],
+): boolean {
+  const comparableBase = comparableText(text);
+  let hasNativeDataFallback = false;
+  for (const block of blocks ?? []) {
+    const dataText = renderSlackNativeDataFallbackText(block);
+    if (!dataText) {
+      continue;
+    }
+    hasNativeDataFallback = true;
+    const comparable = comparableText(dataText);
+    if (!comparable || !comparableBase.includes(comparable)) {
+      return false;
+    }
+  }
+  return hasNativeDataFallback;
+}
+
 /** Preserve every native data block's content once in the accessible fallback. */
 export function appendSlackNativeDataFallbackText(
   text: string,

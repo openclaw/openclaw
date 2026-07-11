@@ -17,13 +17,14 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
-import { markdownToSlackMrkdwnChunks } from "../format.js";
+import { buildSlackDeferredNativeDataRejectionFallback } from "../blocks-fallback.js";
+import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_RESPONSE_URL_MAX_USES, SLACK_TEXT_LIMIT } from "../limits.js";
 import { emitSlackMessageSentHooks } from "../message-sent-hook.js";
 import {
   appendSlackNativeDataFallbackText,
   buildSlackNativeDataFallbackBlocks,
+  hasCompleteSlackNativeDataFallbackText,
   hasSlackNativeDataBlock,
   isSlackInvalidBlocksError,
 } from "../native-data-blocks.js";
@@ -137,6 +138,12 @@ export async function deliverReplies(params: {
       renderPlan.mode === "single" ? renderPlan.blocks : renderPlan.blockPart?.blocks;
     const tableFallbackText =
       renderPlan.mode === "split" ? renderPlan.fallbackText.trim() : undefined;
+    const mediaBlockPartOwnsFallback = Boolean(
+      reply.hasMedia &&
+      renderPlan.mode === "split" &&
+      renderPlan.blockPart &&
+      hasCompleteSlackNativeDataFallbackText(renderPlan.fallbackText, renderPlan.blockPart.blocks),
+    );
     if (!reply.hasContent && !slackBlocks?.length && !tableFallbackText) {
       continue;
     }
@@ -231,7 +238,7 @@ export async function deliverReplies(params: {
     const spokenText = resolveSlackMediaHookSpokenText(payload);
     const mediaHookContent = reply.hasText ? reply.text : spokenText || reply.text;
     const deliveryText =
-      tableFallbackText ??
+      (mediaBlockPartOwnsFallback ? "" : tableFallbackText) ??
       (reply.hasMedia && renderPlan.mode === "single" && renderPlan.textVisibleInBlocks
         ? ""
         : reply.text);
@@ -276,11 +283,18 @@ export async function deliverReplies(params: {
         // Slack file uploads cannot carry blocks. Preserve their ordering and
         // report one terminal outcome only after the trailing block message.
         const text =
-          renderPlan.mode === "split" ? (renderPlan.blockPart?.text ?? "") : renderPlan.text.trim();
+          mediaBlockPartOwnsFallback && renderPlan.mode === "split"
+            ? renderPlan.fallbackText
+            : renderPlan.mode === "split"
+              ? (renderPlan.blockPart?.text ?? "")
+              : renderPlan.text.trim();
         lastResult = await sendReply({
           text,
           threadTs,
           blocks: slackBlocks,
+          ...(mediaBlockPartOwnsFallback
+            ? { separateTextAndBlocks: true, textIsSlackMrkdwn: true }
+            : {}),
         });
       }
     } catch (error) {
@@ -332,6 +346,92 @@ type SlackReplyDeliveryPlan = {
   nextThreadTs: () => string | undefined;
   markSent: () => void;
 };
+
+type SlackSlashReplyWireMessage = {
+  text: string;
+  blocks?: ReturnType<typeof readSlackReplyBlocks>;
+};
+
+type SlackSlashReplyMessage = SlackSlashReplyWireMessage & {
+  nativeDataRejectionFallback?: SlackSlashReplyWireMessage;
+};
+
+type SlackNativeDataFallbackResolution = {
+  deferred: boolean;
+  message: SlackSlashReplyWireMessage;
+};
+
+type SlackSlashReplyDelivery = {
+  hookContent: string;
+  messages: SlackSlashReplyMessage[];
+};
+
+function countSlackResponseUrlUses(deliveries: readonly SlackSlashReplyDelivery[]): number {
+  return deliveries.reduce(
+    (total, delivery) =>
+      total +
+      delivery.messages.reduce(
+        (messageTotal, message) =>
+          messageTotal + 1 + (hasSlackNativeDataBlock(message.blocks) ? 1 : 0),
+        0,
+      ),
+    0,
+  );
+}
+
+function resolveSlackNativeDataFallback(
+  message: SlackSlashReplyMessage,
+): SlackNativeDataFallbackResolution | undefined {
+  if (!hasSlackNativeDataBlock(message.blocks)) {
+    return undefined;
+  }
+  if (message.nativeDataRejectionFallback) {
+    return { deferred: true, message: message.nativeDataRejectionFallback };
+  }
+  const blocks = buildSlackNativeDataFallbackBlocks(message.blocks);
+  return {
+    deferred: false,
+    message: {
+      text: truncateSlackText(
+        appendSlackNativeDataFallbackText(message.text, message.blocks),
+        SLACK_TEXT_LIMIT,
+      ),
+      ...(blocks?.length ? { blocks } : {}),
+    },
+  };
+}
+
+function degradeSlackResponseUrlNativeTables(
+  deliveries: readonly SlackSlashReplyDelivery[],
+  textLimit: number,
+): SlackSlashReplyDelivery[] {
+  return deliveries
+    .map((delivery) => ({
+      ...delivery,
+      messages: delivery.messages.flatMap((message) => {
+        if (!hasSlackNativeDataBlock(message.blocks)) {
+          return [message];
+        }
+        let fallback: SlackNativeDataFallbackResolution | undefined;
+        try {
+          fallback = resolveSlackNativeDataFallback(message);
+        } catch {
+          return [message];
+        }
+        if (!fallback) {
+          return [message];
+        }
+        if (fallback.deferred && !fallback.message.blocks?.length) {
+          return [];
+        }
+        if (fallback.message.text.length > textLimit) {
+          return [message];
+        }
+        return [fallback.message];
+      }),
+    }))
+    .filter((delivery) => delivery.messages.length > 0);
+}
 
 function createSlackReplyReferencePlanner(params: {
   replyToMode: "off" | "first" | "all" | "batched";
@@ -397,10 +497,7 @@ export async function deliverSlackSlashReplies(params: {
   if (responseUrlBudget.closed) {
     return;
   }
-  const deliveries: Array<{
-    hookContent: string;
-    messages: Array<{ text: string; blocks?: ReturnType<typeof readSlackReplyBlocks> }>;
-  }> = [];
+  const deliveries: SlackSlashReplyDelivery[] = [];
   const chunkLimit = Math.min(params.textLimit, SLACK_TEXT_LIMIT);
   for (const payload of params.replies) {
     if (payload.isReasoning === true) {
@@ -430,7 +527,7 @@ export async function deliverSlackSlashReplies(params: {
       combined.length === 0
         ? []
         : renderPlan.mode === "split" || renderPlan.textIsSlackMrkdwn
-          ? chunkTextForOutbound(combined, chunkLimit)
+          ? chunkSlackMrkdwnText(combined, chunkLimit)
           : (chunkMode === "newline"
               ? chunkMarkdownTextWithMode(combined, chunkLimit, chunkMode)
               : [combined]
@@ -440,14 +537,28 @@ export async function deliverSlackSlashReplies(params: {
     if (!chunks.length && combined) {
       chunks.push(combined);
     }
-    const messages: Array<{
-      text: string;
-      blocks?: ReturnType<typeof readSlackReplyBlocks>;
-    }> = chunks.map((chunk) => ({ text: chunk }));
+    const messages: SlackSlashReplyMessage[] = chunks.map((chunk) => ({ text: chunk }));
     if (blockPart) {
+      const ownsLaterNativeDataFallback =
+        renderPlan.mode === "split" &&
+        hasSlackNativeDataBlock(blockPart.blocks) &&
+        hasCompleteSlackNativeDataFallbackText(renderPlan.fallbackText, blockPart.blocks);
+      const deferredRejection = ownsLaterNativeDataFallback
+        ? buildSlackDeferredNativeDataRejectionFallback(blockPart.blocks)
+        : undefined;
       messages.unshift({
         text: blockPart.text,
         blocks: blockPart.blocks,
+        ...(deferredRejection
+          ? {
+              nativeDataRejectionFallback: {
+                text: deferredRejection.text,
+                ...(deferredRejection.blocks.length > 0
+                  ? { blocks: deferredRejection.blocks }
+                  : {}),
+              },
+            }
+          : {}),
       });
     }
     deliveries.push({
@@ -460,20 +571,20 @@ export async function deliverSlackSlashReplies(params: {
     return;
   }
   const responseType = params.ephemeral ? "ephemeral" : "in_channel";
-  const responseUrlUses = deliveries.reduce(
-    (total, delivery) =>
-      total +
-      delivery.messages.reduce(
-        (messageTotal, message) =>
-          messageTotal + 1 + (hasSlackNativeDataBlock(message.blocks) ? 1 : 0),
-        0,
-      ),
-    0,
-  );
   const responseUrlUsesRemaining = Math.max(
     0,
     SLACK_RESPONSE_URL_MAX_USES - responseUrlBudget.used,
   );
+  let plannedDeliveries = deliveries;
+  let responseUrlUses = countSlackResponseUrlUses(plannedDeliveries);
+  if (responseUrlUses > responseUrlUsesRemaining) {
+    const degradedDeliveries = degradeSlackResponseUrlNativeTables(deliveries, chunkLimit);
+    const degradedUses = countSlackResponseUrlUses(degradedDeliveries);
+    if (degradedUses < responseUrlUses) {
+      plannedDeliveries = degradedDeliveries;
+      responseUrlUses = degradedUses;
+    }
+  }
   if (responseUrlUses > responseUrlUsesRemaining) {
     const errorText = `This Slack slash reply is too large for the remaining response_url budget (${String(responseUrlUses)} responses needed; ${String(responseUrlUsesRemaining)} available). Send the result as a regular message instead.`;
     responseUrlBudget.closed = true;
@@ -482,7 +593,7 @@ export async function deliverSlackSlashReplies(params: {
         sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
         to: params.messageSentHookTarget,
         accountId: params.accountId,
-        content: deliveries
+        content: plannedDeliveries
           .map((delivery) => delivery.hookContent)
           .filter(Boolean)
           .join("\n"),
@@ -505,12 +616,16 @@ export async function deliverSlackSlashReplies(params: {
   };
 
   // Slack slash command responses can be multi-part by sending follow-ups via response_url.
-  for (const delivery of deliveries) {
+  for (const delivery of plannedDeliveries) {
     try {
       for (const message of delivery.messages) {
         const hasNativeData = hasSlackNativeDataBlock(message.blocks);
+        const outboundMessage: SlackSlashReplyWireMessage = {
+          text: message.text,
+          ...(message.blocks?.length ? { blocks: message.blocks } : {}),
+        };
         try {
-          const response = await respond({ ...message, response_type: responseType });
+          const response = await respond({ ...outboundMessage, response_type: responseType });
           if (!hasNativeData || !isSlackInvalidBlocksError(response)) {
             continue;
           }
@@ -519,13 +634,12 @@ export async function deliverSlackSlashReplies(params: {
             throw error;
           }
         }
-        const fallbackBlocks = buildSlackNativeDataFallbackBlocks(message.blocks);
+        const fallback = resolveSlackNativeDataFallback(message);
+        if (!fallback) {
+          throw new Error("Slack native-data fallback was unavailable");
+        }
         const fallbackResponse = await respond({
-          text: truncateSlackText(
-            appendSlackNativeDataFallbackText(message.text, message.blocks),
-            SLACK_TEXT_LIMIT,
-          ),
-          ...(fallbackBlocks?.length ? { blocks: fallbackBlocks } : {}),
+          ...fallback.message,
           response_type: responseType,
         });
         if (isSlackInvalidBlocksError(fallbackResponse)) {

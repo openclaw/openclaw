@@ -2,6 +2,7 @@
 import { renderSlackDataTableMrkdwnFallbackText } from "./data-table.js";
 import { renderSlackDataVisualizationMrkdwnFallbackText } from "./data-visualization.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
+import { hasSlackNativeDataBlock } from "./native-data-blocks.js";
 
 type SlackTextObject = { text?: string; type?: string };
 
@@ -250,6 +251,57 @@ export function buildSlackBlocksAccessibleFallbackText(blocks: readonly unknown[
     .map(readSlackBlockFallbackText)
     .filter((text): text is string => Boolean(text));
   return parts.length > 0 ? parts.join("\n\n") : "Shared a Block Kit message";
+}
+
+/** Keep native-data posts compact while their complete fallback is sent separately. */
+export function buildSlackBlocksCompactAccessibleFallbackText(blocks: readonly unknown[]): string {
+  const parts = blocks
+    .map((raw) => {
+      const fallback = readSlackBlockFallbackText(raw);
+      return hasSlackNativeDataBlock([raw]) ? fallback?.split("\n", 1)[0] : fallback;
+    })
+    .filter((text): text is string => Boolean(text));
+  return parts.length > 0 ? parts.join("\n\n") : "Shared a Block Kit message";
+}
+
+/** Keep only native tables whose caption-level accessibility text fits the block post. */
+export function retainSlackDataTablesWithinCompactFallback<T>(
+  blocks: readonly T[],
+  limit: number,
+): T[] {
+  const retainedTables = new Set<T>();
+  for (const block of blocks) {
+    if ((block as SlackBlockWithFields).type !== "data_table") {
+      continue;
+    }
+    const candidate = blocks.filter(
+      (entry) =>
+        (entry as SlackBlockWithFields).type !== "data_table" ||
+        retainedTables.has(entry) ||
+        entry === block,
+    );
+    if (buildSlackBlocksCompactAccessibleFallbackText(candidate).length <= limit) {
+      retainedTables.add(block);
+    }
+  }
+  return blocks.filter(
+    (block) => (block as SlackBlockWithFields).type !== "data_table" || retainedTables.has(block),
+  );
+}
+
+/** Preserve non-data siblings when a later text part owns rejected native-data fallback. */
+export function buildSlackDeferredNativeDataRejectionFallback<T>(blocks: readonly T[]): {
+  blocks: T[];
+  text: string;
+} {
+  const retainedBlocks = blocks.filter((block) => !hasSlackNativeDataBlock([block]));
+  return {
+    blocks: retainedBlocks,
+    text:
+      retainedBlocks.length > 0
+        ? buildSlackBlocksAccessibleFallbackText(retainedBlocks)
+        : buildSlackBlocksCompactAccessibleFallbackText(blocks),
+  };
 }
 
 /** True when visible text can replace this block without losing interaction or media. */

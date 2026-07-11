@@ -318,7 +318,7 @@ describe("handleSlackMessageAction", () => {
     expect(action.content).not.toContain("- Refresh");
   });
 
-  it("assigns one text owner when native table fallback exceeds 8k", async () => {
+  it("keeps a native table while assigning its over-8k fallback one text owner", async () => {
     const invoke = createInvokeSpy();
 
     await handleSlackMessageAction({
@@ -346,7 +346,8 @@ describe("handleSlackMessageAction", () => {
     });
 
     const action = firstAction(invoke);
-    expect(action.blocks).toBeUndefined();
+    expect(action.separateTextAndBlocks).toBe(true);
+    expect(blockAt(action, 0)).toMatchObject({ type: "data_table", caption: "Pipeline" });
     expect(action.content).toContain("- Account: account-99");
     expect(String(action.content).match(/Pipeline \(table\)/g)).toHaveLength(1);
   });

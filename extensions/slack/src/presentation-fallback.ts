@@ -5,10 +5,47 @@ import {
   renderMessagePresentationTableFallbackText,
   type MessagePresentation,
   type MessagePresentationBlock,
+  type MessagePresentationButton,
   type MessagePresentationChartBlock,
   type MessagePresentationTableBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
+import { SLACK_SECTION_TEXT_MAX } from "./presentation.js";
+
+function escapeSlackFallbackCommand(command: string, escapedLabel: string): string | undefined {
+  // Slack parses mrkdwn before decoding these entities. That keeps mention/link
+  // tokens inert while preserving the displayed, copyable command bytes.
+  if (/[\r\n]/u.test(escapedLabel) || /[\\`\r\n]/u.test(command)) {
+    return undefined;
+  }
+  const escaped = command.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  const fallbackLine = `- ${escapedLabel}: \`${escaped}\``;
+  return Array.from(fallbackLine).length <= SLACK_SECTION_TEXT_MAX ? escaped : undefined;
+}
+
+function escapeSlackPresentationButton(
+  button: MessagePresentationButton,
+): MessagePresentationButton {
+  const { action, ...rest } = button;
+  const label = escapeSlackMrkdwn(button.label);
+  const command =
+    action?.type === "command" ? escapeSlackFallbackCommand(action.command, label) : undefined;
+  return {
+    ...rest,
+    label,
+    ...(button.value ? { value: escapeSlackMrkdwn(button.value) } : {}),
+    ...(button.url ? { url: escapeSlackMrkdwn(button.url) } : {}),
+    ...(button.webApp ? { webApp: { url: escapeSlackMrkdwn(button.webApp.url) } } : {}),
+    ...(button.web_app ? { web_app: { url: escapeSlackMrkdwn(button.web_app.url) } } : {}),
+    ...(action?.type === "command"
+      ? command
+        ? { action: { ...action, command } }
+        : {}
+      : action
+        ? { action }
+        : {}),
+  };
+}
 
 function escapeSlackPresentationChartBlock(
   block: MessagePresentationChartBlock,
@@ -61,22 +98,7 @@ function escapeSlackPresentationFallbackBlock(
   if (block.type === "buttons") {
     return {
       ...block,
-      buttons: block.buttons.map((button) => ({
-        ...button,
-        label: escapeSlackMrkdwn(button.label),
-        ...(button.value ? { value: escapeSlackMrkdwn(button.value) } : {}),
-        ...(button.url ? { url: escapeSlackMrkdwn(button.url) } : {}),
-        ...(button.webApp ? { webApp: { url: escapeSlackMrkdwn(button.webApp.url) } } : {}),
-        ...(button.web_app ? { web_app: { url: escapeSlackMrkdwn(button.web_app.url) } } : {}),
-        ...(button.action?.type === "command"
-          ? {
-              action: {
-                ...button.action,
-                command: escapeSlackMrkdwn(button.action.command),
-              },
-            }
-          : {}),
-      })),
+      buttons: block.buttons.map(escapeSlackPresentationButton),
     };
   }
   if (block.type === "select") {

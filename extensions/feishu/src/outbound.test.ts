@@ -1385,6 +1385,52 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(sendCardCall()?.replyInThread).toBe(false);
   });
 
+  it("consumes an implicit first-reply target on valid-card media", async () => {
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "",
+      accountId: "main",
+      replyToId: "om_reply",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      payload: {
+        mediaUrl: "/tmp/image.png",
+        presentation: {
+          blocks: [{ type: "table", caption: "Pipeline", headers: ["Account"], rows: [["Acme"]] }],
+        },
+      },
+    });
+
+    expect(sendMediaCall()?.replyToMessageId).toBe("om_reply");
+    expect(sendCardCall()?.replyToMessageId).toBeUndefined();
+  });
+
+  it("keeps valid-card media and the final card in an explicit thread", async () => {
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "",
+      accountId: "main",
+      threadId: "om_thread",
+      payload: {
+        mediaUrl: "/tmp/image.png",
+        presentation: {
+          blocks: [{ type: "table", caption: "Pipeline", headers: ["Account"], rows: [["Acme"]] }],
+        },
+      },
+    });
+
+    expect(sendMediaCall()).toMatchObject({
+      replyToMessageId: "om_thread",
+      replyInThread: true,
+    });
+    expect(sendCardCall()).toMatchObject({
+      replyToMessageId: "om_thread",
+      replyInThread: true,
+    });
+  });
+
   it("keeps text/media fallback behavior for non-card payloads, including local image text", async () => {
     const { dir, file } = await createTmpImage();
     try {

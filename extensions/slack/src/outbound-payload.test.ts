@@ -319,7 +319,7 @@ describe("slackOutbound sendPayload", () => {
     expect(postedText).not.toContain("<@U123>");
   });
 
-  it("does not re-add a native table after splitting its long accessibility fallback", async () => {
+  it("keeps a native table beside its chunked accessibility fallback", async () => {
     const payload: ReplyPayload = {
       channelData: {
         slack: {
@@ -370,6 +370,7 @@ describe("slackOutbound sendPayload", () => {
     };
     expect(slackData.blocks).toBeUndefined();
     expect(slackData.presentationBlocks).toEqual([
+      expect.objectContaining({ type: "data_table", caption: "Native accounts" }),
       expect.objectContaining({
         type: "actions",
         elements: [expect.objectContaining({ type: "button", value: "refresh" })],
@@ -399,7 +400,11 @@ describe("slackOutbound sendPayload", () => {
     });
 
     expect(client.chat.postMessage.mock.calls[0]?.[0]).toMatchObject({
-      blocks: [expect.objectContaining({ type: "actions" })],
+      text: "Native accounts (table)\n\n- Refresh",
+      blocks: [
+        expect.objectContaining({ type: "data_table", caption: "Native accounts" }),
+        expect.objectContaining({ type: "actions" }),
+      ],
     });
     expect(
       client.chat.postMessage.mock.calls

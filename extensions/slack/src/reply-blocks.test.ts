@@ -307,6 +307,68 @@ describe("resolveSlackReplyText", () => {
     expect(plan.fallbackText).toContain("- Action 26");
   });
 
+  it("preserves safe command bytes and drops unsafe code-span fallbacks", () => {
+    const plan = resolveSlackReplyRenderPlan({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve req_1 deny & <@U123>",
+                },
+              },
+              {
+                label: "Backtick",
+                action: { type: "command", command: "/run `unsafe` <!channel>" },
+              },
+              {
+                label: "Multiline",
+                action: { type: "command", command: "/run\n<!channel>" },
+              },
+              {
+                label: "Overlong",
+                action: { type: "command", command: `/${"x".repeat(3_000)}` },
+              },
+              {
+                label: "Backslash",
+                action: { type: "command", command: "/path\\" },
+              },
+              {
+                label: "Line\nbreak",
+                action: { type: "command", command: "/status" },
+              },
+              ...Array.from({ length: 20 }, (_entry, index) => ({
+                label: `Action ${String(index + 7)}`,
+                value: `action-${String(index + 7)}`,
+              })),
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(plan.mode).toBe("split");
+    if (plan.mode !== "split") {
+      return;
+    }
+    expect(plan.fallbackText).toContain("- Deny: `/approve req_1 deny &amp; &lt;@U123&gt;`");
+    expect(plan.fallbackText).not.toContain("req\\_1");
+    expect(plan.fallbackText).toContain("- Backtick");
+    expect(plan.fallbackText).toContain("- Multiline");
+    expect(plan.fallbackText).toContain("- Overlong");
+    expect(plan.fallbackText).toContain("- Backslash");
+    expect(plan.fallbackText).toContain("- Line\nbreak");
+    expect(plan.fallbackText).not.toContain("`unsafe`");
+    expect(plan.fallbackText).not.toContain("<!channel>");
+    expect(plan.fallbackText).not.toContain("x".repeat(3_000));
+    expect(plan.fallbackText).not.toContain("/path\\");
+    expect(plan.fallbackText).not.toContain("`/status`");
+  });
+
   it("splits a valid native chart when its complete fallback exceeds 8k", () => {
     const categories = Array.from({ length: 20 }, (_entry, index) =>
       `Category-${String(index)}`.padEnd(20, "x"),
@@ -433,7 +495,7 @@ describe("resolveSlackReplyText", () => {
     expect(plan.text).toContain("Active sessions");
   });
 
-  it("splits a native-eligible table when its rendered fallback exceeds 8k", () => {
+  it("keeps a native-eligible table when its rendered fallback exceeds 8k", () => {
     const rows = Array.from({ length: 100 }, (_entry, index) => [
       index === 0 ? "<@U123>" : `account-${String(index)} ${"x".repeat(65)}`,
     ]);
@@ -453,12 +515,63 @@ describe("resolveSlackReplyText", () => {
     if (plan.mode !== "split") {
       return;
     }
-    expect(plan.blockPart?.text).toBe("- Refresh");
+    expect(plan.blockPart?.blocks.map((block) => block.type)).toEqual(["data_table", "actions"]);
+    expect(plan.blockPart?.text).toBe("Pipeline (table)\n\n- Refresh");
+    expect(plan.blockPart?.text.length).toBeLessThanOrEqual(8_000);
     expect(plan.fallbackText).toContain("Quarterly report");
     expect(plan.fallbackText).toContain("Confidential");
     expect(plan.fallbackText).toContain("- Account: account-99");
     expect(plan.fallbackText.match(/Pipeline \(table\)/g)).toHaveLength(1);
     expect(plan.fallbackText).not.toContain("- Refresh");
+  });
+
+  it("compacts native table accessibility text at the active chunk limit", () => {
+    const header = "H".repeat(1_000);
+    const plan = resolveSlackReplyRenderPlan(
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Pipeline",
+              headers: [header],
+              rows: Array.from({ length: 5 }, (_entry, index) => [String(index)]),
+            },
+          ],
+        },
+      },
+      undefined,
+      { textLimit: 4_000 },
+    );
+
+    expect(plan.mode).toBe("split");
+    if (plan.mode !== "split") {
+      return;
+    }
+    expect(plan.blockPart?.text).toBe("Pipeline (table)");
+    expect(plan.blockPart?.text.length).toBeLessThanOrEqual(4_000);
+    expect(plan.fallbackText).toContain(": 4");
+  });
+
+  it("falls back a native-eligible table when its compact caption exceeds 8k", () => {
+    const caption = "c".repeat(8_100);
+    const plan = resolveSlackReplyRenderPlan({
+      presentation: {
+        blocks: [
+          { type: "table", caption, headers: ["Account"], rows: [["Acme"]] },
+          { type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] },
+        ],
+      },
+    });
+
+    expect(plan.mode).toBe("split");
+    if (plan.mode !== "split") {
+      return;
+    }
+    expect(plan.blockPart?.blocks.map((block) => block.type)).toEqual(["actions"]);
+    expect(plan.blockPart?.text).toBe("- Refresh");
+    expect(plan.fallbackText).toContain(`${caption} (table)`);
+    expect(plan.fallbackText).toContain("- Account: Acme");
   });
 
   it("escapes plain-text control labels in split accessibility fallbacks", () => {

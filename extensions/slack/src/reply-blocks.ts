@@ -8,8 +8,10 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   appendSlackBlocksAccessibleFallbackText,
   buildSlackBlocksAccessibleFallbackText,
+  buildSlackBlocksCompactAccessibleFallbackText,
   isSlackBlockRepresentedByTextFallback,
   removeSlackBlocksFallbackParagraphs,
+  retainSlackDataTablesWithinCompactFallback,
 } from "./blocks-fallback.js";
 import { parseSlackBlocksInput, SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import {
@@ -20,6 +22,7 @@ import {
   resolveSlackBlockOffsets,
   type SlackBlock,
 } from "./blocks-render.js";
+import { hasSlackDataTableBlock } from "./data-table.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import {
@@ -92,11 +95,19 @@ function resolveSlackChannelBlocks(payload: ReplyPayload): SlackBlock[] {
   return (parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks) as SlackBlock[]) ?? [];
 }
 
-function buildSlackReplyBlockPart(blocks: SlackBlock[]): SlackReplyBlockPart | undefined {
+function buildSlackReplyBlockPart(
+  blocks: SlackBlock[],
+  compactLimit = SLACK_TEXT_LIMIT,
+): SlackReplyBlockPart | undefined {
   if (blocks.length === 0) {
     return undefined;
   }
-  const text = buildSlackBlocksAccessibleFallbackText(blocks);
+  let text = buildSlackBlocksAccessibleFallbackText(blocks);
+  if (text.length > compactLimit && hasSlackDataTableBlock(blocks)) {
+    // The complete row fallback belongs to the following text chunks. This
+    // post still names the table and every retained control/media sibling.
+    text = buildSlackBlocksCompactAccessibleFallbackText(blocks);
+  }
   if (text.length > SLACK_TEXT_LIMIT) {
     throw new Error(
       `Slack retained-block accessibility fallback exceeds OpenClaw's ${String(SLACK_TEXT_LIMIT)}-character limit`,
@@ -163,6 +174,7 @@ export function resolveSlackReplyRenderPlan(
   text = payload.text,
   options: { includeAuthoredTextBlock?: boolean; textLimit?: number } = {},
 ): SlackReplyRenderPlan {
+  const textLimit = options.textLimit ?? SLACK_TEXT_LIMIT;
   const channelBlocks = resolveSlackChannelBlocks(payload);
   const presentation = normalizeMessagePresentation(payload.presentation);
   const presentationOffsets = resolveSlackBlockOffsets(channelBlocks);
@@ -247,7 +259,7 @@ export function resolveSlackReplyRenderPlan(
         (block) => !isSlackBlockRepresentedByTextFallback(block),
       );
     }
-    const blockPart = buildSlackReplyBlockPart(retainedBlocks);
+    const blockPart = buildSlackReplyBlockPart(retainedBlocks, textLimit);
     if (!fallbackText.trim()) {
       return {
         mode: "single",
@@ -274,17 +286,25 @@ export function resolveSlackReplyRenderPlan(
         blocks,
       )
     : hookText;
-  const textLimit = options.textLimit ?? SLACK_TEXT_LIMIT;
   if (blocks.length > 0 && singleText.length > textLimit) {
-    const siblingBlocks = blocks.filter((block) => !isSlackBlockRepresentedByTextFallback(block));
+    // A native-eligible table should remain native even when its expanded row
+    // fallback requires multiple messages. Other text-replaceable blocks move
+    // completely into those chunks.
+    const siblingCandidates = blocks.filter(
+      (block) => hasSlackDataTableBlock([block]) || !isSlackBlockRepresentedByTextFallback(block),
+    );
+    const siblingBlocks = retainSlackDataTablesWithinCompactFallback(siblingCandidates, textLimit);
     const splitText = textIsSlackMrkdwn
       ? singleText
       : appendSlackBlocksAccessibleFallbackText(
           renderSlackVisiblePresentationFallback({ presentation, text }),
           blocks,
         );
-    const fallbackText = removeSlackBlocksFallbackParagraphs(splitText, siblingBlocks);
-    const blockPart = buildSlackReplyBlockPart(siblingBlocks);
+    const fallbackText = removeSlackBlocksFallbackParagraphs(
+      splitText,
+      siblingBlocks.filter((block) => !hasSlackDataTableBlock([block])),
+    );
+    const blockPart = buildSlackReplyBlockPart(siblingBlocks, textLimit);
     return {
       mode: "split",
       ...(blockPart ? { blockPart } : {}),

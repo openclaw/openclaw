@@ -4,6 +4,7 @@
  * Sends, edits, reacts to, polls, and routes messages through channel plugins and Gateway-backed actions.
  */
 import {
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
@@ -327,7 +328,7 @@ function sanitizePresentationTextFieldsResult(
           suppressionReason ??= sanitized.suppressionReason;
         }
       }
-      if (sanitizedBlock.type === "table") {
+      if (normalizeOptionalLowercaseString(sanitizedBlock.type) === "table") {
         if (typeof sanitizedBlock.caption === "string") {
           const sanitized = sanitizeUserVisibleToolTextResult(sanitizedBlock.caption, bootPrompt);
           sanitizedBlock.caption = sanitized.text.trim();

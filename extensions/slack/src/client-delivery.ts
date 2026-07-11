@@ -228,6 +228,10 @@ export async function postSlackMessageBestEffort(params: {
   replyBroadcast?: boolean;
   identity?: SlackPostMessageIdentity;
   blocks?: (Block | KnownBlock)[];
+  nativeDataRejectionFallback?: {
+    text: string;
+    blocks?: (Block | KnownBlock)[];
+  };
   metadata?: MessageMetadata;
   unfurl?: SlackUnfurlOptions;
 }) {
@@ -246,6 +250,21 @@ export async function postSlackMessageBestEffort(params: {
         throw error;
       }
       const { blocks, ...textPayload } = payload;
+      if (params.nativeDataRejectionFallback) {
+        // A later text part already owns the complete native-data fallback.
+        // Retrying only retained siblings avoids rendering every table row twice.
+        const rejectionFallback = params.nativeDataRejectionFallback;
+        return {
+          response: await withSlackDnsRequestRetry("chat.postMessage", () =>
+            postChatMessage({
+              ...textPayload,
+              text: rejectionFallback.text,
+              ...(rejectionFallback.blocks?.length ? { blocks: rejectionFallback.blocks } : {}),
+            }),
+          ),
+          identity,
+        };
+      }
       // Replace only native data blocks. If an authored sibling is actually invalid,
       // the retry still fails closed instead of silently discarding its controls.
       logVerbose("slack send: native data block rejected, retrying with text fallback");

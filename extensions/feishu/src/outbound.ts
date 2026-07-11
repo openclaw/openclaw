@@ -291,9 +291,9 @@ function renderFeishuPresentationPayload({
 }
 
 type FeishuReplyMode =
-  | { replyToMessageId: string; replyInThread: false }
-  | { replyToMessageId: string; replyInThread: true }
-  | { replyToMessageId: undefined; replyInThread: false };
+  | { normalizedReplyToId: string; replyToMessageId: string; replyInThread: false }
+  | { normalizedReplyToId: undefined; replyToMessageId: string; replyInThread: true }
+  | { normalizedReplyToId: undefined; replyToMessageId: undefined; replyInThread: false };
 
 // Target selection and thread mode are one decision; all payload parts reuse this result.
 function resolveFeishuReplyMode(params: {
@@ -302,13 +302,17 @@ function resolveFeishuReplyMode(params: {
 }): FeishuReplyMode {
   const replyToMessageId = params.replyToId?.trim();
   if (replyToMessageId) {
-    return { replyToMessageId, replyInThread: false };
+    return { normalizedReplyToId: replyToMessageId, replyToMessageId, replyInThread: false };
   }
 
   const threadId = params.threadId == null ? undefined : String(params.threadId).trim();
   return threadId
-    ? { replyToMessageId: threadId, replyInThread: true }
-    : { replyToMessageId: undefined, replyInThread: false };
+    ? { normalizedReplyToId: undefined, replyToMessageId: threadId, replyInThread: true }
+    : {
+        normalizedReplyToId: undefined,
+        replyToMessageId: undefined,
+        replyInThread: false,
+      };
 }
 
 async function sendCommentThreadReply(params: {
@@ -410,8 +414,12 @@ async function sendFeishuFallbackPayload(params: {
     });
   }
 
+  const { normalizedReplyToId } = resolveFeishuReplyMode({
+    replyToId: ctx.replyToId,
+    threadId: ctx.threadId,
+  });
   const nextReplyToId = createReplyToFanout({
-    replyToId: ctx.replyToId?.trim() || undefined,
+    replyToId: normalizedReplyToId,
     replyToIdSource: ctx.replyToIdSource,
     replyToMode: ctx.replyToMode,
   });
@@ -547,10 +555,22 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       return await sendFeishuFallbackPayload({ ctx, payload: fallbackPayload });
     }
 
-    const { replyToMessageId, replyInThread } = resolveFeishuReplyMode({
+    const { normalizedReplyToId } = resolveFeishuReplyMode({
       replyToId: ctx.replyToId,
       threadId: ctx.threadId,
     });
+    // Media and the final card are separate payloads: consume an implicit
+    // first-reply id once, while an explicit thread remains sticky for both.
+    const nextReplyToId = createReplyToFanout({
+      replyToId: normalizedReplyToId,
+      replyToIdSource: ctx.replyToIdSource,
+      replyToMode: ctx.replyToMode,
+    });
+    const nextReplyMode = () =>
+      resolveFeishuReplyMode({
+        replyToId: nextReplyToId(),
+        threadId: ctx.threadId,
+      });
     const mediaUrls = normalizeStringEntries(resolvePayloadMediaUrls(payload));
     return attachChannelToResult(
       "feishu",
@@ -563,8 +583,9 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         onResult: async (deliveryResult) => {
           await ctx.onDeliveryResult?.(attachChannelToResult("feishu", deliveryResult));
         },
-        send: async ({ mediaUrl }) =>
-          await sendMediaFeishu({
+        send: async ({ mediaUrl }) => {
+          const { replyToMessageId, replyInThread } = nextReplyMode();
+          return await sendMediaFeishu({
             cfg: ctx.cfg,
             to: ctx.to,
             mediaUrl,
@@ -575,16 +596,19 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             ...(payload.audioAsVoice === true || ctx.audioAsVoice === true
               ? { audioAsVoice: true }
               : {}),
-          }),
-        finalize: async () =>
-          await sendCardFeishu({
+          });
+        },
+        finalize: async () => {
+          const { replyToMessageId, replyInThread } = nextReplyMode();
+          return await sendCardFeishu({
             cfg: ctx.cfg,
             to: ctx.to,
             card,
             replyToMessageId,
             replyInThread,
             accountId: ctx.accountId ?? undefined,
-          }),
+          });
+        },
       }),
     );
   },
