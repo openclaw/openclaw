@@ -707,6 +707,12 @@ export function renderChatThread(props: ChatThreadProps) {
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
+  // 1:1 sessions (no labeled foreign sender anywhere in the thread) drop the
+  // avatar gutter entirely; group threads keep avatars as the always-visible
+  // identity marker. senderLabel is only populated for non-default senders.
+  const isDirectThread = !chatItems.some(
+    (item) => item.kind === "group" && Boolean(item.senderLabel?.trim()),
+  );
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
@@ -717,7 +723,7 @@ export function renderChatThread(props: ChatThreadProps) {
 
   return html`
     <div
-      class="chat-thread"
+      class="chat-thread ${isDirectThread ? "chat-thread--direct" : ""}"
       role="log"
       aria-live="polite"
       ${ref((element) => {

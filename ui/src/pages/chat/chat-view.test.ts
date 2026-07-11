@@ -686,6 +686,31 @@ describe("chat compaction divider", () => {
   });
 });
 
+describe("direct thread avatar mode", () => {
+  it("marks label-free threads direct and labeled threads as group", () => {
+    const direct = renderChatView({
+      sessionKey: "direct-avatar-mode",
+      messages: [
+        { role: "user", content: "hi", timestamp: 1 },
+        { role: "assistant", content: "hello", timestamp: 2 },
+      ],
+    });
+    const directThread = requireElement(direct, ".chat-thread", "chat thread");
+    expect(directThread.classList.contains("chat-thread--direct")).toBe(true);
+
+    const group = renderChatView({
+      sessionKey: "group-avatar-mode",
+      messages: [
+        { role: "user", content: "hi", timestamp: 1 },
+        { role: "assistant", content: "hello", timestamp: 2 },
+        { role: "user", content: "me too", senderLabel: "Mario", timestamp: 3 },
+      ],
+    });
+    const groupThread = requireElement(group, ".chat-thread", "chat thread");
+    expect(groupThread.classList.contains("chat-thread--direct")).toBe(false);
+  });
+});
+
 describe("chat code-block copy", () => {
   it("copies decoded QR block-art boundary spaces from the delegated button handler", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
