@@ -32,8 +32,7 @@ import {
   buildDiscordSendError,
   createDiscordClient,
   resolveChannelId,
-  resolveDiscordChannelType,
-  toDiscordFileBlob,
+  resolveDiscordChannel,
   stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
 } from "./send.shared.js";
@@ -218,8 +217,7 @@ async function buildDiscordComponentPayload(params: {
     const filenameOverride = params.opts.filename?.trim();
     resolvedFileName = filenameOverride || media.fileName || "upload";
     spec = withImplicitComponentAttachmentBlock(spec, resolvedFileName);
-    const fileData = toDiscordFileBlob(media.buffer);
-    files = [{ data: fileData, name: resolvedFileName }];
+    files = [{ data: media.buffer, name: resolvedFileName }];
   }
 
   const attachmentNames = extractComponentAttachmentNames(spec);
@@ -299,9 +297,9 @@ export async function sendDiscordComponentMessage(
   const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
-  const channelType = await resolveDiscordChannelType(rest, channelId);
+  const channel = await resolveDiscordChannel(rest, channelId);
 
-  if (channelType && DISCORD_FORUM_LIKE_TYPES.has(channelType)) {
+  if (channel && DISCORD_FORUM_LIKE_TYPES.has(channel.type)) {
     throw new Error("Discord components are not supported in forum-style channels");
   }
 

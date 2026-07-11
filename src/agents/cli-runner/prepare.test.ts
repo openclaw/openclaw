@@ -16,6 +16,10 @@ import {
   registerContextEngineForOwner,
 } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import type {
+  McpLoopbackClientGrant,
+  McpLoopbackRequestContext,
+} from "../../gateway/mcp-grant-store.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -117,26 +121,19 @@ function createTestMcpLoopbackServerConfig(port: number) {
         alwaysLoad: true,
         headers: {
           Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-          "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
-          "x-openclaw-session-id": "${OPENCLAW_MCP_SESSION_ID}",
-          "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
-          "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
-          "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
-          "x-openclaw-client-caps": "${OPENCLAW_MCP_CLIENT_CAPS}",
-          "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
-          "x-openclaw-current-thread-ts": "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
-          "x-openclaw-current-message-id": "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
-          "x-openclaw-current-inbound-audio": "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
-          "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",
-          "x-openclaw-source-reply-delivery-mode": "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
-          "x-openclaw-task-suggestion-delivery-mode":
-            "${OPENCLAW_MCP_TASK_SUGGESTION_DELIVERY_MODE}",
-          "x-openclaw-require-explicit-message-target":
-            "${OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET}",
           "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
         },
       },
     },
+  };
+}
+
+function createTestMcpLoopbackClientGrant(params: {
+  context: McpLoopbackRequestContext;
+}): McpLoopbackClientGrant {
+  return {
+    token: "loopback-token",
+    context: structuredClone(params.context),
   };
 }
 
@@ -179,7 +176,13 @@ function createCliBackendConfig(
   } satisfies OpenClawConfig;
 }
 
-function setClaudeCliBackendForPrepareTest() {
+function setClaudeCliBackendForPrepareTest(
+  params: {
+    liveSession?: boolean;
+    sessionMode?: "always" | "existing" | "none";
+    reseedFromRawTranscriptWhenUncompacted?: boolean;
+  } = {},
+) {
   // Keep Claude-specific preparation behind the same runtime resolver seam that
   // production uses; direct backend constants would bypass provider ownership.
   cliBackendsTesting.setDepsForTest({
@@ -195,7 +198,11 @@ function setClaudeCliBackendForPrepareTest() {
           resumeArgs: ["--resume", "{sessionId}"],
           output: "jsonl",
           input: "stdin",
-          sessionMode: "existing",
+          sessionMode: params.sessionMode ?? "existing",
+          ...(params.liveSession ? { liveSession: "claude-stdio" as const } : {}),
+          ...(params.reseedFromRawTranscriptWhenUncompacted
+            ? { reseedFromRawTranscriptWhenUncompacted: true }
+            : {}),
         },
       },
     ],
@@ -264,15 +271,15 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      resolveMcpLoopbackBearerToken: vi.fn((runtime, senderIsOwner) =>
-        senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken,
-      ),
+      mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
+      revokeMcpLoopbackClientGrant: vi.fn(() => true),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
       prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
         args: [],
         cleanup: vi.fn(async () => undefined),
       })),
+      getClaudeLiveSessionGenerationForOwner: vi.fn(() => undefined),
       resolveApiKeyForProfile: resolveApiKeyForProfileImpl,
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
@@ -817,7 +824,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime,
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      resolveMcpLoopbackBearerToken: vi.fn(() => "loopback-token"),
+      mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
     });
 
@@ -918,6 +925,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         ?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
       throw new Error("Gemini auth profile was selected but no credential material was found");
     });
+    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
       resolveRuntimeCliBackends: () => [
@@ -941,7 +949,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime,
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      resolveMcpLoopbackBearerToken: vi.fn(() => "loopback-token"),
+      mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
+      revokeMcpLoopbackClientGrant,
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
     });
 
@@ -963,6 +972,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(generatedSystemSettingsPath).toBeTruthy();
       expect(fs.existsSync(generatedSystemSettingsPath ?? "")).toBe(false);
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1045,7 +1055,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime,
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      resolveMcpLoopbackBearerToken: vi.fn(() => "loopback-token"),
+      mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
         args: ["--plugin-dir", skillsPluginDir],
@@ -1132,7 +1142,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       makeBootstrapWarn: vi.fn(() => () => undefined),
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      resolveMcpLoopbackBearerToken: vi.fn(() => "token"),
+      mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({
         agentId: "main",
         tools: [
@@ -2309,7 +2319,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
         if (expectedStrongPrompt) {
           expect(first.systemPrompt).toContain(
-            "use `message(action=send)` for visible source-channel output",
+            "you MUST call `message(action=send)` for visible source-channel output",
           );
         } else {
           expect(first.systemPrompt).toContain("final text normally routes to the source channel");
@@ -2415,7 +2425,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("reuses CLI session bindings across owner sender flips with stable prompt tool scope", async () => {
+  it("invalidates CLI session bindings when owner policy changes prompt tool scope", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
@@ -2520,7 +2530,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
-          senderIsOwner: undefined,
+          senderIsOwner: true,
           currentMessageId: undefined,
           sourceReplyDeliveryMode: "message_tool_only",
         }),
@@ -2528,13 +2538,17 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
         2,
         expect.objectContaining({
-          senderIsOwner: undefined,
+          senderIsOwner: false,
           currentMessageId: undefined,
           sourceReplyDeliveryMode: "message_tool_only",
         }),
       );
-      expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
-      expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+      expect(second.promptToolNamesHash).not.toBe(first.promptToolNamesHash);
+      expect(second.reusableCliSession).toEqual({
+        mode: "reuse-with-drift",
+        sessionId: "cli-session",
+        drift: { reasons: ["prompt-tools"] },
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2728,6 +2742,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       }));
       const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
       const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      const activateMcpLoopbackClientGrantCapture = vi.fn(() => true);
+      const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
+      const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+      const revokeMcpLoopbackClientGrant = vi.fn(() => true);
       const resolveMcpLoopbackScopedTools = vi.fn(() => ({
         agentId: "main",
         tools: [
@@ -2744,6 +2762,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         getActiveMcpLoopbackRuntime,
         ensureMcpLoopbackServer,
         createMcpLoopbackServerConfig,
+        activateMcpLoopbackClientGrantCapture,
+        deactivateMcpLoopbackClientGrantCapture,
+        mintMcpLoopbackClientGrant,
+        revokeMcpLoopbackClientGrant,
         resolveMcpLoopbackScopedTools,
       });
       cliBackendsTesting.setDepsForTest({
@@ -2768,7 +2790,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
       const baselineContext = await prepareCliRunContext({
         sessionId: "session-test",
-        sessionKey: "agent:main:test",
+        sessionKey: "main",
+        agentId: "worker",
         sessionFile,
         workspaceDir: dir,
         prompt: "latest ask",
@@ -2780,7 +2803,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
       const context = await prepareCliRunContext({
         sessionId: "session-test",
-        sessionKey: "agent:main:test",
+        sessionKey: "main",
+        agentId: "worker",
         sessionFile,
         workspaceDir: dir,
         prompt: "latest ask",
@@ -2803,7 +2827,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith({
         cfg: expect.any(Object),
-        sessionKey: "agent:main:test",
+        sessionKey: "agent:worker:main",
+        runtimePolicySessionKey: undefined,
+        agentId: "worker",
         messageProvider: undefined,
         clientCaps: undefined,
         currentChannelId: undefined,
@@ -2815,7 +2841,23 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sourceReplyDeliveryMode: undefined,
         taskSuggestionDeliveryMode: undefined,
         requireExplicitMessageTarget: false,
-        senderIsOwner: undefined,
+        senderIsOwner: false,
+        nodeExecAllowed: true,
+        modelProvider: "native-cli",
+        modelId: "test-model",
+        execSession: undefined,
+        execOverrides: undefined,
+        bashElevated: undefined,
+        trigger: undefined,
+        approvalReviewerDeviceId: undefined,
+        channelContext: undefined,
+        senderName: undefined,
+        senderUsername: undefined,
+        senderE164: undefined,
+        groupId: undefined,
+        groupChannel: undefined,
+        groupSpace: undefined,
+        spawnedBy: undefined,
       });
       expect(context.systemPrompt).toContain("## Memory Recall");
       expect(context.systemPrompt).toContain("tools=memory_search");
@@ -2910,7 +2952,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("passes current turn kind into bundle MCP loopback env", async () => {
+  it("binds current turn context into the bundle MCP client grant", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
@@ -2920,6 +2962,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       }));
       const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
       const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      const activateMcpLoopbackClientGrantCapture = vi.fn(() => true);
+      const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
+      const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+      const revokeMcpLoopbackClientGrant = vi.fn(() => true);
       const resolveMcpLoopbackScopedTools = vi.fn(() => ({
         agentId: "main",
         tools: [
@@ -2936,6 +2982,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         getActiveMcpLoopbackRuntime,
         ensureMcpLoopbackServer,
         createMcpLoopbackServerConfig,
+        activateMcpLoopbackClientGrantCapture,
+        deactivateMcpLoopbackClientGrantCapture,
+        mintMcpLoopbackClientGrant,
+        revokeMcpLoopbackClientGrant,
         resolveMcpLoopbackScopedTools,
       });
       cliBackendsTesting.setDepsForTest({
@@ -2958,16 +3008,40 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       const context = await prepareCliRunContext({
         sessionId: "session-test",
         sessionKey: "agent:main:telegram:group:chat123",
+        runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
+        agentId: "worker",
         sessionFile,
         workspaceDir: dir,
         prompt: "latest ask",
         provider: "native-cli",
+        modelProvider: "anthropic",
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-room-event-tools",
         config: createCliBackendConfig(),
+        sessionEntry: {
+          execHost: "node",
+          execSecurity: "allowlist",
+          execAsk: "on-miss",
+          execNode: "mac-a",
+        } as never,
+        execOverrides: {
+          host: "node",
+          security: "allowlist",
+          ask: "always",
+          node: "mac-b",
+        },
+        bashElevated: {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+          fullAccessAvailable: false,
+          fullAccessBlockedReason: "runtime",
+        },
+        trigger: "user",
         currentInboundEventKind: "room_event",
         messageChannel: "telegram",
+        messageProvider: "discord",
         clientCaps: ["tool-events", "inline-widgets"],
         currentChannelId: "telegram:-100123:topic:42",
         currentThreadTs: "42",
@@ -2976,21 +3050,93 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sourceReplyDeliveryMode: "message_tool_only",
         taskSuggestionDeliveryMode: "gateway",
         requireExplicitMessageTarget: true,
+        approvalReviewerDeviceId: "reviewer-device",
+        senderId: "canonical-sender",
+        senderName: "Canonical Name",
+        senderUsername: "canonical-user",
+        senderE164: "+15551234567",
+        groupId: "chat123",
+        groupChannel: "ops",
+        groupSpace: "workspace-a",
+        spawnedBy: "agent:main:telegram:group:parent",
+        channelContext: {
+          sender: { id: "sender-1", displayName: "not-forwarded" },
+          chat: { id: "chat-1", title: "not-forwarded" },
+        },
       });
 
       expect(context.preparedBackend.env).toMatchObject({
-        OPENCLAW_MCP_SESSION_ID: "session-test",
-        OPENCLAW_MCP_MESSAGE_CHANNEL: "telegram",
-        OPENCLAW_MCP_CLIENT_CAPS: "tool-events,inline-widgets",
-        OPENCLAW_MCP_CURRENT_CHANNEL_ID: "telegram:-100123:topic:42",
-        OPENCLAW_MCP_CURRENT_THREAD_TS: "42",
-        OPENCLAW_MCP_CURRENT_MESSAGE_ID: "reply-message-1",
-        OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: "true",
-        OPENCLAW_MCP_INBOUND_EVENT_KIND: "room_event",
-        OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: "message_tool_only",
-        OPENCLAW_MCP_TASK_SUGGESTION_DELIVERY_MODE: "gateway",
-        OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET: "true",
+        OPENCLAW_MCP_TOKEN: "loopback-token",
         OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
+      });
+      expect(mintMcpLoopbackClientGrant).toHaveBeenCalledWith({
+        context: {
+          sessionKey: "agent:main:telegram:group:chat123",
+          runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
+          agentId: "worker",
+          sessionId: "session-test",
+          runId: "run-test-room-event-tools",
+          modelProvider: "anthropic",
+          modelId: "test-model",
+          messageProvider: "discord",
+          clientCaps: ["tool-events", "inline-widgets"],
+          currentChannelId: "telegram:-100123:topic:42",
+          currentThreadTs: "42",
+          currentMessageId: "reply-message-1",
+          currentInboundAudio: true,
+          accountId: undefined,
+          inboundEventKind: "room_event",
+          sourceReplyDeliveryMode: "message_tool_only",
+          taskSuggestionDeliveryMode: "gateway",
+          requireExplicitMessageTarget: true,
+          senderIsOwner: false,
+          nodeExecAllowed: true,
+          execSession: {
+            execHost: "node",
+            execSecurity: "allowlist",
+            execAsk: "on-miss",
+            execNode: "mac-a",
+          },
+          execOverrides: {
+            host: "node",
+            security: "allowlist",
+            ask: "always",
+            node: "mac-b",
+          },
+          bashElevated: {
+            enabled: true,
+            allowed: true,
+            defaultLevel: "full",
+            fullAccessAvailable: false,
+            fullAccessBlockedReason: "runtime",
+          },
+          trigger: "user",
+          approvalReviewerDeviceId: "reviewer-device",
+          channelContext: {
+            sender: { id: "canonical-sender" },
+            chat: { id: "chat-1" },
+          },
+          senderName: "Canonical Name",
+          senderUsername: "canonical-user",
+          senderE164: "+15551234567",
+          groupId: "chat123",
+          groupChannel: "ops",
+          groupSpace: "workspace-a",
+          spawnedBy: "agent:main:telegram:group:parent",
+        },
+        runtimeOwnerToken: "loopback-owner-token",
+      });
+      context.preparedBackend.mcpClientGrantCapture?.activate("capture-test");
+      context.preparedBackend.mcpClientGrantCapture?.deactivate("capture-test");
+      expect(activateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
+        token: "loopback-token",
+        runtimeOwnerToken: "loopback-owner-token",
+        captureKey: "capture-test",
+      });
+      expect(deactivateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
+        token: "loopback-token",
+        runtimeOwnerToken: "loopback-owner-token",
+        captureKey: "capture-test",
       });
       expect(context.mcpDeliveryCapture).toBe(true);
       expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
@@ -2998,6 +3144,36 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           clientCaps: ["tool-events", "inline-widgets"],
           taskSuggestionDeliveryMode: "gateway",
           requireExplicitMessageTarget: true,
+          senderIsOwner: false,
+          runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
+          agentId: "worker",
+          modelProvider: "anthropic",
+          modelId: "test-model",
+          execOverrides: {
+            host: "node",
+            security: "allowlist",
+            ask: "always",
+            node: "mac-b",
+          },
+          bashElevated: {
+            enabled: true,
+            allowed: true,
+            defaultLevel: "full",
+            fullAccessAvailable: false,
+            fullAccessBlockedReason: "runtime",
+          },
+          channelContext: {
+            sender: { id: "canonical-sender" },
+            chat: { id: "chat-1" },
+          },
+          senderName: "Canonical Name",
+          senderUsername: "canonical-user",
+          senderE164: "+15551234567",
+          messageProvider: "discord",
+          groupId: "chat123",
+          groupChannel: "ops",
+          groupSpace: "workspace-a",
+          spawnedBy: "agent:main:telegram:group:parent",
         }),
       );
       expect(context.systemPrompt).toContain(
@@ -3006,6 +3182,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.systemPrompt).not.toContain(
         "The target defaults to the current source channel",
       );
+      await context.preparedBackend.cleanup?.();
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -3247,6 +3425,160 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         mode: "invalidate",
         invalidatedReason: "missing-transcript",
       });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("arms raw-transcript reseed for a missing claude-cli transcript so prior conversation is redelivered", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    appendTranscriptEntry(sessionFile, {
+      id: "msg-1",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: {
+        role: "user",
+        content: "prior claude-cli ask",
+        timestamp: 1,
+      },
+    });
+    try {
+      setClaudeCliBackendForPrepareTest({
+        reseedFromRawTranscriptWhenUncompacted: true,
+      });
+      const transcriptCheck = vi.fn(async () => false);
+      const orphanCheck = vi.fn(async () => false);
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-missing-transcript-reseed",
+        cliSessionBinding: { sessionId: "stale-claude-sid" },
+        cliSessionId: "stale-claude-sid",
+        config: createCliBackendConfig(),
+      });
+
+      // Candidate is invalidated (no native --resume) yet reseed still fires:
+      // prepare hands the prior OpenClaw conversation forward as history.
+      expect(context.reusableCliSession).toEqual({
+        mode: "invalidate",
+        invalidatedReason: "missing-transcript",
+      });
+      expect(context.openClawHistoryPrompt).toContain("prior claude-cli ask");
+      expect(context.openClawHistoryPrompt).toContain("latest ask");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a warm claude-cli binding when its managed stdio child is still live", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    appendTranscriptEntry(sessionFile, {
+      id: "msg-warm-1",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: {
+        role: "user",
+        content: "earlier warm context",
+        timestamp: 1,
+      },
+    });
+    try {
+      setClaudeCliBackendForPrepareTest({
+        liveSession: true,
+        reseedFromRawTranscriptWhenUncompacted: true,
+      });
+      const transcriptCheck = vi.fn(async () => false);
+      const orphanCheck = vi.fn(async () => true);
+      const getLiveSessionGeneration = vi.fn(() => "warm-live-generation");
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+        getClaudeLiveSessionGenerationForOwner: getLiveSessionGeneration,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "warm follow-up",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-warm-live-follow-up",
+        cliSessionBinding: { sessionId: "warm-claude-sid" },
+        cliSessionId: "warm-claude-sid",
+        config: createCliBackendConfig(),
+      });
+
+      expect(getLiveSessionGeneration).toHaveBeenCalledWith({
+        backendId: "claude-cli",
+        agentAccountId: undefined,
+        agentId: undefined,
+        authProfileId: undefined,
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+      });
+      expect(transcriptCheck).toHaveBeenCalledWith({
+        sessionId: "warm-claude-sid",
+        workspaceDir: dir,
+      });
+      expect(orphanCheck).not.toHaveBeenCalled();
+      expect(context.reusableCliSession).toEqual({
+        mode: "reuse",
+        sessionId: "warm-claude-sid",
+      });
+      expect(context.requiredClaudeLiveSessionGeneration).toBe("warm-live-generation");
+      expect(context.openClawHistoryPrompt).toContain("earlier warm context");
+      expect(context.openClawHistoryPrompt).toContain("warm follow-up");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores stored CLI session candidates when the backend disables sessions", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      setClaudeCliBackendForPrepareTest({
+        sessionMode: "none",
+        reseedFromRawTranscriptWhenUncompacted: true,
+      });
+      const transcriptCheck = vi.fn(async () => false);
+      const orphanCheck = vi.fn(async () => false);
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "stateless ask",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-stateless-cli",
+        cliSessionBinding: { sessionId: "stale-claude-sid" },
+        cliSessionId: "stale-claude-sid",
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.reusableCliSession).toEqual({ mode: "none" });
+      expect(transcriptCheck).not.toHaveBeenCalled();
+      expect(orphanCheck).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -52,8 +52,10 @@ const state = vi.hoisted(() => ({
   resolveAgentDeliveryPlanMock: vi.fn(),
   resolveAgentOutboundTargetMock: vi.fn(),
   resolveMessageChannelSelectionMock: vi.fn(),
+  createTrajectoryRuntimeRecorderMock: vi.fn(),
   trajectoryRecordEventMock: vi.fn(),
   trajectoryFlushMock: vi.fn(async () => undefined),
+  removeSessionTrajectoryArtifactsMock: vi.fn(async (..._args: unknown[]) => []),
   persistSessionEntryMock: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined),
   clearSessionAuthProfileOverrideMock: vi.fn(),
   isThinkingLevelSupportedMock: vi.fn((_args: unknown) => true),
@@ -277,10 +279,14 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => ({
 }));
 
 vi.mock("./internal-session-effects.js", () => ({
+  isInternalSessionEffectsTranscriptPath: (sessionFile: string | undefined) =>
+    sessionFile?.startsWith("/tmp/openclaw-internal-") === true,
   prepareInternalSessionEffectsTranscript: (...args: unknown[]) =>
     state.prepareInternalSessionEffectsTranscriptMock(...args),
   removeInternalSessionEffectsTranscript: (...args: unknown[]) =>
     state.removeInternalSessionEffectsTranscriptMock(...args),
+  resolveInternalSessionEffectsTranscriptPath: (runId: string) =>
+    `/tmp/openclaw-internal-${runId}.jsonl`,
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
@@ -374,13 +380,21 @@ vi.mock("../terminal/ansi.js", () => ({
   sanitizeForLog: (s: string) => s,
 }));
 
+vi.mock("../trajectory/cleanup.js", () => ({
+  removeSessionTrajectoryArtifacts: (...args: unknown[]) =>
+    state.removeSessionTrajectoryArtifactsMock(...args),
+}));
+
 vi.mock("../trajectory/runtime.js", () => ({
-  createTrajectoryRuntimeRecorder: () => ({
-    enabled: true,
-    filePath: "/tmp/session.trajectory.jsonl",
-    recordEvent: (...args: unknown[]) => state.trajectoryRecordEventMock(...args),
-    flush: () => state.trajectoryFlushMock(),
-  }),
+  createTrajectoryRuntimeRecorder: (params: unknown) => {
+    state.createTrajectoryRuntimeRecorderMock(params);
+    return {
+      enabled: true,
+      filePath: "/tmp/session.trajectory.jsonl",
+      recordEvent: (...args: unknown[]) => state.trajectoryRecordEventMock(...args),
+      flush: () => state.trajectoryFlushMock(),
+    };
+  },
 }));
 
 vi.mock("../utils/message-channel.js", () => ({
@@ -832,6 +846,7 @@ type FallbackRunnerParams = {
   provider: string;
   model: string;
   sessionId?: string;
+  resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
   run: (provider: string, model: string) => Promise<unknown>;
   onFallbackStep?: (step: Record<string, unknown>) => void | Promise<void>;
   classifyResult?: (params: {
@@ -1104,6 +1119,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
     state.updateSessionStoreAfterAgentRunMock.mockResolvedValue(undefined);
     state.trajectoryFlushMock.mockResolvedValue(undefined);
+    state.removeSessionTrajectoryArtifactsMock.mockResolvedValue([]);
     state.prepareInternalSessionEffectsTranscriptMock.mockResolvedValue(
       "/tmp/openclaw-internal-run.jsonl",
     );
@@ -1162,6 +1178,33 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(deliveryOrder).toBeLessThan(
       state.emitAgentEventMock.mock.invocationCallOrder[lastEndIndex] ?? 0,
     );
+  });
+
+  it("retries a same-model switch with the runtime carried by the error", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      agentRuntimeOverride: "openclaw",
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    setupModelSwitchRetry({
+      provider: "openai",
+      model: "gpt-5.4",
+      agentRuntimeOverride: "codex",
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    const retry = mockCallArg(state.runWithModelFallbackMock, 1) as FallbackRunnerParams;
+    expect(retry.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe("codex");
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      agentHarnessRuntimeOverride: "codex",
+    });
   });
 
   it("keeps the fast mode cutoff timestamp across live model switch retries", async () => {
@@ -1534,15 +1577,32 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-fable-5"));
     state.resolvedSessionKeyMock = "agent:main:main";
     state.isThinkingLevelSupportedMock.mockReturnValue(false);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+      thinkingLevel: "low",
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
 
     await expect(
       agentCommand({
         message: "hello",
         to: "+1234567890",
-        thinking: "xhigh",
+        thinking: "ultra",
       }),
     ).rejects.toThrow(/is not supported/u);
     expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    expect(
+      (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main:main"]?.thinkingLevel,
+    ).toBe("low");
+    expect(state.persistSessionEntryMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({ thinkingLevel: "ultra" }),
+      }),
+    );
   });
 
   it("skips the initial session touch after gateway ingress already persisted activity", async () => {
@@ -2099,6 +2159,41 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards an explicit OpenClaw runtime override into fallback and attempt execution", async () => {
+    setupSingleAttemptFallback();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: { "openai/gpt-5.4": {} },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+      agentRuntimeOverride: "openclaw",
+      agentHarnessId: "codex",
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe(
+      "openclaw",
+    );
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      agentHarnessRuntimeOverride: "openclaw",
+    });
+  });
+
   it("does not persist turn-local thinking fallback over a stored session override", async () => {
     setupSingleAttemptFallback();
     const sessionEntry: SessionEntry = {
@@ -2127,6 +2222,127 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         entry: expect.objectContaining({ thinkingLevel: "off" }),
       }),
     );
+  });
+
+  it("revalidates immutable Ultra for each model fallback without persisting the remap", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+      thinkingLevel: "ultra",
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-luna" },
+          models: {
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    };
+    state.isThinkingLevelSupportedMock.mockImplementation((args: unknown) => {
+      const { model, level } = args as { model?: string; level?: string };
+      return model !== "gpt-5.6-luna" || level !== "ultra";
+    });
+    state.resolveSupportedThinkingLevelMock.mockImplementation(
+      ({ level, model }: { level?: string; model?: string }) =>
+        model === "gpt-5.6-luna" && level === "ultra" ? "max" : level,
+    );
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await params.run(params.provider, params.model);
+      const result = await params.run("openai", "gpt-5.6-sol");
+      return {
+        result,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(
+      async (params: { providerOverride: string; modelOverride: string }) =>
+        makeSuccessResult(params.providerOverride, params.modelOverride),
+    );
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 0), {
+      modelOverride: "gpt-5.6-luna",
+      resolvedThinkLevel: "max",
+    });
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
+      modelOverride: "gpt-5.6-sol",
+      resolvedThinkLevel: "ultra",
+    });
+    expect(state.resolveSupportedThinkingLevelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        level: "ultra",
+        agentRuntime: "codex",
+      }),
+    );
+    expect(sessionEntry.thinkingLevel).toBe("ultra");
+    expect(state.persistSessionEntryMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({ thinkingLevel: "max" }),
+      }),
+    );
+  });
+
+  it("recomputes a model-derived thinking default for each fallback candidate", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    };
+    state.resolveThinkingDefaultMock.mockImplementation((args: unknown) => {
+      const { model } = args as { model?: string };
+      return model === "gpt-5.6-terra" ? "medium" : "low";
+    });
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await params.run(params.provider, params.model);
+      const result = await params.run("openai", "gpt-5.6-terra");
+      return {
+        result,
+        provider: "openai",
+        model: "gpt-5.6-terra",
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(
+      async (params: { providerOverride: string; modelOverride: string }) =>
+        makeSuccessResult(params.providerOverride, params.modelOverride),
+    );
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 0), {
+      modelOverride: "gpt-5.6-sol",
+      resolvedThinkLevel: "low",
+    });
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
+      modelOverride: "gpt-5.6-terra",
+      resolvedThinkLevel: "medium",
+    });
   });
 
   it("persists and clears current run delivery context for restart recovery", async () => {
@@ -2665,6 +2881,137 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         sessionId: "session-1",
         isControlUiVisible: false,
       }),
+    );
+    expect(state.removeSessionTrajectoryArtifactsMock).not.toHaveBeenCalled();
+    expect(state.removeInternalSessionEffectsTranscriptMock).not.toHaveBeenCalled();
+  });
+
+  it("removes one-shot internal model-run artifacts after success", async () => {
+    setupSingleAttemptFallback();
+    state.prepareInternalSessionEffectsTranscriptMock.mockResolvedValueOnce(
+      "/tmp/openclaw-internal-model-run-success.jsonl",
+    );
+    const result = makeSuccessResult("openai", "gpt-5.4");
+    state.runAgentAttemptMock.mockResolvedValue({
+      ...result,
+      meta: {
+        ...result.meta,
+        executionTrace: {
+          runner: "embedded",
+          fallbackUsed: false,
+          winnerProvider: "openai",
+          winnerModel: "gpt-5.4",
+        },
+        finalAssistantVisibleText: "ok",
+        agentMeta: {
+          provider: "openai",
+          model: "gpt-5.4",
+          sessionId: "rotated-model-run-session",
+          sessionFile: "/tmp/openclaw-internal-rotated.jsonl",
+        },
+      },
+    });
+
+    await agentCommand({
+      message: "probe",
+      to: "+1234567890",
+      runId: "model-run-success",
+      modelRun: true,
+      promptMode: "none",
+      sessionEffects: "internal",
+    });
+
+    expect(state.createTrajectoryRuntimeRecorderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: "/tmp/openclaw-internal-model-run-success.jsonl",
+      }),
+    );
+    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "rotated-model-run-session",
+        sessionFile: "/tmp/openclaw-internal-rotated.jsonl",
+      }),
+    );
+    const transcriptCall = mockCallArg(state.persistCliTurnTranscriptMock) as {
+      sessionEntry?: SessionEntry;
+    };
+    expect(transcriptCall.sessionEntry?.sessionFile).toBeUndefined();
+    expect(state.removeSessionTrajectoryArtifactsMock).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      sessionFile: "/tmp/openclaw-internal-model-run-success.jsonl",
+      storePath: "/tmp/openclaw-internal-model-run-success.jsonl",
+    });
+    expect(state.removeSessionTrajectoryArtifactsMock).toHaveBeenCalledWith({
+      sessionId: "rotated-model-run-session",
+      sessionFile: "/tmp/openclaw-internal-rotated.jsonl",
+      storePath: "/tmp/openclaw-internal-rotated.jsonl",
+    });
+    expect(state.removeInternalSessionEffectsTranscriptMock).toHaveBeenCalledWith(
+      "/tmp/openclaw-internal-model-run-success.jsonl",
+    );
+    expect(state.removeInternalSessionEffectsTranscriptMock).toHaveBeenCalledWith(
+      "/tmp/openclaw-internal-rotated.jsonl",
+    );
+    const deliveryOrder = state.deliverAgentCommandResultMock.mock.invocationCallOrder[0] ?? 0;
+    const trajectoryCleanupOrder =
+      state.removeSessionTrajectoryArtifactsMock.mock.invocationCallOrder.at(-1) ?? 0;
+    const transcriptCleanupOrder =
+      state.removeInternalSessionEffectsTranscriptMock.mock.invocationCallOrder[0] ?? 0;
+    expect(deliveryOrder).toBeLessThan(trajectoryCleanupOrder);
+    expect(trajectoryCleanupOrder).toBeLessThan(transcriptCleanupOrder);
+  });
+
+  it("removes one-shot internal model-run artifacts after provider failure", async () => {
+    setupSingleAttemptFallback();
+    state.prepareInternalSessionEffectsTranscriptMock.mockResolvedValueOnce(
+      "/tmp/openclaw-internal-model-run-failure.jsonl",
+    );
+    state.runAgentAttemptMock.mockRejectedValueOnce(new Error("probe failed"));
+
+    await expect(
+      agentCommand({
+        message: "probe",
+        to: "+1234567890",
+        runId: "model-run-failure",
+        modelRun: true,
+        promptMode: "none",
+        sessionEffects: "internal",
+      }),
+    ).rejects.toThrow("probe failed");
+
+    expect(state.removeSessionTrajectoryArtifactsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: "/tmp/openclaw-internal-model-run-failure.jsonl",
+      }),
+    );
+    expect(state.removeInternalSessionEffectsTranscriptMock).toHaveBeenCalledWith(
+      "/tmp/openclaw-internal-model-run-failure.jsonl",
+    );
+  });
+
+  it("cleans the deterministic model-run path when transcript preparation fails", async () => {
+    state.prepareInternalSessionEffectsTranscriptMock.mockRejectedValueOnce(
+      new Error("transcript chmod failed"),
+    );
+
+    await expect(
+      agentCommand({
+        message: "probe",
+        to: "+1234567890",
+        runId: "model-run-prepare-failure",
+        modelRun: true,
+        promptMode: "none",
+        sessionEffects: "internal",
+      }),
+    ).rejects.toThrow("transcript chmod failed");
+
+    expect(state.removeSessionTrajectoryArtifactsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: "/tmp/openclaw-internal-model-run-prepare-failure.jsonl",
+      }),
+    );
+    expect(state.removeInternalSessionEffectsTranscriptMock).toHaveBeenCalledWith(
+      "/tmp/openclaw-internal-model-run-prepare-failure.jsonl",
     );
   });
 

@@ -648,7 +648,7 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
                 "clientInfo": [
                     "name": "openclaw_macos",
                     "title": "OpenClaw macOS Node",
-                    "version": GatewayEnvironment.expectedGatewayVersionString() ?? "unknown",
+                    "version": GatewayEnvironment.appVersionString() ?? "unknown",
                 ],
             ],
         ])
@@ -684,9 +684,7 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
             if count == 0 {
                 return ReadChunk(data: data, reachedEOF: true)
             }
-            if errno == EINTR {
-                continue
-            }
+            if errno == EINTR { continue }
             if errno == EAGAIN || errno == EWOULDBLOCK {
                 return ReadChunk(data: data, reachedEOF: false)
             }
@@ -706,9 +704,7 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
             if count == 0 {
                 return true
             }
-            if errno == EINTR {
-                continue
-            }
+            if errno == EINTR { continue }
             if errno == EAGAIN || errno == EWOULDBLOCK {
                 return false
             }

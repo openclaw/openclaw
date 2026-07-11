@@ -276,6 +276,11 @@ export type SessionEntry = {
   spawnedWorkspaceDir?: string;
   /** Task working directory inherited by spawned sessions and reused on later turns. */
   spawnedCwd?: string;
+  /**
+   * Managed worktree bound to this session; set with spawnedCwd at worktree
+   * creation and cleared together when a plain New Chat detaches the checkout.
+   */
+  worktree?: { id: string; branch: string; repoRoot: string };
   /** Explicit parent session linkage for dashboard-created child sessions. */
   parentSessionKey?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */
@@ -332,6 +337,28 @@ export type SessionEntry = {
   abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
+  /**
+   * Exact isolated-cron continuation policy. Only hidden `:run:` session rows
+   * carry this while detached generated-media work may still wake the run.
+   */
+  cronRunContinuation?: {
+    lifecycleRevision: string;
+    phase: "running" | "ready" | "continuing";
+    /** True only after this row's session changes were projected to the stable cron row. */
+    basePersisted?: boolean;
+    ownerRunId?: string;
+    /** Gateway lifecycle generation that owns a continuing claim. */
+    ownerLifecycleGeneration?: string;
+    /** CLI backend whose native session must exist before media work detaches. */
+    cliExecutionProvider?: string;
+    toolsAllow?: string[];
+    toolsAllowIsDefault?: boolean;
+    cliSessionBindingFacts?: {
+      extraSystemPromptStatic?: string;
+      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+      requireExplicitMessageTarget?: boolean;
+    };
+  };
   fastMode?: FastMode;
   verboseLevel?: string;
   traceLevel?: string;

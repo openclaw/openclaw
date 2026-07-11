@@ -1,6 +1,13 @@
 // Slack tests cover shared interactive plugin behavior.
 import { describe, expect, it } from "vitest";
-import { buildSlackInteractiveBlocks, buildSlackPresentationBlocks } from "./blocks-render.js";
+import {
+  buildSlackInteractiveBlocks,
+  buildSlackPresentationBlocks,
+  canRenderSlackPresentation,
+  canRenderSlackPresentationTables,
+  resolveSlackBlockOffsets,
+  type SlackBlock,
+} from "./blocks-render.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 
 describe("buildSlackInteractiveBlocks", () => {
@@ -427,6 +434,189 @@ describe("buildSlackPresentationBlocks", () => {
         ],
       },
     ]);
+  });
+
+  it("renders Slack-incompatible charts as visible text", () => {
+    const title = "A".repeat(51);
+
+    expect(
+      buildSlackPresentationBlocks({
+        blocks: [
+          {
+            type: "chart",
+            chartType: "pie",
+            title,
+            segments: [{ label: "Product", value: 60 }],
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        type: "context",
+        elements: [{ type: "mrkdwn", text: `${title} (pie chart)\n- Product: 60`, verbatim: true }],
+      },
+    ]);
+  });
+
+  it("renders at most two native charts per message", () => {
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        {
+          type: "chart",
+          chartType: "pie",
+          title: "Issue share",
+          segments: [{ label: "Open", value: 5 }],
+        },
+        {
+          type: "chart",
+          chartType: "bar",
+          title: "Weekly volume",
+          categories: ["Mon"],
+          series: [{ name: "Messages", values: [12] }],
+        },
+        {
+          type: "chart",
+          chartType: "area",
+          title: "Active sessions",
+          categories: ["09:00"],
+          series: [{ name: "Sessions", values: [3] }],
+        },
+      ],
+    });
+
+    expect(blocks.map((block) => block.type)).toEqual([
+      "data_visualization",
+      "data_visualization",
+      "context",
+    ]);
+    expect(blocks[2]).toEqual({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: "Active sessions (area chart)\n- Sessions: 09:00: 3",
+          verbatim: true,
+        },
+      ],
+    });
+  });
+
+  it("counts existing native chart blocks toward Slack's per-message limit", () => {
+    const nativeChart = {
+      type: "data_visualization",
+      title: "Existing chart",
+      chart: { type: "pie", segments: [{ label: "Open", value: 5 }] },
+    } as SlackBlock;
+    const offsets = resolveSlackBlockOffsets([nativeChart, nativeChart]);
+
+    expect(
+      buildSlackPresentationBlocks(
+        {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "pie",
+              title: "Presentation chart",
+              segments: [{ label: "Closed", value: 8 }],
+            },
+          ],
+        },
+        offsets,
+      ),
+    ).toEqual([
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: "Presentation chart (pie chart)\n- Closed: 8",
+            verbatim: true,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("renders portable tables as native data tables with typed numeric cells", () => {
+    expect(
+      buildSlackPresentationBlocks({
+        blocks: [
+          {
+            type: "table",
+            caption: "Pipeline report",
+            headers: ["Account", "Stage", "ARR"],
+            rows: [
+              ["Acme", "Won", 125000],
+              ["Globex", "Review", 82000],
+            ],
+            rowHeaderColumnIndex: 0,
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        type: "data_table",
+        caption: "Pipeline report",
+        row_header_column_index: 0,
+        rows: [
+          [
+            { type: "raw_text", text: "Account" },
+            { type: "raw_text", text: "Stage" },
+            { type: "raw_text", text: "ARR" },
+          ],
+          [
+            { type: "raw_text", text: "Acme" },
+            { type: "raw_text", text: "Won" },
+            { type: "raw_number", value: 125000, text: "125000" },
+          ],
+          [
+            { type: "raw_text", text: "Globex" },
+            { type: "raw_text", text: "Review" },
+            { type: "raw_number", value: 82000, text: "82000" },
+          ],
+        ],
+      },
+    ]);
+  });
+
+  it("keeps over-budget tables out of the native block renderer", () => {
+    const table = (caption: string, value: string) => ({
+      type: "table" as const,
+      caption,
+      headers: ["Account"],
+      rows: Array.from({ length: 100 }, (_entry, index) => [`${String(index)}-${value}`]),
+    });
+    const presentation = {
+      blocks: [table("First", "a".repeat(45)), table("Second", "b".repeat(55))],
+    };
+
+    expect(canRenderSlackPresentation(presentation)).toBe(false);
+    expect(canRenderSlackPresentationTables(presentation)).toBe(false);
+    expect(buildSlackPresentationBlocks(presentation)).toEqual([]);
+  });
+
+  it("counts raw native tables against the aggregate Slack table budget", () => {
+    const nativeTable = {
+      type: "data_table",
+      caption: "Existing",
+      rows: [[{ type: "raw_text", text: "Name" }], [{ type: "raw_text", text: "x".repeat(9995) }]],
+    } as SlackBlock;
+
+    const blocks = buildSlackPresentationBlocks(
+      {
+        blocks: [
+          {
+            type: "table",
+            caption: "Portable",
+            headers: ["Name"],
+            rows: [["Acme"]],
+          },
+        ],
+      },
+      resolveSlackBlockOffsets([nativeTable]),
+    );
+
+    expect(blocks).toEqual([]);
   });
 });
 

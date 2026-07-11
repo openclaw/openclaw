@@ -5,18 +5,26 @@ import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../../config/config.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import type { CliBackendConfig } from "../../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertContextEngineHostSupport,
   buildGenericCliContextEngineHostSupport,
 } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
+import {
+  activateMcpLoopbackClientGrantCapture,
+  deactivateMcpLoopbackClientGrantCapture,
+  mintMcpLoopbackClientGrant,
+  revokeMcpLoopbackClientGrant,
+  type McpLoopbackRequestContext,
+} from "../../gateway/mcp-grant-store.js";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
-  resolveMcpLoopbackBearerToken,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
 import { buildCrestodianToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
@@ -89,6 +97,7 @@ import {
   isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
 } from "../workspace.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import { getClaudeLiveSessionGenerationForOwner } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
@@ -108,7 +117,10 @@ const prepareDeps = {
   getActiveMcpLoopbackRuntime,
   ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
-  resolveMcpLoopbackBearerToken,
+  activateMcpLoopbackClientGrantCapture,
+  deactivateMcpLoopbackClientGrantCapture,
+  mintMcpLoopbackClientGrant,
+  revokeMcpLoopbackClientGrant,
   resolveMcpLoopbackScopedTools,
   resolveOpenClawReferencePaths: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
@@ -116,6 +128,7 @@ const prepareDeps = {
   prepareClaudeCliSkillsPlugin,
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
+  getClaudeLiveSessionGenerationForOwner,
   resolveApiKeyForProfile,
 };
 
@@ -140,6 +153,156 @@ function canTransportSystemPrompt(backend: CliBackendConfig): boolean {
       backend.systemPromptArg || backend.systemPromptFileArg || backend.systemPromptFileConfigKey,
     )
   );
+}
+
+function normalizeOptionalMcpContextValue(value: string | undefined): string | undefined {
+  return value?.trim() || undefined;
+}
+
+function buildCliMcpExecSession(
+  sessionEntry: RunCliAgentParams["sessionEntry"],
+): McpLoopbackRequestContext["execSession"] {
+  const execSession = {
+    execHost: normalizeOptionalMcpContextValue(sessionEntry?.execHost),
+    execSecurity: normalizeOptionalMcpContextValue(sessionEntry?.execSecurity),
+    execAsk: normalizeOptionalMcpContextValue(sessionEntry?.execAsk),
+    execNode: normalizeOptionalMcpContextValue(sessionEntry?.execNode),
+  };
+  return Object.values(execSession).some(Boolean) ? execSession : undefined;
+}
+
+function buildCliMcpExecOverrides(
+  execOverrides: RunCliAgentParams["execOverrides"],
+): McpLoopbackRequestContext["execOverrides"] {
+  if (!execOverrides) {
+    return undefined;
+  }
+  const scopedOverrides = {
+    ...(execOverrides.host !== undefined ? { host: execOverrides.host } : {}),
+    ...(execOverrides.security !== undefined ? { security: execOverrides.security } : {}),
+    ...(execOverrides.ask !== undefined ? { ask: execOverrides.ask } : {}),
+    ...(execOverrides.node !== undefined ? { node: execOverrides.node } : {}),
+  };
+  return Object.keys(scopedOverrides).length > 0 ? scopedOverrides : undefined;
+}
+
+function buildCliMcpBashElevated(
+  bashElevated: RunCliAgentParams["bashElevated"],
+): McpLoopbackRequestContext["bashElevated"] {
+  if (!bashElevated) {
+    return undefined;
+  }
+  return {
+    enabled: bashElevated.enabled,
+    allowed: bashElevated.allowed,
+    defaultLevel: bashElevated.defaultLevel,
+    ...(bashElevated.fullAccessAvailable !== undefined
+      ? { fullAccessAvailable: bashElevated.fullAccessAvailable }
+      : {}),
+    ...(bashElevated.fullAccessBlockedReason !== undefined
+      ? { fullAccessBlockedReason: bashElevated.fullAccessBlockedReason }
+      : {}),
+  };
+}
+
+function buildCliMcpChannelContext(
+  channelContext: RunCliAgentParams["channelContext"],
+  senderId?: string | null,
+): McpLoopbackRequestContext["channelContext"] {
+  const resolvedSenderId =
+    normalizeOptionalMcpContextValue(senderId ?? undefined) ??
+    normalizeOptionalMcpContextValue(channelContext?.sender?.id);
+  const chatId = normalizeOptionalMcpContextValue(channelContext?.chat?.id);
+  if (!resolvedSenderId && !chatId) {
+    return undefined;
+  }
+  return {
+    ...(resolvedSenderId ? { sender: { id: resolvedSenderId } } : {}),
+    ...(chatId ? { chat: { id: chatId } } : {}),
+  };
+}
+
+function resolveCliMcpMessageProvider(
+  run: Pick<RunCliAgentParams, "messageProvider" | "messageChannel">,
+): string | undefined {
+  return normalizeMessageChannel(run.messageProvider ?? run.messageChannel) ?? undefined;
+}
+
+function resolveCliMcpSessionKey(
+  run: Pick<RunCliAgentParams, "sessionKey">,
+  config: OpenClawConfig,
+  agentId: string,
+): string {
+  return canonicalizeMainSessionAlias({
+    cfg: config,
+    agentId,
+    sessionKey: run.sessionKey?.trim() || "main",
+  });
+}
+
+function buildCliMcpGrantContext(params: {
+  run: RunCliAgentParams;
+  config: OpenClawConfig;
+  requireExplicitMessageTarget: boolean;
+  agentId: string;
+  modelProvider: string;
+  modelId: string;
+}): McpLoopbackRequestContext {
+  const sessionKey = resolveCliMcpSessionKey(params.run, params.config, params.agentId);
+  const clientCaps = uniqueStrings(
+    (params.run.clientCaps ?? []).map((cap) => cap.trim()).filter(Boolean),
+  );
+  const execSession = buildCliMcpExecSession(params.run.sessionEntry);
+  const execOverrides = buildCliMcpExecOverrides(params.run.execOverrides);
+  const bashElevated = buildCliMcpBashElevated(params.run.bashElevated);
+  const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
+  const senderName = normalizeOptionalMcpContextValue(params.run.senderName ?? undefined);
+  const senderUsername = normalizeOptionalMcpContextValue(params.run.senderUsername ?? undefined);
+  const senderE164 = normalizeOptionalMcpContextValue(params.run.senderE164 ?? undefined);
+  const groupId = normalizeOptionalMcpContextValue(params.run.groupId ?? undefined);
+  const groupChannel = normalizeOptionalMcpContextValue(params.run.groupChannel ?? undefined);
+  const groupSpace = normalizeOptionalMcpContextValue(params.run.groupSpace ?? undefined);
+  const spawnedBy = normalizeOptionalMcpContextValue(params.run.spawnedBy ?? undefined);
+  return {
+    sessionKey,
+    runtimePolicySessionKey: normalizeOptionalMcpContextValue(params.run.runtimePolicySessionKey),
+    agentId: params.agentId,
+    sessionId: normalizeOptionalMcpContextValue(params.run.sessionId),
+    runId: normalizeOptionalMcpContextValue(params.run.runId),
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+    messageProvider: resolveCliMcpMessageProvider(params.run),
+    clientCaps: clientCaps.length > 0 ? clientCaps : undefined,
+    currentChannelId: normalizeOptionalMcpContextValue(params.run.currentChannelId),
+    currentThreadTs: normalizeOptionalMcpContextValue(params.run.currentThreadTs),
+    currentMessageId:
+      params.run.currentMessageId == null
+        ? undefined
+        : normalizeOptionalMcpContextValue(String(params.run.currentMessageId)),
+    currentInboundAudio: params.run.currentInboundAudio === true ? true : undefined,
+    accountId: normalizeOptionalMcpContextValue(params.run.agentAccountId),
+    inboundEventKind: params.run.currentInboundEventKind,
+    sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
+    requireExplicitMessageTarget: params.requireExplicitMessageTarget ? true : undefined,
+    senderIsOwner: params.run.senderIsOwner === true,
+    nodeExecAllowed: true,
+    ...(execSession ? { execSession } : {}),
+    ...(execOverrides ? { execOverrides } : {}),
+    ...(bashElevated ? { bashElevated } : {}),
+    ...(params.run.trigger ? { trigger: params.run.trigger } : {}),
+    ...(normalizeOptionalMcpContextValue(params.run.approvalReviewerDeviceId)
+      ? { approvalReviewerDeviceId: params.run.approvalReviewerDeviceId?.trim() }
+      : {}),
+    ...(channelContext ? { channelContext } : {}),
+    ...(senderName ? { senderName } : {}),
+    ...(senderUsername ? { senderUsername } : {}),
+    ...(senderE164 ? { senderE164 } : {}),
+    ...(groupId ? { groupId } : {}),
+    ...(groupChannel ? { groupChannel } : {}),
+    ...(groupSpace ? { groupSpace } : {}),
+    ...(spawnedBy ? { spawnedBy } : {}),
+  };
 }
 
 function buildCliSessionDriftUserContext(
@@ -438,6 +601,10 @@ export async function prepareCliRunContext(
     : undefined;
 
   const modelId = (params.model ?? "default").trim() || "default";
+  const modelProvider =
+    normalizeOptionalMcpContextValue(params.modelProvider) ??
+    normalizeOptionalMcpContextValue(params.provider) ??
+    params.provider;
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
   const isClaudeCli = isClaudeCliProvider(params.provider);
@@ -567,45 +734,83 @@ export async function prepareCliRunContext(
   let preparedExecution: Awaited<ReturnType<NonNullable<typeof backendResolved.prepareExecution>>> =
     undefined;
   try {
+    const mcpClientGrant = mcpLoopbackRuntime
+      ? prepareDeps.mintMcpLoopbackClientGrant({
+          context: buildCliMcpGrantContext({
+            run: params,
+            config: params.config ?? getRuntimeConfig(),
+            requireExplicitMessageTarget,
+            agentId: sessionAgentId,
+            modelProvider,
+            modelId,
+          }),
+          runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+        })
+      : undefined;
+    const mcpClientGrantCapture =
+      mcpClientGrant && mcpLoopbackRuntime
+        ? {
+            activate: (captureKey: string) => {
+              const activated = prepareDeps.activateMcpLoopbackClientGrantCapture({
+                token: mcpClientGrant.token,
+                runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+                captureKey,
+              });
+              if (!activated) {
+                throw new Error("CLI MCP client grant is no longer valid for this Gateway runtime");
+              }
+            },
+            deactivate: (captureKey: string) => {
+              prepareDeps.deactivateMcpLoopbackClientGrantCapture({
+                token: mcpClientGrant.token,
+                runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+                captureKey,
+              });
+            },
+          }
+        : undefined;
+    let mcpClientGrantRevoked = false;
+    const cleanupMcpClientGrant = mcpClientGrant
+      ? async () => {
+          if (mcpClientGrantRevoked) {
+            return;
+          }
+          mcpClientGrantRevoked = true;
+          prepareDeps.revokeMcpLoopbackClientGrant(mcpClientGrant.token);
+        }
+      : undefined;
+    cleanupPreparedResources = cleanupMcpClientGrant;
     const preparedBackend = await prepareCliBundleMcpConfig({
       enabled: bundleMcpEnabled || crestodianMcpConfig !== undefined,
       mode: backendResolved.bundleMcpMode,
       backend: backendResolved.config,
       workspaceDir,
       config: params.config,
+      agentDir,
       ...(crestodianMcpConfig ? { exclusiveConfig: crestodianMcpConfig } : {}),
       additionalConfig: mcpLoopbackRuntime
         ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
         : undefined,
-      env: mcpLoopbackRuntime
-        ? {
-            OPENCLAW_MCP_TOKEN: prepareDeps.resolveMcpLoopbackBearerToken(
-              mcpLoopbackRuntime,
-              params.senderIsOwner === true,
-            ),
-            OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
-            OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
-            OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
-            OPENCLAW_MCP_SESSION_ID: params.sessionId,
-            OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
-            OPENCLAW_MCP_CLIENT_CAPS: params.clientCaps?.join(",") ?? "",
-            OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? "",
-            OPENCLAW_MCP_CURRENT_THREAD_TS: params.currentThreadTs ?? "",
-            OPENCLAW_MCP_CURRENT_MESSAGE_ID:
-              params.currentMessageId != null ? String(params.currentMessageId) : "",
-            OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: params.currentInboundAudio === true ? "true" : "",
-            OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
-            OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
-            OPENCLAW_MCP_TASK_SUGGESTION_DELIVERY_MODE: params.taskSuggestionDeliveryMode ?? "",
-            OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET: requireExplicitMessageTarget
-              ? "true"
-              : "",
-            OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
-          }
-        : undefined,
+      env:
+        mcpLoopbackRuntime && mcpClientGrant
+          ? {
+              OPENCLAW_MCP_TOKEN: mcpClientGrant.token,
+              OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
+            }
+          : undefined,
       warn: (message) => cliBackendLog.warn(message),
     });
-    cleanupPreparedResources = preparedBackend.cleanup;
+    const cleanupPreparedBackend =
+      preparedBackend.cleanup || cleanupMcpClientGrant
+        ? async () => {
+            try {
+              await preparedBackend.cleanup?.();
+            } finally {
+              await cleanupMcpClientGrant?.();
+            }
+          }
+        : undefined;
+    cleanupPreparedResources = cleanupPreparedBackend;
     const prepareExecutionContext = {
       config: params.config,
       workspaceDir,
@@ -630,12 +835,12 @@ export async function prepareCliRunContext(
       },
     );
     const preparedBackendCleanup =
-      preparedBackend.cleanup || preparedExecution?.cleanup
+      cleanupPreparedBackend || preparedExecution?.cleanup
         ? async () => {
             try {
               await preparedExecution?.cleanup?.();
             } finally {
-              await preparedBackend.cleanup?.();
+              await cleanupPreparedBackend?.();
             }
           }
         : undefined;
@@ -703,18 +908,27 @@ export async function prepareCliRunContext(
       ...(preparedBackendBeforeExecution
         ? { beforeExecution: preparedBackendBeforeExecution }
         : {}),
+      ...(mcpClientGrantCapture ? { mcpClientGrantCapture } : {}),
       ...(preparedCleanup ? { cleanup: preparedCleanup } : {}),
     };
     const promptTools =
       bundleMcpEnabled && mcpLoopbackRuntime
         ? prepareDeps.resolveMcpLoopbackScopedTools({
             cfg: params.config ?? getRuntimeConfig(),
-            sessionKey: params.sessionKey ?? "",
-            messageProvider: params.messageChannel ?? params.messageProvider,
+            sessionKey: resolveCliMcpSessionKey(
+              params,
+              params.config ?? getRuntimeConfig(),
+              sessionAgentId,
+            ),
+            runtimePolicySessionKey: normalizeOptionalMcpContextValue(
+              params.runtimePolicySessionKey,
+            ),
+            agentId: sessionAgentId,
+            messageProvider: resolveCliMcpMessageProvider(params),
             clientCaps: params.clientCaps,
             currentChannelId: params.currentChannelId,
-            // CLI binding hashes must use session-stable prompt facts. Per-sender
-            // and per-message scope stays in the runtime MCP env/list-call path.
+            // CLI binding hashes omit per-message facts, but identity, owner, and
+            // model policy must match the runtime MCP grant's advertised tools.
             currentThreadTs: undefined,
             currentMessageId: undefined,
             currentInboundAudio: undefined,
@@ -723,14 +937,36 @@ export async function prepareCliRunContext(
             sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
             taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
             requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
-            senderIsOwner: undefined,
+            senderIsOwner: params.senderIsOwner === true,
+            nodeExecAllowed: true,
+            modelProvider,
+            modelId,
+            execSession: buildCliMcpExecSession(params.sessionEntry),
+            execOverrides: buildCliMcpExecOverrides(params.execOverrides),
+            bashElevated: buildCliMcpBashElevated(params.bashElevated),
+            trigger: params.trigger,
+            approvalReviewerDeviceId: normalizeOptionalMcpContextValue(
+              params.approvalReviewerDeviceId,
+            ),
+            channelContext: buildCliMcpChannelContext(params.channelContext, params.senderId),
+            senderName: normalizeOptionalMcpContextValue(params.senderName ?? undefined),
+            senderUsername: normalizeOptionalMcpContextValue(params.senderUsername ?? undefined),
+            senderE164: normalizeOptionalMcpContextValue(params.senderE164 ?? undefined),
+            groupId: normalizeOptionalMcpContextValue(params.groupId ?? undefined),
+            groupChannel: normalizeOptionalMcpContextValue(params.groupChannel ?? undefined),
+            groupSpace: normalizeOptionalMcpContextValue(params.groupSpace ?? undefined),
+            spawnedBy: normalizeOptionalMcpContextValue(params.spawnedBy ?? undefined),
           }).tools
         : [];
     const promptToolNamesHash =
       bundleMcpEnabled && mcpLoopbackRuntime
         ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
         : undefined;
-    const reusableCliSessionCandidate: CliReusableSession = isSideQuestion
+    // `sessionMode: none` may still use a live transport in-process, but neither a
+    // returned nor previously stored id is authority for cross-process continuity.
+    const ignoreCliSessionCandidate =
+      isSideQuestion || preparedBackendFinal.backend.sessionMode === "none";
+    const reusableCliSessionCandidate: CliReusableSession = ignoreCliSessionCandidate
       ? { mode: "none" }
       : params.cliSessionBinding
         ? resolveCliSessionReuse({
@@ -763,6 +999,22 @@ export async function prepareCliRunContext(
         sessionId: candidateClaudeCliSessionId,
         workspaceDir: cwd,
       }));
+    const managedClaudeLiveSessionGeneration =
+      claudeCliTranscriptMissing &&
+      backendResolved.id === "claude-cli" &&
+      "liveSession" in preparedBackendFinal.backend &&
+      preparedBackendFinal.backend.liveSession === "claude-stdio" &&
+      preparedBackendFinal.backend.output === "jsonl" &&
+      preparedBackendFinal.backend.input === "stdin" &&
+      prepareDeps.getClaudeLiveSessionGenerationForOwner({
+        backendId: backendResolved.id,
+        agentAccountId: params.agentAccountId,
+        agentId: params.agentId,
+        authProfileId: effectiveAuthProfileId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      });
+    const hasManagedClaudeLiveSession = Boolean(managedClaudeLiveSessionGeneration);
     const claudeCliTranscriptOrphanedToolUse =
       hasClaudeCliCandidate &&
       !claudeCliTranscriptMissing &&
@@ -771,7 +1023,7 @@ export async function prepareCliRunContext(
         workspaceDir: cwd,
       }));
     const claudeCliInvalidatedReason: "missing-transcript" | "orphaned-tool-use" | undefined =
-      claudeCliTranscriptMissing
+      claudeCliTranscriptMissing && !hasManagedClaudeLiveSession
         ? "missing-transcript"
         : claudeCliTranscriptOrphanedToolUse
           ? "orphaned-tool-use"
@@ -1097,6 +1349,9 @@ export async function prepareCliRunContext(
       backendResolved,
       preparedBackend: preparedBackendFinal,
       reusableCliSession,
+      ...(managedClaudeLiveSessionGeneration
+        ? { requiredClaudeLiveSessionGeneration: managedClaudeLiveSessionGeneration }
+        : {}),
       hadSessionFile,
       contextEngineConfig,
       contextEngine,

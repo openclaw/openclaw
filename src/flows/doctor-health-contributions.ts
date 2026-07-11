@@ -518,9 +518,21 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
     await import("../commands/doctor-state-migrations.js");
   const { note } = await loadNoteModule();
-  const legacyState = await detectLegacyStateMigrations({ cfg: ctx.cfg });
+  // Only a direct operator-owned doctor may inspect the default state dir for
+  // imports. Automated repair callers explicitly lack this capability so a
+  // temporary OPENCLAW_STATE_DIR cannot capture and archive production trust.
+  const operatorCanApproveCrossStateDirImports =
+    ctx.prompter.repairMode.canPrompt || ctx.prompter.shouldRepair;
+  const legacyState = await detectLegacyStateMigrations({
+    cfg: ctx.cfg,
+    crossStateDirImports:
+      ctx.options.crossStateDirImports === true && operatorCanApproveCrossStateDirImports,
+  });
   if (legacyState.warnings.length > 0) {
     note(legacyState.warnings.join("\n"), "Doctor warnings");
+  }
+  if (legacyState.notices.length > 0) {
+    note(legacyState.notices.join("\n"), "Doctor notices");
   }
   if (legacyState.preview.length === 0) {
     return;
@@ -1268,7 +1280,6 @@ async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { formatCliCommand } = await loadCommandFormatModule();
   const { applyWizardMetadata } = await loadOnboardHelpersModule();
   const { replaceConfigFile } = await loadConfigModule();
   const { logConfigUpdated } = await import("../config/logging.js");
@@ -1301,6 +1312,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
           : {}),
       },
     });
+    // logConfigUpdated already prints the `.bak` backup line when it exists.
     logConfigUpdated(ctx.runtime);
     const preUpdateSnapshotPath = `${ctx.configPath}.pre-update`;
     if (updateDoctorRun && fs.existsSync(preUpdateSnapshotPath)) {
@@ -1308,14 +1320,6 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
         `Update changed config; pre-update backup: ${shortenHomePath(preUpdateSnapshotPath)}`,
       );
     }
-    const backupPath = `${ctx.configPath}.bak`;
-    if (fs.existsSync(backupPath)) {
-      ctx.runtime.log(`Backup: ${shortenHomePath(backupPath)}`);
-    }
-    return;
-  }
-  if (!ctx.prompter.shouldRepair) {
-    ctx.runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
   }
 }
 
@@ -1496,6 +1500,10 @@ async function runCoreHealthFindingNote(
 
 async function runProviderCatalogProjectionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await runCoreHealthFindingNote(ctx, "core/doctor/provider-catalog-projection");
+}
+
+async function runLocalAudioAccelerationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await runCoreHealthFindingNote(ctx, "core/doctor/local-audio-acceleration");
 }
 
 async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -2021,6 +2029,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Provider catalog projection",
       healthCheckIds: ["core/doctor/provider-catalog-projection"],
       run: runProviderCatalogProjectionHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:local-audio-acceleration",
+      label: "Local audio acceleration",
+      healthCheckIds: ["core/doctor/local-audio-acceleration"],
+      run: runLocalAudioAccelerationHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:runtime-tool-schemas",

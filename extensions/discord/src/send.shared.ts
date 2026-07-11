@@ -278,13 +278,12 @@ async function resolveDiscordTargetChannelId(
   return await resolveChannelId(rest, recipient, request);
 }
 
-export async function resolveDiscordChannelType(
+export async function resolveDiscordChannel(
   rest: RequestClient,
   channelId: string,
-): Promise<number | undefined> {
+): Promise<APIChannel | undefined> {
   try {
-    const channel = (await getChannel(rest, channelId)) as APIChannel | undefined;
-    return channel?.type;
+    return await getChannel(rest, channelId);
   } catch {
     return undefined;
   }
@@ -303,15 +302,6 @@ export function buildDiscordTextChunks(
     chunkMode: opts.chunkMode,
   });
   return resolveTextChunksWithFallback(text, chunks);
-}
-
-export function toDiscordFileBlob(data: Blob | Uint8Array): Blob {
-  if (data instanceof Blob) {
-    return data;
-  }
-  const arrayBuffer = new ArrayBuffer(data.byteLength);
-  new Uint8Array(arrayBuffer).set(data);
-  return new Blob([arrayBuffer]);
 }
 
 export type DiscordSendProgress = (
@@ -451,7 +441,6 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars })
     : [];
   const caption = chunks[0] ?? "";
-  const fileData = toDiscordFileBlob(media.buffer);
   const captionComponents = resolveDiscordSendComponents({
     components,
     text: caption,
@@ -471,7 +460,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     replyTo: resolveDiscordReplyMessageId(reply, true),
     files: [
       {
-        data: fileData,
+        data: media.buffer,
         name: resolvedFileName,
       },
     ],

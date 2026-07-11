@@ -5,15 +5,38 @@ import OpenClawKit
 import ServiceManagement
 import SwiftUI
 
+enum ExecApprovalsPolicyLoadState: Equatable {
+    case loading
+    case available
+    case unavailable(String)
+
+    var isAvailable: Bool {
+        self == .available
+    }
+
+    var errorMessage: String? {
+        guard case let .unavailable(message) = self else { return nil }
+        return message
+    }
+}
+
 @MainActor
 @Observable
 final class AppState {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app-state")
+    private static let execApprovalsReadRetryAttempts = 5
+    private static let execApprovalsReadUnavailableMessage = "Exec approvals unavailable. Retry to refresh."
 
     private let isPreview: Bool
+    @ObservationIgnored private let execApprovalsDefaultsAsyncResolver:
+        @MainActor () async -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError>
+    @ObservationIgnored private let execApprovalsReadRetryDelay: Duration
+    @ObservationIgnored private var execApprovalsReadRetryTask: Task<Void, Never>?
+    @ObservationIgnored private var execApprovalsReadGeneration = 0
     private var isInitializing = true
     private var isApplyingRemoteTokenConfig = false
     private var configWatcher: ConfigFileWatcher?
+    private var lastConfigFingerprint: Data?
     private var suppressVoiceWakeGlobalSync = false
     private var voiceWakeGlobalSyncTask: Task<Void, Never>?
 
@@ -233,16 +256,9 @@ final class AppState {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
     }
 
-    var execApprovalMode: ExecApprovalQuickMode {
-        didSet {
-            self.ifNotPreview {
-                ExecApprovalsStore.updateDefaults { defaults in
-                    defaults.security = self.execApprovalMode.security
-                    defaults.ask = self.execApprovalMode.ask
-                }
-            }
-        }
-    }
+    var execApprovalMode: ExecApprovalQuickMode
+    var execApprovalPolicyLoadState: ExecApprovalsPolicyLoadState
+    var execApprovalMutationError: String?
 
     /// Tracks whether the Canvas panel is currently visible (not persisted).
     var canvasPanelVisible: Bool = false
@@ -293,9 +309,20 @@ final class AppState {
 
     private var earBoostTask: Task<Void, Never>?
 
-    init(preview: Bool = false) {
+    init(
+        preview: Bool = false,
+        execApprovalsDefaultsAsyncResolver: @escaping @MainActor () async -> Result<
+            ExecApprovalsResolvedDefaults,
+            ExecApprovalsReadError,
+        > = {
+            await ExecApprovalsStore.resolveDefaultsAsyncResult()
+        },
+        execApprovalsReadRetryDelay: Duration = .milliseconds(250))
+    {
         let isPreview = preview || ProcessInfo.processInfo.isRunningTests
         self.isPreview = isPreview
+        self.execApprovalsDefaultsAsyncResolver = execApprovalsDefaultsAsyncResolver
+        self.execApprovalsReadRetryDelay = execApprovalsReadRetryDelay
         if !isPreview {
             migrateLegacyDefaults()
         }
@@ -365,6 +392,7 @@ final class AppState {
         }
 
         let configRoot = OpenClawConfigFile.loadDict()
+        self.lastConfigFingerprint = Self.configFingerprint(configRoot)
         let configRemoteToken = GatewayRemoteConfig.resolveTokenValue(root: configRoot)
         let configRemoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
         let configRemoteTransport = configRemoteResolution.transport
@@ -403,8 +431,8 @@ final class AppState {
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
         self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
-        let execDefaults = ExecApprovalsStore.resolveDefaults()
-        self.execApprovalMode = ExecApprovalQuickMode.from(security: execDefaults.security, ask: execDefaults.ask)
+        self.execApprovalMode = .deny
+        self.execApprovalPolicyLoadState = .loading
         self.peekabooBridgeEnabled = UserDefaults.standard
             .object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true
         if !self.isPreview {
@@ -428,12 +456,16 @@ final class AppState {
 
         self.isInitializing = false
         if !self.isPreview {
+            self.scheduleExecApprovalModeReadRetry()
+        }
+        if !self.isPreview {
             self.startConfigWatcher()
         }
     }
 
     @MainActor
     deinit {
+        self.execApprovalsReadRetryTask?.cancel()
         self.configWatcher?.stop()
     }
 
@@ -579,8 +611,18 @@ final class AppState {
 
     private func applyConfigFromDisk() {
         let root = OpenClawConfigFile.loadDict()
+        let fingerprint = Self.configFingerprint(root)
+        let changed = fingerprint != self.lastConfigFingerprint
+        self.lastConfigFingerprint = fingerprint
         self.applyConfigOverrides(root)
         MacNodeModeCoordinator.shared.refresh()
+        if changed {
+            NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+        }
+    }
+
+    private static func configFingerprint(_ root: [String: Any]) -> Data? {
+        try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
     }
 
     private func applyConfigOverrides(_ root: [String: Any]) {
@@ -733,6 +775,8 @@ final class AppState {
             Self.logger.warning("gateway config sync rejected to protect persisted gateway auth/mode")
             return
         }
+        self.lastConfigFingerprint = Self.configFingerprint(synced.root)
+        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
     }
 
     func triggerVoiceEars(ttl: TimeInterval? = 5) {
@@ -845,6 +889,112 @@ final class AppState {
     private func storeChime(_ chime: VoiceWakeChime, key: String) {
         guard let data = try? JSONEncoder().encode(chime) else { return }
         UserDefaults.standard.set(data, forKey: key)
+    }
+}
+
+// MARK: - Exec approval settings
+
+extension AppState {
+    var execApprovalPolicyAvailable: Bool {
+        self.execApprovalPolicyLoadState.isAvailable
+    }
+
+    var execApprovalLoadError: String? {
+        self.execApprovalPolicyLoadState.errorMessage
+    }
+
+    func updateExecApprovalMode(_ mode: ExecApprovalQuickMode) {
+        guard !self.isPreview else {
+            self.syncExecApprovalMode(mode)
+            return
+        }
+        let result = ExecApprovalsStore.updateDefaults { defaults in
+            defaults.security = mode.security
+            defaults.ask = mode.ask
+        }
+        self.applyExecApprovalModeMutation(mode, result: result)
+    }
+
+    func applyExecApprovalModeMutation(
+        _ mode: ExecApprovalQuickMode,
+        result: Result<Void, ExecApprovalsMutationError>)
+    {
+        switch result {
+        case .success:
+            self.syncExecApprovalMode(mode)
+        case let .failure(error):
+            self.execApprovalMutationError = error.message
+        }
+    }
+
+    func syncExecApprovalMode(_ mode: ExecApprovalQuickMode) {
+        self.execApprovalsReadGeneration += 1
+        self.execApprovalsReadRetryTask?.cancel()
+        self.execApprovalsReadRetryTask = nil
+        self.execApprovalMode = mode
+        self.execApprovalPolicyLoadState = .available
+        self.execApprovalMutationError = nil
+    }
+
+    func retryExecApprovalModeRead() {
+        self.scheduleExecApprovalModeReadRetry()
+    }
+
+    func waitForExecApprovalModeRead() async {
+        await self.execApprovalsReadRetryTask?.value
+    }
+
+    func recoverExecApprovalModeRead(maxAttempts: Int) async {
+        self.execApprovalsReadGeneration += 1
+        let generation = self.execApprovalsReadGeneration
+        self.execApprovalsReadRetryTask?.cancel()
+        self.execApprovalsReadRetryTask = nil
+        await self.performExecApprovalModeReadAttempts(
+            maxAttempts: maxAttempts,
+            generation: generation)
+    }
+
+    private func performExecApprovalModeReadAttempts(maxAttempts: Int, generation: Int) async {
+        guard self.execApprovalsReadGeneration == generation else { return }
+        guard maxAttempts > 0 else {
+            self.execApprovalPolicyLoadState = .unavailable(Self.execApprovalsReadUnavailableMessage)
+            return
+        }
+        self.execApprovalPolicyLoadState = .loading
+        for attempt in 0..<maxAttempts {
+            if attempt > 0 {
+                do {
+                    try await Task.sleep(for: self.execApprovalsReadRetryDelay)
+                } catch {
+                    return
+                }
+            }
+            guard self.execApprovalsReadGeneration == generation else { return }
+            let result = await self.execApprovalsDefaultsAsyncResolver()
+            guard self.execApprovalsReadGeneration == generation else { return }
+            switch result {
+            case let .success(defaults):
+                self.syncExecApprovalMode(
+                    ExecApprovalQuickMode.from(security: defaults.security, ask: defaults.ask))
+                return
+            case .failure:
+                continue
+            }
+        }
+        guard self.execApprovalsReadGeneration == generation else { return }
+        self.execApprovalPolicyLoadState = .unavailable(Self.execApprovalsReadUnavailableMessage)
+    }
+
+    private func scheduleExecApprovalModeReadRetry() {
+        self.execApprovalsReadGeneration += 1
+        let generation = self.execApprovalsReadGeneration
+        self.execApprovalsReadRetryTask?.cancel()
+        self.execApprovalPolicyLoadState = .loading
+        self.execApprovalsReadRetryTask = Task { [weak self] in
+            await self?.performExecApprovalModeReadAttempts(
+                maxAttempts: Self.execApprovalsReadRetryAttempts,
+                generation: generation)
+        }
     }
 }
 
