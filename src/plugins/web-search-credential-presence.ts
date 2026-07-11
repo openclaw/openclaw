@@ -386,6 +386,44 @@ function hasAuthProfileProviderCandidate(params: {
   }
 }
 
+function hasProviderConfiguredCredentialFallbackCandidate(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  manifestRecords: readonly PluginManifestRecord[];
+  searchConfig: unknown;
+}): boolean {
+  const providerId = getConfiguredProviderId(params.searchConfig);
+  const manifestRecords = providerId
+    ? params.manifestRecords.filter((plugin) =>
+        (plugin.contracts?.webSearchProviders ?? []).includes(providerId),
+      )
+    : params.manifestRecords;
+  if (manifestRecords.length === 0) {
+    return false;
+  }
+  try {
+    const providers = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+      onlyPluginIds: manifestRecords.map((plugin) => plugin.id),
+    });
+    return (
+      providers?.some((provider) => {
+        if (providerId && provider.id !== providerId) {
+          return false;
+        }
+        if (!providerId && provider.requiresCredential === false) {
+          return false;
+        }
+        return hasConfiguredCredentialValue(
+          provider.getConfiguredCredentialFallback?.(params.config)?.value,
+          params.env,
+        );
+      }) ?? false
+    );
+  } catch {
+    return false;
+  }
+}
+
 function resolveBundledProviderContractEnvVars(params: {
   manifestRecords: readonly PluginManifestRecord[];
   providerId: string | undefined;
@@ -498,6 +536,12 @@ export function hasConfiguredWebSearchCredential(params: {
     }) ||
     hasAuthProfileProviderCandidate({
       config: params.config,
+      manifestRecords: policyScope.manifestRecords,
+      searchConfig,
+    }) ||
+    hasProviderConfiguredCredentialFallbackCandidate({
+      config: params.config,
+      env: params.env,
       manifestRecords: policyScope.manifestRecords,
       searchConfig,
     }) ||

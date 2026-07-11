@@ -17,7 +17,7 @@ type ManifestSnapshot = {
 
 type PublicWebSearchProvider = Pick<
   PluginWebSearchProviderEntry,
-  "id" | "pluginId" | "authProviderId" | "requiresCredential"
+  "id" | "pluginId" | "authProviderId" | "getConfiguredCredentialFallback" | "requiresCredential"
 > & { envVars?: string[] };
 
 const agentScopeMocks = vi.hoisted(() => ({
@@ -755,6 +755,59 @@ describe("hasConfiguredWebSearchCredential", () => {
     expect(
       hasConfiguredWebSearchCredential({
         config: {} as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
+  });
+
+  it("treats provider configured credential fallbacks as configured", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "firecrawl",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["firecrawl"] },
+        },
+      ],
+    });
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValue(
+      [
+        {
+          id: "firecrawl",
+          pluginId: "firecrawl",
+          requiresCredential: true,
+          getConfiguredCredentialFallback: (config) => {
+            const firecrawlConfig = config?.plugins?.entries?.firecrawl?.config as
+              | { webFetch?: { apiKey?: unknown } }
+              | undefined;
+            const apiKey = firecrawlConfig?.webFetch?.apiKey;
+            return apiKey === undefined
+              ? undefined
+              : {
+                  path: "plugins.entries.firecrawl.config.webFetch.apiKey",
+                  value: apiKey,
+                };
+          },
+        },
+      ],
+    );
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    apiKey: "firecrawl-key",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
         env: {},
         origin: "bundled",
       }),
