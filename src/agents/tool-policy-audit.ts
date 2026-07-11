@@ -131,7 +131,10 @@ export function escapeControlCharsVisible(value: string): string {
       return "\\t";
     }
     const codePoint = char.codePointAt(0) ?? 0;
-    if (codePoint < 0x20 || codePoint === 0x7f) {
+    if (codePoint < 0x20 || codePoint === 0x7f || (codePoint >= 0x80 && codePoint <= 0x9f)) {
+      // Escape C0 (0x00-0x1f), DEL (0x7f), and C1 (0x80-0x9f) controls. The C1
+      // range includes the CSI introducer U+009B (an alt ANSI escape prefix),
+      // which must not reach single-line audit/session-label output raw.
       return `\\x${codePoint.toString(16).padStart(2, "0")}`;
     }
     return char;

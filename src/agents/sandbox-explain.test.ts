@@ -167,4 +167,39 @@ describe("sandbox explain helpers", () => {
     expect(msg).toContain('Tool "browser" blocked by sandbox tool policy');
     expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
   });
+
+  it("escapes C1 controls in the Session line and falls back to agent-only explain", () => {
+    // U+009B is the C1 CSI introducer, an alternative ANSI escape prefix (ESC [).
+    const CSI = String.fromCharCode(0x9b);
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "non-main", scope: "agent" },
+        },
+      },
+      tools: {
+        sandbox: {
+          tools: {
+            deny: ["browser"],
+          },
+        },
+      },
+    };
+
+    // Session key carries a C1 byte within its trailing (visible) 6 chars.
+    const sessionKey = `agent:main:mobilechat:group:g1${CSI}`;
+    const msg = formatSandboxToolPolicyBlockedMessage({
+      cfg,
+      sessionKey,
+      toolName: "browser",
+    });
+
+    // Visible Session label escapes the C1 byte instead of emitting it raw.
+    expect(msg).toContain("\\x9b");
+    expect(msg).not.toContain(CSI);
+    // Unsafe (C1-bearing) keys use the agent-scoped explain command and never
+    // embed the raw key in a --session argument.
+    expect(msg).toContain("openclaw sandbox explain --agent");
+    expect(msg).not.toContain("--session");
+  });
 });
