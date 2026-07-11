@@ -138,7 +138,7 @@ export function isGatewaySubordinateWorkAdmissionClosed(): boolean {
     return (
       !current ||
       current.released ||
-      (current.allowSubordinateRestartWork !== true && !requiredContinuationIsDraining)
+      (!current.allowSubordinateRestartWork && !requiredContinuationIsDraining)
     );
   }
   if (current) {
@@ -290,7 +290,7 @@ export function runWithGatewayIndependentRootWorkContinuation<T>(
     return runWithGatewayIndependentRootWorkAdmission(run);
   }
   const allowSubordinateRestartWork =
-    parent.allowSubordinateRestartWork === true ||
+    parent.allowSubordinateRestartWork ||
     (GATEWAY_WORK_ADMISSION_STATE.restartDraining &&
       (GATEWAY_WORK_ADMISSION_STATE.restartDrainContinuationDepth ?? 0) > 0);
   const admission = createGatewayRootWorkAdmission({
