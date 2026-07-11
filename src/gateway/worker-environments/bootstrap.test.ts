@@ -9,6 +9,7 @@ import {
   type WorkerBootstrapCommandRunner,
   type WorkerBootstrapDependencies,
   type WorkerBootstrapRequest,
+  testing,
 } from "./bootstrap.js";
 import { createWorkerBundleProducer, type WorkerInstallationArtifact } from "./bundle.js";
 
@@ -544,4 +545,23 @@ describe("bootstrapWorker", () => {
       });
     },
   );
+});
+
+describe("commandFailure (UTF-16)", () => {
+  it("preserves well-formed UTF-16 when bootstrap stderr reaches the boundary limit", () => {
+    // 511 ASCII code units + emoji: the surrogate pair spans [511, 512].
+    // Current main raw .slice(0, 512) keeps only the high surrogate (U+D83D),
+    // producing a malformed error message. truncateUtf16Safe detects the
+    // split pair and backs up to 511 so the result is well-formed.
+    const prefix = "x".repeat(511);
+    const spawn = result({ stderr: `${prefix}😀after`, code: 1 });
+    const error = testing.commandFailure("preflight", spawn);
+    const message = error.message;
+    for (const lone of ["\ud83d", "\ude00"]) {
+      expect(message).not.toContain(lone);
+    }
+    expect(message).not.toContain("�");
+    // truncateUtf16Safe backs up: "...failed (exit 1): " + 511 ASCII chars
+    expect(message).toContain(`: ${prefix}`);
+  });
 });

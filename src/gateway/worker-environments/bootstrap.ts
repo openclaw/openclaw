@@ -5,6 +5,7 @@ import {
 import { isExactSemverVersion } from "../../infra/npm-registry-spec.js";
 import { normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { truncateUtf16Safe } from "../../plugin-sdk/text-utility-runtime.js";
 import type { WorkerSshEndpoint, WorkerSshIdentity } from "../../plugins/types.js";
 import {
   runCommandWithTimeout,
@@ -549,11 +550,10 @@ function parseReceiptJson(
 }
 
 function commandFailure(phase: string, result: SpawnResult): Error {
-  const output = redactSensitiveText(result.stderr.trim() || result.stdout.trim(), {
+  const compressed = redactSensitiveText(result.stderr.trim() || result.stdout.trim(), {
     mode: "tools",
-  })
-    .replace(/\s+/gu, " ")
-    .slice(0, 512);
+  }).replace(/\s+/gu, " ");
+  const output = truncateUtf16Safe(compressed, 512);
   const status =
     result.termination === "exit" ? `exit ${result.code ?? "unknown"}` : result.termination;
   return new Error(`Worker bootstrap ${phase} failed (${status})${output ? `: ${output}` : ""}`);
@@ -758,3 +758,8 @@ export async function bootstrapWorker(
     await prepared.dispose();
   }
 }
+
+export const testing = {
+  commandFailure,
+};
+export { testing as __testing };
