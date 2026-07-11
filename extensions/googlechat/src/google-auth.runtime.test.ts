@@ -119,6 +119,7 @@ describe("googlechat google auth runtime", () => {
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
@@ -195,6 +196,7 @@ describe("googlechat google auth runtime", () => {
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
@@ -232,6 +234,7 @@ describe("googlechat google auth runtime", () => {
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");

@@ -48,6 +48,7 @@ const GOOGLE_AUTH_TOKEN_URI = "https://oauth2.googleapis.com/token";
 const GOOGLE_AUTH_UNIVERSE_DOMAIN = "googleapis.com";
 const GOOGLE_CLIENT_CERTS_URL_PREFIX = "https://www.googleapis.com/robot/v1/metadata/x509/";
 const MAX_GOOGLE_AUTH_RESPONSE_BYTES = 1024 * 1024;
+const GOOGLE_AUTH_FETCH_TIMEOUT_MS = 30_000;
 const MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES = 64 * 1024;
 
 let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
@@ -423,6 +424,7 @@ export function createGoogleAuthFetch(baseFetch?: FetchLike): FetchLike {
       dispatcherPolicy: guardedOptions.dispatcherPolicy,
       init: guardedOptions.init,
       policy: GOOGLE_AUTH_POLICY,
+      timeoutMs: GOOGLE_AUTH_FETCH_TIMEOUT_MS,
       url,
       ...(baseFetch ? { fetchImpl: baseFetch } : {}),
     });
