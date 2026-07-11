@@ -1144,7 +1144,6 @@ function refreshSessionEntryFromStore(params: {
 export async function runReplyAgent(params: {
   commandBody: string;
   transcriptCommandBody?: string;
-  rawBody?: string;
   followupRun: FollowupRun;
   queueKey: string;
   resolvedQueue: QueueSettings;
@@ -1183,7 +1182,6 @@ export async function runReplyAgent(params: {
   const {
     commandBody,
     transcriptCommandBody,
-    rawBody,
     followupRun,
     queueKey,
     resolvedQueue,
@@ -1295,12 +1293,9 @@ export async function runReplyAgent(params: {
         ...(followupRun.userTurnTranscriptRecorder
           ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
           : {}),
-        // PR #52664: carry this steered turn's gated rawBody (possibly
-        // undefined) so the active embedded run re-derives currentRawBody for
-        // the new inbound. The runner clears by default, so a provenance-gated
-        // (inter_session / internal_system) steered message drops the previous
-        // direct-user rawBody instead of leaking it onto later
-        // before_prompt_build / agent_end events.
+        // Carry this steered turn's gated rawBody (possibly undefined) so the
+        // active run refreshes its tracked value; the runner clears by default,
+        // so gated input never leaks the previous direct-user text.
         rawBody: followupRun.rawBody,
       },
     );
@@ -1761,7 +1756,6 @@ export async function runReplyAgent(params: {
       runAgentTurnWithFallback({
         commandBody,
         transcriptCommandBody,
-        rawBody,
         followupRun,
         sessionCtx,
         replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,

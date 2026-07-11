@@ -434,7 +434,10 @@ import {
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
-import { steerQueuedMessageThenResolveRawBody } from "./attempt.queue-message.js";
+import {
+  createQueuedRawBodyTracker,
+  steerActiveSessionWithOptionalDeliveryWait,
+} from "./attempt.queue-message.js";
 import {
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
@@ -4114,12 +4117,10 @@ export async function runEmbeddedAttempt(
         abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
       };
       let acceptingSteerMessages = true;
-      // PR #52664: track the latest user-input rawBody for hook events.
-      // The initial value is captured at run start; every queued injection
-      // re-derives it from that turn's options so subsequent
-      // before_prompt_build / agent_end hook events reflect the most recent
-      // message rather than the original turn's text.
-      let currentRawBody: string | undefined = params.rawBody;
+      // Latest user-input rawBody for before_prompt_build / agent_end events.
+      // Queued injections refresh it after delivery, in issue order (see
+      // createQueuedRawBodyTracker for the ordering contract).
+      const rawBodyTracker = createQueuedRawBodyTracker(params.rawBody);
 
       const queueHandle: EmbeddedAgentQueueHandle & {
         kind: "embedded";
@@ -4131,13 +4132,10 @@ export async function runEmbeddedAttempt(
           if (options?.steeringMode) {
             activeSession.agent.steeringMode = options.steeringMode;
           }
-          // rawBody updates only after delivery succeeds: a rejected or
-          // timed-out steer was never accepted into the run, so the previous
-          // turn's value stays. On success, clear by default — direct-user
-          // steers gate their clean text in; internal injections
-          // (sessions_send, Talk active-run control, subagent active wakes)
-          // pass nothing, which clears the previous direct-user rawBody.
-          currentRawBody = await steerQueuedMessageThenResolveRawBody(activeSession, text, options);
+          await rawBodyTracker.deliver(
+            () => steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options),
+            options,
+          );
         },
         isStreaming: () => activeSession.isStreaming,
         isStopped: () => !acceptingSteerMessages || aborted || runAbortController.signal.aborted,
@@ -4382,7 +4380,7 @@ export async function runEmbeddedAttempt(
               config: params.config ?? getRuntimeConfig(),
               prompt: params.prompt,
               messages: promptBuildMessages,
-              rawBody: currentRawBody,
+              rawBody: rawBodyTracker.current(),
               hookCtx,
               hookRunner,
               beforeAgentStartResult: params.beforeAgentStartResult,
@@ -5788,7 +5786,7 @@ export async function runEmbeddedAttempt(
               success: !aborted && !promptError,
               error: promptError ? formatErrorMessage(promptError) : undefined,
               durationMs: Date.now() - promptStartedAt,
-              rawBody: currentRawBody,
+              rawBody: rawBodyTracker.current(),
             },
             ctx: {
               runId: params.runId,

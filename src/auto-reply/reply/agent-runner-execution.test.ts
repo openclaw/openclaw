@@ -2731,7 +2731,6 @@ describe("runAgentTurnWithFallback", () => {
 
     const result = await runAgentTurnWithFallback({
       commandBody: "[from alice] summarize my workspace",
-      rawBody: "summarize my workspace",
       followupRun,
       sessionCtx: {
         Provider: "telegram",

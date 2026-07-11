@@ -3709,13 +3709,6 @@ describe("runPreparedReply rawBody hook gating", () => {
     });
   }
 
-  function capturedRawBody(): unknown {
-    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0] as
-      | { rawBody?: unknown; followupRun?: { rawBody?: unknown } }
-      | undefined;
-    return call?.rawBody;
-  }
-
   function capturedFollowupRawBody(): unknown {
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0] as
       | { followupRun?: { rawBody?: unknown } }
@@ -3725,7 +3718,6 @@ describe("runPreparedReply rawBody hook gating", () => {
 
   it("passes user text as rawBody for telegram channel runs", async () => {
     await runPreparedReply(paramsForProvider("telegram", { body: "hello" }));
-    expect(capturedRawBody()).toBe("hello");
     expect(capturedFollowupRawBody()).toBe("hello");
   });
 
@@ -3737,25 +3729,21 @@ describe("runPreparedReply rawBody hook gating", () => {
         commandBody: "Read HEARTBEAT.md and run any due maintenance.",
       }),
     );
-    expect(capturedRawBody()).toBeUndefined();
     expect(capturedFollowupRawBody()).toBeUndefined();
   });
 
   it("gates rawBody to undefined for cron-event runs", async () => {
     await runPreparedReply(paramsForProvider("cron-event", { body: "scheduled prompt text" }));
-    expect(capturedRawBody()).toBeUndefined();
     expect(capturedFollowupRawBody()).toBeUndefined();
   });
 
   it("gates rawBody to undefined for exec-event runs", async () => {
     await runPreparedReply(paramsForProvider("exec-event", { body: "exec event prompt" }));
-    expect(capturedRawBody()).toBeUndefined();
     expect(capturedFollowupRawBody()).toBeUndefined();
   });
 
   it("prefers CommandBody over Body for channel rawBody", async () => {
     await runPreparedReply(paramsForProvider("discord", { body: "raw", commandBody: "!cmd" }));
-    expect(capturedRawBody()).toBe("!cmd");
     expect(capturedFollowupRawBody()).toBe("!cmd");
   });
 
@@ -3766,7 +3754,6 @@ describe("runPreparedReply rawBody hook gating", () => {
         inputProvenance: { kind: "external_user" },
       }),
     );
-    expect(capturedRawBody()).toBe("hello");
     expect(capturedFollowupRawBody()).toBe("hello");
   });
 
@@ -3777,7 +3764,6 @@ describe("runPreparedReply rawBody hook gating", () => {
         inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
       }),
     );
-    expect(capturedRawBody()).toBeUndefined();
     expect(capturedFollowupRawBody()).toBeUndefined();
   });
 
@@ -3788,7 +3774,6 @@ describe("runPreparedReply rawBody hook gating", () => {
         inputProvenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
       }),
     );
-    expect(capturedRawBody()).toBeUndefined();
     expect(capturedFollowupRawBody()).toBeUndefined();
   });
 

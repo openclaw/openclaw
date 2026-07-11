@@ -40,14 +40,11 @@ export function isSystemEventProvider(provider?: string): boolean {
 }
 
 /**
- * Gates clean user text to the plugin-hook `rawBody` field (PR #52664). Only
- * direct external-user channel input qualifies: system-event providers
- * (heartbeat, cron, exec) reuse system prompt text, and inter-session /
- * internal-system handoffs carry a "not a direct user instruction" annotation,
- * so neither may surface as clean `rawBody`. Returns `undefined` (clear) for
- * those, and the candidate text for direct-user input. Shared by channel
- * ingress and the `/steer` `/tell` active-run injection path so both apply the
- * same provenance rule.
+ * Gates clean user text to the plugin-hook `rawBody` field. Only direct
+ * external-user channel input with actual text qualifies; system-event
+ * providers and inter-session/internal-system handoffs resolve to `undefined`
+ * so their text never surfaces as clean user input. Shared by channel ingress
+ * and the `/steer` `/tell` active-run injection path.
  */
 export function resolveDirectUserRawBody(params: {
   candidate: string | undefined;
@@ -57,7 +54,10 @@ export function resolveDirectUserRawBody(params: {
   const isDirectExternalUserInput =
     !isSystemEventProvider(params.provider) &&
     (params.inputProvenance === undefined || params.inputProvenance.kind === "external_user");
-  return isDirectExternalUserInput ? params.candidate : undefined;
+  // Empty/whitespace text (media-only messages) resolves to undefined so the
+  // documented `event.rawBody ?? extractText(messages)` fallback still fires.
+  const hasText = params.candidate !== undefined && params.candidate.trim() !== "";
+  return isDirectExternalUserInput && hasText ? params.candidate : undefined;
 }
 
 function isSessionsSendInterSessionHandoff(inputProvenance: InputProvenance | undefined): boolean {

@@ -1624,7 +1624,6 @@ export async function runPreparedReply(
   return runReplyAgent({
     commandBody: prefixedCommandBody,
     transcriptCommandBody,
-    rawBody: rawBodyForPluginEvent,
     followupRun,
     queueKey,
     resolvedQueue,

@@ -455,4 +455,18 @@ describe("resolveDirectUserRawBody", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("clears empty and whitespace-only candidates (media-only messages)", () => {
+    // rawBody must stay nullish here so the documented
+    // `event.rawBody ?? extractText(messages)` fallback fires for plugins.
+    for (const candidate of [undefined, "", "  \n"]) {
+      expect(
+        resolveDirectUserRawBody({
+          candidate,
+          provider: "telegram",
+          inputProvenance: undefined,
+        }),
+      ).toBeUndefined();
+    }
+  });
 });

@@ -178,10 +178,8 @@ export const handleSteerCommand: CommandHandler = async (params, allowTextComman
       ? { sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode }
       : {}),
     taskSuggestionDeliveryMode: params.opts?.taskSuggestionDeliveryMode,
-    // PR #52664: /steer and /tell carry direct user text, so report it as the
-    // active run's rawBody (gated like channel ingress). The active runner
-    // clears rawBody by default, so without this a direct steer would wrongly
-    // emit `undefined` on before_prompt_build / agent_end.
+    // /steer and /tell carry direct user text; without this gated pass the
+    // clear-by-default active runner would report undefined for a real steer.
     rawBody: resolveDirectUserRawBody({
       candidate: message,
       provider: params.ctx.Provider,

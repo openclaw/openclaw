@@ -3,10 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
   cancelQueuedSteeringMessage,
-  resolveQueuedRawBody,
+  createQueuedRawBodyTracker,
   steerActiveSessionWithOptionalDeliveryWait,
   steerAndWaitForTranscriptCommit,
-  steerQueuedMessageThenResolveRawBody,
   type EmbeddedAgentActiveSessionSteerTarget,
 } from "./attempt.queue-message.js";
 
@@ -277,84 +276,58 @@ describe("embedded OpenClaw queued steering cancellation", () => {
   });
 });
 
-// PR #52664: the active embedded run reports rawBody on before_prompt_build /
-// agent_end. A queued injection must re-derive that value rather than leaving
-// the previous direct-user text in place, or internal injections leak it.
-describe("resolveQueuedRawBody", () => {
-  it("uses the queued turn's clean text when a direct-user steer provides it", () => {
-    expect(resolveQueuedRawBody({ steeringMode: "all", rawBody: "hello steer" })).toBe(
-      "hello steer",
-    );
+// The rawBody tracker may only change after queue delivery succeeds, and only
+// in issue order. A rejected or timed-out steer was never accepted into the
+// run, so its rawBody must not surface on later hook events; a slow earlier
+// steer resolving late must not overwrite a newer injection's value.
+describe("createQueuedRawBodyTracker", () => {
+  it("updates to the queued turn's rawBody after successful delivery", async () => {
+    const tracker = createQueuedRawBodyTracker("initial text");
+
+    await tracker.deliver(async () => {}, { steeringMode: "all", rawBody: "steered text" });
+
+    expect(tracker.current()).toBe("steered text");
   });
 
-  it("clears stale rawBody when an internal injection omits the key", () => {
-    // sessions_send / Talk active-run control / subagent active wakes build
-    // queue options without rawBody; they must not inherit the prior turn's.
-    expect(resolveQueuedRawBody({ steeringMode: "all" })).toBeUndefined();
-    expect(resolveQueuedRawBody(undefined)).toBeUndefined();
+  it("clears after an internal injection that omits rawBody", async () => {
+    const tracker = createQueuedRawBodyTracker("direct user text");
+
+    await tracker.deliver(async () => {}, { steeringMode: "all" });
+
+    expect(tracker.current()).toBeUndefined();
   });
 
-  it("clears rawBody when a provenance-gated steer passes an explicit undefined", () => {
-    expect(resolveQueuedRawBody({ steeringMode: "all", rawBody: undefined })).toBeUndefined();
-  });
-});
-
-// The rawBody tracker may only change after queue delivery succeeds. A
-// rejected or timed-out steer was never accepted into the active run, so its
-// rawBody must not surface on later before_prompt_build / agent_end events.
-describe("steerQueuedMessageThenResolveRawBody", () => {
-  it("resolves the queued turn's rawBody after successful delivery", async () => {
-    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-      steer: async () => {},
-      subscribe: () => () => {},
-    };
+  it("keeps the previous value when delivery rejects", async () => {
+    const tracker = createQueuedRawBodyTracker("previous text");
 
     await expect(
-      steerQueuedMessageThenResolveRawBody(activeSession, "steered text", {
-        steeringMode: "all",
-        rawBody: "steered text",
-      }),
-    ).resolves.toBe("steered text");
-  });
-
-  it("rejects without resolving a rawBody when steering fails", async () => {
-    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-      steer: async () => {
-        throw new Error("steer rejected");
-      },
-      subscribe: () => () => {},
-    };
-
-    await expect(
-      steerQueuedMessageThenResolveRawBody(activeSession, "rejected text", {
-        steeringMode: "all",
-        rawBody: "rejected text",
-      }),
+      tracker.deliver(
+        async () => {
+          throw new Error("steer rejected");
+        },
+        { steeringMode: "all", rawBody: "rejected text" },
+      ),
     ).rejects.toThrow("steer rejected");
+
+    expect(tracker.current()).toBe("previous text");
   });
 
-  it("rejects when the transcript-commit wait times out", async () => {
-    vi.useFakeTimers();
-    try {
-      const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
-        getSteeringMessages: () => [],
-        steer: async () => {},
-        subscribe: () => () => {},
-      };
+  it("ignores an earlier steer that resolves after a newer one", async () => {
+    const tracker = createQueuedRawBodyTracker(undefined);
+    let releaseSlow!: () => void;
+    const slowDelivery = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
+    });
 
-      const pending = steerQueuedMessageThenResolveRawBody(activeSession, "timed out text", {
-        steeringMode: "all",
-        waitForTranscriptCommit: true,
-        deliveryTimeoutMs: 50,
-        rawBody: "timed out text",
-      });
-      const outcome = expect(pending).rejects.toThrow(
-        "queued steering message was not committed to the transcript before timeout",
-      );
-      await vi.advanceTimersByTimeAsync(60);
-      await outcome;
-    } finally {
-      vi.useRealTimers();
-    }
+    const slow = tracker.deliver(() => slowDelivery, {
+      steeringMode: "all",
+      rawBody: "older steer",
+    });
+    await tracker.deliver(async () => {}, { steeringMode: "all", rawBody: "newer steer" });
+    expect(tracker.current()).toBe("newer steer");
+
+    releaseSlow();
+    await slow;
+    expect(tracker.current()).toBe("newer steer");
   });
 });
