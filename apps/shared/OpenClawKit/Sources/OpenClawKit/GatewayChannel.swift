@@ -146,7 +146,9 @@ public actor GatewayChannelActor {
         }
     }
 
-    public func authSource() -> GatewayAuthSource { self.lastAuthSource }
+    public func authSource() -> GatewayAuthSource {
+        self.lastAuthSource
+    }
 
     public func authBinding(ifCurrentConnectionGeneration expectedGeneration: UInt64) -> GatewayAuthBinding? {
         guard self.isConnected(connectionGeneration: expectedGeneration),
