@@ -633,6 +633,43 @@ describe("task-registry", () => {
     );
   });
 
+  it("persists an accepted zero lifecycle start timestamp over stale state", async () => {
+    await withTaskRegistryTempDir(
+      async () => {
+        resetTaskRegistryForTests({ persist: false });
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          requesterSessionKey: "agent:main:main",
+          runId: "run-zero-lifecycle",
+          task: "Replace a stale task timestamp",
+          status: "queued",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+          startedAt: 1_000,
+        });
+
+        emitAcpLifecycleStart({ runId: "run-zero-lifecycle", startedAt: 0 });
+        emitAgentEvent({
+          runId: "run-zero-lifecycle",
+          stream: "lifecycle",
+          data: { phase: "end", endedAt: 500 },
+        });
+
+        resetTaskRegistryForTests({ persist: false });
+        reloadTaskRegistryFromStore();
+
+        expectRecordFields(requireTaskByRunId("run-zero-lifecycle"), {
+          status: "succeeded",
+          startedAt: 0,
+          endedAt: 500,
+        });
+      },
+      { durableStore: true },
+    );
+  });
+
   it("tracks tool activity from tool-start events", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
@@ -675,7 +712,7 @@ describe("task-registry", () => {
         toolUseCount: 2,
         lastToolName: "exec",
       });
-    });
+      });
   });
 
   it("keeps subagent abort lifecycle projections provisional", async () => {

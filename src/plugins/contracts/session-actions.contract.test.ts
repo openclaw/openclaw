@@ -806,7 +806,7 @@ describe("plugin session actions", () => {
       unsubscribe();
     }
 
-    expect(observed).toHaveLength(2);
+    expect(observed).toHaveLength(3);
     const bundledEvent = requireObservedEvent(observed, 0);
     expect(bundledEvent.runId).toBe("run-emit");
     expect(bundledEvent.sessionKey).toBe("agent:main:main");
@@ -816,7 +816,15 @@ describe("plugin session actions", () => {
       pluginId: "event-plugin",
       pluginName: "Event Plugin",
     });
-    const workspaceEvent = requireObservedEvent(observed, 1);
+    const lifecycleEvent = requireObservedEvent(observed, 1);
+    expect(lifecycleEvent.stream).toBe("lifecycle");
+    expect(lifecycleEvent.data).toEqual({
+      phase: "start",
+      startedAt: 1_234,
+      pluginId: "event-plugin",
+      pluginName: "Event Plugin",
+    });
+    const workspaceEvent = requireObservedEvent(observed, 2);
     expect(workspaceEvent.runId).toBe("run-emit");
     expect(workspaceEvent.sessionKey).toBeUndefined();
     expect(workspaceEvent.stream).toBe("workspace-event-plugin.workflow");

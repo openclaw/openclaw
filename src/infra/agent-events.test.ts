@@ -81,7 +81,7 @@ describe("agent-events sequencing", () => {
       runId: "audit-only-run",
       sessionKey: "agent:main:acp:session",
       stream: "lifecycle",
-      data: { phase: "start" },
+      data: { phase: "start", startedAt: 1_000 },
     });
     emitAgentAuditEvent({
       runId: "audit-only-run",
@@ -93,7 +93,7 @@ describe("agent-events sequencing", () => {
       runId: "audit-only-run",
       sessionKey: "agent:main:acp:session",
       stream: "lifecycle",
-      data: { phase: "start" },
+      data: { phase: "start", startedAt: 1_000 },
     });
 
     stopShared();
@@ -299,7 +299,7 @@ describe("agent-events sequencing", () => {
       runId: "shared-run",
       lifecycleGeneration: activeGeneration,
       stream: "lifecycle",
-      data: { phase: "start" },
+      data: { phase: "start", startedAt: 1_000 },
     });
     stop();
 
@@ -672,7 +672,7 @@ describe("agent-events sequencing", () => {
     emitAgentEvent({
       runId: "run-unscoped",
       stream: "lifecycle",
-      data: { phase: "start" },
+      data: { phase: "start", startedAt: 1_000 },
     });
     stop();
 
