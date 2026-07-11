@@ -162,7 +162,7 @@ export type ChatProps = {
   historyHasMore?: boolean;
   historyTotalMessages?: number | null;
   historyLoadingOlder?: boolean;
-  onLoadOlderHistory?: () => void;
+  onLoadOlderHistory?: () => void | Promise<unknown>;
   basePath?: string;
   composerControls?: TemplateResult | typeof nothing;
   replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;

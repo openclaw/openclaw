@@ -1190,6 +1190,39 @@ describe("buildChatItems", () => {
     );
   });
 
+  it("moves the bounded render window into older fetched pages past the hard cap", () => {
+    const messages = Array.from({ length: 2_100 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index,
+    }));
+
+    const newestTail = buildChatItems(
+      createProps({
+        historyRenderLimit: 2_000,
+        historyRenderOffsetFromEnd: 0,
+        messages,
+      }),
+    );
+    const newestGroups = newestTail.filter((item) => item.kind === "group");
+    expect(messageRecord(newestGroups[1]).content).toBe("message 100");
+    expect(messageRecord(newestGroups[newestGroups.length - 1]).content).toBe("message 2099");
+
+    const olderWindow = buildChatItems(
+      createProps({
+        historyRenderLimit: 2_000,
+        historyRenderOffsetFromEnd: 100,
+        messages,
+      }),
+    );
+    const olderGroups = olderWindow.filter((item) => item.kind === "group");
+    expect(messageRecord(requireGroup(olderWindow[0])).content).toBe(
+      "Showing 2000 messages (100 hidden).",
+    );
+    expect(messageRecord(olderGroups[1]).content).toBe("message 0");
+    expect(messageRecord(olderGroups[olderGroups.length - 1]).content).toBe("message 1999");
+  });
+
   it("budgets rendered history by tool-result content size", () => {
     const largeOutput = "x".repeat(100_000);
     const items = buildChatItems(

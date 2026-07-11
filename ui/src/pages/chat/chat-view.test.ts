@@ -1156,6 +1156,144 @@ describe("chat history render window", () => {
       }),
     );
   });
+
+  it("restores the scroll anchor only after a delayed older-history page renders", async () => {
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index,
+    }));
+    const deferred = createDeferred<void>();
+    const onLoadOlderHistory = vi.fn(() => deferred.promise);
+    const onRequestUpdate = vi.fn();
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      }),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    const container = renderChatView({
+      messages,
+      historyHasMore: true,
+      onLoadOlderHistory,
+      onRequestUpdate,
+    });
+    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
+    Object.defineProperties(thread, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 300 },
+    });
+
+    // Grow the local window to the loaded cap without requesting another page.
+    for (let i = 0; i < 2; i += 1) {
+      thread.scrollTop = 0;
+      thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+      renderChatView({
+        messages,
+        historyHasMore: true,
+        onLoadOlderHistory,
+        onRequestUpdate,
+      });
+    }
+    expect(onLoadOlderHistory).not.toHaveBeenCalled();
+    frameCallbacks.splice(0);
+
+    thread.scrollTop = 0;
+    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+    expect(onLoadOlderHistory).toHaveBeenCalledTimes(1);
+
+    // Pre-fetch frames must not clear the saved anchor before the page arrives.
+    for (const callback of frameCallbacks.splice(0)) {
+      callback(0);
+    }
+    expect(thread.scrollTop).toBe(0);
+
+    deferred.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const olderMessages = [
+      ...Array.from({ length: 30 }, (_, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `older ${index}`,
+        timestamp: index - 30,
+      })),
+      ...messages,
+    ];
+    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 600 });
+    renderChatView({
+      messages: olderMessages,
+      historyHasMore: true,
+      onLoadOlderHistory,
+      onRequestUpdate,
+    });
+
+    for (let attempt = 0; attempt < 10 && thread.scrollTop === 0; attempt += 1) {
+      for (const callback of frameCallbacks.splice(0)) {
+        callback(0);
+      }
+    }
+    expect(thread.scrollTop).toBe(300);
+  });
+
+  it("slides the bounded window into older loaded messages once the hard cap is full", () => {
+    const messages = Array.from({ length: 2_060 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index,
+    }));
+    const onLoadOlderHistory = vi.fn();
+    const onRequestUpdate = vi.fn();
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      }),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    const container = renderChatView({ messages, onRequestUpdate, onLoadOlderHistory });
+    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
+    // Drop auto-fill frames so only explicit top-scroll expansion moves the window.
+    frameCallbacks.splice(0);
+
+    for (let i = 0; i < 66; i += 1) {
+      thread.scrollTop = 0;
+      thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+      renderChatView({ messages, onRequestUpdate, onLoadOlderHistory });
+      frameCallbacks.splice(0);
+    }
+
+    buildChatItemsMock.mockClear();
+    renderChatView({ messages, onRequestUpdate, onLoadOlderHistory });
+    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages,
+        historyRenderLimit: 2_000,
+        historyRenderOffsetFromEnd: 0,
+      }),
+    );
+
+    buildChatItemsMock.mockClear();
+    thread.scrollTop = 0;
+    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+    renderChatView({ messages, onRequestUpdate, onLoadOlderHistory });
+
+    expect(onLoadOlderHistory).not.toHaveBeenCalled();
+    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages,
+        historyRenderLimit: 2_000,
+        historyRenderOffsetFromEnd: 30,
+      }),
+    );
+  });
 });
 
 describe("chat goal status", () => {

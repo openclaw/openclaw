@@ -73,6 +73,10 @@ type ChatThreadState = {
   historyRenderMessagesRef: unknown[] | null;
   historyRenderMessageCount: number;
   historyRenderLimit: number;
+  /** Offset from messages.length for the exclusive render-window end. */
+  historyRenderOffsetFromEnd: number;
+  /** True while an older-history fetch is in flight and the scroll anchor must wait for prepend+render. */
+  historyRenderAwaitingOlderPrepend: boolean;
   historyRenderLastScrollTop: number | null;
   historyRenderExpansionFrame: number | null;
   historyRenderAnchorAdjustment: {
@@ -123,8 +127,12 @@ type ChatThreadProps = {
   onRequestUpdate?: () => void;
   onScrollToBottom?: () => void;
   onChatScroll?: (event: Event) => void;
-  /** Fetch older transcript pages when the local render window is exhausted. */
-  onLoadOlderHistory?: () => void;
+  /**
+   * Fetch older transcript pages when the local render window is exhausted.
+   * May return a Promise; scroll-anchor restoration waits until it settles and
+   * the prepended page has rendered.
+   */
+  onLoadOlderHistory?: () => void | Promise<unknown>;
   /** True when older transcript pages remain on the server. */
   historyHasMore?: boolean;
   historyTotalMessages?: number | null;
@@ -153,6 +161,8 @@ function createChatThreadState(): ChatThreadState {
     historyRenderMessagesRef: null,
     historyRenderMessageCount: 0,
     historyRenderLimit: 0,
+    historyRenderOffsetFromEnd: 0,
+    historyRenderAwaitingOlderPrepend: false,
     historyRenderLastScrollTop: null,
     historyRenderExpansionFrame: null,
     historyRenderAnchorAdjustment: null,
@@ -260,6 +270,8 @@ function resolveChatHistoryRenderWindow(
   const previousCount = state.historyRenderMessageCount;
   if (sessionChanged || (refChanged && previousCount === 0)) {
     state.historyRenderLastScrollTop = null;
+    state.historyRenderOffsetFromEnd = 0;
+    state.historyRenderAwaitingOlderPrepend = false;
   }
 
   if (cap === 0) {
@@ -267,6 +279,8 @@ function resolveChatHistoryRenderWindow(
     state.historyRenderMessagesRef = messages;
     state.historyRenderMessageCount = messages.length;
     state.historyRenderLimit = 0;
+    state.historyRenderOffsetFromEnd = 0;
+    state.historyRenderAwaitingOlderPrepend = false;
     state.historyRenderLastScrollTop = null;
     return 0;
   }
@@ -276,13 +290,28 @@ function resolveChatHistoryRenderWindow(
     state.historyRenderMessagesRef = messages;
     state.historyRenderMessageCount = messages.length;
     state.historyRenderLimit = cap;
+    state.historyRenderOffsetFromEnd = 0;
     return cap;
   }
 
   if (sessionChanged || (refChanged && previousCount === 0)) {
     state.historyRenderLimit = Math.min(INITIAL_CHAT_HISTORY_RENDER_WINDOW, cap);
+    state.historyRenderOffsetFromEnd = 0;
   } else if (refChanged) {
     const grewBy = messages.length - previousCount;
+    // Keep the exclusive window end stable across prepend/append so a movable
+    // older window does not jump when the message array grows. Pinned-newest
+    // (offset 0) stays pinned unless an older-page fetch is landing.
+    if (grewBy > 0) {
+      if (state.historyRenderAwaitingOlderPrepend || state.historyRenderOffsetFromEnd > 0) {
+        state.historyRenderOffsetFromEnd += grewBy;
+      }
+    } else if (grewBy < 0) {
+      state.historyRenderOffsetFromEnd = 0;
+    }
+    if (state.historyRenderAwaitingOlderPrepend && grewBy > 0) {
+      state.historyRenderAwaitingOlderPrepend = false;
+    }
     if (state.historyRenderLimit >= previousCount) {
       state.historyRenderLimit = cap;
     } else if (grewBy > 0 && grewBy <= CHAT_HISTORY_RENDER_WINDOW_BATCH) {
@@ -299,7 +328,26 @@ function resolveChatHistoryRenderWindow(
   state.historyRenderMessagesRef = messages;
   state.historyRenderMessageCount = messages.length;
   state.historyRenderLimit = Math.min(Math.max(1, state.historyRenderLimit), cap);
+  const maxOffset = Math.max(0, messages.length - state.historyRenderLimit);
+  state.historyRenderOffsetFromEnd = Math.min(
+    Math.max(0, state.historyRenderOffsetFromEnd),
+    maxOffset,
+  );
   return state.historyRenderLimit;
+}
+
+function captureChatHistoryRenderAnchor(state: ChatThreadState, thread: HTMLElement) {
+  // A newer top-scroll capture supersedes any pending apply from an earlier
+  // expand; otherwise a stubbed/unflushed rAF leaves historyRenderAnchorFrame
+  // set and silently drops the post-fetch restoration.
+  if (state.historyRenderAnchorFrame != null) {
+    cancelAnimationFrame(state.historyRenderAnchorFrame);
+    state.historyRenderAnchorFrame = null;
+  }
+  state.historyRenderAnchorAdjustment = {
+    scrollHeight: thread.scrollHeight,
+    scrollTop: Math.max(0, thread.scrollTop),
+  };
 }
 
 function maybeExpandChatHistoryRenderWindow(
@@ -309,7 +357,7 @@ function maybeExpandChatHistoryRenderWindow(
   opts: {
     historyHasMore?: boolean;
     historyLoadingOlder?: boolean;
-    onLoadOlderHistory?: () => void;
+    onLoadOlderHistory?: () => void | Promise<unknown>;
   } = {},
 ) {
   const target = event.currentTarget;
@@ -323,6 +371,12 @@ function maybeExpandChatHistoryRenderWindow(
   const isTop = scrollTop <= CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX;
   const isBottomAutoScroll =
     scrollTop > 0 && distanceFromBottom <= CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX;
+  // Return to the newest edge when the user scrolls back to the live tail.
+  if (isBottomAutoScroll && state.historyRenderOffsetFromEnd > 0) {
+    state.historyRenderOffsetFromEnd = 0;
+    requestUpdate();
+    return;
+  }
   const isTopScrollUp =
     isTop &&
     (scrollTop === 0 ||
@@ -330,34 +384,49 @@ function maybeExpandChatHistoryRenderWindow(
   if (!isTopScrollUp) {
     return;
   }
-  const cap = resolveChatHistoryRenderCap(state.historyRenderMessageCount);
-  if (state.historyRenderLimit >= cap) {
-    // Local window already shows every loaded message — fetch an older page
-    // when the gateway says more transcript remains.
-    if (
-      opts.historyHasMore &&
-      !opts.historyLoadingOlder &&
-      typeof opts.onLoadOlderHistory === "function"
-    ) {
-      state.historyRenderAnchorAdjustment = {
-        scrollHeight: target.scrollHeight,
-        scrollTop,
-      };
-      scheduleChatHistoryRenderAnchorPreservation(state, target);
-      opts.onLoadOlderHistory();
-    }
+  const messageCount = state.historyRenderMessageCount;
+  const windowEnd = Math.max(0, messageCount - state.historyRenderOffsetFromEnd);
+  const windowCap = Math.min(CHAT_HISTORY_RENDER_HARD_CAP, windowEnd);
+  if (state.historyRenderLimit < windowCap) {
+    captureChatHistoryRenderAnchor(state, target);
+    scheduleChatHistoryRenderAnchorPreservation(state, target);
+    state.historyRenderLimit = Math.min(
+      windowCap,
+      state.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH,
+    );
+    requestUpdate();
     return;
   }
-  state.historyRenderAnchorAdjustment = {
-    scrollHeight: target.scrollHeight,
-    scrollTop,
-  };
-  scheduleChatHistoryRenderAnchorPreservation(state, target);
-  state.historyRenderLimit = Math.min(
-    cap,
-    state.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH,
-  );
-  requestUpdate();
+
+  // Local window already fills the hard cap for the current end — slide into
+  // older loaded messages before asking the gateway for another page.
+  const maxOffsetFromEnd = Math.max(0, messageCount - state.historyRenderLimit);
+  if (state.historyRenderOffsetFromEnd < maxOffsetFromEnd) {
+    captureChatHistoryRenderAnchor(state, target);
+    scheduleChatHistoryRenderAnchorPreservation(state, target);
+    state.historyRenderOffsetFromEnd = Math.min(
+      maxOffsetFromEnd,
+      state.historyRenderOffsetFromEnd + CHAT_HISTORY_RENDER_WINDOW_BATCH,
+    );
+    requestUpdate();
+    return;
+  }
+
+  if (
+    opts.historyHasMore &&
+    !opts.historyLoadingOlder &&
+    !state.historyRenderAwaitingOlderPrepend &&
+    typeof opts.onLoadOlderHistory === "function"
+  ) {
+    captureChatHistoryRenderAnchor(state, target);
+    state.historyRenderAwaitingOlderPrepend = true;
+    // Do not schedule the anchor frame yet: the gateway fetch is async and a
+    // premature rAF clears the adjustment before Lit renders the prepend.
+    const loadResult = opts.onLoadOlderHistory();
+    void Promise.resolve(loadResult).finally(() => {
+      scheduleChatHistoryRenderAnchorPreservationAfterRender(state, target);
+    });
+  }
 }
 
 function scheduleChatHistoryRenderAnchorPreservation(state: ChatThreadState, thread: HTMLElement) {
@@ -376,6 +445,41 @@ function scheduleChatHistoryRenderAnchorPreservation(state: ChatThreadState, thr
   });
 }
 
+/**
+ * Keep the pre-fetch scroll anchor until after Lit commits the prepended page
+ * and layout grows scrollHeight. A single pre-fetch rAF observes no growth and
+ * would clear the adjustment too early.
+ */
+function scheduleChatHistoryRenderAnchorPreservationAfterRender(
+  state: ChatThreadState,
+  thread: HTMLElement,
+  attempts = 0,
+) {
+  const adjustment = state.historyRenderAnchorAdjustment;
+  if (!adjustment || state.historyRenderAnchorFrame != null) {
+    return;
+  }
+  state.historyRenderAnchorFrame = requestAnimationFrame(() => {
+    state.historyRenderAnchorFrame = null;
+    if (state.historyRenderAnchorAdjustment !== adjustment) {
+      return;
+    }
+    const heightDelta = thread.scrollHeight - adjustment.scrollHeight;
+    if (heightDelta <= 0) {
+      if (attempts < 8) {
+        scheduleChatHistoryRenderAnchorPreservationAfterRender(state, thread, attempts + 1);
+        return;
+      }
+      // Fetch failed or produced no DOM growth — release the in-flight gate.
+      state.historyRenderAnchorAdjustment = null;
+      state.historyRenderAwaitingOlderPrepend = false;
+      return;
+    }
+    state.historyRenderAnchorAdjustment = null;
+    thread.scrollTop = adjustment.scrollTop + heightDelta;
+  });
+}
+
 function scheduleChatHistoryRenderWindowFill(
   state: ChatThreadState,
   thread: HTMLElement | null,
@@ -385,14 +489,19 @@ function scheduleChatHistoryRenderWindowFill(
   if (!thread || state.historyRenderExpansionFrame != null) {
     return;
   }
-  const cap = resolveChatHistoryRenderCap(state.historyRenderMessageCount);
-  if (state.historyRenderLimit >= cap) {
+  const windowEnd = Math.max(0, state.historyRenderMessageCount - state.historyRenderOffsetFromEnd);
+  const windowCap = Math.min(CHAT_HISTORY_RENDER_HARD_CAP, windowEnd);
+  if (state.historyRenderLimit >= windowCap) {
     return;
   }
   state.historyRenderExpansionFrame = requestAnimationFrame(() => {
     state.historyRenderExpansionFrame = null;
-    const nextCap = resolveChatHistoryRenderCap(state.historyRenderMessageCount);
-    if (state.historyRenderLimit >= nextCap) {
+    const nextWindowEnd = Math.max(
+      0,
+      state.historyRenderMessageCount - state.historyRenderOffsetFromEnd,
+    );
+    const nextWindowCap = Math.min(CHAT_HISTORY_RENDER_HARD_CAP, nextWindowEnd);
+    if (state.historyRenderLimit >= nextWindowCap) {
       return;
     }
     const canScroll = thread.scrollHeight - thread.clientHeight > 1;
@@ -400,7 +509,7 @@ function scheduleChatHistoryRenderWindowFill(
       return;
     }
     state.historyRenderLimit = Math.min(
-      nextCap,
+      nextWindowCap,
       state.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH,
     );
     requestUpdate();
@@ -782,6 +891,7 @@ export function renderChatThread(props: ChatThreadProps) {
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
     historyRenderLimit,
+    historyRenderOffsetFromEnd: state.historyRenderOffsetFromEnd,
     historyHasMore: props.historyHasMore,
     historyTotalMessages: props.historyTotalMessages,
   });

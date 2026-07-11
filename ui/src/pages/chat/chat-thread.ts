@@ -50,6 +50,12 @@ export type BuildChatItemsProps = {
   searchOpen?: boolean;
   searchQuery?: string;
   historyRenderLimit?: number;
+  /**
+   * Exclusive end of the bounded render window, measured as an offset from
+   * `messages.length`. 0 keeps the window pinned to the newest messages;
+   * larger values slide into older fetched pages without unbounded DOM growth.
+   */
+  historyRenderOffsetFromEnd?: number;
   /** True when older transcript pages remain on the server. */
   historyHasMore?: boolean;
   /** Total transcript messages reported by the gateway, when known. */
@@ -1075,33 +1081,53 @@ function formatChatHistoryNotice(params: {
   hiddenHistoryCount: number;
   historyHasMore?: boolean;
   historyTotalMessages?: number | null;
+  pinnedToNewest?: boolean;
 }): string {
-  const { visibleHistoryCount, hiddenHistoryCount, historyHasMore, historyTotalMessages } = params;
+  const {
+    visibleHistoryCount,
+    hiddenHistoryCount,
+    historyHasMore,
+    historyTotalMessages,
+    pinnedToNewest = true,
+  } = params;
   const totalLabel =
     typeof historyTotalMessages === "number" && Number.isFinite(historyTotalMessages)
       ? ` of ${Math.max(0, Math.floor(historyTotalMessages))}`
       : "";
+  const showingLabel = pinnedToNewest
+    ? `Showing last ${visibleHistoryCount}`
+    : `Showing ${visibleHistoryCount}`;
   if (historyHasMore && hiddenHistoryCount > 0) {
-    return `Showing last ${visibleHistoryCount}${totalLabel} messages (${hiddenHistoryCount} loaded but not shown). Older messages are available on the server — scroll up to load more.`;
+    return `${showingLabel}${totalLabel} messages (${hiddenHistoryCount} loaded but not shown). Older messages are available on the server — scroll up to load more.`;
   }
   if (historyHasMore) {
-    return `Showing last ${visibleHistoryCount}${totalLabel} messages. Older messages are available on the server — scroll up to load more.`;
+    return `${showingLabel}${totalLabel} messages. Older messages are available on the server — scroll up to load more.`;
   }
   if (hiddenHistoryCount > 0) {
-    return `Showing last ${visibleHistoryCount} messages (${hiddenHistoryCount} hidden).`;
+    return `${showingLabel} messages (${hiddenHistoryCount} hidden).`;
   }
-  return `Showing last ${visibleHistoryCount} messages.`;
+  return `${showingLabel} messages.`;
+}
+
+function resolveHistoryWindowEnd(messageCount: number, offsetFromEnd: number | undefined): number {
+  if (typeof offsetFromEnd !== "number" || !Number.isFinite(offsetFromEnd)) {
+    return messageCount;
+  }
+  const normalizedOffset = Math.max(0, Math.floor(offsetFromEnd));
+  return Math.max(0, messageCount - normalizedOffset);
 }
 
 function resolveHistoryStartIndex(
   messages: unknown[],
   showToolCalls: boolean,
   renderLimit: number,
+  windowEnd: number = messages.length,
 ): number {
+  const endIndex = Math.max(0, Math.min(messages.length, Math.floor(windowEnd)));
   let visibleCount = 0;
   let renderChars = 0;
-  let startIndex = messages.length;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
+  let startIndex = endIndex;
+  for (let index = endIndex - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (isHiddenToolMessage(message, showToolCalls)) {
       continue;
@@ -1135,15 +1161,24 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     text: string | null;
     timestamp: number | null;
   }>;
-  const historyStart = resolveHistoryStartIndex(history, props.showToolCalls, historyRenderLimit);
-  const hiddenHistoryCount = countVisibleHistoryMessages(
-    history.slice(0, historyStart),
-    props.showToolCalls,
+  const historyWindowEnd = resolveHistoryWindowEnd(
+    history.length,
+    props.historyRenderOffsetFromEnd,
   );
+  const historyStart = resolveHistoryStartIndex(
+    history,
+    props.showToolCalls,
+    historyRenderLimit,
+    historyWindowEnd,
+  );
+  const hiddenHistoryCount =
+    countVisibleHistoryMessages(history.slice(0, historyStart), props.showToolCalls) +
+    countVisibleHistoryMessages(history.slice(historyWindowEnd), props.showToolCalls);
   const visibleHistoryCount = countVisibleHistoryMessages(
-    history.slice(historyStart),
+    history.slice(historyStart, historyWindowEnd),
     props.showToolCalls,
   );
+  const pinnedToNewest = historyWindowEnd >= history.length;
   if (hiddenHistoryCount > 0 || props.historyHasMore) {
     items.push({
       kind: "message",
@@ -1155,12 +1190,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           hiddenHistoryCount,
           historyHasMore: props.historyHasMore,
           historyTotalMessages: props.historyTotalMessages,
+          pinnedToNewest,
         }),
         timestamp: Date.now(),
       },
     });
   }
-  for (let i = historyStart; i < history.length; i++) {
+  for (let i = historyStart; i < historyWindowEnd; i++) {
     const msg = history[i];
     const normalized = safeNormalizeMessage(msg);
     if (!normalized) {
@@ -1385,6 +1421,7 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery &&
     previous.historyRenderLimit === next.historyRenderLimit &&
+    previous.historyRenderOffsetFromEnd === next.historyRenderOffsetFromEnd &&
     previous.historyHasMore === next.historyHasMore &&
     previous.historyTotalMessages === next.historyTotalMessages
   );
