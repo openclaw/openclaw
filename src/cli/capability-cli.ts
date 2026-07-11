@@ -60,6 +60,7 @@ import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
 } from "../infra/parse-finite-number.js";
+import { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import type { RunMediaUnderstandingFileResult } from "../media-understanding/runtime-types.js";
 import {
@@ -2529,7 +2530,7 @@ export function registerCapabilityCli(program: Command) {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
-        const providers = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
+        const remoteProviders = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
           .filter((provider) => provider.capabilities?.includes("audio"))
           .map((provider) => ({
             available: true,
@@ -2546,6 +2547,23 @@ export function registerCapabilityCli(program: Command) {
             capabilities: provider.capabilities,
             defaultModels: provider.defaultModels,
           }));
+        const localSelection = await inspectLocalAudioSelection();
+        const localProviders = localSelection.candidates
+          .filter((candidate) => candidate.available)
+          .map((candidate) => ({
+            available: candidate.available,
+            configured: candidate.ready,
+            selected: candidate.selected,
+            id: `local/${candidate.id}`,
+            transport: "local-cli",
+            command: candidate.command,
+            ...(candidate.capableBackend ? { capableBackend: candidate.capableBackend } : {}),
+            ...(candidate.requestedBackend ? { requestedBackend: candidate.requestedBackend } : {}),
+            observedBackend: candidate.observedBackend ?? "unknown",
+            evidence: candidate.evidence,
+            ...(candidate.reason ? { reason: candidate.reason } : {}),
+          }));
+        const providers = [...remoteProviders, ...localProviders];
         emitJsonOrText(defaultRuntime, Boolean(opts.json), providers, providerSummaryText);
       });
     });

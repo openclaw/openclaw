@@ -147,6 +147,7 @@ const mocks = vi.hoisted(() => ({
   ]),
   listEmbeddingProviders: vi.fn(() => []),
   buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
+  inspectLocalAudioSelection: vi.fn(async () => ({ candidates: [], entries: [] })),
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
   isWebSearchProviderConfigured: vi.fn(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
@@ -312,6 +313,10 @@ vi.mock("../media-understanding/runtime.js", () => ({
 vi.mock("../media-understanding/provider-registry.js", () => ({
   buildMediaUnderstandingRegistry:
     mocks.buildMediaUnderstandingRegistry as typeof import("../media-understanding/provider-registry.js").buildMediaUnderstandingRegistry,
+}));
+
+vi.mock("../media-understanding/local-audio.js", () => ({
+  inspectLocalAudioSelection: mocks.inspectLocalAudioSelection,
 }));
 
 vi.mock("../media/media-services.js", async (importOriginal) => {
@@ -522,6 +527,7 @@ describe("capability cli", () => {
     mocks.resolveExplicitTtsOverrides.mockClear();
     mocks.getProviderEnvVars.mockClear();
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
+    mocks.inspectLocalAudioSelection.mockReset().mockResolvedValue({ candidates: [], entries: [] });
     mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
     mocks.listMemoryEmbeddingProviders
@@ -3347,6 +3353,48 @@ describe("capability cli", () => {
         id: "groq",
         capabilities: ["audio"],
         defaultModels: { audio: "whisper-large-v3-turbo" },
+      },
+    ]);
+  });
+
+  it("lists the selected local STT command and acceleration evidence", async () => {
+    const candidate = {
+      id: "whisper-cli" as const,
+      command: "whisper-cli",
+      resolvedCommand: "/opt/homebrew/bin/whisper-cli",
+      available: true,
+      ready: true,
+      capableBackend: "metal" as const,
+      evidence: "Apple Silicon Homebrew whisper-cpp runtime with Metal support",
+      selected: true,
+      entry: {
+        type: "cli" as const,
+        command: "whisper-cli",
+        args: ["{{MediaPath}}"],
+      },
+    };
+    mocks.inspectLocalAudioSelection.mockResolvedValueOnce({
+      candidates: [candidate],
+      entries: [candidate.entry],
+      selected: candidate,
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "audio", "providers", "--json"],
+    });
+
+    expect(firstJsonOutput()).toEqual([
+      {
+        available: true,
+        configured: true,
+        selected: true,
+        id: "local/whisper-cli",
+        transport: "local-cli",
+        command: "whisper-cli",
+        capableBackend: "metal",
+        observedBackend: "unknown",
+        evidence: "Apple Silicon Homebrew whisper-cpp runtime with Metal support",
       },
     ]);
   });
