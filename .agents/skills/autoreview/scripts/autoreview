@@ -193,14 +193,10 @@ UNQUOTED_SECRET_REFERENCE_PATTERNS = (
     *QUOTED_SECRET_REFERENCE_PATTERNS,
     re.compile(
         r"^(?:process\.env|os\.environ|env|cfg|config|params|payload|provider|"
-        r"response|result|account|client|auth|auth_response|oauth_response|"
+        r"request|response|result|account|client|auth|auth_response|oauth_response|"
         r"token_response|api_response|authentication|credentials|settings)"
         r"(?:[.\[].*)$"
     ),
-)
-SECRET_ALLOWLIST_MARKERS = (
-    "pragma: allowlist secret",
-    "gitleaks:allow",
 )
 DEFAULT_ENGINE_PATHS = ("/usr/local/bin", "/usr/bin", "/bin")
 MULTI_PROVIDER_CREDENTIAL_SUFFIXES = (
@@ -496,6 +492,19 @@ def safe_dbus_session_address(repo: Path, value: str) -> bool:
         return False
     path = match.group("path")
     return Path(path).is_absolute() and external_env_path(repo, path)
+
+
+def safe_temp_root(repo: Path) -> Path:
+    try:
+        root = Path(tempfile.gettempdir()).resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit(f"unable to resolve temporary directory: {exc}") from exc
+    if is_within(root, repo.resolve()):
+        raise SystemExit(
+            "temporary directory must be outside the reviewed repository; "
+            "unset or relocate TMPDIR/TMP/TEMP"
+        )
+    return root
 
 
 def safe_proxy_url(value: str) -> bool:
@@ -1188,7 +1197,7 @@ def read_text_with_status(path: Path, limit: int = MAX_BUNDLE_TEXT_BYTES) -> tup
     except SystemExit as exc:
         return f"[unreadable: {exc}]", False
     if b"\0" in data:
-        return "[binary file omitted]", False
+        return "[binary file omitted]", True
     text = data.decode("utf-8", errors="replace")
     if len(text) > limit:
         text = text[:limit]
@@ -1224,11 +1233,6 @@ def secret_text_risk(text: str) -> bool:
     if any(pattern.search(text) for pattern in SECRET_VALUE_PATTERNS):
         return True
     for match in SECRET_ASSIGNMENT_PATTERN.finditer(text):
-        line_start = text.rfind("\n", 0, match.start()) + 1
-        line_end = text.find("\n", match.end())
-        line = text[line_start : line_end if line_end >= 0 else len(text)].lower()
-        if any(marker in line for marker in SECRET_ALLOWLIST_MARKERS):
-            continue
         quoted = match.group("bare_value") is None
         value = (
             match.group("double_value")
@@ -1402,10 +1406,11 @@ def validate_review_patch(
     require_no_secret_values(label, patch)
     for content in unified_diff_contents(patch):
         require_no_secret_values(label, content)
-    if len(patch) > limit:
+    patch_bytes = len(patch.encode("utf-8"))
+    if patch_bytes > limit:
         raise SystemExit(
             f"{label} is too large to review safely "
-            f"({len(patch)} characters; limit {limit}); split the change into smaller review targets"
+            f"({patch_bytes} bytes; limit {limit}); split the change into smaller review targets"
         )
     return patch
 
@@ -1764,8 +1769,13 @@ def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, e
     return prompt
 
 
-def write_json_temp(data: dict[str, Any]) -> Path:
-    handle = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+def write_json_temp(data: dict[str, Any], temp_root: Path) -> Path:
+    handle = tempfile.NamedTemporaryFile(
+        "w",
+        suffix=".json",
+        delete=False,
+        dir=temp_root,
+    )
     with handle:
         json.dump(data, handle)
     return Path(handle.name)
@@ -1931,9 +1941,10 @@ def ensure_claude_isolation_supported(args: argparse.Namespace, repo: Path) -> N
         [Path(claude_bin).parent],
         engine="claude",
     )
-    result = run([claude_bin, "--version"], repo, check=False, env=engine_env)
+    temp_root = safe_temp_root(repo)
+    result = run([claude_bin, "--version"], temp_root, check=False, env=engine_env)
     selected_models = [args.model, *(getattr(args, "fallback_model", "") or "").split(",")]
-    uses_fable = "claude-fable-5" in selected_models
+    uses_fable = any(model in {"claude-fable-5", "fable"} for model in selected_models)
     minimum_version = CLAUDE_FABLE_MIN_VERSION if uses_fable else CLAUDE_SAFE_MODE_MIN_VERSION
     version_reason = "for claude-fable-5" if uses_fable else "for --safe-mode"
     if result.returncode != 0:
@@ -1946,7 +1957,7 @@ def ensure_claude_isolation_supported(args: argparse.Namespace, repo: Path) -> N
             f"claude engine requires Claude Code >= {format_version(minimum_version)} "
             f"{version_reason} (found {format_version(version)})"
         )
-    help_result = run([claude_bin, "--help"], repo, check=False, env=engine_env)
+    help_result = run([claude_bin, "--help"], temp_root, check=False, env=engine_env)
     help_text = f"{help_result.stdout}\n{help_result.stderr}"
     required_flags = ["--safe-mode", "--setting-sources", "--strict-mcp-config", "--disallowedTools", "--tools"]
     missing = [flag for flag in required_flags if flag not in help_text]
@@ -1958,7 +1969,10 @@ def ensure_claude_isolation_supported(args: argparse.Namespace, repo: Path) -> N
 def ensure_pi_isolation_supported(args: argparse.Namespace, repo: Path) -> str:
     pi_bin = resolve_command(args.pi_bin, repo)
     engine_env = safe_engine_env(repo, [Path(pi_bin).parent], engine="pi")
-    with tempfile.TemporaryDirectory(prefix="autoreview-pi-probe.") as tempdir:
+    with tempfile.TemporaryDirectory(
+        prefix="autoreview-pi-probe.",
+        dir=safe_temp_root(repo),
+    ) as tempdir:
         probe_cwd = Path(tempdir)
         result = run([pi_bin, "--version"], probe_cwd, check=False, env=engine_env)
         help_result = run([pi_bin, "--help"], probe_cwd, check=False, env=engine_env)
@@ -1990,6 +2004,22 @@ def format_version(version: tuple[int, int, int]) -> str:
     return ".".join(str(part) for part in version)
 
 
+SAFE_CODEX_CONFIG_KEYS = {
+    "hide_agent_reasoning",
+    "model_auto_compact_token_limit",
+    "model_auto_compact_token_limit_scope",
+    "model_context_window",
+    "model_reasoning_effort",
+    "model_reasoning_summary",
+    "model_verbosity",
+    "personality",
+    "plan_mode_reasoning_effort",
+    "service_tier",
+    "show_raw_agent_reasoning",
+    "tool_output_token_limit",
+}
+
+
 def codex_config_overrides(args: argparse.Namespace) -> list[str]:
     raw = list(getattr(args, "codex_config", None) or [])
     if not raw:
@@ -2000,8 +2030,14 @@ def codex_config_overrides(args: argparse.Namespace) -> list[str]:
         if not item:
             continue
         key, sep, value = item.partition("=")
-        if not sep or not value.strip() or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", key.strip()):
+        key = key.strip()
+        if not sep or not value.strip() or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", key):
             raise SystemExit(f"invalid Codex config override (expected key=value): {item}")
+        if key not in SAFE_CODEX_CONFIG_KEYS:
+            raise SystemExit(
+                f"unsafe Codex config override refused: {key}; "
+                "only model and response tuning keys are allowed"
+            )
         overrides.append(item)
     return overrides
 
@@ -2119,8 +2155,14 @@ def codex_command(
 def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     if not args.tools:
         raise SystemExit("--no-tools is not supported by the Codex engine; use --engine claude --no-tools for a no-tools run")
-    schema_path = write_json_temp(SCHEMA)
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as output_file:
+    temp_root = safe_temp_root(repo)
+    schema_path = write_json_temp(SCHEMA, temp_root)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        suffix=".json",
+        delete=False,
+        dir=temp_root,
+    ) as output_file:
         output_path = Path(output_file.name)
     models = [args.model]
     fallback_model = getattr(args, "fallback_model", None)
@@ -2131,7 +2173,10 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         # The validated bundle is the sole repository input. The empty
         # workspace keeps ignored credentials and linked-worktree metadata
         # outside the model's readable filesystem boundary.
-        with tempfile.TemporaryDirectory(prefix="autoreview-codex-workspace.") as tempdir:
+        with tempfile.TemporaryDirectory(
+            prefix="autoreview-codex-workspace.",
+            dir=temp_root,
+        ) as tempdir:
             review_root = Path(tempdir)
             for index, model in enumerate(models):
                 output_path.write_text("")
@@ -2451,7 +2496,10 @@ def run_pi(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     # Pi's built-in read tools accept absolute paths and have no repository
     # confinement, so an untrusted review prompt must never receive them.
     cmd.append("--no-tools")
-    with tempfile.TemporaryDirectory(prefix="autoreview-pi-run.") as tempdir:
+    with tempfile.TemporaryDirectory(
+        prefix="autoreview-pi-run.",
+        dir=safe_temp_root(repo),
+    ) as tempdir:
         result = run_with_heartbeat(
             cmd,
             Path(tempdir),
@@ -3812,7 +3860,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--codex-config",
         action="append",
-        help='Extra Codex "-c key=value" config override (TOML value), codex reviewer only. Repeatable. Env default: AUTOREVIEW_CODEX_CONFIG (semicolon-separated), e.g. service_tier="fast". Reviewed-repo isolation flags still take precedence.',
+        help='Safe Codex model/response tuning "-c key=value" override (TOML value), codex reviewer only. Repeatable. Capability-, command-, and path-bearing keys are refused. Env default: AUTOREVIEW_CODEX_CONFIG (semicolon-separated), e.g. service_tier="fast".',
     )
     parser.add_argument(
         "--codex-speed",
@@ -4272,6 +4320,18 @@ def self_test_config_defaults() -> None:
             rejected = "invalid Codex config override" in str(error)
         if not rejected:
             raise SystemExit("self-test config defaults failed: malformed codex config override accepted")
+        rejected = False
+        try:
+            codex_config_overrides(
+                reviewer_test_args(
+                    engine="codex",
+                    codex_config=['mcp_servers.review.command="touch /tmp/owned"'],
+                )
+            )
+        except SystemExit as error:
+            rejected = "unsafe Codex config override refused" in str(error)
+        if not rejected:
+            raise SystemExit("self-test config defaults failed: capability-bearing codex config override accepted")
         os.environ.pop("AUTOREVIEW_CODEX_CONFIG")
         try:
             reviewer_args(reviewer_test_args(engine="claude", codex_config=['service_tier="fast"']))
