@@ -79,6 +79,8 @@ openclaw-chat-page {
   /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
+  scrollbar-gutter: stable both-edges;
+  scrollbar-color: var(--muted-strong) transparent;
   /* The tall top inset is a titlebar band: it keeps the floating rail
      openers (.chat-floating-toggles, 28px at top 10px) clear of the first
      message and gives the native macOS app an empty strip that starts a
@@ -89,6 +91,14 @@ openclaw-chat-page {
   /* Allow shrinking for flex scroll behavior */
   border-radius: var(--radius-md);
   background: transparent;
+}
+
+:root .chat-thread::-webkit-scrollbar-thumb {
+  background: var(--muted-strong);
+}
+
+:root .chat-thread::-webkit-scrollbar-thumb:hover {
+  background: var(--text);
 }
 
 /* Split panes spend their top row on the pane header (which is both the
