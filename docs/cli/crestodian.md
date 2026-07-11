@@ -269,12 +269,12 @@ OpenClaw: Applied. Audit entry written.
 Agent creation can also be queued locally or via rescue:
 
 ```text
-create agent work workspace ~/Projects/work
+create agent work workspace ~/Projects/work model openai/gpt-5.6-sol
 /crestodian create agent work workspace ~/Projects/work
 ```
 
-Agent creation cannot specify a model. The new agent inherits the
-live-verified default route.
+Agent creation may name only the current live-verified default model. Omit the
+model to inherit that route.
 
 Remote rescue is an admin surface and must be treated like remote config repair, not normal chat.
 

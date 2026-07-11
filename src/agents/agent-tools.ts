@@ -109,6 +109,7 @@ import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
 } from "./tools/cron-tool.js";
+import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
@@ -457,6 +458,8 @@ type OpenClawCodingToolsOptions = {
   toolSearchCatalogRef?: ToolSearchCatalogRef;
   /** Limits which tool families are materialized before the shared policy pipeline runs. */
   toolConstructionPlan?: OpenClawCodingToolConstructionPlan;
+  /** Ring-zero Crestodian tool; set only by the Crestodian agent runner. */
+  crestodianTool?: import("./tools/crestodian-tool.js").CrestodianToolOptions;
   /** Trusted sender identity bit for command/channel-action auth and owner-gated plugin tools. */
   senderIsOwner?: boolean;
   /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
@@ -851,13 +854,29 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   );
   // Plugin-only plans bypass createOpenClawTools, so the capability gate must
   // apply here too or narrow allowlists leak gated tools onto capless surfaces.
+  const pluginToolCallerIdentity =
+    agentId && options?.sessionKey?.trim()
+      ? {
+          agentId,
+          sessionKey: options.sessionKey.trim(),
+          turnSourceChannel: resolveGatewayMessageChannel(
+            options.messageChannel ?? options.messageProvider,
+          ),
+          turnSourceTo:
+            options.currentMessagingTarget ?? options.currentChannelId ?? options.messageTo,
+          turnSourceAccountId: options.agentAccountId,
+          turnSourceThreadId: options.currentThreadTs ?? options.messageThreadId,
+        }
+      : undefined;
   const pluginToolsOnly = filterToolsByClientCaps(
     includeOpenClawTools || !includePluginTools
       ? []
       : resolveOpenClawPluginToolsForOptions({
           options: {
             agentSessionKey: options?.sessionKey,
-            agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
+            agentChannel: resolveGatewayMessageChannel(
+              options?.messageChannel ?? options?.messageProvider,
+            ),
             agentAccountId: options?.agentAccountId,
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,
@@ -891,7 +910,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           resolvedConfig: options?.config,
         }),
     options?.clientCaps,
-  );
+  ).map((tool) => wrapToolWithGatewayCallerIdentity(tool, pluginToolCallerIdentity));
   const ringZeroTools = includeOpenClawTools ? getActiveAgentRingZeroTools() : [];
   const toolSearchTools =
     toolSearchControlsEnabled && ringZeroTools.length === 0
@@ -942,12 +961,15 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       ? mergeRingZeroTools(
           ringZeroTools,
           createOpenClawTools({
+            ...(options?.crestodianTool ? { crestodianTool: options.crestodianTool } : {}),
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             agentSessionKey: options?.sessionKey,
             runId: options?.runId,
             runSessionKey: options?.runSessionKey,
-            agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
+            agentChannel: resolveGatewayMessageChannel(
+              options?.messageChannel ?? options?.messageProvider,
+            ),
             agentAccountId: options?.agentAccountId,
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,

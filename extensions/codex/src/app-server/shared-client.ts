@@ -229,6 +229,7 @@ export function resolveCodexNativeConfigFenceKey(params: {
 
 export type CodexAppServerClientOptions = {
   startOptions?: CodexAppServerStartOptions;
+  pluginConfig?: unknown;
   timeoutMs?: number;
   authProfileId?: string | null;
   authProfileStore?: AuthProfileStore;
@@ -294,6 +295,7 @@ async function resolveCodexAppServerClientStartContext(
     agentDir,
     authProfileId: usesNativeAuth ? null : authProfileId,
     config: options?.config,
+    pluginConfig: options?.pluginConfig,
     ...(authProfileStore ? { authProfileStore } : {}),
   });
   return {

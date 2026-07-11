@@ -99,6 +99,8 @@ export const FIELD_HELP: Record<string, string> = {
     "One cloud worker profile selected by name when creating an environment. Keep provider credentials in supported references rather than embedding secret material in this block.",
   "cloudWorkers.profiles.*.provider":
     "Worker provider id registered by a plugin. The configured plugin must expose this id before the gateway can provision environments from the profile.",
+  "cloudWorkers.profiles.*.install":
+    'Worker installation method: "bundle" (default) transfers the gateway\'s content-hashed installed build and supports released, development, and unreleased versions; "npm" installs the exact gateway version and is available only when that version is released.',
   "cloudWorkers.profiles.*.settings":
     "Provider-owned settings validated by the selected plugin. Use SecretRef objects for secret-bearing values; opaque settings do not gain automatic secret resolution.",
   "cloudWorkers.profiles.*.lifetime":

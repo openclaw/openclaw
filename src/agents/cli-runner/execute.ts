@@ -74,7 +74,7 @@ import {
 } from "../embedded-agent-subscribe.tools.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
+import { resolveCliToolTerminalReason } from "../run-termination.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import {
   rotateClaudeLiveMcpCaptureKeyForContext,
@@ -856,15 +856,6 @@ export async function executePreparedCliRun(
             : {}),
         };
       };
-      const resolveToolTerminalReason = (error?: unknown) => {
-        const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
-        if (abortFields.aborted) {
-          return abortFields.stopReason === "timeout" ? "timed_out" : "cancelled";
-        }
-        return error instanceof FailoverError && error.reason === "timeout"
-          ? "timed_out"
-          : "failed";
-      };
       let finalizeParsedTools = () => {};
       // Opaque owner proof must describe a child spawned for this turn. A
       // warm stdio session could have been created from an older executable.
@@ -1358,7 +1349,10 @@ export async function executePreparedCliRun(
               : undefined;
           const terminalReason =
             trustedTerminalReason ??
-            resolveToolTerminalReason(event.incomplete ? runError : undefined);
+            resolveCliToolTerminalReason({
+              error: event.incomplete ? runError : undefined,
+              abortSignal: params.abortSignal,
+            });
           // Incomplete client/MCP tools inherit the enclosing failed run even when
           // the loopback disconnect is ambiguous. Server-native tools do not.
           const useEnclosingTerminalReason =

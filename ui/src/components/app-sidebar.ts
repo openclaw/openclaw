@@ -178,6 +178,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
   @property({ attribute: false }) activePluginTabId = "";
+  @property({ attribute: false }) activePluginHostId = "";
+  @property({ attribute: false }) activePluginThreadId = "";
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) canPairDevice = false;
@@ -226,6 +228,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
+  @state() private nativeSessionSidebarReady = false;
 
   private readonly subscriptions = new SubscriptionsController(this);
   private customizeMenuTrigger: HTMLElement | null = null;
@@ -241,6 +244,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private reconnectListRevision: number | null = null;
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
+  private nativeSessionSidebarLoadStarted = false;
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -282,6 +286,19 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     this.routePreloadTimers.clear();
     super.disconnectedCallback();
+  }
+
+  override updated() {
+    const advertised = this.pluginTabs().some(
+      (tab) => tab.id === "sessions" && (tab.pluginId === "codex" || tab.pluginId === "anthropic"),
+    );
+    if (!advertised || this.nativeSessionSidebarReady || this.nativeSessionSidebarLoadStarted) {
+      return;
+    }
+    this.nativeSessionSidebarLoadStarted = true;
+    void import("../pages/plugin/codex-sidebar.ts").then(() => {
+      this.nativeSessionSidebarReady = true;
+    });
   }
 
   // The shell calls this before CSS hides the panel or drawer. Mounted menus
@@ -2028,7 +2045,44 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               })}
         </div>
       </section>
+      ${this.renderNativeSessionSidebars()}
     `;
+  }
+
+  private renderNativeSessionSidebars() {
+    if (!this.nativeSessionSidebarReady) {
+      return nothing;
+    }
+    const tabs = this.pluginTabs().filter(
+      (candidate) =>
+        candidate.id === "sessions" &&
+        (candidate.pluginId === "codex" || candidate.pluginId === "anthropic"),
+    );
+    if (tabs.length === 0) {
+      return nothing;
+    }
+    const open = (pluginId: string, hostId?: string, threadId?: string) => {
+      this.onNavigate?.("plugin", {
+        search: pluginTabSearch({
+          pluginId,
+          id: "sessions",
+          ...(hostId && threadId ? { hostId, threadId } : {}),
+        }),
+      });
+    };
+    return tabs.map((tab) => {
+      const active = this.activePluginTabId === pluginTabKey(tab);
+      return html`<openclaw-codex-sidebar
+        .catalogKind=${tab.pluginId === "anthropic" ? "claude" : "codex"}
+        .client=${this.context?.gateway.snapshot.client ?? null}
+        .connected=${this.connected}
+        .basePath=${this.basePath}
+        .selectedHostId=${active ? this.activePluginHostId : ""}
+        .selectedThreadId=${active ? this.activePluginThreadId : ""}
+        .onOpenSession=${(hostId: string, threadId: string) => open(tab.pluginId, hostId, threadId)}
+        .onViewAll=${() => open(tab.pluginId)}
+      ></openclaw-codex-sidebar>`;
+    });
   }
 
   private renderMoreSection() {

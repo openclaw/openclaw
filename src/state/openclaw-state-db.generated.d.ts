@@ -1003,6 +1003,9 @@ export interface WebPushVapidKeys {
 
 export interface WorkerEnvironments {
   attached_session_ids_json: Generated<string>;
+  bootstrap_bundle_hash: string | null;
+  bootstrap_openclaw_version: string | null;
+  bootstrap_protocol_features_json: string | null;
   created_at_ms: number;
   destroy_requested_at_ms: number | null;
   environment_id: string;
@@ -1014,11 +1017,13 @@ export interface WorkerEnvironments {
   provider_id: string;
   provision_operation_id: string;
   ssh_host: string | null;
+  ssh_host_key: string | null;
   ssh_key_ref_json: string | null;
   ssh_port: number | null;
   ssh_user: string | null;
   state: string;
   state_changed_at_ms: number;
+  teardown_terminal_state: string | null;
   updated_at_ms: number;
 }
 

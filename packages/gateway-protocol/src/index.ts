@@ -330,6 +330,10 @@ import {
   WorkerEnvironmentMetadataSchema,
   type WorkerEnvironmentState,
   WorkerEnvironmentStateSchema,
+  type WorkerTunnelStatus,
+  WorkerTunnelStatusSchema,
+  type WorkerAdmissionHandshake,
+  WorkerAdmissionHandshakeSchema,
   type SystemInfoParams,
   SystemInfoParamsSchema,
   type SystemInfoResult,
@@ -770,6 +774,9 @@ function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
 // constants so call sites can pair validation with the wire contract directly.
 export const validateCommandsListParams = lazyCompile<CommandsListParams>(CommandsListParamsSchema);
 export const validateConnectParams = lazyCompile<ConnectParams>(ConnectParamsSchema);
+export const validateWorkerAdmissionHandshake = lazyCompile<WorkerAdmissionHandshake>(
+  WorkerAdmissionHandshakeSchema,
+);
 export const validateGatewaySuspendPrepareParams = lazyCompile<GatewaySuspendPrepareParams>(
   GatewaySuspendPrepareParamsSchema,
 );
@@ -1298,8 +1305,10 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
+  WorkerAdmissionHandshakeSchema,
   EnvironmentStatusSchema,
   WorkerEnvironmentStateSchema,
+  WorkerTunnelStatusSchema,
   WorkerEnvironmentMetadataSchema,
   EnvironmentSummarySchema,
   EnvironmentsCreateParamsSchema,
@@ -1613,6 +1622,7 @@ export {
 export type {
   GatewayFrame,
   ConnectParams,
+  WorkerAdmissionHandshake,
   GatewaySuspendTaskBlocker,
   GatewaySuspendBlocker,
   GatewaySuspendPrepareParams,
@@ -1803,6 +1813,7 @@ export type {
   SkillsUpdateParams,
   EnvironmentStatus,
   WorkerEnvironmentState,
+  WorkerTunnelStatus,
   WorkerEnvironmentMetadata,
   EnvironmentSummary,
   EnvironmentsCreateParams,

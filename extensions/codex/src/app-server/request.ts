@@ -58,6 +58,7 @@ export async function requestCodexAppServerJson<M extends CodexAppServerRequestM
   method: M;
   requestParams: CodexAppServerRequestParams<M>;
   timeoutMs?: number;
+  pluginConfig?: unknown;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string | null;
   agentDir?: string;
@@ -70,6 +71,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   method: string;
   requestParams?: unknown;
   timeoutMs?: number;
+  pluginConfig?: unknown;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string | null;
   agentDir?: string;
@@ -82,6 +84,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   method: string;
   requestParams?: unknown;
   timeoutMs?: number;
+  pluginConfig?: unknown;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string | null;
   agentDir?: string;
@@ -125,6 +128,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
             : getLeasedSharedCodexAppServerClient;
           const client = await acquireClient({
             startOptions: params.startOptions,
+            pluginConfig: params.pluginConfig,
             timeoutMs: remainingTimeoutMs(),
             authProfileId: params.authProfileId,
             agentDir: params.agentDir,

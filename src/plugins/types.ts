@@ -1272,7 +1272,21 @@ export type WorkerSshEndpoint = {
   host: string;
   port: number;
   user: string;
+  /** OpenSSH public host-key line obtained from trusted provisioning output. */
+  hostKey: string;
   /** Secret reference only; providers must never return plaintext key material. */
+  keyRef: SecretRef;
+};
+
+/** Resolved SSH client identity. Providers may return a local path or ephemeral material. */
+export type WorkerSshIdentity =
+  | { kind: "path"; path: string }
+  | { kind: "material"; contents: string };
+
+/** Durable context supplied when a worker provider resolves the identity it minted. */
+export type WorkerSshIdentityRequest = {
+  leaseId: string;
+  profile: WorkerProfile;
   keyRef: SecretRef;
 };
 
@@ -1307,10 +1321,15 @@ export type WorkerProvider = {
    */
   provision: (profile: WorkerProfile, operationId: string) => Promise<WorkerLease>;
   /** Throws on transient/indeterminate failures; `unknown` means authoritative absence. */
-  inspect: (leaseId: string) => Promise<WorkerLeaseStatus>;
+  inspect: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<WorkerLeaseStatus>;
+  /**
+   * Resolves provider-owned dynamic identities. When absent, the gateway uses its generic
+   * SecretRef resolver; when present, failures are authoritative and never fall back.
+   */
+  resolveSshIdentity?: (request: WorkerSshIdentityRequest) => Promise<WorkerSshIdentity>;
   renew?: (leaseId: string) => Promise<void>;
   /** Idempotent; resolves only after the provider can prove teardown. */
-  destroy: (leaseId: string) => Promise<void>;
+  destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
 };
 
 /** Text-inference provider capability registered by a plugin. */
