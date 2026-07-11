@@ -50,6 +50,7 @@ import {
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
+  isValidAgentHarnessSessionStoreEntry,
   resolveAgentHarnessSessionContextError,
 } from "../sessions/agent-harness-session-key.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
@@ -1537,10 +1538,11 @@ async function agentCommandInternal(
         sessionStore &&
         sessionKey &&
         hasStoredOverride &&
-        // Locked harness sessions own their stored model metadata; generic repair must not rewrite it.
-        !isModelSelectionLocked(sessionEntry) &&
+        !isValidAgentHarnessSessionStoreEntry(sessionKey, sessionEntry) &&
         !suppressVisibleSessionEffects
       ) {
+        // Validate legacy model-only locks on a clone so repair rejects before mutation.
+        // Durable harness locks own their model metadata and bypass generic repair entirely.
         const initialEntry = sessionEntry;
         const entry = { ...sessionEntry };
         let entryUpdated = false;
