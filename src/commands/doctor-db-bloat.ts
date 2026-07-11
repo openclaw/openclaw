@@ -25,7 +25,7 @@ type SqliteBloatStats = {
 function readSqliteBloatStats(pathname: string): SqliteBloatStats | null {
   // Diagnostics must degrade per-database: EACCES/ENOTDIR on a stale
   // registered path should skip that entry, not abort doctor.
-  let fileBytes = 0;
+  let fileBytes: number;
   try {
     fileBytes = fs.statSync(pathname, { throwIfNoEntry: false })?.size ?? 0;
   } catch {

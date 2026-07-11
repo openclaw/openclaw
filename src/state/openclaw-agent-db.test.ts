@@ -39,31 +39,10 @@ type AgentDbTestDatabase = Pick<
   "memory_index_sources" | "schema_meta"
 >;
 
-type RegisteredAgentDatabaseRow = {
-  agent_id: string;
-  path: string;
-  schema_version: number;
-  size_bytes: number;
-};
-
 const agentDbTempDirs: string[] = [];
 
 function createTempStateDir(): string {
   return makeTempDir(agentDbTempDirs, "openclaw-agent-db-");
-}
-
-function listRegisteredAgentDatabasesForTest(options: { env?: NodeJS.ProcessEnv } = {}) {
-  const rows = openOpenClawStateDatabase(options)
-    .db.prepare(
-      "SELECT agent_id, path, schema_version, size_bytes FROM agent_databases ORDER BY agent_id, path",
-    )
-    .all() as RegisteredAgentDatabaseRow[];
-  return rows.map((row) => ({
-    agentId: row.agent_id,
-    path: row.path,
-    schemaVersion: row.schema_version,
-    sizeBytes: row.size_bytes,
-  }));
 }
 
 function readRegisteredAgentDatabaseLastSeenAt(params: {

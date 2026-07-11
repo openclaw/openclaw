@@ -305,7 +305,6 @@ describe("importCodexThreadHistoryToTranscript", () => {
     const target = await createSqliteMirrorTarget("openclaw-codex-bounded-history-", {
       sessionId: "session-bounded-history",
     });
-    const sessionFile = `sqlite:${target.agentId}:${target.sessionId}:${target.storePath}`;
     const thread = {
       id: "thread-bounded-history",
       turns: Array.from({ length: 205 }, (_, index) => ({

@@ -519,7 +519,7 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       const sessionKey = "agent:main:harness:openclaw:supervision:existing";
       mockConfig(home, store);
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "existing-harness-session",
           updatedAt: Date.now(),
@@ -1303,7 +1303,7 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-locked-model.json");
       const sessionKey = "agent:main:subagent:locked-model";
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "session-locked-model",
           updatedAt: Date.now(),
@@ -1403,7 +1403,7 @@ describe("agentCommand", () => {
   it("does not repair locked legacy auto session model overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-locked-legacy-auto-override.json");
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         "agent:main:subagent:locked-legacy-auto": {
           sessionId: "session-locked-legacy-auto",
           updatedAt: Date.now(),
@@ -1570,7 +1570,7 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-locked-disallowed-override.json");
       const sessionKey = "agent:main:subagent:locked-disallowed";
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "session-locked-disallowed",
           updatedAt: Date.now(),
@@ -1617,7 +1617,7 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-locked-one-off-override.json");
       const sessionKey = "agent:main:subagent:locked-one-off";
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "session-locked-one-off",
           updatedAt: Date.now(),
