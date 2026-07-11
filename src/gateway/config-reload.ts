@@ -463,14 +463,17 @@ export function startGatewayConfigReloader(opts: {
     watcherUsesPolling = next.options.usePolling;
     hotReloadStatus = "active";
 
-    // Reconcile against the current on-disk config after watcher recreation.
-    // Without this, any edit made during the watcher-down window (e.g., manual
-    // edit or separate `openclaw doctor --fix` run) would be silently adopted
-    // as the new baseline and never scheduled for reload.
+    // Reconcile against the current on-disk config only after the replacement
+    // watcher emits its one-shot `ready` event. Without waiting for ready, an
+    // edit made after the reconciliation snapshot but before the watcher starts
+    // tracking would become its ignored initial baseline, leaving the gateway
+    // on stale config until the next write.
     // See: https://github.com/openclaw/openclaw/issues/103729
     if (watcherRecreateRetries > 0 || degradedToPolling) {
-      opts.log.info("config watcher re-created; performing reconciliation read");
-      schedule();
+      next.once("ready", () => {
+        opts.log.info("config watcher ready after recreation; performing reconciliation read");
+        schedule();
+      });
     }
   };
 
@@ -493,9 +496,9 @@ export function startGatewayConfigReloader(opts: {
         opts.log.warn(
           `config watcher native retries exhausted; degrading to polling mode: ${String(err)}`,
         );
-        watcherRecreateTimer = setTimeout(async () => {
+        watcherRecreateTimer = setTimeout(() => {
           watcherRecreateTimer = null;
-          await createWatcher();
+          void createWatcher();
         }, WATCHER_RECREATE_BACKOFF_MS[0] ?? 500);
         return;
       }
@@ -514,9 +517,9 @@ export function startGatewayConfigReloader(opts: {
     opts.log.warn(
       `config watcher error; re-creating watcher (attempt ${watcherRecreateRetries}/${WATCHER_RECREATE_MAX_RETRIES} in ${backoff}ms): ${String(err)}`,
     );
-    watcherRecreateTimer = setTimeout(async () => {
+    watcherRecreateTimer = setTimeout(() => {
       watcherRecreateTimer = null;
-      await createWatcher();
+      void createWatcher();
     }, backoff);
   };
 
