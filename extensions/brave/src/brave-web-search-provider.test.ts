@@ -825,9 +825,9 @@ describe("brave web search provider", () => {
   it("forwards the execution abort signal to the Brave HTTP request", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
     const controller = new AbortController();
-    let capturedSignal: AbortSignal | undefined;
+    let capturedSignal: AbortSignal | null | undefined;
     const mockFetch = vi.fn(async (_input?: unknown, init?: unknown) => {
-      capturedSignal = (init as RequestInit)?.signal;
+      capturedSignal = (init as RequestInit)?.signal ?? undefined;
       // Hold the request open and only resolve on the forwarded signal
       // abort. If the provider drops the signal, the captured signal is
       // undefined and the first expectation below fails.
@@ -858,7 +858,9 @@ describe("brave web search provider", () => {
       { signal: controller.signal },
     );
     // Yield so the mock fetch runs and captures the signal.
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => {
+      setTimeout(r, 10);
+    });
 
     // Fails if the provider drops the signal.
     expect(capturedSignal).toBeDefined();
