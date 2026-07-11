@@ -430,4 +430,6 @@ export type PluginRuntimeCore = {
       workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
   };
+  /** Count of active embedded agent runs. >0 means the main session is busy. */
+  getActiveEmbeddedRunCount: () => number;
 };

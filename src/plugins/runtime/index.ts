@@ -33,6 +33,7 @@ import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
+import { getActiveEmbeddedRunCount } from "../../agents/embedded-agent-runner/run-state.js";
 import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
 
 export type { CreatePluginRuntimeOptions } from "./types.js";
@@ -269,6 +270,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
+    getActiveEmbeddedRunCount,
     gateway: createRuntimeGateway(),
     config: createRuntimeConfig(),
     agent: createRuntimeAgent(),

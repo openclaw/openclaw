@@ -502,6 +502,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   config: ShortTermPromotionDreamingConfig;
   logger: Logger;
   subagent?: OpenClawPluginApi["runtime"]["subagent"];
+  getActiveEmbeddedRunCount?: () => number;
 }): Promise<{ handled: true; reason: string } | undefined> {
   if (params.trigger !== "heartbeat" && params.trigger !== "cron") {
     return undefined;
@@ -511,6 +512,19 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   }
   if (!params.config.enabled) {
     return { handled: true, reason: "memory-core: short-term dreaming disabled" };
+  }
+
+  // Defer dreaming when the main session has active embedded runs to avoid
+  // provider rate-limit contention and session-file takeover errors (#103911).
+  const activeRunCount = params.getActiveEmbeddedRunCount?.() ?? 0;
+  if (activeRunCount > 0) {
+    params.logger.info(
+      "memory-core: short-term dreaming deferred — main session has active runs",
+    );
+    return {
+      handled: true,
+      reason: "memory-core: short-term dreaming deferred (active runs)",
+    };
   }
 
   const recencyHalfLifeDays =
@@ -976,6 +990,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         config,
         logger: api.logger,
         subagent: config.enabled ? api.runtime?.subagent : undefined,
+        getActiveEmbeddedRunCount: api.runtime?.getActiveEmbeddedRunCount,
       });
     } catch (err) {
       api.logger.error(`memory-core: dreaming trigger failed: ${formatErrorMessage(err)}`);

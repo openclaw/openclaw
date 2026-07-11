@@ -2880,4 +2880,33 @@ describe("short-term dreaming trigger", () => {
       "memory-core: dreaming promotion complete (workspaces=3, candidates=3, applied=3, failed=0).",
     );
   });
+
+  it("defers dreaming when active embedded runs exist (#103911)", async () => {
+    const logger = createLogger();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-defer-");
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "cron",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+      getActiveEmbeddedRunCount: () => 1, // simulate main session active
+    });
+
+    expect(result?.handled).toBe(true);
+    expect(result?.reason).toBe("memory-core: short-term dreaming deferred (active runs)");
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("deferred"),
+    );
+  });
 });
