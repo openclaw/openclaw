@@ -88,6 +88,7 @@ jobs:
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
       run_checks_fast_core: ${{ steps.manifest.outputs.run_checks_fast_core }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
+      run_qa_smoke_ci: ${{ steps.manifest.outputs.run_qa_smoke_ci }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
       run_plugin_contracts_shards: ${{ steps.manifest.outputs.run_plugin_contracts_shards }}
       plugin_contracts_matrix: ${{ steps.manifest.outputs.plugin_contracts_matrix }}
@@ -254,13 +255,29 @@ jobs:
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
         run: |
           node --input-type=module <<'EOF'
-          import { appendFileSync } from "node:fs";
-          import {
-            createNodeTestShardBundles,
-          } from "./scripts/lib/ci-node-test-plan.mjs";
-          import {
-            createChannelContractTestShards,
-          } from "./scripts/lib/channel-contract-test-plan.mjs";
+          import { appendFileSync, existsSync, readFileSync } from "node:fs";
+
+          const nodeTestPlan = await import("./scripts/lib/ci-node-test-plan.mjs");
+          const createNodeTestPlan =
+            typeof nodeTestPlan.createNodeTestShardBundles === "function"
+              ? nodeTestPlan.createNodeTestShardBundles
+              : nodeTestPlan.createNodeTestShards;
+          if (typeof createNodeTestPlan !== "function") {
+            throw new Error("CI target does not export a supported Node test shard planner");
+          }
+
+          const channelContractPlan = await import(
+            "./scripts/lib/channel-contract-test-plan.mjs"
+          ).catch((error) => {
+            if (error?.code !== "ERR_MODULE_NOT_FOUND") {
+              throw error;
+            }
+            return {};
+          });
+          const createChannelContractTestShards =
+            typeof channelContractPlan.createChannelContractTestShards === "function"
+              ? channelContractPlan.createChannelContractTestShards
+              : () => [];
 
           const parseBoolean = (value, fallback = false) => {
             if (value === undefined) return fallback;
@@ -270,25 +287,29 @@ jobs:
             return fallback;
           };
 
-          const { createPluginContractTestShards } = await import(
+          const pluginContractPlan = await import(
             "./scripts/lib/plugin-contract-test-plan.mjs"
           ).catch((error) => {
             if (error?.code !== "ERR_MODULE_NOT_FOUND") {
               throw error;
             }
-            return {
-              createPluginContractTestShards: () => [
-                {
-                  checkName: "checks-fast-contracts-plugins-legacy",
-                  includePatterns: ["src/plugins/contracts/**/*.test.ts"],
-                  runtime: "node",
-                  task: "contracts-plugins",
-                },
-              ],
-            };
+            return {};
           });
+          const createPluginContractTestShards =
+            typeof pluginContractPlan.createPluginContractTestShards === "function"
+              ? pluginContractPlan.createPluginContractTestShards
+              : () => [
+                  {
+                    checkName: "checks-fast-contracts-plugins-legacy",
+                    includePatterns: ["src/plugins/contracts/**/*.test.ts"],
+                    runtime: "node",
+                    task: "contracts-plugins",
+                  },
+                ];
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
+          const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts ?? {};
+          const hasPackageScript = (name) => typeof packageScripts[name] === "string";
           const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
@@ -304,8 +325,16 @@ jobs:
           const runPluginContractShards = runNodeFull || runNodeFastPluginContracts;
           const runMacos =
             parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly && isCanonicalRepository;
+          const supportsCurrentIosCi =
+            hasPackageScript("ios:build") &&
+            existsSync("scripts/install-swift-tools.sh") &&
+            existsSync("scripts/lint-swift.sh") &&
+            existsSync("scripts/format-swift.sh");
           const runIosBuild =
-            parseBoolean(process.env.OPENCLAW_CI_RUN_IOS_BUILD) && !docsOnly && isCanonicalRepository;
+            parseBoolean(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
+            !docsOnly &&
+            isCanonicalRepository &&
+            supportsCurrentIosCi;
           const runAndroid =
             parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !docsOnly && isCanonicalRepository;
           const runWindows =
@@ -317,8 +346,14 @@ jobs:
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
           const runUiTests = parseBoolean(process.env.OPENCLAW_CI_RUN_UI_TESTS) && !docsOnly;
+          const supportsNativeI18n =
+            hasPackageScript("native:i18n:check") &&
+            hasPackageScript("android:i18n:check") &&
+            hasPackageScript("apple:i18n:check");
           const runNativeI18n =
-            parseBoolean(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) && !docsOnly;
+            parseBoolean(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
+            !docsOnly &&
+            supportsNativeI18n;
           const checksFastCoreTasks = [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
@@ -336,8 +371,10 @@ jobs:
           }
 
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
+          const runQaSmokeCi =
+            runNodeFull && existsSync("extensions/qa-lab/src/ci-smoke-plan.ts");
           const nodeTestShards = runNodeFull
-            ? createNodeTestShardBundles({
+            ? createNodeTestPlan({
                 includeReleaseOnlyPluginShards: false,
                 compact: compactPullRequest,
               }).map((shard) => ({
@@ -371,6 +408,7 @@ jobs:
             run_build_artifacts: runNodeFull,
             run_checks_fast_core: checksFastCoreTasks.length > 0,
             run_checks_fast: runNodeFull,
+            run_qa_smoke_ci: runQaSmokeCi,
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
             run_plugin_contracts_shards: runPluginContractShards,
             plugin_contracts_matrix: createMatrix(
@@ -432,7 +470,7 @@ jobs:
           EOF
 
       - name: Check mobile protocol event coverage
-        if: ${{ steps.manifest.outputs.run_node == 'true' || steps.manifest.outputs.run_ios_build == 'true' || steps.manifest.outputs.run_android_job == 'true' }}
+        if: ${{ hashFiles('scripts/check-protocol-event-coverage.mjs') != '' && (steps.manifest.outputs.run_node == 'true' || steps.manifest.outputs.run_ios_build == 'true' || steps.manifest.outputs.run_android_job == 'true') }}
         run: node scripts/check-protocol-event-coverage.mjs
 
   # Run dependency-free security checks in parallel with scope detection so the
@@ -965,7 +1003,7 @@ jobs:
       contents: read
     name: QA Smoke CI (${{ matrix.name }})
     needs: [preflight]
-    if: needs.preflight.outputs.run_checks_fast == 'true'
+    if: needs.preflight.outputs.run_qa_smoke_ci == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:

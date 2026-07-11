@@ -45,6 +45,86 @@ function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
 
+function runCiManifestFixture(options: { bundledPlanner: boolean }) {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-manifest-"));
+  try {
+    const scriptsDir = path.join(root, "scripts", "lib");
+    mkdirSync(scriptsDir, { recursive: true });
+    writeFileSync(
+      path.join(scriptsDir, "ci-node-test-plan.mjs"),
+      options.bundledPlanner
+        ? `
+          export const createNodeTestShards = () => [{
+            checkName: "legacy-node-plan",
+            configs: ["test/vitest/legacy.config.ts"],
+            requiresDist: false,
+            runner: "ubuntu-24.04",
+            shardName: "legacy-node-plan",
+          }];
+          export const createNodeTestShardBundles = () => [{
+            checkName: "bundled-node-plan",
+            configs: ["test/vitest/bundled.config.ts"],
+            requiresDist: false,
+            runner: "ubuntu-24.04",
+            shardName: "bundled-node-plan",
+          }];
+        `
+        : `
+          export const createNodeTestShards = () => [{
+            checkName: "legacy-node-plan",
+            configs: ["test/vitest/legacy.config.ts"],
+            requiresDist: false,
+            runner: "ubuntu-24.04",
+            shardName: "legacy-node-plan",
+          }];
+        `,
+      "utf8",
+    );
+    writeFileSync(path.join(root, "package.json"), '{"scripts":{}}\n', "utf8");
+    const outputPath = path.join(root, "manifest.out");
+    writeFileSync(outputPath, "", "utf8");
+    const manifestStep = readCiWorkflow().jobs.preflight.steps.find(
+      (step: { name?: string }) => step.name === "Build CI manifest",
+    );
+    const run = spawnSync("bash", ["-c", manifestStep.run], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: outputPath,
+        OPENCLAW_CI_CHECKOUT_REVISION: "a".repeat(40),
+        OPENCLAW_CI_DOCS_CHANGED: "true",
+        OPENCLAW_CI_DOCS_ONLY: "false",
+        OPENCLAW_CI_EVENT_NAME: "workflow_dispatch",
+        OPENCLAW_CI_REPOSITORY: "openclaw/openclaw",
+        OPENCLAW_CI_RUN_ANDROID: "true",
+        OPENCLAW_CI_RUN_CONTROL_UI_I18N: "true",
+        OPENCLAW_CI_RUN_IOS_BUILD: "true",
+        OPENCLAW_CI_RUN_MACOS: "true",
+        OPENCLAW_CI_RUN_NATIVE_I18N: "true",
+        OPENCLAW_CI_RUN_NODE: "true",
+        OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: "false",
+        OPENCLAW_CI_RUN_NODE_FAST_ONLY: "false",
+        OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: "false",
+        OPENCLAW_CI_RUN_SKILLS_PYTHON: "true",
+        OPENCLAW_CI_RUN_WINDOWS: "true",
+      },
+    });
+    const outputs = Object.fromEntries(
+      readFileSync(outputPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const separator = line.indexOf("=");
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
+    );
+    return { output: `${run.stdout}${run.stderr}`, outputs, status: run.status };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
 function readAndroidReleaseWorkflow() {
   return parse(readFileSync(".github/workflows/android-release.yml", "utf8"));
 }
@@ -1467,7 +1547,46 @@ describe("ci workflow guards", () => {
     expect(coverageStep.if).toContain("steps.manifest.outputs.run_node == 'true'");
     expect(coverageStep.if).toContain("steps.manifest.outputs.run_ios_build == 'true'");
     expect(coverageStep.if).toContain("steps.manifest.outputs.run_android_job == 'true'");
+    expect(coverageStep.if).toContain(
+      "hashFiles('scripts/check-protocol-event-coverage.mjs') != ''",
+    );
     expect(checkShardRun).not.toContain("check:protocol-coverage");
+  });
+
+  it("uses target-owned CI plans and capabilities for older release checkouts", () => {
+    const legacy = runCiManifestFixture({ bundledPlanner: false });
+    expect(legacy.status, legacy.output).toBe(0);
+    expect(legacy.outputs.run_ios_build).toBe("false");
+    expect(legacy.outputs.run_native_i18n).toBe("false");
+    expect(legacy.outputs.run_qa_smoke_ci).toBe("false");
+    expect(JSON.parse(legacy.outputs.checks_node_core_nondist_matrix).include).toContainEqual(
+      expect.objectContaining({
+        check_name: "legacy-node-plan",
+        shard_name: "legacy-node-plan",
+      }),
+    );
+
+    const current = runCiManifestFixture({ bundledPlanner: true });
+    expect(current.status, current.output).toBe(0);
+    expect(JSON.parse(current.outputs.checks_node_core_nondist_matrix).include).toContainEqual(
+      expect.objectContaining({
+        check_name: "bundled-node-plan",
+        shard_name: "bundled-node-plan",
+      }),
+    );
+
+    const workflow = readCiWorkflow();
+    expect(workflow.jobs["qa-smoke-ci-profile"].if).toBe(
+      "needs.preflight.outputs.run_qa_smoke_ci == 'true'",
+    );
+    const swiftInstall = workflow.jobs["macos-swift"].steps.find(
+      (step: { name?: string }) => step.name === "Install XcodeGen / SwiftLint / SwiftFormat",
+    );
+    const swiftLint = workflow.jobs["macos-swift"].steps.find(
+      (step: { name?: string }) => step.name === "Swift lint",
+    );
+    expect(swiftInstall.run).toContain("brew install xcodegen swiftlint swiftformat");
+    expect(swiftLint.run).toContain("swiftlint lint --config config/swiftlint.yml");
   });
 
   it("does not rebuild Control UI after build:ci-artifacts", () => {
