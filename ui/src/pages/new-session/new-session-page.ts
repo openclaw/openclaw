@@ -60,7 +60,7 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   override updated() {
     const agents = this.agents();
-    const openKey = `${this.data?.agentId ?? ""}`;
+    const openKey = this.data?.agentId ?? "";
     // A hard reload can land here before agents.list resolves; re-adopt the
     // workspace defaults once the list arrives instead of keeping blanks.
     const hydrating = !this.agentsHydrated && agents.length > 0;
