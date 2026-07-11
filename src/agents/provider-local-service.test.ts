@@ -1,4 +1,5 @@
 // Verifies managed local provider services start, lease, probe, and stop safely.
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -476,6 +477,69 @@ describe("provider local service", () => {
       "local-signal-exit local service exited before readiness with signal SIGTERM",
     );
     expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+
+  it("does not keep one-shot hosts alive through diagnostic pipes", async () => {
+    const port = await freePort();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-service-unref-"));
+    const servicePidPath = path.join(tempDir, "service.pid");
+    const moduleUrl = new URL("./provider-local-service.ts", import.meta.url).href;
+    const script = [
+      `import fs from "node:fs/promises";`,
+      `import { ensureProviderLocalService, getManagedProviderLocalServiceDiagnosticsForTest } from ${JSON.stringify(moduleUrl)};`,
+      `const port = ${port};`,
+      `const lease = await ensureProviderLocalService({`,
+      `  providerId: "local-unref",`,
+      `  baseUrl: "http://127.0.0.1:" + port + "/v1",`,
+      `  service: {`,
+      `    command: process.execPath,`,
+      `    args: ["-e", ${JSON.stringify(
+        `const http=require("node:http");const server=http.createServer((req,res)=>{res.writeHead(200);res.end("ok");});server.listen(${port},"127.0.0.1");setInterval(()=>process.stderr.write("tick\\\\n"),10);`,
+      )}],`,
+      `    readyTimeoutMs: 5000,`,
+      `  },`,
+      `});`,
+      `const [diagnostics] = getManagedProviderLocalServiceDiagnosticsForTest();`,
+      `await fs.writeFile(${JSON.stringify(servicePidPath)}, String(diagnostics.pid));`,
+      `lease?.release();`,
+    ].join("\n");
+    const parent = spawn(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", script],
+      {
+        cwd: process.cwd(),
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
+    let stderr = "";
+    parent.stderr.on("data", (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
+    let servicePid: number | undefined;
+    let exitTimeout: NodeJS.Timeout | undefined;
+
+    try {
+      const result = await Promise.race([
+        new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+          parent.once("exit", (code, signal) => resolve({ code, signal }));
+        }),
+        new Promise<"timeout">((resolve) => {
+          exitTimeout = setTimeout(() => resolve("timeout"), 5_000);
+        }),
+      ]);
+      clearTimeout(exitTimeout);
+      expect(result, stderr).toEqual({ code: 0, signal: null });
+      servicePid = await readPidFile(servicePidPath);
+      expect(await waitForPidToExit(servicePid)).toBe(true);
+    } finally {
+      clearTimeout(exitTimeout);
+      killPidIfAlive(parent.pid);
+      if (servicePid === undefined) {
+        servicePid = await readPidFile(servicePidPath).catch(() => undefined);
+      }
+      killPidIfAlive(servicePid);
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("honors request aborts while waiting for local service readiness", async () => {

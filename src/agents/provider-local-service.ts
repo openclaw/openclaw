@@ -384,6 +384,10 @@ async function startAndWaitForLocalService(params: {
     if (await probeHealth(healthUrl, healthHeaders, signal)) {
       diagnostics.readyAt = Date.now();
       diagnostics.lastHealthyAt = diagnostics.readyAt;
+      // Pipes keep startup alive while readiness is pending, then stop
+      // diagnostics from pinning one-shot hosts after the lease is usable.
+      unrefLocalServiceOutput(child.stdout);
+      unrefLocalServiceOutput(child.stderr);
       log.info(
         `${provider} local service ready: pid=${diagnostics.pid ?? "unknown"} spawnMs=${diagnostics.spawnedAt - startedAt} readyMs=${diagnostics.readyAt - startedAt}`,
       );
@@ -423,6 +427,10 @@ function appendLocalServiceOutputTail(
     start += 1;
   }
   return bytes.subarray(start).toString("utf8");
+}
+
+function unrefLocalServiceOutput(stream: ChildProcess["stdout"]): void {
+  (stream as { unref?: () => void } | null)?.unref?.();
 }
 
 function formatLocalServiceDiagnosticTail(diagnostics: LocalServiceDiagnostics): string {
