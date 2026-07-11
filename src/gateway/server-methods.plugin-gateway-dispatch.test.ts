@@ -60,6 +60,8 @@ describe("handleGatewayRequest plugin gateway dispatch", () => {
       },
       isWebchatConnect: () => false,
       context: {
+        authorization: { mode: "legacy" },
+        getRuntimeConfig: () => ({}),
         logGateway: { warn: vi.fn() },
       } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
       methodRegistry: staleStartupRegistry,
@@ -100,6 +102,8 @@ describe("handleGatewayRequest plugin gateway dispatch", () => {
       },
       isWebchatConnect: () => false,
       context: {
+        authorization: { mode: "legacy" },
+        getRuntimeConfig: () => ({}),
         logGateway: { warn: vi.fn() },
       } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
       methodRegistry: attachedRegistry,
@@ -128,6 +132,8 @@ describe("handleGatewayRequest plugin gateway dispatch", () => {
       },
       isWebchatConnect: () => false,
       context: {
+        authorization: { mode: "legacy" },
+        getRuntimeConfig: () => ({}),
         logGateway: { warn: vi.fn() },
       } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
       methodRegistry: createGatewayMethodRegistry([]),

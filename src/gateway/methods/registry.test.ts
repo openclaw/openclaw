@@ -14,12 +14,18 @@ const handler: GatewayRequestHandler = ({ respond }) => respond(true, { ok: true
 
 describe("gateway method registry", () => {
   it("indexes handlers, scopes, startup state, and control-plane metadata", () => {
+    const access = {
+      kind: "resource" as const,
+      permission: "example.read",
+      resolveResources: () => [{ namespace: "core", type: "example", id: "one" }],
+    };
     const registry = createGatewayMethodRegistry([
       {
         name: "example.read",
         handler,
         scope: READ_SCOPE,
         owner: { kind: "core", area: "test" },
+        access,
       },
       {
         name: "example.write",
@@ -36,8 +42,28 @@ describe("gateway method registry", () => {
     expect(registry.listAdvertisedMethods()).toEqual(["example.read"]);
     expect(registry.getHandler("example.read")).toBe(handler);
     expect(registry.getScope("example.write")).toBe(WRITE_SCOPE);
+    expect(registry.getAccessPolicy("example.read")).toBe(access);
+    expect(registry.getAccessPolicy("example.write")).toBeUndefined();
     expect(registry.isStartupUnavailable("example.write")).toBe(true);
     expect(registry.isControlPlaneWrite("example.write")).toBe(true);
+  });
+
+  it("rejects a blank resource permission", () => {
+    expect(() =>
+      createGatewayMethodRegistry([
+        {
+          name: "example.blank-permission",
+          handler,
+          scope: READ_SCOPE,
+          owner: { kind: "core", area: "test" },
+          access: {
+            kind: "resource",
+            permission: "   ",
+            resolveResources: () => [{ namespace: "core", type: "example", id: "one" }],
+          },
+        },
+      ]),
+    ).toThrow("gateway method access permission must not be empty: example.blank-permission");
   });
 
   it("rejects duplicate method names", () => {
@@ -103,5 +129,6 @@ describe("gateway method registry", () => {
     expect(registry.listMethods()).toEqual(["legacy.ping"]);
     expect(registry.getHandler("legacy.ping")).toBe(handler);
     expect(registry.getScope("legacy.ping")).toBe(ADMIN_SCOPE);
+    expect(registry.getAccessPolicy("legacy.ping")).toBeUndefined();
   });
 });

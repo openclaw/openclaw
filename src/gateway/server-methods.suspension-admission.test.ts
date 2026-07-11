@@ -63,9 +63,11 @@ function dispatch(params: {
     isWebchatConnect: () => false,
     context:
       params.context ??
-      ({ logGateway: { warn: vi.fn() } } as unknown as Parameters<
-        typeof handleGatewayRequest
-      >[0]["context"]),
+      ({
+        authorization: { mode: "legacy" },
+        getRuntimeConfig: () => ({}),
+        logGateway: { warn: vi.fn() },
+      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"]),
     methodRegistry,
   });
   return { request, respond };
@@ -132,6 +134,8 @@ describe("gateway request suspension admission", () => {
       getSuspensionBlockerCount: vi.fn(() => 0),
     };
     const context = {
+      authorization: { mode: "legacy" },
+      getRuntimeConfig: () => ({}),
       cron,
       logGateway: { warn: vi.fn() },
       chatAbortControllers: new Map(),

@@ -39,6 +39,9 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
   if (!normalizedScope) {
     throw new Error(`gateway method descriptor is missing a scope: ${name}`);
   }
+  if (input.access?.kind === "resource" && !input.access.permission.trim()) {
+    throw new Error(`gateway method access permission must not be empty: ${name}`);
+  }
   return {
     ...input,
     name,
@@ -73,6 +76,7 @@ export function createGatewayMethodRegistry(
         .filter((descriptor) => descriptor.advertise !== false)
         .map((descriptor) => descriptor.name),
     getScope: (name) => byName.get(name)?.scope,
+    getAccessPolicy: (name) => byName.get(name)?.access,
     isStartupUnavailable: (name) => byName.get(name)?.startup === "unavailable-until-sidecars",
     isControlPlaneWrite: (name) => byName.get(name)?.controlPlaneWrite === true,
     descriptors: () => descriptors,

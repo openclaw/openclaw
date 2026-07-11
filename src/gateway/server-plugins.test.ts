@@ -870,6 +870,80 @@ describe("loadGatewayPlugins", () => {
     ).resolves.toEqual({ status: "ok" });
   });
 
+  test("preserves the authenticated principal for scoped nested gateway dispatch", async () => {
+    const context = createTestContext("principal-preserved");
+    const principal = {
+      issuer: "trusted-proxy",
+      subject: "member@example.com",
+      kind: "human" as const,
+    };
+    const client = {
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { id: "test", version: "1", platform: "test", mode: "test" },
+        role: "operator" as const,
+        scopes: ["operator.write"],
+      },
+      principal,
+    } as GatewayRequestOptions["client"];
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(opts.client?.principal).toEqual(principal);
+      opts.respond(true, { ok: true });
+    });
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(
+        { context, client, isWebchatConnect: () => false },
+        () => serverPluginsModule.dispatchGatewayMethodInProcess("sessions.get", { key: "s-1" }),
+      ),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  test("does not copy an ambient principal onto forced synthetic trusted-plugin dispatch", async () => {
+    const context = createTestContext("principal-not-synthetic");
+    const client = {
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { id: "test", version: "1", platform: "test", mode: "test" },
+        role: "operator" as const,
+        scopes: ["operator.admin"],
+      },
+      principal: {
+        issuer: "trusted-proxy",
+        subject: "member@example.com",
+        kind: "human" as const,
+      },
+    } as GatewayRequestOptions["client"];
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(opts.client?.principal).toBeUndefined();
+      expect(opts.client?.connect.scopes).toEqual(["operator.admin"]);
+      expect(opts.client?.internal?.pluginRuntimeOwnerId).toBe("trusted-plugin-owner");
+      opts.respond(true, { ok: true });
+    });
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(
+        { context, client, isWebchatConnect: () => false },
+        () =>
+          gatewayRequestScopeModule.withPluginRuntimePluginScope(
+            { pluginId: "trusted-plugin", pluginOrigin: "bundled" },
+            () =>
+              serverPluginsModule.dispatchGatewayMethodInProcess(
+                "sessions.get",
+                { key: "s-1" },
+                {
+                  forceSyntheticClient: true,
+                  syntheticScopes: ["operator.admin"],
+                  pluginRuntimeOwnerId: "trusted-plugin-owner",
+                },
+              ),
+          ),
+      ),
+    ).resolves.toEqual({ ok: true });
+  });
+
   test("uses one timeout budget across accepted and final in-process responses", async () => {
     vi.useFakeTimers();
     try {
