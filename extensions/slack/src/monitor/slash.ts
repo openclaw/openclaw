@@ -898,7 +898,14 @@ export async function registerSlackMonitorSlashCommands(params: {
         },
       );
     }
-  } else if (slashCommand.enabled) {
+  }
+
+  const configuredSlashCommandIsNative = nativeCommands.some(
+    (command) =>
+      normalizeLowercaseStringOrEmpty(command.name) ===
+      normalizeLowercaseStringOrEmpty(slashCommand.name),
+  );
+  if (slashCommand.enabled && !configuredSlashCommandIsNative) {
     ctx.app.command(
       buildSlackSlashCommandMatcher(slashCommand.name),
       async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
@@ -911,7 +918,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         });
       },
     );
-  } else {
+  } else if (nativeCommands.length === 0) {
     logVerbose("slack: slash commands disabled");
   }
 

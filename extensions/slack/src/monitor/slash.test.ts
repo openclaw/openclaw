@@ -658,6 +658,14 @@ describe("Slack native command argument menus", () => {
     harness.postEphemeral.mockClear();
   });
 
+  it("registers the configured slash command alongside native commands", () => {
+    expect(
+      [...harness.commands.keys()].some(
+        (command) => command instanceof RegExp && command.test("/openclaw"),
+      ),
+    ).toBe(true);
+  });
+
   it("registers options handlers without losing app receiver binding", async () => {
     const testHarness = createArgMenusHarness();
     await registerCommands(testHarness.ctx, testHarness.account);
