@@ -35,6 +35,7 @@ import {
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizePluginsConfig, normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import {
   applyProviderPluginAuthMethodResultConfig,
@@ -183,18 +184,19 @@ function probedTargetChangedError(params: {
 }
 
 function hasExplicitCodexSupervisionOptOut(config: OpenClawConfig): boolean {
-  const supervision = config.plugins?.entries?.codex?.config?.supervision;
+  const supervision = normalizePluginsConfig(config.plugins).entries.codex?.config?.supervision;
   return isRecord(supervision) && supervision.enabled === false;
 }
 
 function canAutoEnableCodexSupervision(config: OpenClawConfig): boolean {
+  const normalizedConfig = normalizePluginTargetConfig(config, "codex");
   if (
-    config.plugins?.entries?.codex?.enabled === false ||
-    hasExplicitCodexSupervisionOptOut(config)
+    normalizedConfig.plugins?.entries?.codex?.enabled === false ||
+    hasExplicitCodexSupervisionOptOut(normalizedConfig)
   ) {
     return false;
   }
-  return enablePluginInConfig(config, "codex").enabled;
+  return enablePluginInConfig(normalizedConfig, "codex").enabled;
 }
 function enableCodexSupervisionForGuidedSetup(
   config: OpenClawConfig,
@@ -202,11 +204,14 @@ function enableCodexSupervisionForGuidedSetup(
 ): OpenClawConfig {
   // Policy and include-owned opt-outs live in the resolved source config.
   // Runtime defaults cannot distinguish an omitted value from an authored false.
-  const sourceEnabled = enablePluginInConfig(sourceConfig, "codex");
+  const sourceEnabled = enablePluginInConfig(
+    normalizePluginTargetConfig(sourceConfig, "codex"),
+    "codex",
+  );
   if (!sourceEnabled.enabled) {
     throw new CodexPluginPolicyBlockedError(sourceEnabled.reason);
   }
-  const enabled = enablePluginInConfig(config, "codex");
+  const enabled = enablePluginInConfig(normalizePluginTargetConfig(config, "codex"), "codex");
   if (!enabled.enabled) {
     throw new CodexPluginPolicyBlockedError(enabled.reason);
   }
@@ -861,7 +866,10 @@ async function activateSetupInferenceUnredacted(
       const codexInstallBase = stripPendingPluginInstallRecords(
         codexPluginActivation === "selected" ? testPlan.config : cfg,
       );
-      const enabledCodexBase = enablePluginInConfig(codexInstallBase, "codex");
+      const enabledCodexBase = enablePluginInConfig(
+        normalizePluginTargetConfig(codexInstallBase, "codex"),
+        "codex",
+      );
       if (!enabledCodexBase.enabled) {
         return {
           ok: false,
@@ -972,7 +980,10 @@ async function activateSetupInferenceUnredacted(
                 ...(agentRuntimeId ? { agentRuntimeId } : {}),
               })
             : currentCodexConfig;
-        const enabledCodex = enablePluginInConfig(currentCodexSelection, "codex");
+        const enabledCodex = enablePluginInConfig(
+          normalizePluginTargetConfig(currentCodexSelection, "codex"),
+          "codex",
+        );
         if (!enabledCodex.enabled) {
           return {
             ok: false,

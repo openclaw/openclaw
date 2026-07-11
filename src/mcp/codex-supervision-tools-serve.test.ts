@@ -100,6 +100,43 @@ describe("createCodexSupervisionToolsMcpServer", () => {
     }
   });
 
+  it("preserves normalized Codex endpoint config while forcing bridge activation", () => {
+    resolvePluginToolsMock.mockReturnValue(createTools());
+
+    createCodexSupervisionToolsMcpServer({
+      config: {
+        plugins: {
+          allow: [" CODEX "],
+          deny: ["CoDeX"],
+          entries: {
+            " CODEX ": {
+              config: {
+                appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
+                supervision: { enabled: false },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const context = ensureStandalonePluginToolRegistryLoadedMock.mock.calls[0]?.[0]?.context;
+    expect(context?.config.plugins).toMatchObject({
+      allow: ["codex"],
+      deny: [],
+      entries: {
+        codex: {
+          enabled: true,
+          config: {
+            appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
+            supervision: { enabled: true },
+          },
+        },
+      },
+    });
+    expect(context?.config.plugins?.entries).not.toHaveProperty(" CODEX ");
+  });
+
   it("disposes the Codex harness when the stdio bridge shuts down", async () => {
     resolvePluginToolsMock.mockReturnValue(createTools());
 

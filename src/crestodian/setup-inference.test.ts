@@ -2368,6 +2368,39 @@ describe("activateSetupInference", () => {
     });
   });
 
+  it("preserves a normalized Codex supervision opt-out", async () => {
+    const config = {
+      plugins: {
+        allow: [" CODEX "],
+        entries: {
+          " CODEX ": {
+            config: {
+              appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
+              supervision: { enabled: false },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const { result, persistedConfig } = await runCodexSetupWithFinalConfig({
+      currentConfig: config,
+      sourceConfig: config,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(persistedConfig.plugins?.allow).toEqual(["codex"]);
+    expect(persistedConfig.plugins?.entries).toEqual({
+      codex: {
+        enabled: true,
+        config: {
+          appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
+          supervision: { enabled: false },
+        },
+      },
+    });
+  });
+
   it("preserves an include-owned Codex supervision opt-out without copying it to root", async () => {
     const resolvedSource = {
       plugins: {

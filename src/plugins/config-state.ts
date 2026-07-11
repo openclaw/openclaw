@@ -85,6 +85,34 @@ export const normalizePluginsConfig = (
   return normalizePluginsConfigWithResolver(config, createScopedPluginIdNormalizer());
 };
 
+/** Canonicalizes one plugin entry and its policy-list ids before a targeted mutation. */
+export function normalizePluginTargetConfig(
+  config: OpenClawConfig,
+  pluginId: string,
+): OpenClawConfig {
+  const normalizedId = normalizePluginId(pluginId);
+  const normalized = normalizePluginsConfig(config.plugins);
+  const rawEntries = config.plugins?.entries ?? {};
+  const hasTargetEntry = Object.keys(rawEntries).some(
+    (entryId) => normalizePluginId(entryId) === normalizedId,
+  );
+  const entries = Object.fromEntries(
+    Object.entries(rawEntries).filter(([entryId]) => normalizePluginId(entryId) !== normalizedId),
+  );
+  if (hasTargetEntry) {
+    entries[normalizedId] = normalized.entries[normalizedId];
+  }
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      ...(Array.isArray(config.plugins?.allow) ? { allow: normalized.allow } : {}),
+      ...(Array.isArray(config.plugins?.deny) ? { deny: normalized.deny } : {}),
+      entries,
+    },
+  };
+}
+
 export function createPluginActivationSource(params: {
   config?: OpenClawConfig;
   plugins?: NormalizedPluginsConfig;

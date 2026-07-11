@@ -12,6 +12,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
@@ -26,7 +27,8 @@ const LEGACY_TOOL_NAME_SET = new Set<string>(LEGACY_TOOL_NAMES);
 const TRUSTED_STANDALONE_MCP_OWNER_CONTEXT = { senderIsOwner: true as const };
 
 function withCodexSupervisionEnabled(config: OpenClawConfig): OpenClawConfig {
-  const next = structuredClone(config) as OpenClawConfig & Record<string, unknown>;
+  const next = structuredClone(normalizePluginTargetConfig(config, "codex")) as OpenClawConfig &
+    Record<string, unknown>;
   const plugins = (next.plugins ??= {}) as Record<string, unknown>;
   plugins.enabled = true;
   const deny = Array.isArray(plugins.deny)
