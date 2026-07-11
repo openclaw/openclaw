@@ -140,11 +140,11 @@ export async function loadWidgetManifestView(
     // every allowed id without invoking Object.prototype's legacy setter.
     const bindings = Object.create(null) as Record<string, DashboardBinding>;
     for (const value of manifestBindings) {
-      const parsed = parseManifestBinding(value);
-      if (!parsed || Object.hasOwn(bindings, parsed.id)) {
+      const parsedBinding = parseManifestBinding(value);
+      if (!parsedBinding || Object.hasOwn(bindings, parsedBinding.id)) {
         return null;
       }
-      bindings[parsed.id] = parsed.binding;
+      bindings[parsedBinding.id] = parsedBinding.binding;
     }
     const capabilities = (Array.isArray(record.capabilities) ? record.capabilities : []).filter(
       (cap): cap is DashboardWidgetCapability => cap === "data:read" || cap === "prompt:send",
