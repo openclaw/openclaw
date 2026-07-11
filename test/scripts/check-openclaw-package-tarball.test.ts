@@ -314,23 +314,29 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
-  it.each(["2026.6.7", "2026.6.8-beta.3", "2026.6.10-alpha.3", "2026.7.1"])(
-    "rejects missing content inventory for package %s",
-    (version) => {
-      withTarball(
-        ["dist/index.js"],
-        { "dist/index.js": "export {};\n" },
-        (tarball) => {
-          const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+  it.each([
+    "1000.1.1",
+    "2025.12.31",
+    "2026.1.28",
+    "2026.2.30",
+    "2026.6.7",
+    "2026.6.8-beta.3",
+    "2026.6.10-alpha.3",
+    "2026.7.1",
+  ])("rejects missing content inventory for package %s", (version) => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
 
-          expect(result.status).not.toBe(0);
-          expect(result.stderr).toContain("missing dist/postinstall-content-inventory.json");
-        },
-        version,
-        { includeContentInventory: false },
-      );
-    },
-  );
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("missing dist/postinstall-content-inventory.json");
+      },
+      version,
+      { includeContentInventory: false },
+    );
+  });
 
   it.runIf(process.platform !== "win32")(
     "rejects symlinked package metadata used for legacy compatibility",

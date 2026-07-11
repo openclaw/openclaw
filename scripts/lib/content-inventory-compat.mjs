@@ -1,3 +1,4 @@
+const LEGACY_CONTENT_INVENTORY_COMPAT_MIN = { year: 2026, month: 1, day: 29 };
 const LEGACY_CONTENT_INVENTORY_COMPAT_MAX = { year: 2026, month: 6, day: 6 };
 
 // These tagged package versions predate content-inventory packaging. Keep the
@@ -42,11 +43,20 @@ function parseCalver(version) {
   if (!match) {
     return null;
   }
-  return {
+  const parsed = {
     year: Number(match[1]),
     month: Number(match[2]),
     day: Number(match[3]),
   };
+  const date = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day));
+  if (
+    date.getUTCFullYear() !== parsed.year ||
+    date.getUTCMonth() !== parsed.month - 1 ||
+    date.getUTCDate() !== parsed.day
+  ) {
+    return null;
+  }
+  return parsed;
 }
 
 function compareCalver(left, right) {
@@ -64,5 +74,8 @@ export function isLegacyContentInventoryCompatVersion(version) {
     return true;
   }
   const parsed = parseCalver(normalized);
-  return parsed ? compareCalver(parsed, LEGACY_CONTENT_INVENTORY_COMPAT_MAX) <= 0 : false;
+  return parsed
+    ? compareCalver(parsed, LEGACY_CONTENT_INVENTORY_COMPAT_MIN) >= 0 &&
+        compareCalver(parsed, LEGACY_CONTENT_INVENTORY_COMPAT_MAX) <= 0
+    : false;
 }

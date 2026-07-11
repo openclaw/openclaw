@@ -355,32 +355,36 @@ describe("package dist inventory", () => {
     },
   );
 
-  it.each(["2026.6.7", "2026.6.8-beta.3", "2026.6.10-alpha.3", "2026.7.1"])(
-    "requires content inventory for post-cutover package version %s",
-    async (version) => {
-      await withTempDir(
-        { prefix: "openclaw-dist-content-inventory-required-" },
-        async (packageRoot) => {
-          const currentFile = path.join(packageRoot, "dist", "current.js");
-          await fs.mkdir(path.dirname(currentFile), { recursive: true });
-          await fs.writeFile(currentFile, "export const value = 1;\n", "utf8");
-          await fs.writeFile(
-            path.join(packageRoot, "package.json"),
-            JSON.stringify({ name: "openclaw", version }),
-            "utf8",
-          );
-          await writePackageDistInventory(packageRoot);
-          await fs.rm(path.join(packageRoot, "dist", "postinstall-content-inventory.json"));
+  it.each([
+    "1000.1.1",
+    "2025.12.31",
+    "2026.1.28",
+    "2026.2.30",
+    "2026.6.7",
+    "2026.6.8-beta.3",
+    "2026.6.10-alpha.3",
+    "2026.7.1",
+  ])("requires content inventory for post-cutover package version %s", async (version) => {
+    await withTempDir(
+      { prefix: "openclaw-dist-content-inventory-required-" },
+      async (packageRoot) => {
+        const currentFile = path.join(packageRoot, "dist", "current.js");
+        await fs.mkdir(path.dirname(currentFile), { recursive: true });
+        await fs.writeFile(currentFile, "export const value = 1;\n", "utf8");
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version }),
+          "utf8",
+        );
+        await writePackageDistInventory(packageRoot);
+        await fs.rm(path.join(packageRoot, "dist", "postinstall-content-inventory.json"));
 
-          await expect(
-            collectPackageDistContentInventoryErrors(packageRoot),
-          ).resolves.toStrictEqual([
-            "missing package dist content inventory dist/postinstall-content-inventory.json",
-          ]);
-        },
-      );
-    },
-  );
+        await expect(collectPackageDistContentInventoryErrors(packageRoot)).resolves.toStrictEqual([
+          "missing package dist content inventory dist/postinstall-content-inventory.json",
+        ]);
+      },
+    );
+  });
 
   it.each([
     "2026.6.6",
