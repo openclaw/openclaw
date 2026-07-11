@@ -23,6 +23,7 @@ import {
   loadSessionEntry,
   patchSessionEntry as patchAccessorSessionEntry,
   replaceSessionEntry,
+  rollbackAgentHarnessSessionEntryLifecycle,
   type SessionAccessScope,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -273,6 +274,7 @@ async function createSessionEntry(
             initialEntry: afterCreate
               ? { ...params.initialEntry, initializationPending: true }
               : params.initialEntry,
+            authorizedAgentHarnessId: params.initialEntry.agentHarnessId,
             commandSource: "plugin-runtime",
             ...(afterCreate ? { afterCreate: runAfterCreate } : {}),
           });
@@ -336,18 +338,25 @@ async function createSessionEntry(
         try {
           // Delete only the untouched row created for this callback. A concurrent
           // claimant changes the snapshot and must survive failed initialization.
-          const rolledBack = await deleteSessionEntryLifecycle({
+          const expectedEntry = rollbackExpectedEntry ?? callbackContext.entry;
+          const rollbackParams = {
             agentId: callbackContext.agentId,
             archiveTranscript: true,
-            expectedEntry: rollbackExpectedEntry ?? callbackContext.entry,
+            expectedEntry,
             expectedSessionId: callbackContext.entry.sessionId,
-            expectedUpdatedAt: (rollbackExpectedEntry ?? callbackContext.entry).updatedAt,
+            expectedUpdatedAt: expectedEntry.updatedAt,
             storePath: callbackContext.storePath,
             target: {
               canonicalKey: callbackContext.key,
               storeKeys: [callbackContext.key],
             },
-          });
+          };
+          // Locked rows require the narrow harness rollback capability. Unlocked
+          // initializers stay on the ordinary guarded lifecycle deletion path.
+          const rolledBack =
+            expectedEntry.modelSelectionLocked === true
+              ? await rollbackAgentHarnessSessionEntryLifecycle(rollbackParams)
+              : await deleteSessionEntryLifecycle(rollbackParams);
           if (!rolledBack.deleted) {
             throw new Error(`created session ${callbackContext.key} changed before rollback`, {
               cause: error,

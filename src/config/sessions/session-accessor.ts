@@ -61,6 +61,7 @@ import {
   recordSessionMetaFromInbound as recordFileSessionMetaFromInbound,
   resolveSessionStoreEntry,
   resetSessionEntryLifecycle as resetFileSessionEntryLifecycle,
+  rollbackAgentHarnessSessionEntryLifecycle as rollbackFileAgentHarnessSessionEntryLifecycle,
   updateLastRoute as updateFileSessionLastRoute,
   updateSessionStore,
   updateSessionStoreEntry as updateFileSessionStoreEntry,
@@ -541,6 +542,7 @@ export type SessionCompactionCheckpointMutationResult =
       entry: SessionEntry;
     }
   | { status: "missing-session" }
+  | { status: "model-selection-locked" }
   | { status: "missing-checkpoint" }
   | { status: "missing-boundary" }
   | { status: "failed" };
@@ -1611,13 +1613,9 @@ function resolveEntryFromStoreKeys(params: {
   store: Record<string, SessionEntry>;
   keys: readonly string[];
 }): SessionEntry | undefined {
-  for (const key of params.keys) {
-    const entry = params.store[key];
-    if (entry) {
-      return entry;
-    }
-  }
-  return undefined;
+  // Alias migration can leave multiple logical rows. Fork policy must inspect
+  // the freshest row or a stale canonical entry can shadow a newer lock.
+  return resolveFreshestTargetEntry(params.store, params.keys)?.entry;
 }
 
 function persistForkedSessionEntry(params: {
@@ -1958,6 +1956,11 @@ async function applySessionCompactionCheckpointMutation(
       if (!currentEntry?.sessionId) {
         return { status: "missing-session" };
       }
+      // A native harness owns the locked transcript identity. Rotating or
+      // cloning it here would strand that binding on the old session id.
+      if (currentEntry.modelSelectionLocked === true) {
+        return { status: "model-selection-locked" };
+      }
       const checkpoint = findSessionCompactionCheckpoint({
         entry: currentEntry,
         checkpointId: params.checkpointId,
@@ -2145,6 +2148,13 @@ export async function deleteSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   return await deleteFileSessionEntryLifecycle(params);
+}
+
+/** Internal exact-row rollback for failed trusted agent-harness initialization. */
+export async function rollbackAgentHarnessSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams & { expectedEntry: SessionEntry },
+): Promise<DeleteSessionEntryLifecycleResult> {
+  return await rollbackFileAgentHarnessSessionEntryLifecycle(params);
 }
 
 /** Applies exact entry lifecycle mutations and artifact cleanup at the storage boundary. */

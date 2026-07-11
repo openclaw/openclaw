@@ -437,7 +437,10 @@ export type SessionEntry = {
   cacheWrite?: number;
   modelProvider?: string;
   model?: string;
-  /** Prevents changing the session's selected model through OpenClaw mutation surfaces. */
+  /**
+   * Prevents OpenClaw model changes and automatic maintenance eviction until
+   * the owning harness explicitly retires the session.
+   */
   modelSelectionLocked?: boolean;
   /**
    * Embedded agent harness selected for this session id.

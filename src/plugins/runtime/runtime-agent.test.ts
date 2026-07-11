@@ -37,7 +37,7 @@ describe("plugin runtime session creation", () => {
   it("creates a canonical transcript with trusted initial session state", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create" }, async () => {
       const runtime = createRuntimeAgent();
-      const key = "agent:main:dashboard:codex-native-thread";
+      const key = "agent:main:harness:codex:supervision:codex-native-thread";
       const initialPluginExtensions = {
         codex: {
           supervision: {
@@ -105,6 +105,13 @@ describe("plugin runtime session creation", () => {
           key,
           initialEntry: { agentHarnessId: "other" },
         }),
+      ).rejects.toThrow("Session key namespace is reserved for agent harness-owned sessions.");
+      await expect(
+        runtime.session.createSessionEntry({
+          cfg: {},
+          key,
+          initialEntry: { agentHarnessId: "codex" },
+        }),
       ).rejects.toThrow("trusted initial session state requires a new session");
       expect(
         runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
@@ -154,6 +161,35 @@ describe("plugin runtime session creation", () => {
           .some((name) => name.startsWith(`${transcriptName}.deleted.`)),
       ).toBe(true);
     });
+  });
+
+  it("rolls back an unlocked harness entry through the ordinary lifecycle path", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-runtime-unlocked-session-create-rollback" },
+      async () => {
+        const runtime = createRuntimeAgent();
+        const key = "agent:main:dashboard:unlocked-binding-failure";
+        let sessionFile: string | undefined;
+
+        await expect(
+          runtime.session.createSessionEntry({
+            cfg: {},
+            key,
+            initialEntry: { agentHarnessId: "codex" },
+            afterCreate: async (created) => {
+              sessionFile = created.entry.sessionFile;
+              throw new Error("unlocked native binding failed");
+            },
+          }),
+        ).rejects.toThrow("unlocked native binding failed");
+
+        expect(
+          runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
+        ).toBeUndefined();
+        expect(sessionFile).toBeTruthy();
+        expect(fs.existsSync(sessionFile ?? "")).toBe(false);
+      },
+    );
   });
 
   it("does not run initialization when the durable initial row cannot be written", async () => {
@@ -240,6 +276,39 @@ describe("plugin runtime session creation", () => {
             .readdirSync(path.dirname(sessionFile ?? ""))
             .some((name) => name.startsWith(`${transcriptName}.deleted.`)),
         ).toBe(true);
+      },
+    );
+  });
+
+  it("rolls back an unlocked harness entry when final patch persistence fails", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-runtime-unlocked-final-patch-rollback" },
+      async () => {
+        const runtime = createRuntimeAgent();
+        const key = "agent:main:dashboard:unlocked-final-patch-failure";
+        let sessionFile: string | undefined;
+
+        await expect(
+          runtime.session.createSessionEntry({
+            cfg: {},
+            key,
+            initialEntry: { agentHarnessId: "codex" },
+            afterCreate: async (created) => {
+              sessionFile = created.entry.sessionFile;
+              return {
+                pluginExtensions: {
+                  codex: { supervision: { invalidJsonValue: 1n as never } },
+                },
+              };
+            },
+          }),
+        ).rejects.toThrow();
+
+        expect(
+          runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
+        ).toBeUndefined();
+        expect(sessionFile).toBeTruthy();
+        expect(fs.existsSync(sessionFile ?? "")).toBe(false);
       },
     );
   });

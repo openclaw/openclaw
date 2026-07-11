@@ -62,7 +62,7 @@ function normalizePluginIdWithLookup(
   if (builtInAlias) {
     return builtInAlias;
   }
-  return getAliasLookup().get(normalized) ?? trimmed;
+  return getAliasLookup().get(normalized) ?? normalized;
 }
 
 function createScopedPluginIdNormalizer(): NormalizePluginId {
