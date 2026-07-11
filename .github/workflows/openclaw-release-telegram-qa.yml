@@ -1137,7 +1137,9 @@ jobs:
 
           sudo tee "$launcher" >/dev/null <<'LAUNCHER'
           #!/bin/bash
-          set -euo pipefail
+          set -Eeuo pipefail
+          launcher_stage=entry
+          trap 'exit_status=$?; trap - ERR; printf "Telegram SUT launcher failed: stage=%s line=%s status=%s\n" "$launcher_stage" "$LINENO" "$exit_status" >&2; exit "$exit_status"' ERR
 
           transport_keys=(
             HOME
@@ -1514,6 +1516,7 @@ jobs:
             exec sudo "${sudo_args[@]}" -- "$0" --root-run "$@"
           fi
           shift
+          launcher_stage=root-run-setup
           [[ "$EUID" == "0" ]]
           source /etc/openclaw-telegram-sut.conf
 
@@ -1635,11 +1638,14 @@ jobs:
           export boundary_mode generation command_file identity_file sandbox_file
           export command_sha256 expected_env_keys_b64 sandbox_payload_b64
 
-          exec /usr/bin/unshare \
+          launcher_stage=enter-mount-namespace
+          /usr/bin/unshare \
             --mount \
             --fork \
             --propagation private \
             /bin/bash -ceu '
+              launcher_stage=mask-host-paths
+              trap "exit_status=\$?; trap - ERR; printf \"Telegram SUT launcher failed: stage=%s line=%s status=%s\\n\" \"\$launcher_stage\" \"\$LINENO\" \"\$exit_status\" >&2; exit \"\$exit_status\"" ERR
               for masked_path in "$RUNNER_HOME" /tmp /var/tmp /dev/shm; do
                 [[ -d "$masked_path" ]]
                 mount \
@@ -1648,8 +1654,10 @@ jobs:
                   openclaw-telegram-mask \
                   "$masked_path"
               done
+              launcher_stage=mount-proc
               mount -t proc proc /proc -o nosuid,nodev,noexec,hidepid=2
               if [[ "$boundary_mode" == "true" ]]; then
+                launcher_stage=write-identity
                 pid="$$"
                 proc_stat="$(cat "/proc/${pid}/stat")"
                 proc_tail="${proc_stat##*) }"
