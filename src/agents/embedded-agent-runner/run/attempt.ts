@@ -77,7 +77,7 @@ import {
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
-import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { copyPluginToolMeta, getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
@@ -117,7 +117,10 @@ import {
   toClientToolDefinitions,
   toToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
-import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
+import {
+  copyBeforeToolCallHookMarker,
+  recordStructuredReplayTrustForToolCall,
+} from "../../agent-tools.before-tool-call.js";
 import {
   createOpenClawCodingTools,
   resolveProcessToolScopeKey,
@@ -148,11 +151,13 @@ import {
 } from "../../bootstrap-routing.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
+  copyChannelAgentToolMeta,
   getChannelAgentToolMeta,
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
+import { copyCodeModeControlToolIdentity } from "../../code-mode-control-tools.js";
 import {
   addClientToolsToCodeModeCatalog,
   applyCodeModeCatalog,
@@ -263,6 +268,7 @@ import {
   type ToolSearchCatalogToolExecutor,
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
+import { copyToolTerminalPresentation } from "../../tool-terminal-presentation.js";
 import {
   invalidateComputerFrameIfMissing,
   type ComputerContextEpoch,
@@ -537,6 +543,7 @@ import {
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
+import { clearToolActivityRun, notifyToolActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PreflightRecoveryBudgetSnapshot = Pick<
@@ -1996,6 +2003,35 @@ export async function runEmbeddedAttempt(
       sessionId: params.sessionId,
     });
     effectiveTools = [...toolSearchSchemaProjection.tools];
+    effectiveTools = effectiveTools.map((tool) => {
+      const originalExecute = tool.execute;
+      const wrappedTool = {
+        ...tool,
+        execute: (async (...args: Parameters<typeof originalExecute>) => {
+          // Heartbeat every 60s during execution so the 120s idle watchdog
+          // never expires for long-running tools (web_fetch, exec, etc.).
+          const interval = setInterval(() => notifyToolActivity(params.runId), 60_000);
+          interval.unref?.();
+          try {
+            notifyToolActivity(params.runId);
+            const result = await originalExecute(...args);
+            return result;
+          } finally {
+            clearInterval(interval);
+            notifyToolActivity(params.runId);
+          }
+        }) as typeof originalExecute,
+      };
+      // Preserve plugin/channel/before-tool-call/terminal metadata that lives
+      // in WeakMaps keyed by tool object identity. The spread above copies own
+      // enumerable properties but loses these associations.
+      copyPluginToolMeta(tool, wrappedTool);
+      copyChannelAgentToolMeta(tool as never, wrappedTool as never);
+      copyBeforeToolCallHookMarker(tool, wrappedTool);
+      copyToolTerminalPresentation(tool, wrappedTool as never);
+      copyCodeModeControlToolIdentity(tool as never, wrappedTool as never);
+      return wrappedTool;
+    });
     if (toolSearch.compacted && !toolSearch.catalogReused) {
       prepStages.mark(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
       log.info(
@@ -2740,6 +2776,19 @@ export async function runEmbeddedAttempt(
                 const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
                 if (hydratedTool) {
                   log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
+                  const originalExecute = hydratedTool.execute;
+                  hydratedTool.execute = (async (...args: Parameters<typeof originalExecute>) => {
+                    const interval = setInterval(() => notifyToolActivity(params.runId), 60_000);
+                    interval.unref?.();
+                    try {
+                      notifyToolActivity(params.runId);
+                      const result = await originalExecute(...args);
+                      return result;
+                    } finally {
+                      clearInterval(interval);
+                      notifyToolActivity(params.runId);
+                    }
+                  }) as typeof originalExecute;
                 }
                 return hydratedTool;
               }
@@ -3431,6 +3480,7 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
           idleTimeoutMs,
           (error) => idleTimeoutTrigger?.(error),
+          { runId: params.runId },
         );
       } else if (firstEventTimeoutMs > 0) {
         // Local providers opt out of gap policing, but the transport first-event
@@ -3440,7 +3490,7 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
           firstEventTimeoutMs,
           (error) => idleTimeoutTrigger?.(error),
-          { scope: "creation-only" },
+          { runId: params.runId, scope: "creation-only" },
         );
       }
       if (firstEventTimeoutMs > 0) {
@@ -4040,6 +4090,7 @@ export async function runEmbeddedAttempt(
             result,
             timestamp: Date.now(),
           });
+          notifyToolActivity(params.runId);
           return result;
         } catch (error) {
           const message = formatErrorMessage(error);
@@ -4055,6 +4106,7 @@ export async function runEmbeddedAttempt(
             isError: true,
             timestamp: Date.now(),
           });
+          notifyToolActivity(params.runId);
           throw error;
         }
       };
@@ -6290,6 +6342,7 @@ export async function runEmbeddedAttempt(
     }
   } finally {
     removeExternalAbortSignalListener?.();
+    clearToolActivityRun(params.runId);
     if (!sessionCleanupOwnsEmbeddedResources) {
       try {
         await cleanupEmbeddedPrepResourcesAfterEarlyExit();
