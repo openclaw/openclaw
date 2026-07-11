@@ -67,6 +67,7 @@ type ChatThreadState = {
   historyRenderAnchorFrame: number | null;
   relativeTimeTimer: ReturnType<typeof setInterval> | null;
   relativeTimeRequestUpdate: (() => void) | null;
+  relativeTimeVersion: number;
 };
 
 type ChatThreadProps = {
@@ -131,6 +132,7 @@ function createChatThreadState(): ChatThreadState {
     historyRenderAnchorFrame: null,
     relativeTimeTimer: null,
     relativeTimeRequestUpdate: null,
+    relativeTimeVersion: 0,
   };
 }
 
@@ -138,9 +140,12 @@ const RELATIVE_TIME_REFRESH_MS = 60_000;
 
 // Footer timestamps render relative labels ("5m ago") that go stale on idle
 // panes; one per-pane minute tick keeps them fresh without per-message timers.
+// The version bump must accompany requestUpdate: the message subtree is
+// memoized by guard(), so a tick only re-renders it via this dependency.
 function ensureRelativeTimeRefresh(state: ChatThreadState, requestUpdate: () => void) {
   state.relativeTimeRequestUpdate = requestUpdate;
   state.relativeTimeTimer ??= setInterval(() => {
+    state.relativeTimeVersion = (state.relativeTimeVersion + 1) % Number.MAX_SAFE_INTEGER;
     state.relativeTimeRequestUpdate?.();
   }, RELATIVE_TIME_REFRESH_MS);
 }
@@ -745,6 +750,7 @@ export function renderChatThread(props: ChatThreadProps) {
             deletedChatItemsSignature(deleted, chatItems),
             stableBooleanMapSignature(expandedToolCards),
             getAssistantAttachmentAvailabilityRenderVersion(),
+            state.relativeTimeVersion,
             props.sessionKey,
             props.fullMessageAgentId,
             showReasoning,
