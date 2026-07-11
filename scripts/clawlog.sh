@@ -159,7 +159,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -n|--lines)
-            if [[ $# -lt 2 || "${2:-}" == -* ]]; then
+            if [[ $# -lt 2 ]]; then
                 echo -e "${RED}Error: $1 requires a value${NC}" >&2
                 exit 1
             fi
@@ -167,7 +167,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -l|--last)
-            if [[ $# -lt 2 || "${2:-}" == -* ]]; then
+            if [[ $# -lt 2 ]]; then
                 echo -e "${RED}Error: $1 requires a value${NC}" >&2
                 exit 1
             fi
@@ -175,7 +175,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -c|--category)
-            if [[ $# -lt 2 || "${2:-}" == -* ]]; then
+            if [[ $# -lt 2 ]]; then
                 echo -e "${RED}Error: $1 requires a value${NC}" >&2
                 exit 1
             fi
@@ -191,7 +191,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -s|--search)
-            if [[ $# -lt 2 || "${2:-}" == -* ]]; then
+            if [[ $# -lt 2 ]]; then
                 echo -e "${RED}Error: $1 requires a value${NC}" >&2
                 exit 1
             fi
@@ -199,7 +199,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -o|--output)
-            if [[ $# -lt 2 || "${2:-}" == -* ]]; then
+            if [[ $# -lt 2 ]]; then
                 echo -e "${RED}Error: $1 requires a value${NC}" >&2
                 exit 1
             fi
