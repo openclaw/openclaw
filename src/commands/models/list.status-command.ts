@@ -46,6 +46,10 @@ import {
 } from "../../agents/model-selection.js";
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import {
+  readUtilityModelSetting,
+  resolveUtilityModelRefForAgent,
+} from "../../agents/utility-model.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
@@ -378,6 +382,19 @@ export async function modelsStatusCommand(
     const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
     const imageModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
     const imageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
+    // Narration/titles ride the utility model on a plain API auth path that can
+    // differ from the primary's (e.g. OAuth primary, api_key utility); show the
+    // resolved ref so a broken utility credential is inspectable here.
+    const utilitySetting = readUtilityModelSetting(cfg, workspaceAgentId);
+    const utilityModelRef = resolveUtilityModelRefForAgent({ cfg, agentId: workspaceAgentId });
+    const utilityModelSource =
+      utilitySetting.kind === "explicit"
+        ? "config"
+        : utilitySetting.kind === "disabled"
+          ? "disabled"
+          : utilityModelRef
+            ? "provider-default"
+            : "none";
     const aliases = Object.entries(cfg.agents?.defaults?.models ?? {}).reduce<
       Record<string, string>
     >((acc, [key, entry]) => {
@@ -1131,6 +1148,7 @@ export async function modelsStatusCommand(
         fallbacks,
         imageModel: imageModel || null,
         imageFallbacks,
+        utilityModel: { ref: utilityModelRef ?? null, source: utilityModelSource },
         ...(agentId
           ? {
               modelConfig: {
@@ -1206,6 +1224,17 @@ export async function modelsStatusCommand(
         rich,
         fallbacks.length ? theme.warn : theme.muted,
         fallbacks.length ? fallbacks.join(", ") : "-",
+      )}`,
+    );
+    runtime.log(
+      `${label("Utility model")}${colorize(rich, theme.muted, ":")} ${colorize(
+        rich,
+        utilityModelRef ? theme.success : theme.muted,
+        utilityModelRef
+          ? `${utilityModelRef}${utilityModelSource === "provider-default" ? " (provider default)" : ""}`
+          : utilityModelSource === "disabled"
+            ? "off"
+            : "-",
       )}`,
     );
     runtime.log(

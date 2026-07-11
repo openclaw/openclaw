@@ -54,6 +54,7 @@ const mocks = vi.hoisted(() => {
     resolveAgentExplicitModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentEffectiveModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentModelFallbacksOverride: vi.fn().mockReturnValue(undefined),
+    resolveAgentConfig: vi.fn().mockReturnValue(undefined),
     listAgentIds: vi.fn().mockReturnValue(["main", "jeremiah"]),
     listAgentEntries: vi.fn().mockReturnValue([{ id: "main" }, { id: "jeremiah" }]),
     ensureAuthProfileStore: vi.fn().mockReturnValue(store),
@@ -167,6 +168,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentExplicitModelPrimary: mocks.resolveAgentExplicitModelPrimary,
   resolveAgentEffectiveModelPrimary: mocks.resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride: mocks.resolveAgentModelFallbacksOverride,
+  resolveAgentConfig: mocks.resolveAgentConfig,
   listAgentIds: mocks.listAgentIds,
   listAgentEntries: mocks.listAgentEntries,
 }));
@@ -577,6 +579,50 @@ describe("modelsStatusCommand auth overview", () => {
     expect((payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("openai"))).toBe(
       true,
     );
+  });
+
+  it("reports the resolved utility model in JSON output", async () => {
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const baseConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: true } },
+    };
+    try {
+      mocks.loadConfig.mockReturnValue({
+        ...baseConfig,
+        agents: {
+          defaults: { ...baseConfig.agents.defaults, utilityModel: "openai/gpt-5.6-luna" },
+        },
+      });
+      const explicitRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, explicitRuntime as never);
+      expect(parseFirstJsonLog(explicitRuntime).utilityModel).toEqual({
+        ref: "openai/gpt-5.6-luna",
+        source: "config",
+      });
+
+      mocks.loadConfig.mockReturnValue({
+        ...baseConfig,
+        agents: {
+          defaults: { ...baseConfig.agents.defaults, utilityModel: "" },
+        },
+      });
+      const disabledRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, disabledRuntime as never);
+      expect(parseFirstJsonLog(disabledRuntime).utilityModel).toEqual({
+        ref: null,
+        source: "disabled",
+      });
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+    }
   });
 
   it("honors OPENCLAW_AGENT_DIR when no --agent override is provided", async () => {
