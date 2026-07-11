@@ -883,8 +883,14 @@ describe("command queue", () => {
       },
     });
 
-    // The reserved buffer task is created before restart admission closes.
-    await debouncer.enqueue({ key: "accepted-before-restart", value: "delivered" });
+    // Create the reserved buffer task inside an accepted inbound root, then
+    // release that original root before the restart drain flushes the buffer.
+    const inboundRoot = tryBeginGatewayRootWorkAdmission();
+    expect(inboundRoot).not.toBeNull();
+    await inboundRoot?.run(
+      async () => await debouncer.enqueue({ key: "accepted-before-restart", value: "delivered" }),
+    );
+    inboundRoot?.release();
     markGatewayDraining();
 
     await expect(
