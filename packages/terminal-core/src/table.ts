@@ -101,7 +101,7 @@ function wrapLine(text: string, width: number): string[] {
 
   type Token = { kind: "ansi" | "char"; value: string };
   const tokens: Token[] = [];
-  for (let i = 0; i < text.length; ) {
+  for (let i = 0; i < text.length;) {
     const ch0 = text[i];
     const isEsc = ch0 === ESC;
     const isC1Csi = ch0 === C1_CSI;
