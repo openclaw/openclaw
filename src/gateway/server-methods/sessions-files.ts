@@ -23,6 +23,7 @@ import { loadSessionEntry } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import {
+  decodeUtf8Strict,
   listWorkspacePath,
   normalizeRelativePath,
   readWorkspaceFile,
@@ -320,8 +321,14 @@ async function toSessionFileEntry(
     if (read !== "too-large") {
       entry.size = read.stat.size;
       entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
-      entry.content = read.buffer.toString("utf8");
-      entry.hash = createHash("sha256").update(read.buffer).digest("hex");
+      const text = decodeUtf8Strict(read.buffer);
+      entry.content = text ?? read.buffer.toString("utf8");
+      // The hash doubles as the sessions.files.set CAS token, so it is only
+      // issued for strict-UTF-8 text; binary previews stay read-only because
+      // re-encoding their replacement characters would corrupt the file.
+      if (text !== undefined) {
+        entry.hash = createHash("sha256").update(read.buffer).digest("hex");
+      }
     }
   }
   return entry;
@@ -706,6 +713,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       respondSessionFileUnsafe(respond, params.path);
       return;
     }
+    // Only strict-UTF-8 text is editable; sessions.files.get never issues a CAS
+    // hash for binary previews, and overwriting binary bytes with re-encoded
+    // text would corrupt the file even when a client computes the hash itself.
+    if (decodeUtf8Strict(current.buffer) === undefined) {
+      respondSessionFileUnsafe(respond, params.path);
+      return;
+    }
     const currentHash = createHash("sha256").update(current.buffer).digest("hex");
     if (currentHash !== params.expectedHash) {
       respond(
@@ -718,8 +732,10 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    // Check-then-write is intentionally non-atomic: this operator editor has a small CAS
-    // window while agents remain the primary owners of the workspace tree.
+    // Check-then-write is intentionally non-atomic: agents edit this tree from
+    // their own processes, so no gateway-side lock can serialize them. The hash
+    // gate exists to reject stale operator loads; the remaining window is the
+    // few milliseconds inside this handler and is accepted.
     try {
       if (!(await writeWorkspaceFile(loaded.root, browserPath, params.content))) {
         respondSessionFileUnsafe(respond, params.path);

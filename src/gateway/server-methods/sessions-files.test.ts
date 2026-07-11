@@ -725,6 +725,41 @@ describe("sessions.files RPC handlers", () => {
     });
   });
 
+  it("previews binary files without issuing a CAS hash", async () => {
+    const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]);
+    fs.writeFileSync(path.join(workspaceRoot, "logo.png"), binary);
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "logo.png",
+      }),
+    );
+
+    expect(typeof payload.file.content).toBe("string");
+    expect(payload.file.hash).toBeUndefined();
+  });
+
+  it("rejects writes to binary files even with a matching byte hash", async () => {
+    const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]);
+    fs.writeFileSync(path.join(workspaceRoot, "logo.png"), binary);
+
+    const error = expectError(
+      await invokeSessionFilesHandler("sessions.files.set", {
+        sessionKey: "agent:main:main",
+        path: "logo.png",
+        content: "text\n",
+        expectedHash: createHash("sha256").update(binary).digest("hex"),
+      }),
+    );
+
+    expect(error.details).toMatchObject({
+      path: "logo.png",
+      type: "session_file_unsafe",
+    });
+    expect(fs.readFileSync(path.join(workspaceRoot, "logo.png"))).toEqual(binary);
+  });
+
   it("rejects escaped and symlinked write targets without touching outside files", async () => {
     const tempRoot = fs.realpathSync(os.tmpdir());
     const outsidePath = path.join(tempRoot, `openclaw-session-write-outside-${Date.now()}.txt`);

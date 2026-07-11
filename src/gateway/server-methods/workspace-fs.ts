@@ -91,6 +91,18 @@ export async function writeWorkspaceFile(
   return true;
 }
 
+export function decodeUtf8Strict(buffer: Buffer): string | undefined {
+  // NUL bytes are valid UTF-8 but mark binary payloads we refuse to inline.
+  if (buffer.includes(0)) {
+    return undefined;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Collapses `.` segments and separators into a canonical root-relative path. */
 export function normalizeRelativePath(value: string | undefined): string {
   if (!value) {
