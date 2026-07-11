@@ -303,8 +303,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       storePath,
       sessionKey: route.sessionKey,
     });
-    const bodyForAgent =
-      entry.bodyForAgentText ?? formatSignalBodyForAgentWithReplyContext(entry);
+    const bodyForAgent = entry.bodyForAgentText ?? formatSignalBodyForAgentWithReplyContext(entry);
     const body = formatInboundEnvelope({
       channel: "Signal",
       from: fromLabel,
@@ -424,8 +423,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       extra: {
         GroupSubject: entry.isGroup ? (entry.groupName ?? undefined) : undefined,
         ReplyThreading: replyThreading,
-        ReplyContextAlreadyRendered:
-          entry.replyContextAlreadyRendered === true ? true : undefined,
+        ReplyContextAlreadyRendered: entry.replyContextAlreadyRendered === true ? true : undefined,
       },
     });
 
