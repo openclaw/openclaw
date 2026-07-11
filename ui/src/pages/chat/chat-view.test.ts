@@ -1290,6 +1290,48 @@ describe("chat goal status", () => {
   });
 });
 
+describe("chat scroll-to-bottom affordance", () => {
+  it("renders a centered icon button above the composer when the transcript is away from latest", () => {
+    const onScrollToBottom = vi.fn();
+    const container = renderChatView({ showNewMessages: true, onScrollToBottom });
+
+    const button = container.querySelector<HTMLButtonElement>(".chat-scroll-to-bottom");
+    const wrapper = button?.closest(".chat-scroll-to-bottom-wrap");
+    expect(button?.getAttribute("aria-label")).toBe("Scroll to latest");
+    expect(wrapper?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+    expect(wrapper?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(
+      true,
+    );
+    expect(button?.textContent?.trim()).toBe("");
+    expect(container.querySelector(".chat-new-messages")).toBeNull();
+
+    button?.click();
+
+    expect(onScrollToBottom).toHaveBeenCalledWith({ smooth: true });
+  });
+
+  it("keeps the button above a variable-height footer stack", () => {
+    const container = renderChatView({
+      showNewMessages: true,
+      queue: [
+        { id: "queued-1", text: "first queued message", createdAt: 1 },
+        { id: "queued-2", text: "second queued message", createdAt: 2 },
+      ],
+    });
+
+    const wrapper = container.querySelector(".chat-scroll-to-bottom-wrap");
+    const queue = container.querySelector(".chat-queue");
+    expect(wrapper?.nextElementSibling).toBe(queue);
+    expect(queue?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+  });
+
+  it("hides the scroll-to-bottom button when the transcript is already latest", () => {
+    const container = renderChatView({ showNewMessages: false });
+
+    expect(container.querySelector(".chat-scroll-to-bottom")).toBeNull();
+  });
+});
+
 describe("chat composer workbench", () => {
   it("queues ordinary input offline while keeping live commands disabled", () => {
     const onSend = vi.fn();
