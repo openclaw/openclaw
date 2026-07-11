@@ -110,6 +110,8 @@ describe("side chat panel render", () => {
 
   it("sends follow-ups carrying the last non-error turn as context", () => {
     const container = document.createElement("div");
+    // Restore-on-rejection only touches inputs still attached to the document.
+    document.body.append(container);
     const onFollowUp = vi.fn();
 
     render(
@@ -152,5 +154,6 @@ describe("side chat panel render", () => {
     // Empty input must not send.
     input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(onFollowUp).toHaveBeenCalledTimes(1);
+    container.remove();
   });
 });
