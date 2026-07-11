@@ -50,6 +50,7 @@ import { getSessionBindingService } from "../infra/outbound/session-binding-serv
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -188,7 +189,9 @@ export function emitGatewaySessionEndPluginHook(params: {
     nextSessionId: params.nextSessionId,
     nextSessionKey: params.nextSessionKey,
   });
-  void hookRunner.runSessionEnd(payload.event, payload.context).catch((err: unknown) => {
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    await hookRunner.runSessionEnd(payload.event, payload.context);
+  }).catch((err: unknown) => {
     logVerbose(`session_end hook failed: ${String(err)}`);
   });
 }
@@ -231,7 +234,9 @@ export function emitGatewaySessionStartPluginHook(params: {
     cfg: params.cfg,
     resumedFrom: params.resumedFrom,
   });
-  void hookRunner.runSessionStart(payload.event, payload.context).catch((err: unknown) => {
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    await hookRunner.runSessionStart(payload.event, payload.context);
+  }).catch((err: unknown) => {
     logVerbose(`session_start hook failed: ${String(err)}`);
   });
 }
@@ -852,6 +857,10 @@ export async function performGatewaySessionReset(params: {
   key: string;
   agentId?: string;
   spawnedCwd?: string;
+  /** Managed worktree adopted by this reset; cleared together with spawnedCwd. */
+  worktree?: { id: string; branch: string; repoRoot: string };
+  /** Bind session exec to host=node with this node id; caller scope-checks. */
+  execNode?: string;
   // A plain New Chat must return to the agent workspace instead of inheriting the previous
   // turn's session worktree cwd; only worktree-requested resets carry a spawnedCwd forward.
   clearSpawnedCwd?: boolean;
@@ -1092,10 +1101,10 @@ export async function performGatewaySessionReset(params: {
             reasoningLevel: currentEntry?.reasoningLevel,
             elevatedLevel: currentEntry?.elevatedLevel,
             ttsAuto: currentEntry?.ttsAuto,
-            execHost: currentEntry?.execHost,
+            execHost: params.execNode ? "node" : currentEntry?.execHost,
             execSecurity: currentEntry?.execSecurity,
             execAsk: currentEntry?.execAsk,
-            execNode: currentEntry?.execNode,
+            execNode: params.execNode ?? currentEntry?.execNode,
             responseUsage: currentEntry?.responseUsage,
             pinnedAt: currentEntry?.pinnedAt,
             // Resets should keep the user's explicit selection, but clear any
@@ -1116,6 +1125,9 @@ export async function performGatewaySessionReset(params: {
             spawnedCwd: params.clearSpawnedCwd
               ? undefined
               : (params.spawnedCwd ?? currentEntry?.spawnedCwd),
+            worktree: params.clearSpawnedCwd
+              ? undefined
+              : (params.worktree ?? currentEntry?.worktree),
             parentSessionKey: currentEntry?.parentSessionKey,
             forkedFromParent: currentEntry?.forkedFromParent,
             spawnDepth: currentEntry?.spawnDepth,

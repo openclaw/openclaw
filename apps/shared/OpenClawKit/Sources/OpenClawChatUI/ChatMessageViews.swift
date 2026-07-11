@@ -693,8 +693,8 @@ struct ChatSpeechStatusChip: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(self.isPreparing
-            ? Text("Preparing audio, tap to cancel")
-            : Text("Speaking, tap to stop"))
+            ? "Preparing audio, tap to cancel"
+            : "Speaking, tap to stop")
     }
 }
 
