@@ -10,6 +10,7 @@ const providerAuthRuntimeMocks = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => providerAuthRuntimeMocks);
 
 import plugin from "./index.js";
+import { wrapClawRouterProviderStream } from "./stream.js";
 
 const LIVE_CATALOG = {
   providers: [
@@ -86,7 +87,7 @@ describe("ClawRouter plugin", () => {
         provider: "clawrouter",
         api: "anthropic-messages",
         id: "anthropic/claude-sonnet-4-6",
-        headers: { "X-Request-ID": "request-1" },
+        headers: { "x-request-id": "request-1" },
         params: {
           clawrouterRoute: {
             api: "anthropic-messages",
@@ -96,15 +97,149 @@ describe("ClawRouter plugin", () => {
         },
       } as never,
       {} as never,
-      { apiKey: "runtime-proxy-key" } as never,
+      { apiKey: "runtime-proxy-key", requestId: "automatic-call-id" } as never,
     );
 
     expect(calls[0]?.headers).toEqual({
-      "X-Request-ID": "request-1",
+      "x-request-id": "request-1",
+      "X-ClawRouter-Client": "openclaw",
       Authorization: "Bearer runtime-proxy-key",
     });
     expect(calls[0]?.id).toBe("claude-sonnet-4-6");
     expect(calls[0]?.params).toBeUndefined();
+  });
+
+  it("attaches bounded attribution without overriding configured metadata", () => {
+    const calls: Array<Parameters<StreamFn>[0]> = [];
+    const baseStreamFn: StreamFn = (model) => {
+      calls.push(model);
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = wrapClawRouterProviderStream({
+      provider: "clawrouter",
+      modelId: "openai/gpt-5.5",
+      agentId: "main",
+      streamFn: baseStreamFn,
+    } as never);
+
+    const longRunId = `run-${"r".repeat(300)}`;
+    void wrapped?.(
+      {
+        provider: "clawrouter",
+        api: "openai-responses",
+        id: "openai/gpt-5.5",
+        headers: {
+          "x-clawrouter-client": "managed-openclaw",
+          "X-ClawRouter-Project-Id": "fakeco",
+        },
+      } as never,
+      {} as never,
+      {
+        apiKey: "runtime-proxy-key",
+        requestId: `${longRunId}:model:1`,
+        sessionId: `session-${"x".repeat(300)}`,
+      } as never,
+    );
+    void wrapped?.(
+      {
+        provider: "clawrouter",
+        api: "openai-responses",
+        id: "openai/gpt-5.5",
+      } as never,
+      {} as never,
+      {
+        requestId: `${longRunId}:model:2`,
+      } as never,
+    );
+    void wrapped?.(
+      {
+        provider: "clawrouter",
+        api: "openai-responses",
+        id: "openai/gpt-5.5",
+      } as never,
+      {} as never,
+      {
+        requestId: "turn-😀:model:3",
+      } as never,
+    );
+
+    expect(calls[0]?.headers).toMatchObject({
+      "x-clawrouter-client": "managed-openclaw",
+      "X-ClawRouter-Agent-Id": "main",
+      "X-ClawRouter-Project-Id": "fakeco",
+      Authorization: "Bearer runtime-proxy-key",
+    });
+    expect(calls[0]?.headers?.["X-ClawRouter-Session-Id"]).toHaveLength(256);
+    expect(calls[0]?.headers?.["X-Request-ID"]).toHaveLength(128);
+    expect(calls[0]?.headers?.["X-Request-ID"]).toMatch(/~[a-f0-9]{16}:model:1$/u);
+    expect(calls[1]?.headers?.["X-Request-ID"]).toMatch(/~[a-f0-9]{16}:model:2$/u);
+    expect(calls[1]?.headers?.["X-Request-ID"]).not.toBe(calls[0]?.headers?.["X-Request-ID"]);
+    expect(calls[2]?.headers?.["X-Request-ID"]).toMatch(/^turn-_~[a-f0-9]{16}:model:3$/u);
+  });
+
+  it("keeps an explicit per-request header ahead of the automatic model-call id", () => {
+    const calls: Array<{
+      model: Parameters<StreamFn>[0];
+      options: Parameters<StreamFn>[2];
+    }> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      calls.push({ model, options });
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = wrapClawRouterProviderStream({
+      provider: "clawrouter",
+      modelId: "openai/gpt-5.5",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        provider: "clawrouter",
+        api: "openai-responses",
+        id: "openai/gpt-5.5",
+      } as never,
+      {} as never,
+      {
+        headers: { "x-request-id": "operator-request" },
+        requestId: "automatic-call-id",
+      } as never,
+    );
+
+    expect(calls[0]?.model.headers).not.toHaveProperty("X-Request-ID");
+    expect(calls[0]?.options?.headers).toEqual({ "x-request-id": "operator-request" });
+  });
+
+  it("omits unsafe attribution header values", () => {
+    const calls: Array<Parameters<StreamFn>[0]> = [];
+    const baseStreamFn: StreamFn = (model) => {
+      calls.push(model);
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = wrapClawRouterProviderStream({
+      provider: "clawrouter",
+      modelId: "openai/gpt-5.5",
+      agentId: "bad\nagent",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        provider: "clawrouter",
+        api: "openai-responses",
+        id: "openai/gpt-5.5",
+      } as never,
+      {} as never,
+      {
+        apiKey: "runtime-proxy-key",
+        requestId: "bad\nrequest",
+        sessionId: "bad\rsession",
+      } as never,
+    );
+
+    expect(calls[0]?.headers).toEqual({
+      "X-ClawRouter-Client": "openclaw",
+      Authorization: "Bearer runtime-proxy-key",
+    });
   });
 
   it("resolves managed secret refs before scoped discovery", async () => {

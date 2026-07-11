@@ -53,6 +53,13 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "./config.runtime.js";
 import { createSlackMonitorContext } from "./context.js";
+import {
+  assertEnterpriseSlackDmPolicy,
+  assertEnterpriseSlackPolicyConfig,
+  assertNoEnterpriseSlackBindings,
+  resolveSlackInstallationIdentity,
+  type SlackAuthTestIdentity,
+} from "./enterprise-install.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import {
@@ -221,6 +228,21 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
 
   const slackMode = opts.mode ?? account.config.mode ?? "socket";
+  const enterpriseOrgInstall = account.config.enterpriseOrgInstall === true;
+  if (enterpriseOrgInstall && slackMode === "relay") {
+    throw new Error(
+      `Slack Enterprise Grid org account "${account.accountId}" requires direct socket or HTTP delivery; relay mode is unsupported`,
+    );
+  }
+  if (enterpriseOrgInstall && account.config.execApprovals?.enabled === true) {
+    throw new Error(
+      `Slack Enterprise Grid org account "${account.accountId}" does not support Slack-native exec approvals`,
+    );
+  }
+  if (enterpriseOrgInstall) {
+    assertEnterpriseSlackPolicyConfig({ config: account.config, accountId: account.accountId });
+    assertNoEnterpriseSlackBindings({ cfg, accountId: account.accountId });
+  }
   const slackWebhookPath = normalizeSlackWebhookPath(account.config.webhookPath);
   const signingSecret = normalizeResolvedSecretInputString({
     value: account.config.signingSecret,
@@ -256,6 +278,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const dmEnabled = dmConfig?.enabled ?? true;
   const dmPolicy = resolveSlackAccountDmPolicy({ cfg, accountId: account.accountId }) ?? "pairing";
   let allowFrom = resolveSlackAccountAllowFrom({ cfg, accountId: account.accountId });
+  if (enterpriseOrgInstall) {
+    assertEnterpriseSlackDmPolicy({
+      accountId: account.accountId,
+      dmEnabled,
+      dmPolicy,
+      allowFrom,
+    });
+  }
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
   let channelsConfig = slackCfg.channels;
@@ -348,13 +378,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   let botUserId = "";
   let botId = "";
-  let teamId = "";
-  let apiAppId = "";
   const expectedApiAppIdFromAppToken =
     slackMode === "socket" ? parseApiAppIdFromAppToken(appToken) : undefined;
   let authTestFailed = false;
   let authTestError: string | undefined;
   let authIdentityWarning: string | undefined;
+  let authTestIdentity: SlackAuthTestIdentity | undefined;
   try {
     const auth = await app.client.auth.test();
     const authUserId = normalizeOptionalString(auth.user_id) ?? "";
@@ -362,13 +391,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     // Slack documents bot_id only for bot-token identities. Never treat the user behind a
     // user token as the bot mention target; required-mention channels must fail closed instead.
     botUserId = botId ? authUserId : "";
-    teamId = auth.team_id ?? "";
-    apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
+    authTestIdentity = auth;
     authIdentityWarning = formatSlackBotTokenIdentityWarning({
       auth,
       accountId: account.accountId,
     });
-    if (!authUserId) {
+    if (!authUserId && !enterpriseOrgInstall) {
       authTestFailed = true;
       authTestError = "auth.test returned no user_id";
     }
@@ -376,6 +404,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     authTestFailed = true;
     authTestError = err instanceof Error ? err.message : String(err);
   }
+  const installationIdentity = resolveSlackInstallationIdentity({
+    enterpriseOrgInstall,
+    auth: authTestFailed ? undefined : authTestIdentity,
+    authError: authTestError,
+    transportApiAppId: expectedApiAppIdFromAppToken,
+  });
+  const teamId = installationIdentity.kind === "workspace" ? installationIdentity.teamId : "";
+  const apiAppId =
+    installationIdentity.kind === "degraded" ? "" : (installationIdentity.apiAppId ?? "");
   if (authTestFailed) {
     runtime.log?.(
       warn(
@@ -391,7 +428,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
     runtime.error?.(
-      `slack token mismatch: bot token api_app_id=${apiAppId} but app token looks like api_app_id=${expectedApiAppIdFromAppToken}`,
+      `slack token mismatch: bot token app_id=${apiAppId} but app token looks like app_id=${expectedApiAppIdFromAppToken}`,
     );
   }
 
@@ -406,6 +443,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     botId,
     teamId,
     apiAppId,
+    installationIdentity,
     historyLimit,
     dmHistoryLimit,
     sessionScope,
@@ -444,6 +482,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
   if (
+    installationIdentity.kind !== "enterprise" &&
     isSlackAnyNativeApprovalClientEnabled({
       cfg,
       accountId: account.accountId,
@@ -463,7 +502,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   }
 
   registerSlackMonitorEvents({ ctx, account, handleSlackMessage, trackEvent });
-  await registerSlackMonitorSlashCommands({ ctx, account, trackEvent });
+  if (installationIdentity.kind !== "enterprise") {
+    await registerSlackMonitorSlashCommands({ ctx, account, trackEvent });
+  }
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
       path: slackWebhookPath,
@@ -473,7 +514,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     });
   }
 
-  if (resolveToken) {
+  if (resolveToken && installationIdentity.kind !== "enterprise") {
     void (async () => {
       if (opts.abortSignal?.aborted) {
         return;

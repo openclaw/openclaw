@@ -78,6 +78,7 @@ type OpenAIRealtimeSecretRequest = {
   url: string;
   body: unknown;
   errorMessage: string;
+  authRejectedMessage?: string;
   missingValueMessage: string;
 };
 
@@ -117,7 +118,14 @@ async function createOpenAIRealtimeSecret(
   const payload = await (async () => {
     try {
       if (!response.ok) {
-        throw await createProviderHttpError(response, params.errorMessage);
+        const error = await createProviderHttpError(response, params.errorMessage);
+        // Provider details can echo a masked credential while hiding which
+        // OpenClaw auth source won. Keep the status metadata, but give callers
+        // a bounded remediation for an explicitly configured key.
+        if (response.status === 401 && params.authRejectedMessage) {
+          error.message = params.authRejectedMessage;
+        }
+        throw error;
       }
       return await readProviderJsonResponse<unknown>(response, "openai.realtime-session");
     } finally {
@@ -147,6 +155,7 @@ export async function createOpenAIRealtimeClientSecret(params: {
   authToken: string;
   auditContext: string;
   session: Record<string, unknown>;
+  authRejectedMessage?: string;
 }): Promise<OpenAIRealtimeClientSecretResult> {
   const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/client_secrets`;
   return createOpenAIRealtimeSecret({
@@ -162,12 +171,13 @@ export async function createOpenAIRealtimeTranscriptionClientSecret(params: {
   authToken: string;
   auditContext: string;
   session: Record<string, unknown>;
+  authRejectedMessage?: string;
 }): Promise<OpenAIRealtimeClientSecretResult> {
-  const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/transcription_sessions`;
+  const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/client_secrets`;
   return createOpenAIRealtimeSecret({
     ...params,
     url,
-    body: params.session,
+    body: { session: params.session },
     errorMessage: "OpenAI Realtime transcription client secret failed",
     missingValueMessage:
       "OpenAI Realtime transcription client secret response did not include a value",

@@ -60,6 +60,7 @@ import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-medi
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState } from "./session.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
@@ -316,8 +317,14 @@ export async function getReplyFromConfig(
   const mergedSkillFilter = resolverTiming.measureSync("reply.resolve_skill_filter", () =>
     mergeSkillFilters(opts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId)),
   );
-  const resolvedOpts =
+  const optsWithSkillFilter =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
+  const resolvedOpts = attachProgressNarratorToReplyOptions({
+    cfg,
+    agentId,
+    userMessage: finalized.BodyForAgent ?? finalized.Body,
+    opts: optsWithSkillFilter,
+  });
   const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
   let extractedFileImages: ExtractedFileImage[] | undefined;
   const agentCfg = cfg.agents?.defaults;

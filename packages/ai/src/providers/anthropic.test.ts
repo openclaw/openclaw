@@ -152,7 +152,7 @@ describe("Anthropic provider", () => {
   });
 
   it("keeps sentinel-backed Foundry Authorization headers on bearer routing", async () => {
-    const sentinel = "oc-sent-v1-0123456789abcdef01234567";
+    const sentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
     configureAiTransportHost({
       buildModelFetch: () => async () => new Response(null, { status: 500 }),
       resolveSecretSentinel: (value) => value.replaceAll(sentinel, "Bearer entra-access-token"),

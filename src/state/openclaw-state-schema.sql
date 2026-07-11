@@ -167,7 +167,8 @@ CREATE TABLE IF NOT EXISTS device_pairing_pending (
   remote_ip TEXT,
   silent INTEGER,
   is_repair INTEGER,
-  ts INTEGER NOT NULL
+  ts INTEGER NOT NULL,
+  refreshed_at_ms INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_device_pairing_pending_device
@@ -177,6 +178,7 @@ CREATE TABLE IF NOT EXISTS device_pairing_paired (
   device_id TEXT NOT NULL PRIMARY KEY,
   public_key TEXT NOT NULL,
   display_name TEXT,
+  operator_label TEXT,
   platform TEXT,
   device_family TEXT,
   client_id TEXT,
@@ -187,6 +189,9 @@ CREATE TABLE IF NOT EXISTS device_pairing_paired (
   approved_scopes_json TEXT,
   remote_ip TEXT,
   tokens_json TEXT,
+  approved_via TEXT,
+  node_surface_json TEXT,
+  pending_node_surface_json TEXT,
   created_at_ms INTEGER NOT NULL,
   approved_at_ms INTEGER NOT NULL,
   last_seen_at_ms INTEGER,
@@ -211,56 +216,6 @@ CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_device_bootstrap_tokens_ts
   ON device_bootstrap_tokens(ts);
-
-CREATE TABLE IF NOT EXISTS node_pairing_pending (
-  request_id TEXT NOT NULL PRIMARY KEY,
-  node_id TEXT NOT NULL,
-  display_name TEXT,
-  platform TEXT,
-  version TEXT,
-  core_version TEXT,
-  ui_version TEXT,
-  device_family TEXT,
-  model_identifier TEXT,
-  client_id TEXT,
-  client_mode TEXT,
-  caps_json TEXT,
-  commands_json TEXT,
-  permissions_json TEXT,
-  remote_ip TEXT,
-  silent INTEGER,
-  ts INTEGER NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_node_pairing_pending_node
-  ON node_pairing_pending(node_id, ts DESC);
-
-CREATE TABLE IF NOT EXISTS node_pairing_paired (
-  node_id TEXT NOT NULL PRIMARY KEY,
-  token TEXT NOT NULL,
-  display_name TEXT,
-  platform TEXT,
-  version TEXT,
-  core_version TEXT,
-  ui_version TEXT,
-  device_family TEXT,
-  model_identifier TEXT,
-  client_id TEXT,
-  client_mode TEXT,
-  caps_json TEXT,
-  commands_json TEXT,
-  permissions_json TEXT,
-  remote_ip TEXT,
-  bins_json TEXT,
-  created_at_ms INTEGER NOT NULL,
-  approved_at_ms INTEGER NOT NULL,
-  last_connected_at_ms INTEGER,
-  last_seen_at_ms INTEGER,
-  last_seen_reason TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_node_pairing_paired_approved
-  ON node_pairing_paired(approved_at_ms DESC, node_id);
 
 CREATE TABLE IF NOT EXISTS device_identities (
   identity_key TEXT NOT NULL PRIMARY KEY,
@@ -573,6 +528,11 @@ CREATE TABLE IF NOT EXISTS official_external_plugin_catalog_snapshots (
   last_modified TEXT,
   checksum TEXT NOT NULL,
   saved_at TEXT NOT NULL,
+  trust_mode TEXT,
+  trust_key_id TEXT,
+  trust_signature_count INTEGER,
+  trust_threshold INTEGER,
+  trust_verified_at TEXT,
   updated_at_ms INTEGER NOT NULL
 );
 
@@ -1360,3 +1320,12 @@ CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_removed_at
   ON worktrees(removed_at);
+
+-- Gateway-owned custom session group catalog (names + display order).
+-- Membership stays on each session entry's category field; this table only
+-- owns which groups exist and how operator UIs order them.
+CREATE TABLE IF NOT EXISTS session_groups (
+  name TEXT NOT NULL PRIMARY KEY,
+  position INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);

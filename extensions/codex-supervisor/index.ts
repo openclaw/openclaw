@@ -3,11 +3,18 @@
  * OpenClaw agents.
  */
 import { buildJsonPluginConfigSchema, definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { registerCodexSupervisorCliMetadata } from "./cli-metadata.js";
 import {
   CodexSupervisorPluginConfigSchema,
   resolveCodexSupervisorPluginConfig,
 } from "./src/config.js";
 import { createCodexSupervisorTools } from "./src/plugin-tools.js";
+import {
+  createCodexSessionCatalogNodeHostCommands,
+  createCodexSessionCatalogNodeInvokePolicies,
+  createCodexSessionCatalogSupervisor,
+  registerCodexSessionCatalogGateway,
+} from "./src/session-catalog.js";
 import { CodexSupervisor } from "./src/supervisor.js";
 
 export default definePluginEntry({
@@ -22,11 +29,24 @@ export default definePluginEntry({
   register(api) {
     const config = resolveCodexSupervisorPluginConfig(api.pluginConfig);
     const supervisor = new CodexSupervisor(config.endpoints);
+    // Catalog reads use a dedicated stdio app-server, so enabling the plugin
+    // works without replacing the live-control daemon endpoint contract.
+    const catalogSupervisor = createCodexSessionCatalogSupervisor(config.endpoints);
     api.lifecycle.registerRuntimeLifecycle({
       id: "codex-supervisor",
       description: "Close Codex supervisor app-server connections.",
-      cleanup: () => supervisor.close(),
+      cleanup: async () => {
+        await Promise.all([supervisor.close(), catalogSupervisor.close()]);
+      },
     });
+    for (const command of createCodexSessionCatalogNodeHostCommands(catalogSupervisor)) {
+      api.registerNodeHostCommand(command);
+    }
+    for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
+      api.registerNodeInvokePolicy(policy);
+    }
+    registerCodexSessionCatalogGateway({ api, supervisor: catalogSupervisor });
+    registerCodexSupervisorCliMetadata(api);
     for (const tool of createCodexSupervisorTools({
       supervisor,
       policy: {

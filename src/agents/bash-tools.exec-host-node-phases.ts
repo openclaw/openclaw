@@ -59,6 +59,7 @@ type PreparedNodeRun = {
   plan: SystemRunApprovalPlan;
   argv: string[];
   rawCommand: string;
+  transportRawCommand: string;
   cwd: string | undefined;
   agentId: string | undefined;
   sessionKey: string | undefined;
@@ -352,6 +353,7 @@ export function buildNodeSystemRunInvoke(params: {
   turnSourceThreadId?: string | number;
   approved?: boolean;
   approvalDecision?: "allow-once" | "allow-always" | null;
+  approvalSource?: "ask-fallback";
   runId?: string;
   suppressNotifyOnExit?: boolean;
   notifyOnExit?: boolean;
@@ -381,6 +383,7 @@ export function buildNodeSystemRunInvoke(params: {
         : {}),
       approved: params.approved,
       approvalDecision: params.approvalDecision ?? undefined,
+      approvalSource: params.approvalSource,
       runId,
       suppressNotifyOnExit:
         params.suppressNotifyOnExit === true || params.notifyOnExit === false ? true : undefined,
@@ -451,6 +454,7 @@ export async function prepareNodeSystemRun(params: {
     plan: prepared.plan,
     argv: prepared.plan.argv,
     rawCommand: prepared.plan.commandText,
+    transportRawCommand: prepared.plan.commandText,
     cwd: prepared.plan.cwd ?? params.request.workdir,
     agentId: prepared.plan.agentId ?? params.request.agentId,
     sessionKey: prepared.plan.sessionKey ?? params.request.sessionKey,
@@ -489,6 +493,9 @@ function buildLocalPreparedNodeRun(params: {
     plan,
     argv: plan.argv,
     rawCommand: plan.commandText,
+    // Legacy macOS nodes parse the bound shell payload for allowlist matching.
+    // Analysis and approval binding remain anchored to the canonical plan text.
+    transportRawCommand: plan.commandPreview ?? plan.commandText,
     cwd: plan.cwd ?? params.request.workdir,
     agentId: plan.agentId ?? params.request.agentId,
     sessionKey: plan.sessionKey ?? params.request.sessionKey,
