@@ -54,6 +54,8 @@ export type ControlUiMockGatewayScenario = {
   }>;
   defaultAgentId?: string;
   deferredMethods?: string[];
+  /** Non-release gateway checkout branch surfaced in the sidebar footer. */
+  devGitBranch?: string;
   deviceToken?: string;
   featureMethods?: string[];
   historyMessages?: unknown[];
@@ -94,6 +96,7 @@ export type MockGatewayControls = {
   resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
   setOnline: (online: boolean) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
+  setMethodResponse: (method: string, payload: unknown) => Promise<void>;
   waitForRequest: (method: string) => Promise<MockGatewayRequest>;
 };
 
@@ -227,6 +230,7 @@ function normalizeScenario(
     controlUiTabs: scenario.controlUiTabs ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
+    devGitBranch: scenario.devGitBranch?.trim() || "",
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
     featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
@@ -247,6 +251,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     assistantAvatar: "",
     assistantName: normalizedScenario.assistantName,
     basePath: "/",
+    devGitBranch: normalizedScenario.devGitBranch || undefined,
     embedSandbox: "scripts",
     localMediaPreviewRoots: [],
     serverVersion: "e2e",
@@ -303,6 +308,7 @@ function installControlUiMockGateway(input: {
     resolveDeferred: (method: string, payload?: unknown) => void;
     setOnline: (online: boolean) => void;
     setHistoryMessages: (messages: unknown[]) => void;
+    setMethodResponse: (method: string, payload: unknown) => void;
     socketCount: () => number;
     socketUrls: () => string[];
   };
@@ -899,6 +905,9 @@ function installControlUiMockGateway(input: {
         configuredHistory.messages = scenario.historyMessages;
       }
     },
+    setMethodResponse(method, payload) {
+      scenario.methodResponses[method] = payload;
+    },
     socketCount() {
       return sockets.length;
     },
@@ -1121,6 +1130,24 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
         }
         gateway.setHistoryMessages(nextMessages);
       }, messages);
+    },
+    async setMethodResponse(method, payload) {
+      await page.evaluate(
+        ({ targetMethod, responsePayload }) => {
+          const gateway = (
+            window as Window & {
+              openclawControlUiE2eGateway?: {
+                setMethodResponse: (method: string, payload: unknown) => void;
+              };
+            }
+          ).openclawControlUiE2eGateway;
+          if (!gateway) {
+            throw new Error("Mock Gateway is not installed");
+          }
+          gateway.setMethodResponse(targetMethod, responsePayload);
+        },
+        { targetMethod: method, responsePayload: payload },
+      );
     },
     async waitForRequest(method) {
       await page.waitForFunction(

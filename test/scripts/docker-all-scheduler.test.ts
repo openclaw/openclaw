@@ -183,6 +183,7 @@ describe("scripts/test-docker-all scheduler", () => {
     const registryCommand = githubWorkflowRerunCommand(["install-e2e"], "b".repeat(40), {
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: "ghcr.io/openclaw/openclaw-docker-e2e-bare:test",
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: "ghcr.io/openclaw/openclaw-docker-e2e-functional:test",
+      OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "true",
       OPENCLAW_DOCKER_E2E_WORKFLOW_REF: "main",
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.5.3",
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "openclaw@2026.5.3 openclaw@2026.5.2",
@@ -196,7 +197,49 @@ describe("scripts/test-docker-all scheduler", () => {
       "docker_e2e_functional_image='ghcr.io/openclaw/openclaw-docker-e2e-functional:test'",
     );
     expect(registryCommand).toContain("shared_image_policy=existing-only");
+    expect(registryCommand).toContain("allow_unreleased_changelog=true");
     expectDeclaredDispatchInputs(registryCommand);
+  });
+
+  it("preserves ephemeral package intent in generated summary and failure reruns", async () => {
+    const logDir = createTempDir("openclaw-docker-all-rerun-intent-");
+    try {
+      const selectedSha = "c".repeat(40);
+      await writeRunSummary(
+        logDir,
+        {
+          failures: [{ name: "install-e2e", status: 1 }],
+          lanes: [],
+          status: "failed",
+        },
+        {
+          ...process.env,
+          OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "true",
+          OPENCLAW_DOCKER_E2E_SELECTED_SHA: selectedSha,
+        },
+      );
+
+      const summaryFile = path.join(logDir, "summary.json");
+      const summary = JSON.parse(readFileSync(summaryFile, "utf8"));
+      expect(summary.allowUnreleasedChangelog).toBe(true);
+
+      const failureIndexFile = path.join(logDir, "failures.json");
+      const failureIndex = JSON.parse(readFileSync(failureIndexFile, "utf8"));
+      expect(failureIndex.combinedGhWorkflowCommand).toContain("allow_unreleased_changelog=true");
+
+      for (const artifact of [summaryFile, failureIndexFile]) {
+        const rerun = spawnSync(process.execPath, ["scripts/docker-e2e-rerun.mjs", artifact], {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: process.env,
+        });
+        expect(rerun.status, rerun.stderr).toBe(0);
+        expect(rerun.stdout).toContain(`-f ref='${selectedSha}'`);
+        expect(rerun.stdout).toContain("allow_unreleased_changelog=true");
+      }
+    } finally {
+      rmSync(logDir, { force: true, recursive: true });
+    }
   });
 
   it("rejects loose numeric resource limit env vars before scheduling lanes", () => {

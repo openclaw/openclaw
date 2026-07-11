@@ -64,8 +64,8 @@ import {
   isChromeCdpReady,
   isChromeReachable,
   launchOpenClawChrome,
+  ManagedChromeCleanupError,
   resolveOpenClawUserDataDir,
-  stopOpenClawChrome,
 } from "./chrome.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
@@ -84,6 +84,7 @@ type FakeProc = EventEmitter & {
   pid?: number;
   killed: boolean;
   exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
   kill: (sig?: string) => boolean;
   stderr: EventEmitter;
 };
@@ -94,8 +95,11 @@ function makeFakeProc(overrides: Partial<FakeProc> = {}): FakeProc {
     pid: 4242,
     killed: false,
     exitCode: null,
-    kill: vi.fn((_sig?: string) => {
+    signalCode: null,
+    kill: vi.fn((sig = "SIGTERM") => {
       proc.killed = true;
+      proc.signalCode = sig as NodeJS.Signals;
+      proc.emit("exit", null, sig);
       return true;
     }),
     stderr,
@@ -157,6 +161,16 @@ function mockExpiredLaunchPollingClock(): void {
     now += 1_000;
     return now;
   });
+}
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
 }
 
 function linuxProcStatLine(pid: number, startTime: string): string {
@@ -578,6 +592,37 @@ describe("chrome.ts internal", () => {
         ...overrides,
       }) as unknown as ResolvedBrowserConfig;
 
+    const captureFailedLaunchStderr = async (params: {
+      port: number;
+      chunks: readonly (Buffer | string)[];
+    }) => {
+      stubBrowserExecutableAndPrefs("present");
+      const proc = makeFakeProc();
+      spawnMock.mockImplementation(() => {
+        queueMicrotask(() => {
+          for (const chunk of params.chunks) {
+            proc.stderr.emit("data", chunk);
+          }
+        });
+        return proc;
+      });
+      mockExpiredLaunchPollingClock();
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+
+      const result = await launchOpenClawChrome(
+        makeResolved({ localLaunchTimeoutMs: 1 }),
+        makeProfile(params.port),
+      ).catch((err: unknown) => err);
+      if (!(result instanceof Error)) {
+        throw new Error("expected managed Chrome launch to fail");
+      }
+      return {
+        error: result,
+        proc,
+        stderrHint: result.message.split("Chrome stderr:\n")[1] ?? "",
+      };
+    };
+
     it("rejects a remote profile before attempting to spawn", async () => {
       const profile = {
         name: "openclaw",
@@ -634,16 +679,33 @@ describe("chrome.ts internal", () => {
     it("rejects a runtime spawn error before polling CDP", async () => {
       stubBrowserExecutableAndPrefs("present");
       const spawnError = Object.assign(new Error("spawn EACCES"), { code: "EACCES" });
-      spawnMock.mockImplementation(() => makeFailedSpawnProc(spawnError));
+      let failedProc: FakeProc | undefined;
+      spawnMock.mockImplementation(() => {
+        failedProc = makeFailedSpawnProc(spawnError);
+        return failedProc;
+      });
       const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
+      const controller = new AbortController();
+      const addAbortListener = vi.spyOn(controller.signal, "addEventListener");
+      const removeAbortListener = vi.spyOn(controller.signal, "removeEventListener");
 
-      await expect(launchOpenClawChrome(makeResolved(), makeProfile(51112))).rejects.toBe(
-        spawnError,
-      );
+      await expect(
+        launchOpenClawChrome(makeResolved(), makeProfile(51112), {
+          signal: controller.signal,
+        }),
+      ).rejects.toBe(spawnError);
 
       expect(spawnMock).toHaveBeenCalledTimes(1);
       expect(fetchMock).not.toHaveBeenCalled();
+      expect(failedProc?.stderr.listenerCount("data")).toBe(0);
+      const spawnAbortListener = addAbortListener.mock.calls.find(
+        ([eventName]) => eventName === "abort",
+      )?.[1];
+      expect(spawnAbortListener).toEqual(expect.any(Function));
+      expect(removeAbortListener).toHaveBeenCalledWith("abort", spawnAbortListener);
+      controller.abort(new Error("late lifecycle invalidation"));
+      expect(failedProc?.kill).not.toHaveBeenCalled();
     });
 
     it("rejects a bootstrap spawn error without attempting the runtime launch", async () => {
@@ -675,6 +737,83 @@ describe("chrome.ts internal", () => {
           running.proc.kill?.("SIGTERM");
         },
       });
+    });
+
+    it("aborts a deferred managed launch and proves its exact child exited", async () => {
+      stubBrowserExecutableAndPrefs("present");
+      const proc = makeFakeProc({ pid: 51114 });
+      spawnMock.mockReturnValue(proc);
+      const probeEntered = deferred();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          probeEntered.resolve();
+          throw new Error("ECONNREFUSED");
+        }),
+      );
+      const controller = new AbortController();
+      const reason = new Error("lifecycle invalidated");
+
+      const launch = launchOpenClawChrome(makeResolved(), makeProfile(51114), {
+        signal: controller.signal,
+      });
+      await probeEntered.promise;
+      controller.abort(reason);
+
+      await expect(launch).rejects.toBe(reason);
+      expect(proc.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+      expect(proc.signalCode).toBe("SIGKILL");
+    });
+
+    it("aborts bootstrap immediately and never reaches the runtime launch", async () => {
+      stubBrowserExecutableAndPrefs("missing");
+      const bootstrap = makeFakeProc({ pid: 51115 });
+      const spawned = deferred();
+      spawnMock.mockImplementation(() => {
+        spawned.resolve();
+        return bootstrap;
+      });
+      const controller = new AbortController();
+      const reason = new Error("reset invalidated bootstrap");
+
+      const launch = launchOpenClawChrome(makeResolved(), makeProfile(51115), {
+        signal: controller.signal,
+      });
+      await spawned.promise;
+      controller.abort(reason);
+
+      await expect(launch).rejects.toBe(reason);
+      expect(bootstrap.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns the exact child when abort cleanup cannot prove process exit", async () => {
+      stubBrowserExecutableAndPrefs("present");
+      const proc = makeFakeProc({
+        pid: 51116,
+        kill: vi.fn(() => true),
+      });
+      spawnMock.mockReturnValue(proc);
+      const probeEntered = deferred();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          probeEntered.resolve();
+          throw new Error("ECONNREFUSED");
+        }),
+      );
+      const controller = new AbortController();
+
+      const launch = launchOpenClawChrome(makeResolved(), makeProfile(51116), {
+        signal: controller.signal,
+      });
+      await probeEntered.promise;
+      controller.abort(new Error("stop invalidated launch"));
+      const error = await launch.catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(ManagedChromeCleanupError);
+      expect(error).toMatchObject({ running: { pid: 51116, proc } });
+      expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
     });
 
     it.each([
@@ -978,6 +1117,60 @@ describe("chrome.ts internal", () => {
       });
     });
 
+    it("preserves the exact surviving child when a singleton retry cleanup fails", async () => {
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const value = String(p);
+        return (
+          value === "/tmp/profile-chrome" ||
+          value.endsWith("Local State") ||
+          value.endsWith("Preferences")
+        );
+      });
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+      mockExpiredLaunchPollingClock();
+
+      const firstProc = makeFakeProc({ pid: 62001 });
+      const survivingProc = makeFakeProc({
+        pid: 62002,
+        kill: vi.fn(() => true),
+      });
+
+      let spawnCalls = 0;
+      spawnMock.mockImplementation(() => {
+        spawnCalls += 1;
+        if (spawnCalls === 1) {
+          queueMicrotask(() => {
+            firstProc.stderr.emit(
+              "data",
+              Buffer.from("The profile appears to be in use by another Chromium process"),
+            );
+          });
+          return firstProc;
+        }
+        return survivingProc;
+      });
+
+      const profile = { ...makeProfile(51109), executablePath: "/tmp/profile-chrome" };
+      const userDataDir = resolveOpenClawUserDataDir(profile.name);
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink("remote-host-62001", path.join(userDataDir, "SingletonLock"));
+
+      try {
+        const error = await launchOpenClawChrome(
+          makeResolved({ localLaunchTimeoutMs: 20 }),
+          profile,
+        ).catch((err: unknown) => err);
+
+        expect(error).toBeInstanceOf(ManagedChromeCleanupError);
+        expect(error).toMatchObject({ running: { pid: 62002, proc: survivingProc } });
+        expect(firstProc.kill).toHaveBeenCalledWith("SIGKILL");
+        expect(survivingProc.kill).toHaveBeenCalledWith("SIGKILL");
+        expect(spawnCalls).toBe(2);
+      } finally {
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
     it("stops a lock-owned stale managed CDP listener before relaunching", async () => {
       const originalPlatform = process.platform;
       const executablePath = path.join(tmpDir, "chrome");
@@ -1219,56 +1412,39 @@ describe("chrome.ts internal", () => {
     });
 
     it("keeps only a bounded UTF-8-safe newest stderr tail when launch fails after large stderr", async () => {
-      const executablePath = path.join(tmpDir, "chrome");
-      await fsp.writeFile(executablePath, "");
-      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
-        const s = String(p);
-        if (s === executablePath || s.endsWith("Local State") || s.endsWith("Preferences")) {
-          return true;
-        }
-        return false;
-      });
-      const fakeProc = makeFakeProc();
       const oldMarker = "older-stderr-marker";
       const newestMarker = "newest-stderr-marker";
       const splitEmoji = Buffer.from("🦞");
       const newestLine = Buffer.from(`\n${newestMarker}\n`);
       const tailMaxBytes = 64 * 1024;
       const filler = Buffer.alloc(tailMaxBytes + 2 - splitEmoji.length - newestLine.length, "x");
-      spawnMock.mockImplementation(() => {
-        void Promise.resolve().then(() => {
-          fakeProc.stderr.emit("data", Buffer.from(`${oldMarker}\n`));
-          fakeProc.stderr.emit("data", splitEmoji.subarray(0, 2));
-          fakeProc.stderr.emit("data", Buffer.concat([splitEmoji.subarray(2), filler, newestLine]));
-        });
-        return fakeProc;
+      const { error, proc, stderrHint } = await captureFailedLaunchStderr({
+        port: 55557,
+        chunks: [
+          Buffer.from(`${oldMarker}\n`),
+          splitEmoji.subarray(0, 2),
+          Buffer.concat([splitEmoji.subarray(2), filler, newestLine]),
+        ],
       });
-      let now = 1_000_000;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => {
-          now += 10_000;
-          throw new Error("ECONNREFUSED");
-        }),
-      );
 
-      const profile = { ...makeProfile(55557), executablePath } as ResolvedBrowserProfile;
-      let message = "";
-      try {
-        await launchOpenClawChrome(makeResolved({ localLaunchTimeoutMs: 1 }), profile);
-      } catch (err) {
-        message = err instanceof Error ? err.message : String(err);
-      }
-
-      expect(message).toMatch(/Failed to start Chrome CDP/);
-      expect(message).toContain("Chrome stderr:");
-      const stderrHint = message.split("Chrome stderr:\n")[1] ?? "";
+      expect(error.message).toMatch(/Failed to start Chrome CDP/);
       expect(stderrHint).not.toContain(oldMarker);
       expect(stderrHint).toContain(newestMarker);
       expect(stderrHint).not.toContain("�");
       expect(stderrHint.length).toBeLessThanOrEqual(CHROME_STDERR_HINT_MAX_CHARS);
-      expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+    });
+
+    it("does not split a surrogate pair at the stderr hint char-cap boundary", async () => {
+      const newestMarker = "newest-stderr-marker";
+      const tail = `${newestMarker}${"y".repeat(CHROME_STDERR_HINT_MAX_CHARS - 1 - newestMarker.length)}`;
+      // The raw cap starts on 🦞's low surrogate; the safe slice drops the pair.
+      const { stderrHint } = await captureFailedLaunchStderr({
+        port: 55559,
+        chunks: [`${"x".repeat(50)}🦞${tail}`],
+      });
+
+      expect(stderrHint).toBe(tail);
     });
 
     it("keeps early missing-display diagnostics for launch hints after the stderr tail rolls", async () => {
@@ -1342,27 +1518,6 @@ describe("chrome.ts internal", () => {
         /Failed to start Chrome CDP/,
       );
       expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
-    });
-  });
-
-  describe("stopOpenClawChrome SIGKILL fallback", () => {
-    it("escalates to SIGKILL when CDP keeps reporting reachable past the deadline", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(
-          async () =>
-            new Response(JSON.stringify({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }), {
-              headers: { "content-type": "application/json" },
-            }),
-        ),
-      );
-      const proc = makeFakeProc();
-      await stopOpenClawChrome(
-        { proc, cdpPort: 12345 } as unknown as Parameters<typeof stopOpenClawChrome>[0],
-        1,
-      );
-      expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
-      expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
     });
   });
 

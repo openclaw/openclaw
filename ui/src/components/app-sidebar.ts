@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../api/gateway.ts";
-import type { SessionsListResult } from "../api/types.ts";
+import type { SessionsListResult, UpdateAvailable } from "../api/types.ts";
 import {
   cancelRoutePreload,
   DEFAULT_SIDEBAR_PINNED_ROUTES,
@@ -23,13 +23,17 @@ import {
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import type { ThemeMode } from "../app/theme.ts";
 import "./session-menu.ts";
+import "./sidebar-build-chip.ts";
+import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
+import { editorOpenUrl } from "../lib/editor-links.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import {
   channelDisplayLabel,
@@ -72,7 +76,8 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
 import { icons, type IconName } from "./icons.ts";
 import { lobsterPetSeed, resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet.ts";
-import type { SessionMenuAction } from "./session-menu.ts";
+import { fetchSessionMenuWork } from "./session-menu-work.ts";
+import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
 
 type SidebarRecentSession = {
   key: string;
@@ -84,12 +89,14 @@ type SidebarRecentSession = {
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
+  modelSelectionLocked: boolean;
   kind?: string;
   pinned: boolean;
   category?: string;
   channel?: string;
   channelSession?: boolean;
   workSession?: boolean;
+  worktreeId?: string;
   unread: boolean;
 };
 
@@ -106,6 +113,7 @@ type SidebarSessionGroupMenuState = {
 };
 
 type SidebarSessionSortMode = "created" | "updated";
+type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 type SidebarSessionGroupDropTarget = {
   group: string;
   position: "before" | "after";
@@ -171,6 +179,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
   @property({ attribute: false }) activePluginTabId = "";
+  @property({ attribute: false }) activePluginHostId = "";
+  @property({ attribute: false }) activePluginThreadId = "";
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) canPairDevice = false;
@@ -182,6 +192,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) lobsterPetVisits = true;
   @property({ attribute: false }) lobsterPetSounds = false;
   @property({ attribute: false }) gatewayVersion: string | null = null;
+  @property({ attribute: false }) devGitBranch: string | null = null;
+  @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
+  @property({ attribute: false }) updateRunning = false;
+  @property({ attribute: false }) onUpdate: () => void = () => undefined;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (agentId: string) => void;
@@ -198,6 +212,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private context?: ApplicationContext<RouteId>;
   @state() private customizeMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionMenu: SidebarSessionMenuState | null = null;
+  // Multi-select set for batch menu actions; stale keys are dropped lazily by
+  // selectedVisibleSessions() so list refreshes never need to prune here.
+  @state() private selectedSessionKeys: ReadonlySet<string> = new Set();
+  private sessionSelectionAnchor: string | null = null;
+  @state() private sessionMenuWork: SessionMenuWork | null = null;
   @state() private sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
   @state() private draggingSessionKey: string | null = null;
   @state() private draggingSessionGroup: string | null = null;
@@ -210,10 +229,15 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
+  @state() private nativeSessionSidebarReady = false;
+  @state() private sessionsScrollState: SidebarSessionsScrollState = "none";
 
   private readonly subscriptions = new SubscriptionsController(this);
   private customizeMenuTrigger: HTMLElement | null = null;
   private sessionMenuTrigger: HTMLElement | null = null;
+  // Guards the async work fetch: a menu reopened for another session must not
+  // adopt a stale response.
+  private sessionMenuWorkVersion = 0;
   private sessionGroupMenuTrigger: HTMLElement | null = null;
   private sessionSortMenuTrigger: HTMLElement | null = null;
   private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
@@ -222,6 +246,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private reconnectListRevision: number | null = null;
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
+  private nativeSessionSidebarLoadStarted = false;
+  private sessionsScrollElement: HTMLElement | null = null;
+  private sessionsScrollResizeObserver: ResizeObserver | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -262,7 +289,59 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       globalThis.clearTimeout(timer);
     }
     this.routePreloadTimers.clear();
+    this.sessionsScrollResizeObserver?.disconnect();
+    this.sessionsScrollResizeObserver = null;
+    this.sessionsScrollElement = null;
     super.disconnectedCallback();
+  }
+
+  override updated() {
+    this.syncSessionsScrollObserver();
+    const advertised = this.pluginTabs().some(
+      (tab) => tab.id === "sessions" && (tab.pluginId === "codex" || tab.pluginId === "anthropic"),
+    );
+    if (!advertised || this.nativeSessionSidebarReady || this.nativeSessionSidebarLoadStarted) {
+      return;
+    }
+    this.nativeSessionSidebarLoadStarted = true;
+    void import("../pages/plugin/codex-sidebar.ts").then(() => {
+      this.nativeSessionSidebarReady = true;
+    });
+  }
+
+  private syncSessionsScrollObserver() {
+    const element = this.querySelector<HTMLElement>(".sidebar-recent-sessions");
+    if (element !== this.sessionsScrollElement) {
+      this.sessionsScrollResizeObserver?.disconnect();
+      this.sessionsScrollElement = element;
+      this.sessionsScrollResizeObserver = null;
+      if (element && typeof ResizeObserver === "function") {
+        this.sessionsScrollResizeObserver = new ResizeObserver(() =>
+          this.updateSessionsScrollState(element),
+        );
+        this.sessionsScrollResizeObserver.observe(element);
+      }
+    }
+    if (element) {
+      this.updateSessionsScrollState(element);
+    }
+  }
+
+  private updateSessionsScrollState(element: HTMLElement) {
+    const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+    let nextState: SidebarSessionsScrollState = "none";
+    if (maxScrollTop > 1) {
+      if (element.scrollTop <= 1) {
+        nextState = "top";
+      } else if (element.scrollTop >= maxScrollTop - 1) {
+        nextState = "bottom";
+      } else {
+        nextState = "middle";
+      }
+    }
+    if (nextState !== this.sessionsScrollState) {
+      this.sessionsScrollState = nextState;
+    }
   }
 
   // The shell calls this before CSS hides the panel or drawer. Mounted menus
@@ -450,12 +529,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         active: row.key === navigation.activeRowKey,
         visuallyActive: highlightCurrentSession && row.key === navigation.currentSessionKey,
         hasActiveRun: Boolean(row.hasActiveRun),
+        modelSelectionLocked: row.modelSelectionLocked === true,
         kind: row.kind,
         pinned: row.pinned === true,
         category: normalizeOptionalString(row.category),
         channel: channelInfo.channel,
         channelSession: channelInfo.channelSession,
         workSession: Boolean(row.worktree || row.execNode),
+        worktreeId: row.worktree?.id,
         unread: row.unread === true,
       };
     };
@@ -481,6 +562,94 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     });
   };
 
+  /** Rows in on-screen order (grouped sections, collapsed ones skipped); shift
+      ranges and batch actions both key off this order. */
+  private visibleSessionRowsInOrder(): SidebarRecentSession[] {
+    const navigationState = this.getSessionNavigationState();
+    const agents = this.context?.agents.state.agentsList?.agents ?? [];
+    const rows =
+      agents.length > 1
+        ? this.sidebarRowsForAgent(this.expandedAgentId(), navigationState)
+        : navigationState.visibleSessions;
+    const sections = groupSidebarSessionRows(rows, {
+      grouping: this.sessionsGrouping,
+      knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
+    });
+    return sections.flatMap((section) => {
+      // Mirrors renderSessionSection: only headered sections can collapse.
+      const showHeader = section.id === "pinned" || this.sessionsGrouping === "category";
+      return showHeader && this.collapsedSessionSections.has(section.id) ? [] : section.rows;
+    });
+  }
+
+  private selectedVisibleSessions(): SidebarRecentSession[] {
+    if (this.selectedSessionKeys.size === 0) {
+      return [];
+    }
+    return this.visibleSessionRowsInOrder().filter((row) => this.selectedSessionKeys.has(row.key));
+  }
+
+  private handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession) {
+    if (event.defaultPrevented || event.button !== 0) {
+      return;
+    }
+    // Cmd/Ctrl and Shift clicks build the multi-select instead of the browser's
+    // open-in-new-tab default; middle-click still opens the row in a new tab.
+    if (event.metaKey || event.ctrlKey) {
+      event.preventDefault();
+      this.toggleSessionSelected(session.key);
+      return;
+    }
+    if (event.shiftKey) {
+      event.preventDefault();
+      this.extendSessionSelection(session.key);
+      return;
+    }
+    if (event.altKey) {
+      return;
+    }
+    event.preventDefault();
+    this.clearSessionSelection();
+    this.selectSession(session.key);
+  }
+
+  private toggleSessionSelected(key: string) {
+    const next = new Set(this.selectedSessionKeys);
+    if (next.has(key)) {
+      next.delete(key);
+    } else {
+      next.add(key);
+    }
+    this.sessionSelectionAnchor = next.has(key) ? key : null;
+    this.selectedSessionKeys = next;
+  }
+
+  private extendSessionSelection(key: string) {
+    const rows = this.visibleSessionRowsInOrder();
+    const anchor =
+      this.sessionSelectionAnchor ??
+      rows.find((row) => row.visuallyActive || row.active)?.key ??
+      key;
+    const anchorIndex = rows.findIndex((row) => row.key === anchor);
+    const targetIndex = rows.findIndex((row) => row.key === key);
+    if (anchorIndex === -1 || targetIndex === -1) {
+      this.sessionSelectionAnchor = key;
+      this.selectedSessionKeys = new Set([key]);
+      return;
+    }
+    const [start, end] =
+      anchorIndex <= targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
+    this.sessionSelectionAnchor = anchor;
+    this.selectedSessionKeys = new Set(rows.slice(start, end + 1).map((row) => row.key));
+  }
+
+  private clearSessionSelection() {
+    this.sessionSelectionAnchor = null;
+    if (this.selectedSessionKeys.size > 0) {
+      this.selectedSessionKeys = new Set();
+    }
+  }
+
   private readonly replaceCurrentSession = (sessionKey: string) => {
     this.context?.gateway.setSessionKey(sessionKey);
     if (this.activeRouteId === "chat") {
@@ -500,6 +669,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (nextAgentId === normalizeAgentId(this.expandedAgentId())) {
       return;
     }
+    this.clearSessionSelection();
     context.agentSelection.set(nextAgentId);
     void context.sessions.refresh({
       agentId: nextAgentId,
@@ -555,6 +725,90 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
   };
 
+  private patchSessions(
+    rows: readonly SidebarRecentSession[],
+    patch: { archived?: boolean; unread?: boolean; category?: string | null },
+  ) {
+    void (async () => {
+      // Sequential like deleteMany: parallel patches would race the shared
+      // session-state publishes inside the capability.
+      for (const row of rows) {
+        await this.patchSession(row, patch);
+      }
+    })();
+  }
+
+  /** Batch delete: one confirm and one preserved-worktrees alert for the whole
+      selection instead of cascading per-session prompts. */
+  private async deleteSessionsBatch(rows: readonly SidebarRecentSession[]) {
+    const context = this.context;
+    if (!context || rows.length === 0) {
+      return;
+    }
+    if (!window.confirm(t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }))) {
+      return;
+    }
+    const { selectedAgentId } = this.getSessionNavigationState();
+    const result = await context.sessions.deleteMany(
+      rows.map((row) => ({
+        key: row.key,
+        agentId: parseAgentSessionKey(row.key)?.agentId ?? selectedAgentId,
+        deleteTranscript: true,
+      })),
+    );
+    // Dirty/unpushed checkouts survive deletion; point at the Worktrees page
+    // instead of cascading one force-delete confirm per session.
+    if (result.preservedWorktrees.length > 0) {
+      window.alert(
+        t("sessionsView.deletePreservedWorktrees", {
+          count: String(result.preservedWorktrees.length),
+          branches: result.preservedWorktrees.map((worktree) => worktree.branch).join(", "),
+        }),
+      );
+    }
+    const deletedActive = rows.find((row) => row.active && result.deleted.includes(row.key));
+    if (deletedActive) {
+      this.replaceCurrentSession(
+        buildAgentMainSessionKey({
+          agentId: parseAgentSessionKey(deletedActive.key)?.agentId ?? selectedAgentId,
+          mainKey: resolveUiConfiguredMainKey({
+            agentsList: context.agents.state.agentsList,
+            hello: context.gateway.snapshot.hello,
+          }),
+        }),
+      );
+    }
+  }
+
+  private runBatchSessionAction(
+    action: SessionMenuAction,
+    rows: SidebarRecentSession[],
+    allUnread: boolean,
+  ) {
+    switch (action.kind) {
+      case "toggle-unread":
+        this.patchSessions(rows, { unread: !allUnread });
+        break;
+      case "move-to-group":
+        this.patchSessions(
+          rows.filter((row) => (row.category ?? null) !== action.category),
+          { category: action.category },
+        );
+        break;
+      case "new-group":
+        this.createSessionGroup(rows);
+        break;
+      case "toggle-archived":
+        this.patchSessions(rows, { archived: true });
+        break;
+      case "delete":
+        void this.deleteSessionsBatch(rows);
+        break;
+      default:
+        break;
+    }
+  }
+
   private preloadRoute(routeId: NavigationRouteId, event: Event, immediate = false) {
     scheduleRoutePreload(
       this.routePreloadTimers,
@@ -609,6 +863,20 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
   }
 
+  /** Row-triggered opens (context menu, "…"): a row outside the current
+      selection retargets the selection before the menu decides batch mode. */
+  private openSessionMenuForRow(
+    session: SidebarRecentSession,
+    x: number,
+    y: number,
+    trigger: HTMLElement | null = null,
+  ) {
+    if (!this.selectedSessionKeys.has(session.key)) {
+      this.clearSessionSelection();
+    }
+    this.openSessionMenu(session, x, y, trigger);
+  }
+
   private openSessionMenu(
     session: SidebarRecentSession,
     x: number,
@@ -620,11 +888,43 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.closeSessionSortMenu();
     this.sessionMenuTrigger = trigger;
     this.sessionMenu = { session, x, y };
+    this.loadSessionMenuWork(session);
   }
 
   private closeSessionMenu() {
     this.sessionMenuTrigger = null;
     this.sessionMenu = null;
+    this.sessionMenuWorkVersion += 1;
+    this.sessionMenuWork = null;
+  }
+
+  private loadSessionMenuWork(session: SidebarRecentSession) {
+    const version = ++this.sessionMenuWorkVersion;
+    if (!session.worktreeId) {
+      this.sessionMenuWork = null;
+      return;
+    }
+    this.sessionMenuWork = { loading: true, pullRequestUrl: null, worktreePath: null };
+    const context = this.context;
+    const client = context?.gateway.snapshot.client;
+    if (!context || !client) {
+      this.sessionMenuWork = { loading: false, pullRequestUrl: null, worktreePath: null };
+      return;
+    }
+    const { selectedAgentId } = this.getSessionNavigationState();
+    void fetchSessionMenuWork({
+      client,
+      pullRequestsAvailable:
+        isGatewayMethodAdvertised(context.gateway.snapshot, "controlUi.sessionPullRequests") ===
+        true,
+      sessionKey: session.key,
+      agentId: parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
+      worktreeId: session.worktreeId,
+    }).then((work) => {
+      if (version === this.sessionMenuWorkVersion) {
+        this.sessionMenuWork = { loading: false, ...work };
+      }
+    });
   }
 
   private openSessionGroupMenu(group: string, x: number, y: number, trigger: HTMLElement | null) {
@@ -716,14 +1016,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     void this.patchSession(session, { label: normalizeOptionalString(nextLabel) ?? null });
   }
 
-  private createSessionGroup(session?: SidebarRecentSession) {
+  private createSessionGroup(sessions: readonly SidebarRecentSession[] = []) {
     const name = window.prompt(t("sessionsView.newGroupPrompt"))?.trim();
     if (!name) {
       return;
     }
     this.rememberSessionGroup(name);
-    if (session) {
-      void this.patchSession(session, { category: name });
+    if (sessions.length > 0) {
+      this.patchSessions(sessions, { category: name });
     } else {
       // Header-created groups start empty; re-render so the section shows up.
       this.requestUpdate();
@@ -1066,13 +1366,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               aria-checked=${String(pinned)}
               @click=${() => this.togglePinnedRoute(routeId)}
             >
-              <span class="sidebar-customize-menu__check" aria-hidden="true">
-                ${pinned ? icons.check : nothing}
-              </span>
               <span class="nav-item__icon" aria-hidden="true"
                 >${icons[navigationIconForRoute(routeId)]}</span
               >
               <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
+              <span class="sidebar-customize-menu__check" aria-hidden="true">
+                ${pinned ? icons.check : nothing}
+              </span>
             </button>
           `;
         })}
@@ -1087,7 +1387,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             this.closeCustomizeMenu({ restoreFocus: true });
           }}
         >
-          <span class="sidebar-customize-menu__check" aria-hidden="true"></span>
           <span class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
           <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
         </button>
@@ -1102,37 +1401,60 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     const { session } = menu;
     const context = this.context;
-    const archiveAllowed = canArchiveSessionRow(
-      session,
-      resolveUiConfiguredMainKey({
-        agentsList: context?.agents.state.agentsList,
-        hello: context?.gateway.snapshot.hello,
-      }),
-    );
+    const mainKey = resolveUiConfiguredMainKey({
+      agentsList: context?.agents.state.agentsList,
+      hello: context?.gateway.snapshot.hello,
+    });
+    // Batch mode only when the menu's row is part of a multi-selection; the
+    // menu then acts on the selection and shows aggregated unread/category.
+    const selection = this.selectedVisibleSessions();
+    const batchRows =
+      selection.length > 1 && selection.some((row) => row.key === session.key) ? selection : null;
+    const rows = batchRows ?? [session];
+    const archiveAllowed = rows.every((row) => canArchiveSessionRow(row, mainKey));
+    const allUnread = rows.every((row) => row.unread);
+    const sharedCategory = rows.every(
+      (row) => (row.category ?? null) === (rows[0]?.category ?? null),
+    )
+      ? (rows[0]?.category ?? null)
+      : null;
     return html`
       <openclaw-session-menu
         .session=${{
           key: session.key,
           label: session.label,
           pinned: session.pinned,
-          unread: session.unread,
+          unread: batchRows ? allUnread : session.unread,
           archived: false,
-          category: session.category ?? null,
+          category: batchRows ? sharedCategory : (session.category ?? null),
         }}
+        .selectionCount=${rows.length}
         .x=${menu.x}
         .y=${menu.y}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${!this.connected}
-        .forkDisabled=${this.sessionsLoading}
+        .forkDisabled=${this.sessionsLoading || session.modelSelectionLocked}
         .archiveAllowed=${archiveAllowed}
         .groups=${this.knownSessionGroups()}
         .canOpenChat=${true}
+        .work=${batchRows ? null : this.sessionMenuWork}
         .workboard=${null}
         .onClose=${() => this.closeSessionMenu()}
         .onAction=${(action: SessionMenuAction) => {
+          if (batchRows) {
+            this.runBatchSessionAction(action, batchRows, allUnread);
+            return;
+          }
           switch (action.kind) {
             case "open-chat":
               this.selectSession(session.key);
+              break;
+            case "open-pr":
+              window.open(action.url, "_blank", "noopener");
+              break;
+            case "open-in":
+              // A custom-scheme window hands off to the OS without navigating this page.
+              window.open(editorOpenUrl(action.editor, action.path));
               break;
             case "toggle-pin":
               void this.patchSession(session, { pinned: !session.pinned });
@@ -1154,7 +1476,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               }
               break;
             case "new-group":
-              this.createSessionGroup(session);
+              this.createSessionGroup([session]);
               break;
             case "toggle-archived":
               void this.patchSession(session, { archived: true });
@@ -1374,6 +1696,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       "sidebar-recent-session",
       "session-row-host",
       session.visuallyActive ? "sidebar-recent-session--active" : "",
+      this.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
       session.pinned ? "session-row-host--pinned" : "",
       session.hasActiveRun ? "session-row-host--running" : "",
       this.draggingSessionKey === session.key ? "sidebar-recent-session--dragging" : "",
@@ -1397,7 +1720,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         }}
         @contextmenu=${(event: MouseEvent) => {
           event.preventDefault();
-          this.openSessionMenu(session, event.clientX, event.clientY);
+          this.openSessionMenuForRow(session, event.clientX, event.clientY);
         }}
         @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
         @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
@@ -1407,13 +1730,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           class="sidebar-recent-session__link"
           draggable="false"
           title=${`${session.label} · ${session.key}`}
-          @click=${(event: MouseEvent) => {
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
-            event.preventDefault();
-            this.selectSession(session.key);
-          }}
+          @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
           ${session.unread
             ? html`<span
@@ -1472,7 +1789,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 }
                 const trigger = event.currentTarget as HTMLElement;
                 const rect = trigger.getBoundingClientRect();
-                this.openSessionMenu(session, rect.right, rect.bottom + 4, trigger);
+                this.openSessionMenuForRow(session, rect.right, rect.bottom + 4, trigger);
               }}
             >
               ${icons.moreHorizontal}
@@ -1734,7 +2051,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const expandedAgentId = this.expandedAgentId();
     return html`
       <section class="sidebar-sessions">
-        <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
+        <div
+          class="sidebar-recent-sessions sidebar-recent-sessions--scroll-${this
+            .sessionsScrollState}"
+          aria-label=${titleForRoute("sessions")}
+          @scroll=${(event: Event) =>
+            this.updateSessionsScrollState(event.currentTarget as HTMLElement)}
+        >
           <div class="sidebar-recent-sessions__head sidebar-recent-sessions__head--root">
             <span class="sidebar-recent-sessions__label-text">${t("sessionsView.title")}</span>
             <button
@@ -1770,7 +2093,44 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               })}
         </div>
       </section>
+      ${this.renderNativeSessionSidebars()}
     `;
+  }
+
+  private renderNativeSessionSidebars() {
+    if (!this.nativeSessionSidebarReady) {
+      return nothing;
+    }
+    const tabs = this.pluginTabs().filter(
+      (candidate) =>
+        candidate.id === "sessions" &&
+        (candidate.pluginId === "codex" || candidate.pluginId === "anthropic"),
+    );
+    if (tabs.length === 0) {
+      return nothing;
+    }
+    const open = (pluginId: string, hostId?: string, threadId?: string) => {
+      this.onNavigate?.("plugin", {
+        search: pluginTabSearch({
+          pluginId,
+          id: "sessions",
+          ...(hostId && threadId ? { hostId, threadId } : {}),
+        }),
+      });
+    };
+    return tabs.map((tab) => {
+      const active = this.activePluginTabId === pluginTabKey(tab);
+      return html`<openclaw-codex-sidebar
+        .catalogKind=${tab.pluginId === "anthropic" ? "claude" : "codex"}
+        .client=${this.context?.gateway.snapshot.client ?? null}
+        .connected=${this.connected}
+        .basePath=${this.basePath}
+        .selectedHostId=${active ? this.activePluginHostId : ""}
+        .selectedThreadId=${active ? this.activePluginThreadId : ""}
+        .onOpenSession=${(hostId: string, threadId: string) => open(tab.pluginId, hostId, threadId)}
+        .onViewAll=${() => open(tab.pluginId)}
+      ></openclaw-codex-sidebar>`;
+    });
   }
 
   private renderMoreSection() {
@@ -1784,7 +2144,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           aria-expanded=${String(expanded)}
         >
           <span class="nav-section__label-text">${t("nav.more")}</span>
-          <span class="nav-section__chevron"> ${icons.chevronDown} </span>
+          <span class="nav-section__chevron">${icons.chevronDown}</span>
         </button>
         <div class="nav-section__items">
           ${moreRoutes.map((routeId) => this.renderRoute(routeId))}
@@ -1821,7 +2181,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           this.onNavigate?.("chat");
         }}
       >
-        <span class="sidebar-recent-session__body">
+        <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name">${t("nav.chat")}</span>
         </span>
       </a>
@@ -1849,6 +2209,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             ${this.renderSessions()}
           </div>
           <div class="sidebar-shell__footer">
+            <openclaw-sidebar-update-card
+              .updateAvailable=${this.updateAvailable}
+              .updateRunning=${this.updateRunning}
+              .onUpdate=${this.onUpdate}
+            ></openclaw-sidebar-update-card>
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}
               .mode=${resolveLobsterPetMode(this.connected, this.sessionsResult?.sessions)}
@@ -1857,6 +2222,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               .soundsEnabled=${this.lobsterPetSounds}
               .gatewayVersion=${this.gatewayVersion}
             ></openclaw-lobster-pet>
+            ${this.devGitBranch
+              ? html`<div class="sidebar-footer-branch" title=${this.devGitBranch}>
+                  <span class="sidebar-footer-branch__icon" aria-hidden="true"
+                    >${icons.gitBranch}</span
+                  >
+                  <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
+                </div>`
+              : nothing}
             <div class="sidebar-footer-bar">
               <openclaw-tooltip .content=${gatewayStatus}>
                 <span
@@ -1868,6 +2241,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                   aria-label=${gatewayStatus}
                 ></span>
               </openclaw-tooltip>
+              <openclaw-sidebar-build-chip
+                .basePath=${this.basePath}
+                .gatewayVersion=${this.gatewayVersion}
+                .onNavigate=${(routeId: "about") => this.onNavigate?.(routeId)}
+              ></openclaw-sidebar-build-chip>
               <span class="sidebar-footer-bar__spacer"></span>
               <openclaw-tooltip .content=${settingsTooltip}>
                 <a
