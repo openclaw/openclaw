@@ -5339,6 +5339,111 @@ describe("subagent registry seam flow", () => {
     expect(run?.endedAt).toBe(startedAt + 2_000);
   });
 
+  it("preserves an already-finalized explicit timeout over a late real completion arriving through the synthetic-timeout call shape", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    const startedAt = now - 60_000;
+    const endedAt = startedAt + 5_000;
+    const runId = "run-sweep-synthetic-timeout-then-late-ok";
+    // Construct the state the synthetic-timeout branch itself produces once
+    // fully processed (outcome: timeout, past deadline, cleanup/delivery
+    // done) directly, rather than racing the sweeper's detached cleanup tail
+    // to completion — the prior test already proves the synthetic branch
+    // issues this exact completion shape (reason: COMPLETE, outcome:
+    // timeout, triggerCleanup: true) through the shared completion pipeline.
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "synthetic timeout already fully finalized",
+      cleanup: "keep",
+      createdAt: startedAt,
+      startedAt,
+      endedAt,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      outcome: { status: "timeout" },
+      runTimeoutSeconds: 5,
+      cleanupHandled: true,
+      cleanupCompletedAt: endedAt,
+      delivery: { status: "delivered", deliveredAt: endedAt, announcedAt: endedAt },
+      execution: {
+        status: "terminal",
+        startedAt,
+        endedAt,
+        outcome: { status: "timeout" },
+      },
+    });
+
+    // A real completion for the same run arrives after the timeout has
+    // already been fully processed (cleanup/delivery done) — this must be
+    // rejected by the pre-existing shouldPreservePublishedExplicitRunTimeout
+    // guard, exactly like the already-tested live-path equivalent ("keeps
+    // explicit run timeout terminal when late lifecycle success arrives").
+    await mod.completeSubagentRunForTests({
+      runId,
+      startedAt,
+      endedAt: now + 5_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      sendFarewell: true,
+      triggerCleanup: true,
+    });
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === runId);
+    expectRecordFields(
+      run?.outcome,
+      { status: "timeout" },
+      "finalized synthetic timeout must outlive a late real completion",
+    );
+    expect(run?.endedAt).toBe(endedAt);
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
+  it("rescues an entry with endedAt set but outcome incomplete via cleanup_pending, not synthetic timeout", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    const startedAt = now - 60_000;
+    const runId = "run-sweep-endedat-without-outcome";
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: startedAt,
+        status: "running",
+      },
+    });
+    // This shape (endedAt set, outcome absent) should not occur through the
+    // normal completion pipeline — endedAt and outcome are always written
+    // together, in the same synchronous section, under the terminal lock.
+    // The sweeper's outer "typeof entry.endedAt !== 'number'" precondition
+    // does exclude this entry from the synthetic-timeout branch (and from
+    // the generic still-running/orphan branch below it) — but it is not
+    // left stuck: classifyHealthForSweep reports it as cleanup_pending
+    // (ended, cleanup === "keep", no archiveAtMs yet), and the pre-existing
+    // resume_cleanup branch (unrelated to this change) picks it up anyway.
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "endedAt set without a matching outcome",
+      cleanup: "keep",
+      createdAt: startedAt,
+      startedAt,
+      endedAt: startedAt + 500,
+      runTimeoutSeconds: 5,
+      execution: { status: "running" },
+    });
+
+    await mod.testing.sweepOnceForTests();
+    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1));
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === runId);
+    expect(run?.endedAt).toBe(startedAt + 500);
+  });
+
   it("suspends retry-budgeted successful keep-mode completion deliveries during resume", async () => {
     mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
       runs: Map<string, unknown>;
