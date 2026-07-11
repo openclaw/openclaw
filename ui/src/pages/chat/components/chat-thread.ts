@@ -65,6 +65,8 @@ type ChatThreadState = {
     scrollTop: number;
   } | null;
   historyRenderAnchorFrame: number | null;
+  relativeTimeTimer: ReturnType<typeof setInterval> | null;
+  relativeTimeRequestUpdate: (() => void) | null;
 };
 
 type ChatThreadProps = {
@@ -127,7 +129,20 @@ function createChatThreadState(): ChatThreadState {
     historyRenderExpansionFrame: null,
     historyRenderAnchorAdjustment: null,
     historyRenderAnchorFrame: null,
+    relativeTimeTimer: null,
+    relativeTimeRequestUpdate: null,
   };
+}
+
+const RELATIVE_TIME_REFRESH_MS = 60_000;
+
+// Footer timestamps render relative labels ("5m ago") that go stale on idle
+// panes; one per-pane minute tick keeps them fresh without per-message timers.
+function ensureRelativeTimeRefresh(state: ChatThreadState, requestUpdate: () => void) {
+  state.relativeTimeRequestUpdate = requestUpdate;
+  state.relativeTimeTimer ??= setInterval(() => {
+    state.relativeTimeRequestUpdate?.();
+  }, RELATIVE_TIME_REFRESH_MS);
 }
 
 const threadStates = new Map<string, ChatThreadState>();
@@ -173,6 +188,11 @@ export function resetChatThreadPresentationState(paneId?: string) {
     }
     if (state.historyRenderAnchorFrame != null) {
       cancelAnimationFrame(state.historyRenderAnchorFrame);
+    }
+    if (state.relativeTimeTimer != null) {
+      clearInterval(state.relativeTimeTimer);
+      state.relativeTimeTimer = null;
+      state.relativeTimeRequestUpdate = null;
     }
   }
   if (paneId) {
@@ -649,6 +669,7 @@ function renderLoadingSkeleton() {
 export function renderChatThread(props: ChatThreadProps) {
   const state = getChatThreadState(props.paneId);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  ensureRelativeTimeRefresh(state, requestUpdate);
   const displayStream = props.stream ?? null;
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
