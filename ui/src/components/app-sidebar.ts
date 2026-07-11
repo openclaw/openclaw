@@ -194,6 +194,23 @@ function mergeCatalogSessionRows(
   return [...first, ...second.filter((session) => !seen.has(session.threadId))];
 }
 
+function preserveExpandedCatalogHost(
+  freshHost: SessionCatalogHost,
+  previous: SessionCatalogHost | undefined,
+): SessionCatalogHost {
+  if (!previous) {
+    return freshHost;
+  }
+  const { sessions, nextCursor, ...previousDetails } = previous;
+  const { sessions: _freshSessions, nextCursor: _freshNextCursor, ...freshDetails } = freshHost;
+  return {
+    ...previousDetails,
+    ...freshDetails,
+    sessions,
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+  };
+}
+
 class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
@@ -271,6 +288,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private sessionCatalogRevision = 0;
   private sessionCatalogRequestGeneration: number | null = null;
   private readonly sessionCatalogPageDepths = new Map<string, number>();
+  private readonly sessionCatalogRevisions = new Map<string, number>();
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -367,7 +385,17 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       ) {
         return;
       }
+      const revisedCatalogIds = new Set([
+        ...this.sessionCatalogs.map((catalog) => catalog.id),
+        ...catalogs.map((catalog) => catalog.id),
+      ]);
       this.sessionCatalogs = catalogs;
+      for (const catalogId of revisedCatalogIds) {
+        this.sessionCatalogRevisions.set(
+          catalogId,
+          (this.sessionCatalogRevisions.get(catalogId) ?? 0) + 1,
+        );
+      }
       this.sessionCatalogRevision += 1;
     } catch {
       // A transient poll failure must not collapse already visible or expanded pages.
@@ -408,7 +436,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             }
             const previous = previousHosts.get(host.hostId);
             if (host.error) {
-              return previous ?? host;
+              return preserveExpandedCatalogHost(host, previous);
             }
             let sessions = host.sessions;
             let nextCursor = host.nextCursor;
@@ -432,8 +460,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               const pageHost = result.catalogs
                 .find((candidate) => candidate.id === catalog.id)
                 ?.hosts.find((candidate) => candidate.hostId === host.hostId);
-              if (!pageHost || pageHost.error) {
+              if (!pageHost) {
                 return previous ?? host;
+              }
+              if (pageHost.error) {
+                return preserveExpandedCatalogHost({ ...host, ...pageHost }, previous ?? host);
               }
               sessions = mergeCatalogSessionRows(sessions, pageHost.sessions);
               nextCursor = pageHost.nextCursor;
@@ -473,7 +504,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     const generation = this.sessionCatalogGeneration;
-    const revision = this.sessionCatalogRevision;
+    const revision = this.sessionCatalogRevisions.get(catalogId) ?? 0;
     this.loadingMoreSessionCatalogIds = new Set([...this.loadingMoreSessionCatalogIds, catalogId]);
     try {
       const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
@@ -482,7 +513,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       });
       if (
         generation !== this.sessionCatalogGeneration ||
-        revision !== this.sessionCatalogRevision ||
+        revision !== (this.sessionCatalogRevisions.get(catalogId) ?? 0) ||
         client !== this.gatewayClient
       ) {
         return;
@@ -529,6 +560,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       });
       if (updated) {
         this.sessionCatalogs = catalogs;
+        this.sessionCatalogRevisions.set(catalogId, revision + 1);
         this.sessionCatalogRevision += 1;
       }
     } catch {
@@ -657,6 +689,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.sessionCatalogs = [];
     this.loadingMoreSessionCatalogIds = new Set();
     this.sessionCatalogPageDepths.clear();
+    this.sessionCatalogRevisions.clear();
   }
 
   private clearSessionCache() {
