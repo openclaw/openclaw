@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
+import { createMemoryWikiTestHarness } from "./test-helpers.js";
+
+const { createTempDir } = createMemoryWikiTestHarness();
 
 function deferred() {
   let resolve!: () => void;
@@ -61,7 +63,7 @@ describe("withMemoryWikiVaultMutation", () => {
   });
 
   it("serializes physical aliases of one vault", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-vault-alias-"));
+    const root = await createTempDir("memory-wiki-vault-alias-");
     const vaultPath = path.join(root, "vault");
     const aliasPath = path.join(root, "vault-alias");
     await fs.mkdir(vaultPath);
@@ -91,7 +93,6 @@ describe("withMemoryWikiVaultMutation", () => {
     } finally {
       releaseFirst.resolve();
       await Promise.allSettled([first, alias].filter((item) => item !== undefined));
-      await fs.rm(root, { recursive: true, force: true });
     }
   });
 
