@@ -119,6 +119,7 @@ export type PluginHookName =
   | "gateway_start"
   | "gateway_stop"
   | "heartbeat_prompt_contribution"
+  | "cron_reconciled"
   | "cron_changed"
   | "before_dispatch"
   | "reply_dispatch"
@@ -161,6 +162,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_start",
   "gateway_stop",
   "heartbeat_prompt_contribution",
+  "cron_reconciled",
   "cron_changed",
   "before_dispatch",
   "reply_dispatch",
@@ -860,12 +862,22 @@ export type PluginHookGatewayContext = {
   getCron?: () => PluginHookGatewayCronService | undefined;
 };
 
+export type PluginHookCronReconciledContext = PluginHookGatewayContext & {
+  /** Aborts when this exact scheduler snapshot is superseded or the Gateway closes. */
+  abortSignal: AbortSignal;
+};
+
 export type PluginHookGatewayStartEvent = {
   port: number;
 };
 
 export type PluginHookGatewayStopEvent = {
   reason?: string;
+};
+
+export type PluginHookCronReconciledEvent = {
+  reason: "startup" | "reload";
+  enabled: boolean;
 };
 
 export type PluginHookGatewayCronRunStatus = "ok" | "error" | "skipped";
@@ -1274,6 +1286,10 @@ export type PluginHookHandlerMap = {
     | Promise<PluginHeartbeatPromptContributionResult | void>
     | PluginHeartbeatPromptContributionResult
     | void;
+  cron_reconciled: (
+    event: PluginHookCronReconciledEvent,
+    ctx: PluginHookCronReconciledContext,
+  ) => Promise<void> | void;
   cron_changed: (
     event: PluginHookCronChangedEvent,
     ctx: PluginHookGatewayContext,

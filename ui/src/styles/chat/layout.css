@@ -77,12 +77,24 @@ openclaw-chat-page {
   /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
-  padding: clamp(20px, 3vh, 28px) clamp(6px, 1vw, 12px) 6px;
+  /* The tall top inset is a titlebar band: it keeps the floating rail
+     openers (.chat-floating-toggles, 28px at top 10px) clear of the first
+     message and gives the native macOS app an empty strip that starts a
+     window drag (see the thread mousedown handler in chat-thread.ts). */
+  padding: clamp(44px, 5vh, 52px) clamp(6px, 1vw, 12px) 6px;
   margin: 0 0 0 0;
   min-height: 0;
   /* Allow shrinking for flex scroll behavior */
   border-radius: var(--radius-md);
   background: transparent;
+}
+
+/* Split panes spend their top row on the pane header (which is both the
+   toggle host and the drag surface), so their threads keep a compact inset.
+   The single-pane view is also an openclaw-chat-pane but renders no header,
+   hence the :has() guard. */
+openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
+  padding-top: clamp(20px, 3vh, 28px);
 }
 
 .chat-thread-inner > :first-child {
@@ -208,7 +220,7 @@ openclaw-chat-page {
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--popover) 96%, var(--card));
   color: var(--popover-foreground);
-  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-lg);
   animation: fade-in 150ms var(--ease-out);
 }
 
@@ -906,6 +918,45 @@ openclaw-chat-page {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
+}
+
+.chat-selection-popup {
+  position: fixed;
+  z-index: 9999;
+  display: flex;
+  gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  animation: fade-in 0.12s var(--ease-out);
+}
+
+.chat-selection-popup button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  color: var(--fg);
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.chat-selection-popup button:hover,
+.chat-selection-popup button:focus-visible {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  outline: none;
+}
+
+.chat-selection-popup button svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--muted);
 }
 .agent-chat__composer-shell {
   display: grid;
@@ -1623,7 +1674,7 @@ openclaw-chat-page {
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--bg-elevated) 94%, var(--card));
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--shadow-lg);
   overflow-y: auto;
 }
 
@@ -2256,7 +2307,7 @@ openclaw-chat-page {
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-md);
   overflow-y: auto;
 }
 
@@ -2867,62 +2918,6 @@ openclaw-chat-page {
   }
 }
 
-.chat-queue__item--steered {
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
-}
-
-.chat-queue__main {
-  min-width: 0;
-}
-
-.chat-queue__actions {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-}
-
-.chat-queue__steer,
-.chat-queue__retry {
-  align-self: start;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  color: var(--accent);
-  font-size: 12px;
-  line-height: 1;
-}
-
-.chat-queue__steer svg,
-.chat-queue__retry svg {
-  width: 13px;
-  height: 13px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.chat-queue__steer:hover:not(:disabled),
-.chat-queue__retry:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-.chat-queue__badge {
-  display: inline-flex;
-  width: fit-content;
-  margin-bottom: 6px;
-  flex-shrink: 0;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-  font-size: 0.68rem;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
 .slash-menu {
   position: absolute;
   bottom: 100%;
@@ -3411,7 +3406,7 @@ openclaw-chat-page {
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-md);
   overflow-y: auto;
 }
 
@@ -3465,6 +3460,37 @@ openclaw-chat-page {
   max-height: 220px;
   flex: 1 1 220px;
   overflow: hidden;
+}
+
+.chat-controls__locked-model {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--card) 78%, transparent);
+}
+
+.chat-controls__locked-model-value {
+  overflow: hidden;
+  flex: 1 1 auto;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-controls__locked-model-badge {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .chat-controls__provider-list {
@@ -4056,14 +4082,6 @@ openclaw-chat-page {
   .agent-chat__composer-controls .chat-controls__model {
     min-width: 0;
   }
-
-  .agent-chat__suggestions {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .agent-chat__suggestion {
-    min-height: 44px;
-  }
 }
 
 @media (display-mode: standalone) and (max-width: 768px) {
@@ -4254,11 +4272,16 @@ openclaw-chat-page {
 .agent-chat__suggestion {
   min-height: 40px;
   font-size: 13px;
-  padding: 8px 16px;
+  line-height: 1.4;
+  padding: 10px 16px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--foreground);
+  /* Localized labels wrap to multiple lines; balance keeps the split even and
+     break-word stops long words from pushing past the chip border. */
+  text-wrap: balance;
+  overflow-wrap: break-word;
   transition:
     background 0.15s,
     border-color 0.15s;
@@ -4267,6 +4290,19 @@ openclaw-chat-page {
 .agent-chat__suggestion:hover {
   background: var(--panel-strong);
   border-color: var(--accent);
+}
+
+/* Must stay after the base suggestion rules: equal specificity, so source
+   order is what lets the phone layout win over the two-column default. */
+@media (max-width: 768px) {
+  .agent-chat__suggestions {
+    grid-template-columns: minmax(0, 1fr);
+    width: min(100%, 360px);
+  }
+
+  .agent-chat__suggestion {
+    min-height: 44px;
+  }
 }
 
 /* Mobile dropdown toggle — hidden on desktop */

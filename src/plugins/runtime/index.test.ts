@@ -323,6 +323,7 @@ describe("plugin runtime command execution", () => {
         expect(runtime.agent.runEmbeddedPiAgent).toBe(runtime.agent.runEmbeddedAgent);
         expectFunctionKeys(runtime.agent.session as Record<string, unknown>, [
           "loadSessionStore",
+          "createSessionEntry",
           "getSessionEntry",
           "listSessionEntries",
           "patchSessionEntry",
@@ -332,6 +333,15 @@ describe("plugin runtime command execution", () => {
           "updateSessionStore",
           "updateSessionStoreEntry",
           "resolveSessionFilePath",
+        ]);
+      },
+    },
+    {
+      name: "exposes runtime.llm completion and provider-service acquisition",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expectFunctionKeys(runtime.llm as Record<string, unknown>, [
+          "complete",
+          "acquireLocalService",
         ]);
       },
     },

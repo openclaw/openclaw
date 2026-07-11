@@ -264,6 +264,35 @@ method scope (`operator.pairing`), based on the pending request's declared
 | non-exec commands                                              | `operator.pairing` + `operator.write` |
 | includes `system.run`, `system.run.prepare`, or `system.which` | `operator.pairing` + `operator.admin` |
 
+### Caps/commands/permissions (node)
+
+Nodes declare capability claims at connect time:
+
+- `caps`: high-level capability categories such as `camera`, `canvas`, `screen`,
+  `location`, `voice`, and `talk`.
+- `commands`: command allowlist for invoke.
+- `permissions`: granular toggles (e.g. `screen.record`, `camera.capture`).
+
+The Gateway treats these as **claims** and enforces server-side allowlists.
+Connected nodes can publish optional agent-visible plugin or MCP tool
+descriptors with `node.pluginTools.update` after a successful connect or
+reconnect. Headless node hosts restart to apply declarative MCP inventory
+changes. This update method is the only publication path; plugin tool descriptors are not accepted in
+`connect` params. Each descriptor must use a provider-safe tool `name` and name
+a `command` in the node's current command allowlist. The Gateway trusts descriptor
+metadata from the paired node, filters descriptors outside the approved command
+surface, removes them when the node disconnects, and rejects operator attempts
+to mutate another node's catalog. Set `gateway.nodes.pluginTools.enabled: false`
+to ignore node-published descriptors.
+
+Connected node hosts publish their complete skill replacement catalog with
+`node.skills.update`. This node-role method is the only node skill publication
+path; skills are not accepted in `connect` params. Each descriptor contains a
+safe name, description, and bounded `SKILL.md` content. The Gateway parses that
+content with the normal skills loader, includes it in agent skill snapshots
+while the node is connected, and removes it on disconnect. Set
+`gateway.nodes.skills.enabled: false` to ignore node-published skills.
+
 ## Presence
 
 - `system-presence` returns entries keyed by device identity, including
@@ -451,7 +480,8 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `agents.workspace.list` and `agents.workspace.get` (`operator.read`) expose read-only, paginated browsing of an agent's workspace directory for clients in the trusted operator domain described in [Operator scopes](/gateway/operator-scopes). Requests accept workspace-relative paths only; reads stay confined to the realpathed workspace root (symlink and hardlink escapes rejected), size-capped, and limited to UTF-8 text plus common image types (base64). Responses do not expose the host workspace path. There are no write operations in this namespace.
     - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the gateway task ledger to SDK and operator clients. See [Task ledger RPCs](#task-ledger-rpcs) below.
     - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
-    - `environments.list` and `environments.status` expose read-only gateway-local and node environment discovery for SDK clients.
+    - `environments.list` and `environments.status` preserve gateway-local and node environment discovery. Configured cloud workers and durable records left by earlier profiles add `worker` metadata with `providerId`, optional `leaseId`, `state`, `ageMs`, optional `idleMs`, and `attachedSessionIds`. Worker lifecycle states are `requested`, `provisioning`, `bootstrapping`, `ready`, `attached`, `idle`, `draining`, `destroying`, `destroyed`, `failed`, and `orphaned`.
+    - `environments.create` (`{ profileId, idempotencyKey }`) provisions a worker from a configured plugin provider profile; retries with the same key reuse the durable operation. `environments.destroy` (`{ environmentId }`) requests idempotent teardown of a durable worker environment. Both require `operator.admin`, are control-plane writes, and return the same environment summary shape used by status responses.
     - `agent.identity.get` returns the effective assistant identity for an agent or session.
     - `agent.wait` waits for a run to finish and returns the terminal snapshot when available.
 
@@ -498,7 +528,9 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `node.rename` updates a paired node label.
     - `node.invoke` forwards a command to a connected node.
     - `node.invoke.result` returns the result for an invoke request.
+    - `mcp.tools.call.v1` is the headless node-host command for calling a configured node-local MCP tool. It is carried through `node.invoke`, requires the node to declare the command, and remains subject to pairing approval and `gateway.nodes.denyCommands`.
     - `node.event` carries node-originated events back into the gateway.
+    - `node.pluginTools.update` is the only publication path for replacing the connected node's agent-visible plugin/MCP tool descriptors; `connect` params do not carry them.
     - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
     - `node.pending.enqueue` and `node.pending.drain` manage durable pending work for offline/disconnected nodes.
 
@@ -787,6 +819,14 @@ third-party clients.
 The server advertises the effective `policy.tickIntervalMs`,
 `policy.maxPayload`, and `policy.maxBufferedBytes` in `hello-ok`; clients
 should honor those values rather than the pre-handshake defaults.
+
+The reference client lets finite requests own their configured deadline when
+every pending request has one. An `expectFinal` request without a finite
+`timeoutMs`, any request with `timeoutMs: null`, or a mix of finite and
+unbounded requests keeps the tick watchdog active. If inbound events and
+responses remain silent past the tick-timeout threshold, the client closes the
+socket with code `4000`, rejects every pending request, and reconnects. It does
+not replay rejected requests after reconnecting.
 
 ## Auth
 

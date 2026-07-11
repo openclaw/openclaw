@@ -117,6 +117,34 @@ struct GeneralSettings: View {
                     showsDivider: false)
             }
 
+            SettingsCardGroup("Browser") {
+                SettingsCardRow(
+                    title: "Browser login",
+                    subtitle: "Copy cookies from a Chrome-family profile into an isolated managed profile.",
+                    showsDivider: false)
+                {
+                    Button("Import…") {
+                        Task { @MainActor in
+                            switch await BrowserProfileImportModel.shared.refresh(force: true) {
+                            case .offering:
+                                // The banner lives in the dashboard window; force
+                                // offers must surface it even if that window is closed.
+                                AppNavigationActions.openDashboard()
+                            case let .unavailable(title, message):
+                                let alert = NSAlert()
+                                alert.messageText = title
+                                alert.informativeText = message
+                                alert.addButton(withTitle: "OK")
+                                alert.runModal()
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(self.state.connectionMode != .local)
+                }
+            }
+
             SettingsCardGroup("Developer") {
                 SettingsCardToggleRow(
                     title: "Enable debug tools",
@@ -770,8 +798,8 @@ extension GeneralSettings {
     }
 
     private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)
         GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
+        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: self.state)
     }
 }
 
