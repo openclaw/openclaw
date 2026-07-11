@@ -1287,6 +1287,12 @@ export const dispatchTelegramMessage = async ({
       lastAnswerBlockButtons = undefined;
     }
   };
+  const repositionDraftLaneForNewMessage = (lane: DraftLaneState) => {
+    // Reposition instead of delete-then-repost: the replacement must land
+    // before deferred cleanup or Telegram can jump and retain a stale preview.
+    lane.stream?.rotateToNewMessageDeferringDelete();
+    resetDraftLaneState(lane);
+  };
   const rotateLaneForNewMessage = async (lane: DraftLaneState) => {
     if (!lane.hasStreamedMessage && typeof lane.stream?.messageId() !== "number") {
       resetDraftLaneState(lane);
@@ -1306,16 +1312,7 @@ export const dispatchTelegramMessage = async ({
     if (!activeAnswerDraftIsToolProgressOnly) {
       return false;
     }
-    // Reposition, don't delete-then-repost: rewind so the replacement message
-    // sends below, and defer the tool-progress window's delete until after it
-    // lands. Deleting first (clear) scroll-jumps the client when a durable 🧠
-    // was posted between the window and the replacement (the on-off jump).
-    if (answerLane.stream?.rotateToNewMessageDeferringDelete) {
-      answerLane.stream.rotateToNewMessageDeferringDelete();
-    } else {
-      answerLane.stream?.forceNewMessage();
-    }
-    resetDraftLaneState(answerLane);
+    repositionDraftLaneForNewMessage(answerLane);
     suppressProgressDraftState();
     rotateAnswerLaneWhenQueuedBlocksSettle = false;
     return true;
@@ -2693,8 +2690,7 @@ export const dispatchTelegramMessage = async ({
                     ? (payload) =>
                         enqueueDraftLaneEvent(async () => {
                           if (splitReasoningOnNextStream) {
-                            reasoningLane.stream?.forceNewMessage();
-                            resetDraftLaneState(reasoningLane);
+                            repositionDraftLaneForNewMessage(reasoningLane);
                             splitReasoningOnNextStream = false;
                           }
                           await ingestDraftLaneSegments(payload, true);
