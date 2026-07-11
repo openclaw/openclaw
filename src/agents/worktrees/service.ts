@@ -48,10 +48,11 @@ export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain rest
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
 const SETUP_SCRIPT_TIMEOUT_MS = 120_000;
-// Lease contract: provisioning rows carry a heartbeat (lastActiveAt bumps at claim, per
-// copied include-file, and at the ready flip), so the longest legitimate silent gap is the
-// SETUP_SCRIPT_TIMEOUT_MS-bounded setup script plus a single file copy. A lease silent for
-// 10x the setup bound has a dead holder and gc may reclaim the path and branch.
+// Lease contract: a provisioning holder bumps lastActiveAt on a wall-clock interval for the
+// whole provisioning phase, so no stall class (large include-file copy, slow setup, ...)
+// leaves a silence gap while the process lives. A lease silent for PROVISIONING_STALE_MS
+// has a dead holder and gc may reclaim the path and branch.
+export const PROVISIONING_HEARTBEAT_MS = 30_000; // 40x inside the stale threshold.
 export const PROVISIONING_STALE_MS = 10 * SETUP_SCRIPT_TIMEOUT_MS;
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -171,13 +172,7 @@ async function ensureNoSymlinkDirectory(root: string, relativePath: string): Pro
   return true;
 }
 
-async function copyIncludedFiles(
-  repoRoot: string,
-  worktreePath: string,
-  // Invoked once per copied file so provisioning callers can heartbeat their lease
-  // through arbitrarily long multi-file copies; stays clock/env-free itself.
-  heartbeat?: () => void,
-): Promise<void> {
+async function copyIncludedFiles(repoRoot: string, worktreePath: string): Promise<void> {
   const includePath = path.join(repoRoot, ".worktreeinclude");
   if (!(await pathExists(includePath))) {
     return;
@@ -224,7 +219,6 @@ async function copyIncludedFiles(
       }
     });
     await fs.chmod(destination, sourceStat.mode);
-    heartbeat?.();
   }
 }
 
@@ -496,14 +490,40 @@ export class ManagedWorktreeService {
 
   async list(): Promise<ManagedWorktreeRecord[]> {
     const records = listRegistryWorktrees(this.env);
+    const listed: ManagedWorktreeRecord[] = [];
     for (const record of records) {
       if (record.removedAt === undefined && !(await pathExists(record.path))) {
-        const removedAt = this.now();
-        updateRegistryWorktree(this.env, record.id, { removedAt });
-        record.removedAt = removedAt;
+        try {
+          if (await this.healMissingPathRecord(record)) {
+            continue;
+          }
+        } catch (error) {
+          log.warn(`missing-path cleanup failed for ${record.id}: ${String(error)}`);
+        }
       }
+      listed.push(record);
     }
-    return records.filter((record) => record.removedAt === undefined || record.snapshotRef);
+    return listed.filter((record) => record.removedAt === undefined || record.snapshotRef);
+  }
+
+  /**
+   * Missing-path self-heal shared by list() and gc(). Provisioning rows carry no snapshot
+   * and no user work — retiring one would hide the row while its branch survives and
+   * permanently block the name, so row AND branch are hard-deleted. Ready rows retire
+   * restorably. Returns true when the row was hard-deleted.
+   */
+  private async healMissingPathRecord(record: ManagedWorktreeRecord): Promise<boolean> {
+    if (record.readiness === "provisioning") {
+      // resetFailedWorktreeAdd tolerates the partial states a dead holder leaves
+      // (unlisted dir, missing branch).
+      await resetFailedWorktreeAdd(record.repoRoot, record.path, record.branch);
+      deleteRegistryWorktree(this.env, record.id);
+      return true;
+    }
+    const removedAt = this.now();
+    updateRegistryWorktree(this.env, record.id, { removedAt });
+    record.removedAt = removedAt;
+    return false;
   }
 
   findLiveByOwner(
@@ -797,16 +817,9 @@ export class ManagedWorktreeService {
     for (const record of records) {
       try {
         if (record.removedAt === undefined && !(await pathExists(record.path))) {
-          // Provisioning rows have no snapshot and represent no user work; retiring one
-          // whose directory vanished would hide the row while its branch survives and
-          // permanently block the name. Delete branch + row so the name stays retriable.
-          if (record.readiness === "provisioning") {
-            await resetFailedWorktreeAdd(record.repoRoot, record.path, record.branch);
-            deleteRegistryWorktree(this.env, record.id);
+          if (await this.healMissingPathRecord(record)) {
             continue;
           }
-          updateRegistryWorktree(this.env, record.id, { removedAt: now });
-          record.removedAt = now;
         }
         // A 'provisioning' lease silent past PROVISIONING_STALE_MS has a dead holder; reap
         // worktree+branch+row so the next create() — including auto-named orphans no retry
@@ -922,12 +935,15 @@ export class ManagedWorktreeService {
     }
     // The row is visible as 'provisioning' (list()) while copy/setup run; that is what makes
     // in-flight creates unadoptable and observable. Failed creates still end with no row.
+    // Wall-clock lease heartbeat for the whole provisioning phase: any stall class (a single
+    // large include-file copy, a slow setup) keeps proving a live holder, so gc never reaps
+    // a lease whose process is still alive. Always cleared below; a leaked interval would
+    // keep bumping a dead lease forever.
+    const heartbeat = setInterval(() => {
+      updateRegistryWorktree(this.env, record.id, { lastActiveAt: this.now() });
+    }, PROVISIONING_HEARTBEAT_MS);
     try {
-      // Per-file lease heartbeats: a long multi-file copy must keep proving a live holder,
-      // or gc would reap the lease mid-copy after PROVISIONING_STALE_MS of silence.
-      await copyIncludedFiles(repository.sourceRoot, worktreePath, () => {
-        updateRegistryWorktree(this.env, record.id, { lastActiveAt: this.now() });
-      });
+      await copyIncludedFiles(repository.sourceRoot, worktreePath);
       if (params.runSetupScript !== false) {
         await runSetupScript(repository.sourceRoot, worktreePath);
       }
@@ -941,6 +957,8 @@ export class ManagedWorktreeService {
       }
       deleteRegistryWorktree(this.env, record.id);
       throw error;
+    } finally {
+      clearInterval(heartbeat);
     }
     // Readiness flips only after provisioning fully succeeded; every usable-record path
     // (entry shortcut, findLiveByOwner) filters on it. The flip is also the final heartbeat.

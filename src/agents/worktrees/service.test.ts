@@ -16,6 +16,7 @@ import {
 import {
   IDLE_GC_MS,
   ManagedWorktreeService,
+  PROVISIONING_HEARTBEAT_MS,
   PROVISIONING_STALE_MS,
   SNAPSHOT_RETENTION_MS,
 } from "./service.js";
@@ -1006,58 +1007,68 @@ describe("ManagedWorktreeService", () => {
     );
   });
 
-  it("per-file copy heartbeats keep a long-running copy's lease alive through gc", async () => {
-    const syncDir = path.join(root, "sync");
-    await fs.mkdir(syncDir, { recursive: true });
-    const startedFlag = path.join(syncDir, "setup-started");
-    const releaseFlag = path.join(syncDir, "setup-release");
-    await fs.writeFile(path.join(repo, ".gitignore"), "a.env\nb.env\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), "a.env\nb.env\n");
-    await fs.writeFile(path.join(repo, "a.env"), "a\n");
-    await fs.writeFile(path.join(repo, "b.env"), "b\n");
-    await fs.mkdir(path.join(repo, ".openclaw"));
-    await fs.writeFile(
-      path.join(repo, ".openclaw", "worktree-setup.sh"),
-      `#!/bin/sh\n: > "${startedFlag}"\ni=0\nwhile [ ! -f "${releaseFlag}" ]; do\n  i=$((i + 1))\n  [ "$i" -gt 400 ] && exit 9\n  sleep 0.1\ndone\nexit 0\n`,
-      { mode: 0o755 },
-    );
-    let nowCalls = 0;
-    // The first per-file heartbeat's now() read (call #2, after the claim's createdAt) jumps
-    // the clock past the stale threshold — simulating a first include-file copy that took far
-    // longer than PROVISIONING_STALE_MS while the holder stayed alive.
-    const racingService = new ManagedWorktreeService({
-      env,
-      now: () => {
-        nowCalls += 1;
-        if (nowCalls === 2) {
-          now += PROVISIONING_STALE_MS + 1;
-        }
-        return now;
-      },
-    });
+  it("the wall-clock lease heartbeat keeps any provisioning stall alive through gc", async () => {
+    // Fake only the interval APIs: the service's lease timer becomes deterministically
+    // fireable while the test's own polling and the parked child process stay real.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const syncDir = path.join(root, "sync");
+      await fs.mkdir(syncDir, { recursive: true });
+      const startedFlag = path.join(syncDir, "setup-started");
+      const releaseFlag = path.join(syncDir, "setup-release");
+      await fs.mkdir(path.join(repo, ".openclaw"));
+      // The parked setup script stands in for any provisioning stall (one huge include-file
+      // copy, a slow setup, ...): nothing but the timer proves the holder is alive.
+      await fs.writeFile(
+        path.join(repo, ".openclaw", "worktree-setup.sh"),
+        `#!/bin/sh\n: > "${startedFlag}"\ni=0\nwhile [ ! -f "${releaseFlag}" ]; do\n  i=$((i + 1))\n  [ "$i" -gt 400 ] && exit 9\n  sleep 0.1\ndone\nexit 0\n`,
+        { mode: 0o755 },
+      );
 
-    const createPromise = racingService.create({ repoRoot: repo, name: "slow-copy" });
-    while (!(await fs.stat(startedFlag).catch(() => undefined))) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 20);
-      });
+      const createPromise = service.create({ repoRoot: repo, name: "stalled" });
+      while (!(await fs.stat(startedFlag).catch(() => undefined))) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+      }
+
+      // Far past the stale threshold relative to the claim (and to any pre-stall bump), a
+      // single timer tick re-proves liveness; gc must preserve the lease.
+      now += PROVISIONING_STALE_MS + 1;
+      vi.advanceTimersByTime(PROVISIONING_HEARTBEAT_MS);
+      const parked = listRegistryWorktrees(env).find((entry) => entry.name === "stalled");
+      expect(parked?.readiness).toBe("provisioning");
+      expect(now - parked!.createdAt).toBeGreaterThan(PROVISIONING_STALE_MS);
+      // Pins that the timer fired: only its bump can have written the advanced clock.
+      expect(parked?.lastActiveAt).toBe(now);
+      await service.gc();
+      expect(getRegistryWorktree(env, parked!.id)?.readiness).toBe("provisioning");
+      expect(await fs.stat(parked!.path)).toBeTruthy();
+
+      await fs.writeFile(releaseFlag, "");
+      const created = await createPromise;
+      expect(created.readiness).toBe("ready");
+    } finally {
+      vi.useRealTimers();
     }
+  });
 
-    // Mid-provisioning and far past the CLAIM's age, the fresh per-file heartbeat is what
-    // keeps gc from reaping the live holder.
-    const parked = listRegistryWorktrees(env).find((entry) => entry.name === "slow-copy");
-    expect(parked?.readiness).toBe("provisioning");
-    expect(now - parked!.createdAt).toBeGreaterThan(PROVISIONING_STALE_MS);
-    expect(parked?.lastActiveAt).toBe(now);
-    await service.gc();
-    expect(getRegistryWorktree(env, parked!.id)?.readiness).toBe("provisioning");
-    expect(await fs.stat(parked!.path)).toBeTruthy();
+  it("list() hard-deletes a missing-path provisioning claim instead of retiring it", async () => {
+    const created = await service.create({ repoRoot: repo, name: "list-heal" });
+    // Constructed: a provisioning claim whose directory vanished, discovered via list()
+    // before any gc runs (the door that previously retired it into a permanent dead end).
+    updateRegistryWorktree(env, created.id, { readiness: "provisioning" });
+    await fs.rm(created.path, { recursive: true, force: true });
 
-    await fs.writeFile(releaseFlag, "");
-    const created = await createPromise;
-    expect(created.readiness).toBe("ready");
-    // now() reads: claim createdAt + one heartbeat per copied file (2) + the ready flip.
-    expect(nowCalls).toBe(4);
+    const listed = await service.list();
+
+    // Hard-deleted, not retired: no removed row lingers to collide with the surviving
+    // branch, and the branch itself is gone — the name is genuinely retriable.
+    expect(listed.find((entry) => entry.id === created.id)).toBeUndefined();
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+    expect(await git(repo, "branch", "--list", created.branch)).toBe("");
+    const recreated = await service.create({ repoRoot: repo, name: "list-heal" });
+    expect(recreated.readiness).toBe("ready");
   });
 
   it("gc reaps silent provisioning leases and preserves heartbeating ones", async () => {
