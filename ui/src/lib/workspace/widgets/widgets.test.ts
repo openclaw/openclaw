@@ -289,6 +289,7 @@ describe("iframe-embed render × sandbox mode", () => {
   it("scripts mode grants allow-scripts", () => {
     const container = renderToContainer(
       renderIframeEmbed(widget({ props: { url: "/preview" } }), null, {
+        basePath: "",
         embed: { embedSandboxMode: "scripts", allowExternalEmbedUrls: false },
       }),
     );
@@ -303,6 +304,7 @@ describe("iframe-embed render × sandbox mode", () => {
     // same-origin scripted frame would hand the widget the parent's origin.
     const container = renderToContainer(
       renderIframeEmbed(widget({ props: { url: "/preview" } }), null, {
+        basePath: "",
         embed: { embedSandboxMode: "trusted", allowExternalEmbedUrls: false },
       }),
     );
