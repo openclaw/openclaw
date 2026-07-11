@@ -9,6 +9,10 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
+  readSessionArchiveContentSync,
+  stripSessionArchiveCompressionSuffix,
+} from "../../src/config/sessions/archive-compression.js";
+import {
   appendTranscriptMessage,
   type TranscriptEvent,
 } from "../../src/config/sessions/session-accessor.js";
@@ -2250,10 +2254,10 @@ async function walkFiles(root: string, visit: (filePath: string) => Promise<void
 }
 
 async function inventoryFile(filePath: string, relativeRoot: string): Promise<FileInventoryEntry> {
-  const [stat, text] = await Promise.all([
-    fs.stat(filePath),
-    fs.readFile(filePath, "utf8").catch(() => undefined),
-  ]);
+  const stat = await fs.stat(filePath);
+  const text = await Promise.resolve()
+    .then(() => readSessionArchiveContentSync(filePath))
+    .catch(() => undefined);
   const archive = parseArchiveArtifactName(path.basename(filePath));
   const jsonl = text !== undefined ? summarizeJsonl(text) : undefined;
   return {
@@ -2272,11 +2276,12 @@ async function inventoryFile(filePath: string, relativeRoot: string): Promise<Fi
 function parseArchiveArtifactName(
   fileName: string,
 ): Pick<FileInventoryEntry, "archiveReason" | "archiveSessionId"> | undefined {
+  const normalized = stripSessionArchiveCompressionSuffix(fileName);
   for (const archiveReason of ["deleted", "reset", "bak"] as const) {
     const marker = `.jsonl.${archiveReason}.`;
-    const index = fileName.lastIndexOf(marker);
+    const index = normalized.lastIndexOf(marker);
     if (index > 0) {
-      return { archiveReason, archiveSessionId: fileName.slice(0, index) };
+      return { archiveReason, archiveSessionId: normalized.slice(0, index) };
     }
   }
   return undefined;
