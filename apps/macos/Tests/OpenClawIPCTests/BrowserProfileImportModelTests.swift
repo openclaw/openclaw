@@ -216,6 +216,30 @@ struct BrowserProfileImportModelTests {
         #expect(model.phase == .offering(forced))
     }
 
+    @Test func `stale idle poll does not resurrect a dismissed offer`() async {
+        let stub = BrowserImportTransportStub()
+        let model = stub.makeModel()
+        let gate = ContinuationBox()
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { gate.continuation = $0 }
+        }
+
+        let idle = Task { await model.refreshIfIdle() }
+        while gate.continuation == nil {
+            await Task.yield()
+        }
+
+        // A faster poll offered the banner and the user dismissed it while the
+        // slow poll was still waiting on its (pre-dismissal) status payload.
+        model._testSetPhase(.offering(Self.status(profiles: [Self.chromeProfile])))
+        model.dismiss()
+        #expect(model.phase == .hidden)
+
+        gate.continuation?.resume()
+        _ = await idle.value
+        #expect(model.phase == .hidden)
+    }
+
     @Test func `idle refresh never clobbers a visible outcome`() async {
         let stub = BrowserImportTransportStub()
         let model = stub.makeModel()

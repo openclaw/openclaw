@@ -84,6 +84,8 @@ final class BrowserProfileImportModel {
     static let shared = BrowserProfileImportModel()
 
     private(set) var phase: Phase = .hidden
+    /// Bumped by setPhase; see refresh(force:) for the staleness contract.
+    @ObservationIgnored private var phaseGeneration = 0
 
     private let transport: Transport
     private let isOnboarded: @MainActor () -> Bool
@@ -103,6 +105,15 @@ final class BrowserProfileImportModel {
         status.enabled && !status.importableProfiles.isEmpty && (force || status.state == nil)
     }
 
+    /// Every phase change goes through here. The generation lets an awaited
+    /// status poll detect that a dismissal, import, or fresher poll happened
+    /// while it was in flight — "phase is .hidden again" alone cannot tell a
+    /// just-dismissed banner apart from one that never appeared.
+    private func setPhase(_ phase: Phase) {
+        self.phase = phase
+        self.phaseGeneration += 1
+    }
+
     /// Launch/connect/window triggers. Only fills an empty banner slot so a
     /// visible offer, in-flight import, or result is never clobbered by a
     /// background status poll.
@@ -118,38 +129,38 @@ final class BrowserProfileImportModel {
     @discardableResult
     func refresh(force: Bool) async -> ForceRefreshOutcome {
         guard self.isOnboarded(), self.isLocalMode() else {
-            self.phase = .hidden
+            self.setPhase(.hidden)
             return .unavailable(
                 title: "Browser import requires Local mode",
                 message: "Switch this Mac app to a local Gateway before importing browser cookies.")
         }
+        let generation = self.phaseGeneration
         do {
             let status: BrowserProfileImportStatus = try await self.request(
                 method: "GET",
                 path: "/system-profile-import/status")
-            // The status await can interleave with user actions. A stale idle
-            // poll must never replace a phase someone else set meanwhile, and
-            // even a forced refresh must not clobber a running import.
+            // The status await interleaves with user actions. Idle polls apply
+            // only if nothing changed since they started (a dismissal mid-poll
+            // must stay dismissed); a forced refresh wins over everything
+            // except an import that is already running.
             if force {
                 if case .importing = self.phase { return .offering }
             } else {
-                guard case .hidden = self.phase else { return .offering }
+                guard self.phaseGeneration == generation else { return .offering }
             }
             guard Self.shouldOffer(status: status, force: force) else {
-                self.phase = .hidden
+                self.setPhase(.hidden)
                 let message = status.enabled
                     ? "No Chrome, Brave, Edge, or Chromium profile with cookies was found on this Mac."
                     : "System browser profile import is disabled in the local Gateway configuration."
                 return .unavailable(title: "No browser login available", message: message)
             }
-            self.phase = .offering(status)
+            self.setPhase(.offering(status))
             return .offering
         } catch {
-            // Same interleaving rule as above: a failed poll only clears state
-            // it owns — idle polls started hidden, and force never kills an
-            // import that is already running.
-            if force {
-                if case .importing = self.phase {} else { self.phase = .hidden }
+            // Same interleaving rule: a failed poll only clears state it owns.
+            if force, self.phaseGeneration == generation {
+                if case .importing = self.phase {} else { self.setPhase(.hidden) }
             }
             return .unavailable(title: "Browser import unavailable", message: error.localizedDescription)
         }
@@ -157,7 +168,7 @@ final class BrowserProfileImportModel {
 
     func importProfile(_ profile: BrowserSystemProfile) async {
         guard case let .offering(status) = self.phase else { return }
-        self.phase = .importing(profile: profile, target: status.suggestedTarget)
+        self.setPhase(.importing(profile: profile, target: status.suggestedTarget))
         do {
             let body: [String: AnyCodable] = [
                 "browser": AnyCodable(profile.browser),
@@ -170,15 +181,15 @@ final class BrowserProfileImportModel {
                 path: "/profiles/import",
                 body: body,
                 timeoutMs: 120_000)
-            self.phase = .imported(result)
+            self.setPhase(.imported(result))
         } catch {
-            self.phase = .failed(message: error.localizedDescription, retry: status)
+            self.setPhase(.failed(message: error.localizedDescription, retry: status))
         }
     }
 
     func retry() {
         guard case let .failed(_, status) = self.phase else { return }
-        self.phase = .offering(status)
+        self.setPhase(.offering(status))
     }
 
     func dismiss() {
@@ -187,7 +198,7 @@ final class BrowserProfileImportModel {
         } else {
             false
         }
-        self.phase = .hidden
+        self.setPhase(.hidden)
         // Only an unanswered offer persists the dismissal; closing a result
         // banner must not overwrite the recorded "imported" state.
         guard wasOffering else { return }
@@ -202,7 +213,7 @@ final class BrowserProfileImportModel {
     /// import system profiles, so the banner withdraws on mode switches.
     func handleConnectionModeChange() {
         guard !self.isLocalMode() else { return }
-        self.phase = .hidden
+        self.setPhase(.hidden)
     }
 
     private func request<T: Decodable>(
@@ -237,7 +248,7 @@ final class BrowserProfileImportModel {
 #if DEBUG
 extension BrowserProfileImportModel {
     func _testSetPhase(_ phase: Phase) {
-        self.phase = phase
+        self.setPhase(phase)
     }
 }
 #endif

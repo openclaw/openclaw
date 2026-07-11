@@ -273,7 +273,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         window?.makeFirstResponder(self.webView)
         window?.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
-        Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
     }
 
     func closeDashboard() {

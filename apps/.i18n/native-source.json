@@ -15155,7 +15155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 141,
+      "line": 154,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "No Chrome, Brave, Edge, or Chromium profile with cookies was found on this Mac.",
       "surface": "apple",
@@ -15163,7 +15163,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 141,
+      "line": 154,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "System browser profile import is disabled in the local Gateway configuration.",
       "surface": "apple",
