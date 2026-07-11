@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import OpenClawKit
 
-struct BrowserSystemProfile: Codable, Equatable, Identifiable {
+struct BrowserSystemProfile: Codable, Equatable {
     let browser: String
     let id: String
     let name: String
@@ -14,6 +14,12 @@ struct BrowserSystemProfile: Codable, Equatable, Identifiable {
 
     var browserDisplayName: String {
         self.browser.prefix(1).uppercased() + self.browser.dropFirst()
+    }
+
+    /// `id` is only unique per browser (Chrome and Brave both ship "Default");
+    /// UI identity must span browsers or menu rows collide.
+    var menuID: String {
+        "\(self.browser)/\(self.id)"
     }
 }
 

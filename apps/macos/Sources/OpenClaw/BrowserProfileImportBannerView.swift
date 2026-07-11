@@ -128,7 +128,7 @@ struct BrowserProfileImportBannerView: View {
                 .controlSize(.small)
             } else {
                 Menu("Import") {
-                    ForEach(profiles) { profile in
+                    ForEach(profiles, id: \.menuID) { profile in
                         Button(profile.displayName) {
                             Task { await self.model.importProfile(profile) }
                         }
@@ -168,6 +168,37 @@ struct BrowserProfileImportBannerView: View {
         .opacity(content.badge == .progress ? 0.4 : 1)
         .help("Dismiss")
         .accessibilityLabel("Dismiss")
+    }
+}
+
+extension BrowserProfileImportBannerView {
+    /// Wraps the dashboard web view in a pane that floats the shared import
+    /// banner on top; the banner renders empty (zero height) until the model
+    /// has an offer or outcome to show.
+    @MainActor
+    static func makeDashboardPane(webView: NSView) -> NSView {
+        let container = NSView()
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(webView)
+        let banner = NSHostingView(rootView: BrowserProfileImportBannerView(model: .shared))
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(banner)
+        // Preferred card width; the required side insets win on narrow panes.
+        let bannerWidth = banner.widthAnchor.constraint(equalToConstant: 560)
+        bannerWidth.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: container.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            // Float just below the 50px titlebar clearance the native chrome
+            // CSS reserves so the card never collides with window controls.
+            banner.topAnchor.constraint(equalTo: container.topAnchor, constant: 58),
+            banner.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            banner.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 16),
+            bannerWidth,
+        ])
+        return container
     }
 }
 
