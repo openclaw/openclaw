@@ -3,10 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./embedding-worker-errors.js";
 import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
 import { createLocalEmbeddingProviderInProcess, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 import { getLocalEmbeddingRuntimeFacts } from "./local-embedding-runtime-facts.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const nodeLlamaMock = vi.hoisted(() => ({
   importNodeLlamaCpp: vi.fn(),
@@ -693,7 +696,7 @@ process.on("message", (message) => {
   });
 
   it("retains worker runtime facts from failed embedding responses", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const tempDir = tempDirs.make("openclaw-local-embedding-worker-");
     const workerScript = path.join(tempDir, "worker.cjs");
     await fs.writeFile(
       workerScript,
