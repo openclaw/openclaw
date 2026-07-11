@@ -245,7 +245,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.http.endpoints.chatCompletions.images.timeoutMs":
     "Timeout in milliseconds for `image_url` URL fetches (default: 10000).",
   "gateway.reload.mode":
-    'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies in-process, and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
+    'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies hot-safe changes in-process and warns when a routine restart-required change lands (security-critical changes under gateway.auth.* and auth.profiles.*/auth.order.* always auto-restart), and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",

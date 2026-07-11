@@ -17,7 +17,10 @@ import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime-state.js";
 import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
 import { buildGatewayReloadPlan } from "../config-reload-plan.js";
-import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
+import {
+  resolveGatewayReloadSettings,
+  resolveHotModeRestartDecision,
+} from "../config-reload-settings.js";
 import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -162,7 +165,17 @@ function resolveConfigRestartRequirement(params: {
     return { requiresRestart: true, scheduleDirectRestart: false };
   }
   if (plan.restartGateway) {
-    return { requiresRestart: true, scheduleDirectRestart: reloadSettings.mode === "hot" };
+    if (reloadSettings.mode !== "hot") {
+      // Hybrid mode: the config reloader observes this write and owns the restart.
+      return { requiresRestart: true, scheduleDirectRestart: false };
+    }
+    // Hot mode shares the file watcher's restart policy: routine restart-
+    // required writes return a restart-required notice without bouncing the
+    // gateway, while security-critical reasons escalate to a direct restart.
+    // A divergent decision here would let RPC writes bypass the warn-and-keep
+    // contract the watcher enforces.
+    const decision = resolveHotModeRestartDecision(plan.restartReasons);
+    return { requiresRestart: true, scheduleDirectRestart: decision === "security-critical" };
   }
   return { requiresRestart: false, scheduleDirectRestart: false };
 }

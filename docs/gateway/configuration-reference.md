@@ -756,7 +756,7 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 - `mode`: controls how config edits are applied at runtime.
   - `"off"`: ignore live edits; changes require an explicit restart.
   - `"restart"`: always restart the gateway process on config change.
-  - `"hot"`: apply changes in-process without restarting.
+  - `"hot"`: apply hot-safe changes in-process and warn (without restarting) when a routine restart-required change lands. Security-critical changes (`gateway.auth.*` for the gateway access boundary, `auth.profiles.*`/`auth.order.*` for model-auth profile routing) always auto-restart so those changes cannot be silently deferred. Provider secret rotations under `secrets.providers.*` stay on the live path and apply without a restart. The same policy applies to file edits and to `config.patch`/`config.apply` writes over the gateway API. If you want automatic restart for all restart-required changes, use `"hybrid"`.
   - `"hybrid"` (default): try hot reload first; fall back to restart if required.
 - `debounceMs`: debounce window in ms before config changes are applied (non-negative integer; default: `300`).
 - `deferralTimeoutMs`: optional maximum time in ms to wait for in-flight operations before forcing a restart or channel hot reload. Omit it to use the default bounded wait (`300000`); set `0` to wait indefinitely and log periodic still-pending warnings.

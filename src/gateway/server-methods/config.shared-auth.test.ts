@@ -519,10 +519,29 @@ describe("config shared auth disconnects", () => {
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
-  it("still schedules a direct restart for hot mode when the reloader cannot apply the change", async () => {
+  it("keeps hot mode running on routine restart-required config.patch writes", async () => {
+    // Same warn-and-keep policy as the file watcher: a routine restart-
+    // required RPC write in hot mode surfaces requiresRestart in the sentinel
+    // payload but must not bounce the gateway unless the change is
+    // security-critical (see resolveHotModeRestartDecision).
     mockPreviousConfig(hotReloadConfig());
 
     await runConfigPatch({ gateway: { port: 19001 } });
+
+    expectNoDirectRestart();
+    const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
+    expect(payload?.stats?.requiresRestart).toBe(true);
+  });
+
+  it("schedules a direct restart for security-critical hot-mode config.patch writes", async () => {
+    mockPreviousConfig({
+      gateway: {
+        reload: { mode: "hot" },
+        auth: { mode: "token", token: "old-token" },
+      },
+    });
+
+    await runConfigPatch({ gateway: { auth: { token: "new-token" } } });
 
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
     const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];

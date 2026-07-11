@@ -134,6 +134,10 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "session", kind: "none" },
   { prefix: "talk", kind: "none" },
   { prefix: "skills", kind: "none" },
+  // `secrets.*` (including provider SecretRef storage) stays no-op: rotated
+  // values activate through the committed snapshot's live SecretRef
+  // resolution, so credential rotation must never force a gateway bounce.
+  // ClawSweeper P1 #89517 review contract.
   { prefix: "secrets", kind: "none" },
   { prefix: "plugins", kind: "hot", actions: ["reload-plugins", "dispose-mcp-runtimes"] },
   { prefix: "tui", kind: "none" },

@@ -37,7 +37,10 @@ import {
   listPluginInstallWholeRecordPaths,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
-import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
+import {
+  resolveGatewayReloadSettings,
+  resolveHotModeRestartDecision,
+} from "./config-reload-settings.js";
 import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
 
 export type { GatewayReloadPlan } from "./config-reload-plan.js";
@@ -740,13 +743,22 @@ export function startGatewayConfigReloader(opts: {
     }
     if (plan.restartGateway) {
       if (nextSettings.mode === "hot") {
+        // Security-critical restart reasons (gateway auth, auth profiles)
+        // must never sit on disk while the runtime still uses the old
+        // credentials; routine restart-required edits honor the shipped
+        // warn-and-keep contract. The decision is shared with the
+        // config.patch/config.apply RPC write path so both surfaces enforce
+        // the same contract.
+        const decision = resolveHotModeRestartDecision(plan.restartReasons);
+        const reasons = plan.restartReasons.join(", ");
+        if (decision === "warn-and-keep") {
+          opts.log.warn(`config reload requires gateway restart; hot mode ignoring (${reasons})`);
+          await commitReloadBaseline({ runtimeApplied: false });
+          return;
+        }
         opts.log.warn(
-          `config reload requires gateway restart; hot mode ignoring (${plan.restartReasons.join(
-            ", ",
-          )})`,
+          `config reload requires gateway restart; hot mode scheduling restart for security-critical change (${reasons})`,
         );
-        await commitReloadBaseline({ runtimeApplied: false });
-        return;
       }
       await opts.onConfigChange?.(plan, nextConfig);
       await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
