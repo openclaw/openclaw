@@ -150,6 +150,68 @@ describe("classifySubagentHealth", () => {
     });
   });
 
+  it("keeps fresh pending delivery non-retryable", () => {
+    const health = classifySubagentHealth({
+      run: makeRun({
+        endedAt: NOW - 10_000,
+        outcome: { status: "ok" },
+        delivery: {
+          status: "pending",
+          createdAt: NOW - 10_000,
+          lastAttemptAt: NOW - 5_000,
+        },
+      }),
+      task: makeTask({ status: "succeeded", deliveryStatus: "pending", endedAt: NOW - 10_000 }),
+      now: NOW,
+      staleAfterMs: 60_000,
+      deliveryStaleAfterMs: 30_000,
+    });
+
+    expect(health).toEqual({
+      status: "delivery_pending",
+      retryable: false,
+      nextAction: "none",
+    });
+  });
+
+  it("marks failed delivery for retry with the delivery error", () => {
+    const health = classifySubagentHealth({
+      run: makeRun({
+        endedAt: NOW - 10_000,
+        outcome: { status: "ok" },
+        delivery: {
+          status: "failed",
+          lastError: "gateway disconnected",
+          lastAttemptAt: NOW - 1_000,
+        },
+      }),
+      task: makeTask({ status: "succeeded", deliveryStatus: "failed", endedAt: NOW - 10_000 }),
+      now: NOW,
+      staleAfterMs: 60_000,
+    });
+
+    expect(health).toEqual({
+      status: "delivery_failed",
+      reason: "gateway disconnected",
+      retryable: true,
+      nextAction: "retry_delivery",
+    });
+  });
+
+  it("marks active runs without a task projection as orphaned", () => {
+    const health = classifySubagentHealth({
+      run: makeRun({ startedAt: NOW - 10_000, execution: { status: "running" } }),
+      now: NOW,
+      staleAfterMs: 60_000,
+    });
+
+    expect(health).toMatchObject({
+      status: "orphaned",
+      retryable: true,
+      nextAction: "recover_orphan",
+    });
+  });
+
   it("marks ended runs without completed cleanup as cleanup pending", () => {
     const health = classifySubagentHealth({
       run: makeRun({

@@ -27,6 +27,7 @@ import {
 } from "../tasks/detached-task-runtime.js";
 import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-registry.js";
 import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { findTaskByRunIdForStatus } from "../tasks/task-status-access.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -322,6 +323,48 @@ describe("subagent registry seam flow", () => {
     mod.testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();
+  });
+
+  it("classifies subagent health for sweeper observation", () => {
+    const now = Date.now();
+    const task: TaskRecord = {
+      taskId: "task-health",
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:child",
+      runId: "run-health",
+      task: "observe health",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "done_only",
+      createdAt: now - 120_000,
+      startedAt: now - 119_000,
+      lastEventAt: now - 120_000,
+    };
+
+    const health = mod.testing.classifyHealthForSweepForTests({
+      run: {
+        runId: "run-health",
+        childSessionKey: "agent:main:subagent:child",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "observe health",
+        cleanup: "keep",
+        createdAt: now - 120_000,
+        startedAt: now - 119_000,
+        execution: { status: "running" },
+      },
+      task,
+      now,
+    });
+
+    expect(health).toMatchObject({
+      status: "stale",
+      retryable: true,
+      nextAction: "recover_orphan",
+    });
   });
 
   it("keeps a sweeper archive mutation root-admitted until deletion settles", async () => {

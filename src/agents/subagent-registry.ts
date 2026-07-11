@@ -58,6 +58,7 @@ import {
   emitSubagentEndedHookOnce,
   resolveLifecycleOutcomeFromRunOutcome,
 } from "./subagent-registry-completion.js";
+import { classifySubagentHealth, type SubagentHealth } from "./subagent-health.js";
 import {
   ANNOUNCE_EXPIRY_MS,
   MAX_ANNOUNCE_RETRY_COUNT,
@@ -319,6 +320,44 @@ function findSubagentTaskForRun(entry: SubagentRunRecord) {
       entry.taskRunId === undefined &&
       typeof entry.sessionStartedAt === "number" &&
       entry.sessionStartedAt < entry.createdAt,
+  });
+}
+
+function classifyHealthForSweep(params: {
+  run: SubagentRunRecord;
+  task?: TaskRecord;
+  now: number;
+}): SubagentHealth {
+  return classifySubagentHealth({
+    run: params.run,
+    task: params.task,
+    now: params.now,
+    staleAfterMs: STALE_ACTIVE_SUBAGENT_GRACE_MS,
+  });
+}
+
+function observeSubagentHealthDuringSweep(runId: string, entry: SubagentRunRecord, now: number) {
+  if (!log.isEnabled("debug")) {
+    return;
+  }
+  const taskResolution = findSubagentTaskForRun(entry);
+  const health = classifyHealthForSweep({
+    run: entry,
+    task: taskResolution.task,
+    now,
+  });
+  if (health.status === "active" || health.status === "terminal") {
+    return;
+  }
+  log.debug("subagent health observed during sweep", {
+    runId,
+    childSessionKey: entry.childSessionKey,
+    status: health.status,
+    nextAction: health.nextAction,
+    retryable: health.retryable,
+    reason: health.reason,
+    taskLookup: taskResolution.lookup,
+    taskId: taskResolution.task?.taskId,
   });
 }
 
@@ -1136,6 +1175,7 @@ async function sweepSubagentRuns() {
       });
     }
     for (const [runId, entry] of subagentRuns.entries()) {
+      observeSubagentHealthDuringSweep(runId, entry, now);
       if (isSuspendedPendingFinalDelivery(entry)) {
         const suspendedAgeMs = now - (entry.delivery?.suspendedAt ?? now);
         const expired = suspendedAgeMs >= resolveSuspendedDeliveryExpiryMs(entry);
@@ -1763,6 +1803,7 @@ export const testing = {
   async runSweeperTickForTests() {
     await runSubagentSweep();
   },
+  classifyHealthForSweepForTests: classifyHealthForSweep,
   setDepsForTest(overrides?: Partial<SubagentRegistryDeps>) {
     subagentRegistryDeps = overrides
       ? {
