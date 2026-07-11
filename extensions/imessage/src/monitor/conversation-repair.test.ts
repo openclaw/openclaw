@@ -200,9 +200,8 @@ describe("repairIMessageConversationAnchor", () => {
   });
 
   it("routes repaired direct replies to the remote peer instead of the stale local sender", async () => {
-    const { buildIMessageInboundContext, resolveIMessageInboundDecision } = await import(
-      "./inbound-processing.js"
-    );
+    const { buildIMessageInboundContext, resolveIMessageInboundDecision } =
+      await import("./inbound-processing.js");
     const message = anchorlessMessage({
       guid: "11111111-1111-4111-8111-111111111111",
       sender: "+15550000001",
@@ -291,7 +290,9 @@ describe("repairIMessageConversationAnchor", () => {
         runtime,
       }),
     ).resolves.toBeNull();
-    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain("recovered authoritative row is from-me");
+    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(
+      "recovered authoritative row is from-me",
+    );
   });
 
   it("drops fail-closed when exact-GUID history projections conflict", async () => {
@@ -336,7 +337,9 @@ describe("repairIMessageConversationAnchor", () => {
         runtime,
       }),
     ).resolves.toBeNull();
-    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain("conflicting exact-GUID history projections");
+    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(
+      "conflicting exact-GUID history projections",
+    );
   });
 
   it("keeps recovered group destination while using authoritative sender and direction", async () => {
