@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -16,6 +16,8 @@ describe("full-release-validation-at-sha", () => {
         "abc123",
         "--workflow-sha",
         "origin/main",
+        "--target-ref",
+        "release/2026.7.1",
         "--keep-branch",
         "--dry-run",
         "-f",
@@ -32,8 +34,15 @@ describe("full-release-validation-at-sha", () => {
         reuse_evidence: "true",
       },
       sha: "abc123",
+      targetRef: "release/2026.7.1",
       workflowSha: "origin/main",
     });
+  });
+
+  it("keeps branch context separate from the exact target SHA", () => {
+    const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
+    expect(source).toContain("ref: targetSha");
+    expect(source).toContain("target_context_ref: targetContextRef");
   });
 
   it("rejects missing option values", () => {
@@ -43,8 +52,18 @@ describe("full-release-validation-at-sha", () => {
       "--workflow-sha requires a value",
     );
     expect(() => parseArgs(["--workflow-sha", "-h"])).toThrow("--workflow-sha requires a value");
+    expect(() => parseArgs(["--target-ref", "--dry-run"])).toThrow("--target-ref requires a value");
     expect(() => parseArgs(["-f", "--dry-run"])).toThrow("-f requires a value");
     expect(() => parseArgs(["-f", "-h"])).toThrow("-f requires a value");
+  });
+
+  it("accepts only canonical release branch context", () => {
+    expect(parseArgs(["--target-ref", "extended-stable/2026.6.33"]).targetRef).toBe(
+      "extended-stable/2026.6.33",
+    );
+    expect(() => parseArgs(["--target-ref", "feature/not-release"])).toThrow(
+      "canonical OpenClaw release branch",
+    );
   });
 
   it("allows exact-target reuse to be disabled for a forced fresh run", () => {

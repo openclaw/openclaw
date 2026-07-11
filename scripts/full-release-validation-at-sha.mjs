@@ -16,7 +16,7 @@ const DEFAULT_INPUTS = {
 };
 
 function usage() {
-  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
+  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
 
 Creates a temporary remote branch pinned to trusted main release tooling,
 dispatches Full Release Validation with the target commit as its ref input,
@@ -60,6 +60,7 @@ function readOptionValue(argv, index, optionName) {
 export function parseArgs(argv) {
   const args = {
     sha: "",
+    targetRef: "",
     workflowSha: "",
     keepBranch: false,
     dryRun: false,
@@ -79,6 +80,11 @@ export function parseArgs(argv) {
     }
     if (arg === "--workflow-sha") {
       args.workflowSha = readOptionValue(argv, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--target-ref") {
+      args.targetRef = readOptionValue(argv, i, arg);
       i += 1;
       continue;
     }
@@ -129,7 +135,28 @@ export function parseArgs(argv) {
   if (Object.hasOwn(args.inputs, "ref")) {
     throw new Error("SHA-pinned release validation reserves the ref input for --sha");
   }
+  if (
+    args.targetRef &&
+    !/^(?:release\/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable\/[0-9]{4}\.[0-9]+\.33)$/u.test(
+      args.targetRef,
+    )
+  ) {
+    throw new Error("--target-ref must be a canonical OpenClaw release branch");
+  }
   return args;
+}
+
+function verifyTargetRef(targetRef, targetSha) {
+  if (!targetRef) {
+    return targetSha;
+  }
+  const remoteSha = run("git", ["ls-remote", "--heads", "origin", `refs/heads/${targetRef}`]).split(
+    /\s+/u,
+  )[0];
+  if (remoteSha !== targetSha) {
+    throw new Error(`Target ref ${targetRef} does not resolve to ${targetSha}`);
+  }
+  return targetRef;
 }
 
 function resolveSha(requestedSha) {
@@ -234,11 +261,16 @@ function verifyReleaseEvidence(parentRunId, workflowSha) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const targetSha = resolveSha(args.sha);
+  const targetContextRef = verifyTargetRef(args.targetRef, targetSha);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha);
   const shortSha = workflowSha.slice(0, 12);
   const branch = `release-ci/${shortSha}-${Date.now()}`;
   const remoteBranchRef = `refs/heads/${branch}`;
-  const dispatchInputs = { ref: targetSha, ...args.inputs };
+  const dispatchInputs = {
+    ref: targetSha,
+    ...(targetContextRef !== targetSha ? { target_context_ref: targetContextRef } : {}),
+    ...args.inputs,
+  };
 
   console.log(`Target SHA: ${targetSha}`);
   console.log(`Trusted workflow SHA: ${workflowSha}`);

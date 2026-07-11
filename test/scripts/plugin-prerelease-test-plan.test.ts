@@ -349,6 +349,13 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       required: false,
       type: "string",
     });
+    expect(workflow.on.workflow_dispatch.inputs.release_candidate_ref).toEqual({
+      default: "",
+      description:
+        "Canonical release branch authorizing compatibility fallbacks for its exact head",
+      required: false,
+      type: "string",
+    });
     expect(manifestEnv).toEqual({
       OPENCLAW_CI_CHECKOUT_REVISION: "${{ steps.checkout_ref.outputs.sha }}",
       OPENCLAW_CI_DOCS_CHANGED:
@@ -357,6 +364,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.docs_scope.outputs.docs_only }}",
       OPENCLAW_CI_EVENT_NAME: "${{ github.event_name }}",
       OPENCLAW_CI_HISTORICAL_TARGET: "${{ steps.historical_target.outputs.eligible || 'false' }}",
+      OPENCLAW_CI_RELEASE_CANDIDATE_TARGET:
+        "${{ steps.release_candidate_target.outputs.eligible || 'false' }}",
       OPENCLAW_CI_REPOSITORY: "${{ github.repository }}",
       OPENCLAW_CI_RUN_ANDROID:
         "${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
@@ -402,6 +411,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       ).run,
     ).toContain("pnpm deadcode:ci");
     expect(normalCiScript).toContain('args+=(-f historical_target_tag="$TARGET_REF")');
+    expect(normalCiScript).toContain('args+=(-f release_candidate_ref="$TARGET_CONTEXT_REF")');
     expect(normalCiScript).toContain('dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"');
     expect(normalCiScript).not.toContain("full_release_validation=true");
     expect(pluginPrereleaseScript).toContain(
@@ -471,6 +481,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(extensionShard.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}",
     );
+    expect(
+      extensionShard.steps.find((step: WorkflowStep) => step.name === "Run extension shard").run,
+    ).toContain("--retry=1");
     expect(inspector.name).toBe("plugin-prerelease-inspector");
     expect(inspector.needs).toEqual(["preflight"]);
     expect(inspector.if).toBe("needs.preflight.outputs.run_plugin_prerelease_suite == 'true'");
