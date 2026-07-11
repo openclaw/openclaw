@@ -45,7 +45,7 @@ function readStringRecord(value: unknown): Record<string, string> {
   }
   const entries = Object.entries(record)
     .filter((entry): entry is [string, string] => typeof entry[1] === "string")
-    .sort(([left], [right]) => left.localeCompare(right));
+    .toSorted(([left], [right]) => left.localeCompare(right));
   return Object.fromEntries(entries);
 }
 
