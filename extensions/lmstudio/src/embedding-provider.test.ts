@@ -85,6 +85,8 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
   beforeEach(() => {
     ensureLmstudioModelLoadedMock.mockClear();
     createRemoteEmbeddingProviderMock.mockClear();
+    resolveLmstudioProviderHeadersMock.mockClear();
+    resolveLmstudioRuntimeApiKeyMock.mockClear();
   });
 
   it.each([
@@ -165,6 +167,7 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
     expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: "spark-key" }),
     );
+    expect(resolveLmstudioRuntimeApiKeyMock).not.toHaveBeenCalled();
     expect(acquireLocalService).toHaveBeenCalledTimes(2);
     expect(acquireLocalService).toHaveBeenNthCalledWith(
       1,
@@ -241,6 +244,7 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
 
     await createLmstudioEmbeddingProvider(options);
 
+    expect(resolveLmstudioRuntimeApiKeyMock).not.toHaveBeenCalled();
     expect(acquireLocalService).toHaveBeenCalledWith(
       {
         providerId: "lmstudio-spark",
