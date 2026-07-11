@@ -57,9 +57,15 @@ detach the server.
 
 - Tools marked app-only by the server (`_meta.ui.visibility: ["app"]`, e.g.
   checkpoint save/restore) are not exposed to the model.
-- The interactive canvas requires an MCP Apps-capable surface. The Control UI
-  renders it in a sandboxed iframe (`allow-scripts`, no same-origin); the app
-  loads its bundle from `https://esm.sh` per its declared CSP, so offline
-  gateways fall back to text results.
+- The canvas requires an MCP Apps-capable surface. The Control UI renders it
+  in a sandboxed iframe (`allow-scripts`, no same-origin); the app loads its
+  bundle from `https://esm.sh` per its declared CSP, so offline gateways fall
+  back to text results.
+- The current host is view-only for app→host calls: you can pan, zoom, and
+  edit the rendered canvas locally, but app-initiated MCP requests
+  (checkpoint save/restore across turns, "Export to excalidraw.com") are
+  rejected with a JSON-RPC method-not-found error until the full host bridge
+  lands. A follow-up `create_view` that starts from `restoreCheckpoint`
+  renders only the new elements.
 
 <!-- openclaw-plugin-reference:manual-end -->

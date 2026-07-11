@@ -11,6 +11,7 @@
  */
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
 import type { McpAppToolPreview } from "../../../lib/chat/chat-types.ts";
 
 const MCP_APPS_PROTOCOL_VERSION = "2026-01-26";
@@ -159,6 +160,7 @@ function buildCspContent(preview: McpAppToolPreview): string {
   const resourceOrigins = preview.csp?.resourceDomains?.join(" ") ?? "";
   const connectOrigins = preview.csp?.connectDomains?.join(" ") ?? "";
   const frameOrigins = preview.csp?.frameDomains?.join(" ") ?? "";
+  const baseUriOrigins = preview.csp?.baseUriDomains?.join(" ") ?? "";
   // Spec mapping (deny-by-default): resourceDomains feed static asset
   // directives, connectDomains feed connect-src. Inline scripts/styles and
   // data/blob URLs stay allowed — the document itself is already the trust
@@ -173,7 +175,7 @@ function buildCspContent(preview: McpAppToolPreview): string {
     `connect-src data: blob: ${connectOrigins}`.trim(),
     `worker-src blob:`,
     frameOrigins ? `frame-src ${frameOrigins}` : `frame-src 'none'`,
-    `base-uri 'none'`,
+    baseUriOrigins ? `base-uri ${baseUriOrigins}` : `base-uri 'none'`,
   ].join("; ");
 }
 
@@ -196,14 +198,18 @@ function buildAllowAttribute(preview: McpAppToolPreview): string {
 }
 
 function registerAppFrame(preview: McpAppToolPreview) {
-  return (event: Event) => {
-    const frame = event.currentTarget;
-    if (!(frame instanceof HTMLIFrameElement)) {
+  // Registration must happen synchronously when the element attaches — before
+  // the srcdoc document executes — or an app that connects immediately posts
+  // ui/initialize into the void and hangs waiting for the response.
+  return (element: Element | undefined) => {
+    if (!(element instanceof HTMLIFrameElement)) {
       return;
     }
     installAppHostListener();
-    appFrameRegistry.add(frame);
-    appFrameHosts.set(frame, { preview, initialized: false });
+    appFrameRegistry.add(element);
+    if (!appFrameHosts.has(element)) {
+      appFrameHosts.set(element, { preview, initialized: false });
+    }
   };
 }
 
@@ -233,7 +239,7 @@ export function renderMcpAppPreview(preview: McpAppToolPreview) {
               allow=${allow || nothing}
               srcdoc=${buildAppSrcdoc(preview)}
               style="height:${APP_FRAME_DEFAULT_HEIGHT}px;min-height:${APP_FRAME_DEFAULT_HEIGHT}px"
-              @load=${registerAppFrame(preview)}
+              ${ref(registerAppFrame(preview))}
             ></iframe>
           `,
         )}
