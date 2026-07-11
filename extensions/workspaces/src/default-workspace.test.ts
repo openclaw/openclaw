@@ -37,7 +37,7 @@ describe("default Workspaces document", () => {
       expect(widgets.find((widget) => widget.id === id)?.bindings?.value).toEqual({
         source: "rpc",
         method: "usage.cost",
-        params: { days: 1 },
+        params: { days: 1, agentScope: "all" },
       });
     }
   });

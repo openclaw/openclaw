@@ -20,7 +20,11 @@ export const DEFAULT_WORKSPACE: WorkspaceDoc = {
           hidden: false,
           createdBy: "system",
           bindings: {
-            value: { source: "rpc", method: "usage.cost", params: { days: 1 } },
+            value: {
+              source: "rpc",
+              method: "usage.cost",
+              params: { days: 1, agentScope: "all" },
+            },
           },
           props: { metric: "todayCost", format: "usd" },
         },
@@ -36,7 +40,11 @@ export const DEFAULT_WORKSPACE: WorkspaceDoc = {
             // usage.cost carries the day-scoped totals; the stat-card selects the
             // token total via props.metric. (usage.status is provider rate-limit
             // windows — not token counts.)
-            value: { source: "rpc", method: "usage.cost", params: { days: 1 } },
+            value: {
+              source: "rpc",
+              method: "usage.cost",
+              params: { days: 1, agentScope: "all" },
+            },
           },
           props: { metric: "todayTokens", format: "int" },
         },
