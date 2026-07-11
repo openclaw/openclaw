@@ -24,6 +24,12 @@ import type {
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
 import { loadEmbeddedAgentMcpConfig } from "./embedded-agent-mcp.js";
+import {
+  isAppOnlyMcpTool,
+  MCP_APP_MIME_TYPE,
+  MCP_APPS_EXTENSION_KEY,
+  parseMcpToolUiMeta,
+} from "./mcp-apps.js";
 import { isMcpConfigRecord } from "./mcp-config-shared.js";
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 import { sanitizeMcpMetadataText } from "./mcp-metadata.js";
@@ -557,6 +563,14 @@ export function createSessionMcpRuntime(params: {
                     version: "0.0.0",
                   },
                   {
+                    // MCP Apps (ui://) support: servers gate interactive app
+                    // metadata on this extension capability. Tool results stay
+                    // plain text for surfaces that never render app HTML.
+                    capabilities: {
+                      extensions: {
+                        [MCP_APPS_EXTENSION_KEY]: { mimeTypes: [MCP_APP_MIME_TYPE] },
+                      },
+                    },
                     jsonSchemaValidator: createMcpJsonSchemaValidator(),
                     listChanged: {
                       tools: {
@@ -623,8 +637,12 @@ export function createSessionMcpRuntime(params: {
                 });
                 failIfDisposed();
                 const selection = getMcpToolSelection(rawServer);
-                const exposedTools = listedTools.filter((tool) =>
-                  shouldExposeMcpTool(selection, tool.name.trim()),
+                const exposedTools = listedTools.filter(
+                  (tool) =>
+                    shouldExposeMcpTool(selection, tool.name.trim()) &&
+                    // App-only tools (`_meta.ui.visibility` without "model")
+                    // exist for the app iframe, never for the agent.
+                    !isAppOnlyMcpTool(tool._meta),
                 );
                 const serverEntry: McpServerCatalog = {
                   serverName,
@@ -660,6 +678,7 @@ export function createSessionMcpRuntime(params: {
                   if (!toolName) {
                     continue;
                   }
+                  const uiMeta = parseMcpToolUiMeta(tool._meta);
                   toolEntries.push({
                     serverName,
                     safeServerName,
@@ -668,6 +687,7 @@ export function createSessionMcpRuntime(params: {
                     description: sanitizeMcpMetadataText(tool.description),
                     inputSchema: tool.inputSchema,
                     fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
+                    ...(uiMeta ? { ui: uiMeta } : {}),
                   });
                 }
                 return {

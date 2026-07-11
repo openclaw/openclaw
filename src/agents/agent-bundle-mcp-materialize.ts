@@ -6,6 +6,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import { isRecord } from "../utils.js";
 import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
 import {
   buildSafeToolName,
@@ -18,6 +19,7 @@ import type {
   McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
+import { parseMcpAppResource, type McpAppToolDetails } from "./mcp-apps.js";
 import { mcpContentBlockToAgentContent } from "./mcp-content.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -71,6 +73,46 @@ function toAgentToolResult(params: {
     content: normalizedContent,
     details,
   };
+}
+
+/**
+ * Fetches the MCP App ui:// document bound to a tool via `_meta.ui.resourceUri`
+ * and shapes it for UI hosts. Failures degrade to the plain tool result — the
+ * app preview is additive and must never break tool execution.
+ */
+async function resolveMcpAppDetails(params: {
+  runtime: SessionMcpRuntime;
+  tool: McpCatalogTool;
+  result: CallToolResult;
+}): Promise<McpAppToolDetails | undefined> {
+  const resourceUri = params.tool.ui?.resourceUri;
+  if (!resourceUri || params.result.isError === true || !params.runtime.readResource) {
+    return undefined;
+  }
+  try {
+    params.runtime.markUsed();
+    const readResult = await params.runtime.readResource(params.tool.serverName, resourceUri);
+    const resource = parseMcpAppResource(readResult);
+    if (!resource) {
+      return undefined;
+    }
+    return {
+      serverName: params.tool.serverName,
+      toolName: params.tool.toolName,
+      resource: { ...resource, uri: resource.uri || resourceUri },
+      result: {
+        ...(Array.isArray(params.result.content) ? { content: params.result.content } : {}),
+        ...(params.result.structuredContent !== undefined
+          ? { structuredContent: params.result.structuredContent }
+          : {}),
+      },
+    };
+  } catch (error) {
+    logWarn(
+      `bundle-mcp: failed to load MCP app resource "${resourceUri}" from server "${params.tool.serverName}": ${String(error)}`,
+    );
+    return undefined;
+  }
 }
 
 function toJsonAgentToolResult(params: {
@@ -358,11 +400,17 @@ export async function materializeBundleMcpToolsForRun(params: {
     createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
-      return toAgentToolResult({
+      const agentResult = toAgentToolResult({
         serverName: tool.serverName,
         toolName: tool.toolName,
         result,
       });
+      const mcpApp = await resolveMcpAppDetails({ runtime: params.runtime, tool, result });
+      if (mcpApp) {
+        const baseDetails = isRecord(agentResult.details) ? agentResult.details : {};
+        agentResult.details = { ...baseDetails, mcpApp };
+      }
+      return agentResult;
     },
     createResourceListExecute: params.runtime.listResources
       ? (serverName) => async () => {

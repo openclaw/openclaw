@@ -152,18 +152,45 @@ export type ToolCard = {
   /** True once a result landed, including historical results with empty output. */
   completed?: boolean;
   messageId?: string;
-  preview?: {
-    kind: "canvas";
-    surface: "assistant_message";
-    render: "url";
-    title?: string;
-    preferredHeight?: number;
-    url?: string;
-    viewId?: string;
-    className?: string;
-    style?: string;
-    sandbox?: "strict" | "scripts";
+  preview?:
+    | {
+        kind: "canvas";
+        surface: "assistant_message";
+        render: "url";
+        title?: string;
+        preferredHeight?: number;
+        url?: string;
+        viewId?: string;
+        className?: string;
+        style?: string;
+        sandbox?: "strict" | "scripts";
+      }
+    | McpAppToolPreview;
+};
+
+/**
+ * MCP App (ui://) preview extracted from a tool result's `details.mcpApp`.
+ * The html document is untrusted MCP server output and must only render in a
+ * sandboxed iframe without `allow-same-origin`.
+ */
+export type McpAppToolPreview = {
+  kind: "mcp-app";
+  title?: string;
+  html: string;
+  resourceUri?: string;
+  csp?: {
+    connectDomains?: string[];
+    resourceDomains?: string[];
+    frameDomains?: string[];
+    baseUriDomains?: string[];
   };
+  /** Permission names requested by the app (e.g. clipboardWrite). */
+  permissions?: string[];
+  prefersBorder?: boolean;
+  /** Original tool-call arguments for ui/notifications/tool-input. */
+  toolInput?: unknown;
+  /** Raw MCP tool result for ui/notifications/tool-result. */
+  toolResult?: { content?: unknown[]; structuredContent?: unknown };
 };
 
 export type ToolCardOutcome = "running" | "succeeded" | "failed" | "unknown";

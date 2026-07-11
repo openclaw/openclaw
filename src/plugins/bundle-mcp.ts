@@ -300,6 +300,25 @@ export function loadEnabledBundleMcpConfig(params: {
     manifestRegistry: params.manifestRegistry,
     createEmptyConfig: () => ({ mcpServers: {} }),
     loadBundleConfig: loadBundleMcpConfig,
+    // Native plugins declare MCP servers directly in openclaw.plugin.json;
+    // relative stdio commands/paths resolve against the plugin root.
+    loadNativeConfig: (record) => {
+      if (!record.mcpServers || Object.keys(record.mcpServers).length === 0) {
+        return null;
+      }
+      const rootDir = normalizeBundlePath(record.rootDir);
+      return {
+        config: {
+          mcpServers: Object.fromEntries(
+            Object.entries(record.mcpServers).map(([serverName, server]) => [
+              serverName,
+              absolutizeBundleMcpServer({ rootDir, baseDir: rootDir, server }),
+            ]),
+          ),
+        },
+        diagnostics: [],
+      };
+    },
     createDiagnostic: (pluginId, message) => ({ pluginId, message }),
   });
 }

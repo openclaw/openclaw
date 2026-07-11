@@ -91,6 +91,14 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
     rootDir: string;
     bundleFormat: PluginBundleFormat;
   }) => { config: TConfig; diagnostics: string[] };
+  /**
+   * Optional loader for native (`format: "openclaw"`) plugin records, used by
+   * config surfaces that manifests can declare directly (e.g. mcpServers).
+   * Return null to skip a record.
+   */
+  loadNativeConfig?: (
+    record: PluginManifestRegistry["plugins"][number],
+  ) => { config: TConfig; diagnostics: string[] } | null;
   createDiagnostic: (pluginId: string, message: string) => TDiagnostic;
 }): { config: TConfig; diagnostics: TDiagnostic[] } {
   const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
@@ -109,7 +117,8 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
   let merged = params.createEmptyConfig();
 
   for (const record of registry.plugins) {
-    if (record.format !== "bundle" || !record.bundleFormat) {
+    const isBundleRecord = record.format === "bundle" && Boolean(record.bundleFormat);
+    if (!isBundleRecord && !params.loadNativeConfig) {
       continue;
     }
     const activationState = resolveEffectivePluginActivationState({
@@ -122,11 +131,16 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
       continue;
     }
 
-    const loaded = params.loadBundleConfig({
-      pluginId: record.id,
-      rootDir: record.rootDir,
-      bundleFormat: record.bundleFormat,
-    });
+    const loaded = isBundleRecord
+      ? params.loadBundleConfig({
+          pluginId: record.id,
+          rootDir: record.rootDir,
+          bundleFormat: record.bundleFormat as PluginBundleFormat,
+        })
+      : params.loadNativeConfig?.(record);
+    if (!loaded) {
+      continue;
+    }
     merged = applyMergePatch(merged, loaded.config) as TConfig;
     for (const message of loaded.diagnostics) {
       diagnostics.push(params.createDiagnostic(record.id, message));

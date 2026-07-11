@@ -1,0 +1,20 @@
+{
+  "id": "excalidraw",
+  "name": "Excalidraw",
+  "description": "Hand-drawn Excalidraw diagrams via the official Excalidraw MCP App server (interactive canvas in MCP Apps hosts).",
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": false
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "mcpServers": {
+    "excalidraw": {
+      "transport": "streamable-http",
+      "url": "https://mcp.excalidraw.com/mcp"
+    }
+  }
+}

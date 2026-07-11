@@ -219,6 +219,8 @@ export type PluginManifestRecord = {
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
   kind?: PluginKind | PluginKind[];
+  /** MCP servers declared by the plugin manifest (native `openclaw` format). */
+  mcpServers?: Record<string, Record<string, unknown>>;
   channels: string[];
   providers: string[];
   providerDiscoverySource?: string;
@@ -528,6 +530,7 @@ function buildRecord(params: {
     legacyPluginIds: params.manifest.legacyPluginIds,
     format: params.candidate.format ?? "openclaw",
     bundleFormat: params.candidate.bundleFormat,
+    mcpServers: params.manifest.mcpServers,
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],

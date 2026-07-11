@@ -303,6 +303,12 @@ export type PluginManifestCatalog = {
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
+  /**
+   * MCP servers this plugin attaches to agent sessions while enabled. Entries
+   * use the same shape as `mcp.servers.<name>` config (transport/url/command…);
+   * user-configured servers with the same name take precedence.
+   */
+  mcpServers?: Record<string, Record<string, unknown>>;
   /** Plugin ids that must also be installed for this plugin to have effect. */
   requiresPlugins?: string[];
   enabledByDefault?: boolean;
@@ -571,6 +577,23 @@ function normalizeStringListRecord(value: unknown): Record<string, string[]> | u
     normalized[providerId] = values;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestMcpServers(
+  value: unknown,
+): Record<string, Record<string, unknown>> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const servers: Record<string, Record<string, unknown>> = {};
+  for (const [serverName, serverRaw] of Object.entries(value)) {
+    const name = serverName.trim();
+    if (!name || isBlockedObjectKey(name) || !isRecord(serverRaw)) {
+      continue;
+    }
+    servers[name] = { ...serverRaw };
+  }
+  return Object.keys(servers).length > 0 ? servers : undefined;
 }
 
 function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
@@ -1804,6 +1827,7 @@ export function loadPluginManifest(
   if (!configSchema) {
     return cacheResult({ ok: false, error: "plugin manifest requires configSchema", manifestPath });
   }
+  const mcpServers = normalizeManifestMcpServers(raw.mcpServers);
 
   const requiresPlugins = normalizeTrimmedStringList(raw.requiresPlugins);
   const kind = parsePluginKind(raw.kind);
@@ -1880,6 +1904,7 @@ export function loadPluginManifest(
     manifest: {
       id,
       configSchema,
+      ...(mcpServers ? { mcpServers } : {}),
       ...(requiresPlugins.length > 0 ? { requiresPlugins } : {}),
       ...(enabledByDefault ? { enabledByDefault } : {}),
       ...(enabledByDefaultOnPlatforms.length > 0 ? { enabledByDefaultOnPlatforms } : {}),

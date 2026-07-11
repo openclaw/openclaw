@@ -2,6 +2,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { McpToolUiMeta } from "./mcp-apps.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 /** Materialized MCP tools plus diagnostics and cleanup handle for one run. */
@@ -44,6 +45,8 @@ export type McpCatalogTool = {
   description?: string;
   inputSchema: TSchema;
   fallbackDescription: string;
+  /** MCP Apps `_meta.ui` metadata (interactive ui:// resource binding). */
+  ui?: McpToolUiMeta;
 };
 
 /** Complete tool catalog for a session-scoped MCP runtime. */

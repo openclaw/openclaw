@@ -26,6 +26,7 @@ import {
 import { getToolCallTitle } from "../tool-titles.ts";
 import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
+import { renderMcpAppPreview } from "./mcp-app-frame.ts";
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
 
@@ -240,6 +241,10 @@ export function renderToolPreview(
 ) {
   if (!preview) {
     return nothing;
+  }
+  if (preview.kind === "mcp-app") {
+    // App previews render inside the tool card that produced them.
+    return surface === "chat_tool" ? renderMcpAppPreview(preview) : nothing;
   }
   if (preview.kind !== "canvas" || surface === "chat_tool") {
     return nothing;
@@ -884,12 +889,14 @@ export function renderExpandedToolCardContent(
               label: t(isError ? "chat.toolCards.toolError" : "chat.toolCards.toolOutput"),
               text: card.outputText!,
             })
-        : isError
-          ? renderToolDataBlock({
-              label: t("chat.toolCards.toolError"),
-              text: t("chat.toolCards.noOutputFailed"),
-            })
-          : nothing}
+        : card.preview
+          ? visiblePreview
+          : isError
+            ? renderToolDataBlock({
+                label: t("chat.toolCards.toolError"),
+                text: t("chat.toolCards.noOutputFailed"),
+              })
+            : nothing}
     </div>
   `;
 }

@@ -7,6 +7,7 @@ import {
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import type { ToolCard, ToolCardOutcome } from "./chat-types.ts";
+import { extractMcpAppPreview } from "./mcp-app.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
 
@@ -319,9 +320,10 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       const callId = resolveToolCallId(item, m);
       const existing = findFirstUnmatchedCard(cards, cardId, name, fallbackMatchedCards);
       const text = extractToolText(item);
-      const preview = extractToolPreview(text, name);
       const isError = readToolErrorFlag(item) ?? messageIsError;
       const details = item.details ?? m.details;
+      const preview =
+        extractMcpAppPreview(details, existing?.args) ?? extractToolPreview(text, name);
       if (existing) {
         fallbackMatchedCards.add(existing);
         existing.callId ??= callId;
@@ -374,7 +376,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       ...(m.details !== undefined ? { details: m.details } : {}),
       messageId: transcriptMessageId,
       ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
-      preview: extractToolPreview(text, name),
+      preview: extractMcpAppPreview(m.details) ?? extractToolPreview(text, name),
     });
   }
 

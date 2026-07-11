@@ -163,6 +163,49 @@ describe("loadEnabledBundleMcpConfig", () => {
     });
   });
 
+  it("loads MCP servers declared by native plugin manifests", async () => {
+    const workspaceDir = await tempHarness.createTempDir("openclaw-native-mcp-workspace-");
+    const pluginRoot = await tempHarness.createTempDir("openclaw-native-mcp-plugin-");
+    const nativeRecord = {
+      id: "excalidraw",
+      origin: "bundled" as const,
+      format: "openclaw" as const,
+      mcpServers: {
+        excalidraw: {
+          transport: "streamable-http",
+          url: "https://mcp.excalidraw.com/mcp",
+        },
+      },
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      rootDir: pluginRoot,
+      source: "test",
+      manifestPath: path.join(pluginRoot, "openclaw.plugin.json"),
+    };
+
+    const loaded = loadEnabledBundleMcpConfig({
+      workspaceDir,
+      cfg: createEnabledBundleConfig(["excalidraw"]),
+      manifestRegistry: { plugins: [nativeRecord] },
+    });
+
+    expectNoDiagnostics(loaded.diagnostics);
+    expect(loaded.config.mcpServers.excalidraw).toMatchObject({
+      transport: "streamable-http",
+      url: "https://mcp.excalidraw.com/mcp",
+    });
+
+    const disabled = loadEnabledBundleMcpConfig({
+      workspaceDir,
+      cfg: { plugins: { entries: { excalidraw: { enabled: false } } } },
+      manifestRegistry: { plugins: [nativeRecord] },
+    });
+    expect(disabled.config.mcpServers.excalidraw).toBe(undefined);
+  });
+
   it("merges inline bundle MCP servers and skips disabled bundles", async () => {
     await withBundleHomeEnv(
       tempHarness,

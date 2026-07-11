@@ -6198,6 +6198,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/excalidraw.md
+
+- Route: /plugins/reference/excalidraw
+- Headings:
+  - H1: Excalidraw plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Enable
+  - H2: Notes
+
 ## plugins/reference/fal.md
 
 - Route: /plugins/reference/fal
