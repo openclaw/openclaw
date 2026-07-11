@@ -188,6 +188,7 @@ class ChatPane extends OpenClawLightDomElement {
   @property({ attribute: false }) showPaneHeader = false;
   @property({ attribute: false }) paneTitle = "";
   @property({ attribute: false }) narrow = false;
+  @property({ attribute: false }) onOpenSplitView?: () => void;
   @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
   @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
   @property({ attribute: false }) onClosePane?: (paneId: string) => void;
@@ -1404,6 +1405,7 @@ class ChatPane extends OpenClawLightDomElement {
       sessionWorkspace,
       backgroundTasks,
       paneHeaderActive: this.showPaneHeader,
+      onOpenSplitView: this.onOpenSplitView,
       taskSuggestions: this.taskSuggestions,
       pullRequests: this.sessionPullRequests.filter(
         (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
