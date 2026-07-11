@@ -28,6 +28,7 @@ import {
   getActiveSecretsRuntimeEnv as getActiveSecretsRuntimeEnvState,
   getActiveSecretsRuntimeRefreshContext,
   getActiveSecretsRuntimeSnapshot as getActiveSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotRevision as getActiveSecretsRuntimeSnapshotRevisionState,
   getLiveSecretsRuntimeAuthStores,
   getPreparedSecretsRuntimeSnapshotRefreshContext,
   registerSecretsRuntimeStateClearHook,
@@ -359,6 +360,10 @@ export async function refreshActiveSecretsRuntimeSnapshot(): Promise<boolean> {
 
 export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapshot | null {
   return getActiveSecretsRuntimeSnapshotState();
+}
+
+export function getActiveSecretsRuntimeSnapshotRevision(): number {
+  return getActiveSecretsRuntimeSnapshotRevisionState();
 }
 
 export function getActiveSecretsRuntimeEnv(): NodeJS.ProcessEnv {

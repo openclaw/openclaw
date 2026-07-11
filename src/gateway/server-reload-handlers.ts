@@ -24,7 +24,8 @@ import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   deferGatewayRestartUntilIdle,
-  emitGatewayRestartWithSignalAdmission,
+  type GatewayRestartEmitter,
+  type RestartDeferralHandle,
   resolveGatewayRestartDeferralTimeoutMs,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
@@ -36,6 +37,7 @@ import {
 import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshotRevision,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
@@ -72,6 +74,7 @@ import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
 // previous lifecycle's deferred reload.
 let currentReloadGeneration = 0;
 let abortGeneration: number | undefined = undefined;
+const RESTART_EMISSION_RETRY_MS = 1_000;
 
 /** Signal any in-progress deferred channel reload to abort immediately. */
 export function abortPendingChannelReloads(): void {
@@ -102,6 +105,31 @@ type GatewayGmailRestartAbortController = {
   abort: () => void;
   signal: AbortSignal;
 };
+
+type GatewayHotReloadPublication = {
+  publish: (commit: () => Promise<void>, isCommitted: () => boolean) => Promise<void>;
+};
+
+export class GatewayHotReloadCancelledError extends Error {
+  constructor() {
+    super("config hot reload cancelled by in-process restart");
+    this.name = "GatewayHotReloadCancelledError";
+  }
+}
+
+export class GatewayHotReloadRecoveryError extends Error {
+  constructor(surface: string) {
+    super(`config hot reload committed but could not schedule recovery for ${surface}`);
+    this.name = "GatewayHotReloadRecoveryError";
+  }
+}
+
+class GatewayHotReloadStaleSecretsError extends Error {
+  constructor() {
+    super("runtime secrets changed while config hot reload was deferred");
+    this.name = "GatewayHotReloadStaleSecretsError";
+  }
+}
 
 export type GatewayPluginReloadResult = {
   restartChannels: ReadonlySet<ChannelKind>;
@@ -192,6 +220,7 @@ type GatewayReloadHandlerParams = {
     nextConfig: OpenClawConfig;
     changedPaths: readonly string[];
     beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+    commitRuntime: () => Promise<void>;
     isAborted?: () => boolean;
   }) => Promise<GatewayPluginReloadResult>;
   logHooks: {
@@ -207,6 +236,7 @@ type GatewayReloadHandlerParams = {
   createGmailRestartAbortController?: () => GatewayGmailRestartAbortController;
   clearGmailRestartAbortController?: (controller: GatewayGmailRestartAbortController) => void;
   onCronRestart?: () => void;
+  requestRecoveryRestart?: GatewayRestartEmitter;
 };
 
 type ManagedGatewayConfigReloaderParams = Omit<
@@ -369,8 +399,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
   };
 
-  const applyHotReload = async (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => {
-    setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
+  const applyHotReload = async (
+    plan: GatewayReloadPlan,
+    nextConfig: OpenClawConfig,
+    publication?: GatewayHotReloadPublication,
+  ): Promise<void> => {
     const state = params.getState();
     const nextState = { ...state };
 
@@ -381,12 +414,17 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         nextState.hooksConfig = resolveHooksConfig(nextConfig);
       } catch (err) {
         params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
+        throw err;
       }
     }
     nextState.hookClientIpConfig = resolveHookClientIpConfig(nextConfig);
 
-    if (plan.restartHeartbeat) {
-      nextState.heartbeatRunner.updateConfig(nextConfig);
+    if (plan.restartCron) {
+      nextState.cronState = buildGatewayCronService({
+        cfg: nextConfig,
+        deps: params.deps,
+        broadcast: params.broadcast,
+      });
     }
 
     resetDirectoryCache();
@@ -395,6 +433,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const channelsStoppedBeforePluginReload = new Set<ChannelKind>();
     let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
     let pluginReloadAborted = false;
+    let runtimeCommitted = false;
+    let recoveryRestartScheduled = false;
     const shouldSkipChannelRestart = () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
@@ -411,7 +451,99 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         `${action} suppressed by crash-loop breaker for channels: ${[...channels].join(", ")}`,
       );
     };
+    const commitRuntime = async () => {
+      if (runtimeCommitted) {
+        return;
+      }
+      if (!params.requestRecoveryRestart) {
+        throw new Error("config hot reload recovery is unavailable");
+      }
+      const commit = async () => {
+        if (plan.restartHeartbeat) {
+          nextState.heartbeatRunner.updateConfig(nextConfig);
+        }
+        params.setState(nextState);
+        runtimeCommitted = true;
+        setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
+        if (plan.restartCron) {
+          params.cronReconciliation.invalidate();
+          params.onCronRestart?.();
+          state.cronState.cron.stop();
+          state.cronState.stopExitWatchers?.();
+          startGatewayCronWithLogging({
+            cronState: nextState.cronState,
+            cronReconciliation: params.cronReconciliation,
+            reason: "reload",
+            config: nextConfig,
+            afterStart: nextState.cronState.reconcileExitWatchers,
+            logCron: params.logCron,
+            onStartError: (err) => {
+              if (
+                myGeneration !== currentReloadGeneration ||
+                params.getState().cronState !== nextState.cronState
+              ) {
+                return;
+              }
+              try {
+                scheduleRecoveryRestart("cron reload", err);
+              } catch (recoveryError) {
+                params.logCron.error(formatErrorMessage(recoveryError));
+              }
+            },
+          });
+        }
+      };
+      if (publication) {
+        await publication.publish(commit, () => runtimeCommitted);
+      } else {
+        await commit();
+      }
+    };
+    const scheduleRecoveryRestart = (surface: string, err?: unknown) => {
+      const detail = err === undefined ? "" : `: ${formatErrorMessage(err)}`;
+      params.logReload.warn(`${surface} failed after config commit${detail}; restarting gateway`);
+      if (recoveryRestartScheduled) {
+        return;
+      }
+      try {
+        // Reuse the config-restart path: it excludes this reload root while
+        // draining other work and fences signal delivery until restart takes over.
+        requestGatewayRestart(
+          {
+            ...plan,
+            restartGateway: true,
+            restartReasons: [`hot reload recovery: ${surface}`],
+          },
+          nextConfig,
+        );
+        // Immediate emission failure already owns a lifecycle retry. The runtime
+        // is committed, so keep this transaction accepted while that retry runs.
+        recoveryRestartScheduled = true;
+      } catch (restartError) {
+        params.logReload.warn(
+          `failed to schedule post-commit gateway restart: ${formatErrorMessage(restartError)}`,
+        );
+        if (restartError instanceof GatewayHotReloadRecoveryError) {
+          throw restartError;
+        }
+        throw new GatewayHotReloadRecoveryError(surface);
+      }
+    };
     if (plan.reloadPlugins) {
+      const restartStoppedPluginChannels = async (reason: string) =>
+        await collectChannelOperationFailures({
+          channels: [...channelsStoppedBeforePluginReload],
+          run: async (channel) => {
+            params.logChannels.info(`restarting ${channel} channel after ${reason}`);
+            await params.startChannel(channel);
+            channelsStoppedBeforePluginReload.delete(channel);
+          },
+          onFailure: (channel, err) => {
+            params.logChannels.error(
+              `failed to restart ${channel} channel after ${reason}: ${formatErrorMessage(err)}`,
+            );
+          },
+        });
       const stopChannelsBeforePluginReplace = async (channels: ReadonlySet<ChannelKind>) => {
         for (const channel of channels) {
           channelsToRestart.add(channel);
@@ -426,7 +558,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           pluginReloadAborted = true;
           return;
         }
-        const stoppedChannels: ChannelKind[] = [];
         const stopFailures = await collectChannelOperationFailures({
           channels: channelsToRestart,
           run: async (channel) => {
@@ -434,9 +565,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
               return;
             }
             params.logChannels.info(`stopping ${channel} channel before plugin reload`);
-            stoppedChannels.push(channel);
-            await params.stopChannel(channel, undefined, { manual: false });
             channelsStoppedBeforePluginReload.add(channel);
+            await params.stopChannel(channel, undefined, { manual: false });
           },
           onFailure: (channel, err) => {
             params.logChannels.error(
@@ -445,23 +575,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           },
         });
         if (stopFailures.length > 0) {
-          const rollbackFailures = await collectChannelOperationFailures({
-            channels: stoppedChannels,
-            run: async (channel) => {
-              params.logChannels.info(
-                `restarting ${channel} channel after failed plugin reload pre-stop`,
-              );
-              await params.startChannel(channel);
-              channelsStoppedBeforePluginReload.delete(channel);
-            },
-            onFailure: (channel, err) => {
-              params.logChannels.error(
-                `failed to restart ${channel} channel after failed plugin reload pre-stop: ${formatErrorMessage(
-                  err,
-                )}`,
-              );
-            },
-          });
+          const rollbackFailures = await restartStoppedPluginChannels(
+            "failed plugin reload pre-stop",
+          );
           const rollbackSuffix =
             rollbackFailures.length > 0
               ? `; rollback restart failed for: ${rollbackFailures.join(", ")}`
@@ -472,12 +588,42 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
       };
       if (!pluginReloadAborted) {
-        const pluginReloadResult = await params.reloadPlugins({
-          nextConfig,
-          changedPaths: plan.changedPaths,
-          beforeReplace: stopChannelsBeforePluginReplace,
-          isAborted: () => pluginReloadAborted,
-        });
+        let pluginReloadResult: GatewayPluginReloadResult;
+        try {
+          pluginReloadResult = await params.reloadPlugins({
+            nextConfig,
+            changedPaths: plan.changedPaths,
+            beforeReplace: stopChannelsBeforePluginReplace,
+            commitRuntime,
+            isAborted: () => pluginReloadAborted,
+          });
+        } catch (err) {
+          if (!runtimeCommitted) {
+            const rollbackFailures = await restartStoppedPluginChannels(
+              "failed plugin runtime publication",
+            );
+            if (rollbackFailures.length > 0) {
+              throw new Error(
+                `${formatErrorMessage(err)}; rollback restart failed for: ${rollbackFailures.join(", ")}`,
+                { cause: err },
+              );
+            }
+            throw err;
+          }
+          scheduleRecoveryRestart("plugin runtime reload", err);
+          return;
+        }
+        if (pluginReloadResult.cancelled) {
+          pluginReloadAborted = true;
+          const rollbackFailures = await restartStoppedPluginChannels(
+            "cancelled plugin runtime publication",
+          );
+          if (rollbackFailures.length > 0) {
+            throw new Error(
+              `plugin reload cancellation rollback failed for: ${rollbackFailures.join(", ")}`,
+            );
+          }
+        }
         // beforeReplace may have set pluginReloadAborted inside reloadPlugins;
         // skip metadata/runtime updates when the reload was cancelled mid-flight.
         if (!pluginReloadAborted) {
@@ -489,29 +635,34 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
       }
     }
-    if (plan.restartCron) {
-      params.cronReconciliation.invalidate();
-      params.onCronRestart?.();
-      state.cronState.cron.stop();
-      state.cronState.stopExitWatchers?.();
-      nextState.cronState = buildGatewayCronService({
-        cfg: nextConfig,
-        deps: params.deps,
-        broadcast: params.broadcast,
-      });
-      startGatewayCronWithLogging({
-        cronState: nextState.cronState,
-        cronReconciliation: params.cronReconciliation,
-        reason: "reload",
-        config: nextConfig,
-        afterStart: nextState.cronState.reconcileExitWatchers,
-        logCron: params.logCron,
-      });
+
+    if (!plan.reloadPlugins && channelsToRestart.size > 0 && !shouldSkipChannelRestart()) {
+      pluginReloadAborted = await waitForActiveWorkBeforeChannelReload(
+        channelsToRestart,
+        nextConfig,
+      );
+    }
+    if (pluginReloadAborted) {
+      throw new GatewayHotReloadCancelledError();
+    }
+    try {
+      await commitRuntime();
+    } catch (err) {
+      if (!runtimeCommitted) {
+        throw err;
+      }
+      scheduleRecoveryRestart("runtime commit", err);
+      return;
     }
 
     if (plan.restartHealthMonitor) {
-      state.channelHealthMonitor?.stop();
-      nextState.channelHealthMonitor = params.createHealthMonitor(nextConfig);
+      try {
+        nextState.channelHealthMonitor = params.createHealthMonitor(nextConfig);
+        params.setState(nextState);
+        state.channelHealthMonitor?.stop();
+      } catch (err) {
+        scheduleRecoveryRestart("health monitor reload", err);
+      }
     }
 
     if (plan.disposeMcpRuntimes) {
@@ -524,10 +675,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     if (plan.restartGmailWatcher) {
-      await params.stopPostReadySidecars?.();
       const restartAbortController =
         params.createGmailRestartAbortController?.() ?? new AbortController();
       try {
+        await params.stopPostReadySidecars?.();
         if (!restartAbortController.signal.aborted) {
           const [{ stopGmailWatcher }, { startGmailWatcherWithLogs }] = await Promise.all([
             import("../hooks/gmail-watcher.js"),
@@ -551,6 +702,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             });
           }
         }
+      } catch (err) {
+        scheduleRecoveryRestart("gmail watcher reload", err);
       } finally {
         params.clearGmailRestartAbortController?.(restartAbortController);
       }
@@ -562,13 +715,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
         );
       } else if (getChannelAutostartSuppression()) {
-        let cancelledByRestart = pluginReloadAborted;
-        if (!plan.reloadPlugins && !cancelledByRestart) {
-          cancelledByRestart = await waitForActiveWorkBeforeChannelReload(
-            channelsToRestart,
-            nextConfig,
-          );
-        }
+        const cancelledByRestart = pluginReloadAborted;
         if (cancelledByRestart) {
           params.logChannels.info("channel restart cancelled by in-process restart");
         } else {
@@ -593,20 +740,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             },
           });
           if (stopFailures.length > 0) {
-            throw new Error(
-              `failed to stop channels during suppressed hot reload: ${stopFailures.join(", ")}`,
-            );
+            scheduleRecoveryRestart(`channel stop (${stopFailures.join(", ")})`);
           }
           logSuppressedChannelRestart(channelsToRestart, "channel restart during hot reload");
         }
       } else {
-        let cancelledByRestart = pluginReloadAborted;
-        if (!plan.reloadPlugins && !cancelledByRestart) {
-          cancelledByRestart = await waitForActiveWorkBeforeChannelReload(
-            channelsToRestart,
-            nextConfig,
-          );
-        }
+        const cancelledByRestart = pluginReloadAborted;
         if (cancelledByRestart) {
           params.logChannels.info("channel restart cancelled by in-process restart");
         } else {
@@ -633,20 +772,26 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             },
           });
           if (restartFailures.length > 0) {
-            throw new Error(
-              `failed to restart channels during hot reload: ${restartFailures.join(", ")}`,
-            );
+            scheduleRecoveryRestart(`channel restart (${restartFailures.join(", ")})`);
           }
         }
       }
     }
 
-    applyGatewayLaneConcurrency(nextConfig);
+    try {
+      applyGatewayLaneConcurrency(nextConfig);
+    } catch (err) {
+      scheduleRecoveryRestart("lane concurrency reload", err);
+    }
 
     if (shouldRefreshContextWindowCache(plan)) {
-      await refreshContextWindowCache(nextConfig);
-      // Provider discovery is best-effort; a slow hook must not hold hot reload open.
-      void loadModelCatalog({ config: nextConfig });
+      try {
+        await refreshContextWindowCache(nextConfig);
+        // Provider discovery is best-effort; a slow hook must not hold hot reload open.
+        void loadModelCatalog({ config: nextConfig });
+      } catch (err) {
+        scheduleRecoveryRestart("context window cache reload", err);
+      }
     }
     void warmCurrentProviderAuthStateOffMainThread(nextConfig).catch((err: unknown) => {
       params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
@@ -657,22 +802,78 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     } else if (plan.noopPaths.length > 0) {
       params.logReload.info(`config change applied (dynamic reads: ${plan.noopPaths.join(", ")})`);
     }
-
-    params.setState(nextState);
   };
 
   let restartPending = false;
+  let restartRetryStopped = false;
+  let restartRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  let restartDeferral: RestartDeferralHandle | null = null;
+  let restartRequestGeneration = 0;
 
-  const requestGatewayRestart = (plan: GatewayReloadPlan, nextConfig: OpenClawConfig): boolean => {
-    setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
+  const supersedeRestartRequest = () => {
+    restartRequestGeneration += 1;
+    restartPending = false;
+    restartDeferral?.cancel();
+    restartDeferral = null;
+    if (restartRetryTimer) {
+      clearTimeout(restartRetryTimer);
+      restartRetryTimer = null;
+    }
+  };
+
+  const stopRestartRetries = () => {
+    restartRetryStopped = true;
+    supersedeRestartRequest();
+  };
+
+  const scheduleDeferredRestartRetry = (
+    plan: GatewayReloadPlan,
+    nextConfig: OpenClawConfig,
+    requestGeneration: number,
+  ) => {
+    if (
+      restartRetryStopped ||
+      restartRetryTimer ||
+      requestGeneration !== restartRequestGeneration ||
+      myGeneration !== currentReloadGeneration
+    ) {
+      return;
+    }
+    // A deferred restart has already accepted its config transaction. Keep one
+    // lifecycle-owned retry alive until signal admission succeeds.
+    restartPending = true;
+    restartRetryTimer = setTimeout(() => {
+      restartRetryTimer = null;
+      if (
+        restartRetryStopped ||
+        requestGeneration !== restartRequestGeneration ||
+        myGeneration !== currentReloadGeneration
+      ) {
+        return;
+      }
+      restartPending = false;
+      if (!requestGatewayRestartForGeneration(plan, nextConfig, requestGeneration)) {
+        scheduleDeferredRestartRetry(plan, nextConfig, requestGeneration);
+      }
+    }, RESTART_EMISSION_RETRY_MS);
+    restartRetryTimer.unref?.();
+  };
+
+  const requestGatewayRestartForGeneration = (
+    plan: GatewayReloadPlan,
+    nextConfig: OpenClawConfig,
+    requestGeneration: number,
+  ): boolean => {
     const reasons = plan.restartReasons.length
       ? plan.restartReasons.join(", ")
       : plan.changedPaths.join(", ");
+    const restartReason = `config reload: ${reasons}`;
 
-    if (process.listenerCount("SIGUSR1") === 0) {
-      params.logReload.warn("no SIGUSR1 listener found; restart skipped");
+    if (!params.requestRecoveryRestart) {
+      params.logReload.warn("gateway restart recovery handler unavailable; restart skipped");
       return false;
     }
+    const requestRecoveryRestart = params.requestRecoveryRestart;
 
     const active = getActiveCounts();
 
@@ -694,15 +895,27 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         params.logReload.warn(`restart blocked by active background task run(s): ${taskBlockers}`);
       }
 
-      deferGatewayRestartUntilIdle({
+      restartDeferral = deferGatewayRestartUntilIdle({
         getPendingCount: () => getActiveCounts().totalActive,
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(
           nextConfig.gateway?.reload?.deferralTimeoutMs,
         ),
         timeoutIntent: { force: true, reason: "config reload forced restart" },
+        reason: restartReason,
         emitHooks: {
           beforeEmit: () =>
             markActiveMainSessionsForRestart(nextConfig, "config reload forced restart"),
+          emitRestart: (reason, intent) =>
+            requestGeneration === restartRequestGeneration
+              ? requestRecoveryRestart(reason, intent)
+              : { status: "coalesced" },
+          afterEmitFailed: async () => {
+            if (requestGeneration !== restartRequestGeneration) {
+              return;
+            }
+            params.logReload.warn("gateway restart recovery emission failed; retrying");
+            scheduleDeferredRestartRetry(plan, nextConfig, requestGeneration);
+          },
         },
         hooks: {
           onReady: () => {
@@ -736,6 +949,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           },
         },
       });
+      setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
       return true;
     }
     // No active operations or pending replies, restart immediately
@@ -743,14 +957,31 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     // The managed reloader owns independent root admission until onRestart
     // returns. Extend that fence across signal delivery until the run loop
     // atomically promotes it to one-way restart drain.
-    const emitted = emitGatewayRestartWithSignalAdmission();
-    if (!emitted) {
+    const emitResult = requestRecoveryRestart(restartReason);
+    if (emitResult.status === "failed") {
+      params.logReload.warn("gateway restart recovery emission failed");
+      scheduleDeferredRestartRetry(plan, nextConfig, requestGeneration);
+      return false;
+    }
+    if (emitResult.status === "coalesced") {
       params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
     }
+    setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     return true;
   };
 
-  return { applyHotReload, requestGatewayRestart };
+  const requestGatewayRestart = (plan: GatewayReloadPlan, nextConfig: OpenClawConfig): boolean => {
+    // Only another restart requirement supersedes accepted restart work. A
+    // duplicate, hot-only, or failed config transaction must preserve it.
+    supersedeRestartRequest();
+    return requestGatewayRestartForGeneration(plan, nextConfig, restartRequestGeneration);
+  };
+
+  return {
+    applyHotReload,
+    requestGatewayRestart,
+    stopRestartRetries,
+  };
 }
 
 export function startManagedGatewayConfigReloader(
@@ -776,34 +1007,39 @@ export function startManagedGatewayConfigReloader(
     activeGmailRestartAbortController = abortController;
     return abortController;
   };
-  const { applyHotReload, requestGatewayRestart } = createGatewayReloadHandlers({
-    deps: params.deps,
-    broadcast: params.broadcast,
-    getState: params.getState,
-    setState: params.setState,
-    startChannel: params.startChannel,
-    stopChannel: params.stopChannel,
-    getChannelAutostartSuppression: params.getChannelAutostartSuppression,
-    stopPostReadySidecars: params.stopPostReadySidecars,
-    reloadPlugins: params.reloadPlugins,
-    logHooks: params.logHooks,
-    logChannels: params.logChannels,
-    logCron: params.logCron,
-    logReload: params.logReload,
-    cronReconciliation: params.cronReconciliation,
-    createGmailRestartAbortController,
-    clearGmailRestartAbortController: (abortController) => {
-      if (activeGmailRestartAbortController === abortController) {
-        activeGmailRestartAbortController = null;
-      }
+  const { applyHotReload, requestGatewayRestart, stopRestartRetries } = createGatewayReloadHandlers(
+    {
+      deps: params.deps,
+      broadcast: params.broadcast,
+      getState: params.getState,
+      setState: params.setState,
+      startChannel: params.startChannel,
+      stopChannel: params.stopChannel,
+      getChannelAutostartSuppression: params.getChannelAutostartSuppression,
+      stopPostReadySidecars: params.stopPostReadySidecars,
+      reloadPlugins: params.reloadPlugins,
+      logHooks: params.logHooks,
+      logChannels: params.logChannels,
+      logCron: params.logCron,
+      logReload: params.logReload,
+      cronReconciliation: params.cronReconciliation,
+      createGmailRestartAbortController,
+      clearGmailRestartAbortController: (abortController) => {
+        if (activeGmailRestartAbortController === abortController) {
+          activeGmailRestartAbortController = null;
+        }
+      },
+      ...(params.onCronRestart ? { onCronRestart: params.onCronRestart } : {}),
+      ...(params.requestRecoveryRestart
+        ? { requestRecoveryRestart: params.requestRecoveryRestart }
+        : {}),
+      createHealthMonitor: (config) =>
+        startGatewayChannelHealthMonitor({
+          cfg: config,
+          channelManager: params.channelManager,
+        }),
     },
-    ...(params.onCronRestart ? { onCronRestart: params.onCronRestart } : {}),
-    createHealthMonitor: (config) =>
-      startGatewayChannelHealthMonitor({
-        cfg: config,
-        channelManager: params.channelManager,
-      }),
-  });
+  );
 
   const configReloader = startGatewayConfigReloader({
     initialConfig: params.initialConfig,
@@ -822,48 +1058,152 @@ export function startManagedGatewayConfigReloader(
       });
     },
     onHotReload: async (plan, nextConfig) => {
-      const previousSharedGatewaySessionGeneration =
-        params.sharedGatewaySessionGenerationState.current;
-      const previousSnapshot = getActiveSecretsRuntimeSnapshot();
-      const prepared = await params.activateRuntimeSecrets(nextConfig, {
-        reason: "reload",
-        activate: true,
-      });
-      const nextSharedGatewaySessionGeneration =
-        params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
-      params.sharedGatewaySessionGenerationState.current = nextSharedGatewaySessionGeneration;
-      const sharedGatewaySessionGenerationChanged =
-        previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration;
-      if (sharedGatewaySessionGenerationChanged) {
-        disconnectStaleSharedGatewayAuthClients({
-          clients: params.clients,
-          expectedGeneration: nextSharedGatewaySessionGeneration,
+      // A deferred channel/plugin reload can overlap secrets.reload. Retry from
+      // preparation unless the same active snapshot still owns publication.
+      for (;;) {
+        const previousSnapshot = getActiveSecretsRuntimeSnapshot();
+        const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+        const previousSharedGatewaySessionGeneration =
+          params.sharedGatewaySessionGenerationState.current;
+        const prepared = await params.activateRuntimeSecrets(nextConfig, {
+          reason: "reload",
+          activate: false,
         });
-      }
-      try {
-        await applyHotReload(plan, prepared.config);
-      } catch (err) {
-        if (previousSnapshot) {
-          await activateSecretsRuntimeSnapshot(previousSnapshot);
-        } else {
-          clearSecretsRuntimeSnapshot();
+        if (getActiveSecretsRuntimeSnapshotRevision() !== previousSnapshotRevision) {
+          continue;
         }
-        if (previousSnapshot && shouldRefreshContextWindowCache(plan)) {
-          await refreshContextWindowCache(previousSnapshot.config);
-        }
-        params.sharedGatewaySessionGenerationState.current = previousSharedGatewaySessionGeneration;
-        if (sharedGatewaySessionGenerationChanged) {
-          disconnectStaleSharedGatewayAuthClients({
-            clients: params.clients,
-            expectedGeneration: previousSharedGatewaySessionGeneration,
+        const nextSharedGatewaySessionGeneration =
+          params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
+        const sharedGatewaySessionGenerationChanged =
+          previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration;
+        let runtimeSecretsPublished = false;
+        let publishedSnapshotRevision: number | null = null;
+        try {
+          await applyHotReload(plan, prepared.config, {
+            publish: async (commit, isCommitted) => {
+              const publishRuntime = async () => {
+                runtimeSecretsPublished = true;
+                publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+                params.sharedGatewaySessionGenerationState.current =
+                  nextSharedGatewaySessionGeneration;
+                if (sharedGatewaySessionGenerationChanged) {
+                  disconnectStaleSharedGatewayAuthClients({
+                    clients: params.clients,
+                    expectedGeneration: nextSharedGatewaySessionGeneration,
+                  });
+                }
+                try {
+                  await commit();
+                } catch (err) {
+                  if (!isCommitted()) {
+                    if (previousSnapshot) {
+                      await activateSecretsRuntimeSnapshot(previousSnapshot);
+                    } else {
+                      clearSecretsRuntimeSnapshot();
+                    }
+                    if (previousSnapshot && shouldRefreshContextWindowCache(plan)) {
+                      await refreshContextWindowCache(previousSnapshot.config);
+                    }
+                    params.sharedGatewaySessionGenerationState.current =
+                      previousSharedGatewaySessionGeneration;
+                    if (sharedGatewaySessionGenerationChanged) {
+                      disconnectStaleSharedGatewayAuthClients({
+                        clients: params.clients,
+                        expectedGeneration: previousSharedGatewaySessionGeneration,
+                      });
+                    }
+                    runtimeSecretsPublished = false;
+                  }
+                  throw err;
+                }
+              };
+              const activateIfCurrent =
+                params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent;
+              if (activateIfCurrent) {
+                const activated = await activateIfCurrent(
+                  prepared,
+                  previousSnapshotRevision,
+                  {
+                    reason: "reload",
+                    activate: true,
+                  },
+                  publishRuntime,
+                );
+                if (!activated) {
+                  throw new GatewayHotReloadStaleSecretsError();
+                }
+              } else {
+                if (getActiveSecretsRuntimeSnapshotRevision() !== previousSnapshotRevision) {
+                  throw new GatewayHotReloadStaleSecretsError();
+                }
+                if (params.activateRuntimeSecrets.activatePreparedSnapshot) {
+                  await params.activateRuntimeSecrets.activatePreparedSnapshot(prepared, {
+                    reason: "reload",
+                    activate: true,
+                  });
+                } else {
+                  await activateSecretsRuntimeSnapshot(prepared);
+                }
+                await publishRuntime();
+              }
+            },
           });
+        } catch (err) {
+          if (err instanceof GatewayHotReloadStaleSecretsError) {
+            continue;
+          }
+          if (err instanceof GatewayHotReloadRecoveryError) {
+            throw err;
+          }
+          if (runtimeSecretsPublished) {
+            const activateIfCurrent =
+              params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent;
+            let restored = false;
+            if (previousSnapshot && publishedSnapshotRevision !== null && activateIfCurrent) {
+              restored = Boolean(
+                await activateIfCurrent(previousSnapshot, publishedSnapshotRevision, {
+                  reason: "reload",
+                  activate: true,
+                }),
+              );
+            } else if (
+              publishedSnapshotRevision !== null &&
+              getActiveSecretsRuntimeSnapshotRevision() === publishedSnapshotRevision
+            ) {
+              if (previousSnapshot) {
+                await activateSecretsRuntimeSnapshot(previousSnapshot);
+              } else {
+                clearSecretsRuntimeSnapshot();
+              }
+              restored = true;
+            }
+            if (restored) {
+              if (previousSnapshot && shouldRefreshContextWindowCache(plan)) {
+                await refreshContextWindowCache(previousSnapshot.config);
+              }
+              params.sharedGatewaySessionGenerationState.current =
+                previousSharedGatewaySessionGeneration;
+              if (sharedGatewaySessionGenerationChanged) {
+                disconnectStaleSharedGatewayAuthClients({
+                  clients: params.clients,
+                  expectedGeneration: previousSharedGatewaySessionGeneration,
+                });
+              }
+            }
+          }
+          throw err;
         }
-        throw err;
+        if (
+          publishedSnapshotRevision !== null &&
+          getActiveSecretsRuntimeSnapshotRevision() === publishedSnapshotRevision
+        ) {
+          setCurrentSharedGatewaySessionGeneration(
+            params.sharedGatewaySessionGenerationState,
+            nextSharedGatewaySessionGeneration,
+          );
+        }
+        return;
       }
-      setCurrentSharedGatewaySessionGeneration(
-        params.sharedGatewaySessionGenerationState,
-        nextSharedGatewaySessionGeneration,
-      );
     },
     onRestart: async (plan, nextConfig) => {
       const previousRequiredSharedGatewaySessionGeneration =
@@ -879,21 +1219,7 @@ export function startManagedGatewayConfigReloader(
           params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
         const restartQueued = requestGatewayRestart(plan, nextConfig);
         if (!restartQueued) {
-          if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
-            await activateSecretsRuntimeSnapshot(prepared);
-            setCurrentSharedGatewaySessionGeneration(
-              params.sharedGatewaySessionGenerationState,
-              nextSharedGatewaySessionGeneration,
-            );
-            params.sharedGatewaySessionGenerationState.required = null;
-            disconnectStaleSharedGatewayAuthClients({
-              clients: params.clients,
-              expectedGeneration: nextSharedGatewaySessionGeneration,
-            });
-          } else {
-            params.sharedGatewaySessionGenerationState.required = null;
-          }
-          return;
+          throw new GatewayHotReloadRecoveryError("config restart");
         }
         if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
           params.sharedGatewaySessionGenerationState.required = nextSharedGatewaySessionGeneration;
@@ -920,6 +1246,7 @@ export function startManagedGatewayConfigReloader(
   return {
     stop: async () => {
       stopped = true;
+      stopRestartRetries();
       abortActiveGmailRestart();
       await configReloader.stop();
     },

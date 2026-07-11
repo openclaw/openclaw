@@ -41,6 +41,7 @@ export type SecretsRuntimeRefreshContext = {
 };
 
 let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
+let activeSnapshotRevision = 0;
 let activeRefreshContext: SecretsRuntimeRefreshContext | null = null;
 const clearHooks = new Set<() => void>();
 const preparedSnapshotRefreshContext = new WeakMap<
@@ -140,6 +141,7 @@ export function activateSecretsRuntimeSnapshotState(params: {
   setRuntimeConfigSnapshot(next.config, next.sourceConfig);
   replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
   activeSnapshot = next;
+  activeSnapshotRevision += 1;
   activeRefreshContext = nextRefreshContext;
   if (nextRefreshContext) {
     preparedSnapshotRefreshContext.set(next, cloneSecretsRuntimeRefreshContext(nextRefreshContext));
@@ -163,6 +165,11 @@ export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapsho
     );
   }
   return snapshot;
+}
+
+/** Stable token for compare-and-activate ownership across cloned snapshot reads. */
+export function getActiveSecretsRuntimeSnapshotRevision(): number {
+  return activeSnapshotRevision;
 }
 
 // Hot-path readers only need the config pair for availability decisions.
@@ -198,6 +205,7 @@ export function getLiveSecretsRuntimeAuthStores(): PreparedSecretsRuntimeSnapsho
  * Clears active secrets runtime state and all linked config/auth/web-tool snapshots.
  */
 export function clearSecretsRuntimeSnapshot(): void {
+  activeSnapshotRevision += 1;
   activeSnapshot = null;
   activeRefreshContext = null;
   clearActiveRuntimeWebToolsMetadata();

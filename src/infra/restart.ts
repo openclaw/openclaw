@@ -447,6 +447,18 @@ export function emitGatewayRestartWithSignalAdmission(
   return emitted;
 }
 
+/** Closed restart result for owners that must distinguish coalescing from delivery failure. */
+export function requestGatewayRestartWithSignalAdmission(
+  reasonOverride?: string,
+  intent?: GatewayRestartIntent,
+): GatewayRestartEmitResult {
+  const hadUnconsumedRestartSignal = hasUnconsumedRestartSignal();
+  if (emitGatewayRestartWithSignalAdmission(reasonOverride, intent)) {
+    return { status: "emitted" };
+  }
+  return { status: hadUnconsumedRestartSignal ? "coalesced" : "failed" };
+}
+
 function resetSigusr1AuthorizationIfExpired(now = Date.now()) {
   if (sigusr1AuthorizedCount <= 0) {
     return;
@@ -539,7 +551,23 @@ export type RestartDeferralHooks = {
 export type RestartEmitHooks = {
   beforeEmit?: () => Promise<void>;
   afterEmitRejected?: () => Promise<void>;
+  afterEmitFailed?: () => Promise<void>;
+  emitRestart?: GatewayRestartEmitter;
 };
+
+export type RestartDeferralHandle = {
+  cancel: () => void;
+};
+
+export type GatewayRestartEmitter = (
+  reasonOverride?: string,
+  intent?: GatewayRestartIntent,
+) => GatewayRestartEmitResult;
+
+export type GatewayRestartEmitResult =
+  | { status: "emitted" }
+  | { status: "coalesced" }
+  | { status: "failed" };
 
 export function resolveGatewayRestartDeferralTimeoutMs(timeoutMs: unknown): number | undefined {
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
@@ -640,12 +668,17 @@ async function emitPreparedGatewayRestartUnderAdmission(
   const preferredReason = shouldPreferRestartReason(pendingRestartReason, reasonOverride)
     ? pendingRestartReason
     : undefined;
-  const emitted = emitGatewayRestartWithSignalAdmission(
-    preferredReason ?? reasonOverride,
-    preferredReason && intent ? { ...intent, reason: preferredReason } : intent,
-  );
-  if (!emitted) {
+  const resolvedReason = preferredReason ?? reasonOverride;
+  const resolvedIntent =
+    preferredReason && intent ? { ...intent, reason: preferredReason } : intent;
+  const emitResult = preparedHooks?.emitRestart
+    ? preparedHooks.emitRestart(resolvedReason, resolvedIntent)
+    : requestGatewayRestartWithSignalAdmission(resolvedReason, resolvedIntent);
+  if (emitResult.status !== "emitted") {
     await rejectPreparedRestartHook(preparedHooks);
+  }
+  if (emitResult.status === "failed") {
+    await preparedHooks?.afterEmitFailed?.();
   }
 }
 
@@ -690,7 +723,7 @@ export function deferGatewayRestartUntilIdle(opts: {
   maxWaitMs?: number;
   reason?: string;
   timeoutIntent?: GatewayRestartIntent;
-}): void {
+}): RestartDeferralHandle {
   const pollMs = resolveTimerTimeoutMs(opts.pollMs, DEFAULT_DEFERRAL_POLL_MS, 10);
   const maxWaitMs =
     typeof opts.maxWaitMs === "number" && Number.isFinite(opts.maxWaitMs) && opts.maxWaitMs > 0
@@ -698,36 +731,54 @@ export function deferGatewayRestartUntilIdle(opts: {
       : undefined;
 
   let pending: number;
+  let cancelled = false;
+  let poll: ReturnType<typeof setInterval> | null = null;
+  const cancel = () => {
+    cancelled = true;
+    if (!poll) {
+      return;
+    }
+    clearInterval(poll);
+    activeDeferralPolls.delete(poll);
+    poll = null;
+  };
+  const handle = { cancel };
   try {
     pending = opts.getPendingCount();
   } catch (err) {
     opts.hooks?.onCheckError?.(err);
     void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
-    return;
+    return handle;
   }
   if (pending <= 0) {
     opts.hooks?.onReady?.();
     void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
-    return;
+    return handle;
   }
 
   opts.hooks?.onDeferring?.(pending);
   const startedAt = Date.now();
   let nextStillPendingAt = startedAt + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
-  const poll = setInterval(() => {
+  poll = setInterval(() => {
+    if (cancelled || !poll) {
+      return;
+    }
+    const activePoll = poll;
     let current: number;
     try {
       current = opts.getPendingCount();
     } catch (err) {
-      clearInterval(poll);
-      activeDeferralPolls.delete(poll);
+      clearInterval(activePoll);
+      activeDeferralPolls.delete(activePoll);
+      poll = null;
       opts.hooks?.onCheckError?.(err);
       void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
       return;
     }
     if (current <= 0) {
-      clearInterval(poll);
-      activeDeferralPolls.delete(poll);
+      clearInterval(activePoll);
+      activeDeferralPolls.delete(activePoll);
+      poll = null;
       opts.hooks?.onReady?.();
       void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
       return;
@@ -738,13 +789,15 @@ export function deferGatewayRestartUntilIdle(opts: {
       nextStillPendingAt = Date.now() + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
     }
     if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
-      clearInterval(poll);
-      activeDeferralPolls.delete(poll);
+      clearInterval(activePoll);
+      activeDeferralPolls.delete(activePoll);
+      poll = null;
       opts.hooks?.onTimeout?.(current, elapsedMs);
       void emitPreparedGatewayRestart(opts.emitHooks, opts.reason, opts.timeoutIntent);
     }
   }, pollMs);
   activeDeferralPolls.add(poll);
+  return handle;
 }
 
 function formatSpawnDetail(result: {

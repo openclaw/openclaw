@@ -129,6 +129,21 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(hooks.onTimeout).not.toHaveBeenCalled();
   });
 
+  it("cancels a pending deferral before it can emit", () => {
+    let pending = 1;
+    const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const handle = deferGatewayRestartUntilIdle({
+      getPendingCount: () => pending,
+      emitHooks: { emitRestart },
+    });
+
+    handle.cancel();
+    pending = 0;
+    vi.advanceTimersByTime(1_000);
+
+    expect(emitRestart).not.toHaveBeenCalled();
+  });
+
   it("immediately restarts when pending count is 0", () => {
     const hooks: RestartDeferralHooks = {
       onReady: vi.fn(),

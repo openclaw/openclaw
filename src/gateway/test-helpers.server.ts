@@ -27,7 +27,10 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { resetGatewaySuspendCoordinatorForTest } from "../infra/gateway-suspend-coordinator.js";
-import { __testing as restartTesting } from "../infra/restart.js";
+import {
+  __testing as restartTesting,
+  requestGatewayRestartWithSignalAdmission,
+} from "../infra/restart.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
@@ -606,8 +609,11 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
   resetConfigRuntimeState();
   clearSessionStoreCacheForTest();
   const mod = await getServerModule();
-  const resolvedOpts =
-    opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
+  const resolvedOpts = {
+    ...opts,
+    controlUiEnabled: opts?.controlUiEnabled ?? false,
+    hotReloadRecovery: opts?.hotReloadRecovery ?? requestGatewayRestartWithSignalAdmission,
+  };
   if (
     resolvedOpts?.controlUiEnabled === true &&
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1" &&

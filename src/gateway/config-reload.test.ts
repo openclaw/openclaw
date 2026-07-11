@@ -1064,26 +1064,21 @@ describe("startGatewayConfigReloader", () => {
     await reloader.stop();
   });
 
-  it("contains restart callback failures and retries on subsequent changes", async () => {
+  it("contains restart callback failures and retries the same persisted config", async () => {
+    const snapshot = makeSnapshot({
+      config: {
+        gateway: { reload: { debounceMs: 0 }, port: 18790 },
+      },
+      hash: "restart-1",
+    });
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()
-      .mockResolvedValueOnce(
-        makeSnapshot({
-          config: {
-            gateway: { reload: { debounceMs: 0 }, port: 18790 },
-          },
-          hash: "restart-1",
-        }),
-      )
-      .mockResolvedValueOnce(
-        makeSnapshot({
-          config: {
-            gateway: { reload: { debounceMs: 0 }, port: 18791 },
-          },
-          hash: "restart-2",
-        }),
-      );
-    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValueOnce(snapshot);
+    const promoteSnapshot = vi.fn(async () => true);
+    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot, {
+      promoteSnapshot,
+    });
     onRestart.mockRejectedValueOnce(new Error("restart-check failed"));
     onRestart.mockResolvedValueOnce(undefined);
 
@@ -1100,6 +1095,8 @@ describe("startGatewayConfigReloader", () => {
       expect(onHotReload).not.toHaveBeenCalled();
       expect(onRestart).toHaveBeenCalledTimes(1);
       expect(log.error).toHaveBeenCalledWith("config restart failed: Error: restart-check failed");
+      expect(log.error).toHaveBeenCalledWith("config reload failed: Error: restart-check failed");
+      expect(promoteSnapshot).not.toHaveBeenCalled();
       expect(unhandled).toStrictEqual([]);
 
       watcher.emit("change");
@@ -1107,6 +1104,7 @@ describe("startGatewayConfigReloader", () => {
       await Promise.resolve();
 
       expect(onRestart).toHaveBeenCalledTimes(2);
+      expect(promoteSnapshot).toHaveBeenCalledWith(snapshot, "valid-config");
       expect(unhandled).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandled);
@@ -1292,6 +1290,38 @@ describe("startGatewayConfigReloader", () => {
     expect(log.error).toHaveBeenCalledWith("config reload failed: Error: reload refused");
 
     await reloader.stop();
+  });
+
+  it("retries the same external snapshot after a pre-commit hot reload failure", async () => {
+    const snapshot = makeZeroDebounceHookSnapshot("external-retry-1");
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(snapshot);
+    const { watcher, onConfigApplied, onHotReload, reloader } = createReloaderHarness(readSnapshot);
+    onHotReload.mockRejectedValueOnce(new Error("reload refused"));
+
+    watcher.emit("change");
+    await vi.runAllTimersAsync();
+    watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(onHotReload).toHaveBeenCalledTimes(2);
+    expect(onConfigApplied).toHaveBeenCalledTimes(1);
+    await reloader.stop();
+  });
+
+  it("lets the watcher retry a failed in-process write with the same persisted hash", async () => {
+    const snapshot = makeZeroDebounceHookSnapshot("internal-retry-1");
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(snapshot);
+    const harness = createReloaderHarness(readSnapshot);
+    harness.onHotReload.mockRejectedValueOnce(new Error("reload refused"));
+
+    harness.emitWrite(makeZeroDebounceHookWrite("internal-retry-1"));
+    await vi.runAllTimersAsync();
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(harness.onHotReload).toHaveBeenCalledTimes(2);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    await harness.reloader.stop();
   });
 
   it("keeps accepted external config reloads applied when last-known-good promotion fails", async () => {

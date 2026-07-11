@@ -7,6 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
+import {
+  activateSecretsRuntimeSnapshot,
+  clearSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshotRevision,
+} from "../secrets/runtime-state.js";
 import type { PreparedSecretsRuntimeSnapshot, SecretResolverWarning } from "../secrets/runtime.js";
 import { KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS } from "./known-weak-gateway-secrets.js";
 import {
@@ -315,6 +321,7 @@ describe("gateway startup config secret preflight", () => {
   const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
 
   afterEach(() => {
+    clearSecretsRuntimeSnapshot();
     if (previousSkipChannels === undefined) {
       delete process.env.OPENCLAW_SKIP_CHANNELS;
     } else {
@@ -325,6 +332,81 @@ describe("gateway startup config secret preflight", () => {
     } else {
       process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
     }
+  });
+
+  it("activates a prepared snapshot only while its expected predecessor is current", async () => {
+    const initial = preparedSnapshot(gatewayTokenConfig({}));
+    const refreshed = preparedSnapshotWithGatewayToken(initial.sourceConfig, "refreshed-token");
+    const candidate = preparedSnapshotWithGatewayToken(initial.sourceConfig, "candidate-token");
+    const activateRuntimeSecretsSnapshot = vi.fn(activateSecretsRuntimeSnapshot);
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      prepareRuntimeSecretsSnapshot: vi.fn(async ({ config }) => preparedSnapshot(config)),
+      activateRuntimeSecretsSnapshot,
+    });
+    activateSecretsRuntimeSnapshot(initial);
+    const initialRevision = getActiveSecretsRuntimeSnapshotRevision();
+    activateSecretsRuntimeSnapshot(refreshed);
+    const refreshedRevision = getActiveSecretsRuntimeSnapshotRevision();
+
+    await expect(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(candidate, initialRevision, {
+        reason: "reload",
+        activate: true,
+      }),
+    ).resolves.toBeNull();
+    expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
+
+    await expect(
+      activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(candidate, refreshedRevision, {
+        reason: "reload",
+        activate: true,
+      }),
+    ).resolves.toBe(candidate);
+    expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("holds activation ownership through the accepted publication callback", async () => {
+    const initial = preparedSnapshot(gatewayTokenConfig({}));
+    const candidate = preparedSnapshotWithGatewayToken(initial.sourceConfig, "candidate-token");
+    const later = preparedSnapshotWithGatewayToken(initial.sourceConfig, "later-token");
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      prepareRuntimeSecretsSnapshot: vi.fn(async ({ config }) => preparedSnapshot(config)),
+      activateRuntimeSecretsSnapshot: vi.fn(activateSecretsRuntimeSnapshot),
+    });
+    activateSecretsRuntimeSnapshot(initial);
+    const initialRevision = getActiveSecretsRuntimeSnapshotRevision();
+    let releasePublication: (() => void) | undefined;
+    const publicationBlocked = new Promise<void>((resolve) => {
+      releasePublication = resolve;
+    });
+    let publicationStarted: (() => void) | undefined;
+    const publicationEntered = new Promise<void>((resolve) => {
+      publicationStarted = resolve;
+    });
+
+    const candidateActivation = activateRuntimeSecrets.activatePreparedSnapshotIfCurrent?.(
+      candidate,
+      initialRevision,
+      { reason: "reload", activate: true },
+      async () => {
+        publicationStarted?.();
+        await publicationBlocked;
+      },
+    );
+    await publicationEntered;
+    let laterActivated = false;
+    const laterActivation = activateRuntimeSecrets
+      .activatePreparedSnapshot?.(later, { reason: "reload", activate: true })
+      .then(() => {
+        laterActivated = true;
+      });
+    await Promise.resolve();
+    expect(laterActivated).toBe(false);
+
+    releasePublication?.();
+    await candidateActivation;
+    await laterActivation;
+    expect(getActiveSecretsRuntimeSnapshot()?.config.gateway?.auth?.token).toBe("later-token");
   });
 
   it("measures startup auth subphases", async () => {
@@ -801,8 +883,6 @@ describe("gateway startup config secret preflight", () => {
     });
 
     try {
-      const { clearSecretsRuntimeSnapshot, getActiveSecretsRuntimeSnapshot } =
-        await import("../secrets/runtime-state.js");
       const { getRuntimeConfigSnapshotRefreshHandler } =
         await import("../config/runtime-snapshot.js");
       const result = await activateImportedStartupConfig(

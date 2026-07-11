@@ -40,7 +40,11 @@ import {
 import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
-import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
+import {
+  type GatewayRestartEmitter,
+  setGatewaySigusr1RestartPolicy,
+  setPreRestartDeferralCheck,
+} from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
@@ -524,6 +528,8 @@ export type GatewayServerOptions = {
    * reparsing openclaw.json during server startup.
    */
   startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
+  /** Internal run-loop recovery seam. Embedded servers omit it and do not hot reload. */
+  hotReloadRecovery?: GatewayRestartEmitter;
 };
 
 type SetupWizardRunner = NonNullable<GatewayServerOptions["wizardRunner"]>;
@@ -1440,6 +1446,7 @@ export async function startGatewayServer(
       nextConfig: OpenClawConfig;
       changedPaths: readonly string[];
       beforeReplace: (channels: ReadonlySet<ChannelId>) => Promise<void>;
+      commitRuntime: () => Promise<void>;
       isAborted?: () => boolean;
     }): Promise<GatewayPluginReloadResult> => {
       const beforeChannelTargets = listAttachedChannelConfigTargets();
@@ -1496,11 +1503,8 @@ export async function startGatewayServer(
           cancelled: true,
         };
       }
-      setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
-        config: params.nextConfig,
-        env: process.env,
-        workspaceDir: defaultWorkspaceDir,
-      });
+      const previousPluginServices = runtimeState.pluginServices;
+      await params.commitRuntime();
       const loaded = prepareGatewayPluginLoad({
         cfg: params.nextConfig,
         workspaceDir: defaultWorkspaceDir,
@@ -1510,24 +1514,22 @@ export async function startGatewayServer(
         baseMethods,
         pluginLookUpTable: nextPluginLookUpTable,
       });
-      const previousPluginServices = runtimeState.pluginServices;
+      setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
+        config: params.nextConfig,
+        env: process.env,
+        workspaceDir: defaultWorkspaceDir,
+      });
+      replaceAttachedPluginRuntime(loaded);
       runtimeState.pluginServices = null;
       if (previousPluginServices) {
-        await previousPluginServices.stop().catch((err: unknown) => {
-          log.warn(`plugin services stop failed during reload: ${String(err)}`);
-        });
+        await previousPluginServices.stop();
       }
-      replaceAttachedPluginRuntime(loaded);
       await refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
-      try {
-        runtimeState.pluginServices = await startPluginServices({
-          registry: loaded.pluginRegistry,
-          config: params.nextConfig,
-          workspaceDir: defaultWorkspaceDir,
-        });
-      } catch (err) {
-        log.warn(`plugin services failed to start after reload: ${String(err)}`);
-      }
+      runtimeState.pluginServices = await startPluginServices({
+        registry: loaded.pluginRegistry,
+        config: params.nextConfig,
+        workspaceDir: defaultWorkspaceDir,
+      });
       const afterChannelTargets = listAttachedChannelConfigTargets();
       const afterChannelIds = new Set(afterChannelTargets.keys());
       const restartChannels = new Set<ChannelId>();
@@ -1869,62 +1871,65 @@ export async function startGatewayServer(
     activateScheduledServicesWhenReady();
 
     const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
-    runtimeState.configReloader = startManagedGatewayConfigReloader({
-      minimalTestGateway,
-      initialConfig: cfgAtStart,
-      initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
-      initialInternalWriteHash: startupInternalWriteHash,
-      watchPath: configSnapshot.path,
-      readSnapshot: readConfigFileSnapshot,
-      promoteSnapshot: promoteConfigSnapshotToLastKnownGood,
-      subscribeToWrites: registerConfigWriteListener,
-      deps,
-      broadcast,
-      getState: () => ({
-        hooksConfig: runtimeState.hooksConfig,
-        hookClientIpConfig: runtimeState.hookClientIpConfig,
-        heartbeatRunner: runtimeState.heartbeatRunner,
-        cronState: runtimeState.cronState,
-        channelHealthMonitor: runtimeState.channelHealthMonitor,
-      }),
-      setState: (nextState) => {
-        const cronStateChanged = nextState.cronState !== runtimeState.cronState;
-        runtimeState.hooksConfig = nextState.hooksConfig;
-        runtimeState.hookClientIpConfig = nextState.hookClientIpConfig;
-        runtimeState.heartbeatRunner = nextState.heartbeatRunner;
-        runtimeState.cronState = nextState.cronState;
-        deps.cron = runtimeState.cronState.cron;
-        runtimeState.channelHealthMonitor = nextState.channelHealthMonitor;
-        if (cronStateChanged) {
+    if (opts.hotReloadRecovery) {
+      runtimeState.configReloader = startManagedGatewayConfigReloader({
+        minimalTestGateway,
+        initialConfig: cfgAtStart,
+        initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
+        initialInternalWriteHash: startupInternalWriteHash,
+        watchPath: configSnapshot.path,
+        readSnapshot: readConfigFileSnapshot,
+        promoteSnapshot: promoteConfigSnapshotToLastKnownGood,
+        subscribeToWrites: registerConfigWriteListener,
+        deps,
+        broadcast,
+        getState: () => ({
+          hooksConfig: runtimeState.hooksConfig,
+          hookClientIpConfig: runtimeState.hookClientIpConfig,
+          heartbeatRunner: runtimeState.heartbeatRunner,
+          cronState: runtimeState.cronState,
+          channelHealthMonitor: runtimeState.channelHealthMonitor,
+        }),
+        setState: (nextState) => {
+          const cronStateChanged = nextState.cronState !== runtimeState.cronState;
+          runtimeState.hooksConfig = nextState.hooksConfig;
+          runtimeState.hookClientIpConfig = nextState.hookClientIpConfig;
+          runtimeState.heartbeatRunner = nextState.heartbeatRunner;
+          runtimeState.cronState = nextState.cronState;
+          deps.cron = runtimeState.cronState.cron;
+          runtimeState.channelHealthMonitor = nextState.channelHealthMonitor;
+          if (cronStateChanged) {
+            gatewayCronStartHandled = true;
+          }
+        },
+        startChannel,
+        stopChannel,
+        getChannelAutostartSuppression: channelManager.getAutostartSuppression,
+        stopPostReadySidecars: stopRegisteredPostReadySidecars,
+        reloadPlugins: reloadAttachedGatewayPlugins,
+        logHooks,
+        logChannels,
+        logCron,
+        logReload,
+        cronReconciliation,
+        onCronRestart: () => {
           gatewayCronStartHandled = true;
-        }
-      },
-      startChannel,
-      stopChannel,
-      getChannelAutostartSuppression: channelManager.getAutostartSuppression,
-      stopPostReadySidecars: stopRegisteredPostReadySidecars,
-      reloadPlugins: reloadAttachedGatewayPlugins,
-      logHooks,
-      logChannels,
-      logCron,
-      logReload,
-      cronReconciliation,
-      onCronRestart: () => {
-        gatewayCronStartHandled = true;
-      },
-      reconcileTerminalSessions: (plan, nextConfig) => {
-        terminalLaunchPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
-        terminalSessions.closeDisallowedAgents(
-          (agentId) => terminalLaunchPolicy.resolve(agentId).ok,
-        );
-      },
-      commitTerminalConfig: terminalLaunchPolicy.commitConfig,
-      channelManager,
-      activateRuntimeSecrets,
-      resolveSharedGatewaySessionGenerationForConfig,
-      sharedGatewaySessionGenerationState,
-      clients,
-    });
+        },
+        reconcileTerminalSessions: (plan, nextConfig) => {
+          terminalLaunchPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
+          terminalSessions.closeDisallowedAgents(
+            (agentId) => terminalLaunchPolicy.resolve(agentId).ok,
+          );
+        },
+        commitTerminalConfig: terminalLaunchPolicy.commitConfig,
+        channelManager,
+        activateRuntimeSecrets,
+        resolveSharedGatewaySessionGenerationForConfig,
+        sharedGatewaySessionGenerationState,
+        clients,
+        requestRecoveryRestart: opts.hotReloadRecovery,
+      });
+    }
     await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err: unknown) => {
       log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
     });

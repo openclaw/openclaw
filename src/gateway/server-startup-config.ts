@@ -32,6 +32,7 @@ import {
 import {
   activateSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshotRevision,
   getLiveSecretsRuntimeAuthStores,
   setPreparedSecretsRuntimeSnapshotRefreshContext,
 } from "../secrets/runtime-state.js";
@@ -72,6 +73,12 @@ export type ActivateRuntimeSecrets = ((
     snapshot: PreparedRuntimeSecretsSnapshot,
     params: RuntimeSecretsActivationParams,
   ) => Promise<PreparedRuntimeSecretsSnapshot>;
+  activatePreparedSnapshotIfCurrent?: (
+    snapshot: PreparedRuntimeSecretsSnapshot,
+    expectedRevision: number,
+    params: RuntimeSecretsActivationParams,
+    onActivated?: () => Promise<void>,
+  ) => Promise<PreparedRuntimeSecretsSnapshot | null>;
 };
 
 type GatewayStartupConfigOverrides = {
@@ -403,6 +410,36 @@ export function createRuntimeSecretsActivator(params: {
         return handleSecretsActivationError(err, activationParams, snapshot.sourceConfig);
       }
     });
+
+  activateRuntimeSecrets.activatePreparedSnapshotIfCurrent = async (
+    snapshot,
+    expectedRevision,
+    activationParams,
+    onActivated,
+  ) => {
+    // Resolve the lazy activator before entering the compare-and-activate
+    // section so no await separates revision ownership from state publication.
+    const activateRuntimeSecretsSnapshot = activationParams.activate
+      ? await loadActivateRuntimeSecretsSnapshot()
+      : undefined;
+    return await runWithSecretsActivationLock(async () => {
+      if (getActiveSecretsRuntimeSnapshotRevision() !== expectedRevision) {
+        return null;
+      }
+      let activated: PreparedRuntimeSecretsSnapshot;
+      try {
+        activated = await finishPreparedSnapshot(
+          snapshot,
+          activationParams,
+          activateRuntimeSecretsSnapshot ? { activateRuntimeSecretsSnapshot } : undefined,
+        );
+      } catch (err) {
+        return handleSecretsActivationError(err, activationParams, snapshot.sourceConfig);
+      }
+      await onActivated?.();
+      return activated;
+    });
+  };
 
   return activateRuntimeSecrets;
 }
