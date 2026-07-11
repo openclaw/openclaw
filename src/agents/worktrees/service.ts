@@ -390,23 +390,12 @@ export class ManagedWorktreeService {
         existing === undefined &&
         (await findAdoptableOrphan(repository.repoRoot, worktreePath, branch))
       ) {
-        // The crash may have hit before provisioning finished, so re-run copy + setup with the
-        // normal create() failure semantics before the registry row exists. Safe because the
-        // crashed create() never returned this worktree to any caller.
         const adoptedBase = await resolveBase(repository.repoRoot, params.baseRef);
-        try {
-          await copyIncludedFiles(repository.sourceRoot, worktreePath);
-          if (params.runSetupScript !== false) {
-            await runSetupScript(repository.sourceRoot, worktreePath);
-          }
-        } catch (error) {
-          try {
-            await cleanupFailedCreate(repository.repoRoot, worktreePath, branch);
-          } catch (cleanupError) {
-            throw new Error(`${String(error)}\n${String(cleanupError)}`, { cause: cleanupError });
-          }
-          throw error;
-        }
+        // Claim BEFORE provisioning: only the claim holder may provision or destroy this
+        // path; losers must never touch it. Claiming first means a concurrent create()/gc()
+        // cannot register the path during the (long) setup re-run and then have its live
+        // worktree force-removed by this call's failure cleanup, and the repo setup script
+        // never runs twice concurrently in the same path.
         const adopted = this.adoptOrphan({
           repoFingerprint: repository.fingerprint,
           repoRoot: repository.repoRoot,
@@ -416,18 +405,41 @@ export class ManagedWorktreeService {
           ...(params.ownerKind ? { ownerKind: params.ownerKind } : {}),
           ...(params.ownerId ? { ownerId: params.ownerId } : {}),
         });
-        if (adopted) {
-          return adopted;
-        }
-        // Claim lost: a concurrent registration won the path while we re-provisioned; the
-        // winner owns the worktree (the re-run above is idempotent). Mirror create()'s
-        // live-row-at-path shortcut for the row we lost to.
-        const winner = findLiveRegistryWorktreeByPath(this.env, worktreePath);
-        if (winner) {
-          if (!recordOwnerMatches(winner, params)) {
-            throw worktreeNameInUseError(winner, name);
+        if (adopted === undefined) {
+          // Claim lost: a concurrent registration won the path; this call runs no setup,
+          // no copy, no cleanup. Mirror create()'s live-row-at-path shortcut for the winner.
+          const winner = findLiveRegistryWorktreeByPath(this.env, worktreePath);
+          if (winner) {
+            if (!recordOwnerMatches(winner, params)) {
+              throw worktreeNameInUseError(winner, name);
+            }
+            return winner;
           }
-          return winner;
+          // Winner vanished between claim and lookup; fall through to the collision error.
+        } else {
+          // The crash may have hit before provisioning finished, so re-run copy + setup with
+          // the normal create() failure semantics. Unlike normal create() the row exists
+          // during this re-run — acceptable: the physical worktree already exists (orphan
+          // reclaim), and gc-side adoption also registers without provisioning.
+          try {
+            await copyIncludedFiles(repository.sourceRoot, worktreePath);
+            if (params.runSetupScript !== false) {
+              await runSetupScript(repository.sourceRoot, worktreePath);
+            }
+          } catch (error) {
+            // Claim-holder-only destruction: the row is held while the worktree is removed,
+            // then dropped so no registration outlives the path.
+            try {
+              await cleanupFailedCreate(repository.repoRoot, worktreePath, branch);
+            } catch (cleanupError) {
+              throw new Error(`${String(error)}\n${String(cleanupError)}`, {
+                cause: cleanupError,
+              });
+            }
+            deleteRegistryWorktree(this.env, adopted.id);
+            throw error;
+          }
+          return adopted;
         }
       }
       throw new Error(`branch already exists: ${branch}`);

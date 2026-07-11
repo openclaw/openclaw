@@ -819,9 +819,10 @@ describe("ManagedWorktreeService", () => {
     deleteRegistryWorktree(env, created.id);
     const winner: ManagedWorktreeRecord = { ...created, id: "race-winner" };
     let raced = false;
-    // The first now() read inside the retried create() lands before the atomic claim; the
-    // trapdoor inserts the competing row there, deterministically simulating a concurrent
-    // create() winning the path after this call's registry lookup.
+    // The first now() read inside the retried create() is adoptOrphan's createdAt, taken
+    // right before the atomic claim (which precedes provisioning); the trapdoor inserts the
+    // competing row there, deterministically simulating a concurrent create() winning the
+    // path after this call's registry lookup.
     const racingService = new ManagedWorktreeService({
       env,
       now: () => {
@@ -838,6 +839,66 @@ describe("ManagedWorktreeService", () => {
     expect(retried.id).toBe("race-winner");
     const rows = listRegistryWorktrees(env).filter((entry) => entry.path === created.path);
     expect(rows.map((entry) => entry.id)).toEqual(["race-winner"]);
+  });
+
+  it("a losing retried create() does not provision or destroy the winner's worktree", async () => {
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      "#!/bin/sh\necho ran >> setup-marker.txt\n",
+      { mode: 0o755 },
+    );
+    const created = await service.create({ repoRoot: repo, name: "race-loser" });
+    deleteRegistryWorktree(env, created.id);
+    // Pre-setup crash signature: the marker the initial create() wrote is gone.
+    await fs.rm(path.join(created.path, "setup-marker.txt"));
+    const winner: ManagedWorktreeRecord = { ...created, id: "race-winner" };
+    let raced = false;
+    const racingService = new ManagedWorktreeService({
+      env,
+      now: () => {
+        if (!raced) {
+          raced = true;
+          insertRegistryWorktree(env, winner);
+        }
+        return now;
+      },
+    });
+
+    const retried = await racingService.create({ repoRoot: repo, name: "race-loser" });
+
+    expect(retried.id).toBe("race-winner");
+    // Claim-before-provision: the loser ran no setup, no copy, and no cleanup on the
+    // winner's path, and left the registry row set untouched.
+    await expect(fs.stat(path.join(created.path, "setup-marker.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await fs.stat(created.path)).toBeTruthy();
+    const rows = listRegistryWorktrees(env).filter((entry) => entry.path === created.path);
+    expect(rows.map((entry) => entry.id)).toEqual(["race-winner"]);
+  });
+
+  it("binds a gc-adopted name to the manual record until removed", async () => {
+    const created = await service.create({ repoRoot: repo, name: "gc-owned" });
+    deleteRegistryWorktree(env, created.id);
+    await service.gc();
+    const adopted = (await service.list()).find((entry) => entry.path === created.path);
+    expect(adopted?.ownerKind).toBe("manual");
+
+    // An owner-carrying retry hits the owner guard against gc's manual record...
+    await expect(
+      service.create({
+        repoRoot: repo,
+        name: "gc-owned",
+        ownerKind: "workboard",
+        ownerId: "card-9",
+      }),
+    ).rejects.toThrow(/already in use by manual/);
+
+    // ...while an ownerless retry reuses it.
+    const reused = await service.create({ repoRoot: repo, name: "gc-owned" });
+    expect(reused.id).toBe(adopted?.id);
+    expect(reused.ownerKind).toBe("manual");
   });
 
   it("prunes expired snapshot refs and registry rows", async () => {
