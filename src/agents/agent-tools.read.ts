@@ -944,17 +944,9 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
       // The bridge writeFile accepts Buffer | string, so we keep the
       // existing file bytes as a Buffer and write the combined payload
       // without a lossy UTF-8 round-trip.
-      let existing: Buffer;
-      try {
-        existing = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!/ENOENT|no such file/i.test(msg)) {
-          throw err;
-        }
-        // File does not exist — append creates it.
-        existing = Buffer.alloc(0);
-      }
+      const existing = (await params.bridge.stat({ filePath: absolutePath, cwd: params.root }))
+        ? await params.bridge.readFile({ filePath: absolutePath, cwd: params.root })
+        : Buffer.alloc(0);
       await params.bridge.mkdirp({ filePath: path.dirname(absolutePath), cwd: params.root });
       await params.bridge.writeFile({
         filePath: absolutePath,
