@@ -209,7 +209,7 @@ function hasLegacyPromptContextTimestamp(
   // private timestamp marker is their durable outbound provenance.
   return (
     isTelegramMessageFromCurrentBot(node.sourceMessage, botUserId) ||
-    (node.sourceMessage.from?.id === 0 && node.sourceMessage.from.is_bot === true)
+    (node.sourceMessage.from?.id === 0 && node.sourceMessage.from.is_bot)
   );
 }
 
