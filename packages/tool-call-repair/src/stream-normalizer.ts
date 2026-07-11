@@ -950,8 +950,12 @@ function consumeJsonSuppressor(
     const end = consumeRemovedLineEnd(rest, optionalClosing.length);
     return { complete: true, suffix: rest.slice(end) };
   }
-  if (suppressor.optionalClosings?.some((marker) => marker.startsWith(rest))) {
-    suppressor.carry = rest;
+  const optionalClosings = suppressor.optionalClosings ?? [];
+  if (optionalClosings.some((marker) => marker.startsWith(rest))) {
+    const maxCarryChars = Math.max(...optionalClosings.map((marker) => marker.length));
+    // Keep bounded leading whitespace with a split optional closer. If the next
+    // chunk disproves the closer, it remains part of the visible suffix.
+    suppressor.carry = text.slice(-maxCarryChars);
     return { complete: false };
   }
   const end = consumeRemovedLineEnd(text, 0);

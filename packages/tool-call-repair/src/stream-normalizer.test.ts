@@ -696,6 +696,18 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     expect(textDeltas(events)).toEqual(["\nVisible"]);
   });
 
+  it("preserves split visible whitespace when an optional JSON closer is absent", async () => {
+    const prefix = `[tool:read] {"path":"${"x".repeat(256_001)}`;
+    const events = await normalize([
+      { type: "text_delta", contentIndex: 0, delta: prefix },
+      { type: "text_delta", contentIndex: 0, delta: '"}' },
+      { type: "text_delta", contentIndex: 0, delta: "\n\n" },
+      { type: "text_delta", contentIndex: 0, delta: "Visible" },
+    ]);
+
+    expect(textDeltas(events)).toEqual(["\nVisible"]);
+  });
+
   it("retains a later text start when a buffered call leaves visible text", async () => {
     const call = "<function=read></function>\n";
     const suffix = "Visible";
