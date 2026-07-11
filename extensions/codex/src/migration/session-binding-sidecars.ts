@@ -415,7 +415,12 @@ async function migrateSource(
       ]);
       const raw = JSON.parse(contents) as Record<string, unknown>;
       const [
-        { bindingStoreKey, createStoredCodexAppServerBinding, readStoredCodexAppServerBinding },
+        {
+          bindingStoreKey,
+          createStoredCodexAppServerBinding,
+          normalizeStoredCodexAppServerBindingFingerprints,
+          readStoredCodexAppServerBinding,
+        },
         { legacyCodexConversationBindingId },
       ] = await Promise.all([
         import("../app-server/session-binding.js"),
@@ -458,17 +463,53 @@ async function migrateSource(
           bindingId: legacyCodexConversationBindingId(sessionFile),
         }),
       );
+      const normalizeStoredRow = async (
+        key: string,
+        current: MigratedBindingRow,
+      ): Promise<{ value?: MigratedBindingRow; warning?: string }> => {
+        const parsed = readStoredCodexAppServerBinding(current);
+        if (!parsed) {
+          return { warning: `canonical plugin state is invalid at ${key}` };
+        }
+        const normalized = normalizeStoredCodexAppServerBindingFingerprints(parsed);
+        if (!normalized) {
+          return { warning: `canonical plugin state is invalid at ${key}` };
+        }
+        if (isDeepStrictEqual(parsed, normalized)) {
+          return { value: parsed };
+        }
+        if (parsed.lease && parsed.lease.expiresAt > Date.now()) {
+          return { warning: `canonical plugin state is leased at ${key}` };
+        }
+        const update = store.update;
+        if (!update) {
+          return { warning: `canonical plugin state could not be normalized at ${key}` };
+        }
+        await update(key, (candidate) => {
+          const candidateParsed = readStoredCodexAppServerBinding(candidate);
+          if (!candidateParsed || !isDeepStrictEqual(candidateParsed, parsed)) {
+            return undefined;
+          }
+          return normalized;
+        });
+        const persisted = readStoredCodexAppServerBinding(await store.lookup(key));
+        if (!persisted || !isDeepStrictEqual(persisted, normalized)) {
+          return { warning: `canonical plugin state changed at ${key}` };
+        }
+        importedKeys++;
+        return { value: normalized };
+      };
       let currentConversation: MigratedBindingRow | undefined;
       for (const key of conversationKeys) {
         const current = await store.lookup(key);
         if (current === undefined) {
           continue;
         }
-        const parsed = readStoredCodexAppServerBinding(current);
-        if (!parsed) {
-          return retain(`canonical plugin state is invalid at ${key}`);
+        const result = await normalizeStoredRow(key, current);
+        if (result.warning || !result.value) {
+          return retain(result.warning ?? `canonical plugin state is invalid at ${key}`);
         }
-        currentConversation ??= parsed;
+        currentConversation ??= result.value;
       }
       const stored = currentConversation ?? baseStored;
       const sessionKey = owner
@@ -500,7 +541,14 @@ async function migrateSource(
       };
       for (const entry of entries) {
         const current = await store.lookup(entry.key);
-        if (current !== undefined && !hasExpected(current, entry.value)) {
+        if (current === undefined) {
+          continue;
+        }
+        const result = await normalizeStoredRow(entry.key, current);
+        if (result.warning || !result.value) {
+          return retain(result.warning ?? `canonical plugin state is invalid at ${entry.key}`);
+        }
+        if (!hasExpected(result.value, entry.value)) {
           return retain(`canonical plugin state changed at ${entry.key}`);
         }
       }

@@ -353,6 +353,156 @@ describe("codex doctor contract", () => {
     await fs.rm(fixture.stateDir, { recursive: true, force: true });
   });
 
+  it("normalizes a partial raw conversation import before copying the session row", async () => {
+    const threadId = "thread-partial-import";
+    const sessionId = "partial-import";
+    const sessionKey = "agent:main:partial-import";
+    const emptyConversation: StoredCodexAppServerBinding = {
+      version: 1,
+      state: "active",
+      binding: {
+        threadId,
+        cwd: "",
+        dynamicToolsFingerprint: "",
+      },
+    };
+    const rawFingerprint = "x".repeat(
+      65_535 - Buffer.byteLength(JSON.stringify(emptyConversation)),
+    );
+    const rawConversation: StoredCodexAppServerBinding = {
+      ...emptyConversation,
+      binding: {
+        ...emptyConversation.binding,
+        dynamicToolsFingerprint: rawFingerprint,
+      },
+    };
+    const rawSession = { ...rawConversation, sessionId };
+    expect(Buffer.byteLength(JSON.stringify(rawConversation))).toBe(65_535);
+    expect(Buffer.byteLength(JSON.stringify(rawSession))).toBeGreaterThan(65_536);
+
+    const fixture = await createBindingMigrationFixture({
+      name: sessionId,
+      sessionIndex: {
+        [sessionKey]: {
+          sessionId,
+          sessionFile: `${sessionId}.jsonl`,
+        },
+      },
+      threadId,
+      binding: { dynamicToolsFingerprint: rawFingerprint },
+    });
+    const conversationKey = bindingStoreKey({
+      kind: "conversation",
+      bindingId: legacyCodexConversationBindingId(fixture.transcriptPath),
+    });
+    const sessionBindingKey = bindingStoreKey({
+      kind: "session",
+      agentId: "main",
+      sessionId,
+      sessionKey,
+    });
+    const store = openBindingStore(fixture.env);
+    await store.register(conversationKey, rawConversation);
+
+    await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
+      changes: [
+        "Migrated 1 Codex app-server binding sidecar(s) to plugin state and archived the legacy sources",
+      ],
+      warnings: [],
+    });
+
+    const expectedFingerprint = hashCodexAppServerBindingFingerprint(rawFingerprint);
+    await expect(store.lookup(conversationKey)).resolves.toMatchObject({
+      state: "active",
+      binding: { dynamicToolsFingerprint: expectedFingerprint },
+    });
+    await expect(store.lookup(sessionBindingKey)).resolves.toMatchObject({
+      state: "active",
+      sessionId,
+      binding: { dynamicToolsFingerprint: expectedFingerprint },
+    });
+    await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
+    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+
+    await fs.rm(fixture.stateDir, { recursive: true, force: true });
+  });
+
+  it("normalizes retained raw conversation and session rows before comparison", async () => {
+    const threadId = "thread-retained-import";
+    const sessionId = "retained-import";
+    const sessionKey = "agent:main:retained-import";
+    const rawFingerprint = "x".repeat(60_000);
+    const rawConversation: StoredCodexAppServerBinding = {
+      version: 1,
+      state: "active",
+      binding: {
+        threadId,
+        cwd: "",
+        dynamicToolsFingerprint: rawFingerprint,
+      },
+    };
+    const rawSession: StoredCodexAppServerBinding = {
+      ...rawConversation,
+      sessionId,
+    };
+    expect(Buffer.byteLength(JSON.stringify(rawSession))).toBeLessThan(65_536);
+
+    const fixture = await createBindingMigrationFixture({
+      name: sessionId,
+      sessionIndex: {
+        [sessionKey]: {
+          sessionId,
+          sessionFile: `${sessionId}.jsonl`,
+        },
+      },
+      threadId,
+      binding: { dynamicToolsFingerprint: rawFingerprint },
+    });
+    const conversationKey = bindingStoreKey({
+      kind: "conversation",
+      bindingId: legacyCodexConversationBindingId(fixture.transcriptPath),
+    });
+    const sessionBindingKey = bindingStoreKey({
+      kind: "session",
+      agentId: "main",
+      sessionId,
+      sessionKey,
+    });
+    const store = openBindingStore(fixture.env);
+    await store.register(conversationKey, rawConversation);
+    await store.register(sessionBindingKey, rawSession);
+
+    await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
+      changes: [
+        "Migrated 1 Codex app-server binding sidecar(s) to plugin state and archived the legacy sources",
+      ],
+      warnings: [],
+    });
+
+    const expectedFingerprint = hashCodexAppServerBindingFingerprint(rawFingerprint);
+    await expect(store.lookup(conversationKey)).resolves.toMatchObject({
+      state: "active",
+      binding: { dynamicToolsFingerprint: expectedFingerprint },
+    });
+    await expect(store.lookup(sessionBindingKey)).resolves.toMatchObject({
+      state: "active",
+      sessionId,
+      binding: { dynamicToolsFingerprint: expectedFingerprint },
+    });
+    await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
+    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+    await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+
+    await fs.rm(fixture.stateDir, { recursive: true, force: true });
+  });
+
   it("matches an owner through the contained fallback for a stale session file locator", async () => {
     const sessionKey = "agent:main:stale-locator";
     const fixture = await createBindingMigrationFixture({

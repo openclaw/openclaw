@@ -418,6 +418,21 @@ function normalizeLegacyBindingFingerprints(
   return normalized;
 }
 
+export function normalizeStoredCodexAppServerBindingFingerprints(
+  value: unknown,
+): StoredCodexAppServerBinding | undefined {
+  const stored = readStoredCodexAppServerBinding(value);
+  if (!stored || stored.state !== "active") {
+    return stored;
+  }
+  const binding = normalizeLegacyBindingFingerprints(
+    stored.binding as unknown as Record<string, unknown>,
+  );
+  return binding === stored.binding
+    ? stored
+    : readStoredCodexAppServerBinding({ ...stored, binding });
+}
+
 /** Encodes a migrated sidecar binding as one canonical plugin-state row. */
 export function createStoredCodexAppServerBinding(
   value: unknown,
