@@ -45,6 +45,13 @@ plan:
 The catalog is the non-archived collection. A row within it can still have an
 idle, active, `notLoaded`, or error turn status.
 
+Supervision remains opt-in. Guided onboarding attempts to install and enable it
+after native Codex installation detection succeeds and the selected inference
+backend passes its live check, independently of which primary backend the user
+selects. Supervision activates only when that opportunistic plugin setup
+succeeds. An explicit disabled plugin, policy block, or
+`supervision.enabled: false` remains authoritative.
+
 ## Ownership
 
 The `codex` plugin owns all Codex App Server behavior:
@@ -87,15 +94,14 @@ turns on the supervision connection. Live status and ownership remain
 process-local; a thread unknown to OpenClaw's supervision process is `notLoaded`
 even when Codex Desktop is actively running it.
 
-Codex has an experimental canonical local daemon, but current Desktop-only
-installs do not provide its required installer-managed standalone binary and do
-not opt into it by default. This feature must not bootstrap or claim that daemon
-implicitly.
+Codex has an experimental canonical local daemon with a separate
+installer-managed bootstrap contract. This feature must not bootstrap, claim,
+or assume that daemon implicitly.
 
 ## Catalog flow
 
-The Gateway method `codex.sessions.list` always requests `archived: false`.
-It combines:
+The Gateway method `codex.sessions.list` always requests `archived: false` and
+the interactive `cli` and `vscode` source kinds. It combines:
 
 1. Gateway-local `thread/list` results from the supervision App Server,
    which defaults to managed user-home stdio.
@@ -116,11 +122,46 @@ do not return transcript previews, turns, rollout paths, Codex home paths, Git
 remotes, commit SHAs, raw endpoints, or raw App Server errors.
 
 Host failures remain local to each host result. An offline node or unavailable
-local App Server does not erase healthy hosts from the page.
+local App Server does not erase healthy hosts from the page. Connectivity is a
+host property, not a thread status: a failed host result contains no fresh
+session rows and does not project `offline` onto native threads.
 
 Catalog discovery is passive. Listing or reading metadata must not call
 `thread/resume`, subscribe the OpenClaw client to live thread requests, or
 answer an approval.
+
+Search is title-only and case-insensitive. For each returned catalog page, the
+Gateway and paired Mac scan a bounded number of native pages without passing
+the query to App Server, because native search can also match transcript
+previews. The returned native cursor lets callers continue the scan.
+
+## Operator CLI boundary
+
+The plugin registers three Gateway-backed shell commands:
+
+```text
+openclaw codex sessions [--search <text>] [--host <id>] [--limit <count>] [--cursor <cursor>] [--json] [gateway-options]
+openclaw codex continue <thread-id> [--json] [gateway-options]
+openclaw codex archive <thread-id> --confirm-no-other-runner [--json] [gateway-options]
+```
+
+`[gateway-options]` is `--url <url>`, `--token <token>`, `--timeout <ms>`, and
+the inherited `--expect-final` switch. The timeout defaults to 30,000 ms;
+`--expect-final` has no additional effect for these unary RPCs. Session search
+is title-only and case-insensitive; each response scans a bounded native page
+chain, and `--cursor` continues older results. The limit defaults to 50 per host
+and accepts 1 through 100, and a cursor requires one stable `--host`
+destination. No command accepts
+an archived/include-archived option. Only `sessions` can target paired hosts;
+`continue` and `archive` always send `hostId: "gateway:local"`, and archive
+requires the explicit confirmation flag.
+
+The shell namespace is not the in-chat `/codex` runtime namespace. In
+particular, `/codex sessions --host <node>` lists Codex CLI session files on one
+node, `/codex threads` lists App Server threads for the current conversation
+connection, and `/codex resume` or `/codex bind` mutates that conversation's
+binding. Those commands do not replace `codex.sessions.continue`, and there is
+no `/codex continue` or `/codex archive` runtime command.
 
 ## Local continuation
 
@@ -134,6 +175,12 @@ For a stored or idle Gateway-local row, the UI calls
 3. Stores the pending Codex-only model-lock policy, not a concrete model or
    provider selection, plus the private supervision connection scope, and
    returns the OpenClaw `sessionKey`.
+
+The history projection selects the newest tail of visible user and assistant
+messages, with hard limits of 200 messages, 512 KiB of UTF-8 text in total, and
+64 KiB per message. It replaces image and local-image inputs with
+`[Image attachment]`, never copies image payloads or paths, and omits reasoning,
+tool calls, and tool results.
 
 The UI navigates to normal Chat with that session key. No canonical harness
 thread exists yet. On the first normal Chat turn, the harness installs the real
@@ -162,24 +209,30 @@ or mismatched supervision connection fails closed before the turn runs instead
 of falling back to the ordinary agent-home harness.
 
 This guarantees Codex-owned selection, not preservation of the source's
-historical model. The fork's returned pair is pinned only for the canonical
-thread start. Later resumes omit OpenClaw model and provider overrides; Codex's
-native configuration owns the effective pair and may report a changed selection
-or its normal model-difference warning. The outer OpenClaw model and fallback
-chain never substitute for that native selection.
+historical model. The fork's returned pair is used for the canonical thread
+start, and Codex persists that thread's native model and provider. Later resumes
+omit OpenClaw model and provider overrides, so Codex restores the persisted pair.
+If a separate native Codex control changes the canonical thread, OpenClaw accepts
+that native persisted selection. The outer OpenClaw model and fallback chain
+never substitute for it.
 
-Model changes and session reset/new operations fail closed for the supervised
-model-locked Chat. Mutating `/codex model <model>`, `/codex bind`, `/codex resume`
-(including node `--bind here`), and `/codex detach` or `/codex unbind` also fail
-closed because they replace or clear the binding. The `/codex model` query and
-`/codex fast`, `/codex permissions`, and `/codex threads` remain available. The
-`codex_threads` agent tool cannot attach a new fork or archive the bound native
-thread. List and metadata-only read remain available; transcript fields require
-`supervision.allowRawTranscripts`, while rename, unarchive, detached fork, and
-archive of an unrelated thread require `supervision.allowWriteControls`.
-Neither option can replace the locked binding. Resetting the OpenClaw entry
-would otherwise discard the native binding and create a generic thread behind a
-Codex-looking session.
+Model changes, session deletion, and session reset/new operations fail closed
+for the supervised model-locked Chat. Mutating `/codex model <model>`, `/codex
+bind`, `/codex resume` (including node `--bind here`), and `/codex detach` or
+`/codex unbind` also fail closed because they replace or clear the binding. The
+`/codex model` query and `/codex fast`, `/codex permissions`, and `/codex
+threads` remain available. The `codex_threads` agent tool cannot attach a new
+fork or archive the bound native thread. List and metadata-only read remain
+available; transcript fields require `supervision.allowRawTranscripts`, while
+rename, unarchive, detached fork, and archive of an unrelated thread require
+`supervision.allowWriteControls`. Neither option can replace the locked binding.
+Deleting or resetting the OpenClaw entry would otherwise discard the native
+binding and create or permit a generic thread behind a Codex-looking session.
+Retention maintenance therefore preserves model-locked entries even when they
+exceed ordinary age, count, or disk-budget limits. Disabling or uninstalling the
+owning plugin also retains the lock and plugin ownership marker. The Chat stays
+unavailable and fails closed until the same plugin is re-enabled; cleanup never
+converts it into an ordinary model session.
 
 The source is never resumed or mutated by this action. The temporary fork pins a
 snapshot; it is not the durable continuation thread. Starting a distinct
@@ -200,11 +253,19 @@ status, proceeds only for `idle` or `notLoaded`, calls native `thread/archive`,
 and returns success only after Codex accepts the operation. The row then leaves
 the non-archived catalog.
 
-Active and error-status archive are prohibited. Native archive can shut down
-loaded parent and descendant work, so archive is not an interrupt shortcut. The
-confirmation is mandatory because an independent Desktop process can still own
-a row that appears idle or `notLoaded` locally. Paired-node archive is also
-prohibited.
+An active or error status from the fresh read rejects archive. So does an
+initializing or pending supervised branch from the source: the first Chat turn
+must materialize its canonical branch before the source can be archived. A
+known active OpenClaw binding owner for the exact target or any non-archived
+spawned descendant also rejects archive. OpenClaw paginates Codex's experimental
+`thread/list ancestorThreadId` relation and fails closed on request or response
+errors, cursor or thread cycles, and safety-limit exhaustion. Native archive can
+shut down loaded parent and descendant work, so archive is not an interrupt
+shortcut. The read, descendant enumeration, and archive calls are not atomic.
+An independent client can still own or start work on a row that appears idle or
+`notLoaded` locally. The no-other-runner confirmation covers unknown clients and
+that race until Codex has a conditional archive or cross-process lease.
+Paired-node archive is prohibited.
 
 There is no archived view in Codex Sessions. A thread restored with
 `thread/unarchive` in another owner-authorized Codex surface becomes eligible
@@ -221,13 +282,13 @@ of one server, with the first valid response completing the request.
 Therefore:
 
 - passive catalog clients do not subscribe or auto-deny approvals
-- active rows expose neither a new branch nor Archive
+- rows currently reported active expose neither a new branch nor Archive
 - an unmapped source becomes a visible-history branch whose canonical harness
   thread never resumes the source
 - `notLoaded` is shown as activity unknown and can be archived only after
   informed no-other-runner confirmation
 - local archive requires that confirmation plus a fresh `idle` or `notLoaded`
-  read
+  read, while acknowledging the protocol race between read and archive
 
 Interrupt and multi-client handoff are future product decisions. They are not
 implied by showing an active row.
@@ -266,10 +327,28 @@ disabled.
 ## Compatibility
 
 `openclaw doctor --fix` migrates shipped `plugins.entries.codex-supervisor`
-configuration and plugin allow/deny references into
+configuration, including endpoints and transcript/write policies, plus plugin
+allow/deny references into
 `plugins.entries.codex.config.supervision`. Explicit canonical destination
 values win conflicts. Runtime code uses only the canonical `codex` plugin
 shape after migration.
+
+The official plugin retains exactly five Supervisor compatibility tools:
+`codex_endpoint_probe`, `codex_sessions_list`, `codex_session_read`,
+`codex_session_send`, and `codex_session_interrupt`. Session list is loaded-only
+by default; there is no `loaded_only` parameter. `include_stored: true` adds
+non-archived state-database rows, bounded per endpoint by `max_stored_sessions`
+(default 200, accepted range 1 through 1,000); loaded rows are uncapped by that
+setting. Transcript-derived fields and reads remain gated by
+`allowRawTranscripts`; send and interrupt remain gated by `allowWriteControls`.
+
+Compatibility send never starts or resumes an idle thread. `mode: "start"` is
+always refused; `"auto"` and `"steer"` steer only a readable active turn.
+Interrupt likewise requires an active readable turn. Idle continuation routes
+to Codex Sessions so the full harness owns approvals, tools, and the binding.
+The standalone legacy MCP adapter resolves these same tools from the official
+plugin and is the only path that honors the retained legacy policy environment
+variables.
 
 The July catalog UI, Gateway method, node capability, and CLI registration had
 not shipped under the old plugin id. They move directly to `codex` ownership
@@ -290,7 +369,8 @@ surfaces remain the recovery path for archived threads.
 
 - Enabling supervision lists non-archived local sessions.
 - Archived sessions never appear in the catalog response or UI.
-- Healthy hosts remain visible when another host fails.
+- Healthy hosts remain visible when another host fails; an unavailable host
+  returns no fresh rows instead of inventing an offline session status.
 - A stored or idle local row creates a Chat mirror with a Codex-only
   model/runtime lock; the first turn pins a temporary snapshot and starts the
   canonical full harness thread, and repeating Continue opens the existing Chat.
@@ -300,13 +380,16 @@ surfaces remain the recovery path for archived threads.
 - Pending and committed supervised bindings use the supervision connection for
   source access, canonical branch creation, and every later turn; ordinary
   Codex sessions remain agent-scoped.
-- Later resumes omit OpenClaw model/provider overrides, accept Codex-native
-  effective-selection changes, and never substitute the outer OpenClaw model or
-  fallback chain.
+- Later resumes omit OpenClaw model/provider overrides, preserve Codex's
+  canonical persisted selection, accept separate native changes to that thread,
+  and never substitute the outer OpenClaw model or fallback chain.
 - Disabling supervision or losing the binding/connection lifecycle fails closed
   instead of moving the Chat to the ordinary agent-home harness.
-- The Chat mirrors bounded user and assistant history only; source reasoning,
-  tool calls, and tool results are not cloned.
+- A supervised model-locked Chat cannot be deleted while it protects the native
+  binding.
+- The Chat mirrors at most 200 user and assistant messages, 512 KiB total, and
+  64 KiB per message. Images become placeholders; source reasoning, tool calls,
+  tool results, image payloads, and local paths are not cloned.
 - The branch flow never resumes the source thread.
 - The original source remains eligible for both catalogs. The canonical native
   branch uses the `appServer` source kind and is not guaranteed to appear in
@@ -315,7 +398,15 @@ surfaces remain the recovery path for archived threads.
   supervised Chat can still open.
 - Activity-unknown rows can branch without confirmation; archiving requires
   explicit no-other-runner confirmation.
+- A source with an initializing or pending supervised branch cannot be archived
+  until the first Chat turn materializes the canonical branch.
+- A known active binding owner for the exact target or any non-archived spawned
+  descendant blocks archive; descendant enumeration failures fail closed, and
+  explicit confirmation remains responsible for unknown clients and the
+  status-to-archive race.
 - Confirmed stored or idle local archive removes the row after native success.
 - Paired-node rows remain visible without Continue or Archive.
 - Passive listing never subscribes to or answers thread approvals.
 - Legacy Supervisor config migrates to the canonical Codex config shape.
+- Legacy list is loaded-only by default, stored enumeration obeys its per-endpoint
+  cap, and compatibility send never starts or resumes an idle thread.

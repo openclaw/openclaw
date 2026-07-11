@@ -99,9 +99,15 @@ a model-locked Chat with bounded user and assistant history through the last
 terminal persisted source turn. Its private binding keeps the snapshot fork,
 canonical `appServer`-source branch, history injection, and later turns on that
 connection. The first canonical start uses the pair returned by the fork. Later
-resumes omit OpenClaw model and provider overrides so native Codex configuration
-owns the effective selection; the outer model and fallback chain never replace
-it. Stored and idle rows can be archived after no-other-runner confirmation.
+resumes omit OpenClaw model and provider overrides so Codex restores the
+canonical thread's persisted pair; a separate native change can update that
+pair, but the outer model and fallback chain never replace it. Stored and idle
+rows can be archived after no-other-runner confirmation, unless another active
+OpenClaw binding owns the exact target or one of its non-archived spawned
+descendants. OpenClaw follows Codex's descendant pagination and fails closed on
+enumeration errors, cycles, or safety-limit exhaustion. Confirmation still
+covers unknown native clients and the status-to-archive race. A supervised
+model-locked Chat cannot be deleted while it protects the native binding.
 Active sources cannot create a branch or be archived, but an existing supervised
 Chat can still be opened. Every paired-node row stays read-only; the node
 transport does not yet provide the streaming lifecycle needed by the harness.
@@ -395,9 +401,11 @@ canonical branch and future resumes.
 
 In a model-locked supervised Chat, `codex_threads` cannot attach a different
 fork or archive the Chat's bound native thread. List and metadata-only read
-remain available. Raw transcript reads require `allowRawTranscripts`; rename,
-unarchive, detached fork, and archive of an unrelated thread require
-`allowWriteControls`. Neither option bypasses the locked binding.
+remain available. Raw transcript reads require `allowRawTranscripts`; when it
+is disabled, list search is also rejected because native search can match
+transcript previews. Rename, unarchive, detached fork, and archive of an
+unrelated thread not owned by another OpenClaw Chat require
+`allowWriteControls`. Neither option bypasses a locked binding.
 
 OpenClaw does not rewrite `HOME` for normal local app-server launches.
 Codex-run subprocesses such as `openclaw`, `gh`, `git`, cloud CLIs, and shell

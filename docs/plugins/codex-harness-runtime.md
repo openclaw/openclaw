@@ -50,14 +50,15 @@ approvals reviewer, and service tier to app-server. Switching from
 continue with the newly selected model.
 
 Supervised bindings are the exception. The OpenClaw model picker stays locked,
-and resumes omit model and provider overrides so Codex's native configuration
-owns the effective selection. Codex can report a changed pair or its normal
+and resumes omit model and provider overrides so Codex restores the canonical
+thread's persisted model and provider. A separate native Codex control can
+change that persisted pair, and the initial snapshot can produce Codex's normal
 model-difference warning; the outer OpenClaw model and fallback chain never
-substitute for it.
+substitute for either.
 
 ## Supervision and safe continuation
 
-Codex supervision is a second surface owned by the same plugin. It discovers
+Codex supervision is an opt-in capability of the same `codex` plugin. It discovers
 native threads through a separate connection and projects only non-archived
 sessions into the Gateway catalog. Without explicit `appServer` connection
 settings, that connection uses managed user-home stdio while the ordinary
@@ -94,8 +95,13 @@ OpenClaw allows archive for a local `idle` or `notLoaded` row only after explici
 no-other-runner confirmation and a fresh process-local status read. Codex
 serializes thread mutations within one App Server process but does not provide
 an exclusive cross-process runner or approval-owner lease, so that read cannot
-prove that another process is not using the thread. Native archive can shut down
-loaded work.
+prove that another process is not using the thread. OpenClaw blocks a known
+active binding owner for the exact target or any non-archived spawned descendant
+returned by Codex's paginated descendant query. Enumeration errors, cycles, and
+safety-limit exhaustion fail closed. Native archive can still race a new turn
+in another process, so confirmation covers unknown clients and the gap between
+status read and archive. A supervised model-locked Chat cannot be deleted while
+it protects the native binding.
 
 Paired-node catalogs stay metadata-only in the initial release. The current
 node invoke boundary is request/response and cannot carry the long-lived turn

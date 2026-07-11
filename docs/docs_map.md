@@ -5464,10 +5464,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Before you begin
   - H2: Enable supervision
+  - H2: Use the operator CLI
   - H2: Branch from a local session
   - H2: Archive a local session
   - H2: Understand paired-node limits
   - H2: Metadata and permissions
+  - H3: Compatibility tools
   - H2: Troubleshooting
   - H2: Related
 
@@ -6966,6 +6968,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What core still owns
   - H3: Harness-owned auth bootstrap
   - H2: Register a harness
+  - H3: Delegated execution
   - H2: Selection policy
   - H2: Provider plus harness pairing
   - H3: Tool-result middleware
@@ -8771,6 +8774,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Product boundary
   - H2: Ownership
   - H2: Catalog flow
+  - H2: Operator CLI boundary
   - H2: Local continuation
   - H2: Archive behavior
   - H2: Active thread safety
