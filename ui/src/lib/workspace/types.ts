@@ -85,10 +85,14 @@ export type WorkspaceWidgetCapability = "data:read" | "prompt:send";
 /**
  * The subset of a custom widget's `widget.json` manifest the parent bridge needs
  * to gate child requests: the approved binding grants and capabilities. Loaded
- * on demand by the host from the content-pinned served manifest.
+ * on demand by the host through the authenticated plugin gateway.
  */
 export type WidgetManifestView = {
   name: string;
+  /** Server-minted capability used in every approved asset path and bridge bootstrap. */
+  frameToken: string;
+  /** Server expiry for the in-memory capability; the host refreshes before this time. */
+  frameExpiresAt?: number;
   /** The file the sandboxed iframe loads; the manifest declares it. */
   entrypoint: string;
   bindings: Record<string, WorkspaceBinding>;

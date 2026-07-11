@@ -201,6 +201,7 @@ describe("workspace widget cell", () => {
 function customManifest(): WidgetManifestView {
   return {
     name: "chart",
+    frameToken: "11111111-1111-4111-8111-111111111111",
     entrypoint: "index.html",
     bindings: { value: { source: "static", value: null } },
     capabilities: ["data:read"],

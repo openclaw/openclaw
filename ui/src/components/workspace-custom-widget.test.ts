@@ -9,6 +9,9 @@ import {
   type CustomWidgetHostContext,
 } from "./workspace-custom-widget.ts";
 
+const BRIDGE_TOKEN = "11111111-1111-4111-8111-111111111111";
+const FRAME_EXPIRES_AT = Date.now() + 60 * 60 * 1000;
+
 function widget(overrides: Partial<WorkspaceWidget> = {}): WorkspaceWidget {
   return {
     id: "w_custom",
@@ -24,6 +27,7 @@ function widget(overrides: Partial<WorkspaceWidget> = {}): WorkspaceWidget {
 function manifest(overrides?: Partial<WidgetManifestView>): WidgetManifestView {
   return {
     name: "revenue-chart",
+    frameToken: BRIDGE_TOKEN,
     entrypoint: "index.html",
     bindings: { value: { source: "static", value: null } },
     capabilities: ["data:read"],
@@ -49,59 +53,56 @@ afterEach(() => {
 
 describe("widgetAssetUrl", () => {
   it("builds a URL under the plugin route with encoded segments", () => {
-    expect(widgetAssetUrl("", "revenue-chart", "index.html")).toBe(
-      "/plugins/workspaces/widgets/revenue-chart/index.html",
+    expect(widgetAssetUrl("", BRIDGE_TOKEN, "revenue-chart", "index.html")).toBe(
+      `/plugins/workspaces/widgets/${BRIDGE_TOKEN}/revenue-chart/index.html`,
     );
-    expect(widgetAssetUrl("/base", "a b", "assets/app.js")).toBe(
-      "/base/plugins/workspaces/widgets/a%20b/assets/app.js",
+    expect(widgetAssetUrl("/base", "token value", "a b", "assets/app.js")).toBe(
+      "/base/plugins/workspaces/widgets/token%20value/a%20b/assets/app.js",
     );
   });
 });
 
 describe("loadWidgetManifestView", () => {
-  it("shapes a fetched manifest into the bridge read model", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
-          entrypoint: "index.html",
-          bindings: [{ id: "value", source: "static", value: 1 }],
-          capabilities: ["data:read", "prompt:send"],
-        }),
-      })),
-    );
-    const view = await loadWidgetManifestView("", "revenue-chart");
+  it("shapes an authenticated frame response into the bridge read model", async () => {
+    const request = vi.fn(async () => ({
+      frameToken: BRIDGE_TOKEN,
+      frameExpiresAt: FRAME_EXPIRES_AT,
+      manifest: {
+        entrypoint: "index.html",
+        bindings: [{ id: "value", source: "static", value: 1 }],
+        capabilities: ["data:read", "prompt:send"],
+      },
+    }));
+    const view = await loadWidgetManifestView({ request } as never, "revenue-chart");
     expect(view).toEqual({
       name: "revenue-chart",
+      frameToken: BRIDGE_TOKEN,
+      frameExpiresAt: FRAME_EXPIRES_AT,
       entrypoint: "index.html",
       bindings: { value: { source: "static", value: 1 } },
       capabilities: ["data:read", "prompt:send"],
     });
   });
 
-  it("returns null on a non-ok response", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({ ok: false, json: async () => ({}) })),
-    );
-    expect(await loadWidgetManifestView("", "revenue-chart")).toBeNull();
+  it("returns null when the authenticated frame request fails", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("denied");
+    });
+    expect(await loadWidgetManifestView({ request } as never, "revenue-chart")).toBeNull();
   });
 
   it("represents schema-valid binding ids without prototype collisions", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
-          entrypoint: "index.html",
-          bindings: [{ id: "__proto__", source: "static", value: 1 }],
-          capabilities: ["data:read"],
-        }),
-      })),
-    );
+    const request = vi.fn(async () => ({
+      frameToken: BRIDGE_TOKEN,
+      frameExpiresAt: FRAME_EXPIRES_AT,
+      manifest: {
+        entrypoint: "index.html",
+        bindings: [{ id: "__proto__", source: "static", value: 1 }],
+        capabilities: ["data:read"],
+      },
+    }));
 
-    const view = await loadWidgetManifestView("", "revenue-chart");
+    const view = await loadWidgetManifestView({ request } as never, "revenue-chart");
     expect(Object.keys(view?.bindings ?? {})).toEqual(["__proto__"]);
     expect(Reflect.get(view?.bindings ?? {}, "__proto__")).toEqual({
       source: "static",
@@ -138,12 +139,10 @@ describe("renderCustomWidgetHost DOM", () => {
     const iframe = container.querySelector("iframe");
     expect(iframe?.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(iframe?.getAttribute("src")).toMatch(
-      /^\/gw\/plugins\/workspaces\/widgets\/revenue-chart\/index\.html\?bridgeToken=[0-9a-f-]{36}$/i,
+      new RegExp(`^/gw/plugins/workspaces/widgets/${BRIDGE_TOKEN}/revenue-chart/index\\.html$`),
     );
   });
 });
-
-const BRIDGE_TOKEN = "11111111-1111-4111-8111-111111111111";
 
 function connectWidgetBridge(params: {
   iframe: HTMLIFrameElement;
@@ -390,14 +389,12 @@ describe("attachWidgetBridge privileged-data boundary", () => {
   it("refuses a manifest with no entrypoint", async () => {
     // The approval gate hashes the declared entrypoint; without one there is no
     // approved file to load, so nothing should mount.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({ bindings: [], capabilities: [] }),
-      })),
-    );
+    const request = vi.fn(async () => ({
+      frameToken: BRIDGE_TOKEN,
+      frameExpiresAt: FRAME_EXPIRES_AT,
+      manifest: { bindings: [], capabilities: [] },
+    }));
 
-    expect(await loadWidgetManifestView("", "revenue-chart")).toBeNull();
+    expect(await loadWidgetManifestView({ request } as never, "revenue-chart")).toBeNull();
   });
 });

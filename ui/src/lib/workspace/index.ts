@@ -47,6 +47,7 @@ const workspaceEventClients = new WeakMap<WorkspaceHost, GatewayBrowserClient>()
 // tick (re-resolve data-widget bindings) only while the document is visible.
 const workspacePollTimers = new WeakMap<WorkspaceHost, ReturnType<typeof setInterval>>();
 const workspacePollActive = new WeakMap<WorkspaceHost, boolean>();
+const workspaceMutationQueues = new WeakMap<WorkspaceUiState, Promise<void>>();
 
 /** Default data-refresh interval (ms); the L4 spec's 30–60s window, floored at 10s. */
 export const WORKSPACE_POLL_INTERVAL_MS = 45_000;
@@ -510,6 +511,30 @@ function removeWidget(
  * All shell mutations funnel through here so revert semantics stay consistent.
  */
 async function optimisticMutation(
+  state: WorkspaceUiState,
+  client: GatewayBrowserClient | null,
+  params: {
+    widgetId: string;
+    optimistic: (workspace: WorkspaceDocument) => WorkspaceDocument;
+    method: string;
+    rpcParams: Record<string, unknown>;
+  },
+): Promise<void> {
+  const previous = workspaceMutationQueues.get(state) ?? Promise.resolve();
+  const current = previous
+    .catch(() => undefined)
+    .then(async () => {
+      await runOptimisticMutation(state, client, params);
+    });
+  workspaceMutationQueues.set(state, current);
+  await current.finally(() => {
+    if (workspaceMutationQueues.get(state) === current) {
+      workspaceMutationQueues.delete(state);
+    }
+  });
+}
+
+async function runOptimisticMutation(
   state: WorkspaceUiState,
   client: GatewayBrowserClient | null,
   params: {

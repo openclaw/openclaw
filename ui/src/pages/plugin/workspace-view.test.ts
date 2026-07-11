@@ -196,7 +196,7 @@ describe("renderWorkspace", () => {
     }
   });
 
-  it("reloads a custom-widget manifest after the workspace version changes", async () => {
+  it("reloads a custom-widget frame after workspace changes and reconnects", async () => {
     const host = document.createElement("div");
     document.body.append(host);
     const state = getWorkspaceState(host);
@@ -222,37 +222,56 @@ describe("renderWorkspace", () => {
       widgetsRegistry: { "revenue-chart": { status: "approved" as const } },
       prefs: { tabOrder: ["main"] },
     });
-    const fetchMock = vi
+    const request = vi
       .fn()
       .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ entrypoint: "old.html", bindings: [], capabilities: ["prompt:send"] }),
+        frameToken: "1111111111111111111111111111111111111111111",
+        frameExpiresAt: Date.now() + 60 * 60 * 1000,
+        manifest: { entrypoint: "old.html", bindings: [], capabilities: ["prompt:send"] },
       })
       .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ entrypoint: "new.html", bindings: [], capabilities: [] }),
+        frameToken: "2222222222222222222222222222222222222222222",
+        frameExpiresAt: Date.now() + 60 * 60 * 1000,
+        manifest: { entrypoint: "new.html", bindings: [], capabilities: [] },
+      })
+      .mockResolvedValueOnce({
+        frameToken: "3333333333333333333333333333333333333333333",
+        frameExpiresAt: Date.now() + 60 * 60 * 1000,
+        manifest: { entrypoint: "new.html", bindings: [], capabilities: [] },
       });
-    vi.stubGlobal("fetch", fetchMock);
+    const client = {
+      request,
+      addEventListener: vi.fn(() => () => undefined),
+    } as unknown as GatewayBrowserClient;
     state.loaded = true;
     state.activeSlug = "main";
     try {
       state.workspace = workspace(1);
-      render(renderWorkspace({ host, client: null, connected: false }), host);
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      render(renderWorkspace({ host, client, connected: true }), host);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
       await vi.waitFor(() => {
-        render(renderWorkspace({ host, client: null, connected: false }), host);
+        render(renderWorkspace({ host, client, connected: true }), host);
         expect(host.querySelector("iframe")?.getAttribute("src")).toContain("old.html");
       });
 
       state.workspace = workspace(2);
-      render(renderWorkspace({ host, client: null, connected: false }), host);
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      render(renderWorkspace({ host, client, connected: true }), host);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
       await vi.waitFor(() => {
-        render(renderWorkspace({ host, client: null, connected: false }), host);
+        render(renderWorkspace({ host, client, connected: true }), host);
         expect(host.querySelector("iframe")?.getAttribute("src")).toContain("new.html");
       });
+
+      render(renderWorkspace({ host, client, connected: false }), host);
+      render(renderWorkspace({ host, client, connected: true }), host);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+      await vi.waitFor(() => {
+        render(renderWorkspace({ host, client, connected: true }), host);
+        expect(host.querySelector("iframe")?.getAttribute("src")).toContain(
+          "3333333333333333333333333333333333333333333",
+        );
+      });
     } finally {
-      vi.unstubAllGlobals();
       stopWorkspace(host);
       host.remove();
     }

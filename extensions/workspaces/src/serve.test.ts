@@ -23,6 +23,9 @@ type CapturedResponse = {
   ended: boolean;
 };
 
+const PARSE_FRAME_TOKEN = "1111111111111111111111111111111111111111111";
+let activeFrameToken: string | null = null;
+
 /** Minimal ServerResponse stub capturing status, headers, and body. */
 function fakeResponse(): { res: ServerResponse; captured: CapturedResponse } {
   const captured: CapturedResponse = { statusCode: 200, headers: {}, body: "", ended: false };
@@ -83,14 +86,16 @@ async function withApprovedWidget<T>(
       },
       { actor: "user" },
     );
+    activeFrameToken = store.assetTokens.issue("revenue-chart", approvedFiles);
     return await run({ stateDir, store, widgetDir });
   } finally {
+    activeFrameToken = null;
     await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 
 function urlFor(name: string, rest: string): string {
-  return `${WIDGETS_ROUTE_PREFIX}/${name}/${rest}`;
+  return `${WIDGETS_ROUTE_PREFIX}/${activeFrameToken ?? PARSE_FRAME_TOKEN}/${name}/${rest}`;
 }
 
 describe("parseWidgetRequestPath", () => {
@@ -99,11 +104,15 @@ describe("parseWidgetRequestPath", () => {
   });
 
   it("returns null when no logical path is present (name only)", () => {
-    expect(parseWidgetRequestPath(`${WIDGETS_ROUTE_PREFIX}/revenue-chart`)).toBeNull();
+    expect(
+      parseWidgetRequestPath(`${WIDGETS_ROUTE_PREFIX}/${PARSE_FRAME_TOKEN}/revenue-chart`),
+    ).toBeNull();
   });
 
   it("rejects a name failing the charset check", () => {
-    expect(parseWidgetRequestPath(`${WIDGETS_ROUTE_PREFIX}/../etc/passwd`)).toBeNull();
+    expect(
+      parseWidgetRequestPath(`${WIDGETS_ROUTE_PREFIX}/${PARSE_FRAME_TOKEN}/../etc/passwd`),
+    ).toBeNull();
   });
 
   it("rejects an encoded traversal segment in the logical path", () => {
@@ -112,6 +121,7 @@ describe("parseWidgetRequestPath", () => {
 
   it("parses a valid name and logical path", () => {
     expect(parseWidgetRequestPath(urlFor("revenue-chart", "assets/app.js"))).toEqual({
+      frameToken: PARSE_FRAME_TOKEN,
       name: "revenue-chart",
       logicalPath: "assets/app.js",
     });
@@ -145,12 +155,10 @@ describe("serveWidgetAsset security jail", () => {
   it("injects a document-bound MessageChannel bootstrap before approved html", async () => {
     await withApprovedWidget(async ({ store, stateDir }) => {
       const { res, captured } = fakeResponse();
-      const bridgeToken = "11111111-1111-4111-8111-111111111111";
       await serveWidgetAsset(
         {
           method: "GET",
           pathname: urlFor("revenue-chart", "index.html"),
-          bridgeToken,
         },
         res,
         { store, stateDir },
@@ -158,7 +166,7 @@ describe("serveWidgetAsset security jail", () => {
 
       expect(captured.statusCode).toBe(200);
       expect(captured.body).toContain("new MessageChannel()");
-      expect(captured.body).toContain(`token:"${bridgeToken}"`);
+      expect(captured.body).toContain(`token:"${activeFrameToken}"`);
       expect(captured.body.startsWith("<!doctype html><script>")).toBe(true);
       expect(captured.body.indexOf("new MessageChannel()")).toBeLessThan(
         captured.body.indexOf("<h1>ok</h1>"),
@@ -166,20 +174,19 @@ describe("serveWidgetAsset security jail", () => {
     });
   });
 
-  it("does not inject a bootstrap for a malformed bridge token", async () => {
+  it("404s a malformed frame token", async () => {
     await withApprovedWidget(async ({ store, stateDir }) => {
       const { res, captured } = fakeResponse();
       await serveWidgetAsset(
         {
           method: "GET",
-          pathname: urlFor("revenue-chart", "index.html"),
-          bridgeToken: `bad-token"</script>`,
+          pathname: `${WIDGETS_ROUTE_PREFIX}/bad-token/revenue-chart/index.html`,
         },
         res,
         { store, stateDir },
       );
 
-      expect(captured.body).toBe("<!doctype html><h1>ok</h1>");
+      expect(captured.statusCode).toBe(404);
     });
   });
 
@@ -194,12 +201,12 @@ describe("serveWidgetAsset security jail", () => {
         },
         { actor: "user" },
       );
+      activeFrameToken = store.assetTokens.issue("revenue-chart", approvedFiles);
       const { res, captured } = fakeResponse();
       await serveWidgetAsset(
         {
           method: "GET",
           pathname: urlFor("revenue-chart", "index.html"),
-          bridgeToken: "11111111-1111-4111-8111-111111111111",
         },
         res,
         { store, stateDir },
@@ -240,10 +247,13 @@ describe("serveWidgetAsset security jail", () => {
     { label: "encoded %2e%2e traversal", pathname: urlFor("revenue-chart", "%2e%2e/secret.txt") },
     {
       label: "absolute path",
-      pathname: `${WIDGETS_ROUTE_PREFIX}/revenue-chart//etc/passwd`,
+      pathname: `${WIDGETS_ROUTE_PREFIX}/${PARSE_FRAME_TOKEN}/revenue-chart//etc/passwd`,
     },
     { label: "backslash traversal", pathname: urlFor("revenue-chart", "..%5csecret.txt") },
-    { label: "name charset violation", pathname: `${WIDGETS_ROUTE_PREFIX}/..%2f..%2fx/index.html` },
+    {
+      label: "name charset violation",
+      pathname: `${WIDGETS_ROUTE_PREFIX}/${PARSE_FRAME_TOKEN}/..%2f..%2fx/index.html`,
+    },
   ];
 
   for (const { label, pathname } of traversalCases) {
@@ -440,8 +450,8 @@ describe("serveWidgetAsset security jail", () => {
 
   it("404s an oversized file without reading it", async () => {
     await withApprovedWidget(async ({ store, stateDir, widgetDir }) => {
-      // Approved files stay writable, and this route is unauthenticated: a swapped-in
-      // giant asset must be refused on its size, not buffered and then hash-checked.
+      // Approved files stay writable: a swapped-in giant asset must be refused on
+      // its size, not buffered and then hash-checked.
       await fs.writeFile(path.join(widgetDir, "app.js"), Buffer.alloc(2 * 1024 * 1024 + 1));
 
       const { res, captured } = fakeResponse();

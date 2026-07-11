@@ -57,6 +57,7 @@ describe("workspace gateway methods", () => {
 
     expect([...methods.keys()]).toEqual([
       "workspaces.get",
+      "workspaces.widget.frame",
       "workspaces.tab.create",
       "workspaces.tab.update",
       "workspaces.tab.delete",
@@ -73,13 +74,14 @@ describe("workspace gateway methods", () => {
       "workspaces.data.read",
     ]);
     expect(methods.get("workspaces.get")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("workspaces.widget.frame")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workspaces.data.read")?.opts).toEqual({ scope: "operator.read" });
     // Approving agent-authored code is an approvals decision: operator.write alone
     // must not be enough to mount an untrusted widget.
     expect(methods.get("workspaces.widget.approve")?.opts).toEqual({
       scope: "operator.approvals",
     });
-    const readOnly = new Set(["workspaces.get", "workspaces.data.read"]);
+    const readOnly = new Set(["workspaces.get", "workspaces.widget.frame", "workspaces.data.read"]);
     for (const [name, method] of methods) {
       if (readOnly.has(name) || name === "workspaces.widget.approve") {
         continue;
@@ -233,6 +235,17 @@ describe("workspace gateway methods", () => {
         registry: { status: "approved", approvedBy: "user" },
       });
       expect(approved.response?.[1]?.doc).toBeUndefined();
+      const frame = await callMethod(
+        methods.get("workspaces.widget.frame")!,
+        { name: "custom-chart" },
+        broadcast,
+      );
+      expect(frame.response?.[0]).toBe(true);
+      expect(frame.response?.[1]).toMatchObject({
+        manifest: { name: "custom-chart", entrypoint: "index.html" },
+        frameToken: expect.stringMatching(/^[A-Za-z0-9_-]{40,}$/),
+        frameExpiresAt: expect.any(Number),
+      });
       const data = await callMethod(
         methods.get("workspaces.data.read")!,
         { binding: { source: "static", value: { ok: true } } },

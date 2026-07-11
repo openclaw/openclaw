@@ -1,8 +1,7 @@
 // Static-file serving for approved custom widgets, under the `auth:"plugin"`
-// (unauthenticated) HTTP route. This route is safe ONLY because it is static-file
-// only: no query-selected state or data, GET only. The sole query value is a
-// per-frame bridge token copied into a document-local MessageChannel bootstrap.
-// Every rejection returns 404
+// HTTP route. The authenticated gateway first mints a path-scoped capability,
+// bound to the widget and approved-file snapshot; every asset request validates
+// it before touching the registry or disk. Every rejection returns 404
 // (never 403) so the route never leaks whether a widget or file exists.
 //
 // The path jail combines strict logical-path normalization with the shared
@@ -43,8 +42,6 @@ export type WidgetServeRequest = {
   method: string | undefined;
   /** URL pathname (no query/hash), already URL-decoded per segment by the caller. */
   pathname: string;
-  /** Per-frame capability token; used only to bind the approved document's MessagePort. */
-  bridgeToken?: string;
 };
 
 const BRIDGE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{20,100}$/;
@@ -101,7 +98,7 @@ export function isWidgetRoutePath(pathname: string): boolean {
  */
 export function parseWidgetRequestPath(
   pathname: string,
-): { name: string; logicalPath: string } | null {
+): { frameToken: string; name: string; logicalPath: string } | null {
   const prefix = `${WIDGETS_ROUTE_PREFIX}/`;
   if (!pathname.startsWith(prefix)) {
     return null;
@@ -120,10 +117,13 @@ export function parseWidgetRequestPath(
       return null;
     }
   }
-  if (segments.length < 2) {
+  if (segments.length < 3) {
     return null;
   }
-  const [name, ...entry] = segments;
+  const [frameToken, name, ...entry] = segments;
+  if (!BRIDGE_TOKEN_PATTERN.test(frameToken)) {
+    return null;
+  }
   // The charset pattern permits dots, so `.`/`..` slip through it — reject the
   // traversal names explicitly (mirrors normalizeCanvasDocumentId, documents.ts:107).
   if (name === "." || name === ".." || !CUSTOM_WIDGET_NAME_PATTERN.test(name)) {
@@ -135,7 +135,7 @@ export function parseWidgetRequestPath(
   } catch {
     return null;
   }
-  return { name, logicalPath };
+  return { frameToken, name, logicalPath };
 }
 
 /**
@@ -203,6 +203,11 @@ export async function serveWidgetAsset(
     return notFound(res);
   }
 
+  // Reject guessed/expired tokens before even consulting the registry or disk.
+  if (!deps.store.assetTokens.isIssued(parsed.frameToken, parsed.name)) {
+    return notFound(res);
+  }
+
   // Serving gate: only `status === "approved"` widgets are served AT ALL. This is
   // belt-and-braces with the UI render gate (the UI never builds an iframe for a
   // pending/rejected widget, and the server refuses its assets regardless).
@@ -213,6 +218,12 @@ export async function serveWidgetAsset(
       return notFound(res);
     }
     approvedFiles = entry.approvedFiles;
+    if (
+      !approvedFiles ||
+      !deps.store.assetTokens.allows(parsed.frameToken, parsed.name, approvedFiles)
+    ) {
+      return notFound(res);
+    }
   } catch {
     return notFound(res);
   }
@@ -274,7 +285,7 @@ export async function serveWidgetAsset(
     res.end();
   } else {
     const body = contentType.startsWith("text/html")
-      ? injectBridgeBootstrap(data, req.bridgeToken)
+      ? injectBridgeBootstrap(data, parsed.frameToken)
       : data;
     res.end(body);
   }

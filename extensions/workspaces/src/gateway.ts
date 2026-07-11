@@ -51,6 +51,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function approvedFilesMatch(left: Record<string, string>, right: Record<string, string>): boolean {
+  const leftKeys = Object.keys(left);
+  return (
+    leftKeys.length === Object.keys(right).length &&
+    leftKeys.every((key) => left[key] === right[key])
+  );
+}
+
 function readParams(params: unknown, allowedKeys: readonly string[]): Record<string, unknown> {
   if (!isRecord(params)) {
     throw new Error("params must be an object");
@@ -365,6 +373,40 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
         rememberWorkspaceBroadcast(context.broadcast);
         const doc = store.read();
         respond(true, { doc, workspaceVersion: doc.workspaceVersion });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workspaces.widget.frame",
+    async ({ params: rawParams, respond }) => {
+      try {
+        const params = readParams(rawParams, ["name"]);
+        const name = readRequiredString(params, "name", "name");
+        if (!CUSTOM_WIDGET_NAME_PATTERN.test(name)) {
+          throw new Error("name is invalid");
+        }
+        const entry = store.widgetEntry(name);
+        if (entry?.status !== "approved" || !entry.approvedFiles) {
+          throw new Error(`workspace widget is not approved: ${name}`);
+        }
+        const snapshot = await snapshotApprovedWidget(name, { stateDir: store.stateDir });
+        if (!approvedFilesMatch(snapshot.files, entry.approvedFiles)) {
+          throw new Error(`workspace widget approval no longer matches: ${name}`);
+        }
+        const frameToken = store.assetTokens.issue(name, entry.approvedFiles);
+        const frameExpiresAt = store.assetTokens.expiresAt(frameToken, name);
+        if (frameExpiresAt === null) {
+          throw new Error(`workspace widget frame capability failed: ${name}`);
+        }
+        respond(true, {
+          manifest: snapshot.manifest,
+          frameToken,
+          frameExpiresAt,
+        });
       } catch (error) {
         respondError(respond, error);
       }

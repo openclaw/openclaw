@@ -63,11 +63,9 @@ export default definePluginEntry({
       requiredScopes: ["operator.read"],
     });
 
-    // L5: serve approved custom-widget assets under an unauthenticated static
-    // route (sandboxed iframes have no device token). Safe because the handler is
-    // static-file only — jailed to each widget's own dir, GET only, no data. The
-    // handler shares the same store instance, so its approved-only gate always
-    // sees the latest registry state.
+    // Sandboxed iframes cannot attach the gateway device token. The authenticated
+    // frame RPC mints a scoped capability for one approved content snapshot; the
+    // static route rejects every request without that capability.
     const widgetRoute = createWidgetHttpRouteHandler({ store });
     api.registerHttpRoute({
       path: WIDGETS_ROUTE_PREFIX,

@@ -62,14 +62,20 @@ export type CustomWidgetHostContext = {
 };
 
 /** Builds the served asset URL for a widget file under the plugin route. */
-export function widgetAssetUrl(basePath: string, name: string, file: string): string {
+export function widgetAssetUrl(
+  basePath: string,
+  frameToken: string,
+  name: string,
+  file: string,
+): string {
   const base = basePath.replace(/\/+$/, "");
+  const encodedToken = encodeURIComponent(frameToken);
   const encodedName = encodeURIComponent(name);
   const encodedFile = file
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/");
-  return `${base}/plugins/workspaces/widgets/${encodedName}/${encodedFile}`;
+  return `${base}/plugins/workspaces/widgets/${encodedToken}/${encodedName}/${encodedFile}`;
 }
 
 function readThemeTokensFromRoot(): Record<string, string> {
@@ -117,26 +123,32 @@ function bindingMatchesManifestGrant(binding: WorkspaceBinding, grant: Workspace
 
 /** Fetches and shapes a widget's manifest into the bridge's read model. */
 export async function loadWidgetManifestView(
-  basePath: string,
+  client: GatewayBrowserClient | null,
   name: string,
 ): Promise<WidgetManifestView | null> {
-  if (typeof fetch !== "function") {
+  if (!client) {
     return null;
   }
   try {
-    const res = await fetch(widgetAssetUrl(basePath, name, "widget.json"), {
-      method: "GET",
-      credentials: "same-origin",
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) {
+    const payload: unknown = await client.request("workspaces.widget.frame", { name });
+    if (typeof payload !== "object" || payload === null) {
       return null;
     }
-    const parsed: unknown = await res.json();
-    if (typeof parsed !== "object" || parsed === null) {
+    const response = payload as Record<string, unknown>;
+    const frameToken = response.frameToken;
+    const frameExpiresAt = response.frameExpiresAt;
+    const manifest = response.manifest;
+    if (
+      typeof frameToken !== "string" ||
+      typeof frameExpiresAt !== "number" ||
+      !Number.isFinite(frameExpiresAt) ||
+      frameExpiresAt <= Date.now() ||
+      typeof manifest !== "object" ||
+      manifest === null
+    ) {
       return null;
     }
-    const record = parsed as Record<string, unknown>;
+    const record = manifest as Record<string, unknown>;
     const manifestBindings = Array.isArray(record.bindings) ? record.bindings : [];
     // Binding ids may legally be `__proto__`; a null-prototype record represents
     // every allowed id without invoking Object.prototype's legacy setter.
@@ -157,7 +169,7 @@ export async function loadWidgetManifestView(
     if (!entrypoint) {
       return null;
     }
-    return { name, entrypoint, bindings, capabilities };
+    return { name, frameToken, frameExpiresAt, entrypoint, bindings, capabilities };
   } catch {
     return null;
   }
@@ -284,7 +296,12 @@ class CustomWidgetFrameDirective extends AsyncDirective {
     context: CustomWidgetHostContext;
   }): HTMLElement {
     const name = params.widget.kind.slice("custom:".length);
-    const assetUrl = widgetAssetUrl(params.context.basePath, name, params.manifest.entrypoint);
+    const assetUrl = widgetAssetUrl(
+      params.context.basePath,
+      params.manifest.frameToken,
+      name,
+      params.manifest.entrypoint,
+    );
     const nextKey = `${params.widget.id}::${assetUrl}`;
     if (this.iframe && this.key === nextKey) {
       return this.iframe;
@@ -298,8 +315,8 @@ class CustomWidgetFrameDirective extends AsyncDirective {
       iframe.setAttribute("loading", "lazy");
       iframe.className = "workspace-widget__frame";
       iframe.title = params.widget.title;
-      const bridgeToken = generateUUID();
-      iframe.src = `${assetUrl}?bridgeToken=${encodeURIComponent(bridgeToken)}`;
+      const bridgeToken = params.manifest.frameToken;
+      iframe.src = assetUrl;
       iframe.setAttribute("data-test-id", "workspace-custom-widget-frame");
       this.detach = attachWidgetBridge({
         iframe,

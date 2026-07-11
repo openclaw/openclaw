@@ -29,6 +29,7 @@ const WIDGET_CSP =
 
 let browser: Browser;
 let server: ControlUiE2eServer;
+const FRAME_TOKEN = "1111111111111111111111111111111111111111111";
 
 function workspaceGatewayScenario() {
   return {
@@ -41,7 +42,24 @@ function workspaceGatewayScenario() {
         order: -10,
       },
     ],
-    featureMethods: ["workspaces.get", "workspaces.widget.approve"],
+    featureMethods: ["workspaces.get", "workspaces.widget.approve", "workspaces.widget.frame"],
+  };
+}
+
+function frameMethodResponse() {
+  return {
+    "workspaces.widget.frame": {
+      frameToken: FRAME_TOKEN,
+      frameExpiresAt: Date.now() + 60 * 60 * 1000,
+      manifest: {
+        schemaVersion: 1,
+        name: "revenue-chart",
+        title: "Revenue Chart",
+        entrypoint: "index.html",
+        bindings: [{ id: "value", source: "static", value: 0 }],
+        capabilities: ["data:read"],
+      },
+    },
   };
 }
 
@@ -114,24 +132,11 @@ const THROWING_WIDGET_HTML = `<!doctype html><html><head><meta charset="utf-8"><
 <body><script>throw new Error("widget boom");</script></body></html>`;
 
 async function routeWidgetAssets(page: Page, html: string): Promise<void> {
-  await page.route("**/plugins/workspaces/widgets/revenue-chart/**", (route: Route) => {
+  await page.route("**/plugins/workspaces/widgets/*/revenue-chart/**", (route: Route) => {
     const url = route.request().url();
-    if (url.includes("widget.json")) {
-      return route.fulfill({
-        status: 200,
-        contentType: "application/json; charset=utf-8",
-        headers: { "Content-Security-Policy": WIDGET_CSP, "X-Content-Type-Options": "nosniff" },
-        body: JSON.stringify({
-          schemaVersion: 1,
-          name: "revenue-chart",
-          title: "Revenue Chart",
-          entrypoint: "index.html",
-          bindings: [{ id: "value", source: "static", value: 0 }],
-          capabilities: ["data:read"],
-        }),
-      });
-    }
-    const bridgeToken = new URL(url).searchParams.get("bridgeToken");
+    const segments = new URL(url).pathname.split("/");
+    const widgetsIndex = segments.indexOf("widgets");
+    const bridgeToken = widgetsIndex >= 0 ? segments[widgetsIndex + 1] : null;
     const bootstrap = bridgeToken
       ? `<script>(()=>{const channel=new MessageChannel();const listeners=new Set();const port=channel.port1;port.onmessage=(event)=>{for(const listener of listeners)listener(event)};port.start();Object.defineProperty(window,"openclawWorkspaceBridge",{configurable:false,writable:false,value:Object.freeze({postMessage:(message)=>port.postMessage(message),addEventListener:(type,listener)=>{if(type==="message")listeners.add(listener)},removeEventListener:(type,listener)=>{if(type==="message")listeners.delete(listener)}})});window.parent.postMessage({v:1,type:"workspace:bridge:init",token:"${bridgeToken}"},"*",[channel.port2])})();</script>`
       : "";
@@ -186,6 +191,7 @@ describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
     const gateway = await installMockGateway(page, {
       ...workspaceGatewayScenario(),
       methodResponses: {
+        ...frameMethodResponse(),
         "workspaces.get": workspaceDoc(1, "pending"),
         "workspaces.widget.approve": { ok: true },
       },
@@ -220,6 +226,7 @@ describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
     await installMockGateway(page, {
       ...workspaceGatewayScenario(),
       methodResponses: {
+        ...frameMethodResponse(),
         "workspaces.get": workspaceDoc(2, "approved"),
       },
     });
@@ -248,6 +255,7 @@ describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
     await installMockGateway(page, {
       ...workspaceGatewayScenario(),
       methodResponses: {
+        ...frameMethodResponse(),
         "workspaces.get": workspaceDoc(2, "approved"),
       },
     });
@@ -281,6 +289,7 @@ describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
     await installMockGateway(page, {
       ...workspaceGatewayScenario(),
       methodResponses: {
+        ...frameMethodResponse(),
         "workspaces.get": workspaceDoc(2, "approved"),
       },
     });

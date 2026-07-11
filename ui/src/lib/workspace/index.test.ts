@@ -232,6 +232,44 @@ describe("optimistic mutations", () => {
     expect(state.pendingWidgetIds.has("w1")).toBe(false);
   });
 
+  it("serializes overlapping optimistic writes so both failures fully revert", async () => {
+    const host = {};
+    const state = getWorkspaceState(host);
+    state.workspace = normalizeWorkspace(sampleDoc);
+    const rejectors: Array<(error: Error) => void> = [];
+    const request = vi.fn(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectors.push(reject);
+        }),
+    );
+    const client = mockClient({ request: request as never });
+
+    const first = moveWidget(state, client, {
+      slug: "main",
+      widgetId: "w1",
+      grid: { x: 8, y: 0, w: 4, h: 2 },
+    });
+    await vi.waitFor(() => expect(rejectors).toHaveLength(1));
+    const second = updateWidgetTitle(state, client, {
+      slug: "main",
+      widgetId: "w1",
+      title: "Rejected title",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+
+    rejectors[0]!(new Error("first rejected"));
+    await vi.waitFor(() => expect(rejectors).toHaveLength(2));
+    rejectors[1]!(new Error("second rejected"));
+    await Promise.all([first, second]);
+
+    expect(state.workspace?.tabs[0].widgets[0]).toMatchObject({
+      title: "Revenue",
+      grid: { x: 0, y: 0, w: 4, h: 2 },
+    });
+    expect(state.pendingWidgetIds.has("w1")).toBe(false);
+  });
+
   it("does not stomp a fresher concurrent load when the mutation later rejects", async () => {
     const host = {};
     const state = getWorkspaceState(host);
@@ -255,6 +293,7 @@ describe("optimistic mutations", () => {
       widgetId: "w1",
       grid: { x: 8, y: 0, w: 4, h: 2 },
     });
+    await vi.waitFor(() => expect(typeof rejectMutation).toBe("function"));
 
     // A concurrent broadcast refetch lands a FRESHER doc (version 4) mid-flight.
     const fresher = normalizeWorkspace({ ...sampleDoc, workspaceVersion: 4 });

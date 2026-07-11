@@ -95,6 +95,8 @@ type WorkspaceViewState = {
   manifestCache: Map<string, WidgetManifestView>;
   manifestLoads: Set<string>;
   manifestVersion: number;
+  manifestConnected: boolean;
+  manifestEpoch: number;
   /**
    * Monotonic data-refresh counter bumped by the per-widget polling timer.
    * Folded into the binding cache key so a poll tick re-resolves data-widget
@@ -219,6 +221,8 @@ function getViewState(host: object): WorkspaceViewState {
       manifestCache: new Map(),
       manifestLoads: new Set(),
       manifestVersion: -1,
+      manifestConnected: false,
+      manifestEpoch: 0,
       dataVersion: 0,
       dialog: null,
       onboardingDismissed: isOnboardingDismissed(),
@@ -463,9 +467,9 @@ function renderTabStrip(state: WorkspaceUiState, workspace: WorkspaceDocument): 
 /**
  * Load `widget.json` manifests for the APPROVED custom widgets on the active tab.
  * Only approved widgets ever build an iframe, so only they need a manifest; a
- * pending/rejected widget never fetches one. A workspace-version change clears
- * the cache because it may represent a new approval with a narrower manifest;
- * reusing the old capabilities would grant the new code more than was approved.
+ * pending/rejected widget never fetches one. Workspace changes, reconnects, and
+ * approaching server expiry clear the cache: capabilities are approval-scoped
+ * and process-local, so they must never outlive either boundary.
  */
 function ensureManifests(
   viewState: WorkspaceViewState,
@@ -473,15 +477,22 @@ function ensureManifests(
   workspace: WorkspaceDocument,
   tab: WorkspaceTab,
 ): void {
+  if (!props.connected || !props.client) {
+    return;
+  }
   if (viewState.manifestVersion !== workspace.workspaceVersion) {
     viewState.manifestCache.clear();
     viewState.manifestLoads.clear();
     viewState.manifestVersion = workspace.workspaceVersion;
   }
   const manifestVersion = viewState.manifestVersion;
-  const basePath = props.basePath ?? "";
+  const manifestEpoch = viewState.manifestEpoch;
   for (const widget of tab.widgets) {
     const name = customWidgetName(widget.kind);
+    const cached = name ? viewState.manifestCache.get(name) : undefined;
+    if (name && cached?.frameExpiresAt && cached.frameExpiresAt <= Date.now() + 60_000) {
+      viewState.manifestCache.delete(name);
+    }
     if (
       !name ||
       customWidgetStatus(workspace, widget.kind) !== "approved" ||
@@ -491,10 +502,13 @@ function ensureManifests(
       continue;
     }
     viewState.manifestLoads.add(name);
-    void loadWidgetManifestView(basePath, name).then((manifest) => {
+    void loadWidgetManifestView(props.client, name).then((manifest) => {
       // A fetch started for an older approval must not repopulate the cache after
       // a workspace update invalidated it.
-      if (viewState.manifestVersion !== manifestVersion) {
+      if (
+        viewState.manifestVersion !== manifestVersion ||
+        viewState.manifestEpoch !== manifestEpoch
+      ) {
         return;
       }
       viewState.manifestLoads.delete(name);
@@ -867,6 +881,15 @@ export function renderWorkspace(props: WorkspaceProps): TemplateResult {
 
   const requestedSlug = requestedWorkspaceSlug(window.location.search);
   const active = props.connected;
+  // Gateway restart revokes every in-memory frame capability without changing
+  // workspaceVersion. A disconnect/reconnect therefore starts a new cache epoch.
+  if (viewState.manifestConnected !== active) {
+    viewState.manifestConnected = active;
+    viewState.manifestEpoch += 1;
+    viewState.manifestCache.clear();
+    viewState.manifestLoads.clear();
+    viewState.manifestVersion = -1;
+  }
   subscribeToWorkspaceEvents(props.host, state, active ? props.client : null);
   // Per-widget data refresh: a visibility-gated timer bumps the data version so
   // the next render re-resolves data-widget bindings. stopWorkspace clears it on

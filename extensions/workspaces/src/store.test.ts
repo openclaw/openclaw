@@ -137,6 +137,20 @@ describe("WorkspaceStore", () => {
     });
   });
 
+  it("replace preserves registry decisions omitted by the incoming document", async () => {
+    await withStore((store) => {
+      const doc = docWithPendingWidget(store);
+      const replacement = validateWorkspaceDoc({ ...doc, widgetsRegistry: {} });
+
+      const result = store.replace(replacement, { actor: "agent:finance" });
+
+      expect(result.doc.widgetsRegistry.chart).toEqual({
+        status: "pending",
+        createdBy: "agent:finance",
+      });
+    });
+  });
+
   it("does not restore a revoked widget approval through undo", async () => {
     await withStore((store) => {
       docWithPendingWidget(store);

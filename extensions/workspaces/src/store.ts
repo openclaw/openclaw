@@ -24,6 +24,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { configureSqliteConnectionPragmas } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { WidgetAssetTokens } from "./asset-tokens.js";
 import { DEFAULT_WORKSPACE } from "./default-workspace.js";
 import {
   validateWorkspaceDoc,
@@ -70,8 +71,8 @@ function assertWorkspaceSize(serialized: string): void {
  * the write transaction. Two fields are never taken from the caller:
  *
  * - **the registry itself.** Entries are minted by `workspace_widget_scaffold` and
- *   nowhere else. A replacement document may keep entries that already exist, but
- *   any name it invents is dropped: otherwise a caller could mint a `pending`
+ *   nowhere else. Replacement preserves the complete current registry and ignores
+ *   the incoming field: otherwise a caller could delete approval decisions or mint a `pending`
  *   entry for a name with no widget on disk, have an operator approve it, and only
  *   then write the code the operator "approved". Status likewise changes only
  *   through `workspaces.widget.approve` — a document that arrives already marked
@@ -85,13 +86,9 @@ export function reconcileReplace(
   current: WorkspaceDoc,
   actor: WorkspaceActor,
 ): WorkspaceDoc {
-  const widgetsRegistry: Record<string, WorkspaceWidgetRegistryEntry> = {};
-  for (const name of Object.keys(incoming.widgetsRegistry)) {
-    const existing = current.widgetsRegistry[name];
-    if (existing) {
-      widgetsRegistry[name] = existing;
-    }
-  }
+  const widgetsRegistry: Record<string, WorkspaceWidgetRegistryEntry> = structuredClone(
+    current.widgetsRegistry,
+  );
   const existingTabs = new Map(current.tabs.map((tab) => [tab.slug, tab]));
   const existingWidgets = new Map(
     current.tabs.flatMap((tab) => tab.widgets.map((widget) => [widget.id, widget] as const)),
@@ -115,10 +112,11 @@ export class WorkspaceStore {
   readonly workspaceDir: string;
   readonly dbPath: string;
   private readonly db: DatabaseSync;
+  readonly assetTokens = new WidgetAssetTokens();
   /**
    * Single-slot cache of the parsed document. This process is the only writer
    * and every write goes through `commit()`, so the cache is exact rather than
-   * merely fresh — the unauthenticated asset route can check approval status on
+   * merely fresh — the capability-gated asset route can check approval status on
    * every request without re-parsing a 256 KB document.
    */
   private cached: WorkspaceDoc | null = null;
