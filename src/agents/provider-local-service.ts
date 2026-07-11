@@ -203,13 +203,11 @@ export function stopManagedProviderLocalServicesForTest(): void {
 
 /** Return bounded local-service state for focused lifecycle tests. */
 export function getManagedProviderLocalServiceDiagnosticsForTest(): LocalServiceDiagnostics[] {
-  return [...services.values()]
-    .map((managed) => managed.diagnostics)
-    .filter((value): value is LocalServiceDiagnostics => value !== undefined)
-    .map((value) => ({
-      ...value,
-      ...(value.lastExit ? { lastExit: { ...value.lastExit } } : {}),
-    }));
+  return structuredClone(
+    [...services.values()]
+      .map((managed) => managed.diagnostics)
+      .filter((value): value is LocalServiceDiagnostics => value !== undefined),
+  );
 }
 
 function validateLocalServiceConfig(service: ModelProviderLocalServiceConfig, provider: string) {
