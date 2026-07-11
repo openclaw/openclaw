@@ -12,6 +12,7 @@ import {
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
+  type CodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import { createCodexThreadsTool } from "./native-thread-tool.js";
@@ -47,6 +48,7 @@ describe("native Codex thread tool", () => {
     request?: ReturnType<typeof vi.fn>;
     sessionId?: string | null;
     modelSelectionLocked?: boolean;
+    bindingStore?: CodexAppServerBindingStore;
   }) {
     const context: OpenClawPluginToolContext = {
       config: {},
@@ -72,7 +74,7 @@ describe("native Codex thread tool", () => {
       },
     });
     return createCodexThreadsTool({
-      bindingStore: testCodexAppServerBindingStore,
+      bindingStore: params?.bindingStore ?? testCodexAppServerBindingStore,
       context,
       runtime,
       getPluginConfig:
@@ -815,6 +817,39 @@ describe("native Codex thread tool", () => {
       expect(request).not.toHaveBeenCalled();
       await expect(readCodexAppServerBinding("session-id")).resolves.toMatchObject({
         threadId: "bound-thread",
+      });
+    }));
+
+  it("rechecks a binding attached while archive waits for its ownership fence", () =>
+    withFixture(async () => {
+      let fenced = false;
+      const bindingStore: CodexAppServerBindingStore = {
+        ...testCodexAppServerBindingStore,
+        withThreadArchiveFence: async (run) => {
+          if (!fenced) {
+            fenced = true;
+            await writeCodexAppServerBinding("session-id", {
+              threadId: "newly-bound-thread",
+              cwd: "/tmp/project",
+            });
+          }
+          return await testCodexAppServerBindingStore.withThreadArchiveFence(run);
+        },
+      };
+      const request = vi.fn(async () => ({}));
+      const tool = createTool({ bindingStore, request, modelSelectionLocked: true });
+
+      await expect(
+        tool?.execute("call-raced-locked-archive", {
+          action: "archive",
+          thread_id: "newly-bound-thread",
+          confirm: true,
+        }),
+      ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
+
+      expect(request).not.toHaveBeenCalled();
+      await expect(readCodexAppServerBinding("session-id")).resolves.toMatchObject({
+        threadId: "newly-bound-thread",
       });
     }));
 

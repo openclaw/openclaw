@@ -374,15 +374,16 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           throw new Error("cannot safely archive a native Codex thread without a session identity");
         }
         const identity = currentIdentity(session.sessionId);
-        if (binding?.threadId === threadId) {
-          // Clearing the binding detaches the harness-owned Codex thread. The session lock keeps
-          // both that thread and App Server-selected model routing fixed.
-          if (session.modelSelectionLocked) {
-            throw new ModelSelectionLockedError();
-          }
-          assertCodexBindingMayBeReplaced(binding, "archiving its bound native thread");
-        }
         await options.bindingStore.withThreadArchiveFence(async () => {
+          const archivedBinding = await currentBinding(session);
+          if (archivedBinding?.threadId === threadId) {
+            // Clearing the binding detaches the harness-owned Codex thread. The session lock keeps
+            // both that thread and App Server-selected model routing fixed.
+            if (session.modelSelectionLocked) {
+              throw new ModelSelectionLockedError();
+            }
+            assertCodexBindingMayBeReplaced(archivedBinding, "archiving its bound native thread");
+          }
           // App Server status is process-local, and archive is a separate RPC. This read blocks
           // known active/invalid state; `confirm` owns the remaining cross-client race.
           const current = await request(
@@ -423,7 +424,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             { threadId },
             await requestOptions(pluginConfig),
           );
-          if (binding?.threadId === threadId) {
+          if (archivedBinding?.threadId === threadId) {
             await options.bindingStore.mutate(identity, {
               kind: "clear",
               threadId,
