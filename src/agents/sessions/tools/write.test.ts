@@ -54,7 +54,7 @@ describe("write tool", () => {
     // Remote transports can report cancellation after the write landed; verify
     // by readback before surfacing a false failure to the model.
     const filePath = await createTempPath();
-    const content = "finished 😀\n";
+    const expectedContent = "finished 😀\n";
     const controller = new AbortController();
     const tool = createWriteTool(tmpDir, {
       operations: createRecoverableOperations(async (absolutePath, content) => {
@@ -64,11 +64,15 @@ describe("write tool", () => {
       }),
     });
 
-    const result = await tool.execute("call-1", { path: filePath, content }, controller.signal);
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: expectedContent },
+      controller.signal,
+    );
 
     expect(result.content[0]).toEqual({
       type: "text",
-      text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${filePath}`,
+      text: `Successfully wrote ${Buffer.byteLength(expectedContent, "utf8")} bytes to ${filePath}`,
     });
   });
 
