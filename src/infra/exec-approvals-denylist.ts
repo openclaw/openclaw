@@ -109,6 +109,16 @@ export function collectExecDenylistErrors(raw: unknown, path: string): string[] 
 }
 
 /**
+ * Stable identity key for a denylist entry (pattern + reason). Mirrors the
+ * de-duplication key used by {@link normalizeExecDenylist} so callers can tell
+ * whether a currently-effective rule was already present when an authorization
+ * snapshot was captured (i.e. detect a newly-added STOP rule).
+ */
+export function buildExecDenylistRuleKey(entry: ExecDenylistEntry): string {
+  return `${entry.pattern}\u0000${entry.reason ?? ""}`;
+}
+
+/**
  * Resolves the effective denylist as the de-duplicated UNION of every supplied
  * config layer (order-independent). Any entry from any layer applies
  * (stricter-wins / deny-over-allow across layers).

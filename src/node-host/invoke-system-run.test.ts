@@ -1905,6 +1905,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           requireAutoAllowSkills: false,
           requireExactCommandApproval: false,
           requireDurableAllowlistApproval: false,
+          denylistBinding: expect.objectContaining({
+            configDenylist: [],
+            approvedRuleKeys: [],
+          }),
         });
         expect(invoke.runCommand).not.toHaveBeenCalled();
         expect(invoke.sendExecFinishedEvent).not.toHaveBeenCalled();
@@ -3172,6 +3176,59 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect(runCommand).toHaveBeenCalledTimes(1);
         expectInvokeOk(sendInvokeResult, { payloadContains: "denylist-approved" });
         expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
+      },
+    });
+  });
+
+  it("denies dispatch when a denylist rule is added while the approval is pending", async () => {
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+        },
+        agents: {},
+      },
+      run: async () => {
+        // Simulate an operator tightening the approvals-file denylist between
+        // the approval grant and the locked pre-dispatch commit: the write
+        // lands immediately before the real locked revalidation runs.
+        const commitAuthorization: HandleSystemRunInvokeOptions["commitExecAuthorization"] = async (
+          params,
+        ) => {
+          fs.writeFileSync(
+            resolveExecApprovalsPath(),
+            JSON.stringify({
+              version: 1,
+              defaults: {
+                security: "full",
+                ask: "off",
+                askFallback: "deny",
+                denylist: [{ pattern: "echo *", reason: "tightened mid-approval" }],
+              },
+              agents: {},
+            }),
+          );
+          await commitExecAuthorizationLocked(params);
+        };
+
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["echo", "ok"],
+          security: "full",
+          ask: "off",
+          approvalDecision: "allow-once",
+          approved: true,
+          commitExecAuthorization: commitAuthorization,
+        });
+
+        expect(runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: approval state could not be persisted",
+          exact: true,
+        });
       },
     });
   });

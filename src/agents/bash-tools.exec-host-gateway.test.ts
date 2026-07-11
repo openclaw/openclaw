@@ -13,6 +13,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../infra/diagnostic-events.js";
+import { buildExecDenylistRuleKey } from "../infra/exec-approvals-denylist.js";
 import type {
   ExecAllowlistEntry,
   ExecApprovalDecision,
@@ -556,6 +557,40 @@ describe("processGatewayAllowlist", () => {
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(result.pendingResult ?? null).toBeNull();
+  });
+
+  it("carries denylist provenance into the locked authorization commit", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "echo ok",
+      security: "full",
+      ask: "off",
+      execConfigDenylist: [{ pattern: "rm *", reason: "destructive" }],
+    });
+
+    expect(result.pendingResult ?? null).toBeNull();
+    // The locked commit must receive the pre-wait denylist provenance so a
+    // rule added while an approval waits is re-screened before dispatch.
+    expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorization: expect.objectContaining({
+          denylistBinding: expect.objectContaining({
+            command: "echo ok",
+            analysisOk: true,
+            configDenylist: [{ pattern: "rm *", reason: "destructive" }],
+            approvedRuleKeys: [
+              buildExecDenylistRuleKey({ pattern: "rm *", reason: "destructive" }),
+            ],
+          }),
+        }),
+      }),
+    );
   });
 
   it("still requires approval when allowlist execution plan is unavailable despite durable trust", async () => {
@@ -2236,6 +2271,10 @@ EOF`,
             autoAllowSkills: false,
             allowlistRuleKeys: [],
           },
+          denylistBinding: expect.objectContaining({
+            configDenylist: [],
+            approvedRuleKeys: [],
+          }),
           requireAutoAllowSkills: false,
           requireExactCommandApproval: false,
           requireDurableAllowlistApproval: false,

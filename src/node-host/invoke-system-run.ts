@@ -9,6 +9,8 @@ import {
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
+  buildExecDenylistRuleKey,
+  type ExecDenylistEntry,
   evaluateExecDenylist,
   resolveEffectiveExecDenylist,
 } from "../infra/exec-approvals-denylist.js";
@@ -135,6 +137,10 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   denylisted: boolean;
+  /** openclaw.json config-layer denylist captured before the approval wait. */
+  denylistConfigEntries: ExecDenylistEntry[];
+  /** Effective denylist rule keys (config + approvals-file) at evaluation time. */
+  approvedDenylistRuleKeys: string[];
   allowlistAuthorizationSatisfied: boolean;
   safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
   safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
@@ -600,9 +606,15 @@ async function evaluateSystemRunPolicyPhase(
   // Deny-over-allow screening: union the openclaw.json layers (global +
   // per-agent) with the exec-approvals.json file layer, then force approval on
   // any hit. Unanalyzable commands with a configured denylist fail closed.
-  const effectiveDenylist = resolveEffectiveExecDenylist({
-    layers: [cfg.tools?.exec?.denylist, agentExec?.denylist, approvals.denylist],
+  const denylistConfigEntries = resolveEffectiveExecDenylist({
+    layers: [cfg.tools?.exec?.denylist, agentExec?.denylist],
   });
+  const effectiveDenylist = resolveEffectiveExecDenylist({
+    layers: [denylistConfigEntries, approvals.denylist],
+  });
+  // Snapshot the rule keys effective when the approval is requested so the
+  // locked pre-dispatch commit can reject a STOP rule added during the wait.
+  const approvedDenylistRuleKeys = effectiveDenylist.map(buildExecDenylistRuleKey);
   const denylistEvaluation = evaluateExecDenylist({
     command: parsed.commandText,
     segments,
@@ -842,6 +854,8 @@ async function evaluateSystemRunPolicyPhase(
     analysisOk,
     allowlistSatisfied,
     denylisted,
+    denylistConfigEntries,
+    approvedDenylistRuleKeys,
     allowlistAuthorizationSatisfied,
     safeBins,
     safeBinProfiles,
@@ -1039,6 +1053,15 @@ async function executeSystemRunPhase(
     requireAutoAllowSkills: phase.segmentSatisfiedBy.includes("skills"),
     requireExactCommandApproval: phase.durableApprovalRequirement === "exact-command",
     requireDurableAllowlistApproval: phase.durableApprovalRequirement === "segment-allowlist",
+    // Deny-over-allow TOCTOU guard: re-screen the denylist under the approvals
+    // lock so a STOP rule added while this approval was pending blocks dispatch.
+    denylistBinding: {
+      command: phase.commandText,
+      segments: phase.segments,
+      analysisOk: phase.analysisOk,
+      configDenylist: phase.denylistConfigEntries,
+      approvedRuleKeys: phase.approvedDenylistRuleKeys,
+    },
   };
 
   try {

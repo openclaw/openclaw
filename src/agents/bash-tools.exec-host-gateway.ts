@@ -9,6 +9,7 @@ import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
+  buildExecDenylistRuleKey,
   evaluateExecDenylist,
   type ExecDenylistEntry,
   formatExecDenylistWarning,
@@ -595,6 +596,19 @@ export async function processGatewayAllowlist(
     }
     return { ...state, approvedByAsk: true, deniedReason: null };
   };
+  // Deny-over-allow TOCTOU guard: capture the effective denylist that authorized
+  // this command BEFORE the approval wait. The commit re-reads the approvals
+  // file under lock and unions it with this config layer, rejecting dispatch if
+  // an operator added/tightened a matching STOP rule while approval was pending.
+  const denylistAuthorizationBinding: ExecApprovalUsageAuthorization["denylistBinding"] = {
+    command: params.command,
+    segments: allowlistEval.segments,
+    analysisOk,
+    configDenylist: params.execConfigDenylist ?? [],
+    approvedRuleKeys: resolveEffectiveExecDenylist({
+      layers: [approvals.denylist, params.execConfigDenylist],
+    }).map(buildExecDenylistRuleKey),
+  };
   const commitExecutionAuthorization = (options: {
     source: ExecApprovalUsageAuthorization["source"];
     resolvedPath?: string;
@@ -640,6 +654,7 @@ export async function processGatewayAllowlist(
           policyAuthorization && durableApprovalRequirement === "exact-command",
         requireDurableAllowlistApproval:
           policyAuthorization && durableApprovalRequirement === "segment-allowlist",
+        denylistBinding: denylistAuthorizationBinding,
       },
       ...(options.allowAlwaysDecision ? { allowAlwaysDecision: options.allowAlwaysDecision } : {}),
     });

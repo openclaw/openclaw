@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { buildExecDenylistRuleKey } from "./exec-approvals-denylist.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 
 const requestJsonlSocketMock = vi.hoisted(() => vi.fn());
@@ -2021,6 +2022,118 @@ describe("exec approvals store helpers", () => {
       }),
     ).rejects.toThrow("Allow-always persistence requires explicit approval");
     expect(allowlistEntries(dir, "main")).toEqual([]);
+  });
+
+  it("rejects a commit when a denylist rule was added while the approval was pending", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: { main: {} },
+    });
+    // Denylist provenance captured at approval time: no rules were effective.
+    const denylistBinding = {
+      command: "printf approved",
+      segments: [{ argv: ["printf", "approved"] }],
+      analysisOk: true,
+      configDenylist: [],
+      approvedRuleKeys: [],
+    };
+
+    // Operator tightens the approvals-file denylist while the approval waits.
+    await updateExecApprovals({
+      update: (current) => ({
+        ...current,
+        defaults: { ...current.defaults, denylist: [{ pattern: "printf*" }] },
+      }),
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf approved",
+        authorization: {
+          source: "explicit-approval",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+          denylistBinding,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+  });
+
+  it("commits when the matching denylist rule was already effective at approval time", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off", denylist: [{ pattern: "printf*" }] },
+      agents: { main: {} },
+    });
+    // The rule matched at request time and the human approved anyway; the same
+    // rule being current at dispatch must not revoke the explicit decision.
+    const denylistBinding = {
+      command: "printf approved",
+      segments: [{ argv: ["printf", "approved"] }],
+      analysisOk: true,
+      configDenylist: [],
+      approvedRuleKeys: [buildExecDenylistRuleKey({ pattern: "printf*" })],
+    };
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf approved",
+        authorization: {
+          source: "explicit-approval",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+          denylistBinding,
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("fails closed when the pending command cannot be screened against a new denylist rule", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: { main: {} },
+    });
+    // Unanalyzable command binding: no segments and analysis failed.
+    const denylistBinding = {
+      command: "printf approved | obscure",
+      segments: [],
+      analysisOk: false,
+      configDenylist: [],
+      approvedRuleKeys: [],
+    };
+
+    await updateExecApprovals({
+      update: (current) => ({
+        ...current,
+        defaults: { ...current.defaults, denylist: [{ pattern: "unrelated*" }] },
+      }),
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf approved | obscure",
+        authorization: {
+          source: "explicit-approval",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+          denylistBinding,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
   });
 
   it("rejects unprompted full execution after policy changes to deny", async () => {

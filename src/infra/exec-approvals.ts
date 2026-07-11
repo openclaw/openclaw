@@ -19,7 +19,10 @@ import {
 } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import {
+  buildExecDenylistRuleKey,
   type ExecDenylistEntry,
+  type ExecDenylistSegment,
+  evaluateExecDenylist,
   normalizeExecDenylist,
   resolveEffectiveExecDenylist,
 } from "./exec-approvals-denylist.js";
@@ -2126,6 +2129,39 @@ function execApprovalPolicySnapshotIsCurrent(
   );
 }
 
+/**
+ * Captures the effective exec denylist that authorized a specific command
+ * dispatch so the locked pre-dispatch commit can detect a STOP rule that an
+ * operator added/tightened while the approval was pending (a TOCTOU gap: the
+ * denylist is screened before the approval wait, but the locked revalidation
+ * historically only re-checked scalar policy + allowlist).
+ *
+ * The approvals-file denylist layer is intentionally NOT captured here: it is
+ * re-read fresh under the approvals lock at commit time (operators edit
+ * exec-approvals.json live), mirroring how allowlist revalidation re-reads the
+ * current file. Only the openclaw.json config layer — which is not re-read
+ * under the approvals lock — is carried on {@link configDenylist}.
+ */
+export type ExecDenylistAuthorizationBinding = {
+  /** Canonical command text screened at approval time. */
+  command: string;
+  /** Analyzed command segments used to screen argv/basename targets. */
+  segments: readonly ExecDenylistSegment[];
+  /** Whether the command was analyzable (drives conservative fail-closed). */
+  analysisOk: boolean;
+  /**
+   * openclaw.json config-layer denylist (`tools.exec.denylist` +
+   * `agents.list.<id>.tools.exec.denylist`) captured before the approval wait.
+   */
+  configDenylist: readonly ExecDenylistEntry[];
+  /**
+   * Rule keys of the FULL effective denylist (config + approvals-file) present
+   * when the approval was requested. Any currently-effective rule whose key is
+   * absent here is treated as newly-added and re-screened before dispatch.
+   */
+  approvedRuleKeys: readonly string[];
+};
+
 export type ExecApprovalUsageAuthorization = {
   source: "current-policy" | "ask-fallback" | "explicit-approval" | "auto-review";
   security: ExecSecurity;
@@ -2135,7 +2171,56 @@ export type ExecApprovalUsageAuthorization = {
   requireAutoAllowSkills?: boolean;
   requireExactCommandApproval?: boolean;
   requireDurableAllowlistApproval?: boolean;
+  /**
+   * Denylist provenance for the locked pre-dispatch revalidation. When present,
+   * a denylist rule that became effective after the approval was requested and
+   * that matches the approved command binding fails the commit closed.
+   */
+  denylistBinding?: ExecDenylistAuthorizationBinding;
 };
+
+/**
+ * Deny-over-allow re-screen under the approvals lock. Re-reads the current
+ * approvals-file denylist (operators edit exec-approvals.json live) and unions
+ * it with the config-layer denylist captured before the approval wait, then
+ * screens the approved command against only the rules that became effective
+ * AFTER the authorization was snapshotted. A newly-current STOP rule that
+ * matches — or that leaves an unanalyzable command unscreenable — fails the
+ * commit closed so the already-pending approval cannot reach dispatch.
+ */
+function assertCurrentDenylistAuthorization(params: {
+  file: ExecApprovalsFile;
+  agentId: string | undefined;
+  binding: ExecDenylistAuthorizationBinding | undefined;
+}): void {
+  const binding = params.binding;
+  if (!binding) {
+    return;
+  }
+  const currentFileDenylist = resolveExecApprovalsFromFile({
+    file: params.file,
+    agentId: params.agentId,
+  }).denylist;
+  const currentEffective = resolveEffectiveExecDenylist({
+    layers: [binding.configDenylist, currentFileDenylist],
+  });
+  const approvedRuleKeys = new Set(binding.approvedRuleKeys);
+  const newlyCurrent = currentEffective.filter(
+    (entry) => !approvedRuleKeys.has(buildExecDenylistRuleKey(entry)),
+  );
+  if (newlyCurrent.length === 0) {
+    return;
+  }
+  const evaluation = evaluateExecDenylist({
+    command: binding.command,
+    segments: binding.segments,
+    denylist: newlyCurrent,
+    analysisOk: binding.analysisOk,
+  });
+  if (evaluation.match !== null || evaluation.conservativeApproval) {
+    throw new Error("Exec approval changed before execution");
+  }
+}
 
 function assertCurrentUsageAuthorization(params: {
   file: ExecApprovalsFile;
@@ -2144,6 +2229,14 @@ function assertCurrentUsageAuthorization(params: {
   matchKeys: ReadonlySet<string>;
   authorization: ExecApprovalUsageAuthorization;
 }): void {
+  // Re-screen the denylist for every authorization source: a STOP rule added
+  // while the approval was pending must block dispatch regardless of how the
+  // command was otherwise authorized (deny-over-allow).
+  assertCurrentDenylistAuthorization({
+    file: params.file,
+    agentId: params.agentId,
+    binding: params.authorization.denylistBinding,
+  });
   const current = resolveExecApprovalsFromFile({
     file: params.file,
     agentId: params.agentId,
