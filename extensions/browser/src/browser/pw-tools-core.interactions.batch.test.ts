@@ -178,7 +178,7 @@ describe("batchViaPlaywright", () => {
       },
     },
     { name: "evaluate", action: { kind: "evaluate", fn: "() => true" } as const },
-  ])("forwards proxy policy to existing batched $name actions", async ({ action }) => {
+  ])("guards batched $name document requests with the proxy policy", async ({ action }) => {
     const ssrfPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
 
     const result = await batchViaPlaywright({
@@ -191,6 +191,14 @@ describe("batchViaPlaywright", () => {
     });
 
     expect(result).toEqual({ results: [{ ok: true }] });
+    expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
+      action: expect.any(Function),
+      onPolicyCheckStarted: expect.any(Function),
+      onPolicyDenied: expect.any(Function),
+      page,
+      ssrfPolicy,
+      browserProxyMode: "explicit-browser-proxy",
+    });
     expect(assertPageNavigationCompletedSafely).toHaveBeenLastCalledWith({
       cdpUrl: "http://127.0.0.1:9222",
       page,
@@ -210,7 +218,7 @@ describe("batchViaPlaywright", () => {
       actions: [
         {
           kind: "batch",
-          actions: [{ kind: "hover", ref: "1" }],
+          actions: [{ kind: "click", ref: "1" }],
         },
       ],
       evaluateEnabled: true,

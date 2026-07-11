@@ -116,7 +116,7 @@ describe("pw-tools-core interaction navigation guard", () => {
         getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
       ).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(250);
       await task;
       expect(completion).toHaveBeenCalledTimes(1);
 
@@ -172,7 +172,7 @@ describe("pw-tools-core interaction navigation guard", () => {
       });
 
       await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(250);
       await task;
 
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
@@ -242,7 +242,7 @@ describe("pw-tools-core interaction navigation guard", () => {
         getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed,
       ).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(240);
       await task;
 
       expect(
@@ -311,9 +311,15 @@ describe("pw-tools-core interaction navigation guard", () => {
       await vi.advanceTimersByTimeAsync(10);
       await vi.advanceTimersByTimeAsync(240);
       await rejection;
-      expect(
-        getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
-      ).not.toHaveBeenCalled();
+      expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
+        {
+          cdpUrl: "http://127.0.0.1:18792",
+          page,
+          response: null,
+          ssrfPolicy: { allowPrivateNetwork: false },
+          targetId: "T1",
+        },
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -429,6 +435,7 @@ describe("pw-tools-core interaction navigation guard", () => {
       const rejection = expect(task).rejects.toThrow("main frame blocked");
 
       await vi.advanceTimersByTimeAsync(20);
+      await vi.advanceTimersByTimeAsync(230);
       await rejection;
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
         {
@@ -489,6 +496,7 @@ describe("pw-tools-core interaction navigation guard", () => {
       });
 
       await vi.advanceTimersByTimeAsync(20);
+      await vi.advanceTimersByTimeAsync(230);
       await task;
 
       expect(
@@ -567,8 +575,7 @@ describe("pw-tools-core interaction navigation guard", () => {
         },
       );
       expect(
-        getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mock
-          .invocationCallOrder[0],
+        getPwToolsCoreSessionMocks().withPageNavigationRequestGuard.mock.invocationCallOrder[0],
       ).toBeLessThan(page.evaluate.mock.invocationCallOrder[0]);
     } finally {
       vi.useRealTimers();
@@ -693,6 +700,7 @@ describe("pw-tools-core interaction navigation guard", () => {
       const rejection = expect(task).rejects.toThrow("main frame blocked");
 
       await vi.advanceTimersByTimeAsync(30);
+      await vi.advanceTimersByTimeAsync(250);
       await rejection;
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
         {
@@ -752,12 +760,12 @@ describe("pw-tools-core interaction navigation guard", () => {
       for (const listener of Array.from(listeners)) {
         listener();
       }
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(250);
       await Promise.all([first, second]);
 
       expect(
         getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
-      ).toHaveBeenCalledTimes(1);
+      ).toHaveBeenCalledTimes(3);
       expect(listeners.size).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -806,7 +814,7 @@ describe("pw-tools-core interaction navigation guard", () => {
       });
       const rejection = expect(task).rejects.toThrow("blocked delayed interaction navigation");
 
-      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(250);
       await rejection;
       expect(listeners.size).toBe(0);
     } finally {
@@ -1002,7 +1010,7 @@ describe("pw-tools-core interaction navigation guard", () => {
         ssrfPolicy: { allowPrivateNetwork: false },
       });
 
-      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(250);
       await task;
 
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
@@ -1095,7 +1103,7 @@ describe("pw-tools-core interaction navigation guard", () => {
       });
       const rejection = expect(task).rejects.toThrow("blocked delayed interaction navigation");
 
-      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(250);
       await rejection;
       expect(listeners.size).toBe(0);
     } finally {
@@ -1103,7 +1111,7 @@ describe("pw-tools-core interaction navigation guard", () => {
     }
   });
 
-  it("does not run the post-click navigation guard when the url is unchanged", async () => {
+  it("runs the final committed-URL check when a click leaves the URL unchanged", async () => {
     const click = vi.fn(async () => {});
     const page = { url: vi.fn(() => "http://127.0.0.1:9222/json/version") };
     setPwToolsCoreCurrentRefLocator({ click });
@@ -1116,10 +1124,16 @@ describe("pw-tools-core interaction navigation guard", () => {
       ssrfPolicy: { allowPrivateNetwork: false },
     });
 
-    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).not.toHaveBeenCalled();
+    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page,
+      response: null,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      targetId: "T1",
+    });
   });
 
-  it("does not run the navigation guard when only the URL hash changes (same-document navigation)", async () => {
+  it("runs the final committed-URL check after a same-document hash change", async () => {
     const click = vi.fn(async () => {});
     const page = {
       url: vi
@@ -1137,7 +1151,13 @@ describe("pw-tools-core interaction navigation guard", () => {
       ssrfPolicy: { allowPrivateNetwork: false },
     });
 
-    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).not.toHaveBeenCalled();
+    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page,
+      response: null,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      targetId: "T1",
+    });
   });
 
   it("runs the navigation guard when a same-URL reload fires framenavigated during a click", async () => {
@@ -1184,7 +1204,7 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
   });
 
-  it("checks the current page before evaluate and skips the post-evaluate guard when the url is unchanged", async () => {
+  it("installs the request guard before evaluate and runs the final committed-URL check", async () => {
     const page = {
       evaluate: vi.fn(async () => "ok"),
       url: vi.fn(() => "http://127.0.0.1:9222/json/version"),
@@ -1199,9 +1219,6 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
 
     expect(result).toBe("ok");
-    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledTimes(
-      1,
-    );
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
       page,
@@ -1210,7 +1227,7 @@ describe("pw-tools-core interaction navigation guard", () => {
       targetId: "T1",
     });
     expect(
-      getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mock.invocationCallOrder[0],
+      getPwToolsCoreSessionMocks().withPageNavigationRequestGuard.mock.invocationCallOrder[0],
     ).toBeLessThan(page.evaluate.mock.invocationCallOrder[0]);
   });
 

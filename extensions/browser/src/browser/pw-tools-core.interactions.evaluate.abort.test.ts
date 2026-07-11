@@ -146,7 +146,8 @@ describe("evaluateViaPlaywright (abort)", () => {
     await expect(p).rejects.toThrow("blocked by dialog");
     expect(forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
     resolveEval(true);
-    await Promise.resolve();
-    expect(markObservedDialogsHandledRemotelyForPage).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(markObservedDialogsHandledRemotelyForPage).toHaveBeenCalled();
+    });
   });
 });

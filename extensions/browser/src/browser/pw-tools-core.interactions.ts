@@ -113,6 +113,12 @@ function reconcileRemoteDialogAfterActionSettled(page: Page, signal?: AbortSigna
   }
 }
 
+function throwIfInteractionAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection");
+  }
+}
+
 const resolveInteractionTimeoutMs = resolveActInteractionTimeoutMs;
 
 // Returns true only when the URL change indicates a cross-document navigation
@@ -552,12 +558,7 @@ async function awaitNavigationGuardedInteraction<T>(
           ...opts,
           action: async () => {
             try {
-              if (signal?.aborted) {
-                throw toLintErrorObject(
-                  signal.reason ?? new Error("aborted"),
-                  "Non-Error rejection",
-                );
-              }
+              throwIfInteractionAborted(signal);
               return await opts.action();
             } finally {
               actionSettledAtMs = Date.now();
@@ -698,7 +699,6 @@ export async function clickViaPlaywright(
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
-  const previousUrl = page.url();
   const signal = opts.signal;
   let abortListener: (() => void) | undefined;
   let abortReject: ((reason: unknown) => void) | undefined;
@@ -735,51 +735,45 @@ export async function clickViaPlaywright(
   }
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
   try {
-    await assertInteractionNavigationCompletedSafely({
-      action: async () => {
-        const delayMs = resolveBoundedDelayMs(
-          opts.delayMs,
-          "click delayMs",
-          ACT_MAX_CLICK_DELAY_MS,
-        );
-        if (delayMs > 0) {
-          await awaitActionWithAbort(
-            locator.hover({ timeout }),
-            abortPromise,
-            reconcileRemoteDialog,
+    await awaitNavigationGuardedInteraction(
+      {
+        action: async () => {
+          const delayMs = resolveBoundedDelayMs(
+            opts.delayMs,
+            "click delayMs",
+            ACT_MAX_CLICK_DELAY_MS,
           );
-          await new Promise((resolve) => {
-            setTimeout(resolve, delayMs);
-          });
-        }
-        if (opts.doubleClick) {
-          await awaitActionWithAbort(
-            locator.dblclick({
+          if (delayMs > 0) {
+            await locator.hover({ timeout });
+            throwIfInteractionAborted(signal);
+            await new Promise((resolve) => {
+              setTimeout(resolve, delayMs);
+            });
+            throwIfInteractionAborted(signal);
+          }
+          if (opts.doubleClick) {
+            await locator.dblclick({
               timeout,
               button: opts.button,
               modifiers: opts.modifiers,
-            }),
-            abortPromise,
-            reconcileRemoteDialog,
-          );
-          return;
-        }
-        await awaitActionWithAbort(
-          locator.click({
+            });
+            return;
+          }
+          await locator.click({
             timeout,
             button: opts.button,
             modifiers: opts.modifiers,
-          }),
-          abortPromise,
-          reconcileRemoteDialog,
-        );
+          });
+        },
+        cdpUrl: opts.cdpUrl,
+        page,
+        ...interactionNavigationPolicy(opts),
+        targetId: opts.targetId,
       },
-      cdpUrl: opts.cdpUrl,
-      page,
-      previousUrl,
-      ...interactionNavigationPolicy(opts),
-      targetId: opts.targetId,
-    });
+      abortPromise,
+      signal,
+      reconcileRemoteDialog,
+    );
   } catch (err) {
     throw toFriendlyInteractionError(err, label);
   } finally {
@@ -804,27 +798,26 @@ export async function clickCoordsViaPlaywright(
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
   const page = await getRestoredPageForTarget(opts);
-  const previousUrl = page.url();
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
-  await assertInteractionNavigationCompletedSafely({
-    action: async () => {
-      await awaitActionWithAbort(
-        page.mouse.click(opts.x, opts.y, {
+  await awaitNavigationGuardedInteraction(
+    {
+      action: async () => {
+        await page.mouse.click(opts.x, opts.y, {
           button: opts.button,
           clickCount: opts.doubleClick ? 2 : 1,
           delay: resolveBoundedDelayMs(opts.delayMs, "clickCoords delayMs", ACT_MAX_CLICK_DELAY_MS),
-        }),
-        abortPromise,
-        reconcileRemoteDialog,
-      );
+        });
+      },
+      cdpUrl: opts.cdpUrl,
+      page,
+      ...interactionNavigationPolicy(opts),
+      targetId: opts.targetId,
     },
-    cdpUrl: opts.cdpUrl,
-    page,
-    previousUrl,
-    ...interactionNavigationPolicy(opts),
-    targetId: opts.targetId,
-  }).finally(cleanup);
+    abortPromise,
+    opts.signal,
+    reconcileRemoteDialog,
+  ).finally(cleanup);
 }
 
 /** Hovers a role ref or selector on the target page. */
@@ -939,26 +932,25 @@ export async function selectOptionViaPlaywright(
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
-  const previousUrl = page.url();
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await assertInteractionNavigationCompletedSafely({
-      action: async () => {
-        await awaitActionWithAbort(
-          locator.selectOption(opts.values, {
+    await awaitNavigationGuardedInteraction(
+      {
+        action: async () => {
+          await locator.selectOption(opts.values, {
             timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
-          }),
-          abortPromise,
-          reconcileRemoteDialog,
-        );
+          });
+        },
+        cdpUrl: opts.cdpUrl,
+        page,
+        ...interactionNavigationPolicy(opts),
+        targetId: opts.targetId,
       },
-      cdpUrl: opts.cdpUrl,
-      page,
-      previousUrl,
-      ...interactionNavigationPolicy(opts),
-      targetId: opts.targetId,
-    });
+      abortPromise,
+      opts.signal,
+      reconcileRemoteDialog,
+    );
   } catch (err) {
     throw toFriendlyInteractionError(err, label);
   } finally {
@@ -982,26 +974,25 @@ export async function pressKeyViaPlaywright(
   }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  const previousUrl = page.url();
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await assertInteractionNavigationCompletedSafely({
-      action: async () => {
-        await awaitActionWithAbort(
-          page.keyboard.press(key, {
+    await awaitNavigationGuardedInteraction(
+      {
+        action: async () => {
+          await page.keyboard.press(key, {
             delay: resolveNonNegativeIntegerOption(opts.delayMs, 0),
-          }),
-          abortPromise,
-          reconcileRemoteDialog,
-        );
+          });
+        },
+        cdpUrl: opts.cdpUrl,
+        page,
+        ...interactionNavigationPolicy(opts),
+        targetId: opts.targetId,
       },
-      cdpUrl: opts.cdpUrl,
-      page,
-      previousUrl,
-      ...interactionNavigationPolicy(opts),
-      targetId: opts.targetId,
-    });
+      abortPromise,
+      opts.signal,
+      reconcileRemoteDialog,
+    );
   } finally {
     cleanup();
   }
@@ -1032,57 +1023,30 @@ export async function typeViaPlaywright(
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    const previousUrl = page.url();
-    if (opts.slowly) {
-      await assertInteractionNavigationCompletedSafely({
+    await awaitNavigationGuardedInteraction(
+      {
         action: async () => {
-          await awaitActionWithAbort(
-            locator.click({ timeout }),
-            abortPromise,
-            reconcileRemoteDialog,
-          );
-          await awaitActionWithAbort(
-            locator.type(text, { timeout, delay: 75 }),
-            abortPromise,
-            reconcileRemoteDialog,
-          );
+          if (opts.slowly) {
+            await locator.click({ timeout });
+            throwIfInteractionAborted(opts.signal);
+            await locator.type(text, { timeout, delay: 75 });
+          } else {
+            await locator.fill(text, { timeout });
+          }
           if (opts.submit) {
-            await awaitActionWithAbort(
-              locator.press("Enter", { timeout }),
-              abortPromise,
-              reconcileRemoteDialog,
-            );
+            throwIfInteractionAborted(opts.signal);
+            await locator.press("Enter", { timeout });
           }
         },
         cdpUrl: opts.cdpUrl,
         page,
-        previousUrl,
         ...interactionNavigationPolicy(opts),
         targetId: opts.targetId,
-      });
-    } else {
-      await assertInteractionNavigationCompletedSafely({
-        action: async () => {
-          await awaitActionWithAbort(
-            locator.fill(text, { timeout }),
-            abortPromise,
-            reconcileRemoteDialog,
-          );
-          if (opts.submit) {
-            await awaitActionWithAbort(
-              locator.press("Enter", { timeout }),
-              abortPromise,
-              reconcileRemoteDialog,
-            );
-          }
-        },
-        cdpUrl: opts.cdpUrl,
-        page,
-        previousUrl,
-        ...interactionNavigationPolicy(opts),
-        targetId: opts.targetId,
-      });
-    }
+      },
+      abortPromise,
+      opts.signal,
+      reconcileRemoteDialog,
+    );
   } catch (err) {
     throw toFriendlyInteractionError(err, label);
   } finally {
@@ -1107,6 +1071,9 @@ export async function fillFormViaPlaywright(
   try {
     for (const field of opts.fields) {
       const ref = field.ref.trim();
+      if (!ref) {
+        continue;
+      }
       const type = (field.type || DEFAULT_FILL_FIELD_TYPE).trim() || DEFAULT_FILL_FIELD_TYPE;
       const rawValue = field.value;
       const value =
@@ -1115,50 +1082,28 @@ export async function fillFormViaPlaywright(
           : typeof rawValue === "number" || typeof rawValue === "boolean"
             ? String(rawValue)
             : "";
-      if (!ref) {
-        continue;
-      }
       const locator = refLocator(page, ref);
-      if (type === "checkbox" || type === "radio") {
-        const checked =
-          rawValue === true || rawValue === 1 || rawValue === "1" || rawValue === "true";
-        try {
-          const previousUrl = page.url();
-          await assertInteractionNavigationCompletedSafely({
+      try {
+        await awaitNavigationGuardedInteraction(
+          {
             action: async () => {
-              await awaitActionWithAbort(
-                locator.setChecked(checked, { timeout }),
-                abortPromise,
-                reconcileRemoteDialog,
-              );
+              if (type === "checkbox" || type === "radio") {
+                const checked =
+                  rawValue === true || rawValue === 1 || rawValue === "1" || rawValue === "true";
+                await locator.setChecked(checked, { timeout });
+              } else {
+                await locator.fill(value, { timeout });
+              }
             },
             cdpUrl: opts.cdpUrl,
             page,
-            previousUrl,
             ...interactionNavigationPolicy(opts),
             targetId: opts.targetId,
-          });
-        } catch (err) {
-          throw toFriendlyInteractionError(err, ref);
-        }
-        continue;
-      }
-      try {
-        const previousUrl = page.url();
-        await assertInteractionNavigationCompletedSafely({
-          action: async () => {
-            await awaitActionWithAbort(
-              locator.fill(value, { timeout }),
-              abortPromise,
-              reconcileRemoteDialog,
-            );
           },
-          cdpUrl: opts.cdpUrl,
-          page,
-          previousUrl,
-          ...interactionNavigationPolicy(opts),
-          targetId: opts.targetId,
-        });
+          abortPromise,
+          opts.signal,
+          reconcileRemoteDialog,
+        );
       } catch (err) {
         throw toFriendlyInteractionError(err, ref);
       }
@@ -1218,17 +1163,8 @@ export async function evaluateViaPlaywright(
   }
 
   try {
-    const previousUrl = page.url();
     const navigationPolicy = interactionNavigationPolicy(opts);
-    if (hasInteractionNavigationPolicy(navigationPolicy)) {
-      await assertPageNavigationCompletedSafely({
-        cdpUrl: opts.cdpUrl,
-        page,
-        response: null,
-        ...navigationPolicy,
-        targetId: opts.targetId,
-      });
-    }
+    const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
 
     if (opts.ref) {
       const locator = refLocator(page, opts.ref);
@@ -1259,20 +1195,22 @@ export async function evaluateViaPlaywright(
         }
         `,
       ) as (el: Element, args: { fnSource: string; timeoutMs: number }) => unknown;
-      const evalPromise = locator.evaluate(elementEvaluator, {
-        fnSource,
-        timeoutMs: evaluateTimeout,
-      });
-      const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
-      const result = await assertInteractionNavigationCompletedSafely({
-        action: () => awaitActionWithAbort(evalPromise, abortPromise, reconcileRemoteDialog),
-        cdpUrl: opts.cdpUrl,
-        page,
-        previousUrl,
-        ...navigationPolicy,
-        targetId: opts.targetId,
-      });
-      return result;
+      return await awaitNavigationGuardedInteraction(
+        {
+          action: async () =>
+            await locator.evaluate(elementEvaluator, {
+              fnSource,
+              timeoutMs: evaluateTimeout,
+            }),
+          cdpUrl: opts.cdpUrl,
+          page,
+          ...navigationPolicy,
+          targetId: opts.targetId,
+        },
+        abortPromise,
+        signal,
+        reconcileRemoteDialog,
+      );
     }
 
     // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
@@ -1301,20 +1239,22 @@ export async function evaluateViaPlaywright(
         }
       `,
     ) as (args: { fnSource: string; timeoutMs: number }) => unknown;
-    const evalPromise = page.evaluate(browserEvaluator, {
-      fnSource,
-      timeoutMs: evaluateTimeout,
-    });
-    const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
-    const result = await assertInteractionNavigationCompletedSafely({
-      action: () => awaitActionWithAbort(evalPromise, abortPromise, reconcileRemoteDialog),
-      cdpUrl: opts.cdpUrl,
-      page,
-      previousUrl,
-      ...navigationPolicy,
-      targetId: opts.targetId,
-    });
-    return result;
+    return await awaitNavigationGuardedInteraction(
+      {
+        action: async () =>
+          await page.evaluate(browserEvaluator, {
+            fnSource,
+            timeoutMs: evaluateTimeout,
+          }),
+        cdpUrl: opts.cdpUrl,
+        page,
+        ...navigationPolicy,
+        targetId: opts.targetId,
+      },
+      abortPromise,
+      signal,
+      reconcileRemoteDialog,
+    );
   } finally {
     cleanup();
   }
@@ -1869,42 +1809,28 @@ async function executeSingleAction(
   return undefined;
 }
 
-function actionNeedsStandaloneDownloadGrace(
-  action: BrowserActRequest,
-  navigationPolicy: BrowserNavigationPolicyOptions,
-): boolean {
-  const hasNavigationPolicy = hasInteractionNavigationPolicy(navigationPolicy);
+function actionUsesNavigationRequestGuard(action: BrowserActRequest): boolean {
   switch (action.kind) {
     case "close":
     case "resize":
     case "wait":
       return false;
-    case "hover":
-    case "scrollIntoView":
-    case "drag":
-      return !hasNavigationPolicy;
     case "batch":
-      return action.actions.some((nested) =>
-        actionNeedsStandaloneDownloadGrace(nested, navigationPolicy),
-      );
+      return action.actions.some(actionUsesNavigationRequestGuard);
     default:
-      // Navigation-aware interactions already hold a 250 ms event window when
-      // policy is active. Policy-free internal callers need that window here.
-      return !hasNavigationPolicy;
+      return true;
   }
 }
 
-function actionCanOutliveGuardAbort(action: BrowserActRequest): boolean {
-  switch (action.kind) {
-    case "hover":
-    case "scrollIntoView":
-    case "drag":
-      return true;
-    case "batch":
-      return action.actions.some(actionCanOutliveGuardAbort);
-    default:
-      return false;
-  }
+function actionNeedsStandaloneDownloadGrace(
+  action: BrowserActRequest,
+  navigationPolicy: BrowserNavigationPolicyOptions,
+): boolean {
+  // Guarded interactions already hold a 250 ms event window while policy is
+  // active. Policy-free internal callers need that window from download capture.
+  return (
+    actionUsesNavigationRequestGuard(action) && !hasInteractionNavigationPolicy(navigationPolicy)
+  );
 }
 
 /** Executes one high-level browser act request with bounded recursive actions. */
@@ -1990,7 +1916,7 @@ export async function executeActViaPlaywright(
     let failure = err;
     try {
       const failureGraceMs =
-        dialogAbort.signal.aborted && actionCanOutliveGuardAbort(opts.action)
+        dialogAbort.signal.aborted && actionUsesNavigationRequestGuard(opts.action)
           ? INTERACTION_NAVIGATION_GRACE_MS
           : downloadGraceMs;
       await drainDownloads(failureGraceMs);
