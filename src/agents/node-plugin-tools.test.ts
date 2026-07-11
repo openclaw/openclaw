@@ -354,18 +354,16 @@ describe("createNodePluginTools", () => {
       nodeId: "node-1",
       tools: [{ ...githubDescriptor, pluginId: "node-mcp" }],
     });
-    expect(
-      createNodePluginTools({ toolAllowlist: ["node-mcp"] }).map((tool) => tool.name),
-    ).toEqual(["remote_repo_search"]);
+    expect(createNodePluginTools({ toolAllowlist: ["node-mcp"] }).map((tool) => tool.name)).toEqual(
+      ["remote_repo_search"],
+    );
 
     replaceNodePluginTools({
       nodeId: "node-1",
       tools: [githubDescriptor],
     });
     expect(
-      createNodePluginTools({ toolAllowlist: ["remote_repo_search"] }).map(
-        (tool) => tool.name,
-      ),
+      createNodePluginTools({ toolAllowlist: ["remote_repo_search"] }).map((tool) => tool.name),
     ).toEqual(["remote_repo_search"]);
     expect(
       createNodePluginTools({
