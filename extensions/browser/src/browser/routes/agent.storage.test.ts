@@ -1,14 +1,82 @@
 // Browser tests cover agent.storage plugin behavior.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   parseCookieSetOptions,
   parseGeolocationOptions,
   parseRequiredStorageMutationRequest,
   parseStorageKind,
   parseStorageMutationRequest,
+  registerBrowserAgentStorageRoutes,
 } from "./agent.storage.js";
+import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+
+const pwMocks = vi.hoisted(() => ({
+  setGeolocationViaPlaywright: vi.fn(async () => {}),
+}));
+
+vi.mock("../pw-ai-module.js", () => ({
+  getPwAiModule: vi.fn(async () => pwMocks),
+}));
+
+function createProfileContext() {
+  return {
+    profile: {
+      name: "openclaw",
+      cdpUrl: "http://127.0.0.1:18800",
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
+      driver: "openclaw",
+    },
+    ensureBrowserAvailable: vi.fn(async () => {}),
+    ensureTabAvailable: vi.fn(async (targetId?: string) => ({
+      targetId: targetId || "tab-1",
+      url: "https://current.example/page",
+    })),
+    isHttpReachable: vi.fn(),
+    isTransportAvailable: vi.fn(),
+    isReachable: vi.fn(),
+    listTabs: vi.fn(async () => []),
+    openTab: vi.fn(),
+    labelTab: vi.fn(),
+    focusTab: vi.fn(),
+    closeTab: vi.fn(),
+    stopRunningBrowser: vi.fn(),
+    resetProfile: vi.fn(),
+  };
+}
+
+function createRouteContext(profileCtx: ReturnType<typeof createProfileContext>) {
+  return {
+    state: () => ({
+      resolved: {
+        actionTimeoutMs: 5_000,
+        ssrfPolicy: { allowPrivateNetwork: false },
+      },
+    }),
+    forProfile: () => profileCtx,
+    listProfiles: vi.fn(async () => []),
+    mapTabError: vi.fn(() => null),
+    ...profileCtx,
+  };
+}
+
+async function callSetGeolocation(body: Record<string, unknown>) {
+  const { app, postHandlers } = createBrowserRouteApp();
+  const profileCtx = createProfileContext();
+  registerBrowserAgentStorageRoutes(app, createRouteContext(profileCtx) as never);
+  const handler = postHandlers.get("/set/geolocation");
+  expect(handler).toBeTypeOf("function");
+
+  const response = createBrowserRouteResponse();
+  await handler?.({ params: {}, query: {}, body }, response.res);
+  return { response, profileCtx };
+}
 
 describe("browser storage route parsing", () => {
+  beforeEach(() => {
+    pwMocks.setGeolocationViaPlaywright.mockClear();
+  });
+
   describe("parseStorageKind", () => {
     it("accepts local and session", () => {
       expect(parseStorageKind("local")).toBe("local");
@@ -114,7 +182,7 @@ describe("browser storage route parsing", () => {
           latitude: "48.2082",
           longitude: 16.3738,
           accuracy: "12.5",
-          origin: " https://example.com ",
+          origin: " https://example.com/path?query=1#hash ",
         }),
       ).toEqual({
         clear: false,
@@ -160,5 +228,60 @@ describe("browser storage route parsing", () => {
         "accuracy must be non-negative.",
       );
     });
+
+    it("rejects malformed and non-http geolocation origins", () => {
+      expect(() =>
+        parseGeolocationOptions({ latitude: 48, longitude: 16, origin: "file:///tmp/page.html" }),
+      ).toThrow("origin must be an http(s) origin");
+      expect(() =>
+        parseGeolocationOptions({ latitude: 48, longitude: 16, origin: "not a url" }),
+      ).toThrow("origin must be an http(s) origin");
+    });
+  });
+
+  describe("/set/geolocation", () => {
+    it("normalizes supplied origin before applying geolocation", async () => {
+      const { response, profileCtx } = await callSetGeolocation({
+        latitude: "48.2082",
+        longitude: 16.3738,
+        accuracy: "12.5",
+        origin: " https://geo.example/path?query=1#hash ",
+        targetId: "geo-tab",
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toStrictEqual({ ok: true, targetId: "geo-tab" });
+      expect(profileCtx.ensureTabAvailable).toHaveBeenCalledWith("geo-tab", {
+        allowPlaywrightFallback: true,
+        signal: expect.any(AbortSignal),
+        timeoutMs: 5_000,
+      });
+      expect(pwMocks.setGeolocationViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cdpUrl: "http://127.0.0.1:18800",
+          targetId: "geo-tab",
+          latitude: 48.2082,
+          longitude: 16.3738,
+          accuracy: 12.5,
+          origin: "https://geo.example",
+        }),
+      );
+    });
+
+    it.each(["file:///tmp/page.html", "not a url"])(
+      "rejects %s before applying geolocation",
+      async (origin) => {
+        const { response, profileCtx } = await callSetGeolocation({
+          latitude: 48,
+          longitude: 16,
+          origin,
+        });
+
+        expect(response.statusCode).toBe(400);
+        expect(response.body).toStrictEqual({ error: "origin must be an http(s) origin" });
+        expect(profileCtx.ensureTabAvailable).not.toHaveBeenCalled();
+        expect(pwMocks.setGeolocationViaPlaywright).not.toHaveBeenCalled();
+      },
+    );
   });
 });
