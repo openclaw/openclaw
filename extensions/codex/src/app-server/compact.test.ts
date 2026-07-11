@@ -9,6 +9,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl } from "./compact.js";
+import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { sessionBindingIdentity } from "./session-binding.js";
 import {
@@ -91,6 +93,11 @@ async function writeSupervisedTestBinding(
     conversationSourceTransferComplete: true,
     model: "gpt-5.4",
     modelProvider: "openai",
+    appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+      resolveCodexSupervisionAppServerRuntimeOptions({
+        pluginConfig: { supervision: { enabled: true } },
+      }),
+    ),
     ...options,
   });
 }
@@ -1056,7 +1063,16 @@ describe("maybeCompactCodexAppServerSession", () => {
       rejectInterrupt: true,
     });
     fake.closeAndWait.mockResolvedValueOnce(false);
-    const sessionFile = await writeSupervisedTestBinding({ threadId: "thread-stuck-supervision" });
+    const pluginConfig = {
+      supervision: { enabled: true },
+      appServer: { transport: "websocket" as const, url: "ws://127.0.0.1:45001" },
+    };
+    const sessionFile = await writeSupervisedTestBinding({
+      threadId: "thread-stuck-supervision",
+      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+        resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig }),
+      ),
+    });
 
     const pendingResult = maybeCompactCodexAppServerSession(
       {
@@ -1068,10 +1084,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       },
       {
         clientFactory: async () => fake.client,
-        pluginConfig: {
-          supervision: { enabled: true },
-          appServer: { transport: "websocket", url: "ws://127.0.0.1:45001" },
-        },
+        pluginConfig,
         nativeCompletionTimeoutMs: 10,
         nativeInterruptGraceMs: 10,
       },

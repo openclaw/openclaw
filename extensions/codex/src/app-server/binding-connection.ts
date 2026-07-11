@@ -5,6 +5,7 @@ import {
   resolveCodexSupervisionAppServerRuntimeOptions,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
+import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 
 type CodexAppServerRuntimeOptionsParams = NonNullable<
@@ -40,7 +41,10 @@ export function requireCodexSupervisionModelSelection(
 /** Resolves connection and auth ownership exclusively from the private thread binding. */
 export function resolveCodexBindingAppServerConnection(
   params: CodexAppServerRuntimeOptionsParams & {
-    binding?: Pick<CodexAppServerThreadBinding, "connectionScope">;
+    binding?: Pick<
+      CodexAppServerThreadBinding,
+      "appServerRuntimeFingerprint" | "connectionScope" | "pendingSupervisionBranch"
+    >;
     authProfileId?: string;
   },
 ): CodexBindingAppServerConnection {
@@ -59,6 +63,22 @@ export function resolveCodexBindingAppServerConnection(
       ? resolveCodexSupervisionAppServerRuntimeOptions
       : resolveCodexAppServerRuntimeOptions
   )(runtimeParams);
+  if (usesSupervisionConnection) {
+    // Thread ids are connection-local. Every binding-owned operation must reject
+    // config drift before a copied id can reach another native Codex store.
+    const persistedFingerprint =
+      binding.pendingSupervisionBranch?.connectionFingerprint ??
+      binding.appServerRuntimeFingerprint;
+    const currentFingerprint = buildCodexAppServerConnectionFingerprint(
+      appServer,
+      runtimeParams.agentDir,
+    );
+    if (!persistedFingerprint || persistedFingerprint !== currentFingerprint) {
+      throw new Error(
+        "Codex supervision connection changed; refusing to operate on its bound native thread",
+      );
+    }
+  }
   return {
     appServer,
     usesSupervisionConnection,

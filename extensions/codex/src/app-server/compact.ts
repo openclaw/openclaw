@@ -7,6 +7,7 @@ import {
   type CompactEmbeddedAgentSessionParams,
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
@@ -521,10 +522,17 @@ async function compactCodexNativeThread(
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   let connection: ReturnType<typeof resolveCodexBindingAppServerConnection>;
   try {
+    const config = params.config ?? {};
+    const agentId =
+      params.agentId ??
+      readAgentIdFromSessionKey(params.sessionKey) ??
+      resolveDefaultAgentId(config);
     connection = resolveCodexBindingAppServerConnection({
       binding,
       authProfileId: requestedAuthProfileId ?? binding.authProfileId,
       pluginConfig: options.pluginConfig,
+      config,
+      agentDir: resolveAgentDir(config, agentId),
     });
   } catch (error) {
     return {

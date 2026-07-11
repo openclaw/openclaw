@@ -14,6 +14,8 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification, JsonObject, JsonValue, RpcRequest } from "./protocol.js";
 import {
   createCodexTestBindingStore,
@@ -28,6 +30,14 @@ const createOpenClawCodingToolsMock = vi.fn();
 const toolExecuteMock = vi.fn();
 const handleCodexAppServerApprovalRequestMock = vi.fn();
 const resolveCodexProviderWebSearchSupportForClientMock = vi.fn();
+
+function supervisionConnectionFingerprint(): string {
+  return buildCodexAppServerConnectionFingerprint(
+    resolveCodexSupervisionAppServerRuntimeOptions({
+      pluginConfig: { supervision: { enabled: true } },
+    }),
+  );
+}
 
 vi.mock("./session-binding.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-binding.js")>()),
@@ -639,6 +649,7 @@ describe("runCodexAppServerSideQuestion", () => {
       cwd: "/tmp/workspace",
       model: "gpt-5.5",
       modelProvider: "openai",
+      appServerRuntimeFingerprint: supervisionConnectionFingerprint(),
       preserveNativeModel: true,
       conversationSourceTransferComplete: true,
     });
@@ -688,6 +699,7 @@ describe("runCodexAppServerSideQuestion", () => {
       supervisionSourceThreadId: "source-thread",
       cwd: "/tmp/workspace",
       model: "gpt-5.5",
+      appServerRuntimeFingerprint: supervisionConnectionFingerprint(),
       preserveNativeModel: true,
       conversationSourceTransferComplete: true,
     });
@@ -710,6 +722,7 @@ describe("runCodexAppServerSideQuestion", () => {
       cwd: "/tmp/workspace",
       model: "gpt-5.4",
       modelProvider: "openai",
+      appServerRuntimeFingerprint: supervisionConnectionFingerprint(),
       preserveNativeModel: true,
       conversationSourceTransferComplete: true,
     });
