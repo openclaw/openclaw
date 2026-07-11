@@ -774,6 +774,52 @@ describe("config io write", () => {
     });
   });
 
+  it("writeConfigFile drops keys that exist only on the next-config prototype", async () => {
+    // Production path: writeConfigFile → resolvePersistCandidateForWrite → createMergePatch.
+    // A nextConfig that inherits `commands` must not adopt the inherited value; the own-key
+    // check deletes it instead of persisting the prototype payload.
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            gateway: { mode: "local", port: 18789 },
+            commands: { ownerDisplay: "hash" },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const nextConfig = Object.create({
+        commands: { ownerDisplay: "raw" },
+      }) as Record<string, unknown>;
+      nextConfig.gateway = { mode: "local", port: 19001 };
+
+      await io.writeConfigFile(nextConfig as OpenClawConfig);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        gateway?: { mode?: string; port?: number };
+        commands?: unknown;
+        meta?: unknown;
+      };
+      expect(persisted.gateway).toEqual({ mode: "local", port: 19001 });
+      expect(Object.hasOwn(persisted, "commands")).toBe(false);
+      // Write path stamps meta; collision must not resurrect the prototype commands payload.
+      expect(persisted.commands).toBeUndefined();
+    });
+  });
+
   it("does not log an overwrite audit entry when creating config for the first time", async () => {
     await withSuiteHome(async (home) => {
       const warn = vi.fn();

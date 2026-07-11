@@ -37,8 +37,8 @@ export function createMergePatch(base: unknown, target: unknown): unknown {
   const patch: Record<string, unknown> = {};
   const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
   for (const key of keys) {
-    const hasBase = key in base;
-    const hasTarget = key in target;
+    const hasBase = Object.hasOwn(base, key);
+    const hasTarget = Object.hasOwn(target, key);
     if (!hasTarget) {
       patch[key] = null;
       continue;
@@ -71,7 +71,7 @@ export function projectSourceOntoRuntimeShape(source: unknown, runtime: unknown)
 
   const next: Record<string, unknown> = {};
   for (const [key, sourceValue] of Object.entries(source)) {
-    if (!(key in runtime)) {
+    if (!Object.hasOwn(runtime, key)) {
       next[key] = cloneUnknown(sourceValue);
       continue;
     }
@@ -1155,8 +1155,8 @@ export function collectChangedPaths(
     const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
     for (const key of keys) {
       const childPath = path ? `${path}.${key}` : key;
-      const hasBase = key in base;
-      const hasTarget = key in target;
+      const hasBase = Object.hasOwn(base, key);
+      const hasTarget = Object.hasOwn(target, key);
       if (!hasTarget || !hasBase) {
         output.add(childPath);
         continue;

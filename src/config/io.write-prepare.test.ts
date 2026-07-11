@@ -2,8 +2,10 @@
 import { describe, expect, it } from "vitest";
 import {
   collectChangedPaths,
-  formatConfigValidationFailure,
   applyUnsetPathsForWrite,
+  createMergePatch,
+  formatConfigValidationFailure,
+  projectSourceOntoRuntimeShape,
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
   resolveWriteEnvSnapshotForPath,
@@ -12,6 +14,65 @@ import {
 import type { OpenClawConfig } from "./types.js";
 
 describe("config io write prepare", () => {
+  it("ignores prototype-chain keys when building merge patches", () => {
+    // Discriminating fixture: `collision` is own on base and only inherited on
+    // target. With `key in target` the old code treated the inherited value as
+    // present and emitted it in the patch; Object.hasOwn deletes the own key.
+    const base = {
+      safe: { mode: "local" },
+      collision: { mode: "owned-base" },
+    };
+    const target = Object.create({
+      collision: { mode: "inherited-target" },
+    }) as Record<string, unknown>;
+    target.safe = { mode: "cloud" };
+
+    expect(createMergePatch(base, target)).toEqual({
+      safe: { mode: "cloud" },
+      collision: null,
+    });
+  });
+
+  it("preserves authored keys whose names match Object.prototype members", () => {
+    const source = {
+      commands: {
+        toString: { enabled: true },
+      },
+    };
+    // Runtime inherits a record-shaped `toString`. Own-key checks must keep the
+    // authored value instead of projecting through the prototype record.
+    const runtime = {
+      commands: Object.create({
+        toString: { fromProto: true },
+      }) as Record<string, unknown>,
+    };
+
+    expect(projectSourceOntoRuntimeShape(source, runtime)).toEqual(source);
+  });
+
+  it("persists caller changes without adopting inherited peer keys", () => {
+    const nextConfig = Object.create({
+      collision: { mode: "inherited-next" },
+    }) as Record<string, unknown>;
+    nextConfig.gateway = { mode: "local", port: 19001 };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        gateway: { mode: "local", port: 18789 },
+        collision: { mode: "owned-runtime" },
+      },
+      sourceConfig: {
+        gateway: { mode: "local", port: 18789 },
+      },
+      nextConfig,
+    });
+
+    expect(persisted).toEqual({
+      gateway: { mode: "local", port: 19001 },
+    });
+    expect(Object.hasOwn(persisted as object, "collision")).toBe(false);
+  });
+
   it("persists caller changes onto resolved config without leaking runtime defaults", () => {
     const persisted = resolvePersistCandidateForWrite({
       runtimeConfig: {
@@ -1044,6 +1105,25 @@ describe("config io write prepare", () => {
         { id: "a", token: "${TOKEN_A}" },
       ],
     });
+  });
+
+  it("ignores prototype-chain keys when collecting changed paths", () => {
+    // Same one-sided collision as the merge-patch fixture: own on base, only
+    // inherited on target. Old `in` checks walked into collision.mode; hasOwn
+    // reports the top-level own-key removal instead.
+    const base = {
+      safe: { mode: "local" },
+      collision: { mode: "owned-base" },
+    };
+    const target = Object.create({
+      collision: { mode: "inherited-target" },
+    }) as Record<string, unknown>;
+    target.safe = { mode: "cloud" };
+
+    const changedPaths = new Set<string>();
+    collectChangedPaths(base, target, "", changedPaths);
+
+    expect([...changedPaths].toSorted()).toEqual(["collision", "safe.mode"]);
   });
 
   it("does not overwrite identity-restored escaped refs with positional map entries", () => {
