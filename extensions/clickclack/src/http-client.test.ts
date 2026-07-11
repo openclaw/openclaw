@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { createClickClackClient } from "./http-client.js";
+import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
 
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
 const CLICKCLACK_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
@@ -125,6 +125,71 @@ function streamedErrorResponse(body: string, limit: number) {
 }
 
 describe("ClickClack HTTP client", () => {
+  it("adds paged tail queries without changing the legacy events result", async () => {
+    const fetchMock = vi.fn(async () => Response.json({ events: [], tail_cursor: "cursor-900" }));
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock,
+    });
+
+    const page = await client.eventPage("workspace-1", {
+      afterCursor: "cursor-500",
+      limit: 500,
+      includeTail: true,
+    });
+    const legacyEvents = await client.events("workspace-1", "cursor-900");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "https://clickclack.example/api/realtime/events?workspace_id=workspace-1&after_cursor=cursor-500&limit=500&include_tail=true",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://clickclack.example/api/realtime/events?workspace_id=workspace-1&after_cursor=cursor-900",
+      expect.any(Object),
+    );
+    expect(page).toEqual({ events: [], tailCursor: "cursor-900" });
+    expect(legacyEvents).toEqual([]);
+  });
+
+  it("sends only safe bounded request correlation", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      Response.json({ user: { id: "usr_1" } }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      correlationId: " fakeco.case_1 ",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await client.me();
+
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("X-Correlation-ID")).toBe("fakeco.case_1");
+    expect(normalizeClickClackCorrelationId("bad\ncorrelation")).toBeUndefined();
+    expect(normalizeClickClackCorrelationId("x".repeat(129))).toBeUndefined();
+  });
+
+  it("omits invalid request correlation instead of constructing an unsafe header", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      Response.json({ user: { id: "usr_1" } }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      correlationId: "bad\rcorrelation",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await client.me();
+
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(headers.has("X-Correlation-ID")).toBe(false);
+  });
+
   it("bounds oversized success JSON responses and closes the stream early", async () => {
     const { server, closed } = createOversizedJsonServer();
     const port = await listenLoopbackServer(server);

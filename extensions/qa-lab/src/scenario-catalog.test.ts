@@ -229,6 +229,9 @@ describe("qa scenario catalog", () => {
       throw new Error(`expected Playwright scenario, got ${scenario.execution.kind}`);
     }
     expect(scenario.execution.path).toBe("ui/src/e2e/chat-flow.e2e.test.ts");
+    expect(scenario.execution.testNamePattern).toBe(
+      "sends a chat turn through the GUI and renders the final Gateway event",
+    );
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.primary).toContain("ui.control");
     expect(uxMatrix.execution.kind).toBe("script");
@@ -305,10 +308,42 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioExecutionConfig(soak.id)).toMatchObject({ turnCount: 100 });
   });
 
+  it("marks only non-assistant runtime parity fixtures as usage not applicable", () => {
+    const notApplicable = readQaScenarioPack()
+      .scenarios.filter((scenario) => scenario.runtimeParityUsage?.expectation === "not-applicable")
+      .map((scenario) => scenario.id)
+      .toSorted();
+
+    expect(notApplicable).toStrictEqual(
+      [
+        "auth-profile-codex-mixed-profiles",
+        "auth-profile-doctor-migration-safety",
+        "codex-plugin-cold-install",
+        "codex-plugin-install-race",
+        "codex-plugin-pinned-new",
+        "codex-plugin-pinned-old",
+        "plugin-manifest-contract-health",
+      ].toSorted(),
+    );
+    for (const scenarioId of notApplicable) {
+      const scenario = readQaScenarioById(scenarioId);
+      expect(scenario.runtimeParityTier).toBeDefined();
+      expect(scenario.runtimeParityUsage).toMatchObject({
+        expectation: "not-applicable",
+      });
+      if (scenario.runtimeParityUsage?.expectation === "not-applicable") {
+        expect(scenario.runtimeParityUsage.reason).toContain("no assistant turn runs");
+      }
+    }
+    expect(readQaScenarioById("runtime-tool-fs-read").runtimeParityUsage).toBeUndefined();
+    expect(readQaScenarioById("plugin-hook-health-sentinel").runtimeParityUsage).toBeUndefined();
+  });
+
   it("loads runtime tool fixture metadata for standard and optional lanes", () => {
     const applyPatch = readQaScenarioById("runtime-tool-apply-patch");
     const messageTool = readQaScenarioById("runtime-tool-message-tool");
     const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
+    const webFetch = readQaScenarioById("runtime-tool-web-fetch");
     const webSearch = readQaScenarioById("runtime-tool-web-search");
     const imageGenerate = readQaScenarioById("runtime-tool-image-generate");
 
@@ -341,6 +376,16 @@ describe("qa scenario catalog", () => {
         required: true,
       },
     });
+    const webFetchConfig = readQaScenarioExecutionConfig(webFetch.id);
+    expect(webFetchConfig?.happyPrompt).toContain("Call web_fetch exactly once");
+    expect(webFetchConfig?.happyPrompt).toContain("call it directly without tool_search");
+    expect(webFetchConfig?.happyPrompt).toContain("Otherwise use tool_search to locate it first");
+    expect(webFetchConfig?.happyPrompt).toContain(
+      "A tool_search result alone does not complete the task",
+    );
+    expect(webFetchConfig?.happyPrompt).toContain("https://example.com/");
+    expect(webFetchConfig?.happyPrompt).toContain("maxChars 500");
+    expect(webFetchConfig?.happyPrompt).toContain("tool search qa check target=web_fetch");
     expect(webSearch.plugins).toEqual(["qa-lab"]);
     expect(webSearch.gatewayConfigPatch?.tools).toEqual({
       web: {
@@ -404,18 +449,22 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("long-context-progress-watchdog").sourcePath).toBe(
       "qa/scenarios/runtime/long-context-progress-watchdog.yaml",
     );
-    expect(
-      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
-    ).toContain("EmbeddedAttemptSessionTakeoverError");
-    expect(
-      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
-    ).toContain("AbortError");
-    expect(
-      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
-    ).toContain("This operation was aborted");
-    expect(
-      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
-    ).toContain("liveTurnTimeoutMs(env, 180000)");
+    const gatewayRestartFlow = readQaScenarioById("gateway-restart-inflight-run").execution.flow;
+    const interruptedStatusAssertion = gatewayRestartFlow?.steps
+      .flatMap((step) => step.actions)
+      .find((action) =>
+        JSON.stringify(action).includes("interrupted agent run ended with unexpected status"),
+      );
+    expect(interruptedStatusAssertion).toBeDefined();
+    const interruptedStatusContract = JSON.stringify(interruptedStatusAssertion);
+    expect(interruptedStatusContract).toContain("waited.stopReason === 'restart'");
+    expect(interruptedStatusContract).toContain(
+      "env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === 'codex' && waited.stopReason === 'aborted'",
+    );
+    expect(interruptedStatusContract).toContain("EmbeddedAttemptSessionTakeoverError");
+    expect(interruptedStatusContract).toContain("AbortError");
+    expect(interruptedStatusContract).toContain("This operation was aborted");
+    expect(JSON.stringify(gatewayRestartFlow)).toContain("liveTurnTimeoutMs(env, 180000)");
     const longContextFlow = JSON.stringify(
       readQaScenarioById("long-context-progress-watchdog").execution.flow,
     );
@@ -647,18 +696,22 @@ describe("qa scenario catalog", () => {
     const strandedConfig = readQaScenarioExecutionConfig("message-tool-stranded-final-reply") as
       | { requiredChannelDriver?: string; requiredProviderMode?: string }
       | undefined;
+    const retryFailureConfig = readQaScenarioExecutionConfig(
+      "message-tool-stranded-final-retry-failure",
+    ) as { requiredProviderMode?: string } | undefined;
     const stranded = readQaScenarioById("message-tool-stranded-final-reply");
-    const strandedFlow = JSON.stringify(stranded.execution.flow);
+    const retryFailure = readQaScenarioById("message-tool-stranded-final-retry-failure");
     const heartbeat = readQaScenarioById("commitments-heartbeat-target-none");
     const heartbeatFlow = JSON.stringify(heartbeat.execution.flow);
 
     expect(strandedConfig?.requiredProviderMode).toBe("mock-openai");
-    expect(strandedConfig?.requiredChannelDriver).toBe("qa-channel");
-    expect(strandedFlow).toContain("this seeded scenario is mock-openai only");
-    expect(strandedFlow).toContain("state.getSnapshot().events.slice(eventStartIndex)");
-    expect(strandedFlow).toContain("message.deleted !== true");
-    expect(strandedFlow).toContain("config.expectedMarker");
-    expect(strandedFlow).not.toContain("waitForNoOutbound");
+    expect(retryFailureConfig?.requiredProviderMode).toBe("mock-openai");
+    expect(JSON.stringify(stranded.execution.flow)).toContain(
+      "this seeded scenario is mock-openai only",
+    );
+    expect(JSON.stringify(retryFailure.execution.flow)).toContain(
+      "this seeded scenario is mock-openai only",
+    );
     expect(heartbeatFlow).toContain("sessionKey");
     expect(heartbeatFlow).toContain("commitmentOutbound.length === 0");
     expect(heartbeatFlow).not.toContain("waitForNoOutbound");
@@ -852,10 +905,12 @@ describe("qa scenario catalog", () => {
     }
   });
 
-  it("isolates channel baseline silence assertions from shared transport state", () => {
-    const scenario = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
+  it("isolates scenarios that own asynchronous transport state", () => {
+    const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
+    const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
 
-    expect(scenario.execution.suiteIsolation).toBe("isolated");
+    expect(channelBaseline.execution.suiteIsolation).toBe("isolated");
+    expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
   });
 
   it("adds a dreaming shadow trial report scenario", () => {

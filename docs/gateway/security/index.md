@@ -106,6 +106,7 @@ Quick model for triaging risk reports:
 | Local TUI `!` shell                                       | Explicit operator-triggered local execution       | "Local shell convenience command is remote injection"                         |
 | Node pairing and node commands                            | Operator-level remote execution on paired devices | "Remote device control should be treated as untrusted user access by default" |
 | `gateway.nodes.pairing.autoApproveCidrs`                  | Opt-in trusted-network node enrollment policy     | "A disabled-by-default allowlist is an automatic pairing vulnerability"       |
+| `gateway.nodes.pairing.sshVerify`                         | Key-verified node enrollment over operator SSH    | "Default-on auto-approval is an automatic pairing vulnerability"              |
 
 ## Not vulnerabilities by design
 
@@ -117,6 +118,7 @@ Quick model for triaging risk reports:
 - Localhost-only deployment findings (for example missing HSTS on a loopback-only gateway).
 - Discord inbound webhook signature findings for inbound paths that do not exist in this repo.
 - Node pairing metadata treated as a hidden second per-command approval layer for `system.run`; the real execution boundary is the gateway's global node command policy plus the node's own exec approvals.
+- `gateway.nodes.pairing.sshVerify` treated as a vulnerability because it is enabled by default. It never approves on network locality or SSH reachability alone: the gateway reads the device identity back over SSH (BatchMode, strict host keys) and approves only on an exact device-key match with the pending request, which requires the connecting keypair to already live under the operator's account on a host the operator controls. Probes are bounded to private/CGNAT source addresses, share the trusted-CIDR eligibility floor (fresh scopeless `role: node` only), and `sshVerify: false` turns the feature off.
 - `gateway.nodes.pairing.autoApproveCidrs` treated as a vulnerability by itself. It is disabled by default, requires explicit CIDR/IP entries, only applies to first-time `role: node` pairing with no requested scopes, and never auto-approves operator/browser/Control UI, WebChat, role/scope upgrades, metadata or public-key changes, or same-host loopback trusted-proxy header paths (even when loopback trusted-proxy auth is enabled).
 - "Missing per-user authorization" findings that treat `sessionKey` as an auth token.
 
@@ -581,7 +583,7 @@ Gateway auth is required by default - with no valid auth path configured, the Ga
 
 Pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`. Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and Tailnet `*.ts.net` gateway URLs; for other trusted private-DNS names, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass (process environment only, not an `openclaw.json` key). Mobile pairing and Android manual/scanned gateway routes are stricter: cleartext only for loopback, while private-LAN, link-local, `.local`, and dotless hostnames must use TLS unless you explicitly opt into the trusted private-network cleartext path.
 
-Device pairing is auto-approved for direct local loopback connects (plus a narrow backend/container-local self-connect path for trusted shared-secret helper flows); Tailnet and LAN connects, including same-host tailnet binds, are treated as remote and still need approval. Forwarded-header evidence on a loopback request disqualifies loopback locality; metadata-upgrade auto-approval is scoped narrowly. See [Gateway pairing](/gateway/pairing).
+Device pairing is auto-approved for direct local loopback connects (plus a narrow backend/container-local self-connect path for trusted shared-secret helper flows); Tailnet and LAN connects, including same-host connections to a tailnet address, are treated as remote and still need approval. A resolved `tailnet` address or `custom` address other than `127.0.0.1` or `0.0.0.0` adds a separate `127.0.0.1` listener; only connections to that local listener receive loopback semantics. Forwarded-header evidence on a loopback request disqualifies loopback locality; metadata-upgrade auto-approval is scoped narrowly. See [Gateway pairing](/gateway/pairing).
 
 Auth modes:
 

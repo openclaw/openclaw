@@ -12,6 +12,7 @@ import {
   formatBuildAllDuration,
   formatBuildAllTimingSummary,
   parseBuildAllArgs,
+  resolveBuildAllEnvironment,
   resolveBuildAllStepCacheState,
   resolveBuildAllStepCacheStampState,
   resolveBuildAllStep,
@@ -69,6 +70,79 @@ function withBuildCacheFixture(
 }
 
 describe("resolveBuildAllStep", () => {
+  it("pins one generated timestamp across every child build", () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    const buildEnv = resolveBuildAllEnvironment(
+      { FOO: "bar" },
+      () => new Date("2026-07-10T12:34:56.789Z"),
+      () => commit,
+    );
+    const uiInvocation = resolveBuildAllStep(getBuildAllStep("ui:build"), {
+      env: buildEnv,
+    });
+    const buildInfoInvocation = resolveBuildAllStep(getBuildAllStep("write-build-info"), {
+      env: buildEnv,
+    });
+
+    expect(uiInvocation.options.env).toMatchObject({
+      FOO: "bar",
+      GIT_COMMIT: commit,
+      OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T12:34:56.789Z",
+    });
+    expect(buildInfoInvocation.options.env.OPENCLAW_BUILD_TIMESTAMP).toBe(
+      uiInvocation.options.env.OPENCLAW_BUILD_TIMESTAMP,
+    );
+  });
+
+  it("pins the first explicit full commit alias and rejects malformed values", () => {
+    const gitSha = "A".repeat(40);
+    expect(
+      resolveBuildAllEnvironment(
+        { GIT_SHA: gitSha, GITHUB_SHA: "b".repeat(40) },
+        () => new Date("2026-07-10T12:34:56.000Z"),
+        () => "c".repeat(40),
+      ).GIT_COMMIT,
+    ).toBe(gitSha.toLowerCase());
+    expect(() =>
+      resolveBuildAllEnvironment({ GIT_COMMIT: "deadbeef" }, undefined, () => null),
+    ).toThrow("full 40-character hexadecimal SHA");
+  });
+
+  it("uses checked-out Git instead of unverified GitHub workflow context", () => {
+    const checkedOutCommit = "b".repeat(40);
+    const ambientCommit = "a".repeat(40);
+
+    expect(
+      resolveBuildAllEnvironment(
+        { GITHUB_SHA: ambientCommit },
+        () => new Date("2026-07-10T12:34:56.000Z"),
+        () => checkedOutCommit,
+      ).GIT_COMMIT,
+    ).toBe(checkedOutCommit);
+    expect(
+      resolveBuildAllEnvironment(
+        { GITHUB_SHA: ambientCommit },
+        () => new Date("2026-07-10T12:34:56.000Z"),
+        () => null,
+      ).GIT_COMMIT,
+    ).toBe(ambientCommit);
+    expect(() =>
+      resolveBuildAllEnvironment(
+        { GITHUB_SHA: "bad" },
+        () => new Date("2026-07-10T12:34:56.000Z"),
+        () => null,
+      ),
+    ).toThrow("full 40-character hexadecimal SHA");
+  });
+
+  it("preserves an explicit build timestamp after trimming outer whitespace", () => {
+    expect(
+      resolveBuildAllEnvironment({
+        OPENCLAW_BUILD_TIMESTAMP: " 2026-07-10T01:02:03.000Z ",
+      }).OPENCLAW_BUILD_TIMESTAMP,
+    ).toBe("2026-07-10T01:02:03.000Z");
+  });
+
   it("routes pnpm steps through the npm_execpath pnpm runner on Windows", () => {
     const step = getBuildAllStep("plugins:assets:build");
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
@@ -243,12 +317,12 @@ describe("resolveBuildAllSteps", () => {
       "plugins:assets:build",
       "tsdown",
       "check-cli-bootstrap-imports",
+      "plugins:assets:copy",
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
       "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
-      "plugins:assets:copy",
       "copy-hook-metadata",
       "copy-export-html-templates",
       "ui:build",
@@ -329,6 +403,7 @@ describe("resolveBuildAllSteps", () => {
       "plugins:assets:build",
       "tsdown",
       "check-cli-bootstrap-imports",
+      "plugins:assets:copy",
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
@@ -385,6 +460,19 @@ describe("resolveBuildAllSteps", () => {
     ).toMatchObject({
       OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1",
     });
+  });
+
+  it("copies generated plugin assets before runtime postbuild snapshots static outputs", () => {
+    for (const profile of ["full", "ciArtifacts", "qaRuntime"]) {
+      const labels = resolveBuildAllSteps(profile).map((step) => step.label);
+      expect(labels.indexOf("plugins:assets:copy")).toBeGreaterThan(labels.indexOf("tsdown"));
+      expect(labels.indexOf("runtime-postbuild")).toBeGreaterThan(
+        labels.indexOf("plugins:assets:copy"),
+      );
+      expect(labels.indexOf("runtime-postbuild-stamp")).toBeGreaterThan(
+        labels.indexOf("runtime-postbuild"),
+      );
+    }
   });
 
   it("writes the runtime postbuild stamp after the build stamp", () => {

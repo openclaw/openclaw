@@ -394,9 +394,6 @@ export async function runCodexAppServerSideQuestion(
           threadId: childThreadId,
           turnId,
           nativeHookRelay,
-          execPolicy,
-          execReviewerAgentId: sessionAgentId,
-          internalExecAutoReview: modelScopedAppServer.approvalsReviewer === "user",
           autoApprove: shouldAutoApproveCodexAppServerApprovals({
             approvalPolicy,
             networkProxy: modelScopedAppServer.networkProxy,
@@ -746,9 +743,14 @@ function buildSideRunAttemptParams(
     agentId: params.agentId,
     ...(params.messageChannel ? { messageChannel: params.messageChannel } : {}),
     ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
+    ...(params.chatType ? { chatType: params.chatType } : {}),
     ...(params.agentAccountId ? { agentAccountId: params.agentAccountId } : {}),
     ...(params.messageTo ? { messageTo: params.messageTo } : {}),
     ...(params.messageThreadId !== undefined ? { messageThreadId: params.messageThreadId } : {}),
+    ...(params.chatId ? { chatId: params.chatId } : {}),
+    ...(params.messageActionTurnCapability
+      ? { messageActionTurnCapability: params.messageActionTurnCapability }
+      : {}),
     ...(params.groupId !== undefined ? { groupId: params.groupId } : {}),
     ...(params.groupChannel !== undefined ? { groupChannel: params.groupChannel } : {}),
     ...(params.groupSpace !== undefined ? { groupSpace: params.groupSpace } : {}),
@@ -846,10 +848,15 @@ async function createCodexSideToolBridge(input: {
             toolPolicyMessageProvider: input.params.messageProvider ?? input.params.messageChannel,
           }
         : {}),
+      ...(input.params.chatType ? { chatType: input.params.chatType } : {}),
       ...(input.params.agentAccountId ? { agentAccountId: input.params.agentAccountId } : {}),
       ...(input.params.messageTo ? { messageTo: input.params.messageTo } : {}),
       ...(input.params.messageThreadId !== undefined
         ? { messageThreadId: input.params.messageThreadId }
+        : {}),
+      ...(input.params.chatId ? { nativeChannelId: input.params.chatId } : {}),
+      ...(input.params.messageActionTurnCapability
+        ? { messageActionTurnCapability: input.params.messageActionTurnCapability }
         : {}),
       ...(input.params.groupId !== undefined ? { groupId: input.params.groupId } : {}),
       ...(input.params.groupChannel !== undefined
@@ -900,7 +907,11 @@ async function createCodexSideToolBridge(input: {
           webSearchAllowed: false,
         })
       : requestedWebSearchPlan;
-  const exposedTools = tools.filter((tool) => tool.name !== "web_search");
+  // Side threads inherit a large parent context but do not own the main
+  // context-compaction lifecycle needed to expire screenshot coordinates.
+  const exposedTools = tools.filter(
+    (tool) => tool.name !== "web_search" && tool.name !== "computer",
+  );
   const hookChannelFields = buildAgentHookContextChannelFields({
     sessionKey: input.params.sessionKey,
     messageChannel: input.params.messageChannel,

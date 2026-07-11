@@ -98,9 +98,9 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.mode":
     'Gateway operation mode: "local" runs channels and agent runtime on this host, while "remote" connects through remote transport. Keep "local" unless you intentionally run a split remote gateway topology.',
   "gateway.bind":
-    'Network bind profile: "auto", "lan", "loopback", "custom", or "tailnet" to control interface exposure. Keep "loopback" or "auto" for safest local operation unless external clients must connect.',
+    'Network bind profile: "auto", "lan", "loopback", "custom", or "tailnet" to control interface exposure. Keep "loopback" for local-only operation; "auto" can expose all interfaces.',
   "gateway.customBindHost":
-    "Explicit bind host/IP used when gateway.bind is set to custom for manual interface targeting. Use a precise address and avoid wildcard binds unless external exposure is required.",
+    "IPv4 address used for a custom bind. Specific IPv4s also require the same Gateway port on 127.0.0.1; avoid 0.0.0.0 unless all-interface exposure is required.",
   "gateway.controlUi":
     "Control UI hosting settings including enablement, pathing, and browser-origin/auth hardening behavior. Keep UI exposure minimal and pair with strong auth controls before internet-facing deployments.",
   "gateway.controlUi.enabled":
@@ -365,6 +365,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Browser runtime controls for local or remote CDP attachment, profile routing, and screenshot/snapshot behavior. Keep defaults unless your automation workflow requires custom browser transport settings.",
   "browser.enabled":
     "Enables browser capability wiring in the gateway so browser tools and CDP-driven workflows can run. Disable when browser automation is not needed to reduce surface area and startup work.",
+  "browser.allowSystemProfileImport":
+    "Allows macOS hosts to import cookies from a local Chrome-family system profile into a managed OpenClaw browser profile. Disable this to prevent browser profile cookie import and its macOS Keychain consent prompt.",
   "browser.cdpUrl":
     "CDP/DevTools endpoint URL used to attach to an externally managed browser instance. Use this for centralized browser hosts, tunnels, or existing-session attachment, and keep URL access restricted to trusted network paths.",
   "browser.actionTimeoutMs":
@@ -466,9 +468,9 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec.reviewer":
     "Model-backed exec reviewer used by auto mode before human approval fallback. Configure a narrow model override here when you want exec review isolated from the main agent model.",
   "tools.exec.reviewer.model":
-    "Optional provider/model override for the exec reviewer agent. Omit to reuse the current agent model.",
+    "Optional provider/model override for the exec reviewer agent. Omit to reuse the configured primary model for the target agent.",
   "tools.exec.reviewer.timeoutMs":
-    "Exec reviewer timeout in milliseconds before falling back to human approval (default: 30000).",
+    "Per-stage exec reviewer timeout in milliseconds for model preparation and completion before falling back to human approval (default: 30000).",
   "tools.exec.security":
     "Execution security posture selector controlling sandbox/approval expectations for command execution. Keep strict security mode for untrusted prompts and relax only for trusted operator workflows.",
   "tools.exec.ask":
@@ -581,6 +583,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
   "gateway.controlUi.root":
     "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
+  "gateway.controlUi.toolTitles":
+    "Opt-in AI purpose titles for tool calls in Control UI chat (default off). When enabled, the chat.toolTitles method generates short titles for complex tool calls with the agent's utility model (an explicit utilityModel may route bounded tool arguments to the operator-chosen provider like every utility task; the derived default stays on the session's provider) and caches them in the per-agent state database. Setting utilityModel to an empty string disables titles too. Leave off to keep tool rendering fully deterministic with no background model calls.",
   "gateway.controlUi.embedSandbox":
     'Iframe sandbox policy for hosted Control UI embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
   "gateway.controlUi.allowExternalEmbedUrls":
@@ -636,9 +640,11 @@ export const FIELD_HELP: Record<string, string> = {
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
   "gateway.nodes.pairing":
-    "Node pairing policy settings. Defaults keep CIDR auto-approval disabled; enable only with explicit trusted CIDR/IP allowlists you control.",
+    "Node pairing policy settings. SSH-verified auto-approval is enabled by default; CIDR auto-approval stays disabled unless explicit trusted CIDR/IP allowlists are configured.",
   "gateway.nodes.pairing.autoApproveCidrs":
     "Opt-in CIDR/IP allowlist for auto-approving first-time node-role device pairing with no requested scopes. Disabled when unset. Operator, browser, Control UI, and any role, scope, metadata, or public-key upgrade pairing still require manual approval.",
+  "gateway.nodes.pairing.sshVerify":
+    "SSH-verified auto-approval for first-time node-role device pairing (default: enabled). The gateway SSHes back to the pairing host (BatchMode, strict host keys) and approves only when the remote `openclaw node identity` output matches the pending device key. Set false to disable SSH verification (independent of autoApproveCidrs, which stays active); for manual-only pairing also unset autoApproveCidrs. Pass an object to override user/identity/timeoutMs/cidrs.",
   "gateway.nodes.allowCommands":
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
   "gateway.nodes.denyCommands":
@@ -1464,7 +1470,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
   "agents.defaults.utilityModel":
-    "Optional lower-cost model (provider/model or alias) for short internal tasks such as generated session and thread titles. Falls back to the agent's primary model when unset.",
+    "Optional lower-cost model (provider/model or alias) for short internal tasks such as generated titles and progress narration. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
   "agents.list.*.utilityModel":
     "Optional per-agent utility model override for short internal tasks. Overrides agents.defaults.utilityModel.",
   "agents.list.*.models": "Per-agent model catalog overrides keyed by full provider/model IDs.",
@@ -1637,6 +1643,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Exact MCP tool names or simple '*' globs to expose from this server. When omitted, all server tools remain eligible unless excluded.",
   "mcp.servers.*.toolFilter.exclude":
     "Exact MCP tool names or simple '*' globs to hide from this server.",
+  "mcp.servers.*.oauth.authProfileId":
+    "Refresh-capable auth profile id used to inject the current bearer token into this remote MCP server. When set, OpenClaw resolves and refreshes the profile at runtime and does not project refresh material downstream.",
   "mcp.servers.*.codex.agents":
     "Optional non-empty OpenClaw agent ids that should receive this MCP server in Codex app-server thread config. Empty, blank, or invalid lists fail closed; when omitted, the server is projected for all Codex app-server agents.",
   "mcp.servers.*.codex.defaultToolsApprovalMode":
