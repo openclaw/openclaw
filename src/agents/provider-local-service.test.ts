@@ -756,7 +756,9 @@ describe("provider local service", () => {
     const port = await freePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const diagnosticSecret = "local-service-diagnostic-secret";
+    const inheritedDiagnosticSecret = "inherited-local-service-diagnostic-secret";
     let startupError: Error | undefined;
+    vi.stubEnv("INHERITED_DIAGNOSTIC_TOKEN", inheritedDiagnosticSecret);
 
     try {
       await ensureProviderLocalService({
@@ -766,7 +768,7 @@ describe("provider local service", () => {
           command: process.execPath,
           args: [
             "-e",
-            `const noise="x".repeat(9000);process.stderr.write(noise+" "+process.env.DIAGNOSTIC_SECRET);process.exit(17);`,
+            `const noise="x".repeat(9000);process.stderr.write(noise+" "+process.env.DIAGNOSTIC_SECRET+" "+process.env.INHERITED_DIAGNOSTIC_TOKEN);process.exit(17);`,
           ],
           env: { DIAGNOSTIC_SECRET: diagnosticSecret },
           healthUrl,
@@ -776,6 +778,8 @@ describe("provider local service", () => {
       });
     } catch (error) {
       startupError = error instanceof Error ? error : new Error(String(error));
+    } finally {
+      vi.unstubAllEnvs();
     }
 
     expect(startupError?.message).toContain(
@@ -783,6 +787,7 @@ describe("provider local service", () => {
     );
     expect(startupError?.message).toContain("[redacted]");
     expect(startupError?.message).not.toContain(diagnosticSecret);
+    expect(startupError?.message).not.toContain(inheritedDiagnosticSecret);
     expect(Buffer.byteLength(startupError?.message ?? "")).toBeLessThanOrEqual(8 * 1024 + 256);
     expect(getManagedProviderLocalServiceDiagnosticsForTest()).toEqual([]);
   });

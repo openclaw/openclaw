@@ -13,7 +13,7 @@ import type { ModelProviderLocalServiceConfig } from "../config/types.models.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
 import type { Model } from "../llm/types.js";
-import { redactSensitiveText } from "../logging/redact.js";
+import { isSensitiveFieldKey, redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   forceKillChildProcessTree,
@@ -422,6 +422,7 @@ async function startAndWaitForLocalService(params: {
       diagnostics.stdoutTail,
       chunk,
       service.env,
+      process.env,
     );
   };
   const captureStderr = (chunk: Buffer | string) => {
@@ -429,6 +430,7 @@ async function startAndWaitForLocalService(params: {
       diagnostics.stderrTail,
       chunk,
       service.env,
+      process.env,
     );
   };
   child.stdout?.on("data", captureStdout);
@@ -490,10 +492,16 @@ function appendLocalServiceOutputTail(
   current: string,
   chunk: Buffer | string,
   serviceEnv: Record<string, string> | undefined,
+  inheritedEnv: NodeJS.ProcessEnv,
 ): string {
   let redacted = redactSensitiveText(`${current}${chunk.toString()}`, { mode: "tools" });
   for (const value of Object.values(serviceEnv ?? {})) {
     if (value) {
+      redacted = redacted.replaceAll(value, "[redacted]");
+    }
+  }
+  for (const [key, value] of Object.entries(inheritedEnv)) {
+    if (value && isSensitiveFieldKey(key)) {
       redacted = redacted.replaceAll(value, "[redacted]");
     }
   }
