@@ -240,6 +240,43 @@ describe("getToolResultTextLength", () => {
   it("returns zero for non-toolResult messages", () => {
     expect(getToolResultTextLength(makeAssistantMessage("hello"))).toBe(0);
   });
+
+  it("weights CJK characters higher than ASCII in estimated length", () => {
+    const asciiMsg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text", text: "a".repeat(100) }],
+      timestamp: nextTimestamp(),
+    };
+    const cjkMsg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_2",
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text", text: "你".repeat(100) }],
+      timestamp: nextTimestamp(),
+    };
+    const asciiLen = getToolResultTextLength(asciiMsg);
+    const cjkLen = getToolResultTextLength(cjkMsg);
+    expect(asciiLen).toBe(100);
+    expect(cjkLen).toBe(400);
+    expect(cjkLen).toBeGreaterThan(asciiLen);
+  });
+
+  it("accounts for mixed ASCII and CJK content", () => {
+    const msg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text", text: "hi你好" }],
+      timestamp: nextTimestamp(),
+    };
+    // "hi你好" = 2 ASCII + 2 CJK, estimated = 2 + 2*4 = 10
+    expect(getToolResultTextLength(msg)).toBe(10);
+  });
 });
 
 describe("truncateToolResultMessage", () => {
@@ -295,6 +332,107 @@ describe("truncateToolResultMessage", () => {
     expect(firstBlock.text).toContain("[persist-truncated]");
     expect(String(firstBlock.text).length).toBeLessThan(oversized.length);
     expect(firstBlock.content).toBe(firstBlock.text);
+  });
+
+  it("truncates dense CJK content that exceeds the token-derived budget", () => {
+    // 8000 CJK chars: estimateStringChars = 8000*4 = 32000 > 16000 budget
+    const cjkText = "你".repeat(8000);
+    const msg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "text", text: cjkText }],
+      isError: false,
+      timestamp: nextTimestamp(),
+    };
+    const result = truncateToolResultMessage(msg, 16_000, {
+      suffix: "\n\n[persist-truncated]",
+      minKeepChars: 2_000,
+    });
+    expect(result.role).toBe("toolResult");
+    if (result.role !== "toolResult") {
+      throw new Error("expected toolResult");
+    }
+    const kept = getFirstToolResultText(result);
+    // Must be truncated: physical length < original
+    expect(kept.length).toBeLessThan(cjkText.length);
+    expect(kept).toContain("[persist-truncated]");
+    // Physical budget ≈ estimatedBudget / inflationRatio = 16000/4 = 4000 chars
+    expect(kept.length).toBeLessThanOrEqual(5000);
+  });
+
+  it("does not truncate ASCII text within budget", () => {
+    // 16000 ASCII chars: estimateStringChars = 16000 == 16000 budget
+    const asciiText = "a".repeat(16000);
+    const msg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "text", text: asciiText }],
+      isError: false,
+      timestamp: nextTimestamp(),
+    };
+    const result = truncateToolResultMessage(msg, 16_000, {
+      suffix: "\n\n[persist-truncated]",
+      minKeepChars: 2_000,
+    });
+    expect(result).toBe(msg);
+  });
+
+  it("allocates proportional physical budget for mixed ASCII and CJK blocks", () => {
+    const msg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [
+        { type: "text", text: "a".repeat(4000) },
+        { type: "text", text: "你".repeat(4000) },
+      ],
+      isError: false,
+      timestamp: nextTimestamp(),
+    };
+    // ASCII block: 4000 estimated chars. CJK block: 4000*4=16000 estimated chars.
+    // Total estimated: 20000. Budget 8000.
+    const result = truncateToolResultMessage(msg, 8000, {
+      suffix: "\n\n[persist-truncated]",
+      minKeepChars: 500,
+    });
+    expect(result.role).toBe("toolResult");
+    if (result.role !== "toolResult") {
+      throw new Error("expected toolResult");
+    }
+    const blocks = result.content as Array<{ type: string; text: string }>;
+    const asciiResult = blocks[0];
+    const cjkResult = blocks[1];
+    expect(asciiResult.text.length).toBeLessThan(4000);
+    expect(cjkResult.text.length).toBeLessThan(4000);
+    expect(cjkResult.text.length).toBeLessThanOrEqual(asciiResult.text.length + 1000);
+  });
+
+  it("skips empty text blocks without NaN propagation", () => {
+    const msg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [
+        { type: "text", text: "" },
+        { type: "text", text: "你".repeat(8000) },
+      ],
+      isError: false,
+      timestamp: nextTimestamp(),
+    };
+    const result = truncateToolResultMessage(msg, 16_000, {
+      suffix: "\n\n[persist-truncated]",
+      minKeepChars: 2_000,
+    });
+    expect(result.role).toBe("toolResult");
+    if (result.role !== "toolResult") {
+      throw new Error("expected toolResult");
+    }
+    const blocks = result.content as Array<{ type: string; text: string }>;
+    expect(blocks[0].text).toBe("");
+    expect(Number.isFinite(blocks[1].text.length)).toBe(true);
+    expect(blocks[1].text.length).toBeLessThan(8000);
   });
 });
 
@@ -564,6 +702,30 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(messages.reduce((sum, message) => sum + getToolResultTextLength(message), 0)).toBe(
       medium.length * 3,
     );
+  });
+
+  it("bounds aggregate CJK tool results within estimated-char budget", () => {
+    const cjkMedium = "你".repeat(3000);
+    const messages: AgentMessage[] = [
+      makeUserMessage("hello"),
+      makeAssistantMessage("calling tools"),
+      makeToolResult(cjkMedium, "call_1"),
+      makeToolResult(cjkMedium, "call_2"),
+      makeToolResult(cjkMedium, "call_3"),
+    ];
+    const { messages: result, truncatedCount } = truncateOversizedToolResultsInMessages(
+      messages,
+      128_000,
+      16_000,
+      16_000,
+    );
+    const totalChars = result.reduce(
+      (sum, message) =>
+        sum + (message.role === "toolResult" ? getToolResultTextLength(message) : 0),
+      0,
+    );
+    expect(truncatedCount).toBeGreaterThan(0);
+    expect(totalChars).toBeLessThanOrEqual(16_000);
   });
 
   it("keeps prompt projections stable while enforcing aggregate recovery as history grows", () => {
