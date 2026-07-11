@@ -21,6 +21,10 @@ import {
 import { beginNativeWindowDrag } from "../../app/native-window-drag.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import {
+  BROWSER_ANNOTATION_EVENT,
+  type BrowserAnnotationDraft,
+} from "../../components/browser/browser-annotation.ts";
+import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette.ts";
@@ -82,7 +86,7 @@ import {
   renderBackgroundTasksToggle,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
-import { configureToolTitleFetcher } from "./tool-titles.ts";
+import { chatAttachmentFromDataUrl } from "./components/chat-composer.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import {
   chatPullRequestId,
@@ -92,6 +96,7 @@ import {
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
+  renderSessionDiffToggle,
   renderSessionWorkspaceToggle,
   revealSessionWorkspaceFile,
   toggleSessionWorkspace,
@@ -115,6 +120,7 @@ import {
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
+import { configureToolTitleFetcher } from "./tool-titles.ts";
 
 type ChatPageContext = ApplicationContext;
 type PaneSessionChangeOptions = { replace?: boolean };
@@ -712,6 +718,34 @@ class ChatPane extends OpenClawLightDomElement {
     this.onFocusPane?.(this.paneId);
   };
 
+  /** Receives a browser-panel annotation: attach the marked-up screenshot and append the prepackaged prompt. */
+  private receiveBrowserAnnotation(event: Event): void {
+    const state = this.state;
+    // Only the active pane consumes the annotation; defaultPrevented tells the
+    // browser panel it landed (and stops sibling panes from double-adding).
+    if (!state || !this.active || event.defaultPrevented || !(event instanceof CustomEvent)) {
+      return;
+    }
+    const detail = event.detail as BrowserAnnotationDraft | null;
+    if (!detail || typeof detail.text !== "string" || typeof detail.dataUrl !== "string") {
+      return;
+    }
+    const attachment = chatAttachmentFromDataUrl(detail.dataUrl, detail.fileName || "annotation");
+    if (!attachment) {
+      return;
+    }
+    event.preventDefault();
+    state.chatAttachments = [...state.chatAttachments, attachment];
+    const current = state.chatMessage.trimEnd();
+    state.handleChatDraftChange(current ? `${current}\n\n${detail.text}` : detail.text);
+    state.requestUpdate?.();
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
+        preventScroll: true,
+      });
+    });
+  }
+
   private sendPendingSkillWorkshopRevision(expectedSessionKey: string) {
     const state = this.state;
     if (!this.active || !state || !state.connected || state.sessionKey !== expectedSessionKey) {
@@ -880,6 +914,11 @@ class ChatPane extends OpenClawLightDomElement {
     if (this.draft !== undefined) {
       this.state.handleChatDraftChange(this.draft);
     }
+    const handleBrowserAnnotation = (event: Event) => this.receiveBrowserAnnotation(event);
+    window.addEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation);
+    chatState.addCleanup(() =>
+      window.removeEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation),
+    );
     chatState.addCleanup(
       this.context.gateway.subscribe((snapshot) => {
         this.applyGatewaySnapshot(snapshot);
@@ -1072,6 +1111,10 @@ class ChatPane extends OpenClawLightDomElement {
       snapshot.connected &&
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "terminal.open") === true;
+    state.browserPanelAvailable =
+      snapshot.connected &&
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(snapshot, "browser.request") === true;
     state.assistantAgentId = snapshot.assistantAgentId;
     const routeSessionKey = this.sessionKey.trim();
     const canonicalRouteSessionKey = routeSessionKey
@@ -1163,6 +1206,7 @@ class ChatPane extends OpenClawLightDomElement {
              drag-and-drop. -->
         <span class="chat-pane__session-title" title=${this.paneTitle}>${this.paneTitle}</span>
         <div class="chat-pane__actions">
+          ${renderSessionDiffToggle(sessionWorkspace, "pane-header")}
           ${renderBackgroundTasksToggle(backgroundTasks, "pane-header")}
           ${renderSessionWorkspaceToggle(sessionWorkspace, "pane-header")}
           ${!this.narrow
@@ -1222,6 +1266,9 @@ class ChatPane extends OpenClawLightDomElement {
     const agentDefaultModel = this.context.agents.state.agentsList?.agents.find(
       (agent) => agent.id === currentAgentId,
     )?.model?.primary;
+    const selectedSession = state.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, state.sessionKey),
+    );
     const selectedSessionArchived =
       state.selectedChatSessionArchived ||
       state.sessionsResult?.sessions.some(
@@ -1283,6 +1330,7 @@ class ChatPane extends OpenClawLightDomElement {
       disabledReason,
       error: state.lastError,
       sessions: state.sessionsResult,
+      sessionHost: { agentsList: state.agentsList, hello: state.hello },
       providerUsage: {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
@@ -1302,6 +1350,8 @@ class ChatPane extends OpenClawLightDomElement {
           loading: state.chatLoading,
           modelCatalog: state.chatModelCatalog,
           modelOverrides: state.sessions.state.modelOverrides,
+          modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
+          modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
           modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
           modelsLoading: state.chatModelsLoading,
           sending: state.chatSending,

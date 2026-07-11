@@ -17,6 +17,7 @@ import type {
 import type { ChatSideResult } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
+import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import {
   renderBackgroundTasksRail,
   renderBackgroundTasksToggle,
@@ -29,6 +30,7 @@ import {
 } from "./components/chat-composer.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import {
+  renderSessionDiffToggle,
   renderSessionWorkspaceRail,
   renderSessionWorkspaceToggle,
   type SessionWorkspaceProps,
@@ -88,6 +90,8 @@ export type ChatProps = {
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
+  /** Host context resolving global-alias session keys (scope=global fleets). */
+  sessionHost?: Pick<UiSessionDefaultsHost, "agentsList" | "hello"> | null;
   providerUsage?: ProviderUsageDisplayProps;
   focusMode?: boolean;
   onLoadSidebarFullMessage?: (
@@ -206,6 +210,7 @@ export function renderChat(props: ChatProps) {
     showToolCalls: props.showToolCalls,
     runActive: Boolean(props.canAbort),
     sessions: props.sessions,
+    sessionHost: props.sessionHost,
     assistantName: props.assistantName,
     assistantAvatar: props.assistantAvatar,
     assistantAvatarUrl: props.assistantAvatarUrl,
@@ -401,11 +406,24 @@ export function renderChat(props: ChatProps) {
             `
           : nothing}
         <div class="chat-workbench__main">
-          ${props.sessionWorkspace?.collapsed && !props.paneHeaderActive
-            ? renderSessionWorkspaceToggle(props.sessionWorkspace, "floating")
-            : nothing}
-          ${props.backgroundTasks?.collapsed && !props.paneHeaderActive
-            ? renderBackgroundTasksToggle(props.backgroundTasks, "floating")
+          <!-- Floating openers share the top-right corner with the detail
+               panel's header controls; hide them while the sidebar is open. -->
+          ${!props.paneHeaderActive &&
+          !sidebarOpen &&
+          (props.sessionWorkspace?.collapsed || props.backgroundTasks?.collapsed)
+            ? html`
+                <div class="chat-floating-toggles">
+                  ${props.sessionWorkspace?.collapsed
+                    ? renderSessionDiffToggle(props.sessionWorkspace, "floating")
+                    : nothing}
+                  ${props.backgroundTasks?.collapsed
+                    ? renderBackgroundTasksToggle(props.backgroundTasks, "floating")
+                    : nothing}
+                  ${props.sessionWorkspace?.collapsed
+                    ? renderSessionWorkspaceToggle(props.sessionWorkspace, "floating")
+                    : nothing}
+                </div>
+              `
             : nothing}
           <div
             class="chat-split-container ${sidebarOpen

@@ -207,7 +207,7 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
 }
 
 describe("release Telegram QA workflow", () => {
-  it("dispatches exactly one trusted-main child from release checks", () => {
+  it("dispatches one accepted trusted-main child from release checks", () => {
     const releaseSource = readFileSync(RELEASE_CHECKS_PATH, "utf8");
     const reusableSource = readFileSync(WORKFLOW_PATH, "utf8");
     const releaseWorkflow = parse(releaseSource) as {
@@ -236,7 +236,13 @@ describe("release Telegram QA workflow", () => {
     expect(dispatch?.run).toContain("trap cancel_child_on_failure EXIT");
     expect(dispatch?.run).toContain("for _ in $(seq 1 6)");
     expect(dispatch?.run).toContain("/actions/runs/${run_id}/cancel");
-    expect(dispatch?.run).toContain('[[ "$child_head_sha" == "$EXPECTED_TRUSTED_WORKFLOW_SHA" ]]');
+    expect(dispatch?.run).toContain("for dispatch_attempt in 1 2 3 4 5");
+    expect(dispatch?.run).toContain('gh api "repos/${GITHUB_REPOSITORY}/commits/main"');
+    expect(dispatch?.run).toContain(
+      'if [[ "$child_head_sha" == "$expected_trusted_workflow_sha" ]]; then',
+    );
+    expect(dispatch?.run).toContain("Trusted main moved from");
+    expect(dispatch?.run).toContain("Trusted main kept moving");
     expect(dispatch?.run).toContain("for _ in $(seq 1 1080)");
     expect(dispatch?.run).toContain("Trusted Telegram QA concluded ${conclusion}");
     expect(
@@ -266,14 +272,10 @@ describe("release Telegram QA workflow", () => {
     );
     expect(reusableSource).toContain('--signer-digest "$CALLED_WORKFLOW_SHA"');
     const resolveJob = releaseWorkflow.jobs?.resolve_target;
-    expect(resolveJob?.outputs?.trusted_workflow_sha).toBe(
-      "${{ steps.trusted_workflow.outputs.sha }}",
-    );
-    const resolveTrustedWorkflow = resolveJob?.steps?.find(
-      (step) => step.name === "Resolve trusted main Telegram workflow SHA",
-    );
-    expect(resolveTrustedWorkflow?.run).toContain("--ref refs/heads/main");
-    expect(resolveTrustedWorkflow?.run).not.toContain("--fallback-ok");
+    expect(resolveJob?.outputs?.trusted_workflow_sha).toBeUndefined();
+    expect(
+      resolveJob?.steps?.find((step) => step.name === "Resolve trusted main Telegram workflow SHA"),
+    ).toBeUndefined();
     const dispatchedWorkflow = parse(reusableSource) as {
       on?: {
         workflow_call?: {
@@ -503,7 +505,36 @@ describe("release Telegram QA workflow", () => {
 
   it("derives SUT-writable paths from the verified runtime root after sudo", () => {
     const source = readFileSync(WORKFLOW_PATH, "utf8");
+    expect(source).toContain("Telegram SUT launcher failed: stage=%s line=%s status=%s");
+    expect(source).toContain("launcher_stage=root-run-setup");
+    expect(source).toContain("launcher_stage=enter-mount-namespace");
+    expect(source).toContain("launcher_stage=mask-host-paths");
+    expect(source).toContain("launcher_stage=mount-proc");
+    expect(source).toContain("launcher_stage=write-identity");
+    expect(source).toContain('TMPDIR="${SUT_RUNTIME_ROOT}/tmp"');
+    expect(source).toContain('"$RUNTIME_ROOT"/tmp/openclaw-qa-suite-*');
+    expect(source).toMatch(/launcher_stage=enter-mount-namespace\n\s+\/usr\/bin\/unshare/u);
+    expect(source).not.toContain("exec /usr/bin/unshare");
+    expect(source).not.toContain("set -x");
+    expect(source).toContain('source_node_bin="$(realpath -e "$(command -v node)")"');
+    expect(source).toContain('node_bin="${runtime_root}/node"');
+    expect(source).toContain(
+      'sudo install -o root -g root -m 0555 "$source_node_bin" "$node_bin"',
+    );
+    expect(source).toContain(
+      '[[ "$(stat -c \'%F:%a:%u:%g\' "$node_bin")" == "regular file:555:0:0" ]]',
+    );
+    expect(source).toContain('"$node_bin" --version >/dev/null');
+    expect(source).toContain("for masked_path in \"$RUNNER_HOME\" /tmp /var/tmp /dev/shm");
+    expect(source).not.toMatch(
+      /^\s+node_bin="\$\(realpath -e "\$\(command -v node\)"\)"$/mu,
+    );
     expect(source).toContain('temp_root="$(realpath -e "${OPENCLAW_QA_TEMP_ROOT:?}")"');
+    expect(source).toContain("sudo install -d -o root -g root -m 0700 /tmp/openclaw");
+    expect(source).toContain(
+      '-m 0711 \\\n            "${runtime_root}/tmp/openclaw-${runner_uid}"',
+    );
+    expect(source).toContain('"$RUNTIME_ROOT"/tmp/openclaw-"$RUNNER_UID"/openclaw-qa-suite-*');
     expect(source).toContain('proc_stat="$(cat "/proc/${pid}/stat")"');
     expect(source).not.toContain('proc_stat="$(cat /proc/self/stat)"');
     expect(source).toContain('if [[ "${1:-}" == "--root-verify" ]]');
@@ -513,5 +544,62 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain('export HOME="${temp_root}/home"');
     expect(source).toContain('export XDG_CONFIG_HOME="${temp_root}/xdg-config"');
     expect(source).toContain('if [[ "${1:-}" == "--root-terminate-uid" ]]');
+  });
+
+  it("arms the boundary preload only in the gateway main thread", () => {
+    const createSutStep = workflowStep(
+      workflowJob("run_telegram"),
+      "Create isolated Telegram SUT identity and launcher",
+    );
+    const preloadSource = createSutStep.run?.match(
+      /<<'PRELOAD'\n([\s\S]*?)\nPRELOAD/u,
+    )?.[1];
+    expect(preloadSource).toBeTruthy();
+
+    const workdir = tempDirs.make("openclaw-telegram-preload-");
+    const preloadPath = join(workdir, "preload.mjs");
+    writeFileSync(preloadPath, preloadSource ?? "");
+    const env = { ...process.env };
+    delete env.OPENCLAW_QA_SUT_PREENTRY_STOP;
+
+    const mainResult = spawnSync(process.execPath, ["--import", preloadPath, "-e", ""], {
+      encoding: "utf8",
+      env,
+    });
+    expect(mainResult.status).not.toBe(0);
+    expect(mainResult.stderr).toContain("trusted Telegram SUT preload was not armed");
+
+    const workerResult = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        `const { Worker } = require("node:worker_threads");\n` +
+          `const worker = new Worker('require("node:worker_threads").parentPort.postMessage("ready")', { eval: true, execArgv: ["--import", ${JSON.stringify(preloadPath)}] });\n` +
+          `worker.once("message", () => process.exit(0));\n` +
+          `worker.once("error", (error) => { console.error(error); process.exit(1); });`,
+      ],
+      { encoding: "utf8", env, killSignal: "SIGKILL", timeout: 5_000 },
+    );
+    expect(workerResult.status, workerResult.stderr).toBe(0);
+  });
+
+  it("reports the namespace-entry stage when its supervised child fails", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+    const trapLine = source.match(/^\s+(trap 'exit_status=.*' ERR)$/mu)?.[1];
+    expect(trapLine).toBeTruthy();
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -Eeuo pipefail\nlauncher_stage=enter-mount-namespace\n${trapLine}\nbash -c 'exit 23'`,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(23);
+    expect(result.stderr).toMatch(
+      /Telegram SUT launcher failed: stage=enter-mount-namespace line=[0-9]+ status=23/u,
+    );
   });
 });

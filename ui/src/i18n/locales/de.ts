@@ -213,6 +213,11 @@ export const de: TranslationMap = {
     gateway: "Gateway · lokal",
     folder: "Ordner",
     folderPlaceholder: "Agent-Arbeitsbereich",
+    browse: "Ordner durchsuchen",
+    browserUp: "Übergeordneter Ordner",
+    browserUse: "Diesen Ordner verwenden",
+    browserEmpty: "Keine Unterordner",
+    browserLoadFailed: "Dieser Ordner konnte nicht aufgelistet werden.",
     worktree: "Worktree",
     worktreeUnavailable: "Agent-Arbeitsbereich ist kein git Checkout",
     baseBranch: "Basis-Branch",
@@ -325,6 +330,8 @@ export const de: TranslationMap = {
     markRead: "Mark as read",
     forkSession: "Fork",
     openChat: "Chat öffnen",
+    openPullRequest: "PR öffnen",
+    openInEditorMenu: "Öffnen in",
     archiveSession: "Sitzung archivieren",
     restoreSession: "Sitzung wiederherstellen",
     deleteSessionMenu: "Delete…",
@@ -557,6 +564,57 @@ export const de: TranslationMap = {
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
     unavailable: "The terminal is not available on this gateway.",
+  },
+  browser: {
+    title: "Browser",
+    toggle: "Browser-Bereich ein-/ausblenden",
+    hide: "Browser-Bereich ausblenden",
+    resize: "Browser-Bereich anpassen",
+    newTab: "Neuer Tab",
+    closeTab: "Tab schließen",
+    untitledTab: "Neuer Tab",
+    back: "Zurück",
+    forward: "Weiter",
+    reload: "Neu laden",
+    openExternal: "In Ihrem Browser öffnen",
+    urlPlaceholder: "URL eingeben und Eingabetaste drücken",
+    dockBottom: "Unten andocken",
+    dockRight: "Rechts andocken",
+    annotate: "Seite kommentieren",
+    inspect: "Element untersuchen",
+    annotateSend: "An Chat senden",
+    annotateUndo: "Rückgängig",
+    annotateClear: "Löschen",
+    annotateDone: "Kommentarmodus beenden",
+    annotateHint:
+      "Zeichnen Sie auf der Seite und senden Sie anschließend die Markierung an Ihren Chat.",
+    inspectHint:
+      "Zum Untersuchen den Mauszeiger darüber bewegen; klicken, um das Element an Ihren Chat zu senden.",
+    inspectName: "Name",
+    inspectRole: "Rolle",
+    inspectFocusable: "Fokussierbar",
+    loading: "Seite wird geladen…",
+    starting: "Browser wird gestartet…",
+    notRunning: "Der Gateway-Browser wird nicht ausgeführt.",
+    start: "Browser starten",
+    empty: "Keine geöffneten Tabs. Geben Sie oben eine URL ein, um zu browsen.",
+    refresh: "Ansicht aktualisieren",
+    noChatTarget: "Öffnen Sie zuerst eine Chat-Sitzung, damit die Annotation ein Ziel hat.",
+    inspectUnavailable: "Elementprüfung ist deaktiviert (browser.evaluateEnabled=false).",
+    annotationSent: "Annotation zum Chat-Composer hinzugefügt.",
+    annotatePrompt: {
+      introTitled:
+        'Ich habe die Seite unter {url} annotiert (von der Seite gemeldeter Titel: "{title}") — der angehängte Screenshot zeigt meine Markierung.',
+      introUntitled:
+        "Ich habe die Seite unter {url} annotiert — der angehängte Screenshot zeigt meine Markierung.",
+      region:
+        "Markierter Bereich {index}: zentriert bei {x}% horizontal / {y}% vertikal, umfasst etwa {width}% × {height}% der Ansicht.",
+      moreRegions: "…plus {count} weitere markierte Region(en), alle im Screenshot sichtbar.",
+      elementDetail:
+        "Markiertes Element (von der Seite gemeldet): {descriptor} — {width}×{height}px bei ({x}, {y}).",
+      outro:
+        "Bitte sehen Sie sich den markierten Bereich an und sagen Sie mir, was Sie davon halten.",
+    },
   },
   tabs: {
     agents: "Agenten",
@@ -896,8 +954,8 @@ export const de: TranslationMap = {
   codexSessions: {
     eyebrow: "Codex-Flotte",
     title: "Sitzungen auf allen deinen Computern",
-    subtitle:
-      "Eine schreibgeschützte Ansicht der Codex-Sitzungen auf diesem Gateway und allen verbundenen Computern, die sie freigeben.",
+    interactiveSubtitle:
+      "Starten Sie einen Chat-Branch, dessen Modellauswahl unter der Kontrolle des Codex App Server bleibt, archivieren Sie berechtigte lokale Sitzungen nach Bestätigung und zeigen Sie Sitzungen gekoppelter Computer an.",
     summaryLabel: "Zusammenfassung der Codex-Sitzungen",
     summary: {
       sessions: "Sitzungen",
@@ -906,11 +964,6 @@ export const de: TranslationMap = {
     },
     searchLabel: "Codex-Sitzungen durchsuchen",
     searchPlaceholder: "Sitzungstitel durchsuchen",
-    scopeLabel: "Archivfilter für Sitzungen",
-    scope: {
-      active: "Aktiv",
-      archived: "Archiviert",
-    },
     refresh: "Aktualisieren",
     disconnected: "Verbinde dich erneut mit dem Gateway, um die Codex-Sitzungen zu aktualisieren.",
     partial: "Nicht verfügbare Hosts: {count}. Andere Hosts bleiben verfügbar.",
@@ -919,11 +972,36 @@ export const de: TranslationMap = {
     loadingMore: "Wird geladen…",
     untitled: "Unbenannte Codex-Sitzung",
     threadId: "Thread",
+    actions: {
+      continue: "Fortfahren",
+      continueAsBranch: "Als Branch fortfahren",
+      openChat: "Chat öffnen",
+      continuing: "Wird fortgesetzt…",
+      archive: "Archivieren",
+      continueLabel: "{title} fortsetzen",
+      continueAsBranchLabel: "{title} als Branch fortsetzen",
+      openChatLabel: "Chat für {title} öffnen",
+      continueAsBranchHint:
+        "Erstellen Sie einen Chat aus dem gespeicherten sichtbaren Verlauf. Bei Ihrer ersten Nachricht wählt der Codex App Server das Modell und den Anbieter für den neuen Harness-Thread aus. Die spätere Auswahl bleibt Codex-gesteuert; OpenClaw ersetzt niemals eine andere Laufzeitumgebung, ein anderes Modell oder einen Fallback. Die Quelle bleibt unverändert, und laufende Arbeit ist möglicherweise nicht enthalten.",
+      archiveLabel: "{title} archivieren",
+      archiveConfirmation:
+        "{title} und alle erzeugten Nachfolger archivieren? Bestätigen Sie, dass kein anderer Codex-Client oder OpenClaw-Runner sie verwendet. Das Archivieren, während ein anderer Runner aktiv ist, kann dessen Arbeit unterbrechen.",
+      active: "Aktive Sitzungen können keinen Branch starten und nicht archiviert werden.",
+      archiveActivityUnknownHint:
+        "Die Aktivität ist unbekannt, da der Status prozesslokal ist. Archivieren Sie erst, nachdem Sie bestätigt haben, dass kein anderer Codex-Client oder Runner diese Sitzung verwendet.",
+      statusUnavailable:
+        "Diese Codex-Sitzung kann in ihrem aktuellen Zustand nicht verwaltet werden.",
+      hostOffline:
+        "Verbinden Sie diesen Computer erneut, bevor Sie seine Codex-Sitzungen verwalten.",
+      gatewayOffline:
+        "Stellen Sie erneut eine Verbindung zum Gateway her, bevor Sie Codex-Sitzungen verwalten.",
+      remoteReadOnly: "Sitzungen gekoppelter Computer können vorerst nur angezeigt werden.",
+    },
     status: {
       active: "Aktiv",
       idle: "Inaktiv",
       archived: "Archiviert",
-      notLoaded: "Gespeichert",
+      storedActivityUnknown: "Gespeichert / Aktivität unbekannt",
       systemError: "Systemfehler",
       unknown: "Unbekannt",
     },
@@ -937,11 +1015,10 @@ export const de: TranslationMap = {
     },
     empty: {
       title: "Keine Codex-Hosts gefunden",
-      subtitle:
-        "Aktiviere die Freigabe von Codex-Sitzungen auf dem Gateway oder einem gekoppelten Computer und aktualisiere dann diese Ansicht.",
+      supervisionSubtitle:
+        "Aktiviere die Codex-Überwachung auf dem Gateway oder einem gekoppelten Computer und aktualisiere dann diese Ansicht.",
       search: "Keine Sitzungen auf diesem Host entsprechen deiner Suche.",
-      active: "Keine aktiven Sitzungen auf diesem Host.",
-      archived: "Keine archivierten Sitzungen auf diesem Host.",
+      nonArchived: "Keine nicht archivierten Sitzungen auf diesem Host.",
     },
   },
   logbook: {
@@ -1937,10 +2014,7 @@ export const de: TranslationMap = {
     commandPaletteTitle: "Suchen oder springen zu… (⌘K)",
     openCommandPalette: "Befehlspalette öffnen",
     docsOpensInNewTab: "{label} (wird in neuem Tab geöffnet)",
-    updateAvailable: "Update verfügbar:",
-    runningVersion: "v{version} wird ausgeführt",
     updating: "Wird aktualisiert…",
-    updateNow: "Jetzt aktualisieren",
     dismissUpdateBanner: "Update-Banner ausblenden",
     switchedSession: "Zu {session} gewechselt",
     splitView: {
@@ -1952,6 +2026,7 @@ export const de: TranslationMap = {
       dropOpenHere: "Hier öffnen",
     },
     sidebar: {
+      updateAvailable: "Update verfügbar",
       allSessions: "Alle Sitzungen",
       chats: "Chats",
       openSessionMenu: "Open session menu",
@@ -2064,6 +2139,11 @@ export const de: TranslationMap = {
       clearSessionSearch: "Sitzungssuche löschen",
       loadMoreSessions: "Weitere Sitzungen laden",
       model: "Chat model",
+      modelSection: "Modell",
+      modelLocked: "Gesperrt",
+      modelLockedLabel: "Modellauswahl für diese Sitzung gesteuert",
+      lockedSessionModel: "Sitzungsmodell",
+      nativeCodexModel: "Von Codex gesteuertes Modell",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2128,6 +2208,26 @@ export const de: TranslationMap = {
       finished: "Abgeschlossen ({count})",
       stopTask: "{title} stoppen",
       viewTranscript: "Transkript anzeigen",
+    },
+    sessionDiff: {
+      title: "Änderungen",
+      show: "Sitzungsänderungen anzeigen",
+      refresh: "Änderungen aktualisieren",
+      loading: "Änderungen werden geladen…",
+      empty: "Keine Änderungen im Checkout dieser Sitzung.",
+      notGit: "Der Arbeitsbereich dieser Sitzung ist kein Git-Checkout.",
+      unknownSession: "Dieser Sitzung ist kein Arbeitsbereich zugeordnet.",
+      disconnected: "Gateway ist getrennt.",
+      unmodifiedLines: "{count} unveränderte Zeilen",
+      binaryFile: "Binärdatei",
+      untracked: "nicht verfolgt",
+      tooLarge: "Diff zu groß zum Anzeigen.",
+      truncatedFile: "Diff gekürzt.",
+      truncatedResult: "Einige Änderungen wurden ausgelassen, weil der Diff sehr groß ist.",
+      statusAdded: "Hinzugefügt",
+      statusDeleted: "Gelöscht",
+      statusRenamed: "Umbenannt",
+      statusModified: "Geändert",
     },
     workspaceFiles: {
       label: "Sitzungsarbeitsbereich",
