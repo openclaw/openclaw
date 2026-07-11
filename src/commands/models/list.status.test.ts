@@ -618,6 +618,23 @@ describe("modelsStatusCommand auth overview", () => {
         ref: null,
         source: "disabled",
       });
+
+      // The utility model is a real runtime auth consumer: a provider that only
+      // narration/titles use must surface in the missing-auth overview.
+      mocks.loadConfig.mockReturnValue({
+        ...baseConfig,
+        agents: {
+          defaults: { ...baseConfig.agents.defaults, utilityModel: "mistral/mistral-small" },
+        },
+      });
+      const missingAuthRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, missingAuthRuntime as never);
+      const missingPayload = parseFirstJsonLog(missingAuthRuntime);
+      expect(missingPayload.utilityModel).toEqual({
+        ref: "mistral/mistral-small",
+        source: "config",
+      });
+      expect(missingPayload.auth.missingProvidersInUse).toContain("mistral");
     } finally {
       if (originalLoadConfig) {
         mocks.loadConfig.mockImplementation(originalLoadConfig);

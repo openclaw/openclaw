@@ -463,7 +463,14 @@ export async function modelsStatusCommand(
         });
       }
     };
-    for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
+    for (const raw of [
+      defaultLabel,
+      ...fallbacks,
+      imageModel,
+      ...imageFallbacks,
+      utilityModelRef ?? "",
+      ...allowed,
+    ]) {
       const ref = resolveStatusModelRef(raw);
       if (ref?.provider) {
         providersFromModels.add(normalizeProviderId(ref.provider));
@@ -472,7 +479,10 @@ export async function modelsStatusCommand(
     for (const raw of [defaultLabel, ...fallbacks]) {
       addProviderUse(raw, true);
     }
-    for (const raw of [imageModel, ...imageFallbacks]) {
+    // Utility completions (narration/titles) ride the plain API path like image
+    // models, so missing utility-provider auth must fail --check instead of
+    // hiding behind the primary's codex-runtime fallback.
+    for (const raw of [imageModel, ...imageFallbacks, utilityModelRef ?? ""]) {
       addProviderUse(raw, false);
     }
 
