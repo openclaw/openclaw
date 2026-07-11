@@ -1,5 +1,4 @@
 // CLI for showing and applying exec policy presets across config and approvals.
-import crypto from "node:crypto";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -13,12 +12,15 @@ import {
   type ExecPolicyScopeSnapshot,
 } from "../infra/exec-approvals-effective.js";
 import {
+  maxAsk,
+  minSecurity,
   normalizeExecAsk,
   normalizeExecSecurity,
   normalizeExecTarget,
   readExecApprovalsSnapshot,
-  restoreExecApprovalsSnapshot,
-  saveExecApprovals,
+  resolveExecApprovalsFromFile,
+  restoreExecApprovalsSnapshotLocked,
+  updateExecApprovals,
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
@@ -128,12 +130,6 @@ function sanitizeExecPolicyMessage(value: unknown): string {
   return sanitizeTerminalText(String(value));
 }
 
-function hashExecApprovalsFile(file: ExecApprovalsFile): string {
-  // Match the persisted formatting hash so restore/set operations can detect drift.
-  const raw = `${JSON.stringify(file, null, 2)}\n`;
-  return crypto.createHash("sha256").update(raw).digest("hex");
-}
-
 function resolveExecPolicyInput(params: {
   host?: string;
   security?: string;
@@ -212,6 +208,43 @@ function applyApprovalsDefaults(
     next.defaults.askFallback = policy.askFallback;
   }
   return next;
+}
+
+function buildExecPolicyApprovalsRollback(params: {
+  current: ExecApprovalsFile;
+  original: ExecApprovalsFile;
+  written: ExecApprovalsFile;
+  policy: ExecPolicyResolved;
+}): ExecApprovalsFile | null {
+  // Whole-file restore can lose to an unrelated concurrent edit. Revert only
+  // matching fields, and never loosen ambiguous same-value concurrent writes.
+  const fields = [
+    ["security", params.policy.security],
+    ["ask", params.policy.ask],
+    ["askFallback", params.policy.askFallback],
+  ] as const;
+  const originalDefaults = resolveExecApprovalsFromFile({ file: params.original }).defaults;
+  const currentDefaults = resolveExecApprovalsFromFile({ file: params.current }).defaults;
+  const next = structuredClone(params.current);
+  let changed = false;
+  for (const [field, appliedValue] of fields) {
+    const currentValue = params.current.defaults?.[field];
+    const originalValue = params.original.defaults?.[field];
+    const rollbackDoesNotLoosen =
+      field === "ask"
+        ? maxAsk(originalDefaults.ask, currentDefaults.ask) === originalDefaults.ask
+        : minSecurity(originalDefaults[field], currentDefaults[field]) === originalDefaults[field];
+    if (
+      appliedValue !== undefined &&
+      currentValue === params.written.defaults?.[field] &&
+      currentValue !== originalValue &&
+      rollbackDoesNotLoosen
+    ) {
+      next.defaults = { ...next.defaults, [field]: originalValue };
+      changed = true;
+    }
+  }
+  return changed ? next : null;
 }
 
 function buildNextExecPolicyConfig(
@@ -346,19 +379,37 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
   }
   const approvalsSnapshot = readExecApprovalsSnapshot();
   const nextApprovals = applyApprovalsDefaults(approvalsSnapshot.file, policy);
-  const writtenApprovalsHash = hashExecApprovalsFile(nextApprovals);
-  saveExecApprovals(nextApprovals);
+  const writtenApprovals = await updateExecApprovals({
+    baseHash: approvalsSnapshot.hash,
+    update: () => nextApprovals,
+  });
+  if (!writtenApprovals) {
+    throw new Error("Exec approvals changed; reload and retry.");
+  }
   try {
     await replaceConfigFile({
       baseHash: configSnapshot.hash,
       nextConfig,
     });
   } catch (err) {
-    const currentApprovalsSnapshot = readExecApprovalsSnapshot();
-    if (currentApprovalsSnapshot.hash !== writtenApprovalsHash) {
-      throw err;
+    try {
+      if (!(await restoreExecApprovalsSnapshotLocked(approvalsSnapshot, writtenApprovals.hash))) {
+        await updateExecApprovals({
+          update: (current) =>
+            buildExecPolicyApprovalsRollback({
+              current,
+              original: approvalsSnapshot.file,
+              written: writtenApprovals.file,
+              policy,
+            }),
+        });
+      }
+    } catch (rollbackError) {
+      throw new Error(
+        `Config update failed: ${formatExecPolicyError(err)}; exec approvals rollback failed: ${formatExecPolicyError(rollbackError)}`,
+        { cause: rollbackError },
+      );
     }
-    restoreExecApprovalsSnapshot(approvalsSnapshot);
     throw err;
   }
   return await buildLocalExecPolicyShowPayload();

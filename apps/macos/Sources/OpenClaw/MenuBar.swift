@@ -33,7 +33,6 @@ struct OpenClawApp: App {
 
     init() {
         OpenClawLogging.bootstrapIfNeeded()
-        GatewayConnectivityCoordinator.shared.start()
 
         Self.applyAttachOnlyOverrideIfNeeded()
         _state = State(initialValue: AppStateStore.shared)
@@ -79,6 +78,11 @@ struct OpenClawApp: App {
         }
         .onChange(of: self.controlChannel.state) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
+            if self.controlChannel.state == .connected {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    BrowserProfileImportPrompter.shared.checkAndPromptIfNeeded()
+                }
+            }
         }
         .onChange(of: self.gatewayManager.status) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
@@ -284,9 +288,30 @@ private struct SettingsWindowOpenRegistrar: View {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let dashboardURL = URL(string: "openclaw://dashboard")!
     private var state: AppState?
+    private var terminationCleanupTask: Task<Void, Never>?
+    private var terminationDeadlineTask: Task<Void, Never>?
+    private var terminationCleanupFinished = false
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
+    var nodeTerminationCleanup: @MainActor () async -> Void = {
+        await TalkMLXSpeechSynthesizer.shared.shutdown()
+        await MacNodeModeCoordinator.shared.stopAndWait()
+    }
+
+    var waitForTerminationCleanupDeadline: @MainActor () async -> Void = {
+        try? await Task.sleep(for: .seconds(AppTerminationTiming.cleanupDeadlineSeconds))
+    }
+
+    var applicationTerminationReply: @MainActor (NSApplication, Bool) -> Void = { app, allow in
+        app.reply(toApplicationShouldTerminate: allow)
+    }
+
     var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
     let updaterController: UpdaterProviding = makeUpdaterController()
+
+    func applicationWillFinishLaunching(_: Notification) {
+        // URL/reopen callbacks can create the dashboard before didFinishLaunching.
+        DashboardManager.shared.configure(updater: self.updaterController)
+    }
 
     func applicationDockMenu(_: NSApplication) -> NSMenu? {
         let menu = NSMenu()
@@ -364,6 +389,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+        // Remote startup can spawn an SSH child. Admit tunnel work only after the
+        // singleton check so a short-lived handoff process cannot orphan that child.
+        GatewayEndpointStore.admitPrimaryAppLaunch()
+        GatewayConnectivityCoordinator.shared.start()
         self.state = AppStateStore.shared
         if let state {
             MacNodeModeCoordinator.prepareNodeIdentityProfile(
@@ -404,6 +433,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+            BrowserProfileImportPrompter.shared.checkAndPromptIfNeeded()
         }
 
         #if DEBUG
@@ -452,6 +484,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await RemoteTunnelManager.shared.stopAll() }
         Task { await GatewayConnection.shared.shutdown() }
         Task { await PeekabooBridgeHostCoordinator.shared.stop() }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if self.terminationCleanupFinished {
+            return .terminateNow
+        }
+        guard self.terminationCleanupTask == nil else {
+            return .terminateLater
+        }
+        let cleanup = self.nodeTerminationCleanup
+        self.terminationCleanupTask = Task { @MainActor [weak self] in
+            await cleanup()
+            self?.finishTerminationCleanup(for: sender)
+        }
+        let waitForDeadline = self.waitForTerminationCleanupDeadline
+        self.terminationDeadlineTask = Task { @MainActor [weak self] in
+            await waitForDeadline()
+            guard !Task.isCancelled else { return }
+            self?.finishTerminationCleanup(for: sender)
+        }
+        return .terminateLater
+    }
+
+    private func finishTerminationCleanup(for sender: NSApplication) {
+        guard !self.terminationCleanupFinished else { return }
+        // Cleanup may ignore cancellation while transport or input teardown is stuck.
+        // The deadline replies without awaiting that loser; this gate keeps the reply single.
+        self.terminationCleanupFinished = true
+        self.terminationCleanupTask?.cancel()
+        self.terminationDeadlineTask?.cancel()
+        self.terminationCleanupTask = nil
+        self.terminationDeadlineTask = nil
+        self.applicationTerminationReply(sender, true)
     }
 
     @MainActor
@@ -613,7 +678,20 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
     }
 }
 
-extension SparkleUpdaterController: SPUUpdaterDelegate {}
+func allowedSparkleChannels(forGatewayUpdateChannel channel: String?) -> Set<String> {
+    switch channel?.lowercased() {
+    case "beta", "dev":
+        ["beta"]
+    default:
+        []
+    }
+}
+
+extension SparkleUpdaterController: SPUUpdaterDelegate {
+    func allowedChannels(for _: SPUUpdater) -> Set<String> {
+        allowedSparkleChannels(forGatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel())
+    }
+}
 
 private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
     var staticCode: SecStaticCode?

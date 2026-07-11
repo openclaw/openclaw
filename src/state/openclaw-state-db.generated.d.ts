@@ -460,6 +460,7 @@ export interface DevicePairingPaired {
   last_seen_at_ms: number | null;
   last_seen_reason: string | null;
   node_surface_json: string | null;
+  operator_label: string | null;
   pending_node_surface_json: string | null;
   platform: string | null;
   public_key: string;
@@ -784,6 +785,12 @@ export interface SchemaMeta {
   updated_at: number;
 }
 
+export interface SessionGroups {
+  created_at: number;
+  name: string;
+  position: number;
+}
+
 export interface SkillCuratorState {
   id: Generated<number>;
   last_attempt_at_ms: number;
@@ -1073,6 +1080,7 @@ export interface DB {
   plugin_state_entries: PluginStateEntries;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
+  session_groups: SessionGroups;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
   skill_uploads: SkillUploads;

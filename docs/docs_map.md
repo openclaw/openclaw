@@ -862,6 +862,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Media, chunking, and delivery
   - H2: Commands and slash behavior
   - H2: Native charts
+  - H2: Native tables
   - H2: Interactive replies
   - H3: Plugin-owned modal submissions
   - H2: Native approvals in Slack
@@ -1439,6 +1440,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: openclaw devices approve [requestId] [--latest]
   - H3: openclaw devices reject &lt;requestId&gt;
   - H3: openclaw devices remove &lt;deviceId&gt;
+  - H3: openclaw devices rename --device &lt;id&gt; --name &lt;label&gt;
   - H3: openclaw devices clear --yes [--pending]
   - H3: openclaw devices rotate --device &lt;id&gt; --role &lt;role&gt; [--scope &lt;scope...&gt;]
   - H3: openclaw devices revoke --device &lt;id&gt; --role &lt;role&gt;
@@ -1714,6 +1716,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Gateway auth for node host
   - H2: Service (background)
   - H2: Pairing
+  - H3: Identity and pairing state
   - H2: Exec approvals
   - H2: Related
 
@@ -2719,6 +2722,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Detail mode
   - H3: Command/exec text
   - H3: Commentary lane
+  - H3: Narrated status
   - H3: Line limits
   - H3: Rich rendering (Slack)
   - H3: Hide tool/task lines
@@ -3337,6 +3341,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: What is available today
   - H2: Recommended path
+  - H2: Cooperative host suspension
   - H2: App code vs plugin code
   - H2: Related
 
@@ -3585,6 +3590,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: API surface (gateway protocol)
   - H2: Node command gating (2026.3.31+)
   - H2: Node event trust boundaries (2026.3.31+)
+  - H2: SSH-verified device auto-approval (default)
   - H2: Auto-approval (macOS app)
   - H2: Trusted-CIDR device auto-approval
   - H2: Silent pairing supersede cleanup
@@ -3667,6 +3673,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H4: Step 5: load the LaunchAgent
   - H4: Troubleshooting
   - H2: Related
+
+## gateway/restart-recovery.md
+
+- Route: /gateway/restart-recovery
+- Headings:
+  - H2: What survives a restart
+  - H2: Graceful restarts drain first
+  - H2: How interrupted work is detected
+  - H2: Automatic resume
+  - H3: Subagents
+  - H3: Background tasks
+  - H3: Agent-requested restarts
+  - H2: Safety valves and observability
+  - H2: What is not resumed
 
 ## gateway/sandbox-vs-tool-policy-vs-elevated.md
 
@@ -4106,6 +4126,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /
 - Headings:
   - H1: OpenClaw 🦞
+  - H2: Browse docs
   - H2: What is OpenClaw?
   - H2: How it works
   - H2: Key capabilities
@@ -4214,6 +4235,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Manual flow
   - H3: Upgrading container images
   - H3: Environment variables
+  - H3: Source-built images with selected plugins
   - H3: Observability
   - H3: Health checks
   - H3: LAN vs loopback
@@ -4658,6 +4680,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Provider-only (SenseAudio)
   - H3: Echo transcript to chat (opt-in)
   - H2: Notes and limits
+  - H3: Resident local STT
   - H3: Proxy environment support
   - H2: Mention detection in groups
   - H2: Gotchas
@@ -4719,6 +4742,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Remote gateway via SSH tunnel (loopback bind)
   - H3: Start a node host (service)
   - H3: Pair + name
+  - H3: Headless identity state
   - H3: Allowlist the commands
   - H3: Point exec at the node
   - H3: Local model inference
@@ -5153,6 +5177,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Download
   - H2: First run
+  - H2: Updates
   - H2: Open dashboard links
   - H2: Choose a Gateway mode
   - H2: What the app owns
@@ -5362,6 +5387,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/codex-harness-reference
 - Headings:
   - H2: Plugin config surface
+  - H2: Supervision
   - H2: App-server transport
   - H2: Approval and sandbox modes
   - H2: Sandboxed native execution
@@ -5379,6 +5405,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Overview
   - H2: Thread bindings and model changes
+  - H2: Supervision and safe continuation
   - H2: Visible replies and heartbeats
   - H2: Hook boundaries
   - H2: V1 support contract
@@ -5396,6 +5423,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Requirements
   - H2: Quickstart
   - H2: Share threads with Codex Desktop and CLI
+  - H2: Supervise Codex sessions
   - H2: Configuration
   - H3: Compaction
   - H2: Verify Codex runtime
@@ -5432,6 +5460,21 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Connected account apps
   - H2: Thread app config
   - H2: Destructive action policy
+  - H2: Troubleshooting
+  - H2: Related
+
+## plugins/codex-supervision.md
+
+- Route: /plugins/codex-supervision
+- Headings:
+  - H2: Before you begin
+  - H2: Enable supervision
+  - H2: Use the operator CLI
+  - H2: Branch from a local session
+  - H2: Archive a local session
+  - H2: Understand paired-node limits
+  - H2: Metadata and permissions
+  - H3: Compatibility tools
   - H2: Troubleshooting
   - H2: Related
 
@@ -5541,6 +5584,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Message hooks
   - H2: Install hooks
   - H2: Gateway lifecycle
+  - H3: Safe external cron projection
   - H2: Upcoming deprecations
   - H2: Related
 
@@ -5583,6 +5627,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /plugins/manage-plugins
 - Headings:
+  - H2: Use the Control UI
   - H2: List and search plugins
   - H2: Enable and disable plugins
   - H2: Install plugins
@@ -5601,6 +5646,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Minimal example
   - H2: Rich example
   - H2: Top-level field reference
+  - H2: catalog reference
   - H2: Generation provider metadata reference
   - H2: Tool metadata reference
   - H2: providerAuthChoices reference
@@ -5899,20 +5945,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
-
-## plugins/reference/codex-supervisor.md
-
-- Route: /plugins/reference/codex-supervisor
-- Headings:
-  - H1: Codex Supervisor plugin
-  - H2: Distribution
-  - H2: Surface
-  - H2: Enable the plugin
-  - H2: App Server selection
-  - H2: List sessions from the CLI
-  - H2: Use the Control UI
-  - H2: Metadata and security boundary
-  - H2: Supervisor agent session listing
 
 ## plugins/reference/codex.md
 
@@ -6942,6 +6974,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What core still owns
   - H3: Harness-owned auth bootstrap
   - H2: Register a harness
+  - H3: Delegated execution
   - H2: Selection policy
   - H2: Provider plus harness pairing
   - H3: Tool-result middleware
@@ -8738,25 +8771,24 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Recommended blocked destinations
   - H2: Limits
 
-## specs/claw-supervisor.md
+## specs/codex-supervision.md
 
-- Route: /specs/claw-supervisor
+- Route: /specs/codex-supervision
 - Headings:
-  - H1: Claw Supervisor
+  - H1: Codex supervision
   - H2: Goal
-  - H2: Product Model
-  - H2: Architecture
-  - H2: Federated Session Catalog
-  - H2: Codex App-Server Contract
-  - H2: Session Registry
-  - H2: MCP Surface For Codex
-  - H2: Claw Control Surface
-  - H2: Launch Flow
-  - H2: Deployment
-  - H2: Security
-  - H2: Implementation Plan
-  - H2: Acceptance Tests
-  - H2: Open Questions
+  - H2: Product boundary
+  - H2: Ownership
+  - H2: Catalog flow
+  - H2: Operator CLI boundary
+  - H2: Local continuation
+  - H2: Archive behavior
+  - H2: Active thread safety
+  - H2: Paired-node boundary
+  - H2: Permissions
+  - H2: Compatibility
+  - H2: Future work
+  - H2: Acceptance tests
 
 ## start/bootstrapping.md
 
@@ -9922,11 +9954,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Gateway host status
   - H2: Language support
   - H2: Appearance themes
+  - H2: Manage plugins
   - H2: Sidebar navigation
+  - H2: New session page
   - H2: What it can do (today)
   - H2: MCP page
   - H2: Activity tab
   - H2: Operator terminal
+  - H2: Browser panel
   - H2: Chat behavior
   - H2: Connection loss and reconnect
   - H2: PWA install and web push

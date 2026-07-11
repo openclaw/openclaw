@@ -6,6 +6,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -26,6 +30,7 @@ import {
   listAgentRunsForSession,
 } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { CommandLane } from "../process/lanes.js";
 import {
   isAcpSessionKey,
@@ -513,6 +518,8 @@ async function sendUnresumableSessionNotice(params: {
       method: "message.action",
       params: actionParams,
       timeoutMs: 10_000,
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
     });
     log.info(
       `sent interrupted main session recovery notice: ${params.sessionKey} (${params.reason})`,
@@ -956,12 +963,17 @@ export function scheduleRestartAbortedMainSessionRecovery(
   const startupRecoveryCutoffMs = Date.now();
 
   const runRecoveryAttempt = (attempt: number, delay: number) => {
-    void recoverStartupOrphanedMainSessions({
-      cfg: params.cfg,
-      stateDir: params.stateDir,
-      resumedSessionKeys,
-      updatedBeforeMs: startupRecoveryCutoffMs,
-    })
+    // Delayed retries outlive startup; each attempt must independently block
+    // host suspension while it reads and rewrites recovery session state.
+    void runWithGatewayIndependentRootWorkAdmission(
+      async () =>
+        await recoverStartupOrphanedMainSessions({
+          cfg: params.cfg,
+          stateDir: params.stateDir,
+          resumedSessionKeys,
+          updatedBeforeMs: startupRecoveryCutoffMs,
+        }),
+    )
       .then((result) => {
         if (result.failed > 0 && attempt < maxRetries) {
           scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);

@@ -41,11 +41,24 @@ available for recovery.
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
 
+## Updates
+
+The dashboard update card updates the signed macOS app through Sparkle first.
+After the app relaunches, it automatically updates and restarts the matching
+app-managed local Gateway. Homebrew and other user-managed CLI installs keep
+the normal Gateway update flow (the card runs the Gateway update directly),
+and the automatic repair never downgrades a newer Gateway or overrides an
+`extended-stable` channel pin.
+
+Sparkle follows the Gateway's `update.channel` setting. `beta` and `dev` opt in
+to beta app builds; `stable`, `extended-stable`, and missing or unknown values
+stay on stable app builds.
+
 ## Open dashboard links
 
-In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate external page history. The sidebar also has reload, open-in-default-browser, and close controls, and it remembers its width.
+In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar. Each link opens in its own tab; clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls, and it remembers its width.
 
-Right-click an external link to choose **Open in Sidebar**, **Open in Default Browser**, or **Copy Link**. Modified clicks and user-activated new-window links continue to open in the default browser. Regular browser-hosted Control UI pages keep the browser's normal link and context-menu behavior.
+Right-click an external link to choose **Open in Sidebar**, **Open in Default Browser**, or **Copy Link**. Modified clicks and user-activated new-window links from the dashboard continue to open in the default browser; new-window links inside the sidebar open as new sidebar tabs. Regular browser-hosted Control UI pages keep the browser's normal link and context-menu behavior.
 
 ## Choose a Gateway mode
 

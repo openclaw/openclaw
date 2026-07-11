@@ -83,6 +83,7 @@ const mockState = vi.hoisted(() => ({
   onAfterAgentRunStart: null as (() => void) | null,
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
+  sessionMissing: false,
   loadSessionEntryCalls: [] as Array<{ rawKey: string; opts?: { agentId?: string } }>,
   lastDispatchCtx: undefined as MsgContext | undefined,
   lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
@@ -159,11 +160,13 @@ vi.mock("../session-utils.js", async () => {
         typeof mockState.sessionEntry.canonicalKey === "string"
           ? mockState.sessionEntry.canonicalKey
           : rawKey || "main";
-      const entry = {
-        sessionId: mockState.sessionId,
-        sessionFile: mockState.transcriptPath,
-        ...mockState.sessionEntry,
-      };
+      const entry = mockState.sessionMissing
+        ? undefined
+        : {
+            sessionId: mockState.sessionId,
+            sessionFile: mockState.transcriptPath,
+            ...mockState.sessionEntry,
+          };
       return {
         ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
         cfg: {
@@ -174,7 +177,7 @@ vi.mock("../session-utils.js", async () => {
           },
         },
         storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
-        store: { [canonicalKey]: entry },
+        store: entry ? { [canonicalKey]: entry } : {},
         entry,
         canonicalKey,
       };
@@ -444,7 +447,8 @@ vi.mock("../../media/store.js", async () => {
 
 const { chatHandlers } = await import("./chat.js");
 
-async function waitForAssertion(assertion: () => void, timeoutMs = 1000, stepMs = 2) {
+// Multi-media transcript mirroring can exceed 1s on loaded CI before the async broadcast lands.
+async function waitForAssertion(assertion: () => void, timeoutMs = 5_000, stepMs = 2) {
   await vi.waitFor(assertion, { interval: stepMs, timeout: timeoutMs });
 }
 
@@ -846,6 +850,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.onAfterAgentRunStart = null;
     mockState.agentRunId = "run-agent-1";
     mockState.sessionEntry = {};
+    mockState.sessionMissing = false;
     mockState.loadSessionEntryCalls = [];
     mockState.lastDispatchCtx = undefined;
     mockState.lastDispatchImages = undefined;
@@ -3443,6 +3448,35 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.broadcast).not.toHaveBeenCalled();
   });
 
+  it("rejects chat.send creation in an agent harness-owned namespace", async () => {
+    await createTranscriptFixture("openclaw-chat-send-harness-reserved-");
+    mockState.sessionMissing = true;
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "agent:main:harness:codex:supervision:native-thread",
+        message: "claim reserved session",
+        idempotencyKey: "idem-harness-reserved",
+      },
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const response = lastRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "Session key namespace is reserved for agent harness-owned sessions.",
+    });
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(context.broadcast).not.toHaveBeenCalled();
+  });
+
   it("chat.inject strips external untrusted wrapper metadata from final payload text", async () => {
     await createTranscriptFixture("openclaw-chat-inject-untrusted-meta-");
     const respond = vi.fn();
@@ -4810,6 +4844,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.sessionEntry = {
       modelProvider: "test-provider",
       model: "vision-model",
+      providerOverride: "test-provider",
+      modelOverride: "vision-model",
     };
     mockState.modelCatalog = [
       {
@@ -5190,6 +5226,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.sessionEntry = {
       modelProvider: "modelscope",
       model: "Qwen/Qwen3.5-35B-A3B",
+      providerOverride: "modelscope",
+      modelOverride: "Qwen/Qwen3.5-35B-A3B",
     };
     mockState.modelCatalog = [
       {
@@ -6115,6 +6153,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.sessionEntry = {
       modelProvider: "test-provider",
       model: "vision-model",
+      providerOverride: "test-provider",
+      modelOverride: "vision-model",
     };
     mockState.modelCatalog = [
       {
