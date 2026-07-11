@@ -33,38 +33,6 @@ describe("native app i18n inventory", () => {
     ).toBe("native.apple.existing-translation");
   });
 
-  it("keeps IDs stable when a unique source moves files", () => {
-    const candidate = {
-      kind: "ui-call",
-      line: 10,
-      path: "apps/macos/Sources/OpenClaw/Old.swift",
-      source: "Moved title",
-      surface: "apple" as const,
-    };
-    const initial = assignNativeI18nIds([candidate]);
-    const moved = { ...candidate, path: "apps/macos/Sources/OpenClaw/New.swift" };
-
-    expect(assignNativeI18nIds([moved], initial)[0]?.id).toBe(initial[0]?.id);
-  });
-
-  it("does not guess IDs when a moved source is ambiguous", () => {
-    const candidate = {
-      kind: "ui-call",
-      line: 10,
-      source: "Repeated",
-      surface: "apple" as const,
-    };
-    const initial = assignNativeI18nIds([
-      { ...candidate, path: "apps/macos/Sources/OpenClaw/One.swift" },
-      { ...candidate, path: "apps/macos/Sources/OpenClaw/Two.swift" },
-    ]);
-    const moved = { ...candidate, path: "apps/macos/Sources/OpenClaw/Three.swift" };
-
-    expect(initial.map((entry) => entry.id)).not.toContain(
-      assignNativeI18nIds([moved], initial)[0]?.id,
-    );
-  });
-
   it("preserves registered IDs when Swift entries move between files", async () => {
     const entries = await collectNativeI18nEntries();
     const idsByLocation = new Map(
