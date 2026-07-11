@@ -867,7 +867,7 @@ function consumeXmlSuppressor(
       if (
         !name ||
         name.length > MAX_TOOL_NAME_CHARS ||
-        [...name].some((character) => !isXmlishNameChar(character))
+        Array.from(name).some((character) => !isXmlishNameChar(character))
       ) {
         return { complete: true, suffix: text.slice(markerStart) };
       }
