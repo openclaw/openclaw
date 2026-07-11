@@ -1191,7 +1191,10 @@ describe("openclaw agent database", () => {
     const memoryIndexSourceColumns = database.db
       .prepare("PRAGMA table_info(memory_index_sources)")
       .all() as Array<{ name?: unknown }>;
+    // Canonical memory-source identity keeps stable integer ids so FTS rowids
+    // survive VACUUM (main's v2 shape, folded into the flip schema).
     expect(memoryIndexSourceColumns.map((column) => column.name)).toEqual([
+      "id",
       "path",
       "source",
       "hash",

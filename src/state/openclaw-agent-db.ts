@@ -218,9 +218,7 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
       updated_at INTEGER NOT NULL
     );
   `);
-  db.exec("PRAGMA foreign_keys = OFF;");
-  try {
-    db.exec(`
+  db.exec(`
       DROP TABLE IF EXISTS sessions_new;
       CREATE TABLE sessions_new (
         session_id TEXT NOT NULL PRIMARY KEY,
@@ -248,10 +246,6 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
       DROP TABLE sessions;
       ALTER TABLE sessions_new RENAME TO sessions;
     `);
-    dropLegacyMemoryIndexSchema(db);
-  } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
-  }
 }
 
 function parseMigratedSessionEntry(value: unknown): MigratedSessionEntry | null {
@@ -487,46 +481,70 @@ function assertExistingSchemaOwner(
 }
 
 function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string): void {
-  runSqliteImmediateTransactionSync(db, () => {
-    // Ownership and version checks must share the write transaction with the
-    // schema update; concurrent openers must not overwrite another agent.
-    assertSupportedAgentSchemaVersion(db, pathname);
-    assertExistingSchemaOwner(readExistingSchemaMeta(db), agentId, pathname);
-    const previousVersion = readSqliteUserVersion(db);
-    // Structure-gated, idempotent: canonicalizes legacy memory-source identity
-    // in place on every lineage (pre-flip v1/v2 and pre-merge flip v4) before
-    // the flip migration, so no lineage loses its memory index.
-    migrateMemoryIndexSourcesIdentity(db);
-    migrateOpenClawAgentSchema(db);
-    db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-    backfillOpenClawAgentSchema(db, previousVersion);
-    const kysely = getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db);
-    db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
-    const now = Date.now();
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .insertInto("schema_meta")
-        .values({
-          meta_key: "primary",
-          role: "agent",
-          schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-          agent_id: agentId,
-          app_version: null,
-          created_at: now,
-          updated_at: now,
-        })
-        .onConflict((conflict) =>
-          conflict.column("meta_key").doUpdateSet({
+  // FK enforcement must be off before BEGIN: PRAGMA foreign_keys is a silent
+  // no-op inside a transaction, and the v1 sessions rebuild would otherwise
+  // cascade-delete session_entries when the old parent table drops. The
+  // connection pragmas restore enforcement for steady-state work below.
+  db.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    runSqliteImmediateTransactionSync(db, () => {
+      // Ownership and version checks must share the write transaction with the
+      // schema update; concurrent openers must not overwrite another agent.
+      assertSupportedAgentSchemaVersion(db, pathname);
+      assertExistingSchemaOwner(readExistingSchemaMeta(db), agentId, pathname);
+      const previousVersion = readSqliteUserVersion(db);
+      // Two legacy memory shapes exist: the flip lineage's source_kind schema
+      // (derived cache — dropped for rebuild) and main's path/source-keyed
+      // schema (migrated in place by the identity migration). Both helpers are
+      // structure-gated, so this ordering converges every lineage — pre-flip
+      // v1/v2 and pre-merge flip v1/v4 — without version-number coupling.
+      dropLegacyMemoryIndexSchema(db);
+      migrateMemoryIndexSourcesIdentity(db);
+      migrateOpenClawAgentSchema(db);
+      db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+      backfillOpenClawAgentSchema(db, previousVersion);
+      const kysely = getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db);
+      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
+      const now = Date.now();
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .insertInto("schema_meta")
+          .values({
+            meta_key: "primary",
             role: "agent",
             schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
             agent_id: agentId,
             app_version: null,
+            created_at: now,
             updated_at: now,
-          }),
-        ),
-    );
-  });
+          })
+          .onConflict((conflict) =>
+            conflict.column("meta_key").doUpdateSet({
+              role: "agent",
+              schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+              agent_id: agentId,
+              app_version: null,
+              updated_at: now,
+            }),
+          ),
+      );
+    });
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
+}
+
+// auto_vacuum only takes effect when set before the first page is written;
+// existing databases keep their mode until a doctor-owned full VACUUM.
+// INCREMENTAL lets maintenance release freed pages in bounded steps so
+// per-agent DBs shrink after retention deletes rows instead of pinning
+// their high-water mark forever.
+function enableIncrementalAutoVacuumForFreshDatabase(db: DatabaseSync): void {
+  const row = db.prepare("PRAGMA page_count").get() as { page_count?: unknown } | undefined;
+  if (row?.page_count === 0) {
+    db.exec("PRAGMA auto_vacuum = INCREMENTAL;");
+  }
 }
 
 /** Initialize agent schema/ownership metadata on an independently managed connection. */
@@ -538,6 +556,7 @@ export function ensureOpenClawAgentDatabaseSchema(
   const databaseOptions = { ...options, agentId };
   const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
+  enableIncrementalAutoVacuumForFreshDatabase(db);
   ensureAgentSchema(db, agentId, pathname);
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   if (options.register === true) {
@@ -757,6 +776,7 @@ export function openOpenClawAgentDatabase(
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
+  enableIncrementalAutoVacuumForFreshDatabase(db);
   const walMaintenance = (() => {
     let maintenance: SqliteWalMaintenance | undefined;
     try {
