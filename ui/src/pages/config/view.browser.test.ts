@@ -1,6 +1,7 @@
 // Control UI tests cover config behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
 
@@ -62,6 +63,17 @@ describe("config view", () => {
     setTextScale: vi.fn(),
     gatewayUrl: "",
     assistantName: "OpenClaw",
+  });
+
+  it("lets config pages grow with their content instead of creating an inner viewport", () => {
+    const configCss = readStyleSheet("ui/src/styles/config.css");
+    const layoutRules = configCss.match(/\.config-layout\s*\{[^}]*\}/gu) ?? [];
+
+    expect(layoutRules.length).toBeGreaterThan(0);
+    for (const rule of layoutRules) {
+      expect(rule).not.toMatch(/\bheight\s*:/u);
+      expect(rule).not.toMatch(/\bmax-height\s*:/u);
+    }
   });
 
   function findActionButtons(container: HTMLElement): {
