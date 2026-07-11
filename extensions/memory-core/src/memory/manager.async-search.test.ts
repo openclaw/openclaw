@@ -54,6 +54,60 @@ describe("memory search async sync", () => {
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps vector-only results unweighted when FTS is unavailable", async () => {
+    const vectorResult = {
+      id: "memory-alpha",
+      path: "memory/alpha.md",
+      startLine: 1,
+      endLine: 1,
+      score: 0.9,
+      snippet: "Alpha memory",
+      source: "memory" as const,
+    };
+    const mergeHybridResults = vi.fn(async () => []);
+    const manager = Object.create(MemoryIndexManager.prototype) as MemoryIndexManager;
+    Object.assign(manager as unknown as Record<string, unknown>, {
+      providerRequirement: { mode: "optional", provider: "openai" },
+      providerLifecycle: { mode: "ready" },
+      provider: { id: "mock", model: "mock-embed" },
+      settings: {
+        sync: { onSearch: false },
+        query: {
+          minScore: 0.8,
+          maxResults: 5,
+          hybrid: {
+            enabled: true,
+            candidateMultiplier: 2,
+            vectorWeight: 0.5,
+            textWeight: 0.5,
+            temporalDecay: { enabled: false, halfLifeDays: 30 },
+          },
+        },
+      },
+      sources: new Set(["memory"]),
+      dirty: false,
+      sessionsDirty: false,
+      workspaceDir: "",
+      drainReindex: vi.fn(async () => {}),
+      hasIndexedContentForSearch: vi.fn(async () => true),
+      warmSession: vi.fn(),
+      sync: vi.fn(async () => {}),
+      ensureProviderInitialized: vi.fn(async () => {}),
+      assertRequiredProviderAvailable: vi.fn(),
+      refreshSearchIndexIdentityDirty: vi.fn(async () => ({ status: "valid" })),
+      searchKeywordWithFallback: vi.fn(async () => []),
+      embedQueryWithRetry: vi.fn(async () => [1, 0]),
+      searchVector: vi.fn(async () => [vectorResult]),
+      hasKeywordSearchAvailable: vi.fn(async () => false),
+      mergeHybridResults,
+    });
+
+    const results = await manager.search("alpha");
+
+    expect(results).toEqual([vectorResult]);
+    expect(mergeHybridResults).not.toHaveBeenCalled();
+  });
+
   it("waits for in-flight search sync during close", async () => {
     let releaseSync = () => {};
     const pendingSync = new Promise<void>((resolve) => {

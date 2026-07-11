@@ -349,6 +349,13 @@ export abstract class MemoryManagerSyncOps {
   protected sessionDeltas = new Map<string, MemorySessionDeltaState>();
   protected vectorDegradedWriteWarningShown = false;
   private lastMetaSerialized: string | null = null;
+  // A full reindex briefly repoints this.db at a half-built temp DB (see
+  // runInPlaceReindex). Readers must wait or use a stable pre-swap snapshot.
+  protected reindexing: Promise<void> | null = null;
+  private reindexDepth = 0;
+  private resolveReindexing: (() => void) | null = null;
+  private activeIndexReaders = 0;
+  private activeIndexReaderResolvers: Array<() => void> = [];
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
   protected abstract db: DatabaseSync;
@@ -517,6 +524,52 @@ export abstract class MemoryManagerSyncOps {
     }
     await this.executeSourceSyncPlans([memoryPlan], params.progress);
   }
+
+  protected async drainReindex(): Promise<void> {
+    while (this.reindexing) {
+      try {
+        await this.reindexing;
+      } catch {}
+    }
+  }
+
+  protected async withIndexRead<T>(read: () => Promise<T>): Promise<T> {
+    while (true) {
+      await this.drainReindex();
+      this.activeIndexReaders++;
+      if (!this.reindexing) {
+        break;
+      }
+      this.releaseIndexRead();
+    }
+
+    try {
+      return await read();
+    } finally {
+      this.releaseIndexRead();
+    }
+  }
+
+  private async drainActiveIndexReaders(): Promise<void> {
+    while (this.activeIndexReaders > 0) {
+      await new Promise<void>((resolve) => {
+        this.activeIndexReaderResolvers.push(resolve);
+      });
+    }
+  }
+
+  private releaseIndexRead(): void {
+    this.activeIndexReaders--;
+    if (this.activeIndexReaders === 0) {
+      const resolvers = this.activeIndexReaderResolvers.splice(0);
+      for (const resolve of resolvers) {
+        resolve();
+      }
+    }
+  }
+
+  protected captureReindexReadSnapshot(): void {}
+  protected clearReindexReadSnapshot(): void {}
 
   protected hasIndexedChunks(): boolean {
     const row = this.db.prepare(`SELECT 1 as found FROM memory_index_chunks LIMIT 1`).get() as
@@ -2706,7 +2759,15 @@ export abstract class MemoryManagerSyncOps {
       this.vectorDegradedWriteWarningShown = originalState.vectorDegradedWriteWarningShown;
       this.vectorReady = originalState.vectorReady;
     };
+    if (this.reindexDepth === 0) {
+      this.captureReindexReadSnapshot();
+      this.reindexing = new Promise<void>((resolve) => {
+        this.resolveReindexing = resolve;
+      });
+    }
+    this.reindexDepth++;
     try {
+      await this.drainActiveIndexReaders();
       cleanupAgedMemoryReindexTempFiles(dbPath);
       reindexLock = acquireMemoryReindexLock(dbPath);
       const originalRevision = readMemoryDatabaseRevision(originalDb);
@@ -2797,6 +2858,10 @@ export abstract class MemoryManagerSyncOps {
       this.resetVectorState();
       this.fts.available = nextFtsState.available;
       this.fts.loadError = nextFtsState.loadError;
+      // The temp DB wrote this metadata, but the durable handle is now the
+      // reader DB. Re-write idempotently so immediate reads see matching meta.
+      this.lastMetaSerialized = null;
+      this.writeMeta(nextMeta);
       this.vector.dims = nextMeta.vectorDims;
     } catch (err) {
       if (tempDb && !tempDbClosed) {
@@ -2827,6 +2892,13 @@ export abstract class MemoryManagerSyncOps {
         reindexLock?.release();
       } catch (err) {
         log.warn(`failed to release memory reindex lock for ${dbPath}: ${formatErrorMessage(err)}`);
+      }
+      this.reindexDepth--;
+      if (this.reindexDepth === 0) {
+        this.clearReindexReadSnapshot();
+        this.reindexing = null;
+        this.resolveReindexing?.();
+        this.resolveReindexing = null;
       }
     }
   }
