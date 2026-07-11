@@ -1777,15 +1777,15 @@ jobs:
                     control_pid="$!"
                     trap "kill ${control_pid} >/dev/null 2>&1 || true" EXIT
                     proc_marker_visible=false
-                    # The child PID exists before execve publishes command-scoped env.
+                    # The background child can still expose the shell's pre-exec environment.
                     for _ in {1..100}; do
-                      if tr "\0" "\n" <"/proc/${control_pid}/environ" |
+                      if tr "\0" "\n" <"/proc/${control_pid}/environ" 2>/dev/null |
                         grep -Fxq "OPENCLAW_QA_PROC_CONTROL=visible"; then
                         proc_marker_visible=true
                         break
                       fi
                       kill -0 "$control_pid" >/dev/null 2>&1 || break
-                      sleep 0.01
+                      sleep 0.05
                     done
                     [[ "$proc_marker_visible" == "true" ]]
                     # Reading the marker is the proof; the probe may exit before cleanup.

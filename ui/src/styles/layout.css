@@ -1236,6 +1236,14 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   color: var(--text-strong);
 }
 
+/* Multi-select highlight: stronger border than --active so a selection stays
+   readable when it includes the active row. */
+.sidebar-recent-session--selected {
+  background: color-mix(in srgb, var(--accent-subtle) 52%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  color: var(--text-strong);
+}
+
 .sidebar-recent-session__link {
   display: flex;
   align-items: center;
