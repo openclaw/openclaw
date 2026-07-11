@@ -91,7 +91,12 @@ async function requestRealAdminRpc(port: number, contentLength: number): Promise
         res.on("end", () => {
           resolve({
             statusCode: res.statusCode ?? 0,
-            headers: res.headers,
+            headers: Object.fromEntries(
+              Object.entries(res.headers).filter(
+                (entry): entry is [string, string | number | readonly string[]] =>
+                  entry[1] !== undefined,
+              ),
+            ),
             body: Buffer.concat(chunks).toString("utf8"),
           });
         });

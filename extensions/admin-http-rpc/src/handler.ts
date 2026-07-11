@@ -123,7 +123,6 @@ async function readJsonBody(
             : "request body must be valid JSON",
       };
     default:
-      body satisfies never;
       return { ok: false, status: 400, message: "request body must be valid JSON" };
   }
 }
