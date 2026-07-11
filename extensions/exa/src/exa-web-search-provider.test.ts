@@ -1,5 +1,5 @@
 // Exa tests cover exa web search provider plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing } from "../test-api.js";
 import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
 import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
@@ -54,6 +54,10 @@ function streamingJsonResponse(params: { chunkCount: number; chunkSize: number }
 }
 
 describe("exa web search provider", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("exposes the expected metadata and selection wiring", () => {
     const provider = createExaWebSearchProvider();
     if (!provider.applySelectionConfig) {
@@ -113,7 +117,69 @@ describe("exa web search provider", () => {
   });
 
   it("prefers scoped configured api keys over environment fallbacks", () => {
+    vi.stubEnv("EXA_API_KEY", "exa-env-fallback");
+
     expect(testing.resolveExaApiKey({ apiKey: "exa-secret" })).toBe("exa-secret");
+  });
+
+  it("uses the documented Exa environment fallback when no api key is configured", () => {
+    vi.stubEnv("EXA_API_KEY", "exa-env-fallback");
+
+    expect(testing.resolveExaApiKey({})).toBe("exa-env-fallback");
+  });
+
+  it("resolves configured Exa env SecretRefs before EXA_API_KEY fallback", () => {
+    vi.stubEnv("EXA_API_KEY", "exa-env-fallback");
+    vi.stubEnv("EXA_SECRETREF_API_KEY", "exa-env-ref-key");
+
+    expect(
+      testing.resolveExaApiKey({
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "EXA_SECRETREF_API_KEY",
+        },
+      }),
+    ).toBe("exa-env-ref-key");
+  });
+
+  it("preserves Exa env SecretRefs from the search config record before resolving", () => {
+    vi.stubEnv("EXA_API_KEY", "exa-env-fallback");
+    vi.stubEnv("EXA_SEARCH_CONFIG_REF_KEY", "exa-search-config-ref-key");
+    const apiKeyRef = {
+      source: "env",
+      provider: "default",
+      id: "EXA_SEARCH_CONFIG_REF_KEY",
+    };
+
+    const exaConfig = testing.resolveExaConfig({ exa: { apiKey: apiKeyRef } });
+
+    expect(exaConfig.apiKey).toBe(apiKeyRef);
+    expect(testing.resolveExaApiKey(exaConfig)).toBe("exa-search-config-ref-key");
+  });
+
+  it("does not use EXA_API_KEY when configured Exa SecretRefs are unavailable", () => {
+    vi.stubEnv("EXA_API_KEY", "exa-env-fallback");
+    vi.stubEnv("MISSING_EXA_SECRETREF_API_KEY", "");
+
+    expect(
+      testing.resolveExaApiKey({
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "MISSING_EXA_SECRETREF_API_KEY",
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      testing.resolveExaApiKey({
+        apiKey: {
+          source: "file",
+          provider: "vault",
+          id: "/exa/api-key",
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it("resolves Exa search base URL overrides", () => {
