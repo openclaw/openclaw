@@ -125,7 +125,9 @@ async function flushTasks() {
 }
 
 async function waitForNextTask() {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 async function waitMs(ms: number) {
