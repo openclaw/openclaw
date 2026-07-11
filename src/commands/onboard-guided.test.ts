@@ -662,9 +662,11 @@ describe("runGuidedOnboarding", () => {
           }),
         }),
         deliver: false,
-        url: "wss://selected.example/ws",
-        token: "selected-token",
-        tlsFingerprint: "sha256:selected",
+        boundGateway: {
+          url: "wss://selected.example/ws",
+          token: "selected-token",
+          tlsFingerprint: "sha256:selected",
+        },
       });
       return { exitReason: "exit" as const };
     });
