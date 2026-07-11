@@ -1191,7 +1191,7 @@ function createCompactNodeTestShardBundles(options = {}) {
     const wholeGroups = sortedGroups.filter((candidate) => !candidate.includePatterns);
     const wholeJobCount = Math.ceil(wholeGroups.length / COMPACT_WHOLE_NODE_TEST_JOB_GROUPS);
     // A lone whole-config job serializes every fixed suite and owns PR wall time.
-    // Fold it into already-admitted same-runner jobs when their group caps allow it.
+    // Fold it into same-runner jobs when caps allow, retaining the whole-config timeout.
     const canSpreadWholeGroups =
       wholeJobCount === 1 &&
       bins.length > 1 &&
@@ -1205,7 +1205,9 @@ function createCompactNodeTestShardBundles(options = {}) {
       : createStripedBatches(wholeGroups, wholeJobCount);
     if (canSpreadWholeGroups) {
       for (const [index, group] of wholeGroups.entries()) {
-        bins[index % bins.length].groups.push(group);
+        const bin = bins[index % bins.length];
+        bin.groups.push(group);
+        bin.timeoutMinutes = COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES;
       }
     }
     for (const [index, groupBatch] of wholeGroupBatches.entries()) {
@@ -1230,6 +1232,7 @@ function createCompactNodeTestShardBundles(options = {}) {
         requiresDist: bin.groups[0].requiresDist,
         runner: bin.groups[0].runner,
         shardName: `compact-${runnerClass}-${index + 1}`,
+        ...(bin.timeoutMinutes ? { timeoutMinutes: bin.timeoutMinutes } : {}),
       });
     }
   }

@@ -225,7 +225,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ).toEqual({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" });
     expect(
       compact
-        .filter((shard) => shard.checkName.includes("-whole-"))
+        .filter((shard) => shard.groups.some((group) => !group.includePatterns))
         .every((shard) => shard.timeoutMinutes === 120),
     ).toBe(true);
     const largeJobs = compact.filter((shard) =>
