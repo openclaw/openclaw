@@ -13,10 +13,10 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 
 const MAX_IMAGES_PER_MESSAGE = 8;
 const TLON_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
-/** Overall request lifetime for remote media fetches. Matches the shared
- * bounded-media ceiling so a never-responding endpoint still aborts while
- * slow-but-progressing transfers stay bounded by readIdleTimeoutMs. */
-const TLON_MEDIA_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
+/** Header-arrival deadline forwarded to readRemoteMediaBuffer. Cleared once headers
+ * arrive so a healthy body keeps progressing past the deadline; matches the
+ * canonical 15-min bounded-media ceiling from PR #103266. */
+const TLON_MEDIA_DOWNLOAD_RESPONSE_HEADER_TIMEOUT_MS = 15 * 60_000;
 
 interface ExtractedImage {
   url: string;
@@ -74,8 +74,8 @@ export async function downloadMedia(
     const fetchOptions = {
       url,
       maxBytes: MAX_IMAGE_BYTES,
-      timeoutMs: TLON_MEDIA_DOWNLOAD_TIMEOUT_MS,
       readIdleTimeoutMs: TLON_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS,
+      responseHeaderTimeoutMs: TLON_MEDIA_DOWNLOAD_RESPONSE_HEADER_TIMEOUT_MS,
       ssrfPolicy: undefined,
       requestInit: { method: "GET" },
     };

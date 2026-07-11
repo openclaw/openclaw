@@ -1144,47 +1144,50 @@ describe("loadWebMedia", () => {
     );
   });
 
-  it("aborts a stalled remote fetch via the overall timeoutMs deadline", async () => {
-    // Endpoint accepts the connection but never returns headers: the fetch
-    // promise stays pending until the guarded-fetch abort signal fires at the
-    // timeoutMs deadline. Proves loadWebMediaRaw forwards timeoutMs through
-    // readRemoteMediaBuffer to fetchWithSsrFGuard's abort signal (the total
-    // request lifetime, separate from readIdleTimeoutMs body-gap protection).
-    const timeoutMs = 200;
-    const fetchImpl = vi.fn(
-      (_input: RequestInfo | URL, init?: RequestInit) =>
-        new Promise<Response>((_resolve, reject) => {
-          const signal = init?.signal;
-          if (!signal) {
-            return;
-          }
-          // Reject with an Error to satisfy prefer-promise-reject-errors; the
-          // test only asserts that loadWebMediaRaw rejects when the guarded-fetch
-          // abort signal fires at the timeoutMs deadline.
-          const rejectWithAbort = () => reject(new Error("aborted"));
-          if (signal.aborted) {
-            rejectWithAbort();
-            return;
-          }
-          signal.addEventListener("abort", rejectWithAbort, { once: true });
-        }),
-    );
-
+  it("forwards responseHeaderTimeoutMs from loadWebMediaRaw through readRemoteMediaBuffer", async () => {
+    // Proves the public loadWebMedia / loadWebMediaRaw seam forwards the canonical
+    // responseHeaderTimeoutMs field from main (FetchMediaOptions.responseHeaderTimeoutMs,
+    // src/media/fetch.ts:82) end-to-end, mirroring main's "clears the response-header
+    // deadline while a healthy body keeps progressing" pattern at fetch.test.ts:438-485.
+    // Header deadline is much smaller than the body enqueue intervals so any failure to
+    // forward the field (or any leak between the header and body phases) surfaces as
+    // a MediaFetchError instead of a successful read.
     vi.useFakeTimers();
     try {
-      const outcome = loadWebMediaRaw("https://example.test/withheld.pdf", {
-        maxBytes: 1024 * 1024,
+      const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              const failForAbort = () => controller.error(signal?.reason);
+              if (signal?.aborted) {
+                failForAbort();
+                return;
+              }
+              signal?.addEventListener("abort", failForAbort, { once: true });
+              setTimeout(() => controller.enqueue(new Uint8Array([1])), 25);
+              setTimeout(() => controller.enqueue(new Uint8Array([2])), 50);
+              setTimeout(() => {
+                signal?.removeEventListener("abort", failForAbort);
+                controller.close();
+              }, 75);
+            },
+          }),
+          { status: 200 },
+        );
+      });
+
+      const result = loadWebMediaRaw("https://example.test/file.bin", {
         fetchImpl,
-        timeoutMs,
+        maxBytes: 1024,
+        responseHeaderTimeoutMs: 10,
+        readIdleTimeoutMs: 30,
         ssrfPolicy: { allowedHostnames: ["example.test"] },
-      }).then(
-        () => ({ status: "resolved" as const }),
-        (error: unknown) => ({ status: "rejected" as const, error }),
-      );
-      await vi.advanceTimersByTimeAsync(timeoutMs + 10);
-      const result = await outcome;
-      expect(result.status).toBe("rejected");
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      });
+
+      await vi.advanceTimersByTimeAsync(80);
+
+      await expect(result).resolves.toMatchObject({ buffer: Buffer.from([1, 2]) });
     } finally {
       vi.useRealTimers();
     }

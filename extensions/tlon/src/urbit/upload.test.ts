@@ -59,7 +59,7 @@ describe("uploadImageFromUrl", () => {
       expect.objectContaining({
         url: "https://example.com/image.png",
         maxBytes: MAX_IMAGE_BYTES,
-        timeoutMs: 15 * 60_000,
+        responseHeaderTimeoutMs: 15 * 60_000,
         readIdleTimeoutMs: 30_000,
         ssrfPolicy: undefined,
         requestInit: { method: "GET" },

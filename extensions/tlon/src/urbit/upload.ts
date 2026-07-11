@@ -5,10 +5,10 @@ import { MAX_IMAGE_BYTES, readRemoteMediaBuffer } from "openclaw/plugin-sdk/medi
 import { uploadFile } from "../tlon-api.js";
 
 const TLON_UPLOAD_IMAGE_IDLE_TIMEOUT_MS = 30_000;
-/** Overall request lifetime for image upload fetches. Matches the shared
- * bounded-media ceiling so a never-responding endpoint still aborts while
- * slow-but-progressing transfers stay bounded by readIdleTimeoutMs. */
-const TLON_UPLOAD_IMAGE_TIMEOUT_MS = 15 * 60_000;
+/** Header-arrival deadline for URL-backed image uploads. Cleared once headers
+ * arrive so a healthy body keeps progressing past the deadline; matches the
+ * canonical 15-min bounded-media ceiling from PR #103266. */
+const TLON_UPLOAD_IMAGE_RESPONSE_HEADER_TIMEOUT_MS = 15 * 60_000;
 
 /**
  * Fetch an image from a URL and upload it to Tlon storage.
@@ -28,8 +28,8 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
     const fetched = await readRemoteMediaBuffer({
       url: imageUrl,
       maxBytes: MAX_IMAGE_BYTES,
-      timeoutMs: TLON_UPLOAD_IMAGE_TIMEOUT_MS,
       readIdleTimeoutMs: TLON_UPLOAD_IMAGE_IDLE_TIMEOUT_MS,
+      responseHeaderTimeoutMs: TLON_UPLOAD_IMAGE_RESPONSE_HEADER_TIMEOUT_MS,
       ssrfPolicy: undefined,
       requestInit: { method: "GET" },
     });
