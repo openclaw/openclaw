@@ -290,6 +290,36 @@ describe("AppSidebar session pagination", () => {
     expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
   });
 
+  it("keeps active and pinned sessions visible beyond the first page", async () => {
+    const pinnedKey = "agent:main:pinned";
+    const keys = [
+      ...Array.from({ length: 10 }, (_, index) => `agent:main:session-${index + 1}`),
+      pinnedKey,
+      "agent:main:main",
+    ];
+    const sessions = createSessionsHarness("main", keys);
+    const result = sessions.sessions.state.result;
+    expect(result).not.toBeNull();
+    if (!result) {
+      return;
+    }
+    sessions.publish({
+      result: {
+        ...result,
+        sessions: result.sessions.map((row) =>
+          row.key === pinnedKey ? { ...row, pinned: true } : row,
+        ),
+      },
+    });
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
+    expect(sidebar.querySelector(`[data-session-key="${pinnedKey}"]`)).not.toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:main"]')).not.toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:session-9"]')).toBeNull();
+  });
+
   it("reveals sessions ten at a time and offers See less after thirty", async () => {
     const keys = [
       "agent:main:main",

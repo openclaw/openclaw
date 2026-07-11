@@ -1114,6 +1114,13 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     });
     try {
       await page.goto(`${server.baseUrl}chat`);
+      const seeMore = page.getByRole("button", { name: "See more" });
+      for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
+        await seeMore.click();
+      }
+      await page.locator(".sidebar-recent-sessions").evaluate((element) => {
+        element.scrollTop = 0;
+      });
       await expect
         .poll(() => page.locator(".sidebar-recent-session").count(), { timeout: 15_000 })
         .toBeGreaterThanOrEqual(rows.length);

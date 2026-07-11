@@ -126,6 +126,23 @@ const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
 
+function limitSidebarSessionRows(rows: SidebarRecentSession[], limit: number) {
+  const requiredCount = rows.filter((row) => row.active || row.pinned).length;
+  let optionalSlots = Math.max(0, limit - requiredCount);
+  // Active and pinned sessions remain reachable without changing their
+  // relative order, even when their sort position falls outside the page.
+  return rows.filter((row) => {
+    if (row.active || row.pinned) {
+      return true;
+    }
+    if (optionalSlots === 0) {
+      return false;
+    }
+    optionalSlots -= 1;
+    return true;
+  });
+}
+
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
   : "Ctrl K";
@@ -575,10 +592,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       agents.length > 1
         ? this.sidebarRowsForAgent(this.expandedAgentId(), navigationState)
         : navigationState.visibleSessions;
-    const sections = groupSidebarSessionRows(rows.slice(0, this.visibleSessionLimit), {
-      grouping: this.sessionsGrouping,
-      knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
-    });
+    const sections = groupSidebarSessionRows(
+      limitSidebarSessionRows(rows, this.visibleSessionLimit),
+      {
+        grouping: this.sessionsGrouping,
+        knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
+      },
+    );
     return sections.flatMap((section) => {
       // Mirrors renderSessionSection: only headered sections can collapse.
       const showHeader = section.id === "pinned" || this.sessionsGrouping === "category";
@@ -1988,7 +2008,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     rows: SidebarRecentSession[],
     options: { showDraft: boolean; showFallback: boolean },
   ) {
-    const visibleRows = rows.slice(0, this.visibleSessionLimit);
+    const visibleRows = limitSidebarSessionRows(rows, this.visibleSessionLimit);
     const sections = groupSidebarSessionRows(visibleRows, {
       grouping: this.sessionsGrouping,
       // Stored-but-empty groups stay visible as sections so a freshly created
