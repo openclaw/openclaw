@@ -11,7 +11,7 @@ import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { parseSessionDiffPatch, type ParsedFilePatch } from "../../../lib/chat/session-diff.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import { renderDiffBlock, renderDiffStatChips } from "./chat-tool-cards.ts";
+import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
 
 export type SessionDiffLoader = () => Promise<SessionsDiffResult>;
 
