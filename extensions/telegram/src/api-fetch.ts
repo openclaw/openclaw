@@ -3,6 +3,7 @@ import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
+import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
 
 const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
@@ -10,6 +11,34 @@ type TelegramGetChatResponse = {
   ok?: boolean;
   result?: { id?: number | string };
 };
+
+function buildTelegramGetChatLookupSignal(params: { signal?: AbortSignal; timeoutMs?: number }): {
+  signal?: AbortSignal;
+  cleanup: () => void;
+} {
+  if (!params.timeoutMs) {
+    return { signal: params.signal, cleanup: () => {} };
+  }
+  const timeoutMs = params.timeoutMs;
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(params.signal?.reason);
+  if (params.signal?.aborted) {
+    controller.abort(params.signal.reason);
+  } else {
+    params.signal?.addEventListener("abort", onAbort, { once: true });
+  }
+  const timeout = setTimeout(() => {
+    controller.abort(new Error(`Telegram getChat lookup timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+  timeout.unref?.();
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout);
+      params.signal?.removeEventListener("abort", onAbort);
+    },
+  };
+}
 
 export function resolveTelegramChatLookupFetch(params?: {
   proxyUrl?: string;
@@ -27,12 +56,14 @@ export async function lookupTelegramChatId(params: {
   apiRoot?: string;
   proxyUrl?: string;
   network?: TelegramNetworkConfig;
+  timeoutSeconds?: unknown;
 }): Promise<string | null> {
   return fetchTelegramChatId({
     token: params.token,
     chatId: params.chatId,
     signal: params.signal,
     apiRoot: params.apiRoot,
+    timeoutSeconds: params.timeoutSeconds,
     fetchImpl: resolveTelegramChatLookupFetch({
       proxyUrl: params.proxyUrl,
       network: params.network,
@@ -46,12 +77,17 @@ export async function fetchTelegramChatId(params: {
   signal?: AbortSignal;
   apiRoot?: string;
   fetchImpl?: typeof fetch;
+  timeoutSeconds?: unknown;
 }): Promise<string | null> {
   const apiBase = resolveTelegramApiBase(params.apiRoot);
   const url = `${apiBase}/bot${params.token}/getChat?chat_id=${encodeURIComponent(params.chatId)}`;
   const fetchImpl = params.fetchImpl ?? fetch;
+  const timeout = buildTelegramGetChatLookupSignal({
+    signal: params.signal,
+    timeoutMs: resolveTelegramRequestTimeoutMs("getchat", params.timeoutSeconds),
+  });
   try {
-    const res = await fetchImpl(url, params.signal ? { signal: params.signal } : undefined);
+    const res = await fetchImpl(url, timeout.signal ? { signal: timeout.signal } : undefined);
     if (!res.ok) {
       return null;
     }
@@ -70,5 +106,7 @@ export async function fetchTelegramChatId(params: {
     return null;
   } catch {
     return null;
+  } finally {
+    timeout.cleanup();
   }
 }
