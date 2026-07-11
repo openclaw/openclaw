@@ -884,14 +884,14 @@ function legacyEntry(
   };
 }
 
-function legacySessionEvent(sessionId: string): TranscriptEvent & Record<string, unknown> {
+function legacySessionEvent(sessionId: string): TranscriptEvent {
   return { type: "session", sessionId };
 }
 
 async function writeTranscript(
   sessionsDir: string,
   sessionId: string,
-  events: Record<string, unknown>[],
+  events: TranscriptEvent[],
 ): Promise<void> {
   const body = events.map((event) => JSON.stringify(event)).join("\n");
   await fs.writeFile(path.join(sessionsDir, `${sessionId}.jsonl`), `${body}\n`, { mode: 0o600 });
