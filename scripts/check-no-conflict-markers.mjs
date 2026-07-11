@@ -8,6 +8,11 @@ import { fileURLToPath } from "node:url";
 
 const CONFLICT_MARKER_GREP_PATTERN = "^(<<<<<<< |\\|\\|\\|\\|\\|\\|\\| |=======$|>>>>>>> )";
 
+// Files larger than this are skipped rather than buffered into memory whole.
+// Conflict markers live in source-like text, and 50 MiB is well above any
+// reasonable source or generated text file that should be scanned here.
+const MAX_CONFLICT_MARKER_SCAN_BYTES = 50 * 1024 * 1024;
+
 function isBinaryBuffer(buffer) {
   return buffer.includes(0);
 }
@@ -46,11 +51,31 @@ export function listTrackedFiles(cwd = process.cwd()) {
 }
 
 /**
- * Scans files for merge conflict markers, skipping binary content.
+ * Scans files for merge conflict markers, skipping binary content and
+ * oversized files to avoid unbounded memory use.
  */
-export function findConflictMarkersInFiles(filePaths, readFile = fs.readFileSync) {
+export function findConflictMarkersInFiles(
+  filePaths,
+  readFile = fs.readFileSync,
+  statSync = fs.statSync,
+  warn = console.warn,
+  maxScanBytes = MAX_CONFLICT_MARKER_SCAN_BYTES,
+) {
   const violations = [];
   for (const filePath of filePaths) {
+    let stats;
+    try {
+      stats = statSync(filePath);
+    } catch {
+      continue;
+    }
+    if (stats.size > maxScanBytes) {
+      warn(
+        `[check-no-conflict-markers] skipping oversized file: ${filePath} (${stats.size} bytes)`,
+      );
+      continue;
+    }
+
     let content;
     try {
       content = readFile(filePath);
