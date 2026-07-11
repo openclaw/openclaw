@@ -1,21 +1,14 @@
 #!/usr/bin/env node
 // Watches dev source paths and restarts scripts/run-node.mjs when relevant
 // files change.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE } from "./lib/local-build-metadata.mjs";
 import { sleep } from "./lib/sleep.mjs";
-import {
-  isRestartRelevantRunNodePath,
-  runNodeConfigFiles,
-  runNodeSourceRoots,
-  runNodeWatchedPaths,
-} from "./run-node-watch-paths.mjs";
-import { resolveBuildRequirement, resolveRuntimePostBuildRequirement } from "./run-node.mjs";
+import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node-watch-paths.mjs";
 
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
 const WATCH_RESTART_SIGNAL = "SIGTERM";
@@ -26,8 +19,8 @@ const WATCH_LOCK_WAIT_MS = 5_000;
 const WATCH_LOCK_POLL_MS = 100;
 const WATCH_SHUTDOWN_KILL_GRACE_MS = 5_000;
 const WATCH_LOCK_DIR = path.join(".local", "watch-node");
-const WATCH_BUILD_READY_POLL_MS = 200;
-const WATCH_BUILD_READY_TIMEOUT_MS = 5 * 60 * 1000;
+const WATCH_DIST_ENTRY_POLL_MS = 1_000;
+const WATCH_DIST_ENTRY_TIMEOUT_MS = 5 * 60 * 1_000;
 const AUTO_DOCTOR_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 // The source watcher cannot import the TypeScript owner; keep this literal
 // aligned with src/commands/doctor-invocation.ts.
@@ -36,72 +29,6 @@ const DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV =
 
 const buildRunnerArgs = (args) => [WATCH_NODE_RUNNER, ...args];
 const buildDoctorRunnerArgs = () => [WATCH_NODE_RUNNER, "doctor", "--fix", "--non-interactive"];
-
-/**
- * Reason codes from resolveBuildRequirement / resolveRuntimePostBuildRequirement
- * that indicate the dist/ is physically broken — the child process cannot start.
- * Soft-staleness reasons (source_mtime_newer, git_head_changed, dirty_watched_tree,
- * config_newer, build_stamp_missing_head, build_stamp_newer, etc.) are handled by
- * run-node rebuilding on the next start, so the guard does NOT defer on them.
- */
-const HARD_BUILD_FAILURES = new Set([
-  "missing_dist_entry",
-  "missing_bundled_plugin_dist_entry",
-  "missing_private_qa_dist",
-]);
-
-const HARD_RUNTIME_FAILURES = new Set(["missing_runtime_postbuild_output"]);
-
-/**
- * Checks if the build output is ready for restart by delegating to run-node's
- * canonical readiness contract. Only defers on hard failures where the child
- * process physically cannot start (missing files). Soft staleness (source drift,
- * git HEAD change, dirty tree) is handled by run-node rebuilding on start.
- */
-const isBuildReadyForRestart = (cwd, env, fsImpl = fs) => {
-  try {
-    const distRoot = path.join(cwd, "dist");
-    const distEntry = path.join(distRoot, "entry.js");
-    const buildDeps = {
-      cwd,
-      fs: fsImpl,
-      spawnSync,
-      env,
-      distRoot,
-      distEntry,
-      buildStampPath: path.join(distRoot, BUILD_STAMP_FILE),
-      runtimePostBuildStampPath: path.join(distRoot, RUNTIME_POSTBUILD_STAMP_FILE),
-      sourceRoots: runNodeSourceRoots.map((name) => ({
-        name,
-        path: path.join(cwd, name),
-      })),
-      configFiles: runNodeConfigFiles.map((filePath) => path.join(cwd, filePath)),
-    };
-    const buildReq = resolveBuildRequirement(buildDeps);
-    if (buildReq.shouldBuild) {
-      if (HARD_BUILD_FAILURES.has(buildReq.reason)) {
-        return false;
-      }
-      // resolveBuildRequirement checks missing_build_stamp before
-      // missing_dist_entry. When both stamp and entry are absent the
-      // reason is missing_build_stamp (soft) even though the entry is
-      // also gone (hard failure). Verify entry existence directly.
-      if (buildReq.reason === "missing_build_stamp") {
-        try {
-          if (!fsImpl.existsSync(distEntry)) {
-            return false;
-          }
-        } catch {
-          return false;
-        }
-      }
-    }
-    const runtimeReq = resolveRuntimePostBuildRequirement(buildDeps);
-    return !(runtimeReq.shouldSync && HARD_RUNTIME_FAILURES.has(runtimeReq.reason));
-  } catch {
-    return false;
-  }
-};
 
 const normalizePath = (filePath) =>
   String(filePath ?? "")
@@ -325,6 +252,7 @@ const releaseWatchLock = (lockHandle) => {
  *   cwd?: string;
  *   args?: string[];
  *   env?: NodeJS.ProcessEnv;
+ *   fs?: Pick<typeof fs, "existsSync">;
  *   now?: () => number;
  *   sleep?: (ms: number) => Promise<void>;
  *   signalProcess?: (pid: number, signal: string | number) => void;
@@ -372,6 +300,7 @@ export async function runWatchMain(params = {}) {
     let settled = false;
     let shuttingDown = false;
     let restartRequested = false;
+    let deferredRestartGeneration = 0;
     let deferredRestartActive = false;
     let watchProcess = null;
     let watcher = null;
@@ -477,31 +406,26 @@ export async function runWatchMain(params = {}) {
         if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal)) {
           forceKillWatchProcessGroup(exitedProcess);
           restartRequested = false;
-          // #99603: when the child exited during a deferred restart (build
-          // not ready), wait for build readiness instead of restarting
-          // immediately into a potentially broken dist.
-          // Skip in test mode to preserve existing test behavior.
-          const isTestMode = deps.env.OPENCLAW_WATCH_MODE === "test";
-          if (!isTestMode && !isBuildReadyForRestart(deps.cwd, deps.env, deps.fs)) {
-            logWatcher(
-              "Child exited during deferred restart but build output is not ready; waiting.",
-              deps,
-            );
-            deferUntilBuildReady(
-              () => {
-                logWatcher("Build output ready after child exit; restarting.", deps);
-                startRunner();
+          deferredRestartGeneration += 1;
+          deferredRestartActive = false;
+          if (!hasDistEntry()) {
+            deferredRestartActive = true;
+            const generation = deferredRestartGeneration;
+            logWatcher("Watcher child exited mid-build; waiting for the build entry.", deps);
+            deferRestartUntilDistEntryExists({
+              generation,
+              targetProcess: null,
+              onReady: () => {
+                if (!watchProcess) {
+                  startRunner();
+                }
               },
-              () => {
-                logWatcher(
-                  `Build output still not ready after ${WATCH_BUILD_READY_TIMEOUT_MS}ms ` +
-                    "after child exit; restarting anyway (bounded recovery).",
-                  deps,
-                );
-                startRunner();
+              onTimeout: () => {
+                logWatcher("Build entry wait timed out; starting run-node recovery.", deps);
+                if (!watchProcess) {
+                  startRunner();
+                }
               },
-            ).catch(() => {
-              startRunner();
             });
             return;
           }
@@ -594,20 +518,46 @@ export async function runWatchMain(params = {}) {
       });
     };
 
-    // Shared readiness polling loop for both the requestRestart and
-    // child-exit deferral paths. Calls onReady when the build is ready,
-    // onTimeout after WATCH_BUILD_READY_TIMEOUT_MS. Errors fall through
-    // to the caller's catch handler.
-    const deferUntilBuildReady = async (onReady, onTimeout) => {
-      const startedAt = deps.now();
-      while (!isBuildReadyForRestart(deps.cwd, deps.env, deps.fs)) {
-        if (deps.now() - startedAt > WATCH_BUILD_READY_TIMEOUT_MS) {
-          onTimeout();
-          return;
+    const hasDistEntry = () => deps.fs.existsSync(path.join(deps.cwd, "dist", "entry.js"));
+
+    const deferRestartUntilDistEntryExists = ({
+      generation,
+      targetProcess,
+      onReady,
+      onTimeout,
+    }) => {
+      void (async () => {
+        const deadline = deps.now() + WATCH_DIST_ENTRY_TIMEOUT_MS;
+        while (true) {
+          if (
+            generation !== deferredRestartGeneration ||
+            settled ||
+            shuttingDown ||
+            (targetProcess && (!restartRequested || watchProcess !== targetProcess))
+          ) {
+            return;
+          }
+          await deps.sleep(WATCH_DIST_ENTRY_POLL_MS);
+          if (
+            generation !== deferredRestartGeneration ||
+            settled ||
+            shuttingDown ||
+            (targetProcess && (!restartRequested || watchProcess !== targetProcess))
+          ) {
+            return;
+          }
+          if (hasDistEntry()) {
+            deferredRestartActive = false;
+            onReady();
+            return;
+          }
+          if (deps.now() >= deadline) {
+            deferredRestartActive = false;
+            onTimeout();
+            return;
+          }
         }
-        await deps.sleep(WATCH_BUILD_READY_POLL_MS);
-      }
-      onReady();
+      })();
     };
 
     const requestRestart = (changedPath) => {
@@ -615,54 +565,35 @@ export async function runWatchMain(params = {}) {
         return;
       }
       if (!watchProcess) {
+        if (deferredRestartActive) {
+          return;
+        }
         startRunner();
         return;
       }
       restartRequested = true;
 
-      // #99603 fix: Check if build output exists before restarting.
-      // If dist/entry.js is missing (mid-rebuild state), wait for it to appear
-      // before sending SIGTERM to avoid crash-loop.
-      // Skip this check in test mode to preserve existing test behavior.
-      const isTestMode = deps.env.OPENCLAW_WATCH_MODE === "test";
-      if (!isTestMode && !isBuildReadyForRestart(deps.cwd, deps.env, deps.fs)) {
-        // Single-flight: only one deferral loop runs at a time. Additional
-        // change events during deferral are coalesced into the active loop.
-        if (deferredRestartActive) {
-          return;
+      // A separate build can temporarily remove dist while this healthy child is
+      // still serving. Keep it alive until run-node can take ownership safely.
+      if (!hasDistEntry()) {
+        if (!deferredRestartActive) {
+          deferredRestartActive = true;
+          deferredRestartGeneration += 1;
+          logWatcher("Build entry missing; keeping watcher child alive until it returns.", deps);
+          const targetProcess = watchProcess;
+          deferRestartUntilDistEntryExists({
+            generation: deferredRestartGeneration,
+            targetProcess,
+            onReady: () => {
+              logWatcher("Build entry restored; restarting watcher child.", deps);
+              signalWatchProcess(targetProcess, WATCH_RESTART_SIGNAL);
+            },
+            onTimeout: () => {
+              restartRequested = false;
+              logWatcher("Build entry wait timed out; keeping the healthy watcher child.", deps);
+            },
+          });
         }
-        deferredRestartActive = true;
-        logWatcher(
-          "Build output not ready (dist/entry.js missing or stale); waiting before restart.",
-          deps,
-        );
-        const clearDeferral = () => {
-          deferredRestartActive = false;
-        };
-        deferUntilBuildReady(
-          () => {
-            clearDeferral();
-            logWatcher("Build output ready; proceeding with restart.", deps);
-            if (restartRequested && watchProcess && typeof watchProcess.kill === "function") {
-              signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
-            } else if (!restartRequested) {
-              logWatcher("Restart already handled by exit handler; skipping duplicate kill.", deps);
-            }
-          },
-          () => {
-            clearDeferral();
-            restartRequested = false;
-            logWatcher(
-              `Build output still not ready after ${WATCH_BUILD_READY_TIMEOUT_MS}ms; giving up. ` +
-                "The current process is still running. A future file change will retry the restart.",
-              deps,
-            );
-          },
-        ).catch(() => {
-          clearDeferral();
-          restartRequested = false;
-          logWatcher("Error polling build readiness; giving up.", deps);
-        });
         return;
       }
 
