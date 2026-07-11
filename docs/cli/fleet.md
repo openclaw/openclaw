@@ -151,6 +151,8 @@ openclaw fleet upgrade acme --image ghcr.io/openclaw/openclaw:<version>
 
 Upgrade pulls the target image, inspects the existing container and per-cell network, stops and removes the container, then recreates and starts it. The replacement preserves the same host port, data directories, per-cell bridge network, runtime profile, resource limits, restart policy, Fleet-managed environment, and values originally supplied with `--env`. Mounted state survives container replacement; image-default environment can change with the target image.
 
+The replacement is committed only after its Gateway answers `/healthz` on the cell's loopback port, matching the health contract the official compose file uses. A replacement that exits, crash-loops, or fails to become healthy within about a minute is removed and the previous container is restored, so a broken image does not take down a working cell.
+
 The Gateway token is intentionally not stored in the fleet registry. Before removing the old container, Fleet reads its environment and carries `OPENCLAW_GATEWAY_TOKEN` into the replacement. Do not manually remove the old container before an upgrade if the token exists nowhere else you control.
 
 ## `fleet rm`

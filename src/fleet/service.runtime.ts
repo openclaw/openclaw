@@ -55,6 +55,11 @@ import {
 
 const OFFICIAL_IMAGE_UID = 1_000;
 const OFFICIAL_IMAGE_GID = 1_000;
+// Mirrors the compose healthcheck contract: an upgrade commits only after /healthz
+// answers. The deadline bounds how long a broken image can hold the cell before
+// restore without rolling back slow-booting cells prematurely.
+const UPGRADE_VERIFY_TIMEOUT_MS = 60_000;
+const UPGRADE_VERIFY_POLL_MS = 1_000;
 
 export type FleetCreateOptions = {
   tenant: string;
@@ -128,6 +133,7 @@ export type FleetServiceOptions = {
   generateAttemptId?: () => string;
   getuid?: () => number | undefined;
   getgid?: () => number | undefined;
+  sleep?: (ms: number) => Promise<void>;
   selinuxEnabled?: () => Promise<boolean>;
   updateImage?: typeof updateFleetCellImage;
 };
@@ -142,6 +148,12 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     options.generateAttemptId ?? (() => crypto.randomBytes(16).toString("hex"));
   const getuid = options.getuid ?? (() => process.getuid?.());
   const getgid = options.getgid ?? (() => process.getgid?.());
+  const sleep =
+    options.sleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   const selinuxEnabled = options.selinuxEnabled ?? detectHostSelinux;
   const updateImage = options.updateImage ?? updateFleetCellImage;
 
@@ -477,20 +489,33 @@ export function createFleetService(options: FleetServiceOptions = {}) {
             await containers.remove(record.runtime, record.containerName, false);
             checkpoint();
             await containers.run(nextProfile, true);
-            // `run -d` succeeds once the container launches; verify the replacement is the
-            // expected attempt and still running so a crash-looping image restores the old
-            // cell instead of being committed. Deeper liveness stays with `fleet status`.
-            const replacement = await containers.inspect(record.runtime, record.containerName);
-            if (
-              replacement.kind !== "ok" ||
-              replacement.labels[FLEET_ATTEMPT_LABEL] !== nextAttemptId ||
-              !replacement.running
-            ) {
-              throw new Error(
-                replacement.kind === "ok"
-                  ? "Replacement cell container is not running after upgrade."
-                  : "Replacement cell container could not be verified after upgrade.",
-              );
+            // `run -d` succeeds once the container launches, and a broken image can stay
+            // "running" briefly before crashing. Commit only after the replacement answers
+            // /healthz (the image's compose health contract): exit/restart-loop fails fast,
+            // and the deadline restores the old cell instead of leaving a dead replacement.
+            const verifyDeadline = now() + UPGRADE_VERIFY_TIMEOUT_MS;
+            for (;;) {
+              const replacement = await containers.inspect(record.runtime, record.containerName);
+              if (
+                replacement.kind !== "ok" ||
+                replacement.labels[FLEET_ATTEMPT_LABEL] !== nextAttemptId ||
+                !replacement.running
+              ) {
+                throw new Error(
+                  replacement.kind === "ok"
+                    ? "Replacement cell container is not running after upgrade."
+                    : "Replacement cell container could not be verified after upgrade.",
+                );
+              }
+              const health = await probeCellHealth({ port: record.hostPort, fetchImpl });
+              if (health.status === "ok") {
+                break;
+              }
+              if (now() >= verifyDeadline) {
+                throw new Error("Replacement cell container did not become healthy after upgrade.");
+              }
+              checkpoint();
+              await sleep(UPGRADE_VERIFY_POLL_MS);
             }
             checkpoint();
             updateImage(env, record.tenantId, image);

@@ -311,6 +311,7 @@ describe("fleet service", () => {
     const service = createFleetService({
       env,
       containers: containers.runtime,
+      fetch: vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
       now: () => 1000,
       generateAttemptId: () => NEXT_ATTEMPT_ID,
     });
@@ -391,6 +392,7 @@ describe("fleet service", () => {
     const service = createFleetService({
       env,
       containers: containers.runtime,
+      fetch: vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
       now: () => 1000,
       generateAttemptId: () => NEXT_ATTEMPT_ID,
       updateImage: () => {
@@ -433,6 +435,65 @@ describe("fleet service", () => {
       .mockResolvedValueOnce(runningInspection())
       .mockResolvedValueOnce(crashLooping)
       .mockResolvedValueOnce(crashLooping);
+
+    await expect(service.upgrade("acme")).rejects.toThrow(/previous container was restored/iu);
+
+    expect(containers.run).toHaveBeenCalledTimes(2);
+    expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
+    expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:latest");
+  });
+
+  it("restores the previous cell when the replacement crashes after starting", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({
+      env,
+      containers: containers.runtime,
+      fetch: vi.fn<typeof fetch>(async () => {
+        throw new Error("connect ECONNREFUSED");
+      }),
+      sleep: async () => {},
+      now: () => 1000,
+      generateAttemptId: () => NEXT_ATTEMPT_ID,
+    });
+    await service.create({ tenant: "acme", gatewayToken: "old-token" });
+    containers.run.mockClear();
+    const crashed = runningInspection({
+      labels: fleetLabels("acme", NEXT_ATTEMPT_ID),
+      state: "exited",
+      running: false,
+    });
+    containers.inspect
+      .mockResolvedValueOnce(runningInspection())
+      .mockResolvedValueOnce(runningInspection({ labels: fleetLabels("acme", NEXT_ATTEMPT_ID) }))
+      .mockResolvedValueOnce(crashed)
+      .mockResolvedValueOnce(crashed);
+
+    await expect(service.upgrade("acme")).rejects.toThrow(/previous container was restored/iu);
+
+    expect(containers.run).toHaveBeenCalledTimes(2);
+    expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
+    expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:latest");
+  });
+
+  it("restores the previous cell when the replacement never becomes healthy", async () => {
+    const containers = createContainerMock();
+    let clock = 0;
+    const service = createFleetService({
+      env,
+      containers: containers.runtime,
+      fetch: vi.fn<typeof fetch>(async () => new Response(null, { status: 503 })),
+      sleep: async () => {},
+      now: () => (clock += 50_000),
+      generateAttemptId: () => NEXT_ATTEMPT_ID,
+    });
+    await service.create({ tenant: "acme", gatewayToken: "old-token" });
+    containers.run.mockClear();
+    const hung = runningInspection({ labels: fleetLabels("acme", NEXT_ATTEMPT_ID) });
+    containers.inspect
+      .mockResolvedValueOnce(runningInspection())
+      .mockResolvedValueOnce(hung)
+      .mockResolvedValueOnce(hung)
+      .mockResolvedValueOnce(hung);
 
     await expect(service.upgrade("acme")).rejects.toThrow(/previous container was restored/iu);
 
