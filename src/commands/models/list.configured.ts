@@ -1,4 +1,6 @@
 /** Resolves configured model refs and tags for model-list rows. */
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../../agents/model-ref-shared.js";
 import {
   buildModelAliasIndex,
   resolveConfiguredModelRef,
@@ -10,16 +12,65 @@ import {
 } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import type { ListRowModel } from "./list.model-row.js";
 import type { ConfiguredEntry } from "./list.types.js";
-import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER, modelKey } from "./shared.js";
+import {
+  createModelCatalogProviderAliasCanonicalizer,
+  type ModelCatalogProviderAliasCanonicalizer,
+} from "./provider-aliases.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./shared.js";
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
+
+export type ConfiguredProviderCandidate = {
+  model: ListRowModel;
+  explicitApi: boolean;
+};
+
+/** Builds the canonical configured-provider rows once for every list source. */
+export function resolveConfiguredProviderCandidates(
+  cfg: OpenClawConfig,
+  canonicalize: ModelCatalogProviderAliasCanonicalizer,
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+): Map<string, ConfiguredProviderCandidate> {
+  const candidates = new Map<string, ConfiguredProviderCandidate>();
+  for (const [rawProvider, providerConfig] of Object.entries(cfg.models?.providers ?? {})) {
+    const provider = canonicalize.provider(rawProvider);
+    for (const model of providerConfig.models ?? []) {
+      const id = normalizeConfiguredProviderCatalogModelId(provider, model.id, {
+        manifestPlugins: metadataSnapshot?.manifestRegistry.plugins,
+      });
+      const key = canonicalize.key(provider, id);
+      // Config order decides alias/case collisions so every source sees one stable row.
+      if (candidates.has(key)) {
+        continue;
+      }
+      const input = model.input?.filter((item) => item === "text" || item === "image") ?? [];
+      candidates.set(key, {
+        model: {
+          provider,
+          id,
+          name: model.name ?? model.id,
+          baseUrl: model.baseUrl ?? providerConfig.baseUrl,
+          input: input.length > 0 ? input : ["text"],
+          contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+          contextTokens: model.contextTokens,
+        },
+        explicitApi: providerConfig.api !== undefined || model.api !== undefined,
+      });
+    }
+  }
+  return candidates;
+}
 
 /** Returns canonical configured model entries with default/fallback/image/configured tags. */
 export function resolveConfiguredEntries(
   cfg: OpenClawConfig,
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+  canonicalizeProviderAlias = createModelCatalogProviderAliasCanonicalizer({
+    cfg,
+    metadataSnapshot,
+  }),
 ) {
   const resolvedDefault = resolveConfiguredModelRef({
     cfg,
@@ -32,39 +83,29 @@ export function resolveConfiguredEntries(
     defaultProvider: DEFAULT_PROVIDER,
     ...DISPLAY_MODEL_PARSE_OPTIONS,
   });
-  const order: string[] = [];
+  const order: Array<{ key: string; ref: { provider: string; model: string } }> = [];
   const tagsByKey = new Map<string, Set<string>>();
   const aliasesByKey = new Map<string, string[]>();
-  const canonicalizeProviderAlias = createModelCatalogProviderAliasCanonicalizer({
-    cfg,
-    metadataSnapshot,
-  });
-
   for (const [key, aliases] of aliasIndex.byKey.entries()) {
-    aliasesByKey.set(key, aliases);
+    const canonicalKey = canonicalizeProviderAlias.keyFromString(key);
+    aliasesByKey.set(canonicalKey, [
+      ...new Set([...(aliasesByKey.get(canonicalKey) ?? []), ...aliases]),
+    ]);
   }
 
   const addEntry = (ref: { provider: string; model: string }, tag: string) => {
     const canonicalRef = canonicalizeProviderAlias.ref(ref);
-    const key = modelKey(canonicalRef.provider, canonicalRef.model);
-    const originalKey = modelKey(ref.provider, ref.model);
-    if (originalKey !== key) {
-      // Preserve aliases attached to pre-canonical provider keys so display rows
-      // still show user-facing aliases after catalog provider canonicalization.
-      const aliases = aliasesByKey.get(originalKey);
-      if (aliases) {
-        aliasesByKey.set(key, [...new Set([...(aliasesByKey.get(key) ?? []), ...aliases])]);
-      }
-    }
+    const key = canonicalizeProviderAlias.key(canonicalRef.provider, canonicalRef.model);
     if (!tagsByKey.has(key)) {
       tagsByKey.set(key, new Set());
-      order.push(key);
+      order.push({ key, ref: canonicalRef });
     }
     tagsByKey.get(key)?.add(tag);
   };
 
   const addResolvedModelRef = (raw: string, tag: string) => {
     const resolved = resolveModelRefFromString({
+      cfg,
       raw,
       defaultProvider: DEFAULT_PROVIDER,
       aliasIndex,
@@ -110,13 +151,10 @@ export function resolveConfiguredEntries(
     addEntry(resolved.ref, "configured");
   }
 
-  const entries: ConfiguredEntry[] = order.map((key) => {
-    const slash = key.indexOf("/");
-    const provider = slash === -1 ? key : key.slice(0, slash);
-    const model = slash === -1 ? "" : key.slice(slash + 1);
+  const entries: ConfiguredEntry[] = order.map(({ key, ref }) => {
     return {
       key,
-      ref: { provider, model },
+      ref,
       tags: tagsByKey.get(key) ?? new Set(),
       aliases: aliasesByKey.get(key) ?? [],
     } satisfies ConfiguredEntry;

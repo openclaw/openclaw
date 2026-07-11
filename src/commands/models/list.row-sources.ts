@@ -178,6 +178,15 @@ export async function appendConfiguredModelRowSources(params: {
   modelRegistry?: ModelRegistry;
   context: RowBuilderContext;
 }): Promise<void> {
+  if (params.context.cfg.models?.mode === "replace") {
+    await appendConfiguredProviderRows({
+      rows: params.rows,
+      context: params.context,
+      seenKeys: new Set(),
+      includeImplicitTransport: true,
+    });
+    return;
+  }
   await appendConfiguredRows(params);
   const seenKeys = new Set(params.rows.map((row) => row.key));
   await appendConfiguredProviderRows({

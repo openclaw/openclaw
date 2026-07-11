@@ -50,7 +50,10 @@ describe("resolveConfiguredEntries", () => {
     const { entries } = resolveConfiguredEntries({
       agents: {
         defaults: {
-          model: { primary: "kilocode/google/gemini-3-pro-preview" },
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["kilocode/google/gemini-3-pro-preview"],
+          },
           models: {
             "kilocode/google/gemini-3-pro-preview": { alias: "Kilo Gemini" },
           },
@@ -77,9 +80,12 @@ describe("resolveConfiguredEntries", () => {
       },
     });
 
-    expect(entries.map((entry) => entry.key)).toEqual(["kilocode/google/gemini-3.1-pro-preview"]);
-    expect(entries[0]?.aliases).toEqual(["Kilo Gemini"]);
-    expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
+    expect(entries.map((entry) => entry.key)).toEqual([
+      "openai/gpt-5.5",
+      "kilocode/google/gemini-3.1-pro-preview",
+    ]);
+    expect(entries[1]?.aliases).toEqual(["Kilo Gemini"]);
+    expect(entries[1]?.tags).toEqual(new Set(["fallback#1", "configured"]));
   });
   it("treats provider wildcard defaults as selectors, not configured model rows", () => {
     const { entries } = resolveConfiguredEntries({
@@ -118,6 +124,29 @@ describe("resolveConfiguredEntries", () => {
     expect(entries.map((entry) => entry.key)).toEqual(["zai/glm-4.7"]);
     expect(entries[0]?.aliases).toEqual(["GLM"]);
     expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
+  });
+
+  it("preserves manifest aliases that select a distinct transport", () => {
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+
+    const { entries } = resolveConfiguredEntries({
+      agents: {
+        defaults: {
+          model: {
+            primary: "azure-openai-responses/gpt-5.4",
+            fallbacks: ["openai/gpt-5.4"],
+          },
+        },
+      },
+      models: { providers: {} },
+    });
+
+    expect(entries.map((entry) => entry.key)).toEqual([
+      "azure-openai-responses/gpt-5.4",
+      "openai/gpt-5.4",
+    ]);
+    expect(entries[0]?.tags).toEqual(new Set(["default"]));
+    expect(entries[1]?.tags).toEqual(new Set(["fallback#1"]));
   });
 
   it("recovers bundled source aliases when stale dist metadata omits them", () => {

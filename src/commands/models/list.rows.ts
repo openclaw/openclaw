@@ -1,12 +1,10 @@
 /** Row builders used by `openclaw models list` source orchestration. */
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   shouldSuppressBuiltInModel,
   shouldSuppressBuiltInModelFromManifest,
 } from "../../agents/model-suppression.js";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
@@ -15,12 +13,12 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { normalizeProviderResolvedModelWithPlugin } from "../../plugins/provider-runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ModelListAuthIndex } from "./list.auth-index.js";
+import type { ConfiguredProviderCandidate } from "./list.configured.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
 import type { ListRowModel } from "./list.model-row.js";
 import { toModelRow } from "./list.model-row.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
-import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
-import { modelKey } from "./shared.js";
+import type { ModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 
 type ConfiguredByKey = Map<string, ConfiguredEntry>;
 type ModelCatalogModule = typeof import("../../agents/model-catalog.js");
@@ -39,10 +37,12 @@ export type RowBuilderContext = {
   authIndex: ModelListAuthIndex;
   availableKeys?: Set<string>;
   configuredByKey: ConfiguredByKey;
+  configuredProviderCandidates: Map<string, ConfiguredProviderCandidate>;
   discoveredKeys: Set<string>;
   filter: RowFilter;
   skipRuntimeModelSuppression?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
+  rowIdentity: ModelCatalogProviderAliasCanonicalizer;
   workspaceDir?: string;
 };
 
@@ -73,11 +73,7 @@ function matchesProviderFilter(context: RowBuilderContext, provider: string): bo
   if (!providerFilter) {
     return true;
   }
-  const canonicalProvider = canonicalizeModelCatalogProviderAlias(provider, {
-    cfg: context.cfg,
-    metadataSnapshot: context.metadataSnapshot,
-  });
-  return normalizeProviderId(canonicalProvider) === providerFilter;
+  return context.rowIdentity.provider(provider) === providerFilter;
 }
 
 function matchesRowFilter(
@@ -100,10 +96,11 @@ async function buildRow(params: {
   allowProviderAvailabilityFallback?: boolean;
 }): Promise<ModelRow> {
   const configured = params.context.configuredByKey.get(params.key);
+  const sourceProvider = params.key.split("/", 1)[0] ?? params.model.provider;
   const allowProviderAvailabilityFallback =
     params.allowProviderAvailabilityFallback === true ||
     (configured !== undefined &&
-      params.context.authIndex.allowsProviderAuthAvailabilityFallback(params.model.provider));
+      params.context.authIndex.allowsProviderAuthAvailabilityFallback(sourceProvider));
   const shouldResolveProviderAuth =
     params.context.availableKeys === undefined || allowProviderAvailabilityFallback;
   return toModelRow({
@@ -114,7 +111,7 @@ async function buildRow(params: {
     availableKeys: params.context.availableKeys,
     allowProviderAvailabilityFallback,
     hasAuthForProvider: shouldResolveProviderAuth
-      ? (provider) => params.context.authIndex.hasProviderAuth(provider)
+      ? () => params.context.authIndex.hasProviderAuth(sourceProvider)
       : undefined,
   });
 }
@@ -209,33 +206,6 @@ async function appendVisibleRow(params: {
   return true;
 }
 
-function resolveConfiguredModelInput(params: {
-  model: Partial<ModelDefinitionConfig>;
-}): Array<"text" | "image"> {
-  const input = Array.isArray(params.model.input)
-    ? params.model.input.filter(
-        (item): item is "text" | "image" => item === "text" || item === "image",
-      )
-    : [];
-  return input.length > 0 ? input : ["text"];
-}
-
-function toConfiguredProviderListModel(params: {
-  provider: string;
-  providerConfig: Partial<ModelProviderConfig>;
-  model: Partial<ModelDefinitionConfig> & Pick<ModelDefinitionConfig, "id">;
-}): ListRowModel {
-  return {
-    provider: params.provider,
-    id: params.model.id,
-    name: params.model.name ?? params.model.id,
-    baseUrl: params.model.baseUrl ?? params.providerConfig.baseUrl,
-    input: resolveConfiguredModelInput({ model: params.model }),
-    contextWindow: params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-    contextTokens: params.model.contextTokens,
-  };
-}
-
 function toListRowInput(input: readonly string[] | undefined): ListRowModel["input"] {
   const parsed = input?.filter(
     (item): item is ListRowModel["input"][number] =>
@@ -259,37 +229,12 @@ function toManifestCatalogListModel(
   };
 }
 
-function shouldListConfiguredProviderModel(params: {
-  providerConfig: Partial<ModelProviderConfig>;
-  model: Partial<ModelDefinitionConfig>;
-}): boolean {
-  return params.providerConfig.api !== undefined || params.model.api !== undefined;
-}
-
-function findConfiguredProviderModel(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  modelId: string;
-}): ListRowModel | undefined {
-  const providerConfig = params.cfg.models?.providers?.[params.provider];
-  const configuredModel = providerConfig?.models?.find((model) => model.id === params.modelId);
-  if (!providerConfig || !configuredModel) {
-    return undefined;
-  }
-  return toConfiguredProviderListModel({
-    provider: params.provider,
-    providerConfig,
-    model: configuredModel,
-  });
-}
-
-function toFallbackConfiguredListModel(entry: ConfiguredEntry, cfg: OpenClawConfig): ListRowModel {
+function toFallbackConfiguredListModel(
+  entry: ConfiguredEntry,
+  context: RowBuilderContext,
+): ListRowModel {
   return (
-    findConfiguredProviderModel({
-      cfg,
-      provider: entry.ref.provider,
-      modelId: entry.ref.model,
-    }) ?? {
+    context.configuredProviderCandidates.get(entry.key)?.model ?? {
       provider: entry.ref.provider,
       id: entry.ref.model,
       name: entry.ref.model,
@@ -322,7 +267,7 @@ export async function appendDiscoveredRows(params: {
   });
 
   for (const model of sorted) {
-    const key = modelKey(model.provider, model.id);
+    const key = params.context.rowIdentity.key(model.provider, model.id);
     const resolvedModel =
       params.modelRegistry && modelResolver
         ? modelResolver({
@@ -334,7 +279,8 @@ export async function appendDiscoveredRows(params: {
           })
         : undefined;
     const rowModel =
-      resolvedModel && modelKey(resolvedModel.provider, resolvedModel.id) === key
+      resolvedModel &&
+      params.context.rowIdentity.key(resolvedModel.provider, resolvedModel.id) === key
         ? resolvedModel
         : model;
     await appendVisibleRow({
@@ -355,30 +301,21 @@ export async function appendConfiguredProviderRows(params: {
   rows: ModelRow[];
   context: RowBuilderContext;
   seenKeys: Set<string>;
+  includeImplicitTransport?: boolean;
 }): Promise<void> {
-  for (const [provider, providerConfig] of Object.entries(
-    params.context.cfg.models?.providers ?? {},
-  )) {
-    for (const configuredModel of providerConfig.models ?? []) {
-      if (!shouldListConfiguredProviderModel({ providerConfig, model: configuredModel })) {
-        continue;
-      }
-      const key = modelKey(provider, configuredModel.id);
-      const model = toConfiguredProviderListModel({
-        provider,
-        providerConfig,
-        model: configuredModel,
-      });
-      await appendVisibleRow({
-        rows: params.rows,
-        model,
-        key,
-        context: params.context,
-        seenKeys: params.seenKeys,
-        allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
-        normalizeWithProviderPlugin: true,
-      });
+  for (const [key, candidate] of params.context.configuredProviderCandidates) {
+    if (!params.includeImplicitTransport && !candidate.explicitApi) {
+      continue;
     }
+    await appendVisibleRow({
+      rows: params.rows,
+      model: candidate.model,
+      key,
+      context: params.context,
+      seenKeys: params.seenKeys,
+      allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
+      normalizeWithProviderPlugin: true,
+    });
   }
 }
 
@@ -395,10 +332,12 @@ export async function appendAuthenticatedCatalogRows(params: {
     metadataSnapshot: params.context.metadataSnapshot,
   });
   for (const entry of catalog) {
-    if (!params.context.authIndex.hasProviderAuth(entry.provider)) {
+    if (
+      !params.context.authIndex.hasProviderAuth(params.context.rowIdentity.provider(entry.provider))
+    ) {
       continue;
     }
-    const key = modelKey(entry.provider, entry.id);
+    const key = params.context.rowIdentity.key(entry.provider, entry.id);
     await appendVisibleRow({
       rows: params.rows,
       model: toManifestCatalogListModel(entry),
@@ -419,7 +358,7 @@ export async function appendModelCatalogRows(params: {
 }): Promise<number> {
   let appended = 0;
   for (const catalogRow of params.catalogRows) {
-    const key = modelKey(catalogRow.provider, catalogRow.id);
+    const key = params.context.rowIdentity.key(catalogRow.provider, catalogRow.id);
     if (
       await appendVisibleRow({
         rows: params.rows,
@@ -469,7 +408,7 @@ export async function appendCatalogSupplementRows(params: {
     if (!matchesProviderFilter(params.context, entry.provider)) {
       continue;
     }
-    const key = modelKey(entry.provider, entry.id);
+    const key = params.context.rowIdentity.key(entry.provider, entry.id);
     if (params.seenKeys.has(key)) {
       continue;
     }
@@ -524,7 +463,7 @@ export async function appendProviderCatalogRows(params: {
     });
   }
   for (const model of catalogModels) {
-    const key = modelKey(model.provider, model.id);
+    const key = params.context.rowIdentity.key(model.provider, model.id);
     if (
       await appendVisibleRow({
         rows: params.rows,
@@ -563,7 +502,7 @@ export async function appendConfiguredRows(params: {
             modelRegistry: params.modelRegistry,
             cfg: params.context.cfg,
           })
-        : toFallbackConfiguredListModel(entry, params.context.cfg);
+        : toFallbackConfiguredListModel(entry, params.context);
     const model = resolvedModel
       ? normalizeListRowWithProviderPlugin({ model: resolvedModel, context: params.context })
       : resolvedModel;
@@ -578,8 +517,8 @@ export async function appendConfiguredRows(params: {
     }
     const allowProviderAvailabilityFallback =
       model &&
-      (!params.context.discoveredKeys.has(modelKey(model.provider, model.id)) ||
-        params.context.authIndex.allowsProviderAuthAvailabilityFallback(model.provider));
+      (!params.context.discoveredKeys.has(entry.key) ||
+        params.context.authIndex.allowsProviderAuthAvailabilityFallback(entry.ref.provider));
     const shouldResolveProviderAuth =
       model && (params.context.availableKeys === undefined || allowProviderAvailabilityFallback);
     params.rows.push(
@@ -591,7 +530,7 @@ export async function appendConfiguredRows(params: {
         availableKeys: params.context.availableKeys,
         allowProviderAvailabilityFallback: allowProviderAvailabilityFallback === true,
         hasAuthForProvider: shouldResolveProviderAuth
-          ? (provider) => params.context.authIndex.hasProviderAuth(provider)
+          ? () => params.context.authIndex.hasProviderAuth(entry.ref.provider)
           : undefined,
       }),
     );
