@@ -88,12 +88,12 @@ export function bindPayloadColumns(
       payload_allow_unsafe_external_content: null,
       payload_external_content_source_json: null,
       payload_light_context: null,
-      payload_tools_allow_json: null,
+      payload_tools_allow_json: serializeJson(payload.toolsAllow),
       payload_tools_allow_is_default: null,
     };
   }
   if (payload.kind === "command") {
-    const { timeoutSeconds: _timeoutSeconds, ...payloadMessage } = payload;
+    const { timeoutSeconds: _timeoutSeconds, toolsAllow: _toolsAllow, ...payloadMessage } = payload;
     return {
       payload_kind: "command",
       payload_message: serializeJson(payloadMessage),
@@ -104,7 +104,7 @@ export function bindPayloadColumns(
       payload_allow_unsafe_external_content: null,
       payload_external_content_source_json: null,
       payload_light_context: null,
-      payload_tools_allow_json: null,
+      payload_tools_allow_json: serializeJson(payload.toolsAllow),
       payload_tools_allow_is_default: null,
     };
   }
@@ -128,7 +128,15 @@ export function bindPayloadColumns(
 /** Reconstructs cron payload variants from SQLite columns, returning null for invalid rows. */
 export function payloadFromRow(row: CronJobRow): CronPayload | null {
   if (row.payload_kind === "systemEvent") {
-    return row.payload_message == null ? null : { kind: "systemEvent", text: row.payload_message };
+    if (row.payload_message == null) {
+      return null;
+    }
+    const toolsAllow = parseJsonArray(row.payload_tools_allow_json);
+    return {
+      kind: "systemEvent",
+      text: row.payload_message,
+      ...(toolsAllow ? { toolsAllow } : {}),
+    };
   }
   if (row.payload_kind === "agentTurn") {
     if (row.payload_message == null) {
@@ -174,10 +182,12 @@ export function payloadFromRow(row: CronJobRow): CronPayload | null {
       return null;
     }
     const timeoutSeconds = normalizeNumber(row.payload_timeout_seconds);
+    const toolsAllow = parseJsonArray(row.payload_tools_allow_json);
     return {
       kind: "command",
       ...command,
       ...(timeoutSeconds != null ? { timeoutSeconds } : {}),
+      ...(toolsAllow ? { toolsAllow } : {}),
     };
   }
   return null;

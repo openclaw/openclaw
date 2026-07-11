@@ -622,6 +622,47 @@ describe("cron store", () => {
     });
   });
 
+  it("round-trips a trigger-script systemEvent tool cap through SQLite", async () => {
+    // A restart reloads jobs from SQLite; the trigger evaluator reads
+    // job.payload.toolsAllow, so dropping the cap here re-grants the full tool
+    // surface to a restricted caller's trigger after reboot.
+    const store = await makeStorePath();
+    const payload = makeStore("trigger-system-event-cap", true);
+    payload.jobs[0].trigger = { script: "return { fire: false }" };
+    payload.jobs[0].payload = {
+      kind: "systemEvent",
+      text: "changed",
+      toolsAllow: ["read", "cron"],
+    };
+
+    await saveCronStore(store.storePath, payload);
+
+    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toEqual({
+      kind: "systemEvent",
+      text: "changed",
+      toolsAllow: ["read", "cron"],
+    });
+  });
+
+  it("round-trips a command payload tool cap through SQLite", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("command-cap-job", true);
+    payload.jobs[0].sessionTarget = "isolated";
+    payload.jobs[0].payload = {
+      kind: "command",
+      argv: ["echo", "hi"],
+      toolsAllow: ["read", "cron"],
+    };
+
+    await saveCronStore(store.storePath, payload);
+
+    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toEqual({
+      kind: "command",
+      argv: ["echo", "hi"],
+      toolsAllow: ["read", "cron"],
+    });
+  });
+
   it("round-trips completion destinations through SQLite delivery columns", async () => {
     const { storePath } = await makeStorePath();
     const job = expectDefined(
