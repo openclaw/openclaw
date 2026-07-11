@@ -208,6 +208,9 @@ class ChatController internal constructor(
 
   // Gateway ACKs may return a run id that differs from the row's idempotency key; ownership
   // and in-flight checks must recognize both or reconciliation can park a still-live run.
+  // Deliberately in-memory: chat.send uses the client idempotency key as the run id, and
+  // after a restart canonical-history proof by "<id>:user" retires rows regardless of the
+  // acked id; an ambiguous survivor parks for manual review instead of auto-retrying.
   private val acknowledgedRunIdByRowId = ConcurrentHashMap<String, String>()
 
   private val outboxRecoveryJob =
