@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 
@@ -55,6 +58,41 @@ describe("withMemoryWikiVaultMutation", () => {
     await secondEntered.promise;
     releaseFirst.resolve();
     await Promise.all([first, second]);
+  });
+
+  it("serializes physical aliases of one vault", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-vault-alias-"));
+    const vaultPath = path.join(root, "vault");
+    const aliasPath = path.join(root, "vault-alias");
+    await fs.mkdir(vaultPath);
+    await fs.symlink(vaultPath, aliasPath, process.platform === "win32" ? "junction" : "dir");
+    const firstEntered = deferred();
+    const releaseFirst = deferred();
+    let aliasEntered = false;
+    let first: Promise<void> | undefined;
+    let alias: Promise<void> | undefined;
+
+    try {
+      first = withMemoryWikiVaultMutation(vaultPath, async () => {
+        firstEntered.resolve();
+        await releaseFirst.promise;
+      });
+      await firstEntered.promise;
+      alias = withMemoryWikiVaultMutation(aliasPath, async () => {
+        aliasEntered = true;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(aliasEntered).toBe(false);
+
+      releaseFirst.resolve();
+      await Promise.all([first, alias]);
+      expect(aliasEntered).toBe(true);
+    } finally {
+      releaseFirst.resolve();
+      await Promise.allSettled([first, alias].filter((item) => item !== undefined));
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("queues detached work after its inherited transaction has ended", async () => {
