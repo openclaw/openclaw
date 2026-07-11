@@ -558,25 +558,25 @@ describe("createBundleMcpToolRuntime", () => {
           },
         ],
       },
-      createExecute: () => async (_toolCallId, _input, toolSignal) => {
+      createExecute: (_tool) => async (_toolCallId, _input, toolSignal) => {
         captured.callTool = toolSignal;
-        return { content: [{ type: "text", text: "ok" }] };
+        return { content: [{ type: "text", text: "ok" }], details: {} };
       },
-      createResourceListExecute: () => async (_toolCallId, _input, toolSignal) => {
+      createResourceListExecute: (_serverName) => async (_toolCallId, _input, toolSignal) => {
         captured.listResources = toolSignal;
-        return { content: [{ type: "text", text: "ok" }] };
+        return { content: [{ type: "text", text: "ok" }], details: {} };
       },
-      createResourceReadExecute: () => async (_toolCallId, _input, toolSignal) => {
+      createResourceReadExecute: (_serverName) => async (_toolCallId, _input, toolSignal) => {
         captured.readResource = toolSignal;
-        return { content: [{ type: "text", text: "ok" }] };
+        return { content: [{ type: "text", text: "ok" }], details: {} };
       },
-      createPromptListExecute: () => async (_toolCallId, _input, toolSignal) => {
+      createPromptListExecute: (_serverName) => async (_toolCallId, _input, toolSignal) => {
         captured.listPrompts = toolSignal;
-        return { content: [{ type: "text", text: "ok" }] };
+        return { content: [{ type: "text", text: "ok" }], details: {} };
       },
-      createPromptGetExecute: () => async (_toolCallId, _input, toolSignal) => {
+      createPromptGetExecute: (_serverName) => async (_toolCallId, _input, toolSignal) => {
         captured.getPrompt = toolSignal;
-        return { content: [{ type: "text", text: "ok" }] };
+        return { content: [{ type: "text", text: "ok" }], details: {} };
       },
     });
 
