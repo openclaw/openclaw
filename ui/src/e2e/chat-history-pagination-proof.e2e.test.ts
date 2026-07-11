@@ -111,7 +111,9 @@ async function waitForNewHistoryOffset(
         return latest;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
   }
   throw new Error(
     `Timed out waiting for new chat.history offset=${offset} after ${previousCount} requests`,
