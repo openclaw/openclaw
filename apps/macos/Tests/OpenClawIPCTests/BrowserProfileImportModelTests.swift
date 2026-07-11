@@ -3,6 +3,11 @@ import Testing
 @testable import OpenClaw
 
 @MainActor
+private final class ContinuationBox {
+    var continuation: CheckedContinuation<Void, Never>?
+}
+
+@MainActor
 private final class BrowserImportTransportStub {
     struct StubError: Error, LocalizedError {
         var errorDescription: String? {
@@ -12,6 +17,7 @@ private final class BrowserImportTransportStub {
 
     var requests: [BrowserProfileImportRequest] = []
     var failingPaths: Set<String> = []
+    var beforeStatusResponse: (@MainActor () async -> Void)?
     var statusJSON = """
     {
       "enabled": true,
@@ -28,6 +34,10 @@ private final class BrowserImportTransportStub {
             transport: { [weak self] request in
                 guard let self else { throw StubError() }
                 self.requests.append(request)
+                if request.path == "/system-profile-import/status", let hook = self.beforeStatusResponse {
+                    self.beforeStatusResponse = nil
+                    await hook()
+                }
                 if self.failingPaths.contains(request.path) {
                     throw StubError()
                 }
@@ -180,6 +190,30 @@ struct BrowserProfileImportModelTests {
             await Task.yield()
         }
         #expect(stub.requests(for: "/system-profile-import/dismiss").isEmpty)
+    }
+
+    @Test func `stale idle poll never clobbers a phase set while it was in flight`() async {
+        let stub = BrowserImportTransportStub()
+        let model = stub.makeModel()
+        let gate = ContinuationBox()
+        stub.beforeStatusResponse = {
+            await withCheckedContinuation { gate.continuation = $0 }
+        }
+
+        let idle = Task { await model.refreshIfIdle() }
+        while gate.continuation == nil {
+            await Task.yield()
+        }
+
+        // A forced Settings offer lands while the idle poll is suspended.
+        let forced = Self.status(
+            profiles: [Self.chromeProfile],
+            state: BrowserProfileImportOutcome(status: .dismissed))
+        model._testSetPhase(.offering(forced))
+
+        gate.continuation?.resume()
+        _ = await idle.value
+        #expect(model.phase == .offering(forced))
     }
 
     @Test func `idle refresh never clobbers a visible outcome`() async {

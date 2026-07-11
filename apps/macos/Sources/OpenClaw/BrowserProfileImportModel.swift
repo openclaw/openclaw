@@ -127,6 +127,14 @@ final class BrowserProfileImportModel {
             let status: BrowserProfileImportStatus = try await self.request(
                 method: "GET",
                 path: "/system-profile-import/status")
+            // The status await can interleave with user actions. A stale idle
+            // poll must never replace a phase someone else set meanwhile, and
+            // even a forced refresh must not clobber a running import.
+            if force {
+                if case .importing = self.phase { return .offering }
+            } else {
+                guard case .hidden = self.phase else { return .offering }
+            }
             guard Self.shouldOffer(status: status, force: force) else {
                 self.phase = .hidden
                 let message = status.enabled
@@ -137,7 +145,12 @@ final class BrowserProfileImportModel {
             self.phase = .offering(status)
             return .offering
         } catch {
-            self.phase = .hidden
+            // Same interleaving rule as above: a failed poll only clears state
+            // it owns — idle polls started hidden, and force never kills an
+            // import that is already running.
+            if force {
+                if case .importing = self.phase {} else { self.phase = .hidden }
+            }
             return .unavailable(title: "Browser import unavailable", message: error.localizedDescription)
         }
     }
