@@ -685,8 +685,31 @@ async function openMeetWithBrowserRequest(params: {
         timeoutMs: Math.min(timeoutMs, 5_000),
       });
       // Meet automation scripts match English UI labels; a reused tab may have
-      // been opened by the browser/profile in a non-English locale. Navigate to
-      // the English variant so DOM matchers don't go blind.
+      // been opened by the browser/profile in a non-English locale. Before
+      // forcing English, verify the tab is not already in an active call:
+      // reloading a live meeting interrupts the call and replaces its target.
+      const preflight = await params.callBrowser({
+        method: "POST",
+        path: "/act",
+        body: {
+          kind: "evaluate",
+          targetId,
+          fn: meetStatusScript({
+            allowMicrophone: false,
+            autoJoin: false,
+            captureCaptions: false,
+            guestName: "",
+            readOnly: true,
+          }),
+        },
+        timeoutMs: Math.min(timeoutMs, 10_000),
+      });
+      const preflightBrowser = parseMeetBrowserStatus(preflight);
+      if (preflightBrowser?.inCall === true) {
+        return { launched: true, browser: preflightBrowser };
+      }
+      // Not in-call (or status could not be determined), so normalize to English
+      // so the full inspection/join scripts can read the UI reliably.
       const englishUrl = tab.url ? forceMeetEnglishUi(tab.url) : undefined;
       if (englishUrl && englishUrl !== tab.url) {
         const navigated = await params.callBrowser({
@@ -825,12 +848,34 @@ async function inspectRecoverableMeetTab(params: {
     body: { targetId: params.targetId },
     timeoutMs: Math.min(params.timeoutMs, 5_000),
   });
+  // Recovery inspects a tab that automation lost track of. The status script
+  // matches English UI labels, so normalize the locale before inspection; adopt
+  // the target returned by navigation so subsequent calls stay attached to the
+  // correct renderer.
+  let targetId = params.targetId;
+  let tab = params.tab;
+  const englishUrl = tab.url ? forceMeetEnglishUi(tab.url) : undefined;
+  if (englishUrl && englishUrl !== tab.url) {
+    const navigated = await params.callBrowser({
+      method: "POST",
+      path: "/navigate",
+      body: { targetId, url: englishUrl },
+      timeoutMs: Math.min(params.timeoutMs, 5_000),
+    });
+    const navigatedTab = readBrowserTab(navigated);
+    if (navigatedTab?.url) {
+      tab = navigatedTab;
+      if (navigatedTab.targetId) {
+        targetId = navigatedTab.targetId;
+      }
+    }
+  }
   const permissionNotes = params.readOnly
     ? []
     : await grantMeetMediaPermissions({
         allowMicrophone,
         callBrowser: params.callBrowser,
-        targetId: params.targetId,
+        targetId,
         timeoutMs: params.timeoutMs,
       });
   const evaluated = await params.callBrowser({
@@ -838,7 +883,7 @@ async function inspectRecoverableMeetTab(params: {
     path: "/act",
     body: {
       kind: "evaluate",
-      targetId: params.targetId,
+      targetId,
       fn: meetStatusScript({
         allowMicrophone,
         captureCaptions: params.mode === "transcribe",
@@ -852,8 +897,8 @@ async function inspectRecoverableMeetTab(params: {
   const browser = mergeBrowserNotes(
     parseMeetBrowserStatus(evaluated) ?? {
       status: "browser-control",
-      browserUrl: params.tab.url,
-      browserTitle: params.tab.title,
+      browserUrl: tab.url,
+      browserTitle: tab.title,
     },
     permissionNotes,
   );
@@ -862,8 +907,8 @@ async function inspectRecoverableMeetTab(params: {
     : undefined;
   return {
     found: true,
-    targetId: params.targetId,
-    tab: params.tab,
+    targetId,
+    tab,
     browser,
     message:
       manual ?? (browser?.inCall ? "Existing Meet tab is in-call." : "Existing Meet tab focused."),
