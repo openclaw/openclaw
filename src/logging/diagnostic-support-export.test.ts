@@ -774,6 +774,11 @@ describe("diagnostic support export", () => {
       ),
     ).toBe("failed at ~\\Documents\\snapshot-error.txt");
 
+    const boundaryValue = `${"a".repeat(39)}😀tail`;
+    const truncated = redactSupportString(boundaryValue, redaction, { maxLength: 40 });
+    expect(truncated).toBe(`${"a".repeat(39)}...<truncated>`);
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(truncated)).toBe(false);
+
     const status = sanitizeSupportSnapshotValue(
       {
         service: {
