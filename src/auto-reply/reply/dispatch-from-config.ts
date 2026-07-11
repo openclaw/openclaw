@@ -733,7 +733,11 @@ function createInboundMessageAuditTerminal(
         ...(agentId ? { agentId } : {}),
         ...(observedRunId ? { runId: observedRunId } : {}),
         direction: "inbound",
+        // OriginatingChannel is the canonical routing channel id and matches
+        // outbound rows' channel; Surface/Provider can be UI-surface variants
+        // and plugin channels may set only OriginatingChannel.
         channel:
+          normalizeLowercaseStringOrEmpty(ctx.OriginatingChannel) ||
           normalizeLowercaseStringOrEmpty(ctx.Surface) ||
           normalizeLowercaseStringOrEmpty(ctx.Provider) ||
           "unknown",

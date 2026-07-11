@@ -7625,6 +7625,30 @@ describe("dispatchReplyFromConfig", () => {
     expect(serializedEvent).not.toContain(privateSenderUsername);
   });
 
+  it("records the routing channel id ahead of surface and provider", async () => {
+    setNoAbort();
+    // SDK plugin channels may set only OriginatingChannel, and it is the id
+    // outbound rows record; it must win over Surface/Provider variants.
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        OriginatingChannel: "clickclack",
+        AccountId: "acc-plugin",
+        MessageSid: "msg-audit-plugin-channel",
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
+    });
+
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledTimes(1);
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        action: "message.inbound.processed",
+        channel: "clickclack",
+      }),
+    );
+  });
+
   it("emits diagnostics when enabled", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
