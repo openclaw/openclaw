@@ -2,6 +2,11 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
+import {
+  ensureProviderLocalService,
+  type ProviderLocalServiceTarget,
+} from "../agents/provider-local-service.js";
+import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
@@ -32,6 +37,7 @@ export type OpenAICompatibleEmbeddingClient = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  localServiceTarget?: ProviderLocalServiceTarget;
 };
 
 type OpenAICompatibleEmbeddingResponse = {
@@ -43,6 +49,12 @@ type ConfiguredEmbeddingProvider = {
   baseUrl?: string;
   apiKey?: unknown;
   headers?: Record<string, unknown>;
+  localService?: ModelProviderLocalServiceConfig;
+};
+
+type ResolvedConfiguredEmbeddingProvider = {
+  providerId: string;
+  config: ConfiguredEmbeddingProvider;
 };
 
 function normalizeBaseUrl(value: string | undefined): string {
@@ -215,7 +227,7 @@ function isOpenAICompatibleProviderConfig(
 
 function resolveConfiguredProvider(
   options: EmbeddingProviderCreateOptions,
-): ConfiguredEmbeddingProvider | undefined {
+): ResolvedConfiguredEmbeddingProvider | undefined {
   const providers = options.config.models?.providers as
     | Record<string, ConfiguredEmbeddingProvider>
     | undefined;
@@ -224,12 +236,20 @@ function resolveConfiguredProvider(
   }
   const providerId = options.provider?.trim() || OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID;
   const normalizedProviderId = normalizeProviderId(providerId);
-  const entry =
-    providers[providerId] ??
-    Object.entries(providers).find(
-      ([candidateId]) => normalizeProviderId(candidateId) === normalizedProviderId,
-    )?.[1];
-  return entry && isOpenAICompatibleProviderConfig(providerId, entry) ? entry : undefined;
+  const direct = providers[providerId];
+  if (direct && isOpenAICompatibleProviderConfig(providerId, direct)) {
+    return { providerId, config: direct };
+  }
+  const normalizedEntry = Object.entries(providers).find(
+    ([candidateId]) => normalizeProviderId(candidateId) === normalizedProviderId,
+  );
+  if (!normalizedEntry) {
+    return undefined;
+  }
+  const [configuredProviderId, config] = normalizedEntry;
+  return isOpenAICompatibleProviderConfig(configuredProviderId, config)
+    ? { providerId: configuredProviderId, config }
+    : undefined;
 }
 
 function embeddingInputToText(input: EmbeddingInput): string {
@@ -329,27 +349,34 @@ async function postEmbeddingRequest(params: {
     ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
     ...(inputType ? { input_type: inputType } : {}),
   };
-  const { response, release } = await fetchWithSsrFGuard({
-    url: `${client.baseUrl}/embeddings`,
-    init: {
-      method: "POST",
-      headers: client.headers,
-      body: JSON.stringify(body),
-    },
-    signal: params.signal,
-    policy: client.ssrfPolicy,
-    auditContext: "embedding-provider:openai-compatible",
-  });
+  const localServiceLease = client.localServiceTarget
+    ? await ensureProviderLocalService(client.localServiceTarget, params.signal)
+    : undefined;
   try {
-    if (!response.ok) {
-      throw await createEmbeddingHttpError(response);
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${client.baseUrl}/embeddings`,
+      init: {
+        method: "POST",
+        headers: client.headers,
+        body: JSON.stringify(body),
+      },
+      signal: params.signal,
+      policy: client.ssrfPolicy,
+      auditContext: "embedding-provider:openai-compatible",
+    });
+    try {
+      if (!response.ok) {
+        throw await createEmbeddingHttpError(response);
+      }
+      return readEmbeddingVectors(
+        (await readJsonResponse(response)) as OpenAICompatibleEmbeddingResponse,
+        input.length,
+      );
+    } finally {
+      await release();
     }
-    return readEmbeddingVectors(
-      (await readJsonResponse(response)) as OpenAICompatibleEmbeddingResponse,
-      input.length,
-    );
   } finally {
-    await release();
+    localServiceLease?.release();
   }
 }
 
@@ -357,7 +384,8 @@ async function postEmbeddingRequest(params: {
 async function createOpenAICompatibleEmbeddingClient(
   options: EmbeddingProviderCreateOptions,
 ): Promise<OpenAICompatibleEmbeddingClient> {
-  const configuredProvider = resolveConfiguredProvider(options);
+  const resolvedProvider = resolveConfiguredProvider(options);
+  const configuredProvider = resolvedProvider?.config;
   const baseUrl = normalizeBaseUrl(
     normalizeOptionalString(options.remote?.baseUrl) ?? configuredProvider?.baseUrl,
   );
@@ -369,18 +397,32 @@ async function createOpenAICompatibleEmbeddingClient(
   const inputType = normalizeOptionalInputType(options.inputType);
   const queryInputType = normalizeOptionalInputType(options.queryInputType);
   const documentInputType = normalizeOptionalInputType(options.documentInputType);
+  const headers = await buildHeaders({
+    config: options.config,
+    apiKey,
+    extra: {
+      ...configuredProvider?.headers,
+      ...options.remote?.headers,
+    },
+  });
   return {
     baseUrl,
-    headers: await buildHeaders({
-      config: options.config,
-      apiKey,
-      extra: {
-        ...configuredProvider?.headers,
-        ...options.remote?.headers,
-      },
-    }),
+    headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
     model,
+    ...(configuredProvider?.localService
+      ? {
+          localServiceTarget: {
+            providerId:
+              resolvedProvider?.providerId ??
+              options.provider?.trim() ??
+              OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+            baseUrl,
+            headers,
+            service: configuredProvider.localService,
+          },
+        }
+      : {}),
     ...(options.dimensions !== undefined
       ? { dimensions: normalizeDimensions(options.dimensions) }
       : {}),

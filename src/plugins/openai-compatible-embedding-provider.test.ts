@@ -1,7 +1,7 @@
 // Covers OpenAI-compatible embedding provider plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
 import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
@@ -9,6 +9,18 @@ import {
   createOpenAICompatibleEmbeddingProvider,
   openAICompatibleEmbeddingProviderAdapter,
 } from "./openai-compatible-embedding-provider.js";
+
+const { ensureProviderLocalServiceMock } = vi.hoisted(() => ({
+  ensureProviderLocalServiceMock: vi.fn(async () => undefined),
+}));
+
+vi.mock("../agents/provider-local-service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/provider-local-service.js")>();
+  return {
+    ...actual,
+    ensureProviderLocalService: ensureProviderLocalServiceMock,
+  };
+});
 
 type CapturedRequest = {
   method: string | undefined;
@@ -266,6 +278,8 @@ async function startOversizedSuccessEmbeddingServer(): Promise<OversizedStreamSe
 }
 
 afterEach(async () => {
+  ensureProviderLocalServiceMock.mockReset();
+  ensureProviderLocalServiceMock.mockResolvedValue(undefined);
   const pending = servers.splice(0);
   await Promise.all(pending.map((server) => server.close()));
 });
@@ -298,6 +312,51 @@ describe("openai-compatible generic embedding provider", () => {
       model: "nomic-embed-text",
     });
     expect(server.requests).toHaveLength(0);
+  });
+
+  it("leases the exact configured provider alias for each embedding request", async () => {
+    const server = await startEmbeddingServer();
+    const release = vi.fn();
+    ensureProviderLocalServiceMock.mockResolvedValueOnce({ release });
+    const service = {
+      command: process.execPath,
+      args: ["--version"],
+      idleStopMs: 10,
+    };
+    const options = createOptions({
+      config: {
+        models: {
+          providers: {
+            "gpu-spark": {
+              api: "openai-completions",
+              baseUrl: server.baseUrl,
+              headers: { "X-GPU-Host": "spark" },
+              localService: service,
+              models: [],
+            },
+          },
+        },
+      } as EmbeddingProviderCreateOptions["config"],
+      provider: "gpu-spark",
+      model: "gpu-spark/nomic-embed-text",
+    });
+
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(options);
+    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+
+    expect(ensureProviderLocalServiceMock).toHaveBeenCalledWith(
+      {
+        providerId: "gpu-spark",
+        baseUrl: server.baseUrl,
+        headers: expect.objectContaining({
+          "content-type": "application/json",
+          "x-gpu-host": "spark",
+        }),
+        service,
+      },
+      undefined,
+    );
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("adds non-secret routing headers to runtime cache identity", async () => {
