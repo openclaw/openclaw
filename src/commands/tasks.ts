@@ -5,6 +5,8 @@ import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coer
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import type { SubagentHealth } from "../agents/subagent-health.js";
+import { createSubagentHealthResolver } from "../agents/subagent-registry-read.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatLookupMiss } from "../cli/error-format.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -55,6 +57,25 @@ const DELIVERY_PAD = 14;
 const ID_PAD = 10;
 const RUN_PAD = 10;
 const SESSION_REGISTRY_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const SUBAGENT_HEALTH_STATUS_ORDER = [
+  "active",
+  "stale",
+  "timed_out",
+  "delivery_pending",
+  "delivery_failed",
+  "cleanup_pending",
+  "orphaned",
+  "cancel_reconciling",
+  "terminal",
+] as const;
+const SUBAGENT_HEALTH_NEXT_ACTION_ORDER = [
+  "recover_orphan",
+  "finalize_timeout",
+  "retry_delivery",
+  "resume_cleanup",
+  "wait_cancel_reconciliation",
+  "none",
+] as const;
 
 const info = theme.info;
 
@@ -272,6 +293,56 @@ function formatTaskListSummary(tasks: TaskRecord[]) {
   return `${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${summary.failures} issues`;
 }
 
+type TaskSubagentHealthSummary = {
+  total: number;
+  retryable: number;
+  byStatus: Partial<Record<SubagentHealth["status"], number>>;
+  byNextAction: Partial<Record<SubagentHealth["nextAction"], number>>;
+};
+
+function buildTaskSubagentHealthSummary(
+  tasks: TaskRecord[],
+  resolveSubagentHealth: ReturnType<typeof createSubagentHealthResolver>,
+): TaskSubagentHealthSummary | undefined {
+  const summary: TaskSubagentHealthSummary = {
+    total: 0,
+    retryable: 0,
+    byStatus: {},
+    byNextAction: {},
+  };
+  for (const task of tasks) {
+    const health = resolveSubagentHealth(task);
+    if (!health) {
+      continue;
+    }
+    summary.total += 1;
+    if (health.retryable) {
+      summary.retryable += 1;
+    }
+    summary.byStatus[health.status] = (summary.byStatus[health.status] ?? 0) + 1;
+    summary.byNextAction[health.nextAction] =
+      (summary.byNextAction[health.nextAction] ?? 0) + 1;
+  }
+  return summary.total > 0 ? summary : undefined;
+}
+
+function formatTaskSubagentHealthSummary(summary: TaskSubagentHealthSummary): string {
+  const statusParts = SUBAGENT_HEALTH_STATUS_ORDER.flatMap((status) => {
+    const count = summary.byStatus[status];
+    return count ? [`${status} ${count}`] : [];
+  });
+  const actionParts = SUBAGENT_HEALTH_NEXT_ACTION_ORDER.flatMap((nextAction) => {
+    const count = summary.byNextAction[nextAction];
+    return count ? [`${nextAction} ${count}`] : [];
+  });
+  return [
+    `${summary.total} observed`,
+    `${summary.retryable} retryable`,
+    ...statusParts,
+    ...actionParts,
+  ].join(" · ");
+}
+
 function formatAgeMs(ageMs: number | undefined): string {
   if (typeof ageMs !== "number" || ageMs < 1000) {
     return "fresh";
@@ -360,6 +431,8 @@ export async function tasksListCommand(
     }
     return true;
   });
+  const resolveSubagentHealth = createSubagentHealthResolver();
+  const subagentHealthSummary = buildTaskSubagentHealthSummary(tasks, resolveSubagentHealth);
 
   if (opts.json) {
     runtime.log(
@@ -368,6 +441,7 @@ export async function tasksListCommand(
           count: tasks.length,
           runtime: runtimeFilter ?? null,
           status: statusFilter ?? null,
+          subagentHealthSummary,
           tasks,
         },
         null,
@@ -379,6 +453,9 @@ export async function tasksListCommand(
 
   runtime.log(info(`Background tasks: ${tasks.length}`));
   runtime.log(info(`Task pressure: ${formatTaskListSummary(tasks)}`));
+  if (subagentHealthSummary) {
+    runtime.log(info(`Subagent health: ${formatTaskSubagentHealthSummary(subagentHealthSummary)}`));
+  }
   if (runtimeFilter) {
     runtime.log(info(`Runtime filter: ${runtimeFilter}`));
   }

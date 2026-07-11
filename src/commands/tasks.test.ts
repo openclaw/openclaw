@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { saveCronStore } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "../agents/subagent-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { resetDetachedTaskLifecycleRuntimeForTests } from "../tasks/detached-task-runtime.js";
 import {
@@ -97,6 +101,7 @@ async function withTaskCommandStateDir(
       resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
+      resetSubagentRegistryForTests({ persist: false });
       closeOpenClawAgentDatabasesForTest();
       try {
         await run(state);
@@ -108,6 +113,7 @@ async function withTaskCommandStateDir(
         resetTaskRegistryDeliveryRuntimeForTests();
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
+        resetSubagentRegistryForTests({ persist: false });
         closeOpenClawAgentDatabasesForTest();
       }
     },
@@ -128,6 +134,7 @@ describe("tasks commands", () => {
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
+    resetSubagentRegistryForTests({ persist: false });
     closeOpenClawAgentDatabasesForTest();
     mocks.callGateway.mockReset();
   });
@@ -222,6 +229,82 @@ describe("tasks commands", () => {
         status: null,
         tasks: [jsonRoundTrip(task)],
       });
+    });
+  });
+
+  it("includes subagent health summary in task list JSON and text output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const now = Date.now();
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:stale-cli",
+        runId: "run-health-stale-cli",
+        status: "running",
+        task: "Stale CLI subagent",
+        deliveryStatus: "pending",
+        lastEventAt: now - 120_000,
+      });
+      addSubagentRunForTests({
+        runId: "run-health-stale-cli",
+        childSessionKey: "agent:main:subagent:stale-cli",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "Stale CLI subagent",
+        cleanup: "keep",
+        createdAt: now - 120_000,
+        startedAt: now - 119_000,
+        execution: { status: "running" },
+      });
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:delivery-cli",
+        runId: "run-health-delivery-cli",
+        status: "succeeded",
+        task: "Delivery failed CLI subagent",
+        deliveryStatus: "failed",
+        lastEventAt: now - 10_000,
+      });
+      addSubagentRunForTests({
+        runId: "run-health-delivery-cli",
+        childSessionKey: "agent:main:subagent:delivery-cli",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "Delivery failed CLI subagent",
+        cleanup: "keep",
+        createdAt: now - 10_000,
+        startedAt: now - 9_000,
+        endedAt: now - 1_000,
+        outcome: { status: "ok" },
+        delivery: { status: "failed", lastError: "send failed" },
+        execution: { status: "terminal", endedAt: now - 1_000, outcome: { status: "ok" } },
+      });
+
+      const jsonRuntime = createRuntime();
+      await tasksListCommand({ json: true }, jsonRuntime);
+
+      expect(readFirstJsonLog(jsonRuntime)).toMatchObject({
+        subagentHealthSummary: {
+          total: 2,
+          retryable: 2,
+          byStatus: { stale: 1, delivery_failed: 1 },
+          byNextAction: { recover_orphan: 1, retry_delivery: 1 },
+        },
+      });
+
+      const textRuntime = createRuntime();
+      await tasksListCommand({}, textRuntime);
+
+      const output = vi
+        .mocked(textRuntime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain(
+        "Subagent health: 2 observed · 2 retryable · stale 1 · delivery_failed 1 · recover_orphan 1 · retry_delivery 1",
+      );
     });
   });
 
