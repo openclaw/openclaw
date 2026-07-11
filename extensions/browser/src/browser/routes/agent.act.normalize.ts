@@ -105,10 +105,6 @@ function readActionTimeoutMs(body: Record<string, unknown>): number | undefined 
   return readRouteTimerTimeoutMs(body.timeoutMs);
 }
 
-function readClickCoordinate(body: Record<string, unknown>, key: "x" | "y"): number | undefined {
-  return readRouteFiniteNumber(body[key], key);
-}
-
 function readBoundedActionDurationMs(
   body: Record<string, unknown>,
   key: string,
@@ -179,8 +175,8 @@ export function normalizeActRequest(
       };
     }
     case "clickCoords": {
-      const x = readClickCoordinate(body, "x");
-      const y = readClickCoordinate(body, "y");
+      const x = readRouteFiniteNumber(body.x, "x");
+      const y = readRouteFiniteNumber(body.y, "y");
       if (x === undefined || y === undefined || x < 0 || y < 0) {
         throw new Error("clickCoords requires non-negative x and y");
       }
