@@ -201,7 +201,6 @@ export type {
   CliBackendSideQuestionToolMode,
   CliBackendThinkingLevel,
   CliBackendPlugin,
-  CliBackendRuntimeArtifactPolicy,
   CliBundleMcpMode,
   PluginTextReplacement,
   PluginTextTransforms,
@@ -2028,7 +2027,7 @@ export type PluginCommandContext = {
   diagnosticsSessions?: PluginCommandDiagnosticsSession[];
   /** Host-bound runtime capabilities scoped to this command invocation. */
   runtimeContext?: {
-    llm?: import("./runtime/types-core.js").PluginRuntimeCore["llm"];
+    llm?: Pick<import("./runtime/types-core.js").PluginRuntimeCore["llm"], "complete">;
   };
   /** Internal diagnostics-only marker that exec approval already authorized upload. */
   diagnosticsUploadApproved?: boolean;

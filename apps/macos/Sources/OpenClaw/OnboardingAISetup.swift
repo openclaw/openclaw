@@ -132,6 +132,12 @@ final class OnboardingAISetupModel {
     @ObservationIgnored private var completedHandoff: CompletedHandoff?
     @ObservationIgnored private var pendingActivationRequiresFreshActivation = false
     @ObservationIgnored private var serverLease: GatewayConnection.ServerLease?
+    @ObservationIgnored private var lastDetectedActivationState: PersistedActivationState?
+
+    private struct PersistedActivationState: Equatable {
+        let setupComplete: Bool
+        let configuredModel: String?
+    }
 
     private struct AttemptContext: Equatable {
         let token: UUID
@@ -171,6 +177,16 @@ final class OnboardingAISetupModel {
 
         let candidates: [DetectedCandidate]
         let manualProviders: [ManualProvider]?
+        let configuredModel: String?
+        let setupComplete: Bool?
+
+        var persistedActivationState: PersistedActivationState? {
+            self.setupComplete.map {
+                PersistedActivationState(
+                    setupComplete: $0,
+                    configuredModel: self.configuredModel)
+            }
+        }
     }
 
     struct ActivateResult: Decodable {
@@ -595,6 +611,7 @@ final class OnboardingAISetupModel {
         self.pendingActivationOwner = nil
         self.completedHandoff = nil
         self.pendingActivationRequiresFreshActivation = false
+        self.lastDetectedActivationState = nil
         self.started = false
         self.phase = .idle
         self.candidates = []
@@ -656,6 +673,7 @@ final class OnboardingAISetupModel {
             else { return }
             let result = try JSONDecoder().decode(DetectResult.self, from: data)
             self.serverLease = lease
+            self.lastDetectedActivationState = result.persistedActivationState
             let manualProviders = result.manualProviders ?? []
             self.candidates = result.candidates.map { detected in
                 Candidate(
@@ -739,7 +757,9 @@ final class OnboardingAISetupModel {
     static func activationRequestTimeoutMs(for kind: String) -> Double {
         // Codex can spend 305s installing its runtime plugin before the 90s live probe.
         // Keep a bounded client deadline with room for registry refresh and finalization.
-        kind == "codex-cli" ? OnboardingCrestodianResumeStore.maximumActivationTimeoutMs : 150_000
+        kind == "codex-cli"
+            ? OnboardingCrestodianResumeStore.maximumActivationTimeoutMs
+            : 150_000
     }
 
     static func activationFailureIsDefinitive(_ error: Error) -> Bool {
@@ -756,6 +776,16 @@ final class OnboardingAISetupModel {
         return error is GatewayConnectAuthError ||
             error is GatewayTLSValidationError ||
             error is OpenClawChatTransportSendError
+    }
+
+    private static func activationTransitionWasPersisted(
+        expectedModel: String,
+        before: PersistedActivationState?,
+        after: PersistedActivationState?) -> Bool
+    {
+        guard let before, let after else { return false }
+        let wasAlreadyPersisted = before.setupComplete && before.configuredModel == expectedModel
+        return !wasAlreadyPersisted && after.setupComplete && after.configuredModel == expectedModel
     }
 
     /// Candidates the automatic ladder may try: skip definitively logged-out
@@ -813,6 +843,7 @@ final class OnboardingAISetupModel {
             return
         }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
+        let persistedStateBeforeActivation = self.lastDetectedActivationState
         let requestTimeoutMs = Self.activationRequestTimeoutMs(for: kind)
         self.selectedKind = kind
         self.phase = .testing
@@ -917,6 +948,20 @@ final class OnboardingAISetupModel {
                     self.requireFreshDetection(after: failure)
                 }
             } else {
+                // A managed Gateway can restart after persisting fresh-Mac Codex setup.
+                // The retired process cannot mutate further, so accept only the same
+                // route/auth owner, an exact persisted transition, and a fresh live turn.
+                if !Task.isCancelled,
+                   !(await gateway.isCurrentServerLease(lease)),
+                   await self.reconcileActivationAfterGatewayRestart(
+                       kind: kind,
+                       context: context,
+                       activationOwner: activationOwner,
+                       before: persistedStateBeforeActivation,
+                       originalServerLease: lease)
+                {
+                    return
+                }
                 // Do not start another provider while the request can still commit.
                 // The route-bound deadline probe decides whether setup may resume.
                 self.retainAmbiguousActivation(
@@ -925,6 +970,117 @@ final class OnboardingAISetupModel {
                     activationDeadline: activationDeadline)
             }
         }
+    }
+
+    private func reconcileActivationAfterGatewayRestart(
+        kind: String,
+        context: AttemptContext,
+        activationOwner: OnboardingCrestodianResumeStore.ActivationOwner,
+        before: PersistedActivationState?,
+        originalServerLease: GatewayConnection.ServerLease) async -> Bool
+    {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(30))
+        var delayMs = 250
+        while clock.now < deadline {
+            guard self.isCurrentAttempt(context), !Task.isCancelled else { return false }
+            let leaseTimeoutMs = Self.remainingMilliseconds(
+                until: deadline,
+                clock: clock,
+                cappedAt: 3000)
+            guard leaseTimeoutMs > 0 else { return false }
+            if let replacementLease = try? await gateway.acquireServerLease(
+                ifSameRouteAs: originalServerLease,
+                timeoutMs: Double(leaseTimeoutMs)),
+                await self.reconcilePersistedActivation(
+                    kind: kind,
+                    context: context,
+                    activationOwner: activationOwner,
+                    before: before,
+                    serverLease: replacementLease,
+                    timeoutMs: Self.remainingMilliseconds(
+                        until: deadline,
+                        clock: clock,
+                        cappedAt: 10000))
+            {
+                self.serverLease = replacementLease
+                return true
+            }
+            let sleepMs = Self.remainingMilliseconds(
+                until: deadline,
+                clock: clock,
+                cappedAt: delayMs)
+            guard sleepMs > 0 else { return false }
+            do {
+                try await Task.sleep(nanoseconds: UInt64(sleepMs) * 1_000_000)
+            } catch {
+                return false
+            }
+            delayMs = min(delayMs * 2, 2000)
+        }
+        return false
+    }
+
+    private func reconcilePersistedActivation(
+        kind: String,
+        context: AttemptContext,
+        activationOwner: OnboardingCrestodianResumeStore.ActivationOwner,
+        before: PersistedActivationState?,
+        serverLease: GatewayConnection.ServerLease,
+        timeoutMs: Int) async -> Bool
+    {
+        guard timeoutMs > 0,
+              let expectedModel = candidates.first(where: { $0.kind == kind })?.modelRef,
+              self.isCurrentAttempt(context),
+              !Task.isCancelled,
+              OnboardingCrestodianResumeStore.isOwned(
+                  by: activationOwner,
+                  for: context.routeIdentity,
+                  defaults: defaults),
+              await gateway.activationOwnershipFingerprint(ifCurrentServerLease: serverLease) ==
+              activationOwner.routeFingerprint
+        else { return false }
+        guard let detectData = try? await gateway.request(
+            method: "crestodian.setup.detect",
+            params: [:],
+            timeoutMs: Double(timeoutMs),
+            ifCurrentServerLease: serverLease),
+            await gateway.isCurrentServerLease(serverLease),
+            self.isCurrentAttempt(context),
+            !Task.isCancelled,
+            let detection = try? JSONDecoder().decode(DetectResult.self, from: detectData),
+            Self.activationTransitionWasPersisted(
+                expectedModel: expectedModel,
+                before: before,
+                after: detection.persistedActivationState)
+        else { return false }
+        guard let verifyData = try? await gateway.request(
+            method: "crestodian.setup.verify",
+            params: [:],
+            timeoutMs: Double(timeoutMs),
+            ifCurrentServerLease: serverLease),
+            await gateway.isCurrentServerLease(serverLease),
+            self.isCurrentAttempt(context),
+            !Task.isCancelled,
+            let result = try? JSONDecoder().decode(ActivateResult.self, from: verifyData),
+            result.ok,
+            result.modelRef == expectedModel
+        else { return false }
+        self.finishConnected(
+            kind: kind,
+            result: result,
+            activationOwner: activationOwner)
+        return self.connected
+    }
+
+    private static func remainingMilliseconds(
+        until deadline: ContinuousClock.Instant,
+        clock: ContinuousClock,
+        cappedAt capMs: Int) -> Int
+    {
+        let components = clock.now.duration(to: deadline).components
+        let milliseconds = components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
+        return max(0, min(capMs, Int(milliseconds)))
     }
 
     func submitManualKey() {
@@ -969,6 +1125,7 @@ final class OnboardingAISetupModel {
             return
         }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
+        let requestTimeoutMs = Self.activationRequestTimeoutMs(for: "api-key")
         let activationOwner = OnboardingCrestodianResumeStore.ActivationOwner(
             id: UUID().uuidString,
             routeFingerprint: routeFingerprint)
@@ -979,7 +1136,7 @@ final class OnboardingAISetupModel {
         guard let activationDeadline = OnboardingCrestodianResumeStore.markPending(
             routeIdentity: context.routeIdentity,
             activationOwner: activationOwner,
-            activationTimeoutMs: 150_000,
+            activationTimeoutMs: requestTimeoutMs,
             defaults: defaults)
         else {
             self.manualError = Self.transportFailure(
@@ -998,7 +1155,7 @@ final class OnboardingAISetupModel {
                     "authChoice": AnyCodable(provider.id),
                     "apiKey": AnyCodable(key),
                 ],
-                timeoutMs: 150_000,
+                timeoutMs: requestTimeoutMs,
                 ifCurrentServerLease: lease)
             let result = try JSONDecoder().decode(ActivateResult.self, from: data)
             guard self.isCurrentAttempt(context), !Task.isCancelled else { return }

@@ -43,6 +43,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import {
   applyProviderPluginAuthMethodResultConfig,
@@ -113,6 +114,8 @@ export type SetupInferenceManualProvider = {
 
 export type SetupInferenceDetection = {
   candidates: SetupInferenceCandidate[];
+  /** A native Codex binary can provide inference and later supervision. */
+  codexAppServerDetected: boolean;
   /** Text-inference key/token methods exposed by installed provider manifests. */
   manualProviders: SetupInferenceManualProvider[];
   /** Resolved workspace the setup apply would use (display + default). */
@@ -187,6 +190,7 @@ export type ActivateSetupInferenceDeps = {
   runEmbeddedAgent?: SetupInferenceRunEmbeddedAgent;
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
+  ensureSelectedAgentHarnessPlugin?: typeof import("../agents/harness/runtime-plugin.js").ensureSelectedAgentHarnessPlugin;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
   ensurePluginRegistryLoaded?: typeof import("../plugins/runtime/runtime-registry-loader.js").ensurePluginRegistryLoaded;
@@ -307,6 +311,7 @@ export async function detectSetupInference(
   }).filter((choice) => enablePluginInConfig(cfg, choice.pluginId).enabled);
   return {
     candidates,
+    codexAppServerDetected: candidates.some((candidate) => candidate.kind === "codex-cli"),
     manualProviders: listSetupInferenceManualProviders(authChoices),
     workspace,
     ...(configuredModel ? { configuredModel } : {}),
@@ -337,6 +342,31 @@ type SetupInferenceTestPlan = {
     pluginId?: string;
   };
 };
+
+function configureCodexCliNativeAuth(cfg: OpenClawConfig): OpenClawConfig {
+  const entry = cfg.plugins?.entries?.codex;
+  const pluginConfig = entry?.config ?? {};
+  const appServer =
+    pluginConfig.appServer && typeof pluginConfig.appServer === "object"
+      ? pluginConfig.appServer
+      : {};
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      entries: {
+        ...cfg.plugins?.entries,
+        codex: {
+          ...entry,
+          config: {
+            ...pluginConfig,
+            appServer: { ...appServer, transport: "stdio", homeScope: "user" },
+          },
+        },
+      },
+    },
+  };
+}
 
 type RunResult = {
   payloads?: Array<{ text?: string; isError?: boolean }>;
@@ -808,6 +838,7 @@ async function buildTestPlan(params: {
         runner: "embedded",
         ...ref,
         modelRef,
+        agentHarnessRuntimeOverride: "codex",
         config: cfg,
         agentId: "crestodian",
         routeAgentId: resolveDefaultAgentId(cfg),
@@ -1169,7 +1200,10 @@ async function activateSetupInferenceUnredacted(
       // This explicit Codex CLI choice owns its runtime independently of the
       // user's existing OpenAI provider route (which may use a custom base URL).
       const codexInstallBase = stripPendingPluginInstallRecords(testPlan.config);
-      const enabledCodexBase = enablePluginInConfig(codexInstallBase, "codex");
+      const enabledCodexBase = enablePluginInConfig(
+        normalizePluginTargetConfig(codexInstallBase, "codex"),
+        "codex",
+      );
       if (!enabledCodexBase.enabled) {
         return {
           ok: false,
@@ -1220,7 +1254,11 @@ async function activateSetupInferenceUnredacted(
           };
         }
       }
-      const enabledCodex = enablePluginInConfig(ensured.cfg, "codex");
+      const normalizedCodexConfig = normalizePluginTargetConfig(ensured.cfg, "codex");
+      const enabledCodex = enablePluginInConfig(
+        configureCodexCliNativeAuth(normalizedCodexConfig),
+        "codex",
+      );
       if (!enabledCodex.enabled) {
         return {
           ok: false,
@@ -1239,6 +1277,41 @@ async function activateSetupInferenceUnredacted(
         ...testPlan,
         config: stagedCodexConfig,
       };
+
+      // The Gateway registry predates a runtime installed by this request.
+      // Refresh and load the exact Codex harness before auth snapshots it.
+      const refreshPluginRegistry =
+        deps.refreshPluginRegistryAfterConfigMutation ??
+        (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
+      let registryRefreshWarning: string | undefined;
+      await refreshPluginRegistry({
+        config: testPlan.config,
+        reason: "source-changed",
+        workspaceDir: workspace,
+        policyPluginIds: ["codex"],
+        traceCommand: "crestodian-setup-probe",
+        logger: { warn: (message) => (registryRefreshWarning = message) },
+      });
+      const ensureHarnessPlugin =
+        deps.ensureSelectedAgentHarnessPlugin ??
+        (await import("../agents/harness/runtime-plugin.js")).ensureSelectedAgentHarnessPlugin;
+      try {
+        await ensureHarnessPlugin({
+          provider: testPlan.provider,
+          modelId: testPlan.model,
+          config: testPlan.config,
+          agentId: testPlan.routeAgentId,
+          agentHarnessRuntimeOverride: "codex",
+          workspaceDir: tempDir,
+        });
+      } catch (error) {
+        const loadError = `Could not load the Codex runtime plugin: ${formatErrorMessage(error)}`;
+        return {
+          ok: false,
+          status: "unavailable",
+          error: registryRefreshWarning ? `${registryRefreshWarning} ${loadError}` : loadError,
+        };
+      }
     }
     const baselineRoute = await projectDefaultInferenceRoute(cfg);
     const verifiedRoute = await projectDefaultInferenceRoute(testPlan.config);
@@ -1466,7 +1539,17 @@ async function activateSetupInferenceUnredacted(
           );
         }
         if (codexPluginPatch !== undefined) {
-          next = applyMergePatch(next, codexPluginPatch) as OpenClawConfig;
+          const patched = applyMergePatch(next, codexPluginPatch) as OpenClawConfig;
+          const enabledCodex = enablePluginInConfig(
+            normalizePluginTargetConfig(patched, "codex"),
+            "codex",
+          );
+          if (!enabledCodex.enabled) {
+            throw new Error(
+              `Could not enable the Codex runtime plugin: ${enabledCodex.reason ?? "plugin disabled"}.`,
+            );
+          }
+          next = enabledCodex.config;
         }
         next = selectModel ? selectModel(next) : next;
         if (!pendingCodexInstall) {

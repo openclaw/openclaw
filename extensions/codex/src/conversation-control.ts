@@ -1,4 +1,6 @@
 // Codex plugin module implements conversation control behavior.
+import { ModelSelectionLockedError } from "openclaw/plugin-sdk/model-session-runtime";
+import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import {
@@ -20,6 +22,7 @@ import {
 import {
   getLeasedSharedCodexAppServerClient,
   releaseCodexAppServerClientLease,
+  releaseLeasedSharedCodexAppServerClient,
   withLeasedCodexAppServerClientStartSelectionRetry,
   type CodexAppServerClientLease,
   type CodexAppServerClientOptions,
@@ -32,7 +35,7 @@ import { formatCodexDisplayText } from "./command-formatters.js";
 
 type ActiveTurn = {
   identity: CodexAppServerBindingIdentity;
-  client: CodexAppServerClient;
+  client?: CodexAppServerClient;
   threadId: string;
   turnId: string;
 };
@@ -80,15 +83,44 @@ export async function stopCodexConversationTurn(params: {
   if (!active) {
     return { stopped: false, message: "No active Codex run to stop." };
   }
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
-  await active.client.request(
-    "turn/interrupt",
-    {
-      threadId: active.threadId,
-      turnId: active.turnId,
-    },
-    { timeoutMs: runtime.requestTimeoutMs },
-  );
+  const lookup = buildBindingLookup(params);
+  const binding = await params.bindingStore.read(params.identity);
+  if (binding?.threadId !== active.threadId) {
+    return {
+      stopped: false,
+      message: "The active Codex run no longer matches this session binding.",
+    };
+  }
+  const connection = resolveCodexBindingAppServerConnection({
+    binding,
+    authProfileId: binding?.authProfileId,
+    pluginConfig: params.pluginConfig,
+  });
+  const runtime = connection.appServer;
+  // Turn ids are connection-local. Prefer the exact live client; ID-only
+  // records must resolve the binding-owned connection before dispatch.
+  const client =
+    active.client ??
+    (await getLeasedSharedCodexAppServerClient({
+      startOptions: runtime.start,
+      timeoutMs: runtime.requestTimeoutMs,
+      authProfileId: connection.clientAuthProfileId,
+      ...lookup,
+    }));
+  try {
+    await client.request(
+      "turn/interrupt",
+      {
+        threadId: active.threadId,
+        turnId: active.turnId,
+      },
+      { timeoutMs: runtime.requestTimeoutMs },
+    );
+  } finally {
+    if (!active.client) {
+      releaseLeasedSharedCodexAppServerClient(client);
+    }
+  }
   return { stopped: true, message: "Codex stop requested." };
 }
 
@@ -108,16 +140,45 @@ export async function steerCodexConversationTurn(params: {
   if (!active) {
     return { steered: false, message: "No active Codex run to steer." };
   }
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
-  await active.client.request(
-    "turn/steer",
-    {
-      threadId: active.threadId,
-      expectedTurnId: active.turnId,
-      input: [{ type: "text", text, text_elements: [] }],
-    },
-    { timeoutMs: runtime.requestTimeoutMs },
-  );
+  const lookup = buildBindingLookup(params);
+  const binding = await params.bindingStore.read(params.identity);
+  if (binding?.threadId !== active.threadId) {
+    return {
+      steered: false,
+      message: "The active Codex run no longer matches this session binding.",
+    };
+  }
+  const connection = resolveCodexBindingAppServerConnection({
+    binding,
+    authProfileId: binding?.authProfileId,
+    pluginConfig: params.pluginConfig,
+  });
+  const runtime = connection.appServer;
+  // Turn ids are connection-local. Prefer the exact live client; ID-only
+  // records must resolve the binding-owned connection before dispatch.
+  const client =
+    active.client ??
+    (await getLeasedSharedCodexAppServerClient({
+      startOptions: runtime.start,
+      timeoutMs: runtime.requestTimeoutMs,
+      authProfileId: connection.clientAuthProfileId,
+      ...lookup,
+    }));
+  try {
+    await client.request(
+      "turn/steer",
+      {
+        threadId: active.threadId,
+        expectedTurnId: active.turnId,
+        input: [{ type: "text", text, text_elements: [] }],
+      },
+      { timeoutMs: runtime.requestTimeoutMs },
+    );
+  } finally {
+    if (!active.client) {
+      releaseLeasedSharedCodexAppServerClient(client);
+    }
+  }
   return { steered: true, message: "Sent steer message to Codex." };
 }
 
@@ -135,6 +196,9 @@ export async function setCodexConversationModel(params: {
   }
   const lookup = buildBindingLookup(params);
   const binding = await requireThreadBinding(params.bindingStore, params.identity);
+  if (binding.connectionScope === "supervision") {
+    throw new ModelSelectionLockedError();
+  }
   const reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
     provider: "codex",
     model,

@@ -65,6 +65,7 @@ import {
   resolveConversationCapabilityProfile,
   type ResolvedConversationCapabilityProfile,
 } from "./conversation-capability-profile.js";
+import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { createLazyExecTool, resolveExecToolConfig } from "./lazy-exec-tool.js";
 import {
@@ -304,14 +305,6 @@ export const testing = {
   assertRequiredParams,
   applyModelProviderToolPolicy,
 } as const;
-
-export type OpenClawCodingToolConstructionPlan = {
-  includeBaseCodingTools: boolean;
-  includeShellTools: boolean;
-  includeChannelTools: boolean;
-  includeOpenClawTools: boolean;
-  includePluginTools: boolean;
-};
 
 /** Public options for building one plugin-owned agent tool surface. */
 type OpenClawCodingToolsOptions = {

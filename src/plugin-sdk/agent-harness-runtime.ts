@@ -50,7 +50,6 @@ export type {
   AgentHarnessResetParams,
   AgentHarnessSupport,
   AgentHarnessSupportContext,
-  ExpectedAgentHarnessRuntimeArtifact,
 } from "../agents/harness/types.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {

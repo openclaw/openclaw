@@ -1494,8 +1494,15 @@ async function runCoreHealthFindingNote(
   if (findings.length === 0) {
     return;
   }
-  ctx.healthOk = false;
-  note(formatHealthFindings(findings), "Doctor warnings");
+  const information = findings.filter((finding) => finding.severity === "info");
+  const warnings = findings.filter((finding) => finding.severity !== "info");
+  if (information.length > 0) {
+    note(formatHealthFindings(information), "Doctor information");
+  }
+  if (warnings.length > 0) {
+    ctx.healthOk = false;
+    note(formatHealthFindings(warnings), "Doctor warnings");
+  }
 }
 
 async function runProviderCatalogProjectionHealth(ctx: DoctorHealthFlowContext): Promise<void> {

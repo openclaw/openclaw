@@ -58,6 +58,9 @@ export type WorktreesGcResult = SchemaType<"WorktreesGcResult">;
 export type WorktreeBranch = SchemaType<"WorktreeBranch">;
 export type WorktreesBranchesParams = SchemaType<"WorktreesBranchesParams">;
 export type WorktreesBranchesResult = SchemaType<"WorktreesBranchesResult">;
+export type FsDirEntry = SchemaType<"FsDirEntry">;
+export type FsListDirParams = SchemaType<"FsListDirParams">;
+export type FsListDirResult = SchemaType<"FsListDirResult">;
 
 /** Agent activity, identity, send, poll, wait, and wake protocol payloads. */
 export type AgentEvent = SchemaType<"AgentEvent">;

@@ -27,6 +27,35 @@ private actor ActivationMarkerObservation {
     }
 }
 
+private final class ActivationOwnerObservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var observedOwner: OnboardingCrestodianResumeStore.ActivationOwner?
+
+    func record(_ owner: OnboardingCrestodianResumeStore.ActivationOwner?) {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        self.observedOwner = owner
+    }
+
+    func value() -> OnboardingCrestodianResumeStore.ActivationOwner? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.observedOwner
+    }
+}
+
+private final class AISetupSocketGeneration: @unchecked Sendable {
+    private let lock = NSLock()
+    private var nextGeneration = 0
+
+    func claim() -> Int {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        defer { self.nextGeneration += 1 }
+        return self.nextGeneration
+    }
+}
+
 private final class AISetupGatewayConfig: @unchecked Sendable {
     private let lock = NSLock()
     private let url: URL
@@ -264,6 +293,21 @@ private func actionableDetectedSetupResponse(id: String) -> Data {
     return Data(response.utf8)
 }
 
+private func persistedDetectedSetupResponse(
+    id: String,
+    configuredModel: String = "openai/gpt-5.5") -> Data
+{
+    let response = String(decoding: detectedSetupResponse(
+        id: id,
+        kind: "codex-cli",
+        modelRef: "openai/gpt-5.5"), as: UTF8.self)
+        .replacingOccurrences(
+            of: #""configuredModel": null"#,
+            with: #""configuredModel": "\#(configuredModel)""#)
+        .replacingOccurrences(of: #""setupComplete": false"#, with: #""setupComplete": true"#)
+    return Data(response.utf8)
+}
+
 private func missingConfiguredModelResponse(id: String) -> Data {
     Data(
         """
@@ -344,6 +388,57 @@ private func makeAISetupSession(
                     return
                 }
                 task.emitReceiveSuccess(.data(failedActivationResponse(id: request.id)))
+            default:
+                break
+            }
+        })
+    })
+}
+
+private func makeRestartingAISetupSession(
+    suiteName: String,
+    recorder: AISetupRequestRecorder,
+    ownerObservation: ActivationOwnerObservation,
+    postRestartConfiguredModel: String?) -> GatewayTestWebSocketSession
+{
+    let socketGeneration = AISetupSocketGeneration()
+    return GatewayTestWebSocketSession(taskFactory: {
+        let generation = socketGeneration.claim()
+        return GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+            guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
+            if respondToAISetupHealth(task: task, request: request) { return }
+            await recorder.record(message)
+            if generation == 0 {
+                switch request.method {
+                case "crestodian.setup.detect":
+                    task.emitReceiveSuccess(.data(detectedSetupResponse(
+                        id: request.id,
+                        kind: "codex-cli",
+                        modelRef: "openai/gpt-5.5")))
+                case "crestodian.setup.activate":
+                    let owner = UserDefaults(suiteName: suiteName).flatMap {
+                        OnboardingCrestodianResumeStore.activationOwner(
+                            for: "local",
+                            defaults: $0)
+                    }
+                    ownerObservation.record(owner)
+                    task.emitReceiveFailure(URLError(.networkConnectionLost))
+                default:
+                    break
+                }
+                return
+            }
+            switch request.method {
+            case "crestodian.setup.detect":
+                let response = postRestartConfiguredModel.map {
+                    persistedDetectedSetupResponse(id: request.id, configuredModel: $0)
+                } ?? detectedSetupResponse(
+                    id: request.id,
+                    kind: "codex-cli",
+                    modelRef: "openai/gpt-5.5")
+                task.emitReceiveSuccess(.data(response))
+            case "crestodian.setup.verify":
+                task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
             default:
                 break
             }
@@ -610,6 +705,95 @@ struct OnboardingAISetupTests {
         #expect(OnboardingCrestodianResumeStore.pendingState(
             for: "local",
             defaults: defaults) == .none)
+    }
+
+    @Test func `managed Gateway restart reconciles exact persisted activation before handoff`() async throws {
+        let suiteName = "OnboardingManagedRestartReconciliationTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let recorder = AISetupRequestRecorder()
+        let ownerObservation = ActivationOwnerObservation()
+        let session = makeRestartingAISetupSession(
+            suiteName: suiteName,
+            recorder: recorder,
+            ownerObservation: ownerObservation,
+            postRestartConfiguredModel: "openai/gpt-5.5")
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: "route-token", password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let model = OnboardingAISetupModel(
+            gateway: gateway,
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
+        var handoffCount = 0
+        model.onConnected = { handoffCount += 1 }
+
+        await model.detectAndAutoConnect()
+        await model.activate(kind: "codex-cli")
+
+        let activationOwner = try #require(ownerObservation.value())
+        #expect(session.snapshotMakeCount() >= 2)
+        #expect(await (recorder.snapshot()).methods == [
+            "crestodian.setup.detect",
+            "crestodian.setup.activate",
+            "crestodian.setup.detect",
+            "crestodian.setup.verify",
+        ])
+        #expect(model.connected)
+        #expect(model.connectedModelRef == "openai/gpt-5.5")
+        #expect(handoffCount == 1)
+        #expect(OnboardingCrestodianResumeStore.activationOwner(
+            for: "local",
+            defaults: defaults) == activationOwner)
+        #expect(OnboardingCrestodianResumeStore.pendingState(
+            for: "local",
+            defaults: defaults) == .completed)
+    }
+
+    @Test func `managed Gateway restart rejects mismatched persisted transition`() async throws {
+        let suiteName = "OnboardingManagedRestartMismatchTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let recorder = AISetupRequestRecorder()
+        let ownerObservation = ActivationOwnerObservation()
+        let session = makeRestartingAISetupSession(
+            suiteName: suiteName,
+            recorder: recorder,
+            ownerObservation: ownerObservation,
+            postRestartConfiguredModel: "anthropic/other-model")
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: "route-token", password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let model = OnboardingAISetupModel(
+            gateway: gateway,
+            defaults: defaults,
+            routeIdentityProvider: { "local" })
+        var handoffCount = 0
+        model.onConnected = { handoffCount += 1 }
+
+        await model.detectAndAutoConnect()
+        let activation = Task { await model.activate(kind: "codex-cli") }
+        let reconciledRequests = await waitForAISetupRequests(recorder, count: 3)
+        activation.cancel()
+        await activation.value
+
+        let activationOwner = try #require(ownerObservation.value())
+        #expect(Array(reconciledRequests.methods.prefix(3)) == [
+            "crestodian.setup.detect",
+            "crestodian.setup.activate",
+            "crestodian.setup.detect",
+        ])
+        #expect(!reconciledRequests.methods.contains("crestodian.setup.verify"))
+        #expect(!model.connected)
+        #expect(handoffCount == 0)
+        #expect(OnboardingCrestodianResumeStore.isOwned(
+            by: activationOwner,
+            for: "local",
+            defaults: defaults))
+        #expect(model.pendingActivationVerification)
+        #expect(model.waitingForPendingActivationDeadline)
     }
 
     @Test func `completion cannot clear a replacement activation owner`() async throws {

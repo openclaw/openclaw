@@ -39,6 +39,7 @@ import {
   resolveCodexNativeSandboxBlock,
 } from "./app-server/sandbox-guard.js";
 import {
+  assertCodexBindingMayBeReplaced,
   isCodexAppServerNativeAuthProfile,
   normalizeCodexAppServerBindingModelProvider,
   sessionBindingIdentity,
@@ -194,6 +195,7 @@ export async function startCodexConversationThread(
     config: params.config,
   });
   const existingBinding = await params.bindingStore.read(identity);
+  assertCodexBindingMayBeReplaced(existingBinding, "starting a conversation-bound Codex thread");
   const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
     authProfileId: params.authProfileId ?? existingBinding?.authProfileId,
     ...agentLookup,
@@ -354,6 +356,7 @@ export async function handleCodexConversationBindingResolved(
   }
   const identity = conversationBindingIdentity(data);
   const binding = await options.bindingStore.read(identity);
+  assertCodexBindingMayBeReplaced(binding, "clearing a denied conversation binding");
   if (!data.start?.id || binding?.conversationStartId === data.start.id) {
     await options.bindingStore.mutate(identity, { kind: "clear" });
   }
@@ -530,6 +533,8 @@ async function writeThreadBindingFromResponse(
   resolved: CodexThreadBindingRuntime,
   response: CodexThreadResumeResponse | CodexThreadStartResponse,
 ): Promise<void> {
+  const current = await params.bindingStore.read(params.identity);
+  assertCodexBindingMayBeReplaced(current, "storing a conversation-bound Codex thread");
   const runtimeApprovalPolicy =
     typeof resolved.runtime.approvalPolicy === "string"
       ? resolved.runtime.approvalPolicy
@@ -568,6 +573,8 @@ async function attachExistingThread(
     threadId: string;
   },
 ): Promise<void> {
+  const current = await params.bindingStore.read(params.identity);
+  assertCodexBindingMayBeReplaced(current, "attaching a conversation-bound Codex thread");
   const resolved = await resolveThreadBindingRuntime(params);
   try {
     // Codex applies network-proxy permission profiles at thread/start. Resuming
@@ -601,6 +608,8 @@ async function attachExistingThread(
 }
 
 async function createThread(params: CodexThreadBindingParams): Promise<void> {
+  const current = await params.bindingStore.read(params.identity);
+  assertCodexBindingMayBeReplaced(current, "creating a conversation-bound Codex thread");
   const resolved = await resolveThreadBindingRuntime(params);
   try {
     const response = await requestNewConversationBindingThread(params, resolved);
@@ -626,6 +635,7 @@ async function runBoundTurn(params: {
   if (!binding?.threadId) {
     throw new Error("bound Codex conversation has no thread binding");
   }
+  assertCodexBindingMayBeReplaced(binding, "running a conversation-bound Codex thread");
   let threadId = binding.threadId;
   const workspaceDir = binding.cwd || params.data.workspaceDir;
   const reviewerModelProvider = resolveModelBackedReviewerPolicyProvider({
@@ -962,6 +972,11 @@ async function prepareConversationBinding(
     const sourceBinding = sourceIdentity
       ? await params.bindingStore.read(sourceIdentity)
       : undefined;
+    assertCodexBindingMayBeReplaced(current, "initializing a conversation-bound Codex thread");
+    assertCodexBindingMayBeReplaced(
+      sourceBinding,
+      "transferring a session into a conversation-bound Codex thread",
+    );
     const inherited = current ?? sourceBinding;
     const execPolicy = resolveConversationExecPolicy({
       config: params.config,

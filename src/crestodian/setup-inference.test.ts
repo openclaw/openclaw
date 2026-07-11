@@ -54,21 +54,35 @@ import {
 
 const mocks = vi.hoisted(() => ({
   appendAudit: vi.fn(),
+  ensureSelectedAgentHarnessPlugin: vi.fn(),
+  refreshPluginRegistryAfterConfigMutation: vi.fn(),
 }));
 
 vi.mock("./audit.js", () => ({
   appendCrestodianAuditEntry: mocks.appendAudit,
 }));
 
-vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: vi.fn(async () => ({
-    exists: false,
-    valid: false,
-    path: "/tmp/openclaw.json",
-    issues: [],
-    config: {},
-  })),
+vi.mock("../agents/harness/runtime-plugin.js", () => ({
+  ensureSelectedAgentHarnessPlugin: mocks.ensureSelectedAgentHarnessPlugin,
 }));
+
+vi.mock("../plugins/registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistryAfterConfigMutation,
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    readConfigFileSnapshot: vi.fn(async () => ({
+      exists: false,
+      valid: false,
+      path: "/tmp/openclaw.json",
+      issues: [],
+      config: {},
+    })),
+  };
+});
 
 vi.mock("../commands/onboard-inference.js", async (importActual) => {
   const actual = await importActual<typeof import("../commands/onboard-inference.js")>();
@@ -289,6 +303,7 @@ describe("detectSetupInference", () => {
     expect(detection.candidates).toHaveLength(2);
     expect(detection.candidates[0]).toMatchObject({ kind: "claude-cli", recommended: false });
     expect(detection.candidates[1]).toMatchObject({ kind: "codex-cli", recommended: false });
+    expect(detection.codexAppServerDetected).toBe(true);
     expect(detection.setupComplete).toBe(false);
     expect(detection.workspace.length).toBeGreaterThan(0);
     expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
@@ -422,9 +437,90 @@ describe("detectSetupInference", () => {
   });
 });
 
+async function runCodexSetupWithFinalConfig(params: {
+  initialConfig?: OpenClawConfig;
+  currentConfig: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+}) {
+  const initialConfig = params.initialConfig ?? params.sourceConfig;
+  let persistedConfig = structuredClone(params.currentConfig);
+  let committed = false;
+  const refreshPluginRegistry = vi.fn(async () => {});
+  const transformConfig = vi.fn(
+    async (input: {
+      transform: (
+        config: OpenClawConfig,
+        context: {
+          snapshot: {
+            exists: true;
+            valid: true;
+            path: string;
+            config: OpenClawConfig;
+            sourceConfig: OpenClawConfig;
+            runtimeConfig: OpenClawConfig;
+          };
+          previousHash: string | null;
+          attempt: number;
+        },
+      ) => Promise<{ nextConfig: OpenClawConfig }> | { nextConfig: OpenClawConfig };
+    }) => {
+      const transformed = await input.transform(persistedConfig, {
+        snapshot: {
+          exists: true,
+          valid: true,
+          path: "/tmp/openclaw.json",
+          config: params.sourceConfig,
+          sourceConfig: params.sourceConfig,
+          runtimeConfig: params.sourceConfig,
+        },
+        previousHash: null,
+        attempt: 0,
+      });
+      persistedConfig = withoutPluginInstallRecords(transformed.nextConfig);
+      committed = true;
+      return { nextConfig: persistedConfig };
+    },
+  );
+  const readConfigFileSnapshot = vi.fn(async () => {
+    const config = committed ? persistedConfig : initialConfig;
+    return {
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      hash: committed ? "after-setup" : "before-setup",
+      issues: [],
+      config,
+      sourceConfig: config,
+      runtimeConfig: config,
+    };
+  });
+  const result = await activateSetupInference({
+    kind: "codex-cli",
+    workspace: "/tmp/openclaw-workspace",
+    surface: "gateway",
+    runtime,
+    deps: {
+      readConfigFileSnapshot: readConfigFileSnapshot as never,
+      runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6-sol")) as never,
+      ensureCodexRuntimePlugin: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        cfg,
+        required: true,
+        installed: true,
+        status: "installed" as const,
+      })) as never,
+      transformConfigWithPendingPluginInstalls: transformConfig as never,
+      refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+      createTempDir: makeTempDir,
+    },
+  });
+  return { result, persistedConfig, refreshPluginRegistry, transformConfig };
+}
+
 describe("activateSetupInference", () => {
   beforeEach(() => {
     mocks.appendAudit.mockReset();
+    mocks.ensureSelectedAgentHarnessPlugin.mockReset().mockResolvedValue(undefined);
+    mocks.refreshPluginRegistryAfterConfigMutation.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -1168,6 +1264,99 @@ describe("activateSetupInference", () => {
     ).rejects.toThrow("active route owner");
     expect(configHarness.transform).toHaveBeenCalledOnce();
     expect(configHarness.current()).toEqual({});
+  });
+
+  it("does not configure Codex while selecting Claude as the primary backend", async () => {
+    const sourceConfig = {} satisfies OpenClawConfig;
+    const configHarness = createConfigTransformHarness(sourceConfig);
+    const ensureCodexRuntimePlugin = vi.fn();
+    const runCliAgent = vi.fn(async (params: SuccessfulRunParams) => {
+      expect(configHarness.transform).not.toHaveBeenCalled();
+      return successfulRun("claude-cli", "claude-opus-4-8", params);
+    });
+    const refreshPluginRegistry = vi.fn(async () => {});
+
+    const result = await activateSetupInference({
+      kind: "claude-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          path: "/tmp/openclaw.json",
+          issues: [],
+          sourceConfig,
+          config: sourceConfig,
+          runtimeConfig: sourceConfig,
+        })) as never,
+        ensureCodexRuntimePlugin: ensureCodexRuntimePlugin as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        runCliAgent: runCliAgent as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(runCliAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "claude-cli", model: "claude-opus-4-8" }),
+    );
+    expect(ensureCodexRuntimePlugin).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+    expect(configHarness.transform).toHaveBeenCalledOnce();
+    expect(configHarness.current()).toMatchObject({
+      agents: { defaults: { model: "claude-cli/claude-opus-4-8" } },
+    });
+    expect(configHarness.current().plugins?.entries?.codex).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "an explicitly disabled Codex plugin",
+      { plugins: { entries: { codex: { enabled: false } } } } satisfies OpenClawConfig,
+    ],
+    [
+      "an explicit supervision opt-out",
+      {
+        plugins: {
+          entries: { codex: { config: { supervision: { enabled: false } } } },
+        },
+      } satisfies OpenClawConfig,
+    ],
+    ["plugin policy", { plugins: { deny: ["codex"] } } satisfies OpenClawConfig],
+  ])("preserves %s while selecting another backend", async (_label, config) => {
+    const ensureCodexRuntimePlugin = vi.fn();
+    const configHarness = createConfigTransformHarness(config);
+
+    const result = await activateSetupInference({
+      kind: "claude-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          path: "/tmp/openclaw.json",
+          issues: [],
+          sourceConfig: config,
+          config,
+          runtimeConfig: config,
+        })) as never,
+        ensureCodexRuntimePlugin: ensureCodexRuntimePlugin as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(ensureCodexRuntimePlugin).not.toHaveBeenCalled();
+    expect(configHarness.transform).toHaveBeenCalledOnce();
+    expect(configHarness.current()).toMatchObject(config);
+    expect(configHarness.current()).toMatchObject({
+      agents: { defaults: { model: "claude-cli/claude-opus-4-8" } },
+    });
   });
 
   it("does not touch config when the live test fails", async () => {
@@ -2773,7 +2962,6 @@ describe("activateSetupInference", () => {
       plugins: {
         entries: {
           codex: {
-            enabled: false,
             config: { appServer: { command: "codex", mode: "yolo" } },
           },
         },
@@ -2822,12 +3010,22 @@ describe("activateSetupInference", () => {
       async (params: {
         transform: (
           config: OpenClawConfig,
-          context: { snapshot: { config: OpenClawConfig; runtimeConfig: OpenClawConfig } },
-        ) => Promise<{ nextConfig: OpenClawConfig }>;
+          context: {
+            snapshot: {
+              config: OpenClawConfig;
+              sourceConfig: OpenClawConfig;
+              runtimeConfig: OpenClawConfig;
+            };
+          },
+        ) => Promise<{ nextConfig: OpenClawConfig }> | { nextConfig: OpenClawConfig };
       }) => {
         const transformed = (
           await params.transform(persistedConfig, {
-            snapshot: { config: persistedConfig, runtimeConfig: persistedConfig },
+            snapshot: {
+              config: persistedConfig,
+              sourceConfig: persistedConfig,
+              runtimeConfig: persistedConfig,
+            },
           })
         ).nextConfig;
         const configuredRuntime =
@@ -2844,7 +3042,9 @@ describe("activateSetupInference", () => {
     );
     const refreshPluginRegistry = vi.fn(async () => {
       events.push("refresh-plugin-registry");
-      throw new Error("simulated registry refresh failure");
+      if (refreshPluginRegistry.mock.calls.length > 1) {
+        throw new Error("simulated registry refresh failure");
+      }
     });
     const markRetainedInstall = vi.fn(async () => {
       events.push("retain-plugin-install");
@@ -2912,9 +3112,26 @@ describe("activateSetupInference", () => {
         agentId: "ops",
       }),
     );
+    expect(mocks.ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        agentHarnessRuntimeOverride: "codex",
+      }),
+    );
+    expect(refreshPluginRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "source-changed",
+        policyPluginIds: ["codex"],
+        traceCommand: "crestodian-setup-probe",
+        workspaceDir: "/tmp/openclaw-workspace",
+      }),
+    );
+    expect(refreshPluginRegistry).toHaveBeenCalledTimes(2);
     expect(events).toEqual([
       "install-plugin",
       "retain-plugin-install",
+      "refresh-plugin-registry",
       "live-test",
       "persist-plugin-config",
       "refresh-plugin-registry",
@@ -2967,7 +3184,19 @@ describe("activateSetupInference", () => {
           ],
         },
         plugins: {
-          entries: { codex: { enabled: true } },
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                appServer: {
+                  command: "codex",
+                  mode: "yolo",
+                  transport: "stdio",
+                  homeScope: "user",
+                },
+              },
+            },
+          },
           installs: {
             codex: expect.objectContaining({ installPath: "/tmp/plugins/codex" }),
           },
@@ -3004,7 +3233,14 @@ describe("activateSetupInference", () => {
         entries: {
           codex: {
             enabled: true,
-            config: { appServer: { command: "codex", mode: "yolo" } },
+            config: {
+              appServer: {
+                command: "codex",
+                mode: "yolo",
+                transport: "stdio",
+                homeScope: "user",
+              },
+            },
           },
         },
       },
@@ -3024,14 +3260,29 @@ describe("activateSetupInference", () => {
     const ensureCodex = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
       cfg: {
         ...cfg,
-        plugins: { entries: { codex: { enabled: true } } },
+        plugins: {
+          ...cfg.plugins,
+          entries: {
+            ...cfg.plugins?.entries,
+            codex: { ...cfg.plugins?.entries?.codex, enabled: true },
+          },
+        },
       },
       required: true,
       installed: true,
       status: "installed" as const,
     }));
-    const runEmbeddedAgent = vi.fn(successfulRunner("openai", "gpt-5.4"));
-
+    const ensureSelectedAgentHarnessPlugin = vi.fn(async () => {});
+    const refreshPluginRegistryAfterConfigMutation = vi.fn(
+      async (params: { logger?: { warn?: (message: string) => void } }) => {
+        params.logger?.warn?.("best-effort refresh warning");
+      },
+    );
+    const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
+      expect(refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledOnce();
+      expect(ensureSelectedAgentHarnessPlugin).toHaveBeenCalledOnce();
+      return successfulRun("openai", "gpt-5.4", params);
+    });
     const result = await activateSetupInference({
       kind: "codex-cli",
       modelRef: "openai/gpt-5.4",
@@ -3049,20 +3300,36 @@ describe("activateSetupInference", () => {
           runtimeConfig: initialConfig,
         })) as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
+        ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPlugin as never,
+        refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutation as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
-        refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
         createTempDir: makeTempDir,
       },
     });
 
     expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.4" });
     expect(ensureCodex).toHaveBeenCalledWith(expect.objectContaining({ model: "openai/gpt-5.4" }));
-    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+    expect(ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
-        model: "gpt-5.4",
+        modelId: "gpt-5.4",
         agentHarnessRuntimeOverride: "codex",
+      }),
+    );
+    expect(refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "source-changed",
+        policyPluginIds: ["codex"],
+        traceCommand: "crestodian-setup-probe",
+        workspaceDir: "/tmp/work",
+      }),
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessRuntimeOverride: "codex",
+        provider: "openai",
+        model: "gpt-5.4",
         config: expect.objectContaining({
           agents: expect.objectContaining({
             defaults: expect.objectContaining({
@@ -3077,7 +3344,19 @@ describe("activateSetupInference", () => {
               }),
             ]),
           }),
-          plugins: { entries: { codex: { enabled: true } } },
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              codex: expect.objectContaining({
+                enabled: true,
+                config: expect.objectContaining({
+                  appServer: expect.objectContaining({
+                    transport: "stdio",
+                    homeScope: "user",
+                  }),
+                }),
+              }),
+            }),
+          }),
         }),
       }),
     );
@@ -3091,6 +3370,14 @@ describe("activateSetupInference", () => {
           }),
         ]),
       }),
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: { appServer: { transport: "stdio", homeScope: "user" } },
+          },
+        },
+      },
     });
   });
 
@@ -3149,12 +3436,18 @@ describe("activateSetupInference", () => {
       async (params: {
         transform: (
           config: OpenClawConfig,
-          context: { snapshot: { config: OpenClawConfig; runtimeConfig: OpenClawConfig } },
-        ) => Promise<{ nextConfig: OpenClawConfig }>;
+          context: {
+            snapshot: {
+              config: OpenClawConfig;
+              sourceConfig: OpenClawConfig;
+              runtimeConfig: OpenClawConfig;
+            };
+          },
+        ) => Promise<{ nextConfig: OpenClawConfig }> | { nextConfig: OpenClawConfig };
       }) => {
         const transformed = (
           await params.transform(persistedConfig, {
-            snapshot: { config: runtimeConfig, runtimeConfig },
+            snapshot: { config: runtimeConfig, sourceConfig, runtimeConfig },
           })
         ).nextConfig;
         const pending = transformed.plugins?.installs;
@@ -3937,6 +4230,145 @@ describe("resolveCrestodianInferenceForPersistentApply", () => {
       }),
     ).resolves.toBeNull();
     expect(resolveVerifiedInferenceRoute).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("activateSetupInference Codex configuration", () => {
+  it.each([
+    {
+      name: "omitted",
+      config: {} satisfies OpenClawConfig,
+      expectedSupervision: undefined,
+    },
+    {
+      name: "an empty object",
+      config: {
+        plugins: {
+          entries: { codex: { config: { supervision: {} } } },
+        },
+      } satisfies OpenClawConfig,
+      expectedSupervision: {},
+    },
+  ])("does not add Codex supervision when it is $name", async (testCase) => {
+    const { result, persistedConfig, refreshPluginRegistry, transformConfig } =
+      await runCodexSetupWithFinalConfig({
+        currentConfig: testCase.config,
+        sourceConfig: testCase.config,
+      });
+
+    expect(result.ok).toBe(true);
+    expect(persistedConfig.plugins?.entries?.codex).toMatchObject({
+      enabled: true,
+      config: { appServer: { transport: "stdio", homeScope: "user" } },
+    });
+    expect(persistedConfig.plugins?.entries?.codex?.config?.supervision).toEqual(
+      testCase.expectedSupervision,
+    );
+    expect(transformConfig).toHaveBeenCalledOnce();
+    expect(refreshPluginRegistry).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves an explicit Codex supervision opt-out from the latest config", async () => {
+    const config = {
+      plugins: {
+        entries: {
+          codex: {
+            enabled: false,
+            config: {
+              discovery: { enabled: true },
+              supervision: { enabled: false, allowRawTranscripts: true },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const { result, persistedConfig } = await runCodexSetupWithFinalConfig({
+      currentConfig: config,
+      sourceConfig: config,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(persistedConfig.plugins?.entries?.codex).toMatchObject({
+      enabled: true,
+      config: {
+        appServer: { transport: "stdio", homeScope: "user" },
+        discovery: { enabled: true },
+        supervision: { enabled: false, allowRawTranscripts: true },
+      },
+    });
+  });
+
+  it("preserves a normalized Codex supervision opt-out", async () => {
+    const config = {
+      plugins: {
+        allow: [" CODEX "],
+        entries: {
+          " CODEX ": {
+            config: {
+              appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
+              supervision: { enabled: false },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const { result, persistedConfig } = await runCodexSetupWithFinalConfig({
+      currentConfig: config,
+      sourceConfig: config,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(persistedConfig.plugins?.allow).toEqual(["codex"]);
+    expect(persistedConfig.plugins?.entries).toMatchObject({
+      codex: {
+        enabled: true,
+        config: {
+          appServer: { transport: "stdio", url: "ws://127.0.0.1:4500", homeScope: "user" },
+          supervision: { enabled: false },
+        },
+      },
+    });
+  });
+
+  it("preserves an include-owned Codex supervision opt-out without copying it to root", async () => {
+    const resolvedSource = {
+      plugins: {
+        entries: {
+          codex: { config: { supervision: { enabled: false } } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const { result, persistedConfig } = await runCodexSetupWithFinalConfig({
+      initialConfig: resolvedSource,
+      currentConfig: {},
+      sourceConfig: resolvedSource,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(persistedConfig.plugins?.entries?.codex).toMatchObject({
+      enabled: true,
+      config: { appServer: { transport: "stdio", homeScope: "user" } },
+    });
+  });
+
+  it("fails closed when effective plugin policy changes before the success commit", async () => {
+    const denied = { plugins: { deny: ["codex"] } } satisfies OpenClawConfig;
+    const { result, refreshPluginRegistry, transformConfig } = await runCodexSetupWithFinalConfig({
+      initialConfig: {},
+      currentConfig: denied,
+      sourceConfig: denied,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "unavailable",
+      error: expect.stringContaining("blocked by denylist"),
+    });
+    expect(refreshPluginRegistry).toHaveBeenCalledOnce();
+    expect(transformConfig).toHaveBeenCalledOnce();
   });
 });
 

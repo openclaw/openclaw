@@ -45,6 +45,8 @@ export type CrestodianSetupApplyParams = {
   expectedConfigHash?: string | null;
   /** Provider-auth config produced in the isolated manual-key flow. */
   configPatch?: unknown;
+  /** Success-gated final normalization against the config held by the write lock. */
+  finalizeConfig?: (config: OpenClawConfig, sourceConfig: OpenClawConfig) => OpenClawConfig;
   /** Plugin whose enablement belongs to the successful setup transaction. */
   enablePluginId?: string;
   /** Refresh an installed plugin after its success-gated enablement commits. */
@@ -269,6 +271,7 @@ export async function applyCrestodianSetup(
     expectedModelRef,
     expectedConfigHash,
     configPatch,
+    finalizeConfig,
     enablePluginId,
     refreshPluginRegistry,
     assertCommitPreconditions,
@@ -432,8 +435,11 @@ export async function applyCrestodianSetup(
           // A retry can preserve unrelated concurrent edits without carrying
           // stale settings from the losing attempt into service setup or probes.
           const setupCandidate = await buildSetupCandidate(currentConfig);
+          const finalizedConfig = finalizeConfig
+            ? finalizeConfig(setupCandidate.nextConfig, currentSnapshot.sourceConfig)
+            : setupCandidate.nextConfig;
           const expectedPersistedRoute = params.expectedInferenceRoute
-            ? await projectDefaultInferenceRoute(setupCandidate.nextConfig)
+            ? await projectDefaultInferenceRoute(finalizedConfig)
             : undefined;
           if (
             params.expectedInferenceRoute &&
@@ -449,7 +455,7 @@ export async function applyCrestodianSetup(
           // the synchronous cross-store guard across async config I/O.
           assertCommitPreconditions?.();
           return {
-            nextConfig: setupCandidate.nextConfig,
+            nextConfig: finalizedConfig,
             result: { expectedPersistedRoute, settings: setupCandidate.settings },
           };
         },

@@ -175,6 +175,11 @@ offers a manual key/token step populated from the Gateway's active
 text-inference provider plugins. The selected provider owns its starter model
 and config, and the credential is verified the same way before it is saved.
 
+Codex supervision and other optional plugin features stay outside this
+inference activation transaction. Configure them only after inference is
+working and Crestodian has started; existing plugin policy and explicit
+supervision opt-outs remain untouched during inference setup.
+
 ## AI conversation
 
 Interactive Crestodian's free-form conversation runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero OpenClaw authority tool, `crestodian`, that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so Crestodian has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.

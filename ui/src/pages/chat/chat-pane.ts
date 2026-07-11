@@ -31,6 +31,7 @@ import {
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -1266,6 +1267,9 @@ class ChatPane extends OpenClawLightDomElement {
     const agentDefaultModel = this.context.agents.state.agentsList?.agents.find(
       (agent) => agent.id === currentAgentId,
     )?.model?.primary;
+    const selectedSession = state.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, state.sessionKey),
+    );
     const selectedSessionArchived =
       state.selectedChatSessionArchived ||
       state.sessionsResult?.sessions.some(
@@ -1309,6 +1313,7 @@ class ChatPane extends OpenClawLightDomElement {
       fallbackStatus: state.fallbackStatus,
       messages: state.chatMessages,
       sideResult: state.chatSideResult,
+      sideResultPending: state.chatSideResultPending,
       toolMessages: state.chatToolMessages,
       streamSegments: state.chatStreamSegments,
       stream: state.chatStream,
@@ -1347,6 +1352,8 @@ class ChatPane extends OpenClawLightDomElement {
           loading: state.chatLoading,
           modelCatalog: state.chatModelCatalog,
           modelOverrides: state.sessions.state.modelOverrides,
+          modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
+          modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
           modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
           modelsLoading: state.chatModelsLoading,
           sending: state.chatSending,
@@ -1423,6 +1430,7 @@ class ChatPane extends OpenClawLightDomElement {
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),
       onRefresh: () => {
         state.chatSideResult = null;
+        retirePendingChatSideQuestion(state);
         state.resetToolStream();
         void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false });
       },
@@ -1462,8 +1470,12 @@ class ChatPane extends OpenClawLightDomElement {
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
+      onSideQuestion: (command) => void state.handleSendChat(command),
       onDismissSideResult: () => {
         state.chatSideResult = null;
+        // Retire (not just clear) so a dismissed question's still-running
+        // detached run cannot leak its late reply into the transcript.
+        retirePendingChatSideQuestion(state);
         state.requestUpdate?.();
       },
       replyTarget: state.chatReplyTarget ?? null,

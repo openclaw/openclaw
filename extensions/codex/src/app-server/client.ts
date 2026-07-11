@@ -275,7 +275,7 @@ export class CodexAppServerClient {
     if (startOptions.transport === "stdio" && startOptions.commandSource === "managed") {
       throw new Error("Managed Codex app-server start options must be resolved before spawn.");
     }
-    if (startOptions.transport === "websocket") {
+    if (startOptions.transport === "websocket" || startOptions.transport === "unix") {
       return new CodexAppServerClient(createWebSocketTransport(startOptions));
     }
     return new CodexAppServerClient(createStdioTransport(startOptions));

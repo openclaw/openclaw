@@ -612,6 +612,8 @@ struct OnboardingView: View {
     let connectionPageIndex = 1
     let cliPageIndex = 2
     let aiPageIndex = 3
+    let onboardingChatPageIndex = 8
+    let readyPageIndex = 9
 
     let permissionsPageIndex = 5
 

@@ -3741,6 +3741,12 @@ function classifyTarget(arg, cwd) {
   if (isPathAtOrUnder(relative, "src/gateway")) {
     return "gateway";
   }
+  if (
+    isPathAtOrUnder(relative, "packages/gateway-client") ||
+    isPathAtOrUnder(relative, "packages/gateway-protocol")
+  ) {
+    return "gatewayClient";
+  }
   if (isPathAtOrUnder(relative, "src/hooks")) {
     return "hooks";
   }
