@@ -46,6 +46,33 @@ function copySchemaMeta(from: Record<string, unknown>, to: Record<string, unknow
   }
 }
 
+// Google requires enum entries as strings even when the declared schema type is numeric or
+// boolean. Keep the type intact so tool argument generation and runtime validation still agree.
+function stringifyGeminiEnumValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return String(value);
+  }
+  return undefined;
+}
+
+function cleanGeminiEnumValues(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const values = value.flatMap((entry) => {
+    const stringified = stringifyGeminiEnumValue(entry);
+    return stringified === undefined ? [] : [stringified];
+  });
+  const unique = [...new Set(values)];
+  return unique.length > 0 ? unique : undefined;
+}
+
 // Check if an anyOf/oneOf array contains only literal values that can be flattened.
 // TypeBox Type.Literal generates { const: "value", type: "string" }.
 // Some schemas may use { enum: ["value"], type: "string" }.
@@ -317,48 +344,7 @@ function cleanSchemaForGeminiWithDefs(
     }
   }
 
-  // Gemini's Function Calling only accepts STRING values in `enum` (see
-  // https://ai.google.dev/gemini-api/docs/function-calling). Numeric, boolean,
-  // and bigint enum values must be coerced to strings, otherwise the API
-  // rejects the whole request with:
-  //   Invalid value at 'tools[X].function_declarations[Y].parameters...enum[N]'
-  //   (TYPE_STRING), 1
-  // This applies to both `enum` arrays and single-valued `const` (which is
-  // rewritten to `enum: [value]` below).
-  const coerceEnumValue = (v: unknown): string | undefined => {
-    if (typeof v === "string") {
-      return v;
-    }
-    if (typeof v === "number" && Number.isFinite(v)) {
-      return String(v);
-    }
-    if (typeof v === "boolean") {
-      return v ? "true" : "false";
-    }
-    if (typeof v === "bigint") {
-      return v.toString();
-    }
-    return undefined;
-  };
-  const coerceEnumArray = (arr: unknown): string[] | undefined => {
-    if (!Array.isArray(arr)) {
-      return undefined;
-    }
-    const out: string[] = [];
-    for (const entry of arr) {
-      const coerced = coerceEnumValue(entry);
-      if (coerced !== undefined && !out.includes(coerced)) {
-        out.push(coerced);
-      }
-    }
-    return out;
-  };
-
   const cleaned: Record<string, unknown> = {};
-  // Track whether we produced an enum this pass; the final `type` is forced to
-  // "string" after the loop so that `type` appearing AFTER `enum` in the input
-  // schema cannot overwrite the coercion (schema key order is not semantic).
-  let enumCoercedToString = false;
 
   for (const [key, value] of Object.entries(obj)) {
     if (GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS.has(key)) {
@@ -366,19 +352,17 @@ function cleanSchemaForGeminiWithDefs(
     }
 
     if (key === "const") {
-      const coerced = coerceEnumValue(value);
-      if (coerced !== undefined) {
-        cleaned.enum = [coerced];
-        enumCoercedToString = true;
+      const enumValues = cleanGeminiEnumValues([value]);
+      if (enumValues) {
+        cleaned.enum = enumValues;
       }
       continue;
     }
 
     if (key === "enum") {
-      const coerced = coerceEnumArray(value);
-      if (coerced && coerced.length > 0) {
-        cleaned.enum = coerced;
-        enumCoercedToString = true;
+      const enumValues = cleanGeminiEnumValues(value);
+      if (enumValues) {
+        cleaned.enum = enumValues;
       }
       continue;
     }
@@ -440,14 +424,6 @@ function cleanSchemaForGeminiWithDefs(
     } else {
       cleaned[key] = value;
     }
-  }
-
-  // Force `type: "string"` when the schema produced a coerced enum, regardless
-  // of the input schema's property order. Setting this after the loop makes the
-  // behavior independent of whether `type` appeared before or after `enum` /
-  // `const` in the input object.
-  if (enumCoercedToString) {
-    cleaned.type = "string";
   }
 
   // Cloud Code Assist API rejects anyOf/oneOf in nested schemas even after

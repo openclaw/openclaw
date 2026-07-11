@@ -226,48 +226,34 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.properties?.agentId?.type).toBe("string");
   });
 
-  // Gemini Function Calling requires string enum values. Numeric/boolean enums
-  // (common in tool schemas — priorities, scores, flags) must be coerced to
-  // strings and the schema retyped as `"string"`, otherwise Gemini rejects the
-  // request with `TYPE_STRING expected` errors.
-  it("coerces numeric enum values to strings and retypes as string", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "integer",
-      enum: [1, 2, 3],
-    }) as { type?: unknown; enum?: unknown };
-
-    expect(cleaned.type).toBe("string");
-    expect(cleaned.enum).toStrictEqual(["1", "2", "3"]);
-  });
-
-  it("coerces boolean enum values to strings", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "boolean",
-      enum: [true, false],
-    }) as { type?: unknown; enum?: unknown };
-
-    expect(cleaned.type).toBe("string");
-    expect(cleaned.enum).toStrictEqual(["true", "false"]);
-  });
-
-  it("preserves already-string enum values without retyping", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "string",
-      enum: ["a", "b", "c"],
-    }) as { type?: unknown; enum?: unknown };
-
-    expect(cleaned.type).toBe("string");
-    expect(cleaned.enum).toStrictEqual(["a", "b", "c"]);
-  });
-
-  it("coerces a numeric const to a string enum and retypes as string", () => {
-    const cleaned = cleanSchemaForGemini({
-      type: "integer",
-      const: 42,
-    }) as { type?: unknown; enum?: unknown };
-
-    expect(cleaned.type).toBe("string");
-    expect(cleaned.enum).toStrictEqual(["42"]);
+  it.each([
+    {
+      name: "integer enum",
+      schema: { type: "integer", enum: [1, 2, 3] },
+      expected: { type: "integer", enum: ["1", "2", "3"] },
+    },
+    {
+      name: "integer enum before type",
+      schema: { enum: [1, 2, 3], type: "integer" },
+      expected: { enum: ["1", "2", "3"], type: "integer" },
+    },
+    {
+      name: "boolean enum",
+      schema: { type: "boolean", enum: [true, false] },
+      expected: { type: "boolean", enum: ["true", "false"] },
+    },
+    {
+      name: "string enum",
+      schema: { type: "string", enum: ["a", "b", "c"] },
+      expected: { type: "string", enum: ["a", "b", "c"] },
+    },
+    {
+      name: "integer const before type",
+      schema: { const: 42, type: "integer" },
+      expected: { enum: ["42"], type: "integer" },
+    },
+  ])("stringifies $name values without changing the schema type", ({ schema, expected }) => {
+    expect(cleanSchemaForGemini(schema)).toStrictEqual(expected);
   });
 
   it("drops null/undefined enum entries and de-duplicates", () => {
@@ -279,7 +265,7 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.enum).toStrictEqual(["1", "2", "3"]);
   });
 
-  it("coerces numeric enums inside deeply nested tool parameters", () => {
+  it("stringifies nested numeric enums while preserving their number type", () => {
     const cleaned = cleanSchemaForGemini({
       type: "object",
       properties: {
@@ -300,7 +286,7 @@ describe("cleanSchemaForGemini", () => {
     };
 
     const score = cleaned.properties?.outer?.items?.properties?.score;
-    expect(score?.type).toBe("string");
+    expect(score?.type).toBe("number");
     expect(score?.enum).toStrictEqual(["1", "2", "3", "4", "5"]);
   });
 
@@ -311,49 +297,5 @@ describe("cleanSchemaForGemini", () => {
     }) as { enum?: unknown };
 
     expect(cleaned.enum).toBeUndefined();
-  });
-
-  // Regression: schema key order is not semantic. `{ enum: [...], type: "..." }`
-  // must produce the same output as `{ type: "...", enum: [...] }`. If the
-  // coercion is applied only while visiting `enum`, a later `type` key would
-  // overwrite `type: "string"` and Gemini would still reject the declaration.
-  it("coerces numeric enum with enum-before-type ordering (regression: property order independence)", () => {
-    const cleaned = cleanSchemaForGemini({
-      enum: [1, 2, 3],
-      type: "integer",
-    }) as { type?: unknown; enum?: unknown };
-
-    expect(cleaned.type).toBe("string");
-    expect(cleaned.enum).toStrictEqual(["1", "2", "3"]);
-  });
-
-  it("coerces boolean enum with enum-before-type ordering", () => {
-    const cleaned = cleanSchemaForGemini({
-      enum: [true, false],
-      type: "boolean",
-    }) as { type?: unknown; enum?: unknown };
-
-    expect(cleaned.type).toBe("string");
-    expect(cleaned.enum).toStrictEqual(["true", "false"]);
-  });
-
-  it("coerces numeric const with const-before-type ordering", () => {
-    const cleaned = cleanSchemaForGemini({
-      const: 42,
-      type: "integer",
-    }) as { type?: unknown; enum?: unknown };
-
-    expect(cleaned.type).toBe("string");
-    expect(cleaned.enum).toStrictEqual(["42"]);
-  });
-
-  it("leaves type untouched when no enum coercion happened", () => {
-    // A pure integer schema without enum/const must NOT be retyped as string.
-    const cleaned = cleanSchemaForGemini({
-      type: "integer",
-      description: "a plain integer field",
-    }) as { type?: unknown };
-
-    expect(cleaned.type).toBe("integer");
   });
 });
