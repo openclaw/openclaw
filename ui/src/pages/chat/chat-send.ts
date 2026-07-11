@@ -2178,6 +2178,10 @@ export async function handleSendChat(
       isBtwCommand(message) || (parsed?.command.key === "approve" && isChatBusy(host));
     if (shouldSendDetachedCommand) {
       const submitKey = chatSubmitKey(host, "detached", message, attachmentsToSend);
+      // Covers every non-accepted path — early exits, guard dedupe, and
+      // rejected acks — so the side-chat panel can restore its typed
+      // follow-up even when no request was sent.
+      let detachedSendAccepted = false;
       await withChatSubmitGuard(host, submitKey, async () => {
         const pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
         if (
@@ -2222,18 +2226,17 @@ export async function handleSendChat(
           previousAttachments: cleared.previousAttachments,
           runId: btwPending?.runId,
         });
+        detachedSendAccepted = isAcceptedChatSendAck(ack);
         // Touch only this send's card: a side_result (or a newer question)
         // may already have replaced it while the ack was in flight.
-        if (
-          btwPending &&
-          host.chatSideResultPending === btwPending &&
-          !isAcceptedChatSendAck(ack)
-        ) {
+        if (btwPending && host.chatSideResultPending === btwPending && !detachedSendAccepted) {
           host.chatSideResultPending = null;
-          opts?.onSideQuestionSendRejected?.();
           host.requestUpdate?.();
         }
       });
+      if (!detachedSendAccepted) {
+        opts?.onSideQuestionSendRejected?.();
+      }
       return;
     }
 

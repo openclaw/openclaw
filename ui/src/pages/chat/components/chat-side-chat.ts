@@ -128,12 +128,15 @@ export function renderSideChatPanel(props: SideChatPanelProps): TemplateResult |
       ${props.canFollowUp
         ? html`
             <footer class="chat-side-chat__composer">
+              <!-- Disabled while a question is pending: a new /btw would retire
+                   the in-flight run and silently drop its answer. -->
               <div class="chat-side-chat__prompt">
                 <input
                   class="chat-side-chat__input"
                   type="text"
-                  placeholder="Follow up…"
+                  placeholder=${pending ? "Thinking…" : "Follow up…"}
                   aria-label="Follow up in side chat"
+                  .disabled=${pending != null}
                   @keydown=${(event: KeyboardEvent) => {
                     if (event.key !== "Enter" || event.isComposing) {
                       return;
@@ -146,6 +149,7 @@ export function renderSideChatPanel(props: SideChatPanelProps): TemplateResult |
                   class="btn btn--ghost btn--icon chat-icon-btn chat-side-chat__send"
                   type="button"
                   aria-label="Send follow-up"
+                  .disabled=${pending != null}
                   @click=${(event: MouseEvent) => {
                     const input = (event.currentTarget as HTMLElement)
                       .closest(".chat-side-chat__prompt")

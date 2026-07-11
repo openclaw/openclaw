@@ -87,6 +87,30 @@ describe("side chat panel render", () => {
     expect(container.querySelector(".chat-side-chat__composer")).toBeNull();
   });
 
+  it("disables the follow-up input while a question is pending", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderSideChatPanel({
+        turns: [turn()],
+        pending: { question: "and why?", ts: 3 },
+        hidden: false,
+        canFollowUp: true,
+        onFollowUp: vi.fn(),
+      }),
+      container,
+    );
+
+    const input = container.querySelector<HTMLInputElement>(".chat-side-chat__input");
+    // A new /btw while one is pending would retire the in-flight run and
+    // silently drop its answer.
+    expect(input?.disabled).toBe(true);
+    expect(input?.placeholder).toBe("Thinking…");
+    expect(container.querySelector<HTMLButtonElement>(".chat-side-chat__send")?.disabled).toBe(
+      true,
+    );
+  });
+
   it("renders nothing while hidden or empty", () => {
     const container = document.createElement("div");
 

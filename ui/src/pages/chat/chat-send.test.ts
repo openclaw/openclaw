@@ -6427,6 +6427,49 @@ describe("handleSendChat", () => {
     expect(host.lastError).toBe("The active run ended before the detached message was accepted.");
   });
 
+  it("notifies side-chat rejection on failed sends and pre-send exits", async () => {
+    const onSideQuestionSendRejected = vi.fn();
+    const host = makeHost({
+      client: {
+        request: vi.fn(async (method: string) => {
+          if (method === "chat.send") {
+            return { runId: "btw-rejected", status: "timeout" };
+          }
+          throw new Error(`Unexpected request: ${method}`);
+        }),
+      } as unknown as ChatHost["client"],
+    });
+
+    await handleSendChat(host, "/btw and why?", {
+      sideQuestionDisplayText: "and why?",
+      onSideQuestionSendRejected,
+    });
+    expect(onSideQuestionSendRejected).toHaveBeenCalledTimes(1);
+    expect(host.chatSideResultPending).toBeNull();
+
+    // Pre-send exit (session switched away before the guarded send ran) must
+    // also notify: the panel cleared its input when it handed the command off.
+    const switchingHost = makeHost({
+      client: {
+        request: vi.fn(async () => {
+          throw new Error("must not send");
+        }),
+      } as unknown as ChatHost["client"],
+      chatSubmitGuards: new Map(),
+    });
+    const originalGuards = switchingHost.chatSubmitGuards;
+    // Simulate the session switching between submit and the guarded body.
+    Object.defineProperty(switchingHost, "sessionKey", {
+      configurable: true,
+      get: () => (originalGuards?.size ? "other-session" : "main"),
+    });
+    await handleSendChat(switchingHost, "/btw and why?", {
+      sideQuestionDisplayText: "and why?",
+      onSideQuestionSendRejected,
+    });
+    expect(onSideQuestionSendRejected).toHaveBeenCalledTimes(2);
+  });
+
   it("clears BTW side results when /clear resets chat history", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.reset") {
