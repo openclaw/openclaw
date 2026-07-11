@@ -1,6 +1,13 @@
-﻿// Manages reply session records, labels, ids, and route persistence.
+// Manages reply session records, labels, ids, and route persistence.
 import crypto from "node:crypto";
 import {
+/**
+ * Maximum retries for session initialization conflicts during concurrent session writes.
+ * Each retry uses exponential backoff to allow the active turn to finish writing.
+ */
+const SESSION_INIT_MAX_RETRIES = 3;
+const SESSION_INIT_RETRY_BASE_MS = 100;
+
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -101,13 +108,6 @@ import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./sess
 import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
-/**
- * Maximum number of retries for session initialization conflicts caused by
- * concurrent session store writes during active agent turns.
- * Each retry uses exponential backoff to allow the active turn to finish writing.
- */
-const SESSION_INIT_MAX_RETRIES = 3;
-const SESSION_INIT_RETRY_BASE_MS = 100;
 const log = createSubsystemLogger("session-init");
 
 function stripThreadFromSessionRoute(route: SessionEntry["route"]): SessionEntry["route"] {
@@ -378,7 +378,7 @@ export function resolveReplySessionPreprocessingState(
 
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
-  return await initSessionStateAttempt(params, false);
+  return await initSessionStateAttempt(params, 0);
 }
 
 async function initSessionStateAttempt(
@@ -1092,8 +1092,7 @@ async function initSessionStateAttemptLocked(
   });
   if (!committed.ok) {
     if (staleRetryCount < SESSION_INIT_MAX_RETRIES) {
-      await new Promise((resolve) => setTimeout(resolve, SESSION_INIT_RETRY_BASE_MS * 2 ** Math.min(staleRetryCount, 4)));
-      return await initSessionStateAttemptLocked(params, attemptContext, staleRetryCount + 1, undefined);
+      return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
     }
     throw new Error(`reply session initialization conflicted for ${sessionKey}`);
   }
