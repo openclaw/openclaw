@@ -5423,206 +5423,188 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it.each([
+  type BufferedFailureDeliveryScenario = {
+    name: string;
+    transport: "direct" | "routed";
+    replyKind: "block" | "final";
+    outcome: "delivered" | "suppressed" | "cancelled" | "declined" | "failed";
+    shouldFlush: boolean;
+    tts?: boolean;
+    expectedKinds?: Array<"block" | "final">;
+    expectedCancelled?: { tool: number; block: number; final: number };
+    expectedFailed?: { tool: number; block: number; final: number };
+    expectedQueuedFinal?: boolean;
+  };
+  const bufferedFailureDeliveryScenarios: BufferedFailureDeliveryScenario[] = [
+    ...(["delivered", "suppressed", "failed"] as const).map((outcome) => ({
+      name: `handles buffered failed progress when routed block delivery is ${outcome}`,
+      transport: "routed" as const,
+      replyKind: "block" as const,
+      outcome,
+      shouldFlush: outcome !== "delivered",
+      expectedKinds: ["block" as const],
+    })),
     {
+      name: "flushes buffered failed progress when a dispatcher cancels block delivery",
+      transport: "direct",
+      replyKind: "block",
+      outcome: "cancelled",
+      shouldFlush: true,
+      expectedCancelled: { tool: 0, block: 1, final: 0 },
+    },
+    {
+      name: "flushes buffered failed progress when a dispatcher declines the block",
+      transport: "direct",
+      replyKind: "block",
+      outcome: "declined",
+      shouldFlush: true,
+    },
+    {
+      name: "discards buffered failed progress after confirmed dispatcher block delivery",
+      transport: "direct",
+      replyKind: "block",
       outcome: "delivered",
-      result: { ok: true, messageId: "mock" },
       shouldFlush: false,
+      expectedKinds: ["block"],
     },
     {
+      name: "flushes buffered failed progress when a routed final is suppressed",
+      transport: "routed",
+      replyKind: "final",
       outcome: "suppressed",
-      result: {
-        ok: true,
-        messageId: "mock",
-        suppressed: true,
-        reason: "cancelled_by_reply_payload_sending_hook",
-      },
       shouldFlush: true,
+      expectedKinds: ["final"],
+      expectedQueuedFinal: false,
     },
     {
-      outcome: "failed",
-      result: { ok: false, messageId: "mock", error: "delivery failed" },
+      name: "flushes buffered failed progress when a direct final is cancelled",
+      transport: "direct",
+      replyKind: "final",
+      outcome: "cancelled",
       shouldFlush: true,
+      expectedCancelled: { tool: 0, block: 0, final: 1 },
     },
-  ] as const)(
-    "handles buffered failed progress when routed block delivery is $outcome",
-    async ({ result, shouldFlush }) => {
-      mocks.routeReply.mockResolvedValue(result);
-      const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeReply({
-        dispatcher: createDispatcher(),
-        ctx: buildTestCtx({
-          Provider: "discord",
-          Surface: "discord",
-          OriginatingChannel: "slack",
-          OriginatingTo: "channel:C123",
-          ChatType: "direct",
-          SessionKey: "agent:main:slack:direct:U1",
-        }),
+    {
+      name: "flushes buffered failed progress when direct final delivery fails",
+      transport: "direct",
+      replyKind: "final",
+      outcome: "failed",
+      shouldFlush: true,
+      expectedKinds: ["final"],
+      expectedFailed: { tool: 0, block: 0, final: 1 },
+    },
+    {
+      name: "flushes buffered failed progress when direct block and TTS delivery are cancelled",
+      transport: "direct",
+      replyKind: "block",
+      outcome: "cancelled",
+      shouldFlush: true,
+      tts: true,
+      expectedCancelled: { tool: 0, block: 1, final: 1 },
+    },
+    {
+      name: "flushes buffered failed progress when routed block and TTS delivery are suppressed",
+      transport: "routed",
+      replyKind: "block",
+      outcome: "suppressed",
+      shouldFlush: true,
+      tts: true,
+      expectedKinds: ["block", "final"],
+      expectedQueuedFinal: false,
+    },
+  ];
+
+  it.each(bufferedFailureDeliveryScenarios)("$name", async (scenario) => {
+    ttsMocks.state.synthesizeFinalAudio = scenario.tts === true;
+    const deliver = vi.fn<Parameters<typeof createReplyDispatcher>[0]["deliver"]>(
+      async (_payload, _info) => {
+        if (scenario.outcome === "failed") {
+          throw new Error("delivery failed");
+        }
+      },
+    );
+    const dispatcher = (() => {
+      if (scenario.transport === "routed") {
+        mocks.routeReply.mockResolvedValue(
+          scenario.outcome === "failed"
+            ? { ok: false, messageId: "mock", error: "delivery failed" }
+            : {
+                ok: true,
+                messageId: "mock",
+                ...(scenario.outcome === "suppressed"
+                  ? { suppressed: true, reason: "cancelled_by_reply_payload_sending_hook" }
+                  : {}),
+              },
+        );
+        return createDispatcher();
+      }
+      if (scenario.outcome === "declined") {
+        const declinedDispatcher = createDispatcher();
+        vi.mocked(declinedDispatcher.sendBlockReply).mockReturnValue(false);
+        return declinedDispatcher;
+      }
+      return createReplyDispatcher({
+        deliver,
+        ...(scenario.outcome === "cancelled" ? { beforeDeliver: () => null } : {}),
+      });
+    })();
+    const ctx =
+      scenario.transport === "routed"
+        ? buildTestCtx({
+            Provider: "discord",
+            Surface: "discord",
+            OriginatingChannel: "slack",
+            OriginatingTo: "channel:C123",
+            ChatType: "direct",
+            SessionKey: "agent:main:slack:direct:U1",
+          })
+        : undefined;
+
+    const { failedCommand, onCommandOutput, result } =
+      await dispatchFailedCommandProgressBeforeReply({
+        dispatcher,
+        ctx,
+        replyKind: scenario.replyKind,
       });
 
-      if (shouldFlush) {
-        expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
-      } else {
-        expect(onCommandOutput).not.toHaveBeenCalled();
-      }
-      expect(mocks.routeReply).toHaveBeenCalledWith(
+    if (scenario.shouldFlush) {
+      expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
+    } else {
+      expect(onCommandOutput).not.toHaveBeenCalled();
+    }
+    if (scenario.transport === "routed") {
+      expect(mocks.routeReply.mock.calls.map(([call]) => call.replyKind)).toEqual(
+        scenario.expectedKinds,
+      );
+      expect(mocks.routeReply.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({ payload: { text: "visible answer" } }),
+      );
+    } else if (scenario.outcome === "declined") {
+      expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "visible answer" });
+    } else {
+      expect(deliver.mock.calls.map(([, info]) => info?.kind)).toEqual(
+        scenario.expectedKinds ?? [],
+      );
+    }
+    if (scenario.expectedCancelled) {
+      expect(dispatcher.getCancelledCounts?.()).toEqual(scenario.expectedCancelled);
+    }
+    if (scenario.expectedFailed) {
+      expect(dispatcher.getFailedCounts()).toEqual(scenario.expectedFailed);
+    }
+    if (scenario.expectedQueuedFinal !== undefined) {
+      expect(result.queuedFinal).toBe(scenario.expectedQueuedFinal);
+    }
+    if (scenario.tts && scenario.transport === "routed") {
+      expect(mocks.routeReply.mock.calls[1]?.[0]).toEqual(
         expect.objectContaining({
-          payload: { text: "visible answer" },
-          replyKind: "block",
+          payload: expect.objectContaining({
+            mediaUrl: "https://example.com/tts-synth.opus",
+            spokenText: "visible answer",
+          }),
         }),
       );
-    },
-  );
-
-  it("flushes buffered failed progress when a dispatcher cancels block delivery", async () => {
-    const deliver = vi.fn(async () => undefined);
-    const dispatcher = createReplyDispatcher({
-      deliver,
-      beforeDeliver: (payload, info) => (info.kind === "block" ? null : payload),
-    });
-
-    const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeReply({
-      dispatcher,
-    });
-
-    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
-    expect(dispatcher.getCancelledCounts?.().block).toBe(1);
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("flushes buffered failed progress when a dispatcher declines the block", async () => {
-    const dispatcher = createDispatcher();
-    vi.mocked(dispatcher.sendBlockReply).mockReturnValue(false);
-
-    const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeReply({
-      dispatcher,
-    });
-
-    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
-    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "visible answer" });
-  });
-
-  it("discards buffered failed progress after confirmed dispatcher block delivery", async () => {
-    const deliver = vi.fn(async () => undefined);
-    const dispatcher = createReplyDispatcher({ deliver });
-
-    const { onCommandOutput } = await dispatchFailedCommandProgressBeforeReply({ dispatcher });
-
-    expect(onCommandOutput).not.toHaveBeenCalled();
-    expect(deliver).toHaveBeenCalledWith({ text: "visible answer" }, { kind: "block" });
-  });
-
-  it("flushes buffered failed progress when a routed final is suppressed", async () => {
-    mocks.routeReply.mockResolvedValue({
-      ok: true,
-      suppressed: true,
-      reason: "cancelled_by_reply_payload_sending_hook",
-    });
-    const { failedCommand, onCommandOutput, result } =
-      await dispatchFailedCommandProgressBeforeReply({
-        dispatcher: createDispatcher(),
-        replyKind: "final",
-        ctx: buildTestCtx({
-          Provider: "discord",
-          Surface: "discord",
-          OriginatingChannel: "slack",
-          OriginatingTo: "channel:C123",
-          ChatType: "direct",
-          SessionKey: "agent:main:slack:direct:U1",
-        }),
-      });
-
-    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
-    expect(result.queuedFinal).toBe(false);
-    expect(mocks.routeReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: { text: "visible answer" },
-        replyKind: "final",
-      }),
-    );
-  });
-
-  it("flushes buffered failed progress when a direct final is cancelled", async () => {
-    const deliver = vi.fn(async () => undefined);
-    const dispatcher = createReplyDispatcher({
-      deliver,
-      beforeDeliver: (payload, info) => (info.kind === "final" ? null : payload),
-    });
-
-    const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeReply({
-      dispatcher,
-      replyKind: "final",
-    });
-
-    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
-    expect(dispatcher.getCancelledCounts?.().final).toBe(1);
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("flushes buffered failed progress when direct final delivery fails", async () => {
-    const deliver = vi.fn(async () => {
-      throw new Error("delivery failed");
-    });
-    const dispatcher = createReplyDispatcher({ deliver });
-
-    const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeReply({
-      dispatcher,
-      replyKind: "final",
-    });
-
-    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
-    expect(dispatcher.getFailedCounts().final).toBe(1);
-    expect(deliver).toHaveBeenCalledWith({ text: "visible answer" }, { kind: "final" });
-  });
-
-  it("flushes buffered failed progress when direct block and TTS delivery are cancelled", async () => {
-    ttsMocks.state.synthesizeFinalAudio = true;
-    const deliver = vi.fn(async () => undefined);
-    const dispatcher = createReplyDispatcher({
-      deliver,
-      beforeDeliver: () => null,
-    });
-
-    const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeReply({
-      dispatcher,
-    });
-
-    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
-    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 1, final: 1 });
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("flushes buffered failed progress when routed block and TTS delivery are suppressed", async () => {
-    ttsMocks.state.synthesizeFinalAudio = true;
-    mocks.routeReply.mockResolvedValue({
-      ok: true,
-      suppressed: true,
-      reason: "empty_after_reply_payload_sending_hook",
-    });
-    const { failedCommand, onCommandOutput, result } =
-      await dispatchFailedCommandProgressBeforeReply({
-        dispatcher: createDispatcher(),
-        ctx: buildTestCtx({
-          Provider: "discord",
-          Surface: "discord",
-          OriginatingChannel: "slack",
-          OriginatingTo: "channel:C123",
-          ChatType: "direct",
-          SessionKey: "agent:main:slack:direct:U1",
-        }),
-      });
-
-    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
-    expect(result.queuedFinal).toBe(false);
-    expect(mocks.routeReply.mock.calls.map(([call]) => call.replyKind)).toEqual(["block", "final"]);
-    expect(mocks.routeReply.mock.calls[1]?.[0]).toEqual(
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          mediaUrl: "https://example.com/tts-synth.opus",
-          spokenText: "visible answer",
-        }),
-      }),
-    );
+    }
   });
 
   it("flushes buffered regular-verbose failed tool payloads when no final reply is visible", async () => {
