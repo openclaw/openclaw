@@ -153,10 +153,13 @@ async function main() {
 
 async function formatRunnerErrorMessage(error: unknown) {
   try {
+    // Widen the specifier so the source-only test-root program does not try to
+    // resolve dist (TS2307); the docker-e2e boundary guard requires importing
+    // built dist here, so the cast stays structural instead of a src reference.
     const distErrorsPath = "../../dist/infra/errors.js" as string;
-    const { formatErrorMessage } = (await import(
-      distErrorsPath
-    )) as typeof import("../../src/infra/errors.js");
+    const { formatErrorMessage } = (await import(distErrorsPath)) as {
+      formatErrorMessage: (err: unknown) => string;
+    };
     return formatErrorMessage(error);
   } catch {
     return error instanceof Error ? error.message : String(error);
