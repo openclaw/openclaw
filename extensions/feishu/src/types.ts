@@ -77,6 +77,10 @@ export type FeishuMessageInfo = {
   createTime?: number;
   /** Feishu thread ID (omt_xxx) — present when the message belongs to a topic thread. */
   threadId?: string;
+  /** Media resources recovered from the historical message content, saved in the inbound media store. */
+  media?: FeishuMediaInfo[];
+  /** Number of historical media resources that could not be downloaded. */
+  mediaUnavailableCount?: number;
 };
 
 export interface FeishuProbeResult extends BaseProbeResult {
