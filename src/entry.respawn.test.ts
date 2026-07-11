@@ -37,6 +37,52 @@ describe("buildCliRespawnPlan", () => {
     ).toBeNull();
   });
 
+  it.each([
+    ["command", ["node", "openclaw", "--profile", "release", "update", "--yes"]],
+    ["alias", ["node", "openclaw", "--profile", "release", "--update", "--yes"]],
+  ] as const)("preserves the POSIX CA bootstrap for the update %s", (_label, argv) => {
+    const plan = expectCliRespawnPlan(
+      buildCliRespawnPlan({
+        argv: [...argv],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "linux",
+      }),
+    );
+
+    expect(plan.argv).toEqual(argv.slice(1));
+    expect(plan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
+    expect(plan.waitForChildSignalExit).toBe(true);
+  });
+
+  it.each([
+    ["command", ["node", "openclaw", "update", "--yes"]],
+    ["alias", ["node", "openclaw", "--update", "--yes"]],
+  ] as const)("does not wrap the Windows update %s", (_label, argv) => {
+    expect(
+      buildCliRespawnPlan({
+        argv: [...argv],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "win32",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not respawn a POSIX update when no CA bootstrap is needed", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: ["node", "openclaw", "update", "--yes"],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: undefined,
+        platform: "linux",
+      }),
+    ).toBeNull();
+  });
+
   it("adds NODE_EXTRA_CA_CERTS and warning suppression in one respawn", () => {
     const plan = buildCliRespawnPlan({
       argv: ["node", "openclaw", "status"],
@@ -243,6 +289,7 @@ describe("runCliRespawnPlan", () => {
         argv: ["/repo/openclaw/dist/entry.js", "status"],
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
         detachForProcessTree: true,
+        waitForChildSignalExit: false,
       },
       {
         spawn: spawn as unknown as typeof import("node:child_process").spawn,
@@ -290,6 +337,7 @@ describe("runCliRespawnPlan", () => {
           argv: ["/repo/openclaw/dist/entry.js", "tui"],
           env: {},
           detachForProcessTree: false,
+          waitForChildSignalExit: false,
         },
         {
           spawn: spawn as unknown as typeof import("node:child_process").spawn,
@@ -316,6 +364,46 @@ describe("runCliRespawnPlan", () => {
       child.emit("exit", null, "SIGKILL");
 
       expect(exit).toHaveBeenCalledWith(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for a signaled update bootstrap child to finish cleanup", () => {
+    vi.useFakeTimers();
+    const child = new EventEmitter() as ChildProcess;
+    const kill = vi.fn<(signal?: NodeJS.Signals) => boolean>(() => true);
+    child.kill = kill as ChildProcess["kill"];
+    const exit = vi.fn();
+    let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
+
+    try {
+      runCliRespawnPlan(
+        {
+          command: "/usr/bin/node",
+          argv: ["/repo/openclaw/dist/entry.js", "update"],
+          env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" },
+          detachForProcessTree: false,
+          waitForChildSignalExit: true,
+        },
+        {
+          spawn: vi.fn(() => child) as unknown as typeof import("node:child_process").spawn,
+          attachChildProcessBridge: vi.fn((_child, options) => {
+            onSignal = options?.onSignal;
+            return { detach: vi.fn() };
+          }),
+          exit: exit as unknown as (code?: number) => never,
+          writeError: vi.fn(),
+        },
+      );
+
+      onSignal?.("SIGTERM");
+      vi.advanceTimersByTime(30_000);
+      expect(kill).not.toHaveBeenCalled();
+      expect(exit).not.toHaveBeenCalled();
+
+      child.emit("exit", 143, null);
+      expect(exit).toHaveBeenCalledExactlyOnceWith(143);
     } finally {
       vi.useRealTimers();
     }

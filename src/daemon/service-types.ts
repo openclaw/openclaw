@@ -30,7 +30,16 @@ export type GatewayServiceControlArgs = {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
   disable?: boolean;
+  // Update-time quiescence must suppress supervisor respawn and prove the
+  // service is unloaded before its package root can be replaced.
+  quiesce?: boolean;
   warn?: (message: string) => void;
+};
+
+export type GatewayServiceStopResult = {
+  // Quiescence can temporarily change persistent supervisor state. The owner
+  // returns its exact rollback so a later update failure does not guess with restart.
+  restoreAfterUpdateFailure?: () => Promise<void>;
 };
 
 export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };

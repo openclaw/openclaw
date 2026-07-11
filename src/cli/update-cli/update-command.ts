@@ -159,7 +159,7 @@ import { listPersistedBundledPluginLocationBridges } from "../plugins-location-b
 import {
   registerSignalExitBarrier,
   registerSignalExitGate,
-  waitForSignalExitBarriers,
+  requestSignalExit,
 } from "../signal-exit-barrier.js";
 import {
   hasNativePackageInstallPayload,
@@ -916,17 +916,29 @@ type PreManagedServiceStop = {
   serviceMatchesMutationRoot?: boolean;
   blockMessage?: string;
   serviceEnv?: NodeJS.ProcessEnv;
+  restoreAfterUpdateFailure?: () => Promise<void>;
+  managedServiceSignalRecovery?: ManagedServiceSignalRecovery;
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
 };
 
-type WindowsTaskAutoStartRecovery = {
-  suspended: Promise<boolean>;
+type UpdateSignalRecovery = {
   restore: () => Promise<void>;
   complete: () => void;
   interrupted: () => boolean;
 };
 
+type WindowsTaskAutoStartRecovery = UpdateSignalRecovery & {
+  suspended: Promise<boolean>;
+};
+
+type ManagedServiceSignalRecovery = UpdateSignalRecovery & {
+  setRestoreAfterUpdateFailure: (restore: () => Promise<void>) => void;
+  commit: () => void;
+  shouldRestoreOnExit: () => boolean;
+};
+
 type UpdateCommandRecoveryState = {
+  managedServiceSignalRecovery?: ManagedServiceSignalRecovery;
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
 };
 
@@ -1000,9 +1012,10 @@ function serviceControlStdoutForMode(jsonMode: boolean): NodeJS.WritableStream {
   return jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout;
 }
 
-function armWindowsTaskAutoStartRecovery(
-  serviceEnv: NodeJS.ProcessEnv,
-): WindowsTaskAutoStartRecovery {
+function armUpdateSignalRecovery(params: {
+  restore: () => Promise<void>;
+  includeSigbreak?: boolean;
+}): UpdateSignalRecovery {
   let restorePromise: Promise<void> | undefined;
   let unregisterSignalExitBarrier = () => {};
   let finishUpdate: (() => void) | undefined;
@@ -1015,51 +1028,101 @@ function armWindowsTaskAutoStartRecovery(
   // before normal signal exits as well as from the update's ordinary paths.
   const onSignal = (exitCode: number) => {
     interrupted = true;
-    void waitForSignalExitBarriers()
-      .catch((err: unknown) => {
+    requestSignalExit({
+      exitCode,
+      onError: (err: unknown) => {
         defaultRuntime.error(`Failed to complete update shutdown cleanup: ${String(err)}`);
-      })
-      .finally(() => {
-        process.exit(exitCode);
-      });
+      },
+    });
   };
   const onSigint = () => onSignal(130);
   const onSigterm = () => onSignal(143);
+  const onSighup = () => onSignal(129);
+  const onSigquit = () => onSignal(131);
   const onSigbreak = () => onSignal(130);
+  const includePosixSignals = process.platform !== "win32";
   const removeSignalHandlers = () => {
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
-    process.off("SIGBREAK", onSigbreak);
+    if (includePosixSignals) {
+      process.off("SIGHUP", onSighup);
+      process.off("SIGQUIT", onSigquit);
+    }
+    if (params.includeSigbreak) {
+      process.off("SIGBREAK", onSigbreak);
+    }
     unregisterSignalExitBarrier();
   };
   const complete = () => {
     finishUpdate?.();
     finishUpdate = undefined;
     unregisterSignalExitGate();
+    removeSignalHandlers();
   };
-  const restore = () => {
-    restorePromise ??= suspensionPromise
-      .then(async (suspended) => {
-        if (suspended) {
-          await resumeScheduledTaskAutoStartAfterUpdate(serviceEnv);
-        }
-      })
-      .finally(removeSignalHandlers);
-    return restorePromise;
-  };
+  const restore = () => (restorePromise ??= params.restore().finally(removeSignalHandlers));
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
-  process.on("SIGBREAK", onSigbreak);
+  if (includePosixSignals) {
+    process.on("SIGHUP", onSighup);
+    process.on("SIGQUIT", onSigquit);
+  }
+  if (params.includeSigbreak) {
+    process.on("SIGBREAK", onSigbreak);
+  }
   unregisterSignalExitBarrier = registerSignalExitBarrier(restore);
-  // Arm recovery before starting the persistent state change. A signal arriving
-  // while schtasks is still returning waits for that result before restoring.
-  const suspensionPromise = suspendScheduledTaskAutoStartForUpdate(serviceEnv);
-  return { suspended: suspensionPromise, restore, complete, interrupted: () => interrupted };
+  return { restore, complete, interrupted: () => interrupted };
 }
 
-async function abortWindowsTaskUpdateIfInterrupted(
-  recovery: WindowsTaskAutoStartRecovery,
-): Promise<void> {
+function armWindowsTaskAutoStartRecovery(
+  serviceEnv: NodeJS.ProcessEnv,
+): WindowsTaskAutoStartRecovery {
+  // The signal handler is installed before schtasks starts changing persistent
+  // state. Signal callbacks cannot run until this synchronous setup completes.
+  let suspensionPromise = Promise.resolve(false);
+  const signalRecovery = armUpdateSignalRecovery({
+    includeSigbreak: true,
+    restore: async () => {
+      const suspended = await suspensionPromise;
+      if (suspended) {
+        await resumeScheduledTaskAutoStartAfterUpdate(serviceEnv);
+      }
+    },
+  });
+  // Arm recovery before starting the persistent state change. A signal arriving
+  // while schtasks is still returning waits for that result before restoring.
+  suspensionPromise = suspendScheduledTaskAutoStartForUpdate(serviceEnv);
+  return { suspended: suspensionPromise, ...signalRecovery };
+}
+
+function armManagedServiceSignalRecovery(params: {
+  restoreOnUncommittedExit: boolean;
+}): ManagedServiceSignalRecovery {
+  let restoreAfterUpdateFailure: (() => Promise<void>) | undefined;
+  let ownershipTransferred = false;
+  const signalRecovery = armUpdateSignalRecovery({
+    includeSigbreak: process.platform === "win32",
+    restore: async () => {
+      if (!restoreAfterUpdateFailure) {
+        throw new Error("Managed service rollback was not registered");
+      }
+      await restoreAfterUpdateFailure();
+    },
+  });
+  return {
+    ...signalRecovery,
+    setRestoreAfterUpdateFailure: (restore) => {
+      restoreAfterUpdateFailure = restore;
+    },
+    commit: () => {
+      ownershipTransferred = true;
+      signalRecovery.complete();
+    },
+    shouldRestoreOnExit: () =>
+      !ownershipTransferred && (params.restoreOnUncommittedExit || signalRecovery.interrupted()),
+  };
+}
+
+async function abortUpdateIfInterrupted(recovery: UpdateSignalRecovery): Promise<void> {
   if (!recovery.interrupted()) {
     return;
   }
@@ -1069,6 +1132,14 @@ async function abortWindowsTaskUpdateIfInterrupted(
     recovery.complete();
   }
   throw new UpdateCommandAbort();
+}
+
+async function abortManagedServiceUpdateIfInterrupted(
+  stopState: PreManagedServiceStop | undefined,
+): Promise<void> {
+  if (stopState?.managedServiceSignalRecovery) {
+    await abortUpdateIfInterrupted(stopState.managedServiceSignalRecovery);
+  }
 }
 
 async function maybeSuspendWindowsTaskAutoStartForPackageUpdate(params: {
@@ -1091,7 +1162,7 @@ async function maybeSuspendWindowsTaskAutoStartForPackageUpdate(params: {
     recovery.complete();
     throw err;
   }
-  await abortWindowsTaskUpdateIfInterrupted(recovery);
+  await abortUpdateIfInterrupted(recovery);
   if (!suspended) {
     try {
       await recovery.restore();
@@ -1209,7 +1280,11 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     };
   }
 
-  if (!serviceState.running) {
+  const managedUpdateHandoff = process.env.OPENCLAW_UPDATE_RUN_HANDOFF?.trim() === "1";
+  const stoppedServiceMayRespawn =
+    serviceMatchesMutationRoot !== false &&
+    (managedUpdateHandoff || (process.platform === "darwin" && serviceState.loaded));
+  if (!serviceState.running && !stoppedServiceMayRespawn) {
     const windowsTaskAutoStartRecovery = await maybeSuspendWindowsTaskAutoStartForPackageUpdate({
       updateInstallKind: params.updateInstallKind,
       serviceEnv: serviceState.env,
@@ -1225,6 +1300,8 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     };
   }
 
+  // A loaded LaunchAgent has KeepAlive; the handoff marker also proves
+  // update-owned restart intent across a transient unloaded status snapshot.
   const blockMessage = gatewayAncestryBlockMessage(serviceState.runtime?.pid);
   if (blockMessage) {
     return {
@@ -1265,23 +1342,60 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     updateInstallKind: params.updateInstallKind,
     serviceEnv: serviceState.env,
   });
+  const quiesceLaunchAgent = process.platform === "darwin";
+  const managedServiceSignalRecovery = armManagedServiceSignalRecovery({
+    restoreOnUncommittedExit: quiesceLaunchAgent,
+  });
+  let restoreAfterUpdateFailure: (() => Promise<void>) | undefined;
   try {
-    await service.stop({
+    const stopResult = await service.stop({
       env: serviceState.env,
       stdout: serviceControlStdoutForMode(params.jsonMode),
+      ...(quiesceLaunchAgent ? { quiesce: true } : {}),
     });
+    restoreAfterUpdateFailure = stopResult?.restoreAfterUpdateFailure;
+    if (quiesceLaunchAgent && !restoreAfterUpdateFailure) {
+      managedServiceSignalRecovery.complete();
+      throw new Error("LaunchAgent quiescence did not provide an exact-state rollback");
+    }
+    const ownerRestore = restoreAfterUpdateFailure;
+    managedServiceSignalRecovery.setRestoreAfterUpdateFailure(async () => {
+      if (windowsTaskAutoStartRecovery) {
+        try {
+          await windowsTaskAutoStartRecovery.restore();
+        } finally {
+          windowsTaskAutoStartRecovery.complete();
+        }
+      }
+      if (ownerRestore) {
+        await ownerRestore();
+        return;
+      }
+      if (serviceState.running) {
+        await service.restart({
+          env: serviceState.env,
+          stdout: serviceControlStdoutForMode(params.jsonMode),
+        });
+      }
+    });
+    restoreAfterUpdateFailure = quiesceLaunchAgent
+      ? managedServiceSignalRecovery.restore
+      : ownerRestore;
+    await abortUpdateIfInterrupted(managedServiceSignalRecovery);
     if (windowsTaskAutoStartRecovery) {
-      await abortWindowsTaskUpdateIfInterrupted(windowsTaskAutoStartRecovery);
+      await abortUpdateIfInterrupted(windowsTaskAutoStartRecovery);
     }
   } catch (err) {
     if (err instanceof UpdateCommandAbort) {
       throw err;
     }
+    managedServiceSignalRecovery.complete();
+    let stopError = err;
     if (windowsTaskAutoStartRecovery) {
       try {
         await windowsTaskAutoStartRecovery.restore();
       } catch (resumeErr) {
-        throw createAggregateErrorWithCause(
+        stopError = createAggregateErrorWithCause(
           [err, resumeErr],
           `Failed to stop the managed gateway (${String(err)}) and restore Windows Scheduled Task autostart (${String(resumeErr)})`,
           err,
@@ -1289,40 +1403,53 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       } finally {
         windowsTaskAutoStartRecovery.complete();
       }
-      if (windowsTaskAutoStartRecovery.interrupted()) {
-        throw new UpdateCommandAbort();
-      }
     }
-    throw err;
+    // A failed stop or rollback is diagnostic even when a signal requested it;
+    // never turn a potentially stranded service into a clean signal abort.
+    throw stopError;
   }
   return {
     stopped: true,
     inspected: true,
     runtimeInspected: true,
-    running: true,
+    running: serviceState.running,
     ...serviceOwnership,
     serviceEnv: serviceState.env,
+    ...(restoreAfterUpdateFailure ? { restoreAfterUpdateFailure } : {}),
+    managedServiceSignalRecovery,
     ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
   };
 }
 
-async function maybeRestartServiceAfterFailedMutableUpdate(params: {
+async function maybeRestoreServiceAfterFailedMutableUpdate(params: {
   preManagedServiceStop: PreManagedServiceStop | undefined;
   jsonMode: boolean;
+  exactStateOnly?: boolean;
 }): Promise<void> {
   if (!params.preManagedServiceStop?.stopped || !params.preManagedServiceStop.serviceEnv) {
     return;
   }
+  const exactRestore = params.preManagedServiceStop.restoreAfterUpdateFailure;
+  // Post-core failures preserve an already-stopped generic service. Only the
+  // owner callback can reconstruct launchd's persistent enabled/loaded state.
+  if (!exactRestore && params.exactStateOnly) {
+    return;
+  }
   try {
-    await resolveGatewayService().restart({
-      env: params.preManagedServiceStop.serviceEnv,
-      stdout: serviceControlStdoutForMode(params.jsonMode),
-    });
+    if (exactRestore) {
+      await exactRestore();
+    } else {
+      await resolveGatewayService().restart({
+        env: params.preManagedServiceStop.serviceEnv,
+        stdout: serviceControlStdoutForMode(params.jsonMode),
+      });
+    }
     if (!params.jsonMode) {
-      defaultRuntime.log(theme.muted("Restarted managed gateway service after failed update."));
+      const action = exactRestore ? "Restored" : "Restarted";
+      defaultRuntime.log(theme.muted(`${action} managed gateway service after failed update.`));
     }
   } catch (err) {
-    const message = `Failed to restart managed gateway service after failed update: ${String(err)}`;
+    const message = `Failed to restore managed gateway service after failed update: ${String(err)}`;
     if (params.jsonMode) {
       defaultRuntime.error(message);
     } else {
@@ -3657,11 +3784,25 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   return await withUpdateInProgressEnv(async () => {
     try {
       await updateCommandInternal(opts, recoveryState);
+    } catch (err) {
+      if (!(err instanceof UpdateCommandAbort)) {
+        throw err;
+      }
     } finally {
       try {
-        await recoveryState.windowsTaskAutoStartRecovery?.restore();
+        if (
+          recoveryState.managedServiceSignalRecovery &&
+          recoveryState.managedServiceSignalRecovery.shouldRestoreOnExit()
+        ) {
+          await recoveryState.managedServiceSignalRecovery.restore();
+        }
       } finally {
-        recoveryState.windowsTaskAutoStartRecovery?.complete();
+        recoveryState.managedServiceSignalRecovery?.complete();
+        try {
+          await recoveryState.windowsTaskAutoStartRecovery?.restore();
+        } finally {
+          recoveryState.windowsTaskAutoStartRecovery?.complete();
+        }
       }
     }
   });
@@ -4174,12 +4315,17 @@ async function updateCommandInternal(
           recoveryState.windowsTaskAutoStartRecovery =
             preManagedServiceStop.windowsTaskAutoStartRecovery;
         }
+        if (preManagedServiceStop.managedServiceSignalRecovery) {
+          recoveryState.managedServiceSignalRecovery =
+            preManagedServiceStop.managedServiceSignalRecovery;
+        }
         if (
           preManagedServiceStop.stopped ||
           preManagedServiceStop.blockMessage ||
           shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop }) ||
           !preManagedServiceStop.inspected ||
-          !preManagedServiceStop.running ||
+          (preManagedServiceStop.serviceMatchesMutationRoot !== false &&
+            !preManagedServiceStop.running) ||
           !shouldRestart
         ) {
           break;
@@ -4291,6 +4437,7 @@ async function updateCommandInternal(
     if (err instanceof UpdateCommandAbort) {
       return;
     }
+    await abortManagedServiceUpdateIfInterrupted(preManagedServiceStop);
     try {
       await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(preManagedServiceStop);
     } catch (resumeErr) {
@@ -4302,7 +4449,7 @@ async function updateCommandInternal(
         err,
       );
     }
-    await maybeRestartServiceAfterFailedMutableUpdate({
+    await maybeRestoreServiceAfterFailedMutableUpdate({
       preManagedServiceStop,
       jsonMode: Boolean(opts.json),
     });
@@ -4310,6 +4457,7 @@ async function updateCommandInternal(
   }
 
   stop();
+  await abortManagedServiceUpdateIfInterrupted(preManagedServiceStop);
   if (!opts.json || result.status !== "ok") {
     printResult(result, { ...opts, hideSteps: showProgress });
   }
@@ -4323,7 +4471,7 @@ async function updateCommandInternal(
       result,
       jsonMode: Boolean(opts.json),
     });
-    await maybeRestartServiceAfterFailedMutableUpdate({
+    await maybeRestoreServiceAfterFailedMutableUpdate({
       preManagedServiceStop,
       jsonMode: Boolean(opts.json),
     });
@@ -4340,7 +4488,7 @@ async function updateCommandInternal(
       result,
       jsonMode: Boolean(opts.json),
     });
-    await maybeRestartServiceAfterFailedMutableUpdate({
+    await maybeRestoreServiceAfterFailedMutableUpdate({
       preManagedServiceStop,
       jsonMode: Boolean(opts.json),
     });
@@ -4411,6 +4559,7 @@ async function updateCommandInternal(
 
   let postCorePluginUpdate: PostCorePluginUpdateResult | undefined;
   let pluginsUpdatedInFreshProcess = false;
+  await abortManagedServiceUpdateIfInterrupted(preManagedServiceStop);
   if (shouldResumePostCoreInFreshProcess) {
     const freshProcessResult = await continuePostCoreUpdateInFreshProcess({
       root: postUpdateRoot,
@@ -4433,6 +4582,11 @@ async function updateCommandInternal(
       if (!(await restoreWindowsTaskAutoStartOrExit(preManagedServiceStop))) {
         return;
       }
+      await maybeRestoreServiceAfterFailedMutableUpdate({
+        preManagedServiceStop,
+        jsonMode: Boolean(opts.json),
+        exactStateOnly: true,
+      });
       defaultRuntime.exit(freshProcessResult.exitCode);
       throw new Error(`post-update process exited with code ${freshProcessResult.exitCode}`);
     }
@@ -4507,10 +4661,17 @@ async function updateCommandInternal(
       }
     : result;
 
+  await abortManagedServiceUpdateIfInterrupted(preManagedServiceStop);
+
   if (postCorePluginUpdate?.status === "error") {
     if (!(await restoreWindowsTaskAutoStartOrExit(preManagedServiceStop))) {
       return;
     }
+    await maybeRestoreServiceAfterFailedMutableUpdate({
+      preManagedServiceStop,
+      jsonMode: Boolean(opts.json),
+      exactStateOnly: true,
+    });
     await writeControlPlaneUpdateRestartSentinelBestEffort({
       meta: controlPlaneUpdateSentinelMeta,
       result: resultWithPostUpdate,
@@ -4604,6 +4765,7 @@ async function updateCommandInternal(
   if (!(await restoreWindowsTaskAutoStartOrExit(preManagedServiceStop))) {
     return;
   }
+  await abortManagedServiceUpdateIfInterrupted(preManagedServiceStop);
   const restartOk = await maybeRestartService({
     shouldRestart,
     result: resultWithPostUpdate,
@@ -4618,7 +4780,13 @@ async function updateCommandInternal(
     requireRunningServiceAfterRestart:
       resultWithPostUpdate.mode === "git" && preManagedServiceStop?.stopped === true,
   });
+  await abortManagedServiceUpdateIfInterrupted(preManagedServiceStop);
   if (!restartOk) {
+    await maybeRestoreServiceAfterFailedMutableUpdate({
+      preManagedServiceStop,
+      jsonMode: Boolean(opts.json),
+      exactStateOnly: true,
+    });
     await markControlPlaneUpdateRestartSentinelFailureBestEffort({
       meta: controlPlaneUpdateSentinelMeta,
       reason: "restart-unhealthy",
@@ -4627,6 +4795,7 @@ async function updateCommandInternal(
     defaultRuntime.exit(1);
     return;
   }
+  preManagedServiceStop?.managedServiceSignalRecovery?.commit();
 
   await writeControlPlaneUpdateRestartSentinelBestEffort({
     meta: controlPlaneUpdateSentinelMeta,

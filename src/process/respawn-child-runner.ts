@@ -18,6 +18,7 @@ export function runRespawnChildWithSignalBridge(params: {
   args: string[];
   env: NodeJS.ProcessEnv;
   detachForProcessTree?: boolean;
+  waitForChildSignalExit?: boolean;
   stdioIsTerminal?: boolean;
   runtime: RespawnChildRuntime;
   onError: (error: unknown) => void;
@@ -83,6 +84,11 @@ export function runRespawnChildWithSignalBridge(params: {
   };
   const scheduleParentExit = (): void => {
     parentSignalReceived = true;
+    // Updates can own persistent supervisor rollback. Their bootstrap parent
+    // must wait for child cleanup instead of escalating to a forced kill.
+    if (params.waitForChildSignalExit) {
+      return;
+    }
     if (signalExitTimer) {
       return;
     }

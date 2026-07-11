@@ -59,6 +59,18 @@ async function addCompileCacheProbe(fixtureRoot: string): Promise<void> {
   );
 }
 
+async function addUpdateRespawnProbe(fixtureRoot: string): Promise<void> {
+  await fs.writeFile(
+    path.join(fixtureRoot, "dist", "entry.js"),
+    [
+      "process.stdout.write(",
+      '  `no-respawn:${process.env.OPENCLAW_NO_RESPAWN ?? "0"};respawn:${process.env.OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED ?? "0"}`',
+      ");",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 async function addLauncherRuntimeMock(
   fixtureRoot: string,
   params: { nodeVersion: string; platform: NodeJS.Platform },
@@ -803,6 +815,80 @@ describe("openclaw launcher", () => {
     expect(result.stdout).toBe("cache:disabled;respawn:1");
   });
 
+  it.each([
+    ["command", ["--profile", "release", "update", "--yes"]],
+    ["alias", ["--profile", "release", "--update", "--yes"]],
+  ] as const)("keeps the update %s out of the raw compile-cache wrapper", async (_label, args) => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await addGitMarker(fixtureRoot);
+    await addUpdateRespawnProbe(fixtureRoot);
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), ...args], {
+      cwd: fixtureRoot,
+      env: launcherEnv({
+        NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+      }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("no-respawn:0;respawn:0");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "lets update finish signal cleanup beyond the respawn force-kill grace",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await addGitMarker(fixtureRoot);
+      const processInfoPath = path.join(fixtureRoot, "update-process.json");
+      const cleanupPath = path.join(fixtureRoot, "update-cleanup-complete.txt");
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(processInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
+          'process.on("SIGTERM", () => {',
+          "  setTimeout(() => {",
+          `    writeFileSync(${JSON.stringify(cleanupPath)}, "complete\\n");`,
+          "    process.exit(0);",
+          "  }, 2500);",
+          "});",
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const launcher = spawn(
+        process.execPath,
+        [path.join(fixtureRoot, "openclaw.mjs"), "update", "--yes"],
+        {
+          cwd: fixtureRoot,
+          env: launcherEnv({
+            NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+          }),
+          stdio: "ignore",
+        },
+      );
+
+      try {
+        const processInfo = await waitForJsonFile<{ pid: number }>(processInfoPath, 5000);
+        expect(processInfo.pid).toBe(launcher.pid);
+        launcher.kill("SIGTERM");
+
+        await expect(waitForProcessExit(launcher, "update launcher", 6000)).resolves.toEqual({
+          code: 0,
+          signal: null,
+        });
+        await expect(fs.readFile(cleanupPath, "utf8")).resolves.toBe("complete\n");
+      } finally {
+        if (isProcessAlive(launcher.pid)) {
+          process.kill(launcher.pid!, "SIGKILL");
+        }
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "forwards SIGTERM to source-checkout compile-cache respawn children",
     async () => {
@@ -1056,6 +1142,36 @@ describe("openclaw launcher", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toBe("cache:disabled;respawn:1");
     }
+  });
+
+  it("keeps Windows update cleanup in the original early Node 24 launcher", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const mockRuntime = await addLauncherRuntimeMock(fixtureRoot, {
+      nodeVersion: "24.14.0",
+      platform: "win32",
+    });
+    await addUpdateRespawnProbe(fixtureRoot);
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        pathToFileURL(mockRuntime).href,
+        path.join(fixtureRoot, "openclaw.mjs"),
+        "update",
+        "--yes",
+      ],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv({
+          NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+        }),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("no-respawn:0;respawn:0");
   });
 
   it("keeps compile cache enabled for unaffected packaged launcher runtimes", async () => {

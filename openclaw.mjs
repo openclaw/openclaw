@@ -15,6 +15,64 @@ const RECOMMENDED_NODE_MAJOR = 24;
 const SUPPORTED_NODE_RANGE = ">=22.19.0 <23 or >=23.11.0";
 const MIN_COMPILE_CACHE_NODE_24_MINOR = 15;
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
+const LAUNCHER_ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
+const LAUNCHER_ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level", "--container"]);
+
+const isLauncherRootOptionValueToken = (arg) => {
+  if (!arg || arg === "--") {
+    return false;
+  }
+  if (!arg.startsWith("-")) {
+    return true;
+  }
+  return /^-\d+(?:\.\d+)?$/.test(arg);
+};
+
+const consumeLauncherRootOptionToken = (args, index) => {
+  const arg = args[index];
+  if (!arg) {
+    return 0;
+  }
+  if (LAUNCHER_ROOT_BOOLEAN_FLAGS.has(arg)) {
+    return 1;
+  }
+  if (
+    arg.startsWith("--profile=") ||
+    arg.startsWith("--log-level=") ||
+    arg.startsWith("--container=")
+  ) {
+    return 1;
+  }
+  if (LAUNCHER_ROOT_VALUE_FLAGS.has(arg)) {
+    return isLauncherRootOptionValueToken(args[index + 1]) ? 2 : 1;
+  }
+  return 0;
+};
+
+const resolveLauncherPrimaryCommand = (argv) => {
+  const args = argv.slice(2);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      return null;
+    }
+    const consumed = consumeLauncherRootOptionToken(args, index);
+    if (consumed > 0) {
+      index += consumed - 1;
+      continue;
+    }
+    return arg.startsWith("-") ? null : arg;
+  }
+  return null;
+};
+
+const isLauncherUpdateInvocation = (argv) =>
+  argv.includes("--update") || resolveLauncherPrimaryCommand(argv) === "update";
+
+const isLauncherNoRespawnEnabled = () => {
+  const value = process.env.OPENCLAW_NO_RESPAWN?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+};
 
 const parseNodeVersion = (rawVersion) => {
   const [majorRaw = "0", minorRaw = "0"] = rawVersion.split(".");
@@ -213,6 +271,9 @@ const runRespawnedChild = (command, args, env) => {
 };
 
 const respawnWithoutCompileCacheIfNeeded = () => {
+  if (isLauncherUpdateInvocation(process.argv) || isLauncherNoRespawnEnabled()) {
+    return false;
+  }
   const needsDisabledCompileCacheRespawn =
     isSourceCheckoutLauncher() || shouldSkipCompileCacheForWindowsNode24();
   if (!needsDisabledCompileCacheRespawn) {
@@ -239,6 +300,8 @@ const respawnWithoutCompileCacheIfNeeded = () => {
 
 const respawnWithPackagedCompileCacheIfNeeded = () => {
   if (
+    isLauncherUpdateInvocation(process.argv) ||
+    isLauncherNoRespawnEnabled() ||
     isSourceCheckoutLauncher() ||
     isNodeCompileCacheDisabled() ||
     shouldSkipCompileCacheForWindowsNode24()
@@ -380,8 +443,6 @@ const isBareRootHelpInvocation = (argv) =>
   argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h");
 
 const LAUNCHER_HELP_FLAGS = new Set(["-h", "--help"]);
-const LAUNCHER_ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
-const LAUNCHER_ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level", "--container"]);
 const LAUNCHER_PRECOMPUTED_COMMAND_HELP = {
   browser: { command: "browser", metadataKey: "browserHelpText" },
   secrets: { command: "secrets", metadataKey: "secretsHelpText" },
@@ -395,37 +456,6 @@ const LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP = new Set([
   "sessions",
   "tasks",
 ]);
-
-const isLauncherRootOptionValueToken = (arg) => {
-  if (!arg || arg === "--") {
-    return false;
-  }
-  if (!arg.startsWith("-")) {
-    return true;
-  }
-  return /^-\d+(?:\.\d+)?$/.test(arg);
-};
-
-const consumeLauncherRootOptionToken = (args, index) => {
-  const arg = args[index];
-  if (!arg) {
-    return 0;
-  }
-  if (LAUNCHER_ROOT_BOOLEAN_FLAGS.has(arg)) {
-    return 1;
-  }
-  if (
-    arg.startsWith("--profile=") ||
-    arg.startsWith("--log-level=") ||
-    arg.startsWith("--container=")
-  ) {
-    return 1;
-  }
-  if (LAUNCHER_ROOT_VALUE_FLAGS.has(arg)) {
-    return isLauncherRootOptionValueToken(args[index + 1]) ? 2 : 1;
-  }
-  return 0;
-};
 
 const hasLauncherContainerTarget = (argv) => {
   if (normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {

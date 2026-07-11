@@ -29,6 +29,10 @@ const GATEWAY_RUN_VALUE_FLAGS = [
 
 const INTERACTIVE_TTY_COMMANDS = new Set(["tui", "terminal", "chat"]);
 
+export function isUpdateInvocationArgv(argv: string[]): boolean {
+  return resolveCliArgvInvocation(argv).primary === "update" || argv.includes("--update");
+}
+
 function isInteractiveTtyCommandArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   return invocation.primary !== null && INTERACTIVE_TTY_COMMANDS.has(invocation.primary);
@@ -62,6 +66,7 @@ export function shouldSkipRespawnForArgv(argv: string[]): boolean {
   return (
     invocation.hasHelpOrVersion ||
     isInteractiveTtyCommandArgv(argv) ||
+    isUpdateInvocationArgv(argv) ||
     (invocation.primary === "gateway" && isForegroundGatewayRunArgv(argv))
   );
 }

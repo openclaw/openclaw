@@ -68,6 +68,9 @@ describe("shouldSkipRespawnForArgv", () => {
     { argv: ["node", "openclaw", "tui"] },
     { argv: ["node", "openclaw", "terminal"] },
     { argv: ["node", "openclaw", "chat"] },
+    { argv: ["node", "openclaw", "update"] },
+    { argv: ["node", "openclaw", "--profile", "release", "update", "--yes"] },
+    { argv: ["node", "openclaw", "--profile", "release", "--update", "--yes"] },
     { argv: ["node", "openclaw", "gateway"] },
     { argv: ["node", "openclaw", "gateway", "--port", "14720", "--bind", "loopback"] },
     { argv: ["node", "openclaw", "gateway", "run", "--port=14720", "--bind", "loopback"] },
@@ -101,6 +104,9 @@ describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
     { argv: ["node", "openclaw", "terminal"] },
     { argv: ["node", "openclaw", "chat"] },
     { argv: ["node", "openclaw", "status"] },
+    { argv: ["node", "openclaw", "update"] },
+    { argv: ["node", "openclaw", "--profile", "release", "update", "--yes"] },
+    { argv: ["node", "openclaw", "--profile", "release", "--update", "--yes"] },
   ] as const)("allows startup env respawn for argv %j", ({ argv }) => {
     expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
   });

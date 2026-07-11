@@ -579,6 +579,7 @@ describe("managed service update handoff", () => {
       expect(options.env[key]).toBeUndefined();
     }
     expect(options.env.OPENCLAW_UPDATE_RUN_HANDOFF).toBe("1");
+    expect(options.env.OPENCLAW_NO_RESPAWN).toBe("1");
     expect(options.env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]).toMatch(/sentinel-meta\.json$/u);
   });
 

@@ -789,6 +789,7 @@ export async function startManagedServiceUpdateHandoff(params: {
     const env = {
       ...stripSupervisorHintEnv(params.env ?? process.env),
       [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
+      OPENCLAW_NO_RESPAWN: "1",
       OPENCLAW_UPDATE_RUN_HANDOFF: "1",
     };
     const spawnTarget = await resolveHandoffSpawn({

@@ -39,6 +39,7 @@ import type {
   GatewayServiceStartResult,
   GatewayServiceStageArgs,
   GatewayServiceState,
+  GatewayServiceStopResult,
 } from "./service-types.js";
 import {
   installSystemdService,
@@ -63,6 +64,7 @@ export type {
   GatewayServiceStartResult,
   GatewayServiceStageArgs,
   GatewayServiceState,
+  GatewayServiceStopResult,
 } from "./service-types.js";
 
 // Platform service adapter used by CLI commands across launchd, systemd, and schtasks.
@@ -81,7 +83,7 @@ export type GatewayService = {
   stage: (args: GatewayServiceStageArgs) => Promise<void>;
   install: (args: GatewayServiceInstallArgs) => Promise<void>;
   uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
-  stop: (args: GatewayServiceControlArgs) => Promise<void>;
+  stop: (args: GatewayServiceControlArgs) => Promise<GatewayServiceStopResult | void>;
   restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;

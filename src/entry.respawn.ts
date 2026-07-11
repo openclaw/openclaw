@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
 import {
   isTerminalInteractiveRespawnArgv,
+  isUpdateInvocationArgv,
   shouldSkipRespawnForArgv,
   shouldSkipStartupEnvironmentRespawnForArgv,
 } from "./cli/respawn-policy.js";
@@ -25,6 +26,7 @@ type CliRespawnPlan = {
   argv: string[];
   env: NodeJS.ProcessEnv;
   detachForProcessTree: boolean;
+  waitForChildSignalExit: boolean;
 };
 
 type CliRespawnRuntime = RespawnChildRuntime & {
@@ -89,10 +91,12 @@ export function buildCliRespawnPlan(
   const platform = params.platform ?? process.platform;
   const normalizedArgv =
     platform === "win32" ? normalizeWindowsArgv(argv, { platform, execPath }) : argv;
+  const updateInvocation = isUpdateInvocationArgv(normalizedArgv);
 
   if (
     shouldSkipStartupEnvironmentRespawnForArgv(normalizedArgv) ||
-    isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)
+    isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN) ||
+    (updateInvocation && platform === "win32")
   ) {
     return null;
   }
@@ -116,6 +120,7 @@ export function buildCliRespawnPlan(
       argv: [...childExecArgv, ...normalizedArgv.slice(1)],
       env: childEnv,
       detachForProcessTree: false,
+      waitForChildSignalExit: false,
     };
   }
 
@@ -155,6 +160,7 @@ export function buildCliRespawnPlan(
     argv: [...childExecArgv, ...argv.slice(1)],
     env: childEnv,
     detachForProcessTree: !isTerminalInteractiveRespawnArgv(argv),
+    waitForChildSignalExit: updateInvocation,
   };
 }
 
@@ -172,6 +178,7 @@ export function runCliRespawnPlan(
     args: plan.argv,
     env: plan.env,
     detachForProcessTree: plan.detachForProcessTree,
+    waitForChildSignalExit: plan.waitForChildSignalExit,
     runtime,
     onError: (error) => {
       runtime.writeError(

@@ -5,7 +5,8 @@ import { enableCompileCache, getCompileCacheDir } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { isTerminalInteractiveRespawnArgv } from "./cli/respawn-policy.js";
+import { isTerminalInteractiveRespawnArgv, isUpdateInvocationArgv } from "./cli/respawn-policy.js";
+import { isTruthyEnvValue } from "./infra/env.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 import {
   runRespawnChildWithSignalBridge,
@@ -146,6 +147,10 @@ export function buildOpenClawCompileCacheRespawnPlan(params: {
   platform?: NodeJS.Platform;
 }): OpenClawCompileCacheRespawnPlan | undefined {
   const env = params.env ?? process.env;
+  const argv = params.argv ?? process.argv;
+  if (isUpdateInvocationArgv(argv) || isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)) {
+    return undefined;
+  }
   const needsDisabledCompileCacheRespawn =
     isSourceCheckoutInstallRoot(params.installRoot) ||
     ((params.platform ?? process.platform) === "win32" &&
@@ -167,15 +172,10 @@ export function buildOpenClawCompileCacheRespawnPlan(params: {
   delete nextEnv.NODE_COMPILE_CACHE;
   return {
     command: params.execPath ?? process.execPath,
-    args: [
-      ...(params.execArgv ?? process.execArgv),
-      params.currentFile,
-      ...(params.argv ?? process.argv).slice(2),
-    ],
+    args: [...(params.execArgv ?? process.execArgv), params.currentFile, ...argv.slice(2)],
     env: nextEnv,
     detachForProcessTree:
-      (params.platform ?? process.platform) !== "win32" &&
-      !isTerminalInteractiveRespawnArgv(params.argv ?? process.argv),
+      (params.platform ?? process.platform) !== "win32" && !isTerminalInteractiveRespawnArgv(argv),
   };
 }
 

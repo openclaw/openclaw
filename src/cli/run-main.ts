@@ -53,7 +53,7 @@ import {
   shouldUseSecretsHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
-import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
+import { registerSignalExitBarrier, requestSignalExit } from "./signal-exit-barrier.js";
 import { createGatewayStartupTrace } from "./startup-trace.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
@@ -956,8 +956,8 @@ export async function runCli(argv: string[] = process.argv) {
     }
     unregisterProxySignalExitBarrier = registerSignalExitBarrier(stopStartedProxy);
     const shutdown = (exitCode: number) => {
-      void waitForSignalExitBarriers().finally(() => {
-        process.exit(exitCode);
+      requestSignalExit({
+        exitCode,
       });
     };
     onSigterm = () => shutdown(143);

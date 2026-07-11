@@ -42,6 +42,7 @@ import type {
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
+  GatewayServiceStopResult,
 } from "./service-types.js";
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
@@ -62,6 +63,10 @@ const OPENCLAW_NODE_RUNTIME_NAMES = new Set(["bun", "bun.exe", "node", "node.exe
 const OPENCLAW_SCRIPT_NAMES = new Set(["openclaw.mjs"]);
 const LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
 const LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS = 100;
+const LAUNCH_AGENT_QUIESCE_BOOTOUT_ATTEMPTS = 3;
+const LAUNCH_AGENT_QUIESCE_BOOTOUT_RETRY_MS = 1_000;
+const LAUNCH_AGENT_QUIESCE_COMPLETION_MARGIN_MS = 5_000;
+const LAUNCH_AGENT_QUIESCE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
 
 export type StaleOpenClawUpdateLaunchdJob = {
   label: string;
@@ -923,6 +928,262 @@ async function bootoutLaunchAgentOrThrow(params: {
   params.stdout.write(`${formatLine("Warning", params.warning)}\n`);
 }
 
+type LaunchAgentDisabledOverrideProbe =
+  | { state: "disabled" | "not-disabled" }
+  | { state: "unknown"; detail?: string };
+
+function parseLaunchAgentDisabledOverride(output: string, label: string): boolean | null {
+  const quotedLabel = `"${label}"`;
+  for (const line of output.split(/\r?\n/)) {
+    const [rawLabel, rawValue] = line.trim().split(/\s*=>\s*/, 2);
+    if (rawLabel !== quotedLabel) {
+      continue;
+    }
+    const value = normalizeLowercaseStringOrEmpty(rawValue);
+    if (value === "disabled" || value === "true") {
+      return true;
+    }
+    if (value === "enabled" || value === "false") {
+      return false;
+    }
+    return null;
+  }
+  return false;
+}
+
+async function probeLaunchAgentDisabledOverride(
+  domain: string,
+  label: string,
+): Promise<LaunchAgentDisabledOverrideProbe> {
+  const probe = await execLaunchctl(["print-disabled", domain]);
+  if (probe.code !== 0) {
+    return { state: "unknown", detail: formatLaunchctlResultDetail(probe) || undefined };
+  }
+  const disabled = parseLaunchAgentDisabledOverride(probe.stdout || probe.stderr || "", label);
+  return disabled === null
+    ? { state: "unknown", detail: "unrecognized launchctl print-disabled output" }
+    : { state: disabled ? "disabled" : "not-disabled" };
+}
+
+async function requestLaunchAgentBootoutForQuiescence(serviceTarget: string): Promise<void> {
+  const bootout = await execLaunchctl(["bootout", serviceTarget]);
+  const bootoutInProgress = isLaunchctlOperationAlreadyInProgress(bootout.stderr || bootout.stdout);
+  if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout) && !bootoutInProgress) {
+    throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+  }
+}
+
+type LaunchAgentStateSnapshot = {
+  loaded: boolean;
+  running: boolean;
+  disabled: boolean;
+};
+
+async function restoreLaunchAgentStateOrThrow(params: {
+  domain: string;
+  label: string;
+  serviceTarget: string;
+  plistPath: string;
+  snapshot: LaunchAgentStateSnapshot;
+}): Promise<void> {
+  const restoreErrors: Error[] = [];
+  let canRestoreLoadedState = params.snapshot.disabled;
+  if (!params.snapshot.disabled) {
+    const enable = await execLaunchctl(["enable", params.serviceTarget]);
+    if (enable.code !== 0) {
+      restoreErrors.push(
+        new Error(`launchctl enable rollback failed: ${formatLaunchctlResultDetail(enable)}`),
+      );
+    } else {
+      canRestoreLoadedState = true;
+    }
+  }
+  if (canRestoreLoadedState) {
+    let restoredState = await probeLaunchAgentState(params.serviceTarget);
+    if (params.snapshot.loaded && restoredState.state === "not-loaded") {
+      let bootstrapSucceeded = false;
+      try {
+        await bootstrapLaunchAgentOrThrow({
+          domain: params.domain,
+          serviceTarget: params.serviceTarget,
+          plistPath: params.plistPath,
+          actionHint: "openclaw gateway restart",
+        });
+        bootstrapSucceeded = true;
+      } catch (restoreErr) {
+        restoreErrors.push(
+          restoreErr instanceof Error ? restoreErr : new Error(String(restoreErr)),
+        );
+      }
+      if (params.snapshot.disabled) {
+        const restoreDisable = await execLaunchctl(["disable", params.serviceTarget]);
+        if (restoreDisable.code !== 0) {
+          restoreErrors.push(
+            new Error(
+              `launchctl disable rollback failed: ${formatLaunchctlResultDetail(restoreDisable)}`,
+            ),
+          );
+        }
+      }
+      if (bootstrapSucceeded) {
+        restoredState = await probeLaunchAgentState(params.serviceTarget);
+      }
+    }
+    if (params.snapshot.loaded && params.snapshot.running && restoredState.state === "stopped") {
+      restoredState = await waitForLaunchAgentRunning(params.serviceTarget);
+    }
+    if (restoredState.state === "unknown") {
+      restoreErrors.push(
+        new Error(
+          `launchctl rollback state could not be confirmed: ${restoredState.detail ?? "unknown error"}`,
+        ),
+      );
+    } else if (params.snapshot.loaded && restoredState.state === "not-loaded") {
+      restoreErrors.push(new Error("launchctl rollback did not restore the loaded LaunchAgent"));
+    } else if (
+      params.snapshot.loaded &&
+      params.snapshot.running &&
+      restoredState.state !== "running"
+    ) {
+      restoreErrors.push(new Error("launchctl rollback did not restore the running LaunchAgent"));
+    } else if (
+      params.snapshot.loaded &&
+      params.snapshot.disabled &&
+      !params.snapshot.running &&
+      restoredState.state === "running"
+    ) {
+      // An enabled KeepAlive job may have been observed between respawns. Only a
+      // disabled stopped snapshot represents durable operator intent to stay down.
+      const stop = await execLaunchctl(["stop", params.label]);
+      if (stop.code !== 0 && !isLaunchctlNotLoaded(stop)) {
+        restoreErrors.push(
+          new Error(`launchctl stop rollback failed: ${formatLaunchctlResultDetail(stop)}`),
+        );
+      } else {
+        const stoppedState = await waitForLaunchAgentStopped(params.serviceTarget);
+        if (stoppedState.state !== "stopped") {
+          const detail =
+            stoppedState.state === "unknown" && stoppedState.detail
+              ? `: ${stoppedState.detail}`
+              : `: state=${stoppedState.state}`;
+          restoreErrors.push(
+            new Error(`launchctl rollback did not restore stopped state${detail}`),
+          );
+        }
+      }
+    }
+  }
+  if (restoreErrors.length > 0) {
+    throw new AggregateError(restoreErrors, "LaunchAgent prior state could not be restored");
+  }
+}
+
+function createLaunchAgentStateRestore(params: {
+  domain: string;
+  label: string;
+  serviceTarget: string;
+  plistPath: string;
+  snapshot: LaunchAgentStateSnapshot;
+}): () => Promise<void> {
+  let restorePromise: Promise<void> | undefined;
+  return () => (restorePromise ??= restoreLaunchAgentStateOrThrow(params));
+}
+
+async function quiesceLaunchAgentOrThrow(params: {
+  domain: string;
+  label: string;
+  serviceTarget: string;
+  serviceEnv: GatewayServiceEnv;
+  plistPath: string;
+}): Promise<GatewayServiceStopResult> {
+  // Rollback must preserve the prior loaded state. Enabling an already-unloaded
+  // job must not bootstrap it and unexpectedly start the gateway.
+  const initialState = await probeLaunchAgentState(params.serviceTarget);
+  if (initialState.state === "unknown") {
+    throw new Error(
+      `LaunchAgent state could not be confirmed before quiescence: ${initialState.detail ?? "unknown error"}`,
+    );
+  }
+  const initialDisabledOverride = await probeLaunchAgentDisabledOverride(
+    params.domain,
+    params.label,
+  );
+  if (initialDisabledOverride.state === "unknown") {
+    throw new Error(
+      `LaunchAgent disabled state could not be confirmed before quiescence: ${initialDisabledOverride.detail ?? "unknown error"}`,
+    );
+  }
+  const restoreAfterUpdateFailure = createLaunchAgentStateRestore({
+    domain: params.domain,
+    label: params.label,
+    serviceTarget: params.serviceTarget,
+    plistPath: params.plistPath,
+    snapshot: {
+      loaded: initialState.state !== "not-loaded",
+      running: initialState.state === "running",
+      disabled: initialDisabledOverride.state === "disabled",
+    },
+  });
+  try {
+    const disable = await execLaunchctl(["disable", params.serviceTarget]);
+    if (disable.code !== 0) {
+      throw new Error(`launchctl disable failed: ${formatLaunchctlResultDetail(disable)}`);
+    }
+    let lastState: LaunchAgentProbeResult | null = null;
+    await requestLaunchAgentBootoutForQuiescence(params.serviceTarget);
+    let bootoutAttempts = 1;
+    let nextBootoutAt = Date.now() + LAUNCH_AGENT_QUIESCE_BOOTOUT_RETRY_MS;
+    // ExitTimeOut covers process termination; launchd can remove the job shortly after it expires.
+    const deadline =
+      Date.now() + LAUNCH_AGENT_QUIESCE_TIMEOUT_MS + LAUNCH_AGENT_QUIESCE_COMPLETION_MARGIN_MS;
+    while (true) {
+      const now = Date.now();
+      if (bootoutAttempts < LAUNCH_AGENT_QUIESCE_BOOTOUT_ATTEMPTS && now >= nextBootoutAt) {
+        await requestLaunchAgentBootoutForQuiescence(params.serviceTarget);
+        bootoutAttempts += 1;
+        nextBootoutAt = Date.now() + LAUNCH_AGENT_QUIESCE_BOOTOUT_RETRY_MS;
+      }
+      const state = await probeLaunchAgentState(params.serviceTarget);
+      if (state.state === "not-loaded") {
+        await assertGatewayPortReleasedAfterStop(params.serviceEnv);
+        return { restoreAfterUpdateFailure };
+      }
+      lastState = state;
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        break;
+      }
+      // `bootout` can return before launchd completes its ExitTimeOut shutdown.
+      // Keep the job disabled while polling so no replacement process can race the package swap.
+      await sleep(Math.min(LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS, remainingMs));
+    }
+
+    const detail =
+      lastState?.state === "unknown" && lastState.detail
+        ? `: ${lastState.detail}`
+        : lastState
+          ? `: state=${lastState.state}`
+          : "";
+    throw new Error(`LaunchAgent remained loaded after bootout${detail}`);
+  } catch (err) {
+    try {
+      await restoreAfterUpdateFailure();
+    } catch (restoreFailure) {
+      const restoreErrors =
+        restoreFailure instanceof AggregateError
+          ? restoreFailure.errors
+          : [restoreFailure instanceof Error ? restoreFailure : new Error(String(restoreFailure))];
+      const failure = new AggregateError(
+        [err, ...restoreErrors],
+        "LaunchAgent quiescence failed and its prior state could not be restored",
+      );
+      failure.cause = err;
+      throw failure;
+    }
+    throw err;
+  }
+}
+
 type LaunchAgentProbeResult =
   | { state: "running" }
   | { state: "stopped" }
@@ -969,6 +1230,21 @@ async function waitForLaunchAgentStopped(serviceTarget: string): Promise<LaunchA
   return lastUnknown ?? { state: "running" };
 }
 
+async function waitForLaunchAgentRunning(serviceTarget: string): Promise<LaunchAgentProbeResult> {
+  const deadline = Date.now() + LAUNCH_AGENT_QUIESCE_TIMEOUT_MS;
+  while (true) {
+    const state = await probeLaunchAgentState(serviceTarget);
+    if (state.state === "running") {
+      return state;
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return state;
+    }
+    await sleep(Math.min(LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS, remainingMs));
+  }
+}
+
 async function waitForGatewayPortRelease(port: number): Promise<boolean> {
   const deadline = Date.now() + LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -1006,10 +1282,12 @@ export async function stopLaunchAgent({
   stdout,
   env,
   disable: persistDisable,
-}: GatewayServiceControlArgs): Promise<void> {
+  quiesce,
+}: GatewayServiceControlArgs): Promise<GatewayServiceStopResult | void> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
+  const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
   const serviceTarget = `${domain}/${label}`;
 
   if (
@@ -1018,6 +1296,18 @@ export async function stopLaunchAgent({
     throw new Error(
       `Refusing to stop LaunchAgent ${label} from inside the same launchd service; run this command from an external shell.`,
     );
+  }
+
+  if (quiesce) {
+    const result = await quiesceLaunchAgentOrThrow({
+      domain,
+      label,
+      serviceTarget,
+      serviceEnv,
+      plistPath,
+    });
+    stdout.write(`${formatLine("Quiesced LaunchAgent", serviceTarget)}\n`);
+    return result;
   }
 
   if (!persistDisable) {

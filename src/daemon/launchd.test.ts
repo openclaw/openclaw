@@ -28,24 +28,34 @@ import {
 
 const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
+  launchctlCallTimes: [] as number[],
   listOutput: "",
   printOutput: "",
   printNotLoadedRemaining: 0,
+  printStoppedRemaining: 0,
   printError: "",
   printCode: 1,
   printFailuresRemaining: 0,
   bootstrapError: "",
   bootstrapCode: 1,
   bootstrapLoadsServiceOnFailure: false,
+  bootstrapStartsService: true,
   kickstartError: "",
   kickstartCode: 1,
   kickstartFailuresRemaining: 0,
   disableError: "",
   disableCode: 1,
+  disableChangesStateOnFailure: false,
+  disabledOverride: null as "disabled" | "enabled" | null,
+  printDisabledError: "",
+  printDisabledCode: 1,
+  enableError: "",
+  enableCode: 1,
   stopError: "",
   stopCode: 1,
   bootoutError: "",
   bootoutCode: 1,
+  bootoutKeepsLoadedRemaining: 0,
   serviceLoaded: true,
   serviceRunning: true,
   stopLeavesRunning: false,
@@ -173,13 +183,14 @@ async function runStopLaunchAgentWithFakeTimers(args: Parameters<typeof stopLaun
   vi.useFakeTimers();
   try {
     const stopPromise = stopLaunchAgent(args)
-      .then(() => ({ ok: true as const }))
+      .then((value) => ({ ok: true as const, value }))
       .catch((error: unknown) => ({ ok: false as const, error }));
     await vi.runAllTimersAsync();
     const result = await stopPromise;
     if (!result.ok) {
       throw result.error;
     }
+    return result.value;
   } finally {
     vi.useRealTimers();
   }
@@ -234,6 +245,7 @@ vi.mock("./exec-file.js", () => ({
   execFileUtf8: vi.fn(async (file: string, args: string[]) => {
     const call = normalizeLaunchctlArgs(file, args);
     state.launchctlCalls.push(call);
+    state.launchctlCallTimes.push(Date.now());
     if (call[0] === "list") {
       return { stdout: state.listOutput, stderr: "", code: 0 };
     }
@@ -252,13 +264,33 @@ vi.mock("./exec-file.js", () => ({
       if (state.printOutput) {
         return { stdout: state.printOutput, stderr: "", code: 0 };
       }
+      if (state.printStoppedRemaining > 0) {
+        state.printStoppedRemaining -= 1;
+        return { stdout: ["state = waiting", "pid = 0"].join("\n"), stderr: "", code: 0 };
+      }
       if (!state.serviceRunning) {
         return { stdout: ["state = waiting", "pid = 0"].join("\n"), stderr: "", code: 0 };
       }
       return { stdout: ["state = running", "pid = 4242"].join("\n"), stderr: "", code: 0 };
     }
-    if (call[0] === "disable" && state.disableError) {
-      return { stdout: "", stderr: state.disableError, code: state.disableCode };
+    if (call[0] === "print-disabled") {
+      if (state.printDisabledError) {
+        return { stdout: "", stderr: state.printDisabledError, code: state.printDisabledCode };
+      }
+      const entry = state.disabledOverride
+        ? `\t\t"ai.openclaw.gateway" => ${state.disabledOverride}`
+        : "";
+      return { stdout: `disabled services = {\n${entry}\n}`, stderr: "", code: 0 };
+    }
+    if (call[0] === "disable") {
+      if (state.disableError) {
+        if (state.disableChangesStateOnFailure) {
+          state.disabledOverride = "disabled";
+        }
+        return { stdout: "", stderr: state.disableError, code: state.disableCode };
+      }
+      state.disabledOverride = "disabled";
+      return { stdout: "", stderr: "", code: 0 };
     }
     if (call[0] === "stop") {
       if (state.stopError) {
@@ -273,11 +305,19 @@ vi.mock("./exec-file.js", () => ({
       if (state.bootoutError) {
         return { stdout: "", stderr: state.bootoutError, code: state.bootoutCode };
       }
+      if (state.bootoutKeepsLoadedRemaining > 0) {
+        state.bootoutKeepsLoadedRemaining -= 1;
+        return { stdout: "", stderr: "", code: 0 };
+      }
       state.serviceLoaded = false;
       state.serviceRunning = false;
       return { stdout: "", stderr: "", code: 0 };
     }
     if (call[0] === "enable") {
+      if (state.enableError) {
+        return { stdout: "", stderr: state.enableError, code: state.enableCode };
+      }
+      state.disabledOverride = "enabled";
       return { stdout: "", stderr: "", code: 0 };
     }
     if (call[0] === "bootstrap") {
@@ -289,7 +329,7 @@ vi.mock("./exec-file.js", () => ({
         return { stdout: "", stderr: state.bootstrapError, code: state.bootstrapCode };
       }
       state.serviceLoaded = true;
-      state.serviceRunning = true;
+      state.serviceRunning = state.bootstrapStartsService;
       return { stdout: "", stderr: "", code: 0 };
     }
     if (call[0] === "kickstart") {
@@ -385,24 +425,34 @@ vi.mock("node:fs/promises", async () => {
 
 beforeEach(() => {
   state.launchctlCalls.length = 0;
+  state.launchctlCallTimes.length = 0;
   state.listOutput = "";
   state.printOutput = "";
   state.printNotLoadedRemaining = 0;
+  state.printStoppedRemaining = 0;
   state.printError = "";
   state.printCode = 1;
   state.printFailuresRemaining = 0;
   state.bootstrapError = "";
   state.bootstrapCode = 1;
   state.bootstrapLoadsServiceOnFailure = false;
+  state.bootstrapStartsService = true;
   state.kickstartError = "";
   state.kickstartCode = 1;
   state.kickstartFailuresRemaining = 0;
   state.disableError = "";
   state.disableCode = 1;
+  state.disableChangesStateOnFailure = false;
+  state.disabledOverride = null;
+  state.printDisabledError = "";
+  state.printDisabledCode = 1;
+  state.enableError = "";
+  state.enableCode = 1;
   state.stopError = "";
   state.stopCode = 1;
   state.bootoutError = "";
   state.bootoutCode = 1;
+  state.bootoutKeepsLoadedRemaining = 0;
   state.serviceLoaded = true;
   state.serviceRunning = true;
   state.stopLeavesRunning = false;
@@ -1530,6 +1580,360 @@ describe("launchd install", () => {
     const serviceId = `${domain}/ai.openclaw.gateway`;
     expect(state.launchctlCalls).toEqual([["bootout", serviceId]]);
     expect(output).toContain("Stopped LaunchAgent");
+  });
+
+  it("quiesces LaunchAgent and retries bootout until launchctl confirms it is unloaded", async () => {
+    const env = createDefaultLaunchdEnv();
+    const stdout = new PassThrough();
+    let output = "";
+    state.bootoutKeepsLoadedRemaining = 1;
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await runStopLaunchAgentWithFakeTimers({ env, stdout, quiesce: true });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
+    expect(state.launchctlCalls.slice(0, 4)).toEqual([
+      ["print", serviceId],
+      ["print-disabled", domain],
+      ["disable", serviceId],
+      ["bootout", serviceId],
+    ]);
+    const bootoutIndexes = state.launchctlCalls
+      .map((call, index) => (call[0] === "bootout" ? index : -1))
+      .filter((index) => index >= 0);
+    expect(bootoutIndexes).toHaveLength(2);
+    expect(
+      state.launchctlCallTimes[bootoutIndexes[1]!]! - state.launchctlCallTimes[bootoutIndexes[0]!]!,
+    ).toBeGreaterThanOrEqual(1_000);
+    expect(state.launchctlCalls.at(-1)).toEqual(["print", serviceId]);
+    expect(output).toContain("Quiesced LaunchAgent");
+  });
+
+  it("fails quiescence when launchctl still reports the LaunchAgent after every bootout", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.bootoutKeepsLoadedRemaining = 3;
+
+    await expect(
+      runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough(), quiesce: true }),
+    ).rejects.toThrow("LaunchAgent remained loaded after bootout: state=running");
+
+    const commands = launchctlCommandNames();
+    expect(commands.slice(0, 4)).toEqual(["print", "print-disabled", "disable", "bootout"]);
+    expect(commands.filter((command) => command === "bootout")).toHaveLength(3);
+    expect(commands.slice(-2)).toEqual(["enable", "print"]);
+    const firstBootoutIndex = commands.indexOf("bootout");
+    const rollbackEnableIndex = commands.lastIndexOf("enable");
+    expect(
+      state.launchctlCallTimes[rollbackEnableIndex]! - state.launchctlCallTimes[firstBootoutIndex]!,
+    ).toBeGreaterThan(LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000);
+  });
+
+  it("rolls back the prior override when launchctl disable reports failure", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.disableError = "disable denied";
+    state.disableChangesStateOnFailure = true;
+
+    await expect(
+      runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough(), quiesce: true }),
+    ).rejects.toThrow("launchctl disable failed: disable denied");
+
+    expect(launchctlCommandNames()).toEqual([
+      "print",
+      "print-disabled",
+      "disable",
+      "enable",
+      "print",
+    ]);
+    expect(state.disabledOverride).toBe("enabled");
+  });
+
+  it("re-enables LaunchAgent when quiescence cannot prove its port was released", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "19011",
+    };
+    inspectPortUsage.mockResolvedValue({
+      port: 19011,
+      status: "busy",
+      listeners: [],
+      hints: [],
+    });
+    probePortUsage.mockResolvedValue("busy");
+    formatPortDiagnostics.mockReturnValue(["Port 19011 is held by pid 4242."]);
+
+    await expect(
+      runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough(), quiesce: true }),
+    ).rejects.toThrow(
+      "gateway port 19011 is still busy after LaunchAgent stop\nPort 19011 is held by pid 4242.",
+    );
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
+    expect(state.launchctlCalls).toEqual([
+      ["print", serviceId],
+      ["print-disabled", domain],
+      ["disable", serviceId],
+      ["bootout", serviceId],
+      ["print", serviceId],
+      ["enable", serviceId],
+      ["print", serviceId],
+      ["enable", serviceId],
+      ["bootstrap", domain, resolveLaunchAgentPlistPath(env)],
+      ["print", serviceId],
+    ]);
+    expect(state.serviceLoaded).toBe(true);
+    expect(state.serviceRunning).toBe(true);
+  });
+
+  it("restores a loaded LaunchAgent without clearing its disabled override", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "19011",
+    };
+    state.disabledOverride = "disabled";
+    inspectPortUsage.mockResolvedValue({
+      port: 19011,
+      status: "busy",
+      listeners: [],
+      hints: [],
+    });
+    probePortUsage.mockResolvedValue("busy");
+
+    await expect(
+      runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough(), quiesce: true }),
+    ).rejects.toThrow("gateway port 19011 is still busy after LaunchAgent stop");
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
+    expect(state.launchctlCalls).toEqual([
+      ["print", serviceId],
+      ["print-disabled", domain],
+      ["disable", serviceId],
+      ["bootout", serviceId],
+      ["print", serviceId],
+      ["print", serviceId],
+      ["enable", serviceId],
+      ["bootstrap", domain, resolveLaunchAgentPlistPath(env)],
+      ["disable", serviceId],
+      ["print", serviceId],
+    ]);
+    expect(state.disabledOverride).toBe("disabled");
+    expect(state.serviceLoaded).toBe(true);
+    expect(state.serviceRunning).toBe(true);
+  });
+
+  it("restores an initially disabled stopped LaunchAgent after later update failure", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.disabledOverride = "disabled";
+    state.serviceRunning = false;
+
+    const stopResult = await runStopLaunchAgentWithFakeTimers({
+      env,
+      stdout: new PassThrough(),
+      quiesce: true,
+    });
+    const restore = stopResult?.restoreAfterUpdateFailure;
+    if (!restore) {
+      throw new Error("expected launchd quiescence rollback");
+    }
+    expect(state.serviceLoaded).toBe(false);
+    expect(state.disabledOverride).toBe("disabled");
+
+    await restore();
+
+    expect(launchctlCommandNames().slice(-7)).toEqual([
+      "print",
+      "enable",
+      "bootstrap",
+      "disable",
+      "print",
+      "stop",
+      "print",
+    ]);
+    expect(state.disabledOverride).toBe("disabled");
+    expect(state.serviceLoaded).toBe(true);
+    expect(state.serviceRunning).toBe(false);
+    const restoredCallCount = state.launchctlCalls.length;
+    await restore();
+    expect(state.launchctlCalls).toHaveLength(restoredCallCount);
+  });
+
+  it("waits for an initially running LaunchAgent to finish restoring", async () => {
+    const stopResult = await runStopLaunchAgentWithFakeTimers({
+      env: createDefaultLaunchdEnv(),
+      stdout: new PassThrough(),
+      quiesce: true,
+    });
+    const restore = stopResult?.restoreAfterUpdateFailure;
+    if (!restore) {
+      throw new Error("expected launchd quiescence rollback");
+    }
+    state.printStoppedRemaining = 2;
+
+    await restore();
+
+    expect(state.printStoppedRemaining).toBe(0);
+    expect(state.serviceLoaded).toBe(true);
+    expect(state.serviceRunning).toBe(true);
+  });
+
+  it("rejects restoration when an initially running LaunchAgent stays stopped", async () => {
+    const stopResult = await runStopLaunchAgentWithFakeTimers({
+      env: createDefaultLaunchdEnv(),
+      stdout: new PassThrough(),
+      quiesce: true,
+    });
+    const restore = stopResult?.restoreAfterUpdateFailure;
+    if (!restore) {
+      throw new Error("expected launchd quiescence rollback");
+    }
+    state.bootstrapStartsService = false;
+
+    let failure: unknown;
+    vi.useFakeTimers();
+    try {
+      const restorePromise = restore().catch((error: unknown) => error);
+      await vi.runAllTimersAsync();
+      failure = await restorePromise;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({
+      errors: [
+        expect.objectContaining({
+          message: "launchctl rollback did not restore the running LaunchAgent",
+        }),
+      ],
+    });
+    expect(state.serviceLoaded).toBe(true);
+    expect(state.serviceRunning).toBe(false);
+  });
+
+  it("preserves an initially disabled stopped LaunchAgent after failed quiescence", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.disabledOverride = "disabled";
+    state.serviceRunning = false;
+    state.bootoutKeepsLoadedRemaining = 3;
+
+    await expect(
+      runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough(), quiesce: true }),
+    ).rejects.toThrow("LaunchAgent remained loaded after bootout: state=stopped");
+
+    expect(launchctlCommandNames().filter((command) => command === "bootout")).toHaveLength(3);
+    expect(launchctlCommandNames()).not.toContain("enable");
+    expect(launchctlCommandNames()).not.toContain("bootstrap");
+    expect(launchctlCommandNames()).not.toContain("kickstart");
+    expect(state.disabledOverride).toBe("disabled");
+    expect(state.serviceLoaded).toBe(true);
+    expect(state.serviceRunning).toBe(false);
+  });
+
+  it("does not load an initially unloaded LaunchAgent when quiescence fails", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "19011",
+    };
+    state.serviceLoaded = false;
+    state.serviceRunning = false;
+    inspectPortUsage.mockResolvedValue({
+      port: 19011,
+      status: "busy",
+      listeners: [],
+      hints: [],
+    });
+    probePortUsage.mockResolvedValue("busy");
+
+    await expect(
+      runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough(), quiesce: true }),
+    ).rejects.toThrow("gateway port 19011 is still busy after LaunchAgent stop");
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
+    expect(state.launchctlCalls).toEqual([
+      ["print", serviceId],
+      ["print-disabled", domain],
+      ["disable", serviceId],
+      ["bootout", serviceId],
+      ["print", serviceId],
+      ["enable", serviceId],
+      ["print", serviceId],
+    ]);
+    expect(state.serviceLoaded).toBe(false);
+    expect(state.serviceRunning).toBe(false);
+  });
+
+  it("preserves an initially disabled and unloaded LaunchAgent after failed quiescence", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "19011",
+    };
+    state.disabledOverride = "disabled";
+    state.serviceLoaded = false;
+    state.serviceRunning = false;
+    inspectPortUsage.mockResolvedValue({
+      port: 19011,
+      status: "busy",
+      listeners: [],
+      hints: [],
+    });
+    probePortUsage.mockResolvedValue("busy");
+
+    await expect(
+      runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough(), quiesce: true }),
+    ).rejects.toThrow("gateway port 19011 is still busy after LaunchAgent stop");
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
+    expect(state.launchctlCalls).toEqual([
+      ["print", serviceId],
+      ["print-disabled", domain],
+      ["disable", serviceId],
+      ["bootout", serviceId],
+      ["print", serviceId],
+      ["print", serviceId],
+    ]);
+    expect(state.disabledOverride).toBe("disabled");
+    expect(state.serviceLoaded).toBe(false);
+    expect(state.serviceRunning).toBe(false);
+  });
+
+  it("does not mutate LaunchAgent state when its initial state is unknown", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.printError = "launchctl unavailable";
+    state.printFailuresRemaining = 1;
+
+    await expect(
+      stopLaunchAgent({ env, stdout: new PassThrough(), quiesce: true }),
+    ).rejects.toThrow(
+      "LaunchAgent state could not be confirmed before quiescence: launchctl unavailable",
+    );
+
+    expect(launchctlCommandNames()).toEqual(["print"]);
+  });
+
+  it("preserves quiescence and enable rollback failures", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.bootoutError = "bootout denied";
+    state.enableError = "enable denied";
+
+    const failure = await stopLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      quiesce: true,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({
+      message: "LaunchAgent quiescence failed and its prior state could not be restored",
+      errors: [
+        expect.objectContaining({ message: "launchctl bootout failed: bootout denied" }),
+        expect.objectContaining({ message: "launchctl enable rollback failed: enable denied" }),
+      ],
+    });
   });
 
   it("refuses in-band LaunchAgent stop before launchctl bootout", async () => {
