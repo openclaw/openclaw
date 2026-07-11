@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatErrorMessage } from "../infra/errors.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { createSearchableSelectList } from "./components/selectors.js";
 
@@ -160,7 +161,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       });
 
       child.on("error", (err) => {
-        deps.chatLog.addSystem(`[local] error: ${String(err)}`);
+        deps.chatLog.addSystem(`[local] error: ${formatErrorMessage(err)}`);
         deps.tui.requestRender();
         resolve();
       });
