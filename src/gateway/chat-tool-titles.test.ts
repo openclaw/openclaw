@@ -110,6 +110,29 @@ describe("generateToolCallTitles", () => {
     expect(call.context.messages[0]?.content).not.toContain(token);
   });
 
+  it("redacts secrets that straddle the prompt truncation boundary", async () => {
+    mockPreparedModel();
+    mockCompletionTitles({ "0": "Pushed with credentials" });
+    const token = ["ghp", "a1b2c3d4e5f6a1b2c3d4e5f6"].join("_");
+    // Place the secret so a slice-before-redact would cut it mid-token and
+    // leave an unmatchable fragment in the prompt.
+    const padding = "x".repeat(1_990);
+    const input = `${padding} Authorization: Bearer ${token}`;
+
+    await generateToolCallTitles({
+      cfg: {} satisfies OpenClawConfig,
+      agentId: AGENT_ID,
+      items: [{ id: "item-1", name: "bash", input }],
+    });
+
+    const call = completeWithPreparedSimpleCompletionModel.mock.calls[0]?.[0] as {
+      context: { messages: Array<{ content: string }> };
+    };
+    const content = call.context.messages[0]?.content ?? "";
+    expect(content).not.toContain(token);
+    expect(content).not.toContain(token.slice(0, 12));
+  });
+
   it("serves repeated items from the SQLite cache without a second completion", async () => {
     mockPreparedModel();
     mockCompletionTitles({ "0": "Checked repo status" });

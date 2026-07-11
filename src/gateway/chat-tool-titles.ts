@@ -71,9 +71,10 @@ function normalizeItems(items: readonly ToolTitleRequestItem[]): ToolTitleReques
     const name = item.name.trim();
     // Redact before anything downstream (cache key + model prompt): transcript
     // args can carry raw tokens/signed URLs, and titles must not become a new
-    // secret egress path. Redaction runs in tools mode regardless of logging
-    // config.
-    const input = redactToolPayloadText(item.input.slice(0, TOOL_TITLE_INPUT_MAX_CHARS));
+    // secret egress path. Redaction runs on the full schema-bounded input and
+    // only then truncates — slicing first could bisect a secret so its
+    // fragment no longer matches any redaction pattern.
+    const input = redactToolPayloadText(item.input).slice(0, TOOL_TITLE_INPUT_MAX_CHARS);
     if (!id || !name || !input.trim() || seen.has(id)) {
       continue;
     }
