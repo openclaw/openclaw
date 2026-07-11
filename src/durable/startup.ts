@@ -7,6 +7,8 @@ import {
   reconcileDurableSubagentRunsOnGatewayStartup,
 } from "./recovery.js";
 import { openDurableRuntimeStore } from "./runtime.js";
+import { replayDurableWakeDeliveryAttempts } from "./wake-delivery-replay.js";
+import { createDurableWakeSessionDeliveryHook } from "./wake-internal-delivery.js";
 
 const log = createSubsystemLogger("durable/runtimes");
 
@@ -45,6 +47,14 @@ export async function maybeRecordDurableGatewayStartup(params: {
           now: params.startupStartedAt,
         })
       : { scanned: 0, markedLost: 0 };
+    const wakeDeliveryReplay = await replayDurableWakeDeliveryAttempts({
+      store,
+      replayPassId: `gateway-startup:${params.processInstanceId}:${params.startupStartedAt}`,
+      now: params.startupStartedAt,
+      deliveryHook: createDurableWakeSessionDeliveryHook({
+        stateDir: env.OPENCLAW_STATE_DIR,
+      }),
+    });
     const run = store.createRun({
       operationKind: "openclaw.gateway.startup",
       operationVersion: "1",
@@ -76,6 +86,10 @@ export async function maybeRecordDurableGatewayStartup(params: {
       reconciledLostAgentTurns: recovery.markedLost,
       reconciledLostChatSends: chatSendRecovery.markedLost,
       reconciledLostSubagentRuns: subagentRecovery.markedLost,
+      wakeDeliveryScanned: wakeDeliveryReplay.scanned,
+      wakeDeliveryDelivered: wakeDeliveryReplay.delivered,
+      wakeDeliveryFailed: wakeDeliveryReplay.failed,
+      wakeDeliveryUnknown: wakeDeliveryReplay.unknown,
     });
   } catch (err) {
     log.warn(`durable runtime startup record failed: ${String(err)}`);

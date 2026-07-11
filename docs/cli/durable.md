@@ -48,8 +48,20 @@ OPENCLAW_DURABLE_RUNTIME=1 openclaw durable coordination <runtimeRunId>
 - `timers`: show timers for one run.
 - `coordination`: show a bounded coordination projection for task or session
   runtime consumers.
+- `obligations`: list unresolved durable attention obligations, including
+  pending wake obligations and unresolved uncertainty facts.
+- `wakes`: list pending durable wake obligations.
+- `wake`: inspect one durable wake with target diagnostics, source refs,
+  delivery attempts, and unresolved uncertainty facts.
+- `wake-attempts`: list delivery attempts for one durable wake, including
+  internal session delivery-queue handoff evidence when available.
+- `wake-ack`: record an external, parent, or operator acknowledgement decision.
+- `wake-supersede`: record an external, parent, or operator supersede decision.
+- `wake-mark`: record an `inspected`, `requires_human_decision`, or
+  `requires_operator_decision` mark.
 
-All commands support `--json`. `runs` also supports `--limit <count>`.
+All commands support `--json`. `runs`, `obligations`, `wakes`, and
+`wake-attempts` also support `--limit <count>`.
 
 ## Enablement And Storage
 
@@ -112,6 +124,11 @@ from recorded facts, but it does not choose retry, resume, abandon, or
 replacement work for that target. Duplicate child completions, repeated recovery
 passes, result-mailbox replays, and repeated delivery attempts are expected to
 dedupe by durable keys instead of creating duplicate attention pressure.
+
+Durable wake replay may mark an attempt `delivered` after it has been handed to
+OpenClaw's internal session delivery queue for the resolved session target. That
+status is an internal handoff only; channel/profile/plugin layers still own any
+external Discord, Signal, Slack, or other transport send.
 
 ## Related
 
