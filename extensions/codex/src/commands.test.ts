@@ -18,6 +18,7 @@ import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import type { JsonValue } from "./app-server/protocol.js";
 import type { CodexAppServerThreadBinding } from "./app-server/session-binding.js";
 import {
+  buildCodexSupervisionTestConnectionFingerprint,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
@@ -154,6 +155,7 @@ function supervisedTestBinding(threadId = "thread-supervised"): CodexAppServerTh
     threadId,
     connectionScope: "supervision",
     supervisionSourceThreadId: threadId,
+    appServerRuntimeFingerprint: buildCodexSupervisionTestConnectionFingerprint(),
     cwd: "/repo",
     model: "gpt-5.5",
     modelProvider: "openai",
@@ -2627,6 +2629,33 @@ describe("codex command", () => {
     });
     const token = readDiagnosticsConfirmationToken(request);
     binding = { threadId: "thread-scope-change", cwd: "/repo" };
+
+    await expect(
+      handleCodexCommand(createContext(`diagnostics confirm ${token}`), {
+        deps,
+        pluginConfig,
+      }),
+    ).resolves.toEqual({
+      text: "The Codex diagnostics sessions changed before confirmation. Run /diagnostics again for the current threads.",
+    });
+    expect(safeCodexControlRequest).not.toHaveBeenCalled();
+  });
+
+  it("rejects diagnostics confirmation when the supervised connection changes", async () => {
+    let binding: CodexAppServerThreadBinding = supervisedTestBinding("thread-connection-change");
+    const readBinding = vi.fn(async () => binding);
+    const safeCodexControlRequest = vi.fn();
+    const deps = createDeps({
+      bindingStore: { ...testCodexAppServerBindingStore, read: readBinding },
+      safeCodexControlRequest,
+    });
+    const pluginConfig = { supervision: { enabled: true } };
+    const request = await handleCodexCommand(createContext("diagnostics"), {
+      deps,
+      pluginConfig,
+    });
+    const token = readDiagnosticsConfirmationToken(request);
+    binding = { ...binding, appServerRuntimeFingerprint: "changed-connection" };
 
     await expect(
       handleCodexCommand(createContext(`diagnostics confirm ${token}`), {

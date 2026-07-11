@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS } from "./app-server/protocol.js";
 import {
+  buildCodexSupervisionTestConnectionFingerprint,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
@@ -111,6 +112,7 @@ describe("native Codex thread tool", () => {
         threadId: "supervised-thread",
         connectionScope: "supervision",
         supervisionSourceThreadId: "source-thread",
+        appServerRuntimeFingerprint: buildCodexSupervisionTestConnectionFingerprint(),
         cwd: "/tmp/project",
         model: "gpt-5.5",
         modelProvider: "openai",

@@ -7,6 +7,7 @@ import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-sessio
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildCodexSupervisionTestConnectionFingerprint,
   readCodexAppServerBinding,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
@@ -117,6 +118,7 @@ describe("codex conversation controls", () => {
       threadId: "thread-supervised",
       connectionScope: "supervision",
       supervisionSourceThreadId: "thread-supervised",
+      appServerRuntimeFingerprint: buildCodexSupervisionTestConnectionFingerprint(),
       cwd: tempDir,
       model: "gpt-5.5",
       modelProvider: "openai",

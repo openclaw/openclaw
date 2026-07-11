@@ -35,6 +35,7 @@ import {
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
   type CodexAppServerBindingStore,
+  type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
@@ -198,6 +199,8 @@ type CodexDiagnosticsTarget = {
   identity: CodexAppServerBindingIdentity;
   agentDir: string;
   connectionScope?: "supervision";
+  appServerRuntimeFingerprint?: string;
+  pendingSupervisionBranch?: CodexAppServerThreadBinding["pendingSupervisionBranch"];
   authProfileId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -210,7 +213,11 @@ type CodexDiagnosticsTarget = {
 
 type CodexDiagnosticsCandidate = Omit<
   CodexDiagnosticsTarget,
-  "threadId" | "connectionScope" | "authProfileId"
+  | "threadId"
+  | "connectionScope"
+  | "appServerRuntimeFingerprint"
+  | "pendingSupervisionBranch"
+  | "authProfileId"
 >;
 
 type PendingCodexDiagnosticsConfirmation = {
@@ -1662,7 +1669,14 @@ async function resolvePendingCodexDiagnosticsTargets(
 
 function resolveCodexDiagnosticsTarget(
   target: CodexDiagnosticsCandidate | CodexDiagnosticsTarget,
-  binding: { threadId: string; connectionScope?: "supervision"; authProfileId?: string },
+  binding: Pick<
+    CodexAppServerThreadBinding,
+    | "threadId"
+    | "connectionScope"
+    | "appServerRuntimeFingerprint"
+    | "pendingSupervisionBranch"
+    | "authProfileId"
+  >,
   config?: PluginCommandContext["config"],
 ): CodexDiagnosticsTarget {
   // Confirmation re-resolution receives the previous target. Rebuild the candidate so a
@@ -1683,6 +1697,8 @@ function resolveCodexDiagnosticsTarget(
       ...candidate,
       threadId: binding.threadId,
       connectionScope: binding.connectionScope,
+      appServerRuntimeFingerprint: binding.appServerRuntimeFingerprint,
+      pendingSupervisionBranch: binding.pendingSupervisionBranch,
     };
   }
   const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
@@ -1706,6 +1722,9 @@ function codexDiagnosticsTargetsMatch(
       bindingStoreKey(target.identity),
       target.threadId,
       target.connectionScope ?? null,
+      target.pendingSupervisionBranch?.connectionFingerprint ??
+        target.appServerRuntimeFingerprint ??
+        null,
       target.authProfileId ?? null,
     ]);
   const expectedTargets = expected.map(fingerprint).toSorted();
