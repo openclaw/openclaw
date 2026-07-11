@@ -164,8 +164,8 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         )
 
     def test_codex_config_status_exposes_keys_only(self) -> None:
-        args = argparse.Namespace(codex_config=['model_provider="private-value"'])
-        self.assertEqual(AUTOREVIEW.codex_config_keys(args), ["model_provider"])
+        args = argparse.Namespace(codex_config=['model_verbosity="low"'])
+        self.assertEqual(AUTOREVIEW.codex_config_keys(args), ["model_verbosity"])
 
     def test_codex_retries_terra_after_sol_access_failure(self) -> None:
         args = argparse.Namespace(

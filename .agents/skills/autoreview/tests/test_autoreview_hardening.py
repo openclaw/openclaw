@@ -77,7 +77,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, "untracked sensitive files"):
                     self.helper["local_bundle"](repo)
 
-    def test_local_bundle_omits_safe_untracked_binary_content(self) -> None:
+    def test_local_bundle_marks_untracked_binary_input_incomplete(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
             (repo / "image.bin").write_bytes(b"\x89PNG\r\n\0binary-content")
@@ -85,7 +85,37 @@ class AutoreviewHardeningTests(unittest.TestCase):
             bundle, truncated = self.helper["local_bundle"](repo)
 
             self.assertIn("## image.bin\n[binary file omitted]", bundle)
-            self.assertFalse(truncated)
+            self.assertTrue(truncated)
+
+    def test_codex_config_rejects_capability_bearing_overrides(self) -> None:
+        for override in (
+            'mcp_servers.review.command="touch /tmp/owned"',
+            'notify=["sh", "-c", "touch /tmp/owned"]',
+            'model_instructions_file="/tmp/hostile.md"',
+            'model_provider="credential-sink"',
+            'hooks.PreToolUse.command="touch /tmp/owned"',
+        ):
+            with self.subTest(override=override), self.assertRaisesRegex(
+                SystemExit,
+                "unsafe Codex config override refused",
+            ):
+                self.helper["codex_config_overrides"](
+                    argparse.Namespace(codex_config=[override])
+                )
+
+    def test_codex_config_accepts_safe_tuning_overrides(self) -> None:
+        args = argparse.Namespace(
+            codex_config=[
+                'service_tier="fast"',
+                'model_verbosity="low"',
+                'model_reasoning_summary="concise"',
+            ]
+        )
+
+        self.assertEqual(
+            self.helper["codex_config_overrides"](args),
+            args.codex_config,
+        )
 
     def test_untracked_files_respect_trusted_global_excludes(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -198,6 +228,10 @@ class AutoreviewHardeningTests(unittest.TestCase):
     def test_review_patch_rejects_oversized_content(self) -> None:
         with self.assertRaisesRegex(SystemExit, "too large to review safely"):
             self.helper["validate_review_patch"]("local staged diff", ["safe.txt"], "x" * 25, 10)
+
+    def test_review_patch_limit_counts_utf8_bytes(self) -> None:
+        with self.assertRaisesRegex(SystemExit, r"12 bytes; limit 10"):
+            self.helper["validate_review_patch"]("local staged diff", ["safe.txt"], "界" * 4, 10)
 
     def test_tracked_sensitive_paths_are_blocked_in_all_modes(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -373,6 +407,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             'password = payload.get("password")',
             "token = auth_response.credentials.access_token",
             "token = response.authentication.accessToken",
+            "token = request.headers.authorization",
             "password = account.credentials.password",
             "api_key = client.settings.apiKey",
             'token = "$GITHUB_TOKEN"',
@@ -437,15 +472,24 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
         self.assertTrue(self.helper["secret_text_risk"](content))
 
-    def test_secret_detector_allows_common_fixture_literals_and_pragmas(self) -> None:
+    def test_secret_detector_allows_common_fixture_literals(self) -> None:
         for content in (
             'token: "token-oversized"',
             'API_KEY = "clawrouter-e2e-secret"',
             'token: "very-long-browser-token-0123456789"',
-            'password="CorrectHorseBatteryStaple123!"  # pragma: allowlist secret',
         ):
             with self.subTest(content=content):
                 self.assertFalse(self.helper["secret_text_risk"](content))
+
+    def test_secret_detector_does_not_trust_in_band_suppressions(self) -> None:
+        for marker in ("pragma: allowlist secret", "gitleaks:allow"):
+            with self.subTest(marker=marker):
+                content = (
+                    "pass"
+                    + 'word="CorrectHorseBatteryStaple123!"  # '
+                    + marker
+                )
+                self.assertTrue(self.helper["secret_text_risk"](content))
 
     def test_secret_detector_does_not_treat_quoted_code_text_as_a_reference(self) -> None:
         for content in (
@@ -872,6 +916,51 @@ class AutoreviewHardeningTests(unittest.TestCase):
         ):
             with self.subTest(value=value):
                 self.assertFalse(self.helper["safe_proxy_url"](value))
+
+    def test_safe_temp_root_rejects_reviewed_repo_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            hostile_temp = repo / "tmp"
+            hostile_temp.mkdir()
+
+            with mock.patch.object(
+                tempfile,
+                "gettempdir",
+                return_value=str(hostile_temp),
+            ), self.assertRaisesRegex(
+                SystemExit,
+                "temporary directory must be outside",
+            ):
+                self.helper["safe_temp_root"](repo)
+
+    def test_claude_fable_alias_requires_fable_safe_mode_version(self) -> None:
+        args = argparse.Namespace(
+            claude_bin="claude",
+            fallback_model=None,
+            model="fable",
+        )
+        version_result = subprocess.CompletedProcess(
+            ["claude", "--version"],
+            0,
+            "2.1.169 (Claude Code)",
+            "",
+        )
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            with mock.patch.dict(
+                self.helper["ensure_claude_isolation_supported"].__globals__,
+                {
+                    "resolve_command": lambda *_args: "/usr/bin/claude",
+                    "safe_engine_env": lambda *_args, **_kwargs: {},
+                    "safe_temp_root": lambda _repo: Path(tempdir),
+                    "run": lambda *_args, **_kwargs: version_result,
+                },
+            ), self.assertRaisesRegex(
+                SystemExit,
+                "2.1.170",
+            ):
+                self.helper["ensure_claude_isolation_supported"](args, repo)
 
     def test_codex_env_rejects_executable_dbus_transport(self) -> None:
         old = os.environ.copy()
