@@ -423,7 +423,6 @@ export async function recoverOrphanedSubagentSessions(params: {
         }
         sessionKeysWithRecoveryInFlight.add(childSessionKey);
 
-        let resumeResult: { resumed: boolean; error?: string };
         try {
           log.info(`found orphaned subagent session: ${childSessionKey} (run=${runId})`);
 
@@ -456,7 +455,7 @@ export async function recoverOrphanedSubagentSessions(params: {
           // We intentionally do NOT clear abortedLastRun before attempting
           // the resume — if callGateway fails (e.g. gateway still booting),
           // the flag stays true so the next restart can retry.
-          resumeResult = await resumeOrphanedSession({
+          const resumeResult = await resumeOrphanedSession({
             sessionKey: childSessionKey,
             task: runRecord.task,
             lastHumanMessage: extractMessageText(lastHumanMessage),
@@ -466,45 +465,49 @@ export async function recoverOrphanedSubagentSessions(params: {
             originalRunId: runId,
             originalRun: runRecord,
           });
+
+          if (resumeResult.resumed) {
+            resumedSessionKeys.add(childSessionKey);
+            // Only clear the aborted flag after confirmed successful resume.
+            // The in-flight guard stays claimed through this write — releasing
+            // it right after resumeOrphanedSession() returns would leave a
+            // window where a second scan reads the still-true abortedLastRun
+            // flag and double-resumes before this write lands.
+            try {
+              await updateSessionStore(storePath, (currentStore) => {
+                const current = currentStore[childSessionKey];
+                if (current) {
+                  current.abortedLastRun = false;
+                  markSubagentRecoveryAttempt({
+                    entry: current,
+                    now: Date.now(),
+                    runId,
+                    attempt: recoveryGate.nextAttempt,
+                  });
+                  current.updatedAt = Date.now();
+                  currentStore[childSessionKey] = current;
+                }
+              });
+            } catch (err) {
+              log.warn(
+                `resume succeeded but failed to update session store for ${childSessionKey}: ${String(err)}`,
+              );
+            }
+            result.recovered++;
+          } else {
+            // Flag stays as abortedLastRun=true so next restart can retry
+            log.warn(
+              `resume failed for ${childSessionKey}; abortedLastRun flag preserved for retry on next restart`,
+            );
+            result.failed++;
+            result.failedRuns.push({
+              runId,
+              childSessionKey,
+              error: resumeResult.error,
+            });
+          }
         } finally {
           sessionKeysWithRecoveryInFlight.delete(childSessionKey);
-        }
-
-        if (resumeResult.resumed) {
-          resumedSessionKeys.add(childSessionKey);
-          // Only clear the aborted flag after confirmed successful resume.
-          try {
-            await updateSessionStore(storePath, (currentStore) => {
-              const current = currentStore[childSessionKey];
-              if (current) {
-                current.abortedLastRun = false;
-                markSubagentRecoveryAttempt({
-                  entry: current,
-                  now: Date.now(),
-                  runId,
-                  attempt: recoveryGate.nextAttempt,
-                });
-                current.updatedAt = Date.now();
-                currentStore[childSessionKey] = current;
-              }
-            });
-          } catch (err) {
-            log.warn(
-              `resume succeeded but failed to update session store for ${childSessionKey}: ${String(err)}`,
-            );
-          }
-          result.recovered++;
-        } else {
-          // Flag stays as abortedLastRun=true so next restart can retry
-          log.warn(
-            `resume failed for ${childSessionKey}; abortedLastRun flag preserved for retry on next restart`,
-          );
-          result.failed++;
-          result.failedRuns.push({
-            runId,
-            childSessionKey,
-            error: resumeResult.error,
-          });
         }
       } catch (err) {
         const error = formatErrorMessage(err);

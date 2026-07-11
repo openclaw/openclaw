@@ -856,6 +856,47 @@ describe("subagent-orphan-recovery", () => {
     expect(gateway.callGateway).toHaveBeenCalledOnce();
   });
 
+  it("does not double-resume while the first scan's successful resume is still clearing abortedLastRun", async () => {
+    // resumeOrphanedSession() resolving does not mean the session is safe to
+    // re-scan yet: abortedLastRun is only cleared by the subsequent
+    // updateSessionStore() write. If the in-flight guard released right after
+    // resumeOrphanedSession() returns, a second scan starting in that window
+    // would still read abortedLastRun: true and call callGateway again.
+    mockSingleAbortedSession();
+    let releaseUpdateSessionStore: (() => void) | undefined;
+    const reachedUpdateSessionStore = new Promise<void>((resolveReached) => {
+      vi.mocked(sessions.updateSessionStore).mockImplementationOnce(async () => {
+        resolveReached();
+        return await new Promise<void>((resolve) => {
+          releaseUpdateSessionStore = resolve;
+        });
+      });
+    });
+    vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "new-run" } as never);
+
+    const activeRuns = createActiveRuns(createTestRunRecord());
+
+    const firstScan = recoverOrphanedSubagentSessions({ getActiveRuns: () => activeRuns });
+    await reachedUpdateSessionStore;
+
+    // resumeOrphanedSession() has already resolved (resumed: true) by this
+    // point — only the persisted abortedLastRun clear is still pending.
+    expect(gateway.callGateway).toHaveBeenCalledOnce();
+
+    const secondScan = recoverOrphanedSubagentSessions({ getActiveRuns: () => activeRuns });
+    const second = await secondScan;
+
+    expect(second.skipped).toBe(1);
+    expect(second.recovered).toBe(0);
+    expect(gateway.callGateway).toHaveBeenCalledOnce();
+
+    releaseUpdateSessionStore?.();
+    const first = await firstScan;
+
+    expect(first.recovered).toBe(1);
+    expect(gateway.callGateway).toHaveBeenCalledOnce();
+  });
+
   it("finalizes interrupted runs with a readable failure after recovery retries are exhausted", async () => {
     vi.mocked(sessions.loadSessionStore).mockReturnValue({
       "agent:main:subagent:test-session-1": {
