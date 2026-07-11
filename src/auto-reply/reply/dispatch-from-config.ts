@@ -156,7 +156,10 @@ import type { ReplySessionBinding } from "./get-reply.types.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { buildPendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  buildPendingFinalDeliveryText,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery.js";
 import {
   appendReplyDispatcherBeforeDeliverCancelled,
   captureReplyDispatchDeliveryOutcome,
@@ -1149,9 +1152,29 @@ function matchesPendingFinalDeliveryIdentity(
 }
 
 function resolvePendingFinalDeliveryPayloads(params: {
+  intentId?: string;
   pendingText: string;
   replies: ReplyPayload[];
 }): ReplyPayload[] | undefined {
+  const intentReplies = params.intentId
+    ? params.replies.filter((reply) => {
+        const metadata = getReplyPayloadMetadata(reply);
+        return (
+          metadata?.pendingFinalDeliveryIntentId === params.intentId &&
+          metadata.pendingFinalDeliveryRetryText !== undefined
+        );
+      })
+    : [];
+  const intentContributors = intentReplies.filter(
+    (reply) => getReplyPayloadMetadata(reply)?.pendingFinalDeliveryRetryText,
+  );
+  const intentText = buildPendingFinalDeliveryRetryText(intentContributors);
+  if (
+    intentReplies.length > 0 &&
+    intentText.replace(/\s+/g, " ").trim() === params.pendingText.replace(/\s+/g, " ").trim()
+  ) {
+    return intentContributors;
+  }
   const contributingReplies = params.replies.filter(
     (reply) => buildPendingFinalDeliveryText([reply]) !== "",
   );
@@ -1162,6 +1185,19 @@ function resolvePendingFinalDeliveryPayloads(params: {
     (reply) => buildPendingFinalDeliveryText([reply]) === params.pendingText,
   );
   return exactMatches.length === 1 ? exactMatches : undefined;
+}
+
+function buildPendingFinalDeliveryRetryText(payloads: ReplyPayload[]): string {
+  return sanitizePendingFinalDeliveryText(
+    payloads
+      .map(
+        (payload) =>
+          getReplyPayloadMetadata(payload)?.pendingFinalDeliveryRetryText ??
+          buildPendingFinalDeliveryText([payload]),
+      )
+      .filter(Boolean)
+      .join("\n\n"),
+  );
 }
 
 async function reconcilePendingFinalDeliveryAfterSettlement(params: {
@@ -1189,7 +1225,11 @@ async function reconcilePendingFinalDeliveryAfterSettlement(params: {
         return null;
       }
       const pendingPayloads = pendingText
-        ? resolvePendingFinalDeliveryPayloads({ pendingText, replies: params.replies })
+        ? resolvePendingFinalDeliveryPayloads({
+            intentId: identity.intentId,
+            pendingText,
+            replies: params.replies,
+          })
         : undefined;
       const pendingPayloadSet = pendingPayloads ? new Set(pendingPayloads) : undefined;
       const relevantDeliveries = pendingPayloadSet
@@ -1208,7 +1248,7 @@ async function reconcilePendingFinalDeliveryAfterSettlement(params: {
         return null;
       }
       if (pendingPayloadSet && ownsEveryPendingPayload && failedBeforeDeliver.length > 0) {
-        const retryText = buildPendingFinalDeliveryText(
+        const retryText = buildPendingFinalDeliveryRetryText(
           failedBeforeDeliver.map((delivery) => delivery.payload),
         );
         if (retryText) {

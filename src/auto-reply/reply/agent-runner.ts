@@ -177,6 +177,18 @@ function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPaylo
   );
 }
 
+function resolvePendingFinalDeliveryRetryText(params: {
+  isHeartbeat: boolean;
+  payload: ReplyPayload;
+}): string {
+  const pendingText = buildPendingFinalDeliveryText([params.payload]);
+  if (!params.isHeartbeat) {
+    return pendingText;
+  }
+  const stripped = stripHeartbeatToken(pendingText, { mode: "message" });
+  return stripped.shouldSkip ? "" : stripped.text || pendingText;
+}
+
 function buildSilentFallbackFailurePayload(params: {
   fallbackTransition: ReturnType<typeof resolveFallbackTransition>;
   fallbackFailureKnown: boolean;
@@ -2704,7 +2716,13 @@ export async function runReplyAgent(params: {
       if (resolvedPendingText) {
         const pendingFinalDeliveryIntentId = crypto.randomUUID();
         for (const payload of finalPayloads) {
-          setReplyPayloadMetadata(payload, { pendingFinalDeliveryIntentId });
+          setReplyPayloadMetadata(payload, {
+            pendingFinalDeliveryIntentId,
+            pendingFinalDeliveryRetryText: resolvePendingFinalDeliveryRetryText({
+              isHeartbeat,
+              payload,
+            }),
+          });
         }
         const pendingFinalDeliveryContext = resolveReplyRunDeliveryContext({
           cfg,

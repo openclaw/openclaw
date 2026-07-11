@@ -556,6 +556,73 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     }
   });
 
+  it("narrows heartbeat-normalized retry text using its originating payloads", async () => {
+    vi.useFakeTimers();
+    try {
+      hookMocks.runner.hasHooks.mockReturnValue(false);
+      sessionStoreMocks.currentEntry = {
+        sessionKey: "agent:test:session",
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "auxiliary durable reply",
+        pendingFinalDeliveryCreatedAt: 1,
+        pendingFinalDeliveryIntentId: "heartbeat-intent",
+      };
+      sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+        existing: sessionStoreMocks.currentEntry,
+      });
+      const hookStarted = createDeferred<void>();
+      let hookCalls = 0;
+      const dispatcher = createReplyDispatcher({
+        deliver: vi.fn().mockResolvedValue(undefined),
+        beforeDeliver: (payload) => {
+          hookCalls += 1;
+          if (hookCalls === 2) {
+            hookStarted.resolve();
+            return new Promise<never>(() => {});
+          }
+          return payload;
+        },
+      });
+
+      const resultPromise = withReplyDispatcher({
+        dispatcher,
+        run: () =>
+          dispatchReplyFromConfig({
+            ctx: createHookCtx(),
+            cfg: emptyConfig,
+            dispatcher,
+            replyResolver: async () => [
+              setReplyPayloadMetadata(
+                { text: "auxiliary" },
+                {
+                  pendingFinalDeliveryIntentId: "heartbeat-intent",
+                  pendingFinalDeliveryRetryText: "auxiliary",
+                },
+              ),
+              setReplyPayloadMetadata(
+                { text: "durable reply" },
+                {
+                  pendingFinalDeliveryIntentId: "heartbeat-intent",
+                  pendingFinalDeliveryRetryText: "durable reply",
+                },
+              ),
+            ],
+          }),
+      });
+      await hookStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+      await resultPromise;
+
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryIntentId).toBe("heartbeat-intent");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not let an older settlement rewrite a newer pending-final intent", async () => {
     vi.useFakeTimers();
     try {
