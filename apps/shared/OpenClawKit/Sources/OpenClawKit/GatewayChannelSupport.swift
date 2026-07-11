@@ -1,6 +1,29 @@
 import CryptoKit
 import Foundation
 
+func gatewayIntValue(_ value: Any?) -> Int? {
+    if let value = value as? Int {
+        return value
+    }
+    if let value = value as? Int64 {
+        return Int(exactly: value)
+    }
+    if let value = value as? Double, value.rounded() == value {
+        return Int(exactly: value)
+    }
+    if let value = value as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID() {
+        let doubleValue = value.doubleValue
+        guard doubleValue.rounded() == doubleValue else {
+            return nil
+        }
+        return Int(exactly: doubleValue)
+    }
+    if let value = value as? String {
+        return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+    return nil
+}
+
 /// Bridges task cancellation into the request continuation without racing send.
 final class GatewayRequestCancellationGate: @unchecked Sendable {
     private let lock = NSLock()

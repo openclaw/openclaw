@@ -28,29 +28,6 @@ private func gatewayErrorDetails(_ error: ErrorShape?) -> [String: ProtoAnyCodab
     return details
 }
 
-private func gatewayIntValue(_ value: Any?) -> Int? {
-    if let value = value as? Int {
-        return value
-    }
-    if let value = value as? Int64 {
-        return Int(exactly: value)
-    }
-    if let value = value as? Double, value.rounded() == value {
-        return Int(exactly: value)
-    }
-    if let value = value as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID() {
-        let doubleValue = value.doubleValue
-        guard doubleValue.rounded() == doubleValue else {
-            return nil
-        }
-        return Int(exactly: doubleValue)
-    }
-    if let value = value as? String {
-        return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-    return nil
-}
-
 extension String {
     fileprivate var nilIfEmpty: String? {
         self.isEmpty ? nil : self
