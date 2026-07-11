@@ -71,7 +71,6 @@ function detectResult() {
       },
     ],
     manualProviders: [],
-    authOptions: [],
     workspace: "/gateway/workspace",
     setupComplete: false,
   } as const;

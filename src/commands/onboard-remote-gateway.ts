@@ -58,7 +58,7 @@ function toSetupInferenceDetection(result: CrestodianSetupDetectResult): SetupIn
       label: provider.label,
       ...(provider.hint !== undefined ? { hint: provider.hint } : {}),
     })),
-    authOptions: result.authOptions.map((option) => ({
+    authOptions: (result.authOptions ?? []).map((option) => ({
       id: option.id,
       label: option.label,
       ...(option.hint !== undefined ? { hint: option.hint } : {}),

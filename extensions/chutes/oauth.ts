@@ -194,7 +194,10 @@ async function exchangeChutesCodeForTokens(params: {
       fetchFn,
       ...(params.signal ? { signal: params.signal } : {}),
     });
-  } catch {
+  } catch (error) {
+    if (params.signal?.aborted) {
+      throw error;
+    }
     // Token exchange completes authentication; optional profile enrichment must
     // not discard issued credentials when userinfo is unavailable or times out.
   }

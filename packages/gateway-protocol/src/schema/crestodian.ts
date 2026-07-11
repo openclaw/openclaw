@@ -107,17 +107,19 @@ export const CrestodianSetupDetectResultSchema = Type.Object(
       ),
     ),
     /** Provider-owned browser and device-code login methods. */
-    authOptions: Type.Array(
-      Type.Object(
-        {
-          id: NonEmptyString,
-          label: NonEmptyString,
-          hint: Type.Optional(Type.String()),
-          groupLabel: Type.Optional(Type.String()),
-          kind: Type.Union([Type.Literal("oauth"), Type.Literal("device-code")]),
-          featured: Type.Boolean(),
-        },
-        { additionalProperties: false },
+    authOptions: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            id: NonEmptyString,
+            label: NonEmptyString,
+            hint: Type.Optional(Type.String()),
+            groupLabel: Type.Optional(Type.String()),
+            kind: Type.Union([Type.Literal("oauth"), Type.Literal("device-code")]),
+            featured: Type.Boolean(),
+          },
+          { additionalProperties: false },
+        ),
       ),
     ),
     workspace: NonEmptyString,

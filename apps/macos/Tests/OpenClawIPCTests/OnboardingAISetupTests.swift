@@ -631,6 +631,17 @@ struct OnboardingAISetupTests {
         #expect(model.authError == nil)
     }
 
+    @Test func `provider auth mismatch cancels returned server session id`() {
+        #expect(OnboardingAISetupModel.providerAuthCancellationSessionID(
+            requested: "requested-session",
+            returned: "returned-server-session"
+        ) == "returned-server-session")
+        #expect(OnboardingAISetupModel.providerAuthCancellationSessionID(
+            requested: "matching-session",
+            returned: "matching-session"
+        ) == nil)
+    }
+
     @Test func `provider auth reconciliation only trusts its own completed flow`() {
         #expect(!OnboardingAISetupModel.canAcceptProviderAuthReconciliation(
             pending: false,

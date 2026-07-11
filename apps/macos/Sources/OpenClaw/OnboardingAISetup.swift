@@ -1267,7 +1267,13 @@ extension OnboardingAISetupModel {
                     await self.gateway.cancelWizardSession(result.sessionid, on: serverLease)
                     return
                 }
-                guard result.sessionid == authSessionID else {
+                if let cancellationSessionID = Self.providerAuthCancellationSessionID(
+                    requested: authSessionID,
+                    returned: result.sessionid
+                ) {
+                    // The returned id owns the live server session. Cancel that
+                    // session even when the Gateway violated the echo contract.
+                    self.authSessionID = cancellationSessionID
                     self.cancelProviderAuth()
                     return
                 }
@@ -1352,6 +1358,10 @@ extension OnboardingAISetupModel {
                 self.clearProviderAuth()
             }
         }
+    }
+
+    static func providerAuthCancellationSessionID(requested: String, returned: String) -> String? {
+        requested == returned ? nil : returned
     }
 
     var authWizardOptions: [WizardOption] {
