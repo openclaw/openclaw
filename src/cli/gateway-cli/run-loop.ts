@@ -509,6 +509,7 @@ export async function runGatewayLoop(params: {
           let activeRunsAtDrainStart = 0;
           let drainTimedOut = false;
           let inboundDebounceBuffersFlushed = 0;
+          let inboundDebounceDrainRemaining = 0;
           let channelQueueDrainRemaining = 0;
           let followupQueueDrainRemaining = 0;
           await measureGatewayRestartTrace(
@@ -580,7 +581,17 @@ export async function runGatewayLoop(params: {
                   }, RESTART_DRAIN_STILL_PENDING_WARN_MS);
 
                 if (!restartIntent?.force) {
-                  inboundDebounceBuffersFlushed = await flushAllInboundDebouncers();
+                  const inboundDebounceDrain = await flushAllInboundDebouncers(
+                    resolveRemainingRestartDrainTimeoutMs(),
+                  );
+                  inboundDebounceBuffersFlushed = inboundDebounceDrain.flushed;
+                  inboundDebounceDrainRemaining = inboundDebounceDrain.remaining;
+                  if (!inboundDebounceDrain.drained) {
+                    drainTimedOut = true;
+                    gatewayLog.warn(
+                      `inbound debounce drain stopped with ${inboundDebounceDrain.remaining} pending buffer(s)`,
+                    );
+                  }
                   const channelDrain = await waitForChannelRunQueueDrain(
                     resolveRemainingRestartDrainTimeoutMs(),
                   );
@@ -707,6 +718,7 @@ export async function runGatewayLoop(params: {
               ["activeTasks", activeTasksAtDrainStart],
               ["activeRuns", activeRunsAtDrainStart],
               ["inboundDebounceBuffersFlushed", inboundDebounceBuffersFlushed],
+              ["inboundDebounceDrainRemaining", inboundDebounceDrainRemaining],
               ["channelQueueDrainRemaining", channelQueueDrainRemaining],
               ["followupQueueDrainRemaining", followupQueueDrainRemaining],
               ["timedOut", drainTimedOut],

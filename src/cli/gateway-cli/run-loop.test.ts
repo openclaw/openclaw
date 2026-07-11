@@ -54,7 +54,11 @@ const getInspectableActiveTaskRestartBlockers = vi.fn(
 );
 const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
-const flushAllInboundDebouncers = vi.fn(async () => 0);
+const flushAllInboundDebouncers = vi.fn(async (_timeoutMs?: number) => ({
+  drained: true,
+  flushed: 0,
+  remaining: 0,
+}));
 const waitForChannelRunQueueDrain = vi.fn(async (_timeoutMs?: number) => ({
   drained: true,
   remaining: 0,
@@ -185,7 +189,7 @@ vi.mock("../../process/gateway-work-admission.js", () => ({
 }));
 
 vi.mock("../../auto-reply/inbound-debounce.js", () => ({
-  flushAllInboundDebouncers: () => flushAllInboundDebouncers(),
+  flushAllInboundDebouncers: (timeoutMs?: number) => flushAllInboundDebouncers(timeoutMs),
 }));
 
 vi.mock("../../auto-reply/reply/queue/drain-all.js", () => ({

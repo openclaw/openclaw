@@ -1,4 +1,5 @@
 // Keyed inbound-message debouncer that preserves same-key delivery order.
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   resolveNonNegativeIntegerOption,
   resolveOptionalIntegerOption,
@@ -8,9 +9,20 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 const INBOUND_DEBOUNCER_FLUSH = Symbol.for("openclaw.inboundDebouncerFlush");
+const INBOUND_DEBOUNCER_PENDING = Symbol.for("openclaw.inboundDebouncerPending");
+const MAX_GLOBAL_FLUSH_PASSES = 100;
+const MAX_GLOBAL_FLUSH_TIMEOUT_MS = 30_000;
+const FLUSH_TIMED_OUT = Symbol("inboundDebouncerFlushTimedOut");
+
+type AsyncContextRunner = ReturnType<typeof AsyncLocalStorage.snapshot>;
+type InboundDebouncerFlushPass = {
+  completion: Promise<void>;
+  flushed: number;
+};
 
 type RegisteredInboundDebouncer = {
-  [INBOUND_DEBOUNCER_FLUSH]: () => Promise<number>;
+  [INBOUND_DEBOUNCER_FLUSH]: (runInContext: AsyncContextRunner) => InboundDebouncerFlushPass;
+  [INBOUND_DEBOUNCER_PENDING]: () => number;
 };
 
 const INBOUND_DEBOUNCERS = resolveGlobalMap<symbol, WeakRef<RegisteredInboundDebouncer>>(
@@ -26,24 +38,107 @@ function registerInboundDebouncer(debouncer: RegisteredInboundDebouncer): void {
   INBOUND_DEBOUNCERS.set(Symbol(), new WeakRef(debouncer));
 }
 
-/** Flush every live inbound debounce buffer to its normal channel callback. */
-export async function flushAllInboundDebouncers(): Promise<number> {
-  let flushed = 0;
-  while (true) {
-    let flushedThisPass = 0;
-    for (const [key, reference] of INBOUND_DEBOUNCERS) {
-      const debouncer = reference.deref();
-      if (!debouncer) {
-        INBOUND_DEBOUNCERS.delete(key);
-        continue;
-      }
-      flushedThisPass += await debouncer[INBOUND_DEBOUNCER_FLUSH]();
+function collectLiveInboundDebouncers(): RegisteredInboundDebouncer[] {
+  const live: RegisteredInboundDebouncer[] = [];
+  for (const [key, reference] of INBOUND_DEBOUNCERS) {
+    const debouncer = reference.deref();
+    if (!debouncer) {
+      INBOUND_DEBOUNCERS.delete(key);
+      continue;
     }
-    flushed += flushedThisPass;
-    if (flushedThisPass === 0) {
-      return flushed;
+    live.push(debouncer);
+  }
+  return live;
+}
+
+function countPendingInboundDebounceBuffers(): number {
+  return collectLiveInboundDebouncers().reduce(
+    (pending, debouncer) => pending + debouncer[INBOUND_DEBOUNCER_PENDING](),
+    0,
+  );
+}
+
+async function waitForFlushPass(completion: Promise<void>, timeoutMs: number): Promise<boolean> {
+  if (timeoutMs <= 0) {
+    return false;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const outcome = await Promise.race([
+      completion,
+      new Promise<typeof FLUSH_TIMED_OUT>((resolve) => {
+        timer = setTimeout(() => resolve(FLUSH_TIMED_OUT), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+    return outcome !== FLUSH_TIMED_OUT;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
     }
   }
+}
+
+export type InboundDebouncerDrainResult = {
+  drained: boolean;
+  flushed: number;
+  remaining: number;
+};
+
+/**
+ * Flush live inbound debounce buffers to their normal channel callbacks.
+ *
+ * The finite pass and time budgets prevent a still-open transport from keeping
+ * restart shutdown in this phase forever. The captured async context transfers
+ * pre-created buffer callbacks into the core-owned restart continuation.
+ */
+export async function flushAllInboundDebouncers(
+  timeoutMs?: number,
+): Promise<InboundDebouncerDrainResult> {
+  const effectiveTimeoutMs = Math.max(
+    0,
+    Math.min(timeoutMs ?? MAX_GLOBAL_FLUSH_TIMEOUT_MS, MAX_GLOBAL_FLUSH_TIMEOUT_MS),
+  );
+  const deadline = Date.now() + effectiveTimeoutMs;
+  const runInContext = AsyncLocalStorage.snapshot();
+  let flushed = 0;
+  for (let pass = 0; pass < MAX_GLOBAL_FLUSH_PASSES; pass += 1) {
+    const live = collectLiveInboundDebouncers();
+    const pending = live.reduce(
+      (count, debouncer) => count + debouncer[INBOUND_DEBOUNCER_PENDING](),
+      0,
+    );
+    if (pending === 0) {
+      return { drained: true, flushed, remaining: 0 };
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return { drained: false, flushed, remaining: pending };
+    }
+
+    const flushPasses = live.map((debouncer) => debouncer[INBOUND_DEBOUNCER_FLUSH](runInContext));
+    const flushedThisPass = flushPasses.reduce((count, result) => count + result.flushed, 0);
+    if (flushedThisPass === 0) {
+      return { drained: true, flushed, remaining: 0 };
+    }
+    flushed += flushedThisPass;
+    const completed = await waitForFlushPass(
+      Promise.all(flushPasses.map((result) => result.completion)).then(() => undefined),
+      remainingMs,
+    );
+    if (!completed) {
+      return {
+        drained: false,
+        flushed,
+        remaining: Math.max(1, countPendingInboundDebounceBuffers()),
+      };
+    }
+  }
+
+  const remaining = countPendingInboundDebounceBuffers();
+  return remaining === 0
+    ? { drained: true, flushed, remaining: 0 }
+    : { drained: false, flushed, remaining };
 }
 
 const resolveMs = (value: unknown): number | undefined =>
@@ -79,6 +174,7 @@ type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
+  runInFlushContext?: AsyncContextRunner;
   releaseReady: () => void;
   readyReleased: boolean;
   task: Promise<void>;
@@ -194,7 +290,11 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     buffer.releaseReady();
   };
 
-  const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
+  const flushBuffer = async (
+    key: string,
+    buffer: DebounceBuffer<T>,
+    runInContext?: AsyncContextRunner,
+  ) => {
     if (buffers.get(key) === buffer) {
       buffers.delete(key);
     }
@@ -204,6 +304,9 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     }
     // Reserve each key's execution slot as soon as the first buffered item
     // arrives, so later same-key work cannot overtake a timer-backed flush.
+    if (runInContext) {
+      buffer.runInFlushContext = runInContext;
+    }
     releaseBuffer(buffer);
     await buffer.task;
   };
@@ -216,10 +319,14 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     await flushBuffer(key, buffer);
   };
 
-  const flushAll = async () => {
+  const flushAll = (runInContext: AsyncContextRunner): InboundDebouncerFlushPass => {
     const pending = [...buffers.entries()];
-    await Promise.all(pending.map(async ([key, buffer]) => await flushBuffer(key, buffer)));
-    return pending.length;
+    return {
+      flushed: pending.length,
+      completion: Promise.all(
+        pending.map(async ([key, buffer]) => await flushBuffer(key, buffer, runInContext)),
+      ).then(() => undefined),
+    };
   };
 
   const cancelKey = (key: string): boolean => {
@@ -319,10 +426,17 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       return;
     }
     const reservedTask = enqueueReservedKeyTask(key, async () => {
-      if (buffer.items.length === 0) {
+      const run = async () => {
+        if (buffer.items.length === 0) {
+          return;
+        }
+        await runFlush(buffer.items);
+      };
+      if (buffer.runInFlushContext) {
+        await buffer.runInFlushContext(run);
         return;
       }
-      await runFlush(buffer.items);
+      await run();
     });
     const buffer: DebounceBuffer<T> = {
       items: [item],
@@ -341,6 +455,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     flushKey,
     cancelKey,
     [INBOUND_DEBOUNCER_FLUSH]: flushAll,
+    [INBOUND_DEBOUNCER_PENDING]: () => buffers.size,
   };
   registerInboundDebouncer(debouncer);
   return debouncer;

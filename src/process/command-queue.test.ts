@@ -3,6 +3,10 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createInboundDebouncer,
+  flushAllInboundDebouncers,
+} from "../auto-reply/inbound-debounce.js";
+import {
   runWithGatewayRestartDrainContinuation,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -861,6 +865,33 @@ describe("command queue", () => {
     await expect(
       enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
     ).rejects.toBeInstanceOf(GatewayDrainingError);
+  });
+
+  it("rebinds a pre-created debounce callback to the core restart continuation", async () => {
+    const delivered: string[] = [];
+    const onError = vi.fn();
+    const debouncer = createInboundDebouncer<{ key: string; value: string }>({
+      debounceMs: 60_000,
+      buildKey: (item) => item.key,
+      onError,
+      onFlush: async (items) => {
+        const value = await enqueueCommandInLane(
+          CommandLane.Main,
+          async () => items[0]?.value ?? "",
+        );
+        delivered.push(value);
+      },
+    });
+
+    // The reserved buffer task is created before restart admission closes.
+    await debouncer.enqueue({ key: "accepted-before-restart", value: "delivered" });
+    markGatewayDraining();
+
+    await expect(
+      runWithGatewayRestartDrainContinuation(async () => await flushAllInboundDebouncers(1_000)),
+    ).resolves.toEqual({ drained: true, flushed: 1, remaining: 0 });
+    expect(delivered).toEqual(["delivered"]);
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it("does not affect already-active tasks after markGatewayDraining", async () => {
