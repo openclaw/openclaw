@@ -98,6 +98,21 @@ describe("loadModelCatalogSnapshotForBrowse", () => {
     expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false });
   });
 
+  it.each([
+    ["without picker allowlists", config()],
+    ["with provider wildcards", config({ providerWildcard: true })],
+  ])("uses the read-only catalog for provider-config views %s", async (_label, cfg) => {
+    const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
+      readOnly ? readOnlyCatalog : fullCatalog,
+    );
+
+    await expect(
+      loadModelCatalogSnapshotForBrowse({ cfg, view: "provider-config", loadCatalog }),
+    ).resolves.toBe(readOnlyCatalog);
+
+    expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: true });
+  });
+
   it("builds provider-config inventory independently of picker allowlists", () => {
     const cfg = {
       agents: {
