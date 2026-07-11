@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
 type SignalDaemonOpts = {
@@ -63,14 +64,16 @@ function bindSignalCliOutput(params: {
   log: (message: string) => void;
   error: (message: string) => void;
 }): void {
-  params.stream?.on("data", (data) => {
-    for (const line of data.toString().split(/\r?\n/)) {
-      const kind = classifySignalCliLogLine(line);
-      if (kind === "log") {
-        params.log(`signal-cli: ${line.trim()}`);
-      } else if (kind === "error") {
-        params.error(`signal-cli: ${line.trim()}`);
-      }
+  if (!params.stream) {
+    return;
+  }
+  const lines = createInterface({ input: params.stream });
+  lines.on("line", (line) => {
+    const kind = classifySignalCliLogLine(line);
+    if (kind === "log") {
+      params.log(`signal-cli: ${line.trim()}`);
+    } else if (kind === "error") {
+      params.error(`signal-cli: ${line.trim()}`);
     }
   });
 }
@@ -175,6 +178,7 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
 }
 
 export const testApi = {
+  bindSignalCliOutput,
   buildDaemonArgs,
   classifySignalCliLogLine,
   resolveSignalCliConfigPath,
