@@ -18763,7 +18763,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 225,
+      "line": 235,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Finish",
       "surface": "apple",
@@ -18771,7 +18771,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 225,
+      "line": 235,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Next",
       "surface": "apple",
@@ -19091,7 +19091,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 156,
+      "line": 164,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Layout.swift",
       "source": "Back",
       "surface": "apple",
