@@ -163,6 +163,7 @@ has_visible_prompt_output() {
 }
 
 resolve_subprocess_stdin_path() {
+    local prompt_output_visible="${1:-0}"
     if [[ "${NO_PROMPT:-0}" == "1" ]]; then
         echo "/dev/null"
         return 0
@@ -170,7 +171,7 @@ resolve_subprocess_stdin_path() {
     if ! needs_stdin_isolation; then
         return 1
     fi
-    if has_controlling_tty && has_visible_prompt_output; then
+    if has_controlling_tty && [[ "$prompt_output_visible" == "1" ]]; then
         echo "/dev/tty"
     else
         echo "/dev/null"
@@ -179,7 +180,11 @@ resolve_subprocess_stdin_path() {
 
 run_with_safe_stdin() {
     local stdin_path=""
-    if stdin_path="$(resolve_subprocess_stdin_path)"; then
+    local prompt_output_visible=0
+    if has_visible_prompt_output; then
+        prompt_output_visible=1
+    fi
+    if stdin_path="$(resolve_subprocess_stdin_path "$prompt_output_visible")"; then
         "$@" < "$stdin_path"
     else
         "$@"

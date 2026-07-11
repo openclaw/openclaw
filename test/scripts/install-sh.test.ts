@@ -2166,8 +2166,7 @@ describe("install.sh duplicate OpenClaw install detection", () => {
       NO_PROMPT=0
       needs_stdin_isolation() { return 0; }
       has_controlling_tty() { return 0; }
-      has_visible_prompt_output() { return 0; }
-      resolve_subprocess_stdin_path
+      resolve_subprocess_stdin_path 1
     `);
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("/dev/tty");
@@ -2180,11 +2179,28 @@ describe("install.sh duplicate OpenClaw install detection", () => {
       NO_PROMPT=0
       needs_stdin_isolation() { return 0; }
       has_controlling_tty() { return 0; }
-      has_visible_prompt_output() { return 1; }
-      resolve_subprocess_stdin_path
+      resolve_subprocess_stdin_path 0
     `);
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("/dev/null");
+  });
+
+  it("captures visible prompt output before resolving subprocess stdin", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      marker="$(mktemp)"
+      trap 'rm -f "$marker"' EXIT
+      has_visible_prompt_output() { return 0; }
+      resolve_subprocess_stdin_path() {
+        echo "visible=$1" > "$marker"
+        return 1
+      }
+      run_with_safe_stdin true
+      cat "$marker"
+    `);
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("visible=1");
   });
 
   it("routes non-promptable subprocesses through /dev/null", () => {
