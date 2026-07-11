@@ -2505,12 +2505,11 @@ export const vi: TranslationMap = {
           prompt:
             "Kiểm tra dự án chính của tôi để tìm các dependency lỗi thời hoặc có lỗ hổng bảo mật. Liệt kê các bản cập nhật đáng chú ý kèm một câu ghi chú rủi ro, và soạn lệnh nâng cấp.",
         },
-        nightWatch: {
+        watchdog: {
           name: "Canh đêm",
-          tagline:
-            "Kiểm tra sức khỏe hệ thống mỗi giờ một cách lặng lẽ — chỉ lên tiếng khi có sự cố.",
+          tagline: "Kiểm tra sức khỏe hàng giờ với một dòng kết luận.",
           prompt:
-            "Kiểm tra xem các dịch vụ và Gateway của tôi có hoạt động bình thường không: quét nhật ký gần đây để tìm lỗi mới, khởi động lại, hoặc tải bất thường. Giữ im lặng nếu mọi thứ ổn; nếu có gì đó có vẻ bị hỏng, hãy nhắn cho tôi biết điều gì đã xảy ra và nên bắt đầu kiểm tra từ đâu.",
+            "Kiểm tra xem các dịch vụ và gateway của tôi có hoạt động bình thường không: quét nhật ký gần đây để tìm lỗi mới, khởi động lại, hoặc tải bất thường. Trả lời bằng một dòng ngắn xác nhận tất cả ổn khi mọi thứ bình thường; nếu có gì đó trục trặc, hãy báo cáo những gì đã hỏng và nên bắt đầu kiểm tra ở đâu.",
         },
         polyglotMinute: {
           name: "Phút đa ngôn ngữ",

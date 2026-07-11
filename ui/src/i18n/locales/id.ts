@@ -2517,12 +2517,11 @@ export const id: TranslationMap = {
           prompt:
             "Periksa proyek utama saya untuk dependensi yang usang atau rentan. Daftarkan pembaruan penting dengan catatan risiko satu baris masing-masing, dan buat perintah peningkatannya.",
         },
-        nightWatch: {
+        watchdog: {
           name: "Penjaga malam",
-          tagline:
-            "Pemeriksaan kesehatan per jam yang tenang — berbicara hanya saat ada yang rusak.",
+          tagline: "Pemeriksaan kesehatan per jam dengan satu baris kesimpulan.",
           prompt:
-            "Periksa bahwa layanan dan gateway saya dalam kondisi sehat: pindai log terbaru untuk mencari kesalahan baru, restart, atau beban yang tidak biasa. Tetap diam jika semuanya baik-baik saja; jika ada yang tampak bermasalah, beri tahu saya apa yang gagal dan dari mana harus mulai memeriksa.",
+            "Periksa apakah layanan dan gateway saya dalam kondisi baik: pindai log terkini untuk error baru, restart, atau beban tidak biasa. Balas dengan satu baris singkat yang menyatakan semua aman jika semuanya baik-baik saja; jika ada yang tampak bermasalah, laporkan apa yang gagal dan dari mana harus mulai memeriksa.",
         },
         polyglotMinute: {
           name: "Menit poliglot",

@@ -2529,11 +2529,11 @@ export const pl: TranslationMap = {
           prompt:
             "Sprawdź mój główny projekt pod kątem przestarzałych lub podatnych zależności. Wymień istotne aktualizacje z jednozdaniową oceną ryzyka każdej z nich i przygotuj polecenie aktualizacji.",
         },
-        nightWatch: {
+        watchdog: {
           name: "Nocna warta",
-          tagline: "Cicha, godzinna kontrola stanu — odzywa się tylko gdy coś się psuje.",
+          tagline: "Godzinny test stanu z jednowierszowym podsumowaniem.",
           prompt:
-            "Sprawdź, czy moje usługi i Gateway działają prawidłowo: przejrzyj ostatnie logi pod kątem nowych błędów, restartów lub nietypowego obciążenia. Nie odzywaj się, jeśli wszystko jest w porządku; jeśli coś wygląda na zepsute, napisz mi, co się nie powiodło i od czego zacząć szukanie.",
+            "Sprawdź, czy moje usługi i Gateway działają poprawnie: przeskanuj ostatnie logi pod kątem nowych błędów, restartów lub nietypowego obciążenia. Odpowiedz jedną krótką linią potwierdzającą prawidłowe działanie, gdy wszystko jest w porządku; jeśli coś wygląda na uszkodzone, podaj co zawiodło i od czego zacząć sprawdzanie.",
         },
         polyglotMinute: {
           name: "Minuta poligloty",

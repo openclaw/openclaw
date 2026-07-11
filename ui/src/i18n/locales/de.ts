@@ -2546,11 +2546,11 @@ export const de: TranslationMap = {
           prompt:
             "Prüfe mein Hauptprojekt auf veraltete oder verwundbare Abhängigkeiten. Liste die wichtigen Updates jeweils mit einem einzeiligen Risikohinweis auf und erstelle den Upgrade-Befehl.",
         },
-        nightWatch: {
+        watchdog: {
           name: "Nachtwache",
-          tagline: "Stiller stündlicher Gesundheitscheck – meldet sich nur, wenn etwas kaputtgeht.",
+          tagline: "Stündliche Zustandsprüfung mit einem einzeiligen Ergebnis.",
           prompt:
-            "Überprüfe, ob meine Dienste und der Gateway einwandfrei funktionieren: Scanne die aktuellen Logs auf neue Fehler, Neustarts oder ungewöhnliche Last. Bleib still, wenn alles in Ordnung ist; wenn etwas kaputt aussieht, schreib mir, was fehlgeschlagen ist und wo ich mit der Suche beginnen soll.",
+            "Prüfe, ob meine Dienste und der Gateway fehlerfrei sind: Durchsuche aktuelle Logs nach neuen Fehlern, Neustarts oder ungewöhnlicher Last. Antworte mit einer kurzen Entwarnung, wenn alles in Ordnung ist; falls etwas fehlerhaft aussieht, berichte, was ausgefallen ist und wo die Ursachensuche beginnen sollte.",
         },
         polyglotMinute: {
           name: "Polyglot-Minute",

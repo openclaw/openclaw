@@ -2552,12 +2552,11 @@ export const fr: TranslationMap = {
           prompt:
             "Vérifie les dépendances obsolètes ou vulnérables de mon projet principal. Liste les mises à jour notables avec une note de risque en une ligne chacune, et rédige la commande de mise à jour.",
         },
-        nightWatch: {
+        watchdog: {
           name: "Veille nocturne",
-          tagline:
-            "Vérification silencieuse de l'état toutes les heures — ne signale que les pannes.",
+          tagline: "Vérification horaire avec un verdict en une ligne.",
           prompt:
-            "Vérifie que mes services et mon Gateway sont en bonne santé : analyse les journaux récents pour détecter de nouvelles erreurs, des redémarrages ou une charge inhabituelle. Reste silencieux si tout va bien ; si quelque chose semble défaillant, envoie-moi un message indiquant ce qui a échoué et par où commencer à chercher.",
+            "Vérifie que mes services et mon Gateway sont en bonne santé : analyse les journaux récents pour détecter de nouvelles erreurs, des redémarrages ou une charge inhabituelle. Réponds par une courte ligne indiquant que tout va bien si c'est le cas ; si quelque chose semble défaillant, indique ce qui a échoué et par où commencer à chercher.",
         },
         polyglotMinute: {
           name: "Minute polyglotte",

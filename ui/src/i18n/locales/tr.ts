@@ -2531,12 +2531,11 @@ export const tr: TranslationMap = {
           prompt:
             "Ana projemi güncel olmayan veya güvenlik açığı bulunan bağımlılıklar açısından kontrol et. Önemli güncellemeleri tek satırlık risk notu ile listele ve güncelleme komutunu taslak olarak hazırla.",
         },
-        nightWatch: {
+        watchdog: {
           name: "Gece nöbeti",
-          tagline:
-            "Sakin saatlik sağlık kontrolü — yalnızca bir şeyler bozulduğunda sesini yükseltir.",
+          tagline: "Tek satırlık kararla saatlik sağlık kontrolü.",
           prompt:
-            "Servislerimin ve Gateway'imin sağlıklı olduğunu kontrol et: son günlüklerde yeni hatalar, yeniden başlatmalar veya olağandışı yük ara. Her şey yolundaysa sessiz kal; bir şey bozuk görünüyorsa ne başarısız olduğunu ve nereden bakmaya başlayacağımı mesaj olarak ilet.",
+            "Hizmetlerimin ve Gateway'imin sağlıklı olduğunu kontrol et: son günlükleri yeni hatalar, yeniden başlatmalar veya olağandışı yük için tara. Her şey yolundaysa tek bir kısa 'sorun yok' satırıyla yanıt ver; bir şey bozuk görünüyorsa neyin başarısız olduğunu ve nereden bakmaya başlanacağını bildir.",
         },
         polyglotMinute: {
           name: "Poliglot dakikası",

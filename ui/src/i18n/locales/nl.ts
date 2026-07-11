@@ -2527,11 +2527,11 @@ export const nl: TranslationMap = {
           prompt:
             "Controleer mijn hoofdproject op verouderde of kwetsbare afhankelijkheden. Geef een lijst van de belangrijke updates met elk een risiconoot in één zin, en stel het upgrade-commando op.",
         },
-        nightWatch: {
+        watchdog: {
           name: "Nachtwacht",
-          tagline: "Rustige gezondheidscontrole elk uur — spreekt alleen als er iets stukgaat.",
+          tagline: "Uurlijkse gezondheidscheck met een eenregelig oordeel.",
           prompt:
-            "Controleer of mijn services en gateway gezond zijn: scan recente logs op nieuwe fouten, herstarts of ongewone belasting. Blijf stil als alles in orde is; als er iets stuk lijkt, stuur me een bericht over wat er is misgelopen en waar ik moet beginnen zoeken.",
+            "Controleer of mijn services en Gateway gezond zijn: scan recente logs op nieuwe fouten, herstarts of ongewone belasting. Antwoord met één korte alles-in-orde-regel als alles goed is; als er iets kapot lijkt, meld dan wat er is mislukt en waar te beginnen met zoeken.",
         },
         polyglotMinute: {
           name: "Polyglot minuut",

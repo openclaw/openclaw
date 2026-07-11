@@ -2533,11 +2533,11 @@ export const es: TranslationMap = {
           prompt:
             "Revisa mi proyecto principal en busca de dependencias desactualizadas o vulnerables. Lista las actualizaciones destacadas con una nota de riesgo en una línea cada una, y redacta el comando de actualización.",
         },
-        nightWatch: {
+        watchdog: {
           name: "Guardia nocturna",
-          tagline: "Verificación de salud silenciosa cada hora — solo avisa cuando algo falla.",
+          tagline: "Verificación de salud cada hora con un veredicto en una línea.",
           prompt:
-            "Comprueba que mis servicios y Gateway están en buen estado: analiza los registros recientes en busca de nuevos errores, reinicios o carga inusual. No digas nada si todo va bien; si algo parece estar roto, dime qué falló y por dónde empezar a buscar.",
+            "Comprueba que mis servicios y Gateway estén en buen estado: analiza los registros recientes en busca de nuevos errores, reinicios o carga inusual. Responde con una sola línea breve de confirmación cuando todo esté bien; si algo parece roto, informa qué falló y por dónde empezar a buscar.",
         },
         polyglotMinute: {
           name: "Minuto políglota",

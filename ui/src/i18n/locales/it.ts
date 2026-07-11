@@ -2539,12 +2539,11 @@ export const it: TranslationMap = {
           prompt:
             "Controlla il mio progetto principale alla ricerca di dipendenze obsolete o vulnerabili. Elenca gli aggiornamenti rilevanti con una nota di rischio in una riga ciascuno e prepara il comando di aggiornamento.",
         },
-        nightWatch: {
+        watchdog: {
           name: "Guardia notturna",
-          tagline:
-            "Controllo silenzioso della salute ogni ora — interviene solo quando qualcosa si rompe.",
+          tagline: "Controllo di salute orario con un verdetto in una riga.",
           prompt:
-            "Controlla che i miei servizi e il Gateway siano integri: analizza i log recenti per nuovi errori, riavvii o carichi insoliti. Resta in silenzio se va tutto bene; se qualcosa sembra rotto, mandami un messaggio su cosa ha fallito e da dove iniziare a cercare.",
+            "Verifica che i miei servizi e il Gateway siano in buono stato: analizza i log recenti alla ricerca di nuovi errori, riavvii o carichi insoliti. Rispondi con una breve riga di tutto OK quando tutto va bene; se qualcosa sembra rotto, segnala cosa ha fallito e da dove iniziare a guardare.",
         },
         polyglotMinute: {
           name: "Minuto poliglotta",

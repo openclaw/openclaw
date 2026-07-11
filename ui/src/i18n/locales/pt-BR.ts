@@ -2523,11 +2523,11 @@ export const pt_BR: TranslationMap = {
           prompt:
             "Verifique meu projeto principal em busca de dependências desatualizadas ou vulneráveis. Liste as atualizações relevantes com uma nota de risco em uma linha cada, e esboce o comando de atualização.",
         },
-        nightWatch: {
+        watchdog: {
           name: "Vigia noturno",
-          tagline: "Verificação de saúde silenciosa a cada hora — avisa apenas quando algo quebra.",
+          tagline: "Verificação de saúde a cada hora com um veredicto em uma linha.",
           prompt:
-            "Verifique se meus serviços e Gateway estão saudáveis: analise os logs recentes em busca de novos erros, reinicializações ou carga incomum. Fique em silêncio se tudo estiver bem; se algo parecer quebrado, me avise o que falhou e por onde começar a investigar.",
+            "Verifique se meus serviços e gateway estão saudáveis: analise logs recentes em busca de novos erros, reinicializações ou carga incomum. Responda com uma linha curta confirmando que tudo está bem quando estiver; se algo parecer quebrado, informe o que falhou e por onde começar a investigar.",
         },
         polyglotMinute: {
           name: "Minuto poliglota",
