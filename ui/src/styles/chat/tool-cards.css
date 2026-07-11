@@ -15,6 +15,16 @@
   margin-top: 0;
 }
 
+/* Flat top-level tool rows align their content with the assistant text edge:
+   the row's 8px inline inset bleeds left into the avatar gutter (never right,
+   which could overflow the thread on narrow panes) so the hover pill keeps
+   its inset without indenting the icon/label. Child combinator keeps shells
+   nested in .chat-activity-group__body on the boxed 12px inset. */
+.chat-group-messages > .chat-bubble--tool-shell .chat-tool-msg-summary {
+  width: calc(100% + 8px);
+  margin-left: -8px;
+}
+
 .chat-tool-msg-summary {
   display: flex;
   align-items: center;

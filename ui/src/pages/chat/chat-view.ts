@@ -18,6 +18,11 @@ import type { ChatSideResult } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import {
+  renderBackgroundTasksRail,
+  renderBackgroundTasksToggle,
+  type BackgroundTasksProps,
+} from "./components/chat-background-tasks.ts";
+import {
   handleChatAttachmentDrop,
   renderChatComposer,
   resetChatComposerState,
@@ -150,6 +155,7 @@ export type ChatProps = {
   onClearReply?: () => void;
   onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
   sessionWorkspace?: SessionWorkspaceProps;
+  backgroundTasks?: BackgroundTasksProps;
   /** True when a split pane header hosts the workspace toggle; suppresses the
    * single-pane floating opener so only one affordance renders. */
   paneHeaderActive?: boolean;
@@ -161,6 +167,8 @@ export type ChatProps = {
   onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   pullRequests?: ControlUiSessionPullRequest[];
   pullRequestsRateLimited?: boolean;
+  pullRequestsExpanded?: boolean;
+  onExpandPullRequests?: () => void;
   onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
 };
 
@@ -173,7 +181,7 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
-  const canCompose = props.connected && props.canSend;
+  const canCompose = props.canSend;
   let chatSection: HTMLElement | null = null;
 
   const thread = renderChatThread({
@@ -355,12 +363,12 @@ export function renderChat(props: ChatProps) {
       <div
         class="chat-workbench ${props.sessionWorkspace?.collapsed
           ? "chat-workbench--workspace-collapsed"
-          : ""} ${props.sessionWorkspace?.dock === "bottom" ? "chat-workbench--dock-bottom" : ""}"
+          : ""} ${props.sessionWorkspace?.dock === "bottom"
+          ? "chat-workbench--dock-bottom"
+          : ""} ${props.backgroundTasks?.collapsed === false ? "chat-workbench--tasks-open" : ""}"
       >
         ${renderSessionWorkspaceRail(props.sessionWorkspace)}
-        ${props.sessionWorkspace?.collapsed && !props.paneHeaderActive
-          ? renderSessionWorkspaceToggle(props.sessionWorkspace, "floating")
-          : nothing}
+        ${renderBackgroundTasksRail(props.backgroundTasks)}
         ${props.sessionWorkspace?.dockDragging
           ? html`
               <div class="chat-workbench__dock-zones" aria-hidden="true">
@@ -384,6 +392,12 @@ export function renderChat(props: ChatProps) {
             `
           : nothing}
         <div class="chat-workbench__main">
+          ${props.sessionWorkspace?.collapsed && !props.paneHeaderActive
+            ? renderSessionWorkspaceToggle(props.sessionWorkspace, "floating")
+            : nothing}
+          ${props.backgroundTasks?.collapsed && !props.paneHeaderActive
+            ? renderBackgroundTasksToggle(props.backgroundTasks, "floating")
+            : nothing}
           <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
             <div
               class="chat-main"
@@ -401,6 +415,8 @@ export function renderChat(props: ChatProps) {
               ${renderChatPullRequests({
                 pullRequests: props.pullRequests ?? [],
                 rateLimited: props.pullRequestsRateLimited === true,
+                expanded: props.pullRequestsExpanded === true,
+                onExpand: () => props.onExpandPullRequests?.(),
                 onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
               })}
               ${chatColumnFooter}

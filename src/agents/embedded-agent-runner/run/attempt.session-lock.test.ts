@@ -2046,6 +2046,54 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects a same-size rewrite racing the byte-identical snapshot", async () => {
+    const sessionFile = await createTempSessionFile();
+    const oldTime = new Date("2020-01-01T00:00:00.000Z");
+    await fs.utimes(sessionFile, oldTime, oldTime);
+    const before = await fs.stat(sessionFile, { bigint: true });
+    const originalBytes = await fs.readFile(sessionFile);
+    const release = vi.fn(async () => {});
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await fs.writeFile(sessionFile, originalBytes);
+    // Force the first rewrite past the fingerprint fast path even on filesystems
+    // that coalesce timestamps; the next path stat is snapshot validation.
+    const rewrittenTime = new Date("2021-01-01T00:00:00.000Z");
+    await fs.utimes(sessionFile, rewrittenTime, rewrittenTime);
+    const after = await fs.stat(sessionFile, { bigint: true });
+
+    expect(after.dev).toBe(before.dev);
+    expect(after.ino).toBe(before.ino);
+    expect(after.size).toBe(before.size);
+    expect(after.mtimeNs).not.toBe(before.mtimeNs);
+
+    const realStat = fs.stat.bind(fs);
+    let armedStatCalls = 0;
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (target, options) => {
+      if (target === sessionFile && options?.bigint === true) {
+        armedStatCalls += 1;
+        if (armedStatCalls === 2) {
+          await fs.writeFile(sessionFile, '{"type":"sessioN"}\n', "utf8");
+        }
+      }
+      return await realStat(target, options);
+    });
+
+    try {
+      await expect(controller.reacquireAfterPrompt()).rejects.toBeInstanceOf(
+        EmbeddedAttemptSessionTakeoverError,
+      );
+    } finally {
+      statSpy.mockRestore();
+    }
+    expect(armedStatCalls).toBeGreaterThanOrEqual(2);
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
   it("trusts owned writes after accepting ctime-only fingerprint drift", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
@@ -2094,22 +2142,21 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(3);
   });
 
-  it("allows metadata drift for digest-backed transcript snapshots", async () => {
+  it("allows a byte-identical rewrite for digest-backed transcript snapshots", async () => {
     const sessionFile = await createTempSessionFile();
-    await fs.writeFile(sessionFile, Buffer.alloc(8 * 1024 * 1024 + 1, "x"));
+    const originalBytes = Buffer.alloc(8 * 1024 * 1024 + 1, "x");
+    await fs.writeFile(sessionFile, originalBytes);
     const oldTime = new Date("2020-01-01T00:00:00.000Z");
     await fs.utimes(sessionFile, oldTime, oldTime);
     const before = await fs.stat(sessionFile, { bigint: true });
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLockLocalDigestDrift = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock: acquireSessionWriteLockLocalDigestDrift,
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
       lockOptions: { ...lockOptions, sessionFile },
     });
 
     await controller.releaseForPrompt();
-    const newTime = new Date("2021-01-01T00:00:00.000Z");
-    await fs.utimes(sessionFile, newTime, newTime);
+    await fs.writeFile(sessionFile, originalBytes);
     const after = await fs.stat(sessionFile, { bigint: true });
 
     expect(after.dev).toBe(before.dev);
@@ -2121,15 +2168,38 @@ describe("embedded attempt session lock lifecycle", () => {
     await controller.dispose();
   });
 
+  it("rejects changed bytes for digest-backed transcript snapshots", async () => {
+    const sessionFile = await createTempSessionFile();
+    const originalBytes = Buffer.alloc(8 * 1024 * 1024 + 1, "x");
+    await fs.writeFile(sessionFile, originalBytes);
+    const release = vi.fn(async () => {});
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    const file = await fs.open(sessionFile, "r+");
+    try {
+      await file.write(Buffer.from("y"), 0, 1, 0);
+    } finally {
+      await file.close();
+    }
+
+    await expect(controller.reacquireAfterPrompt()).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
   it("rejects same-inode, same-size transcript rewrites when one byte changes", async () => {
     const sessionFile = await createTempSessionFile();
     const oldTime = new Date("2020-01-01T00:00:00.000Z");
     await fs.utimes(sessionFile, oldTime, oldTime);
     const before = await fs.stat(sessionFile, { bigint: true });
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLockLocalSameSizeRewrite = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock: acquireSessionWriteLockLocalSameSizeRewrite,
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -2144,8 +2214,24 @@ describe("embedded attempt session lock lifecycle", () => {
       EmbeddedAttemptSessionTakeoverError,
     );
     expect(controller.hasSessionTakeover()).toBe(true);
-    expect(acquireSessionWriteLockLocalSameSizeRewrite).toHaveBeenCalledTimes(2);
-    expect(release).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects truncated transcript rewrites", async () => {
+    const sessionFile = await createTempSessionFile();
+    const before = await fs.stat(sessionFile);
+    const release = vi.fn(async () => {});
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await fs.truncate(sessionFile, before.size - 1);
+
+    await expect(controller.reacquireAfterPrompt()).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
   });
 
   it("fails closed when a metadata-only snapshot is too large to verify", async () => {

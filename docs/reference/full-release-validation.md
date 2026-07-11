@@ -264,6 +264,7 @@ Useful artifacts:
 - `.github/workflows/openclaw-live-and-e2e-checks-reusable.yml`
 - `.github/workflows/plugin-prerelease.yml`
 - `.github/workflows/install-smoke.yml`
+- `.github/workflows/install-smoke-reusable.yml`
 - `.github/workflows/openclaw-cross-os-release-checks-reusable.yml`
 - `.github/workflows/package-acceptance.yml`
 - `.github/workflows/openclaw-performance.yml`
