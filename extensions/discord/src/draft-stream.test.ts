@@ -199,6 +199,30 @@ describe("createDiscordDraftStream", () => {
     expect(stream.messageId()).toBe("m1");
   });
 
+  it("starts a new preview after a cleared turn is re-armed", async () => {
+    const rest = {
+      post: vi.fn().mockResolvedValueOnce({ id: "m1" }).mockResolvedValueOnce({ id: "m2" }),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "c1",
+      throttleMs: 250,
+    });
+
+    stream.update("first draft");
+    await stream.flush();
+    await stream.clear();
+    stream.forceNewMessage();
+    stream.update("queued turn draft");
+    await stream.flush();
+
+    expect(rest.post).toHaveBeenCalledTimes(2);
+    expect(rest.delete).toHaveBeenCalledTimes(1);
+    expect(stream.messageId()).toBe("m2");
+  });
+
   it("seal keeps an existing preview and cancels pending final overwrites", async () => {
     const rest = {
       post: vi.fn(async () => ({ id: "m1" })),

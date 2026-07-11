@@ -3449,6 +3449,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     expect(draftStream.flush).toHaveBeenCalledTimes(2);
     expect(draftStream.clear).toHaveBeenCalledTimes(2);
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     const finals = getDeliveredFinalTexts();
     expect(finals).toHaveLength(2);
     expect(finals[0]).toMatch(/^first answer\n-# /);

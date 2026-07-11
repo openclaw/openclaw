@@ -144,9 +144,12 @@ export function createDiscordDraftStream(params: {
   });
 
   const forceNewMessage = () => {
+    streamState.stopped = false;
+    streamState.final = false;
     streamMessageId = undefined;
     lastSentText = "";
     loop.resetPending();
+    loop.resetThrottleWindow();
   };
   const deleteCurrentMessage = async () => {
     loop.resetPending();

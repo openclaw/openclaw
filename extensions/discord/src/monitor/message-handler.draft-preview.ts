@@ -285,11 +285,15 @@ export function createDiscordDraftPreviewController(params: {
     },
     handleAssistantMessageBoundary() {
       // Queued/followup turns need a fresh progress draft after the primary final.
-      if (progressDraft.beginNewTurn()) {
+      const beganNewTurn = progressDraft.beginNewTurn();
+      if (beganNewTurn) {
         progressDraftCollapsed = false;
         progressDraftStartedBeforeFinal = false;
       }
       if (discordStreamMode === "progress") {
+        if (beganNewTurn) {
+          draftStream?.forceNewMessage();
+        }
         return;
       }
       forceNewMessageIfNeeded();
