@@ -16,7 +16,7 @@ describe("scripts/lib/plugin-contract-test-plan.mjs", () => {
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
 
     expect(workflow).toContain(
-      'await import(\n            "./scripts/lib/plugin-contract-test-plan.mjs"',
+      'const pluginContractPlan = await importTargetPlan(\n            "./scripts/lib/plugin-contract-test-plan.mjs",',
     );
     expect(workflow).toContain("checks-fast-contracts-plugins-legacy");
     expect(workflow).not.toContain(
