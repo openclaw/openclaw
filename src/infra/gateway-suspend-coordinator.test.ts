@@ -111,6 +111,9 @@ describe("gateway suspend coordinator", () => {
     });
 
     expect(result.status).toBe("busy");
+    if (result.status !== "busy") {
+      throw new Error("expected busy result");
+    }
     expect(result).toMatchObject({
       reason: "active-work",
       activeCount: 1,

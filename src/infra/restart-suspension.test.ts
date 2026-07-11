@@ -34,6 +34,7 @@ function inspectors(): GatewayActiveWorkInspectors {
     getQueuedTurns: () => 0,
     getTerminalPersistence: () => 0,
     getTerminalSessions: () => 0,
+    getBackgroundExecCount: () => 0,
   };
 }
 
