@@ -1346,6 +1346,10 @@ describe("ci workflow guards", () => {
     const iosInstallStep = workflow.jobs["ios-build"].steps.find(
       (step) => step.name === "Install iOS Swift tooling",
     );
+    const macosLintStep = workflow.jobs["macos-swift"].steps.find(
+      (step) => step.name === "Swift lint",
+    );
+    const iosLintStep = workflow.jobs["ios-build"].steps.find((step) => step.name === "Swift lint");
     const buildStep = workflow.jobs["macos-swift"].steps.find(
       (step) => step.name === "Swift build (release)",
     );
@@ -1354,6 +1358,14 @@ describe("ci workflow guards", () => {
       expect(installStep.run).toContain("if [[ -x ./scripts/install-swift-tools.sh ]]; then");
       expect(installStep.run).toContain("brew install xcodegen swiftlint swiftformat");
     }
+    for (const lintStep of [macosLintStep, iosLintStep]) {
+      expect(lintStep.run).toContain(
+        "if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then",
+      );
+    }
+    expect(macosLintStep.run).toContain("swiftlint lint --config config/swiftlint.yml");
+    expect(macosLintStep.run).toContain("swiftformat --lint apps/macos/Sources");
+    expect(iosLintStep.run).toContain("skipping iOS lint for this frozen target");
     expect(buildStep.run).toContain("for attempt in 1 2 3");
     expect(buildStep.run).toContain('if [[ "$attempt" -eq 3 ]]; then');
     expect(buildStep.run).toContain("swift package --package-path apps/macos reset");
