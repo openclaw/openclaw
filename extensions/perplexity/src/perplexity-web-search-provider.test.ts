@@ -196,9 +196,19 @@ describe("perplexity web search provider", () => {
   it("forwards the execution abort signal to the Perplexity HTTP request", async () => {
     await withEnvAsync({ [perplexityApiKeyEnv]: directPerplexityApiKey }, async () => {
       const controller = new AbortController();
-      const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
-        controller.abort();
-        throw new DOMException("The operation was aborted", "AbortError");
+      let capturedSignal: AbortSignal | undefined;
+      const mockFetch = vi.fn(async (_input?: unknown, init?: unknown) => {
+        capturedSignal = (init as RequestInit)?.signal;
+        // Hold the request open and only resolve on the forwarded signal
+        // abort. If the provider drops the signal, the captured signal is
+        // undefined and the first expectation below fails.
+        return new Promise<Response>((_resolve, reject) => {
+          capturedSignal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("The operation was aborted", "AbortError")),
+            { once: true },
+          );
+        });
       });
       global.fetch = mockFetch as typeof global.fetch;
 
@@ -212,9 +222,19 @@ describe("perplexity web search provider", () => {
           throw new Error("Expected tool definition");
         }
 
-        await expect(
-          tool.execute({ query: "abort propagation" }, { signal: controller.signal }),
-        ).rejects.toThrow("The operation was aborted");
+        const executePromise = tool.execute(
+          { query: "abort propagation" },
+          { signal: controller.signal },
+        );
+        // Yield so the mock fetch runs and captures the signal.
+        await new Promise((r) => setTimeout(r, 10));
+
+        // Fails if the provider drops the signal.
+        expect(capturedSignal).toBeDefined();
+
+        controller.abort();
+        // Fails if the forwarded signal does not propagate the abort.
+        await expect(executePromise).rejects.toThrow("The operation was aborted");
       } finally {
         global.fetch = priorFetch;
       }
