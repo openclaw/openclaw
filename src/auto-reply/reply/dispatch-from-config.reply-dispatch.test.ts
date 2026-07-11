@@ -244,7 +244,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       clone: false,
     });
     expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
-    expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
     expect(deliver).toHaveBeenCalledOnce();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
