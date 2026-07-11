@@ -1060,12 +1060,21 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
   return result;
 }
 
-export async function toggleCronJob(state: CronState, job: CronJob, enabled: boolean) {
+export async function toggleCronJob(
+  state: CronState,
+  job: CronJob,
+  enabled: boolean,
+): Promise<boolean> {
+  // Report whether the update RPC itself succeeded; the follow-up list reload
+  // can be queued or fail without invalidating the confirmed toggle.
+  let updated = false;
   await withCronBusy(state, async (client) => {
     await client.request("cron.update", { id: job.id, patch: { enabled } });
+    updated = true;
     await loadCronJobsPage(state, { tableFilters: true });
     await loadCronStatus(state);
   });
+  return updated;
 }
 
 export async function runCronJob(state: CronState, jobId: string, mode: "force" | "due" = "force") {

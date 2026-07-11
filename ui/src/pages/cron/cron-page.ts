@@ -403,13 +403,13 @@ class CronPage extends OpenClawLightDomElement {
           onClone: (job) => this.cloneJob(job),
           onToggle: (job, enabled) =>
             void this.runCronTask(async (cronState) => {
-              await toggleCronJob(cronState, job, enabled);
+              const updated = await toggleCronJob(cronState, job, enabled);
               // Header pause/resume must not be undone by a later Save: the
               // editor form still carries the pre-toggle enabled value. Sync
-              // from the reloaded job so a failed toggle stays truthful too.
-              const refreshed = cronState.cronJobs.find((entry) => entry.id === job.id);
-              if (cronState.cronEditingJobId === job.id && refreshed) {
-                cronState.cronForm = { ...cronState.cronForm, enabled: refreshed.enabled };
+              // to the confirmed write, not the jobs cache — the reload can be
+              // queued behind an in-flight list request or fail silently.
+              if (updated && cronState.cronEditingJobId === job.id) {
+                cronState.cronForm = { ...cronState.cronForm, enabled };
               }
             }),
           onRun: (job, mode) =>
