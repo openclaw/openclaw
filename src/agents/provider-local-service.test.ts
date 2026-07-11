@@ -11,6 +11,8 @@ import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/pro
 import {
   attachModelProviderLocalService,
   ensureModelProviderLocalService,
+  ensureProviderLocalService,
+  getManagedProviderLocalServiceDiagnosticsForTest,
   getModelProviderLocalService,
   hasLocalServiceProcessExited,
   stopManagedProviderLocalServicesForTest,
@@ -267,11 +269,23 @@ describe("provider local service", () => {
     }
   });
 
-  it("serializes concurrent cold starts for the same local service", async () => {
+  it("serializes concurrent chat and embedding starts with independent leases", async () => {
     const port = await freePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-service-"));
     const startsPath = path.join(tempDir, "starts.txt");
+    const service = {
+      command: process.execPath,
+      args: [
+        "-e",
+        `const fs=require("node:fs");const http=require("node:http");fs.appendFileSync(${JSON.stringify(
+          startsPath,
+        )},"start\\n");setTimeout(()=>{const server=http.createServer((req,res)=>{res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');});server.listen(${port},"127.0.0.1");process.on("SIGTERM",()=>server.close(()=>process.exit(0)));},100);`,
+      ],
+      healthUrl,
+      readyTimeoutMs: 5_000,
+      idleStopMs: 1,
+    };
     const model = attachModelProviderLocalService(
       {
         id: "demo",
@@ -279,31 +293,25 @@ describe("provider local service", () => {
         api: "openai-completions",
         baseUrl: `http://127.0.0.1:${port}/v1`,
       } as unknown as Model<"openai-completions">,
-      {
-        command: process.execPath,
-        args: [
-          "-e",
-          `const fs=require("node:fs");const http=require("node:http");fs.appendFileSync(${JSON.stringify(
-            startsPath,
-          )},"start\\n");setTimeout(()=>{const server=http.createServer((req,res)=>{res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');});server.listen(${port},"127.0.0.1");process.on("SIGTERM",()=>server.close(()=>process.exit(0)));},100);`,
-        ],
-        healthUrl,
-        readyTimeoutMs: 5_000,
-        idleStopMs: 1,
-      },
+      service,
     );
 
     try {
-      const leases = await Promise.all([
+      const [chatLease, embeddingLease] = await Promise.all([
         ensureModelProviderLocalService(model),
-        ensureModelProviderLocalService(model),
+        ensureProviderLocalService({
+          providerId: "local-concurrent",
+          baseUrl: `http://127.0.0.1:${port}/v1`,
+          service,
+        }),
       ]);
 
-      expect(leases).toHaveLength(2);
+      expect(chatLease).toBeDefined();
+      expect(embeddingLease).toBeDefined();
       expect((await fetch(healthUrl)).ok).toBe(true);
-      for (const lease of leases) {
-        lease?.release();
-      }
+      embeddingLease?.release();
+      expect((await fetch(healthUrl)).ok).toBe(true);
+      chatLease?.release();
       await waitForProbeFailure(healthUrl);
       const starts = (await fs.readFile(startsPath, "utf8")).trim().split("\n");
       expect(starts).toHaveLength(1);
@@ -312,7 +320,7 @@ describe("provider local service", () => {
     }
   });
 
-  it("does not reuse a local service with different env and derived health endpoint", async () => {
+  it("keeps configured provider aliases on different local endpoints independent", async () => {
     const firstPort = await freePort();
     const secondPort = await freePort();
     const firstHealthUrl = `http://127.0.0.1:${firstPort}/v1/models`;
@@ -323,41 +331,33 @@ describe("provider local service", () => {
       "-e",
       `const fs=require("node:fs");const http=require("node:http");fs.appendFileSync(process.env.STARTS_PATH,process.env.LOCAL_SERVICE_PORT+"\\n");const server=http.createServer((req,res)=>{res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');});server.listen(Number(process.env.LOCAL_SERVICE_PORT),"127.0.0.1");process.on("SIGTERM",()=>server.close(()=>process.exit(0)));`,
     ];
-    const firstModel = attachModelProviderLocalService(
-      {
-        id: "demo",
-        provider: "local-key",
-        api: "openai-completions",
-        baseUrl: `http://127.0.0.1:${firstPort}/v1`,
-      } as unknown as Model<"openai-completions">,
-      {
-        command: process.execPath,
-        args,
-        env: { LOCAL_SERVICE_PORT: String(firstPort), STARTS_PATH: startsPath },
-        readyTimeoutMs: 5_000,
-        idleStopMs: 1,
-      },
-    );
-    const secondModel = attachModelProviderLocalService(
-      {
-        id: "demo",
-        provider: "local-key",
-        api: "openai-completions",
-        baseUrl: `http://127.0.0.1:${secondPort}/v1`,
-      } as unknown as Model<"openai-completions">,
-      {
-        command: process.execPath,
-        args,
-        env: { LOCAL_SERVICE_PORT: String(secondPort), STARTS_PATH: startsPath },
-        readyTimeoutMs: 5_000,
-        idleStopMs: 1,
-      },
-    );
+    const firstService = {
+      command: process.execPath,
+      args,
+      env: { LOCAL_SERVICE_PORT: String(firstPort), STARTS_PATH: startsPath },
+      readyTimeoutMs: 5_000,
+      idleStopMs: 1,
+    };
+    const secondService = {
+      command: process.execPath,
+      args,
+      env: { LOCAL_SERVICE_PORT: String(secondPort), STARTS_PATH: startsPath },
+      readyTimeoutMs: 5_000,
+      idleStopMs: 1,
+    };
 
     try {
       const leases = await Promise.all([
-        ensureModelProviderLocalService(firstModel),
-        ensureModelProviderLocalService(secondModel),
+        ensureProviderLocalService({
+          providerId: "ollama-spark",
+          baseUrl: `http://127.0.0.1:${firstPort}/v1`,
+          service: firstService,
+        }),
+        ensureProviderLocalService({
+          providerId: "ollama-studio",
+          baseUrl: `http://127.0.0.1:${secondPort}/v1`,
+          service: secondService,
+        }),
       ]);
 
       expect((await fetch(firstHealthUrl)).ok).toBe(true);
@@ -438,22 +438,18 @@ describe("provider local service", () => {
 
   it("reports a local service startup exit without waiting for readiness timeout", async () => {
     const port = await freePort();
-    const model = attachModelProviderLocalService(
-      {
-        id: "demo",
-        provider: "local-fast-exit",
-        api: "openai-completions",
-        baseUrl: `http://127.0.0.1:${port}/v1`,
-      } as unknown as Model<"openai-completions">,
-      {
+    const target = {
+      providerId: "local-fast-exit",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      service: {
         command: process.execPath,
         args: ["-e", "process.exit(17)"],
         readyTimeoutMs: 60_000,
       },
-    );
+    };
 
     const startedAt = Date.now();
-    await expect(ensureModelProviderLocalService(model)).rejects.toThrow(
+    await expect(ensureProviderLocalService(target)).rejects.toThrow(
       "local-fast-exit local service exited before readiness with code 17",
     );
     expect(Date.now() - startedAt).toBeLessThan(5_000);
@@ -486,14 +482,10 @@ describe("provider local service", () => {
     const port = await freePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const controller = new AbortController();
-    const model = attachModelProviderLocalService(
-      {
-        id: "demo",
-        provider: "local-abort",
-        api: "openai-completions",
-        baseUrl: `http://127.0.0.1:${port}/v1`,
-      } as unknown as Model<"openai-completions">,
-      {
+    const target = {
+      providerId: "local-abort",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      service: {
         command: process.execPath,
         args: [
           "-e",
@@ -503,16 +495,59 @@ describe("provider local service", () => {
         readyTimeoutMs: 60_000,
         idleStopMs: 1,
       },
-    );
+    };
 
     const startedAt = Date.now();
     const abortTimer = setTimeout(() => controller.abort(new Error("request aborted")), 100);
     abortTimer.unref?.();
 
-    await expect(
-      ensureModelProviderLocalService(model, undefined, controller.signal),
-    ).rejects.toThrow("request aborted");
+    await expect(ensureProviderLocalService(target, controller.signal)).rejects.toThrow(
+      "request aborted",
+    );
     expect(Date.now() - startedAt).toBeLessThan(5_000);
     await waitForProbeFailure(healthUrl);
+  });
+
+  it("retains only bounded redacted startup diagnostics", async () => {
+    const port = await freePort();
+    const healthUrl = `http://127.0.0.1:${port}/v1/models`;
+    const diagnosticSecret = "local-service-diagnostic-secret";
+    const lease = await ensureProviderLocalService({
+      providerId: "local-diagnostics",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      service: {
+        command: process.execPath,
+        args: [
+          "-e",
+          `const http=require("node:http");const noise="x".repeat(9000);process.stdout.write(noise+" "+process.env.DIAGNOSTIC_SECRET);process.stderr.write(noise+" "+process.env.DIAGNOSTIC_SECRET);const server=http.createServer((req,res)=>{res.writeHead(200);res.end("ok");});server.listen(${port},"127.0.0.1");process.on("SIGTERM",()=>server.close(()=>process.exit(0)));`,
+        ],
+        env: { DIAGNOSTIC_SECRET: diagnosticSecret },
+        healthUrl,
+        readyTimeoutMs: 5_000,
+        idleStopMs: 1,
+      },
+    });
+
+    try {
+      const [diagnostics] = getManagedProviderLocalServiceDiagnosticsForTest();
+      expect(diagnostics).toMatchObject({
+        providerId: "local-diagnostics",
+        healthUrl,
+        pid: expect.any(Number),
+        startedAt: expect.any(Number),
+        spawnedAt: expect.any(Number),
+        readyAt: expect.any(Number),
+        lastHealthyAt: expect.any(Number),
+      });
+      expect(Buffer.byteLength(diagnostics?.stdoutTail ?? "")).toBeLessThanOrEqual(8 * 1024);
+      expect(Buffer.byteLength(diagnostics?.stderrTail ?? "")).toBeLessThanOrEqual(8 * 1024);
+      expect(diagnostics?.stdoutTail).not.toContain(diagnosticSecret);
+      expect(diagnostics?.stderrTail).not.toContain(diagnosticSecret);
+      expect(diagnostics?.stdoutTail).toContain("[redacted]");
+      expect(diagnostics?.stderrTail).toContain("[redacted]");
+    } finally {
+      lease?.release();
+      await waitForProbeFailure(healthUrl);
+    }
   });
 });
