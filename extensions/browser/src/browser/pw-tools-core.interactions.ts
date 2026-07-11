@@ -504,7 +504,7 @@ async function awaitNavigationGuardedInteraction<T>(
     page: opts.page,
     ssrfPolicy: opts.ssrfPolicy,
     onPolicyCheckStarted: (check) => {
-      const tracked = check.then<PolicyCheckOutcome>(
+      const tracked = check.then<PolicyCheckOutcome, PolicyCheckOutcome>(
         () => ({ state: "allowed" }),
         (error: unknown) => ({ state: "failed", error }),
       );
