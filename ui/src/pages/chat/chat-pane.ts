@@ -1309,6 +1309,7 @@ class ChatPane extends OpenClawLightDomElement {
       fallbackStatus: state.fallbackStatus,
       messages: state.chatMessages,
       sideResult: state.chatSideResult,
+      sideResultPending: state.chatSideResultPending,
       toolMessages: state.chatToolMessages,
       streamSegments: state.chatStreamSegments,
       stream: state.chatStream,
@@ -1423,6 +1424,7 @@ class ChatPane extends OpenClawLightDomElement {
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),
       onRefresh: () => {
         state.chatSideResult = null;
+        state.chatSideResultPending = null;
         state.resetToolStream();
         void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false });
       },
@@ -1462,8 +1464,10 @@ class ChatPane extends OpenClawLightDomElement {
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
+      onSideQuestion: (command) => void state.handleSendChat(command),
       onDismissSideResult: () => {
         state.chatSideResult = null;
+        state.chatSideResultPending = null;
         state.requestUpdate?.();
       },
       replyTarget: state.chatReplyTarget ?? null,

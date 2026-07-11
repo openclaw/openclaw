@@ -1,5 +1,11 @@
 import { normalizeOptionalString } from "../string-coerce.ts";
 
+/** Local-only placeholder shown while a sent /btw side question awaits its result. */
+export type ChatSideResultPending = {
+  question: string;
+  ts: number;
+};
+
 export type ChatSideResult = {
   kind: "btw";
   runId: string;

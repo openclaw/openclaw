@@ -308,6 +308,7 @@ export function handleChatSideResultGatewayEvent(state: ChatState, payload: unkn
     return false;
   }
   state.chatSideResult = sideResult;
+  state.chatSideResultPending = null;
   state.chatSideResultTerminalRuns?.add(sideResult.runId);
   return true;
 }

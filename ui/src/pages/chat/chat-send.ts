@@ -14,6 +14,8 @@ import type {
   ChatQueueSkillWorkshopRevision,
 } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { extractSideQuestionDisplayText } from "../../lib/chat/side-question.ts";
+import type { ChatSideResultPending } from "../../lib/chat/side-result.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentIdForSession,
@@ -125,6 +127,8 @@ export type ChatHost = ChatInputHistoryState &
     agentsList?: ChatAgentsListSnapshot | null;
     /** Selected message to reply to (right-click / keyboard shortcut). */
     chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
+    /** Placeholder for an in-flight /btw side question awaiting chat.side_result. */
+    chatSideResultPending?: ChatSideResultPending | null;
   };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -2175,11 +2179,25 @@ export async function handleSendChat(
         if (messageOverride == null) {
           recordNonTranscriptInputHistory(host, message);
         }
-        await sendDetachedCommandMessage(host, message, {
+        // BTW runs detached and delivers via chat.side_result only; show a
+        // pending card immediately so the send has visible feedback.
+        const isBtw = isBtwCommand(message);
+        if (isBtw) {
+          host.chatSideResultPending = {
+            question: extractSideQuestionDisplayText(message),
+            ts: Date.now(),
+          };
+          host.requestUpdate?.();
+        }
+        const ok = await sendDetachedCommandMessage(host, message, {
           previousDraft: cleared.previousDraft,
           attachments: hasAttachments ? attachmentsToSend : undefined,
           previousAttachments: cleared.previousAttachments,
         });
+        if (isBtw && !ok) {
+          host.chatSideResultPending = null;
+          host.requestUpdate?.();
+        }
       });
       return;
     }
