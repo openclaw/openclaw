@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "../config/config.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { usesOpenClawMockKeychain } from "./chrome.profile-decoration.js";
 import { getPwAiModule } from "./pw-ai-module.js";
@@ -134,7 +135,9 @@ export function snapshotCookieDatabase(source: string): {
   databasePath: string;
   cleanup: () => void;
 } {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-cookies-"));
+  const tmpRoot = resolvePreferredOpenClawTmpDir();
+  fs.mkdirSync(tmpRoot, { recursive: true });
+  const tempDir = fs.mkdtempSync(path.join(tmpRoot, "openclaw-system-cookies-"));
   const databasePath = path.join(tempDir, "Cookies");
   const sourceDatabase = new DatabaseSync(source, { readOnly: true });
   try {

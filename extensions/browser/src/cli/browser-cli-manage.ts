@@ -58,7 +58,9 @@ function printJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {
 }
 
 function sanitizeTableCell(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ");
+  // Strip C0/C1 control characters (Unicode Cc) so profile names cannot inject
+  // terminal escapes into the printed table.
+  return value.replace(/\p{Cc}/gu, " ");
 }
 
 async function callTabAction(
