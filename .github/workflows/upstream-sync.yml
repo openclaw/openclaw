@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   sync-upstream:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
