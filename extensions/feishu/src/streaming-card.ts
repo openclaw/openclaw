@@ -16,6 +16,11 @@ import { readFeishuJsonResponse } from "./json-response.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
+// All CardKit and token requests share a single deadline. Without this, a
+// server that accepts the TCP connection but stalls blocks the streaming-card
+// reply lane and pins a gateway request open indefinitely.
+const FEISHU_STREAMING_CARD_REQUEST_TIMEOUT_MS = 30_000;
+
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
 type CardState = {
   cardId: string;
@@ -140,6 +145,7 @@ async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise
     lookupFn: deps?.lookupFn,
     policy: { allowedHostnames: resolveAllowedHostnames(creds.domain) },
     auditContext: "feishu.streaming-card.token",
+    timeoutMs: FEISHU_STREAMING_CARD_REQUEST_TIMEOUT_MS,
   });
   let data: {
     code: number;
@@ -320,6 +326,7 @@ export class FeishuStreamingSession {
       lookupFn: this.lookupFn,
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.create",
+      timeoutMs: FEISHU_STREAMING_CARD_REQUEST_TIMEOUT_MS,
     });
     let createData: {
       code: number;
@@ -434,6 +441,7 @@ export class FeishuStreamingSession {
         lookupFn: this.lookupFn,
         policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
         auditContext: "feishu.streaming-card.update",
+        timeoutMs: FEISHU_STREAMING_CARD_REQUEST_TIMEOUT_MS,
       });
       try {
         await assertSuccessfulCardKitResponse(
@@ -483,6 +491,7 @@ export class FeishuStreamingSession {
         lookupFn: this.lookupFn,
         policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
         auditContext: "feishu.streaming-card.replace",
+        timeoutMs: FEISHU_STREAMING_CARD_REQUEST_TIMEOUT_MS,
       });
       try {
         await assertSuccessfulCardKitResponse(
@@ -595,6 +604,7 @@ export class FeishuStreamingSession {
       lookupFn: this.lookupFn,
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.note-update",
+      timeoutMs: FEISHU_STREAMING_CARD_REQUEST_TIMEOUT_MS,
     })
       .then(async ({ response, release }) => {
         try {
@@ -672,6 +682,7 @@ export class FeishuStreamingSession {
       lookupFn: this.lookupFn,
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.close",
+      timeoutMs: FEISHU_STREAMING_CARD_REQUEST_TIMEOUT_MS,
     })
       .then(async ({ response, release }) => {
         try {

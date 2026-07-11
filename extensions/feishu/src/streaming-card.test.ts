@@ -320,6 +320,67 @@ describe("FeishuStreamingSession", () => {
     );
   });
 
+  it("aborts a stalled Feishu tenant-token request after 30 seconds", async () => {
+    vi.useFakeTimers();
+    let authRequestReceived = false;
+    const deps: StreamingFetchDeps = {
+      fetchImpl: withFetchPreconnect(
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(input instanceof Request ? input.url : input.toString());
+          if (!url.pathname.includes("/auth/")) {
+            return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card_should_not_reach" } });
+          }
+          authRequestReceived = true;
+          return await new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (!signal) {
+              reject(new Error("missing guarded fetch signal"));
+              return;
+            }
+            signal.addEventListener(
+              "abort",
+              () => {
+                const reason = signal.reason;
+                reject(
+                  reason instanceof Error
+                    ? reason
+                    : new Error("request aborted", { cause: reason }),
+                );
+              },
+              { once: true },
+            );
+          });
+        }),
+      ) as FeishuStreamingFetch,
+      lookupFn: hermeticPublicLookup,
+    };
+
+    const session = new FeishuStreamingSession(
+      {} as never,
+      {
+        appId: "app_stalled_token",
+        appSecret: "secret",
+      },
+      undefined,
+      deps,
+    );
+
+    const result = expect(session.start("chat_id", "open_id")).rejects.toSatisfy(
+      (error: unknown) => {
+        expect(error).toBeInstanceOf(Error);
+        const message = (error as Error).message;
+        expect(message).toMatch(/timed out/i);
+        return true;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(30_001);
+    await result;
+    expect(authRequestReceived).toBe(true);
+    console.log(
+      "[feishu streaming-card stall proof] stalled tenant-token fetch aborted after 30000ms",
+    );
+  });
+
   it("rejects oversized streaming card-create JSON before buffering the full body", async () => {
     let streamState:
       | {
