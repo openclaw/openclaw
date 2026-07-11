@@ -247,6 +247,15 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
       }),
     );
+    expect(
+      smallWholeJobs
+        .flatMap((shard) => shard.groups)
+        .find((group) => group.shard_name === "core-tooling-docker"),
+    ).toEqual(
+      expect.objectContaining({
+        configs: ["test/vitest/vitest.tooling-docker.config.ts"],
+      }),
+    );
     const toolingGroups = compact
       .flatMap((shard) => shard.groups)
       .filter((group) => /^core-tooling-\d+$/u.test(group.shard_name));
