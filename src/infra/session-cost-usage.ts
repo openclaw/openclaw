@@ -419,6 +419,23 @@ async function listUsageCountedTranscriptFileStats(
       if (params?.minMtimeMs !== undefined && stats.mtimeMs < params.minMtimeMs) {
         return undefined;
       }
+      // Compressed archives normalize to their materialized plain-JSONL cache
+      // at discovery, so every downstream size, incremental offset, and cache
+      // signature measures decompressed bytes; mixing offset spaces would
+      // truncate or overcount archived usage.
+      if (filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
+        try {
+          const materialized = materializeSessionArchiveForRead(filePath);
+          const materializedStats = await fs.promises.stat(materialized);
+          return {
+            filePath: materialized,
+            size: materializedStats.size,
+            mtimeMs: stats.mtimeMs,
+          };
+        } catch {
+          return undefined;
+        }
+      }
       return { filePath, size: stats.size, mtimeMs: stats.mtimeMs };
     });
   const { results } = await runTasksWithConcurrency({
@@ -503,6 +520,19 @@ async function resolveUsageCostTranscriptFile(
       sessionId: marker.sessionId,
       size: stats.sizeBytes,
     };
+  }
+  if (sessionFile.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
+    try {
+      const materialized = materializeSessionArchiveForRead(sessionFile);
+      const materializedStats = await fs.promises.stat(materialized);
+      return {
+        filePath: materialized,
+        size: materializedStats.size,
+        mtimeMs: materializedStats.mtimeMs,
+      };
+    } catch {
+      return undefined;
+    }
   }
   const stats = await fs.promises.stat(sessionFile).catch(() => null);
   return stats ? { filePath: sessionFile, size: stats.size, mtimeMs: stats.mtimeMs } : undefined;
@@ -1388,10 +1418,9 @@ async function* readTranscriptRecords(
     }
     return;
   }
-  // Compressed archives read through the materialized plain-JSONL cache so
-  // startOffset/endOffset keep their byte semantics against decompressed
-  // content — incremental scans persist offsets per path, and mixing raw
-  // zstd bytes with plain offsets would overcount archived usage.
+  // Discovery normalizes compressed archives to their materialized cache, so
+  // this branch only serves direct callers that pass a raw .zst path; those
+  // callers never carry persisted offsets, keeping the range space coherent.
   if (filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
     yield* readJsonlRecords(materializeSessionArchiveForRead(filePath), startOffset, endOffset);
     return;
