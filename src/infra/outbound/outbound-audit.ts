@@ -14,7 +14,11 @@ import {
   normalizeSessionPeerId,
   parseSessionDeliveryRoute,
 } from "../../sessions/session-key-utils.js";
-import { stripTargetKindPrefix, stripTargetProviderPrefix } from "./channel-target-prefix.js";
+import {
+  resolveTargetPrefixedChannel,
+  stripTargetKindPrefix,
+  stripTargetProviderPrefix,
+} from "./channel-target-prefix.js";
 import {
   countPhysicalOutboundSends,
   type OutboundDeliveryResult,
@@ -238,15 +242,26 @@ function routeNamesDestination(
   if (!route || route.channel !== context.channel.toLowerCase()) {
     return false;
   }
-  // Targets can nest a provider prefix around a kind prefix ("discord:dm:123"),
-  // so strip the provider layer first and evaluate the kind on what remains.
-  const withoutProvider = stripTargetProviderPrefix(context.to, context.channel);
+  // Targets can nest a provider prefix around a kind prefix ("discord:dm:123",
+  // alias "tg:123"), so strip the provider layer first — including registered
+  // plugin aliases proven to belong to this channel — and evaluate the kind on
+  // what remains.
+  const aliasChannel = resolveTargetPrefixedChannel(context.to);
+  const providerPrefixes =
+    aliasChannel === context.channel.toLowerCase()
+      ? [context.channel, TARGET_PREFIX_RE.exec(context.to)?.[1] ?? context.channel]
+      : [context.channel];
+  const withoutProvider = stripTargetProviderPrefix(context.to, ...providerPrefixes);
   const prefix = TARGET_PREFIX_RE.exec(withoutProvider)?.[1]?.toLowerCase();
   const allowedRouteKinds = prefix ? TARGET_KIND_TO_ROUTE_KINDS[prefix] : undefined;
   if (allowedRouteKinds && !allowedRouteKinds.includes(route.peerKind)) {
     return false;
   }
-  const candidates = [context.to, withoutProvider, stripTargetKindPrefix(withoutProvider)];
+  const candidates = [
+    context.to,
+    withoutProvider,
+    stripTargetKindPrefix(withoutProvider, Object.keys(TARGET_KIND_TO_ROUTE_KINDS)),
+  ];
   return candidates.some((candidate) => {
     const normalized = normalizeSessionPeerId({
       channel: route.channel,

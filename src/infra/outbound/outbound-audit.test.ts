@@ -287,6 +287,14 @@ describe("outbound audit projection", () => {
         session: { key: "agent:main:discord:dm:123" },
       }),
     ).toBe("direct");
+    // direct: is in the kind map even though the canonical strip default omits it.
+    expect(
+      conversationKindFor({
+        channel: "whatsapp",
+        to: "direct:+15551234567",
+        session: { key: "agent:main:whatsapp:default:direct:+15551234567" },
+      }),
+    ).toBe("direct");
   });
 
   it("does not classify by a policy session that names another conversation", () => {
