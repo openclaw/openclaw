@@ -57,10 +57,10 @@ describe("normalizeRegisteredChannelPlugin", () => {
       docsPath: normalized?.meta.docsPath,
       blurb: normalized?.meta.blurb,
     }).toEqual({
-      label: telegram?.label,
-      selectionLabel: telegram?.selectionLabel,
-      docsPath: telegram?.docsPath,
-      blurb: telegram?.blurb,
+      label: telegram.label,
+      selectionLabel: telegram.selectionLabel,
+      docsPath: telegram.docsPath,
+      blurb: telegram.blurb,
     });
     expect(diagnostics).toEqual([
       {

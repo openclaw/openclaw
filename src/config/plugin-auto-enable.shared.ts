@@ -12,7 +12,7 @@ import {
   hasBundledChannelConfiguredState,
   listBundledChannelIdsWithConfiguredState,
 } from "../channels/plugins/configured-state.js";
-import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -1014,7 +1014,7 @@ function resolveChannelAutoEnableDisplayLabel(
   const builtInChannelId = normalizeChatChannelId(entry.channelId);
   const plugin = manifestRegistry.plugins.find((record) => record.id === entry.pluginId);
   return (
-    (builtInChannelId ? getChatChannelMeta(builtInChannelId)?.label : undefined) ??
+    (builtInChannelId ? findChatChannelMeta(builtInChannelId)?.label : undefined) ??
     plugin?.channelConfigs?.[entry.channelId]?.label ??
     plugin?.channelCatalogMeta?.label
   );
