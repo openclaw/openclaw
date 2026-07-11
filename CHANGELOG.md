@@ -51,6 +51,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **LM Studio and xAI repaired tool calls:** emit the terminal tool-call event before completion when promoting serialized plain-text tool calls, preserving the complete streaming lifecycle for consumers.
 - **Browser actions on Node 24:** keep browser request cancellation bound to the client and response lifetime instead of Node 24.16+'s prematurely aborted body-stream signal, preventing valid POST actions from failing after JSON parsing. Thanks @obviyus and @vincentkoc.
 - **SecretRef model credentials:** keep resolved provider secrets behind process-local sentinels through auth storage, stream setup, SDK configuration, and managed local-provider probing, then inject plaintext only at the final network or provider-plugin boundary while retaining exact-value log redaction. (#102008, #102009)
 - **Telegram token redaction:** redact bot tokens even when log transports split them across chunks, preventing fragmented credentials from escaping structured and streamed logs. (#103861) Thanks @vincentkoc.

@@ -112,6 +112,7 @@ function emitPromotedToolCallEvents(
       delta: typeof record.partialArgs === "string" ? record.partialArgs : "{}",
       partial: message,
     });
+    stream.push({ type: "toolcall_end", contentIndex, toolCall: record, partial: message });
   });
 }
 
