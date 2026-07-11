@@ -84,6 +84,24 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
+  it("reports non-finite values returned by nested toJSON serializers", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: {
+            toJSON() {
+              return { type: "number", maximum: Number.POSITIVE_INFINITY };
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties.score.maximum is not JSON-serializable"],
+    });
+  });
+
   it("does not report schema map field names as dynamic JSON Schema keywords", () => {
     // Dynamic keywords are only invalid as JSON Schema control fields; property
     // names and definitions can legally contain the same strings.
