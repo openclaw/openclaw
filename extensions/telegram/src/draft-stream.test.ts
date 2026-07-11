@@ -1286,7 +1286,8 @@ describe("createTelegramDraftStream", () => {
     const api = createMockDraftApi();
     const text = Array.from(
       { length: 12 },
-      (_, index) => `**${String(index).padStart(2, "0")}** overflow pagination line with filler text`,
+      (_, index) =>
+        `**${String(index).padStart(2, "0")}** overflow pagination line with filler text`,
     ).join("\n");
     const maxChars = 80;
     const expectedChunks = markdownToTelegramChunks(text, maxChars);
