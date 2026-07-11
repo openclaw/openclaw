@@ -3030,63 +3030,68 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
-  it("does not reapply deleted overrides when a legacy updated package lacks content inventory", async () => {
-    await withTempDir(
-      { prefix: "openclaw-package-update-deleted-no-content-inventory-" },
-      async (base) => {
-        const prefix = path.join(base, "prefix");
-        const globalRoot = path.join(prefix, "lib", "node_modules");
-        const packageRoot = path.join(globalRoot, "openclaw");
-        await writePackageRoot(packageRoot, "1.0.0");
-        await fs.rm(path.join(packageRoot, "dist", "index.js"));
+  it.each(["2026.6.6", "2026.7.1-beta.4", "2026.7.1-beta.5"])(
+    "does not reapply deleted overrides when legacy updated package %s lacks content inventory",
+    async (updatedVersion) => {
+      await withTempDir(
+        { prefix: "openclaw-package-update-deleted-no-content-inventory-" },
+        async (base) => {
+          const prefix = path.join(base, "prefix");
+          const globalRoot = path.join(prefix, "lib", "node_modules");
+          const packageRoot = path.join(globalRoot, "openclaw");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.rm(path.join(packageRoot, "dist", "index.js"));
 
-        const runStep = vi.fn(
-          async ({ name, argv, cwd, timeoutMs }): Promise<PackageUpdateStepResult> => {
-            expect(timeoutMs).toBe(1000);
-            if (name !== "global update") {
-              throw new Error(`unexpected step ${name}`);
-            }
-            const prefixIndex = argv.indexOf("--prefix");
-            expect(prefixIndex).toBeGreaterThan(0);
-            const stagePrefix = argv[prefixIndex + 1];
-            if (!stagePrefix) {
-              throw new Error("missing staged prefix");
-            }
-            const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
-            await writePackageRoot(stagedPackageRoot, "2026.6.6");
-            await fs.rm(path.join(stagedPackageRoot, "dist", "postinstall-content-inventory.json"));
-            return {
-              name,
-              command: argv.join(" "),
-              cwd: cwd ?? process.cwd(),
-              durationMs: 1,
-              exitCode: 0,
-            };
-          },
-        );
+          const runStep = vi.fn(
+            async ({ name, argv, cwd, timeoutMs }): Promise<PackageUpdateStepResult> => {
+              expect(timeoutMs).toBe(1000);
+              if (name !== "global update") {
+                throw new Error(`unexpected step ${name}`);
+              }
+              const prefixIndex = argv.indexOf("--prefix");
+              expect(prefixIndex).toBeGreaterThan(0);
+              const stagePrefix = argv[prefixIndex + 1];
+              if (!stagePrefix) {
+                throw new Error("missing staged prefix");
+              }
+              const stagedPackageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+              await writePackageRoot(stagedPackageRoot, updatedVersion);
+              await fs.rm(
+                path.join(stagedPackageRoot, "dist", "postinstall-content-inventory.json"),
+              );
+              return {
+                name,
+                command: argv.join(" "),
+                cwd: cwd ?? process.cwd(),
+                durationMs: 1,
+                exitCode: 0,
+              };
+            },
+          );
 
-        const result = await runGlobalPackageUpdateSteps({
-          installTarget: createNpmTarget(globalRoot),
-          installSpec: "openclaw@2026.6.6",
-          packageName: "openclaw",
-          packageRoot,
-          runCommand: createRootRunner(globalRoot),
-          runStep,
-          reapplyLocalOverrides: true,
-          timeoutMs: 1000,
-        });
+          const result = await runGlobalPackageUpdateSteps({
+            installTarget: createNpmTarget(globalRoot),
+            installSpec: `openclaw@${updatedVersion}`,
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep,
+            reapplyLocalOverrides: true,
+            timeoutMs: 1000,
+          });
 
-        expect(result.failedStep).toBeNull();
-        expect(result.localOverrides?.status).toBe("conflict");
-        expect(result.localOverrides?.conflicts).toEqual([
-          { path: "dist/index.js", reason: "target-changed" },
-        ]);
-        await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
-          "export {};\n",
-        );
-      },
-    );
-  });
+          expect(result.failedStep).toBeNull();
+          expect(result.localOverrides?.status).toBe("conflict");
+          expect(result.localOverrides?.conflicts).toEqual([
+            { path: "dist/index.js", reason: "target-changed" },
+          ]);
+          await expect(
+            fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8"),
+          ).resolves.toBe("export {};\n");
+        },
+      );
+    },
+  );
 
   it("rejects updated packages that require content inventory before package swap", async () => {
     await withTempDir(

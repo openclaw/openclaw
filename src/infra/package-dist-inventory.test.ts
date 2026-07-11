@@ -405,6 +405,8 @@ describe("package dist inventory", () => {
     "2026.6.15-alpha.1",
     "2026.7.1-beta.1",
     "2026.7.1-beta.2",
+    "2026.7.1-beta.4",
+    "2026.7.1-beta.5",
   ])("allows already-published package version %s without content inventory", async (version) => {
     await withTempDir(
       { prefix: "openclaw-dist-content-inventory-legacy-" },

@@ -33,6 +33,8 @@ const LEGACY_CONTENT_INVENTORY_TAGGED_VERSIONS = new Set([
   "2026.6.15-alpha.1",
   "2026.7.1-beta.1",
   "2026.7.1-beta.2",
+  "2026.7.1-beta.4",
+  "2026.7.1-beta.5",
 ]);
 
 function parseCalver(version) {
