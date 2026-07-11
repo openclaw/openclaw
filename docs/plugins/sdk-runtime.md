@@ -201,7 +201,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     Default model and provider constants:
 
     ```typescript
-    const model = api.runtime.agent.defaults.model; // e.g. "gpt-5.5"
+    const model = api.runtime.agent.defaults.model; // e.g. "gpt-5.6-sol"
     const provider = api.runtime.agent.defaults.provider; // e.g. "openai"
     ```
 
@@ -219,6 +219,38 @@ two-party event loops that do not go through the shared inbound reply runner.
       temperature: 0.2,
     });
     ```
+
+    Provider orchestration can also acquire the configured local-service
+    lifecycle before issuing an HTTP request:
+
+    ```typescript
+    const lease = await api.runtime.llm.acquireLocalService(
+      {
+        providerId,
+        baseUrl,
+        headers,
+      },
+      signal,
+    );
+    try {
+      // Send and fully consume the provider request.
+    } finally {
+      await lease?.release();
+    }
+    ```
+
+    `acquireLocalService(...)` is a stable, generic provider-service SDK
+    contract. The host resolves process configuration from
+    `models.providers.<providerId>.localService`; callers cannot supply a
+    command, arguments, environment, or lifecycle policy. Process spawning,
+    readiness, diagnostics, and idle-stop policy remain internal to the host.
+
+    Pass the exact configured provider id and resolved request base URL. Do not
+    replace aliases with an adapter id: separate aliases can point at separate
+    local GPU hosts. The host rejects endpoints that do not match the configured
+    provider base URL, apart from the `/v1` normalization used by Ollama and LM
+    Studio adapters. The host owns startup serialization, readiness probes,
+    request leases, abort handling, and idle shutdown.
 
     The helper uses the same simple-completion preparation path as OpenClaw's
     built-in runtime and the host-owned runtime config snapshot. Context engines
@@ -262,7 +294,7 @@ two-party event loops that do not go through the shared inbound reply runner.
       sessionKey: "agent:main:subagent:search-helper",
       message: "Expand this query into focused follow-up searches.",
       provider: "openai", // optional override
-      model: "gpt-5.5", // optional override
+      model: "gpt-5.6-sol", // optional override
       deliver: false,
     });
 
@@ -411,7 +443,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     // Include at least one image; text inputs are supplemental context.
     const evidence = await api.runtime.mediaUnderstanding.extractStructuredWithModel({
       provider: "codex",
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       input: [
         {
           type: "image",

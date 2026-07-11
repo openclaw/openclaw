@@ -193,11 +193,17 @@ import {
 } from "./devices.js";
 import {
   EnvironmentSummarySchema,
+  EnvironmentsCreateParamsSchema,
+  EnvironmentsCreateResultSchema,
+  EnvironmentsDestroyParamsSchema,
+  EnvironmentsDestroyResultSchema,
   EnvironmentsListParamsSchema,
   EnvironmentsListResultSchema,
   EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResultSchema,
   EnvironmentStatusSchema,
+  WorkerEnvironmentMetadataSchema,
+  WorkerEnvironmentStateSchema,
 } from "./environments.js";
 import {
   ExecApprovalsGetParamsSchema,
@@ -413,6 +419,7 @@ import {
   WizardStatusResultSchema,
   WizardStepSchema,
 } from "./wizard.js";
+import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 import {
   WorktreeRecordSchema,
   WorktreesCreateParamsSchema,
@@ -432,6 +439,7 @@ import {
 export const ProtocolSchemas = {
   // Handshake, transport frames, state snapshots, and shared error envelopes.
   ConnectParams: ConnectParamsSchema,
+  WorkerAdmissionHandshake: WorkerAdmissionHandshakeSchema,
   HelloOk: HelloOkSchema,
   RequestFrame: RequestFrameSchema,
   ResponseFrame: ResponseFrameSchema,
@@ -456,7 +464,13 @@ export const ProtocolSchemas = {
 
   // Environment and agent-facing control RPC payloads.
   EnvironmentStatus: EnvironmentStatusSchema,
+  WorkerEnvironmentState: WorkerEnvironmentStateSchema,
+  WorkerEnvironmentMetadata: WorkerEnvironmentMetadataSchema,
   EnvironmentSummary: EnvironmentSummarySchema,
+  EnvironmentsCreateParams: EnvironmentsCreateParamsSchema,
+  EnvironmentsCreateResult: EnvironmentsCreateResultSchema,
+  EnvironmentsDestroyParams: EnvironmentsDestroyParamsSchema,
+  EnvironmentsDestroyResult: EnvironmentsDestroyResultSchema,
   EnvironmentsListParams: EnvironmentsListParamsSchema,
   EnvironmentsListResult: EnvironmentsListResultSchema,
   EnvironmentsStatusParams: EnvironmentsStatusParamsSchema,

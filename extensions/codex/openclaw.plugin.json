@@ -20,7 +20,7 @@
     "codex": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "gpt-5.5"
+        "image": "gpt-5.6-sol"
       }
     }
   },
@@ -82,6 +82,38 @@
             "type": "number",
             "minimum": 1,
             "default": 60000
+          },
+          "liveTestTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
+          "toolCallTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
+          "healthCheckEnabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "healthCheckIntervalMinutes": {
+            "type": "number",
+            "enum": [30, 60, 120, 240],
+            "default": 60
+          },
+          "pluginCacheMode": {
+            "type": "string",
+            "enum": ["shared", "independent"],
+            "default": "independent"
+          },
+          "strictReadiness": {
+            "type": "boolean",
+            "default": false
+          },
+          "autoRepair": {
+            "type": "boolean",
+            "default": false
           },
           "marketplaceSource": {
             "type": "string"
@@ -363,6 +395,41 @@
     "computerUse.marketplaceDiscoveryTimeoutMs": {
       "label": "Marketplace Discovery Timeout",
       "help": "Maximum time to wait for Codex app-server to finish loading marketplaces during Computer Use install.",
+      "advanced": true
+    },
+    "computerUse.liveTestTimeoutMs": {
+      "label": "Live Test Timeout",
+      "help": "Maximum time for the Computer Use list_apps readiness probe before status and startup treat the live test as failed.",
+      "advanced": true
+    },
+    "computerUse.toolCallTimeoutMs": {
+      "label": "Tool Call Timeout",
+      "help": "Maximum expected time for real Computer Use tool calls such as list_apps before OpenClaw treats the child runtime as stale.",
+      "advanced": true
+    },
+    "computerUse.healthCheckEnabled": {
+      "label": "Periodic Health Checks",
+      "help": "When true, run periodic Computer Use live probes on the configured cadence.",
+      "advanced": true
+    },
+    "computerUse.healthCheckIntervalMinutes": {
+      "label": "Health Check Interval",
+      "help": "Cadence for periodic Computer Use health checks when health checks are enabled.",
+      "advanced": true
+    },
+    "computerUse.pluginCacheMode": {
+      "label": "Plugin Cache Mode",
+      "help": "The default independent mode leaves each Codex home unmanaged. Choose shared to opt in to a refreshed Codex-discoverable cache copy.",
+      "advanced": true
+    },
+    "computerUse.strictReadiness": {
+      "label": "Strict Readiness",
+      "help": "When true, a failed Computer Use live probe stops Codex-mode startup. The default false value preserves existing enabled setups by continuing with a warning.",
+      "advanced": true
+    },
+    "computerUse.autoRepair": {
+      "label": "Auto Repair",
+      "help": "When true, failed Computer Use live tests repair stale scoped Computer Use MCP children before retrying once.",
       "advanced": true
     },
     "computerUse.marketplaceSource": {
