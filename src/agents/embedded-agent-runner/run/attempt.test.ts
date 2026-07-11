@@ -357,8 +357,44 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       merged: true,
       removeLeaf: true,
       prompt:
-        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "older active-turn message\n\nnewest inbound message",
+    });
+  });
+
+  it("drops stale internal orphan context when a fresh prompt is present", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: "NO_REPLY stale subagent completion",
+          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+        },
+      }),
+    ).toEqual({
+      merged: false,
+      removeLeaf: true,
+      prompt: "newest inbound message",
+    });
+  });
+
+  it("preserves user-directed inter-session orphan context", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: "forwarded user request",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+      }),
+    ).toEqual({
+      merged: true,
+      removeLeaf: true,
+      prompt:
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
+        "forwarded user request\n\nnewest inbound message",
     });
   });
 
@@ -391,7 +427,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       merged: true,
       removeLeaf: true,
       prompt:
-        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "ok\n\nplease inspect this token",
     });
   });
@@ -413,7 +449,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       merged: true,
       removeLeaf: true,
       prompt:
-        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "please inspect this\n" +
         "[image_url] https://example.test/cat.png\n" +
         "[input_audio] https://example.test/cat.wav\n\n" +
@@ -499,7 +535,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       merged: true,
       removeLeaf: true,
       prompt:
-        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "older active-turn message\n\nHEARTBEAT_OK",
     });
   });
@@ -3352,6 +3388,29 @@ describe("buildAfterTurnRuntimeContext", () => {
 
     expect(legacy.provider).toBe("openai");
     expect(legacy.model).toBe("gpt-5.4");
+  });
+
+  it("keeps the primary model for a locked after-turn runtime context", () => {
+    const runtimeContext = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:locked",
+        config: {
+          agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
+        } as OpenClawConfig,
+        skillsSnapshot: undefined,
+        provider: "openai",
+        modelId: "gpt-5.5",
+        agentHarnessId: "openclaw",
+        modelSelectionLocked: true,
+        thinkLevel: "off",
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(runtimeContext.modelSelectionLocked).toBe(true);
+    expect(runtimeContext.provider).toBe("openai");
+    expect(runtimeContext.model).toBe("gpt-5.5");
   });
 
   it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {

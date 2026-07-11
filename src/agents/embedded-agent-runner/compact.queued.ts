@@ -21,6 +21,7 @@ import {
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
+import { mergeAbortSignals } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -58,6 +59,14 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { readAgentModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
+import type { EmbeddedAgentQueueHandle } from "./run-state.js";
+import {
+  clearActiveEmbeddedRun,
+  isEmbeddedAgentRunHandleActive,
+  resolveActiveEmbeddedRunHandleSessionId,
+  resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
+  setActiveEmbeddedRun,
+} from "./runs.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 import { normalizeContextTokenBudget } from "./utils.js";
 
@@ -69,8 +78,40 @@ function shouldFallbackAfterHarnessCompaction(
   return isRecoverableNativeHarnessBindingFailure(result);
 }
 
+function lockedCompactionRuntimeFailure(runtime?: string): EmbeddedAgentCompactResult {
+  return {
+    ok: false,
+    compacted: false,
+    reason: runtime
+      ? `Model selection is locked to native agent harness "${runtime}", but native compaction is unavailable.`
+      : "Model selection is locked but the persisted agent harness is unavailable.",
+    failure: { reason: "model_selection_locked" },
+  };
+}
+
 const DEFERRED_CONTEXT_ENGINE_COMPACTION_SCHEDULE_FAILURE_REASON =
   "failed to schedule background context-engine maintenance";
+const MANUAL_COMPACTION_ACTIVE_RUN_REASON =
+  "manual compaction unavailable while another embedded run is active";
+const COMPACTION_ABORTED_REASON = "compaction aborted";
+
+function createCompactionAbortedResult(): EmbeddedAgentCompactResult {
+  return {
+    ok: false,
+    compacted: false,
+    reason: COMPACTION_ABORTED_REASON,
+  };
+}
+
+function resolveManualCompactionActiveRunSessionId(
+  params: CompactEmbeddedAgentSessionParams,
+): string | undefined {
+  return (
+    (isEmbeddedAgentRunHandleActive(params.sessionId) ? params.sessionId : undefined) ??
+    (params.sessionKey ? resolveActiveEmbeddedRunHandleSessionId(params.sessionKey) : undefined) ??
+    resolveActiveEmbeddedRunHandleSessionIdBySessionFile(params.sessionFile)
+  );
+}
 
 function shouldDeferOwningContextEngineBudgetCompaction(params: {
   compactParams: CompactEmbeddedAgentSessionParams;
@@ -191,6 +232,48 @@ function mergeSecondaryNativeHarnessCompactionDetails(params: {
 export async function compactEmbeddedAgentSession(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
+  if (params.trigger !== "manual") {
+    return await compactEmbeddedAgentSessionImpl(params);
+  }
+  // Reply operations and embedded handles are separate lifecycle owners. A
+  // /compact reply may coexist with this handle, but another embedded writer may not.
+  if (resolveManualCompactionActiveRunSessionId(params)) {
+    return {
+      ok: false,
+      compacted: false,
+      reason: MANUAL_COMPACTION_ACTIVE_RUN_REASON,
+      failure: { reason: "active_run" },
+    };
+  }
+
+  const controller = new AbortController();
+  const mergedAbort = mergeAbortSignals([params.abortSignal, controller.signal]);
+  const handle: EmbeddedAgentQueueHandle = {
+    kind: "embedded",
+    queueMessage: async () => {},
+    isStreaming: () => true,
+    isCompacting: () => true,
+    abort: (reason) => controller.abort(reason ?? "user_abort"),
+    cancel: (reason) => controller.abort(reason ?? "user_abort"),
+  };
+  setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+  try {
+    return await compactEmbeddedAgentSessionImpl({
+      ...params,
+      abortSignal: mergedAbort.signal,
+    });
+  } finally {
+    mergedAbort.dispose();
+    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+  }
+}
+
+async function compactEmbeddedAgentSessionImpl(
+  params: CompactEmbeddedAgentSessionParams,
+): Promise<EmbeddedAgentCompactResult> {
+  if (params.abortSignal?.aborted) {
+    return createCompactionAbortedResult();
+  }
   ensureRuntimePluginsLoaded({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -218,6 +301,7 @@ export async function compactEmbeddedAgentSession(
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
+    modelSelectionLocked: params.modelSelectionLocked,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -234,15 +318,32 @@ export async function compactEmbeddedAgentSession(
     !isDefaultAgentRuntimeId(configuredHarnessPolicy.runtime)
       ? configuredHarnessPolicy.runtime
       : undefined;
-  // The persisted harness id is the runtime contract for this session; config
-  // changes can supply a runtime only when the session has no concrete pin.
-  const selectedHarnessRuntime = params.agentHarnessId ?? configuredHarnessRuntime;
+  const lockedHarnessRuntime =
+    params.modelSelectionLocked === true
+      ? normalizeOptionalAgentRuntimeId(params.agentHarnessId)
+      : undefined;
+  if (
+    params.modelSelectionLocked === true &&
+    (!lockedHarnessRuntime || lockedHarnessRuntime === "auto")
+  ) {
+    await contextEngine.dispose?.();
+    return lockedCompactionRuntimeFailure();
+  }
+  // A model lock makes the persisted harness authoritative. Config may select
+  // a runtime only for unlocked sessions that have no concrete pin.
+  const selectedHarnessRuntime =
+    params.modelSelectionLocked === true
+      ? lockedHarnessRuntime
+      : (params.agentHarnessId ?? configuredHarnessRuntime);
+  const lockedNativeHarness =
+    params.modelSelectionLocked === true && selectedHarnessRuntime !== "openclaw";
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
     harnessRuntime: selectedHarnessRuntime,
+    modelSelectionLocked: params.modelSelectionLocked,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -307,7 +408,7 @@ export async function compactEmbeddedAgentSession(
   });
   const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
   const harnessResult =
-    attemptNativeHarnessCompaction && !contextEngineOwnsCompaction
+    attemptNativeHarnessCompaction && (!contextEngineOwnsCompaction || lockedNativeHarness)
       ? await maybeCompactAgentHarnessSession({
           ...params,
           contextEngine,
@@ -315,6 +416,10 @@ export async function compactEmbeddedAgentSession(
           contextEngineRuntimeContext,
         })
       : undefined;
+  if (lockedNativeHarness) {
+    await contextEngine.dispose?.();
+    return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
+  }
   if (harnessResult) {
     if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
       await contextEngine.dispose?.();
@@ -346,6 +451,9 @@ export async function compactEmbeddedAgentSession(
       let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null | undefined;
       let checkpointSnapshotRetained = false;
       try {
+        if (params.abortSignal?.aborted) {
+          return createCompactionAbortedResult();
+        }
         // When the context engine owns compaction, its compact() implementation
         // bypasses compactEmbeddedAgentSessionDirect (which fires the hooks internally).
         // Fire before_compaction / after_compaction hooks here so plugin subscribers
@@ -674,6 +782,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       provider: params.params.provider,
       modelId: params.params.model,
       harnessRuntime: params.harnessRuntime,
+      modelSelectionLocked: params.params.modelSelectionLocked,
       modelFallbacksOverride: params.params.modelFallbacksOverride,
       thinkLevel: params.params.thinkLevel,
       reasoningLevel: params.params.reasoningLevel,

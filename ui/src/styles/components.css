@@ -903,9 +903,7 @@
   border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--card) 94%, black 6%);
-  box-shadow:
-    0 10px 28px rgba(0, 0, 0, 0.24),
-    0 0 0 1px rgba(255, 255, 255, 0.04);
+  box-shadow: var(--shadow-md);
   color: var(--text);
   font-size: 12px; /* was 11px */
   font-weight: 500;
@@ -952,9 +950,7 @@
   border: 1px solid color-mix(in srgb, var(--border-strong) 88%, transparent);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--card) 96%, var(--bg) 4%);
-  box-shadow:
-    0 22px 54px rgba(0, 0, 0, 0.34),
-    0 0 0 1px rgba(255, 255, 255, 0.035);
+  box-shadow: var(--shadow-lg);
   color: var(--text);
   font-family: var(--font-body);
   pointer-events: none;
@@ -2177,6 +2173,21 @@
   animation: fade-in 0.2s var(--ease-out);
 }
 
+.chat-side-result--pending .chat-side-result__meta {
+  animation: chat-side-result-pending-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes chat-side-result-pending-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.45;
+  }
+}
+
 .chat-side-result--error {
   border-color: rgba(239, 68, 68, 0.28);
   background: linear-gradient(180deg, rgba(239, 68, 68, 0.08), rgba(239, 68, 68, 0.03));
@@ -3015,17 +3026,42 @@
 
 .worktrees-table .table-head,
 .worktrees-table .table-row {
-  grid-template-columns: 1fr 1fr 1.4fr 0.8fr 0.9fr 0.9fr;
+  grid-template-columns: 1fr 1fr 1.3fr 0.9fr 0.7fr 0.9fr 0.9fr;
 }
 
-@media (max-width: 1100px) {
+.worktrees-create {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.worktrees-create label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.worktrees-create input {
+  min-width: 180px;
+}
+
+/* Settings caps .settings-workspace at 1120px, so the table container is ~1080px
+   wide; a 1100px stack breakpoint would collapse the grid at every window size. */
+@media (max-width: 900px) {
   .worktrees-table .table-head,
   .worktrees-table .table-row {
     grid-template-columns: 1fr;
   }
 }
 
-@container (max-width: 1100px) {
+@container (max-width: 900px) {
   .worktrees-table .table-head,
   .worktrees-table .table-row {
     grid-template-columns: 1fr;
@@ -3913,7 +3949,7 @@ td.data-table-key-col {
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+  box-shadow: var(--shadow-lg);
 }
 
 .agent-select__option {
@@ -6524,4 +6560,43 @@ details[open] > .ov-expandable-toggle::after {
   border: none;
   border-radius: 10px;
   background: var(--card);
+}
+
+/* ── Provider brand icons (shared: chat picker, model providers page) ── */
+
+.provider-brand-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.provider-brand-icon:not(.provider-brand-icon--fallback) {
+  background: currentColor;
+  mask: var(--provider-icon-url) center / contain no-repeat;
+  -webkit-mask: var(--provider-icon-url) center / contain no-repeat;
+}
+
+.provider-brand-icon--fallback {
+  border: 1px solid color-mix(in srgb, currentColor 48%, transparent);
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.provider-brand-icon[data-provider-icon="codex"] {
+  color: #10a37f;
+}
+
+.provider-brand-icon[data-provider-icon="claude"] {
+  color: #d97757;
+}
+
+.provider-brand-icon[data-provider-icon="gemini"] {
+  color: #4285f4;
+}
+
+.provider-brand-icon[data-provider-icon="opencode"],
+.provider-brand-icon[data-provider-icon="opencodego"] {
+  color: var(--text-strong);
 }

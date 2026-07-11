@@ -31,6 +31,7 @@ import {
   resolveModelRefFromString,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -123,7 +124,6 @@ import {
 } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
-import { resolveSessionRuntimeOverrideForProvider } from "./agent-runner-execution.js";
 import {
   takeCommandSessionMetadataChanges,
   type CommandSessionMetadataChange,
@@ -722,6 +722,8 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
         config: params.cfg,
         agentId: params.sessionAgentId,
         sessionKey: params.sessionKey,
+        agentHarnessId:
+          params.entry?.modelSelectionLocked === true ? params.entry.agentHarnessId : undefined,
         agentHarnessRuntimeOverride,
       });
       return harness.deliveryDefaults?.sourceVisibleReplies;
@@ -1311,14 +1313,27 @@ export async function dispatchReplyFromConfig(
   const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
   const acpDispatchSessionKey =
     boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;
-  // initialSessionStoreEntry is command-target-aware, so native command turns
-  // stay target-keyed here. Bound ACP dispatch remains source-key owned while
-  // ACP routing uses acpDispatchSessionKey.
+  // initialSessionStoreEntry stays command-target-aware for handler/store
+  // lookups (status/stop/model act on the target via CommandTargetSessionKey).
+  // Reply-run ownership must stay SOURCE-keyed: a native command turn must not
+  // wait on or contend with the target's active run. Bound ACP routing uses
+  // acpDispatchSessionKey separately and must not move source admission.
+  const sourceSessionKey = normalizeOptionalString(ctx.SessionKey);
   const dispatchOperationSessionKey =
-    initialSessionStoreEntry.sessionKey ?? sessionKey ?? acpDispatchSessionKey;
-  // Reply-run ownership stays on the inbound/source session. Bound ACP routing
-  // may use another agent's store, but must not move source lifecycle admission.
-  const operationSessionStoreEntry = initialSessionStoreEntry;
+    sourceSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey ?? acpDispatchSessionKey;
+  const operationSessionStoreEntry =
+    sourceSessionKey &&
+    initialSessionStoreEntry.sessionKey &&
+    sourceSessionKey !== initialSessionStoreEntry.sessionKey
+      ? resolveSessionStoreLookup(
+          {
+            ...ctx,
+            // Strip target so store resolution follows the source SessionKey.
+            CommandTargetSessionKey: undefined,
+          },
+          cfg,
+        )
+      : initialSessionStoreEntry;
   const initialDispatchReplyOperation = dispatchOperationSessionKey
     ? replyRunRegistry.get(dispatchOperationSessionKey)
     : undefined;
@@ -1528,8 +1543,7 @@ export async function dispatchReplyFromConfig(
     }
     const operationSessionId =
       dispatchAbortOperation?.sessionId ??
-      initialSessionStoreEntry.entry?.sessionId ??
-      sessionStoreEntry.entry?.sessionId ??
+      operationSessionStoreEntry.entry?.sessionId ??
       crypto.randomUUID();
     const replyTurnKind = resolveReplyTurnKind(params.replyOptions);
     const allowActivePreDispatch = phase === "pre_dispatch" && replyTurnKind === "visible";
@@ -3193,6 +3207,20 @@ export async function dispatchReplyFromConfig(
           options?.forwardWhenSourceDeliverySuppressed === true)
       );
     };
+    const preserveProgressCallbackStartOrder =
+      params.replyOptions?.preserveProgressCallbackStartOrder === true;
+    let progressCallbackStartTail = Promise.resolve();
+    const reserveProgressCallbackStart = () => {
+      const previousStart = progressCallbackStartTail;
+      let releaseStart: (() => void) | undefined;
+      progressCallbackStartTail = new Promise<void>((resolve) => {
+        releaseStart = resolve;
+      });
+      return {
+        previousStart,
+        releaseStart: () => releaseStart?.(),
+      };
+    };
     const wrapProgressCallback = <Args extends unknown[], Result extends false | void>(
       callback: ((...args: Args) => Promise<Result> | Result) | undefined,
       options?: {
@@ -3207,27 +3235,53 @@ export async function dispatchReplyFromConfig(
       if (!callback) {
         return undefined;
       }
-      return async (...args: Args) => {
-        if (isDispatchOperationAborted()) {
-          return undefined;
-        }
-        dispatchReplyOperation?.recordActivity();
-        markProgress();
-        if (options?.waitForDirectBlockReplyDelivery) {
-          await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
+      const runProgressCallback = async (
+        args: Args,
+        noteCallbackStarted: () => void,
+      ): Promise<Result | undefined> => {
+        try {
           if (isDispatchOperationAborted()) {
             return undefined;
           }
-        }
-        if (shouldForwardProgressCallback(options)) {
-          await options?.onForward?.(...args);
-          const result = await callback?.(...args);
-          if (result === false) {
-            return result;
+          dispatchReplyOperation?.recordActivity();
+          markProgress();
+          if (options?.waitForDirectBlockReplyDelivery) {
+            await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
+            if (isDispatchOperationAborted()) {
+              return undefined;
+            }
           }
-          await options?.onVisible?.(...args);
+          if (shouldForwardProgressCallback(options)) {
+            if (preserveProgressCallbackStartOrder && options?.onForward) {
+              await options.onForward(...args);
+            } else if (!preserveProgressCallbackStartOrder) {
+              // Preserve the historical microtask boundary for unflagged channels.
+              await options?.onForward?.(...args);
+            }
+            const callbackResult = callback(...args);
+            noteCallbackStarted();
+            const result = await callbackResult;
+            if (result === false) {
+              return result;
+            }
+            await options?.onVisible?.(...args);
+          }
+          return undefined;
+        } finally {
+          noteCallbackStarted();
         }
-        return undefined;
+      };
+      return (...args: Args) => {
+        if (!preserveProgressCallbackStartOrder) {
+          return runProgressCallback(args, () => undefined);
+        }
+        // Reserve source order synchronously. Release after callback invocation, not completion,
+        // so async presentation work stays concurrent without letting later activity overtake it.
+        const start = reserveProgressCallbackStart();
+        return (async () => {
+          await start.previousStart;
+          return await runProgressCallback(args, start.releaseStart);
+        })();
       };
     };
 
@@ -3250,6 +3304,12 @@ export async function dispatchReplyFromConfig(
       ? wrapProgressCallback(params.replyOptions?.onItemEvent, {
           ...itemEventForwardingOptions,
           waitForDirectBlockReplyDelivery: true,
+          onForward: (payload) =>
+            preserveProgressCallbackStartOrder &&
+            deliverStandaloneCommentaryProgress &&
+            payload.kind === "preamble"
+              ? noteCommentaryProgress(payload)
+              : undefined,
           onVisible: (payload) => {
             if (hasFailedProgressStatus(payload)) {
               markVisibleToolErrorProgress();
@@ -3269,7 +3329,11 @@ export async function dispatchReplyFromConfig(
             // The wrapped forwarder marks progress itself when present.
             markProgress();
           }
-          if (deliverStandaloneCommentaryProgress && payload.kind === "preamble") {
+          if (
+            (!forwardItemEvent || !preserveProgressCallbackStartOrder) &&
+            deliverStandaloneCommentaryProgress &&
+            payload.kind === "preamble"
+          ) {
             await noteCommentaryProgress(payload);
           }
           return await forwardItemEvent?.(payload);
@@ -3791,6 +3855,11 @@ export async function dispatchReplyFromConfig(
     }
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+    // Final delivery is outside the progress wrappers. Wait until every source-ordered callback
+    // has at least started so a delayed tool/reasoning transition cannot appear after the final.
+    if (preserveProgressCallbackStartOrder) {
+      await progressCallbackStartTail;
+    }
     // Backstop: silent/streaming-delivered turns end without a visible final
     // reply; trailing commentary must still land.
     await flushPendingCommentaryProgress();

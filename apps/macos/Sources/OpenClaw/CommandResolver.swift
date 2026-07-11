@@ -6,17 +6,11 @@ enum CommandResolver {
 
     static func gatewayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
-        if FileManager().isReadableFile(atPath: distEntry) {
-            return distEntry
-        }
+        if FileManager().isReadableFile(atPath: distEntry) { return distEntry }
         let openclawEntry = root.appendingPathComponent("openclaw.mjs").path
-        if FileManager().isReadableFile(atPath: openclawEntry) {
-            return openclawEntry
-        }
+        if FileManager().isReadableFile(atPath: openclawEntry) { return openclawEntry }
         let binEntry = root.appendingPathComponent("bin/openclaw.js").path
-        if FileManager().isReadableFile(atPath: binEntry) {
-            return binEntry
-        }
+        if FileManager().isReadableFile(atPath: binEntry) { return binEntry }
         return nil
     }
 
@@ -132,12 +126,14 @@ enum CommandResolver {
     {
         guard let executable = defaults.string(forKey: cliValidatedExecutableKey),
               fileManager.isExecutableFile(atPath: executable),
-              let validatedVersion = Semver.parse(defaults.string(forKey: cliValidatedVersionKey))
+              let validatedVersion = defaults.string(forKey: cliValidatedVersionKey),
+              Semver.parse(validatedVersion) != nil
         else {
             return nil
         }
-        guard let required = Semver.parse(requiredVersion) else { return executable }
-        return validatedVersion.compatible(with: required) ? executable : nil
+        return Semver.satisfiesExpectedGatewayVersion(
+            installed: validatedVersion,
+            expected: requiredVersion) ? executable : nil
     }
 
     private static func openclawManagedPaths(home: URL) -> [String] {
@@ -207,9 +203,7 @@ enum CommandResolver {
             for i in 0..<maxCount {
                 let ai = i < va.count ? va[i] : 0
                 let bi = i < vb.count ? vb[i] : 0
-                if ai != bi {
-                    return ai > bi
-                }
+                if ai != bi { return ai > bi }
             }
             // If identical numerically, keep stable ordering.
             return a > b
@@ -263,12 +257,8 @@ enum CommandResolver {
     }
 
     static func hasAnyOpenClawInvoker(searchPaths: [String]? = nil) -> Bool {
-        if self.openclawExecutable(searchPaths: searchPaths) != nil {
-            return true
-        }
-        if self.findExecutable(named: "pnpm", searchPaths: searchPaths) != nil {
-            return true
-        }
+        if self.openclawExecutable(searchPaths: searchPaths) != nil { return true }
+        if self.findExecutable(named: "pnpm", searchPaths: searchPaths) != nil { return true }
         if self.findExecutable(named: "node", searchPaths: searchPaths) != nil,
            self.nodeCliPath() != nil
         {
@@ -599,9 +589,7 @@ enum CommandResolver {
     }
 
     private static func shellQuote(_ text: String) -> String {
-        if text.isEmpty {
-            return "''"
-        }
+        if text.isEmpty { return "''" }
         let escaped = text.replacingOccurrences(of: "'", with: "'\\''")
         return "'\(escaped)'"
     }
@@ -625,12 +613,8 @@ enum CommandResolver {
     }
 
     private static func isValidSSHComponent(_ value: String, allowLeadingDash: Bool = false) -> Bool {
-        if value.isEmpty {
-            return false
-        }
-        if !allowLeadingDash, value.hasPrefix("-") {
-            return false
-        }
+        if value.isEmpty { return false }
+        if !allowLeadingDash, value.hasPrefix("-") { return false }
         let invalid = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
         return value.rangeOfCharacter(from: invalid) == nil
     }

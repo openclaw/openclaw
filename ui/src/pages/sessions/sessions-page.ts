@@ -12,13 +12,12 @@ import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import "../../components/session-menu.ts";
-import type { SessionMenuAction } from "../../components/session-menu.ts";
+import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
+import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
 import { t } from "../../i18n/index.ts";
+import { editorOpenUrl } from "../../lib/editor-links.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
-import {
-  loadStoredSessionCustomGroups,
-  saveStoredSessionCustomGroups,
-} from "../../lib/sessions/custom-groups.ts";
 import { normalizeSessionsGroupBy, type SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
   filterSessionRows,
@@ -87,11 +86,11 @@ class SessionsPage extends OpenClawLightDomElement {
   @state() private sortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
   @state() private sortDir: "asc" | "desc" = "desc";
   @state() private groupBy: SessionsGroupBy = loadStoredGroupBy();
-  @state() private customGroups: string[] = loadStoredSessionCustomGroups();
   @state() private page = 0;
   @state() private pageSize = 25;
   @state() private selectedKeys = new Set<string>();
   @state() private sessionMenu: { key: string; x: number; y: number } | null = null;
+  @state() private sessionMenuWork: SessionMenuWork | null = null;
   @state() private expandedSessionKey: string | null = null;
   // Route deep-link target (?session=...); unlike expandedSessionKey it also
   // narrows sessionListOptions so the linked session is guaranteed to load.
@@ -117,6 +116,9 @@ class SessionsPage extends OpenClawLightDomElement {
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
   private sessionMenuTrigger: HTMLElement | null = null;
+  // Guards the async work fetch: a menu reopened for another session must not
+  // adopt a stale response.
+  private sessionMenuWorkVersion = 0;
   private hasBoundGatewaySource = false;
   private sessionsSource?: ApplicationContext["sessions"];
   private hasBoundSessionsSource = false;
@@ -240,8 +242,7 @@ class SessionsPage extends OpenClawLightDomElement {
     this.checkpointLoadingKey = null;
     this.checkpointBusyKey = null;
     this.sessionMutationPending = false;
-    this.sessionMenu = null;
-    this.sessionMenuTrigger = null;
+    this.closeSessionMenu();
   }
 
   private resetProviderState() {
@@ -561,6 +562,16 @@ class SessionsPage extends OpenClawLightDomElement {
       if (!this.isRequestScopeCurrent(scope)) {
         return;
       }
+      // Dirty/unpushed checkouts survive deletion; point at the Worktrees page
+      // instead of cascading one force-delete confirm per session.
+      if (result.preservedWorktrees.length > 0) {
+        window.alert(
+          t("sessionsView.deletePreservedWorktrees", {
+            count: String(result.preservedWorktrees.length),
+            branches: result.preservedWorktrees.map((worktree) => worktree.branch).join(", "),
+          }),
+        );
+      }
       if (result.deleted.length > 0) {
         const deleted = new Set(result.deleted);
         const selected = new Set(this.selectedKeys);
@@ -622,11 +633,17 @@ class SessionsPage extends OpenClawLightDomElement {
     await this.deleteSessions([row.key]);
   }
 
+  private customGroups(): readonly string[] {
+    return this.context?.sessions.state.groups ?? [];
+  }
+
   private knownCategories(): string[] {
     const fromRows = (this.result?.sessions ?? [])
       .map((row) => row.category?.trim())
       .filter((name): name is string => Boolean(name));
-    return [...new Set([...this.customGroups, ...fromRows.toSorted((a, b) => a.localeCompare(b))])];
+    return [
+      ...new Set([...this.customGroups(), ...fromRows.toSorted((a, b) => a.localeCompare(b))]),
+    ];
   }
 
   private setGroupBy(mode: SessionsGroupBy) {
@@ -639,9 +656,9 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private rememberCustomGroup(name: string) {
-    if (!this.customGroups.includes(name)) {
-      this.customGroups = [...this.customGroups, name];
-      saveStoredSessionCustomGroups(this.customGroups);
+    const known = this.knownCategories();
+    if (!known.includes(name)) {
+      void this.context?.sessions.groupsPut([...this.customGroups(), name]);
     }
   }
 
@@ -884,12 +901,48 @@ class SessionsPage extends OpenClawLightDomElement {
     trigger: HTMLElement | null,
   ) {
     if (this.sessionMenu?.key === row.key && trigger) {
-      this.sessionMenu = null;
-      this.sessionMenuTrigger = null;
+      this.closeSessionMenu();
       return;
     }
     this.sessionMenu = { key: row.key, ...position };
     this.sessionMenuTrigger = trigger;
+    this.loadSessionMenuWork(row);
+  }
+
+  private closeSessionMenu() {
+    this.sessionMenu = null;
+    this.sessionMenuTrigger = null;
+    this.sessionMenuWorkVersion += 1;
+    this.sessionMenuWork = null;
+  }
+
+  private loadSessionMenuWork(row: GatewaySessionRow) {
+    const version = ++this.sessionMenuWorkVersion;
+    if (!row.worktree) {
+      this.sessionMenuWork = null;
+      return;
+    }
+    this.sessionMenuWork = { loading: true, pullRequestUrl: null, worktreePath: null };
+    const scope = this.captureRequestScope();
+    if (!scope) {
+      this.sessionMenuWork = { loading: false, pullRequestUrl: null, worktreePath: null };
+      return;
+    }
+    void fetchSessionMenuWork({
+      client: scope.client,
+      pullRequestsAvailable:
+        isGatewayMethodAdvertised(
+          scope.context.gateway.snapshot,
+          "controlUi.sessionPullRequests",
+        ) === true,
+      sessionKey: row.key,
+      agentId: this.sessionAgentId(row.key, scope.context),
+      worktreeId: row.worktree.id,
+    }).then((work) => {
+      if (version === this.sessionMenuWorkVersion) {
+        this.sessionMenuWork = { loading: false, ...work };
+      }
+    });
   }
 
   private renderSessionMenu() {
@@ -930,24 +983,29 @@ class SessionsPage extends OpenClawLightDomElement {
         .y=${menu.y}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${this.loading}
-        .forkDisabled=${false}
+        .forkDisabled=${row.modelSelectionLocked === true}
         .archiveAllowed=${archiveAllowed}
         .groups=${this.knownCategories()}
         .canOpenChat=${row.kind !== "global"}
+        .work=${this.sessionMenuWork}
         .workboard=${canCapture && row.kind !== "global"
           ? {
               captured: capturedSessionKeys.has(row.key),
               busy: [...workboardState.capturingSessionKeys][0] === row.key,
             }
           : null}
-        .onClose=${() => {
-          this.sessionMenu = null;
-          this.sessionMenuTrigger = null;
-        }}
+        .onClose=${() => this.closeSessionMenu()}
         .onAction=${(action: SessionMenuAction) => {
           switch (action.kind) {
             case "open-chat":
               context.navigate("chat", { search: searchForSession(row.key), hash: "" });
+              break;
+            case "open-pr":
+              window.open(action.url, "_blank", "noopener");
+              break;
+            case "open-in":
+              // A custom-scheme window hands off to the OS without navigating this page.
+              window.open(editorOpenUrl(action.editor, action.path));
               break;
             case "toggle-pin":
               void this.patchSession(row.key, { pinned: row.pinned !== true });

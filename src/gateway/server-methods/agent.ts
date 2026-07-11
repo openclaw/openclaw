@@ -46,6 +46,7 @@ import {
   retainEmbeddedAgentRunAbortabilityForRunId,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
+import { resolvePublicAgentAvatarSource } from "../../agents/identity-avatar.js";
 import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
   hasGeneratedMediaCompletionEvent,
@@ -115,6 +116,7 @@ import {
 } from "../../infra/voicewake-routing.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
   classifySessionKeyShape,
   isAcpSessionKey,
@@ -122,6 +124,11 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
+  resolveAgentHarnessSessionContextError,
+  resolveAgentHarnessSessionIdMismatchError,
+} from "../../sessions/agent-harness-session-key.js";
 import {
   annotateInterSessionPromptText,
   normalizeInputProvenance,
@@ -158,7 +165,8 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
-import { resolvePublicAssistantIdentity } from "../assistant-identity.js";
+import { resolveGatewayAssistantAvatar } from "../assistant-avatar.js";
+import { resolveAssistantIdentity } from "../assistant-identity.js";
 import {
   type ChatAbortControllerEntry,
   registerChatAbortController,
@@ -189,13 +197,7 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { waitForAgentJob } from "./agent-job.js";
-import {
-  readTerminalSnapshotFromGatewayDedupe,
-  setGatewayDedupeEntry,
-  type AgentWaitTerminalSnapshot,
-  waitForTerminalGatewayDedupe,
-} from "./agent-wait-dedupe.js";
+import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
@@ -283,6 +285,8 @@ function respondDeletedAgentSession(params: {
 
 function respondUnavailableAgentSessionForKey(params: {
   sessionKey: string;
+  requestedSessionId?: string;
+  isRawModelRun: boolean;
   agentId?: string;
   respond: GatewayRequestHandlerOptions["respond"];
 }): boolean {
@@ -299,6 +303,27 @@ function respondUnavailableAgentSessionForKey(params: {
       respond: params.respond,
     })
   ) {
+    return true;
+  }
+  const harnessSessionError = resolveAgentHarnessSessionContextError(canonicalKey, entry);
+  if (harnessSessionError) {
+    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, harnessSessionError));
+    return true;
+  }
+  const harnessSessionIdError = resolveAgentHarnessSessionIdMismatchError(
+    entry,
+    params.requestedSessionId,
+  );
+  if (harnessSessionIdError) {
+    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, harnessSessionIdError));
+    return true;
+  }
+  if (params.isRawModelRun && entry?.modelSelectionLocked === true) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE),
+    );
     return true;
   }
   const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
@@ -1325,6 +1350,17 @@ export const agentHandlers: GatewayRequestHandlers = {
     const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;
     const isOneShotModelRun = request.modelRun === true;
     const isRawModelRun = isOneShotModelRun || request.promptMode === "none";
+    if (request.promptMode === "none" && !isOneShotModelRun) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          'promptMode="none" requires modelRun=true so the run cannot mutate a durable session.',
+        ),
+      );
+      return;
+    }
     if (requestedModelOverride && !allowModelOverride) {
       respond(
         false,
@@ -1720,7 +1756,13 @@ export const agentHandlers: GatewayRequestHandlers = {
     // and dispatch so agent RPC shares the chat.send / sessions.send boundary.
     if (
       requestedSessionKey &&
-      respondUnavailableAgentSessionForKey({ sessionKey: requestedSessionKey, agentId, respond })
+      respondUnavailableAgentSessionForKey({
+        sessionKey: requestedSessionKey,
+        requestedSessionId,
+        isRawModelRun,
+        agentId,
+        respond,
+      })
     ) {
       clearUnacceptedAgentDedupe();
       return;
@@ -2162,7 +2204,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         resolvedSessionKey === "global"
           ? (resolvedSessionAgentId ?? agentId ?? resolveDefaultAgentId(cfgForAgent ?? cfg))
           : undefined;
-      const assertGatewayWorkAdmissionAllowed = () => {
+      const assertGatewayWorkAdmissionAllowed = (commitOutcome = true) => {
         const latestPreRegistrationAbort = readGatewayDedupeEntry({
           dedupe: context.dedupe,
           keys: agentDedupeKeys,
@@ -2175,38 +2217,46 @@ export const agentHandlers: GatewayRequestHandlers = {
             alternateSessionKeys: [preAcceptedReservedSessionKey, requestedSessionKey],
           })
         ) {
-          postAdmissionAbort = latestPreRegistrationAbort;
+          if (commitOutcome) {
+            postAdmissionAbort = latestPreRegistrationAbort;
+          }
           return;
         }
         if (agentDedupeReserved) {
           if (!latestPreRegistrationAbort) {
-            postAdmissionTimeout = {
-              runId,
-              status: "timeout",
-              summary: "aborted",
-              stopReason: "timeout",
-              timeoutPhase: "queue",
-              providerStarted: false,
-            };
-            setAbortedAgentDedupeEntries({
-              dedupe: context.dedupe,
-              keys: agentDedupeKeys,
-              agentId: admissionAgentId(),
-              sessionKey: resolvedSessionKey,
-              runId,
-              stopReason: "timeout",
-            });
+            if (commitOutcome) {
+              postAdmissionTimeout = {
+                runId,
+                status: "timeout",
+                summary: "aborted",
+                stopReason: "timeout",
+                timeoutPhase: "queue",
+                providerStarted: false,
+              };
+              setAbortedAgentDedupeEntries({
+                dedupe: context.dedupe,
+                keys: agentDedupeKeys,
+                agentId: admissionAgentId(),
+                sessionKey: resolvedSessionKey,
+                runId,
+                stopReason: "timeout",
+              });
+            }
             return;
           }
           if (
             !latestPreRegistrationAbort.ok ||
             !isAcceptedAgentDedupePayload(latestPreRegistrationAbort.payload)
           ) {
-            postAdmissionAbort = latestPreRegistrationAbort;
+            if (commitOutcome) {
+              postAdmissionAbort = latestPreRegistrationAbort;
+            }
             return;
           }
           if (latestPreRegistrationAbort.payload.reservationId !== agentReservationId) {
-            postAdmissionSuperseded = true;
+            if (commitOutcome) {
+              postAdmissionSuperseded = true;
+            }
             return;
           }
           if (
@@ -2214,30 +2264,37 @@ export const agentHandlers: GatewayRequestHandlers = {
               nowMs: Date.now(),
             })
           ) {
-            postAdmissionTimeout = {
-              runId,
-              status: "timeout",
-              summary: "aborted",
-              stopReason: "timeout",
-              timeoutPhase: "queue",
-              providerStarted: false,
-            };
-            setAbortedAgentDedupeEntries({
-              dedupe: context.dedupe,
-              keys: agentDedupeKeys,
-              agentId: admissionAgentId(),
-              sessionKey: resolvedSessionKey,
-              runId,
-              stopReason: "timeout",
-            });
+            if (commitOutcome) {
+              postAdmissionTimeout = {
+                runId,
+                status: "timeout",
+                summary: "aborted",
+                stopReason: "timeout",
+                timeoutPhase: "queue",
+                providerStarted: false,
+              };
+              setAbortedAgentDedupeEntries({
+                dedupe: context.dedupe,
+                keys: agentDedupeKeys,
+                agentId: admissionAgentId(),
+                sessionKey: resolvedSessionKey,
+                runId,
+                stopReason: "timeout",
+              });
+            }
             return;
           }
         }
-        lifecycleRotatedDuringAdmission = abortForLifecycleRotation({
-          sessionKey: resolvedSessionKey,
-          agentId: admissionAgentId(),
-        });
-        if (lifecycleRotatedDuringAdmission || !resolvedSessionKey) {
+        if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+          if (commitOutcome) {
+            lifecycleRotatedDuringAdmission = abortForLifecycleRotation({
+              sessionKey: resolvedSessionKey,
+              agentId: admissionAgentId(),
+            });
+          }
+          return;
+        }
+        if (!resolvedSessionKey) {
           return;
         }
         let latestEntry = loadSessionEntry(resolvedSessionKey, {
@@ -2259,7 +2316,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         if (archivedError) {
           throw new Error(archivedError);
         }
-        if (latestEntry?.sessionId && latestEntry.sessionId !== supersededSessionId) {
+        if (
+          commitOutcome &&
+          latestEntry?.sessionId &&
+          latestEntry.sessionId !== supersededSessionId
+        ) {
           admittedSessionId = latestEntry.sessionId;
         }
       };
@@ -2297,7 +2358,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         gatewayWorkAdmission = await beginSessionWorkAdmission({
           scope,
           identities: [resolvedSessionKey, resolvedSessionId],
-          assertAllowed: assertGatewayWorkAdmissionAllowed,
+          assertAllowed: () => assertGatewayWorkAdmissionAllowed(false),
+          revalidateAllowed: assertGatewayWorkAdmissionAllowed,
           onInterrupt: interruptGatewayWorkAdmission,
         });
       };
@@ -2589,6 +2651,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           : undefined;
         const skipImplicitExpiry =
           restoredCronContinuationIdentity !== undefined ||
+          entry?.modelSelectionLocked === true ||
           (resetPolicy.configured !== true && hasProviderOwnedSession(entry));
         let freshness = entry
           ? skipImplicitExpiry
@@ -2785,6 +2848,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             : undefined;
           const freshSkipImplicitExpiry =
             restoredCronContinuationIdentity !== undefined ||
+            freshEntry?.modelSelectionLocked === true ||
             (resetPolicy.configured !== true && hasProviderOwnedSession(freshEntry));
           const freshFreshness = freshEntry
             ? freshSkipImplicitExpiry
@@ -3541,9 +3605,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (!activeRunAbort.registered) {
         activeGatewayWorkAdmission.release();
       }
+      let releaseGatewayRootContinuation: (() => void) | undefined;
       const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
         activeRunAbort.cleanup(options);
         activeGatewayWorkAdmission.release();
+        releaseGatewayRootContinuation?.();
+        releaseGatewayRootContinuation = undefined;
       };
       if (activeRunAbort.registered) {
         retainEmbeddedAgentRunAbortabilityForRunId(runId);
@@ -3642,6 +3709,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       // is scheduled out of this request handler so immediate agent.wait calls
       // can reach the gateway before the pre-turn runner monopolizes the loop.
       gatewayAdmissionTransferred = true;
+      // Reserve the detached run before this request releases its root. Otherwise
+      // its inherited ALS context becomes retired and rejects subordinate work.
+      releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
       void activeGatewayWorkAdmission.run(async () => {
         await yieldAfterAgentAcceptedAck();
 
@@ -3986,12 +4056,22 @@ export const agentHandlers: GatewayRequestHandlers = {
       agentId = resolved;
     }
     const cfg = context.getRuntimeConfig();
-    const identity = resolvePublicAssistantIdentity({
-      cfg,
-      agentId,
-      basePath: cfg.gateway?.controlUi?.basePath,
-    });
-    respond(true, identity, undefined);
+    const identity = resolveAssistantIdentity({ cfg, agentId });
+    const avatarProjection = resolveGatewayAssistantAvatar({ cfg, identity });
+    const avatarResolution = avatarProjection.resolution;
+    respond(
+      true,
+      {
+        ...identity,
+        avatar: avatarProjection.avatar,
+        avatarSource: avatarResolution
+          ? resolvePublicAgentAvatarSource(avatarResolution)
+          : undefined,
+        avatarStatus: avatarResolution?.kind,
+        avatarReason: avatarResolution?.kind === "none" ? avatarResolution.reason : undefined,
+      },
+      undefined,
+    );
   },
   "agent.wait": async ({ params, respond, context }) => {
     if (!validateAgentWaitParams(params)) {
@@ -4017,89 +4097,11 @@ export const agentHandlers: GatewayRequestHandlers = {
     const activeChatEntry = context.chatAbortControllers.get(runId);
     const hasActiveChatRun = activeChatEntry !== undefined && activeChatEntry.kind !== "agent";
 
-    const cachedGatewaySnapshot = readTerminalSnapshotFromGatewayDedupe({
-      dedupe: context.dedupe,
-      runId,
-      ignoreAgentTerminalSnapshot: hasActiveChatRun,
-    });
-    if (cachedGatewaySnapshot) {
-      respond(true, {
-        runId,
-        status: cachedGatewaySnapshot.status,
-        startedAt: cachedGatewaySnapshot.startedAt,
-        endedAt: cachedGatewaySnapshot.endedAt,
-        error: cachedGatewaySnapshot.error,
-        stopReason: cachedGatewaySnapshot.stopReason,
-        livenessState: cachedGatewaySnapshot.livenessState,
-        yielded: cachedGatewaySnapshot.yielded,
-        pendingError: cachedGatewaySnapshot.pendingError,
-        timeoutPhase: cachedGatewaySnapshot.timeoutPhase,
-        providerStarted: cachedGatewaySnapshot.providerStarted,
-      });
-      return;
-    }
-
-    const lifecycleAbortController = new AbortController();
-    const dedupeAbortController = new AbortController();
-    const dedupePromise = waitForTerminalGatewayDedupe({
-      dedupe: context.dedupe,
+    const snapshot = await waitForAgentJob({
       runId,
       timeoutMs,
-      signal: dedupeAbortController.signal,
-      ignoreAgentTerminalSnapshot: hasActiveChatRun,
+      ...(hasActiveChatRun ? { source: "chat" } : {}),
     });
-
-    if (hasActiveChatRun) {
-      const snapshot = await dedupePromise;
-      dedupeAbortController.abort();
-      if (!snapshot) {
-        respond(true, {
-          runId,
-          status: "timeout",
-          timeoutPhase: "gateway_draining",
-        });
-        return;
-      }
-      respond(true, {
-        runId,
-        status: snapshot.status,
-        startedAt: snapshot.startedAt,
-        endedAt: snapshot.endedAt,
-        error: snapshot.error,
-        stopReason: snapshot.stopReason,
-        livenessState: snapshot.livenessState,
-        yielded: snapshot.yielded,
-        pendingError: snapshot.pendingError,
-        timeoutPhase: snapshot.timeoutPhase,
-        providerStarted: snapshot.providerStarted,
-      });
-      return;
-    }
-
-    const lifecyclePromise = waitForAgentJob({
-      runId,
-      timeoutMs,
-      signal: lifecycleAbortController.signal,
-    });
-
-    const first = await Promise.race([
-      lifecyclePromise.then((snapshot) => ({ source: "lifecycle" as const, snapshot })),
-      dedupePromise.then((snapshot) => ({ source: "dedupe" as const, snapshot })),
-    ]);
-
-    let snapshot: AgentWaitTerminalSnapshot | Awaited<ReturnType<typeof waitForAgentJob>> =
-      first.snapshot;
-    if (snapshot) {
-      if (first.source === "lifecycle") {
-        dedupeAbortController.abort();
-      } else {
-        lifecycleAbortController.abort();
-      }
-    } else {
-      snapshot = first.source === "lifecycle" ? await dedupePromise : await lifecyclePromise;
-      lifecycleAbortController.abort();
-      dedupeAbortController.abort();
-    }
 
     if (!snapshot) {
       const activeRunRegistered = activeChatEntry !== undefined;

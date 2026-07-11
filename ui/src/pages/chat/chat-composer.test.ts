@@ -27,6 +27,7 @@ vi.mock("../../components/markdown.ts", () => ({
 function createProps(overrides: Partial<ChatRunControlsProps> = {}): ChatRunControlsProps {
   return {
     canAbort: false,
+    canSend: true,
     connected: true,
     draft: "",
     hasMessages: false,
@@ -121,6 +122,35 @@ describe("chat run controls", () => {
       getButton(container, `button[aria-label="${t("chat.runControls.sendMessage")}"]`),
     ).not.toBeNull();
     expect(container.querySelector('button[aria-label="Start voice input"]')).toBeNull();
+  });
+
+  it("keeps queued sends available offline while disabling live voice input", () => {
+    const container = document.createElement("div");
+    const onSend = vi.fn();
+    const onToggleVoice = vi.fn();
+
+    render(
+      renderChatRunControls(
+        createProps({
+          connected: false,
+          draft: "queue this offline",
+          onSend,
+          onToggleVoice,
+        }),
+      ),
+      container,
+    );
+
+    const sendButton = getButton(
+      container,
+      `button[aria-label="${t("chat.runControls.sendMessage")}"]`,
+    );
+    expect(sendButton.disabled).toBe(false);
+    sendButton.click();
+    expect(onSend).toHaveBeenCalledTimes(1);
+
+    render(renderChatRunControls(createProps({ connected: false, onToggleVoice })), container);
+    expect(getButton(container, 'button[aria-label="Start voice input"]').disabled).toBe(true);
   });
 
   it("keeps voice and generation stop actions available when both are active", () => {
@@ -757,6 +787,7 @@ describe("side result render", () => {
           isError: false,
           ts: 2,
         },
+        null,
         onDismissSideResult,
       ),
       container,
@@ -804,5 +835,47 @@ describe("side result render", () => {
     const errorResult = container.querySelector<HTMLElement>(".chat-side-result--error");
     expect(errorResult).toBeInstanceOf(HTMLElement);
     expect([...errorResult!.classList]).toEqual(["chat-side-result", "chat-side-result--error"]);
+  });
+
+  it("renders a pending placeholder until the side result arrives", () => {
+    const container = document.createElement("div");
+    const onDismissSideResult = vi.fn();
+
+    render(
+      renderSideResult(null, { question: "what changed?", ts: 1 }, onDismissSideResult),
+      container,
+    );
+
+    const pending = container.querySelector<HTMLElement>(".chat-side-result--pending");
+    expect(pending).toBeInstanceOf(HTMLElement);
+    expect(pending!.querySelector(".chat-side-result__meta")?.textContent).toBe("Thinking…");
+    expect(pending!.querySelector(".chat-side-result__question")?.textContent).toBe(
+      "what changed?",
+    );
+    expect(pending!.querySelector(".chat-side-result__body")).toBeNull();
+
+    const dismiss = pending!.querySelector<HTMLButtonElement>(".chat-side-result__dismiss");
+    dismiss?.click();
+    expect(onDismissSideResult).toHaveBeenCalledTimes(1);
+
+    // A delivered result replaces the placeholder even when pending state lingers.
+    render(
+      renderSideResult(
+        {
+          kind: "btw",
+          runId: "btw-run-2",
+          sessionKey: "main",
+          question: "what changed?",
+          text: "Answer.",
+          isError: false,
+          ts: 2,
+        },
+        { question: "what changed?", ts: 1 },
+        onDismissSideResult,
+      ),
+      container,
+    );
+    expect(container.querySelector(".chat-side-result--pending")).toBeNull();
+    expect(container.querySelector(".chat-side-result__body")?.textContent?.trim()).toBe("Answer.");
   });
 });

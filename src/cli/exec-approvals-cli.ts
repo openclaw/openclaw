@@ -15,9 +15,12 @@ import {
   type ExecPolicyScopeSnapshot,
 } from "../infra/exec-approvals-effective.js";
 import {
+  mergeExecApprovalsSocketDefaults,
+  normalizeExecApprovals,
   readExecApprovalsSnapshot,
-  saveExecApprovals,
+  updateExecApprovals,
   type ExecApprovalsAgent,
+  type ExecApprovalsDefaults,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
@@ -32,6 +35,7 @@ type FileExecApprovalsSnapshot = {
   exists: boolean;
   hash: string;
   file: ExecApprovalsFile;
+  resolvedDefaults?: Required<ExecApprovalsDefaults>;
 };
 
 type NativeExecApprovalAction = "allow" | "deny" | "prompt";
@@ -229,9 +233,22 @@ function normalizeNativePolicyInput(value: unknown): NativeExecApprovalPolicy {
   };
 }
 
-function saveSnapshotLocal(file: ExecApprovalsFile): ExecApprovalsSnapshot {
-  saveExecApprovals(file);
-  return loadSnapshotLocal();
+async function saveSnapshotLocal(
+  file: ExecApprovalsFile,
+  baseHash: string,
+): Promise<ExecApprovalsSnapshot> {
+  const snapshot = await updateExecApprovals({
+    baseHash,
+    update: (current) =>
+      mergeExecApprovalsSocketDefaults({
+        normalized: normalizeExecApprovals(file),
+        current,
+      }),
+  });
+  if (!snapshot) {
+    throw new Error("Exec approvals changed; reload and retry.");
+  }
+  return snapshot;
 }
 
 async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
@@ -309,7 +326,7 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
     });
     next = await loadSnapshot(params.opts, params.nodeId);
   } else if (params.source === "local") {
-    next = saveSnapshotLocal(params.file);
+    next = await saveSnapshotLocal(params.file, params.baseHash);
   } else {
     next = await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
   }
@@ -357,6 +374,7 @@ function buildEffectivePolicyReport(params: {
   configLoad: ConfigLoadResult;
   source: ApprovalsTargetSource;
   approvals?: ExecApprovalsFile;
+  resolvedDefaults?: Required<ExecApprovalsDefaults>;
   hostPath: string;
   nativePolicy: boolean;
 }): EffectivePolicyReport {
@@ -381,11 +399,19 @@ function buildEffectivePolicyReport(params: {
           "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec.",
       };
     }
+    if (!params.resolvedDefaults) {
+      return {
+        scopes: [],
+        note: "This node does not expose a complete resolved host policy, so Effective Policy is unavailable.",
+      };
+    }
     return {
       scopes: collectExecPolicyScopeSnapshots({
         cfg,
         approvals: params.approvals,
         hostPath: params.hostPath,
+        hostDefaults: params.resolvedDefaults,
+        hostDefaultSource: "node-reported resolved defaults",
       }),
       note: "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
     };
@@ -731,6 +757,7 @@ export function registerExecApprovalsCli(program: Command) {
           configLoad,
           source,
           approvals: fileSnapshot?.file,
+          resolvedDefaults: fileSnapshot?.resolvedDefaults,
           hostPath: fileSnapshot?.path ?? "",
           nativePolicy,
         });
