@@ -28,7 +28,7 @@ const hostRuntime = {
   llm: {
     acquireLocalService: async () => undefined,
   },
-} as OpenClawPluginApi["runtime"];
+} as unknown as OpenClawPluginApi["runtime"];
 
 function registerMemoryCoreRuntime(): MemoryPluginRuntime {
   let runtime: MemoryPluginRuntime | undefined;
