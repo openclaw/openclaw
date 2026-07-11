@@ -45,7 +45,11 @@ describe("tavily abort signal proof", () => {
       await expect(executePromise).rejects.toThrow("The operation was aborted");
     } finally {
       globalThis.fetch = priorFetch;
-      process.env.TAVILY_API_KEY = priorApiKey;
+      if (priorApiKey === undefined) {
+        delete process.env.TAVILY_API_KEY;
+      } else {
+        process.env.TAVILY_API_KEY = priorApiKey;
+      }
     }
   });
 });
