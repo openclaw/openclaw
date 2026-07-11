@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="trust_this_gateway">هل تثق بهذه البوابة؟</string>
+    <string name="trust_and_continue">الثقة والمتابعة</string>
+    <string name="cancel">إلغاء</string>
+    <string name="new_chat_in_worktree">دردشة جديدة في worktree</string>
+    <string name="gateway_trust_first_seen">تحقق من بصمة الشهادة قبل الوثوق بهذه البوابة.\n\n%1$s</string>
+    <string name="gateway_trust_changed">تم تغيير شهادة البوابة. تابع فقط إذا كنت تتوقع هذا التغيير.\n\nSHA-256 القديم:\n%1$s\n\nSHA-256 الجديد:\n%2$s</string>
+</resources>

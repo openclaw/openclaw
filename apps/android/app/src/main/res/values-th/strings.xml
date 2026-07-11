@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="trust_this_gateway">เชื่อถือเกตเวย์นี้หรือไม่?</string>
+    <string name="trust_and_continue">เชื่อถือและดำเนินการต่อ</string>
+    <string name="cancel">ยกเลิก</string>
+    <string name="new_chat_in_worktree">แชทใหม่ใน worktree</string>
+    <string name="gateway_trust_first_seen">ตรวจสอบลายนิ้วมือของใบรับรองก่อนเชื่อถือเกตเวย์นี้\n\n%1$s</string>
+    <string name="gateway_trust_changed">ใบรับรองของเกตเวย์มีการเปลี่ยนแปลง ดำเนินการต่อเมื่อคุณคาดว่าจะมีการเปลี่ยนแปลงนี้เท่านั้น\n\nSHA-256 เดิม:\n%1$s\n\nSHA-256 ใหม่:\n%2$s</string>
+</resources>

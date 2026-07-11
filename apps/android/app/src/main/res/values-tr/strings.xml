@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="trust_this_gateway">Bu ağ geçidine güvenilsin mi?</string>
+    <string name="trust_and_continue">Güven ve devam et</string>
+    <string name="cancel">İptal</string>
+    <string name="new_chat_in_worktree">Worktree\'de yeni sohbet</string>
+    <string name="gateway_trust_first_seen">Bu ağ geçidine güvenmeden önce sertifika parmak izini doğrulayın.\n\n%1$s</string>
+    <string name="gateway_trust_changed">Ağ geçidi sertifikası değişti. Yalnızca bu değişikliği bekliyorsanız devam edin.\n\nEski SHA-256:\n%1$s\n\nYeni SHA-256:\n%2$s</string>
+</resources>

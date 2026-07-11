@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="trust_this_gateway">信任此閘道？</string>
+    <string name="trust_and_continue">信任並繼續</string>
+    <string name="cancel">取消</string>
+    <string name="new_chat_in_worktree">在 worktree 中新增聊天</string>
+    <string name="gateway_trust_first_seen">請先驗證憑證指紋，再信任此閘道。\n\n%1$s</string>
+    <string name="gateway_trust_changed">閘道憑證已變更。僅在這是您預期的變更時繼續。\n\n舊 SHA-256：\n%1$s\n\n新 SHA-256：\n%2$s</string>
+</resources>

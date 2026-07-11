@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="trust_this_gateway">इस गेटवे पर भरोसा करें?</string>
+    <string name="trust_and_continue">भरोसा करें और जारी रखें</string>
+    <string name="cancel">रद्द करें</string>
+    <string name="new_chat_in_worktree">worktree में नया चैट</string>
+    <string name="gateway_trust_first_seen">इस गेटवे पर भरोसा करने से पहले प्रमाणपत्र फ़िंगरप्रिंट सत्यापित करें।\n\n%1$s</string>
+    <string name="gateway_trust_changed">गेटवे प्रमाणपत्र बदल गया है। केवल तभी जारी रखें जब आपको इस बदलाव की अपेक्षा थी।\n\nपुराना SHA-256:\n%1$s\n\nनया SHA-256:\n%2$s</string>
+</resources>
