@@ -7,7 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isDurableRuntimesEnabled } from "../../durable/config.js";
 import { buildDurableCoordinationProjection } from "../../durable/coordination-projection.js";
-import { openDurableRuntimeStore } from "../../durable/store-factory.js";
+import { openDurableRuntimeStore } from "../../durable/runtime.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const durableHandlers: GatewayRequestHandlers = {

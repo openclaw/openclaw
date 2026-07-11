@@ -876,6 +876,7 @@ public struct AgentParams: Codable, Sendable {
     public let execapprovalfollowupexpectedsessionid: String?
     public let internalevents: [[String: AnyCodable]]?
     public let inputprovenance: [String: AnyCodable]?
+    public let contextrefs: [[String: AnyCodable]]?
     public let suppresspromptpersistence: Bool?
     public let sessioneffects: AnyCodable?
     public let sourcereplydeliverymode: AnyCodable?
@@ -919,6 +920,7 @@ public struct AgentParams: Codable, Sendable {
         execapprovalfollowupexpectedsessionid: String?,
         internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
+        contextrefs: [[String: AnyCodable]]?,
         suppresspromptpersistence: Bool?,
         sessioneffects: AnyCodable?,
         sourcereplydeliverymode: AnyCodable?,
@@ -961,6 +963,7 @@ public struct AgentParams: Codable, Sendable {
         self.execapprovalfollowupexpectedsessionid = execapprovalfollowupexpectedsessionid
         self.internalevents = internalevents
         self.inputprovenance = inputprovenance
+        self.contextrefs = contextrefs
         self.suppresspromptpersistence = suppresspromptpersistence
         self.sessioneffects = sessioneffects
         self.sourcereplydeliverymode = sourcereplydeliverymode
@@ -1005,6 +1008,7 @@ public struct AgentParams: Codable, Sendable {
         case execapprovalfollowupexpectedsessionid = "execApprovalFollowupExpectedSessionId"
         case internalevents = "internalEvents"
         case inputprovenance = "inputProvenance"
+        case contextrefs = "contextRefs"
         case suppresspromptpersistence = "suppressPromptPersistence"
         case sessioneffects = "sessionEffects"
         case sourcereplydeliverymode = "sourceReplyDeliveryMode"
@@ -3442,6 +3446,128 @@ public struct TasksCancelResult: Codable, Sendable {
         case cancelled
         case reason
         case task
+    }
+}
+
+public struct DurableCoordinationGetParams: Codable, Sendable {
+    public let runtimerunid: String
+
+    public init(
+        runtimerunid: String)
+    {
+        self.runtimerunid = runtimerunid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runtimerunid = "runtimeRunId"
+    }
+}
+
+public struct DurableCoordinationProjection: Codable, Sendable {
+    public let runtimerunid: String
+    public let operationkind: String
+    public let operationversion: String
+    public let status: AnyCodable
+    public let recoverystate: AnyCodable
+    public let sourcetype: String?
+    public let sourceref: String?
+    public let parentruntimerunid: String?
+    public let parentstepid: String?
+    public let workunitid: String?
+    public let reportrouteid: String?
+    public let currentstepid: String?
+    public let waitingreason: AnyCodable?
+    public let heartbeatat: Int?
+    public let updatedat: Int
+    public let completedat: Int?
+    public let refs: [String: AnyCodable]
+    public let external: [String: AnyCodable]
+    public let children: [String: AnyCodable]
+    public let controls: [String: AnyCodable]
+    public let recovery: [String: AnyCodable]?
+
+    public init(
+        runtimerunid: String,
+        operationkind: String,
+        operationversion: String,
+        status: AnyCodable,
+        recoverystate: AnyCodable,
+        sourcetype: String?,
+        sourceref: String?,
+        parentruntimerunid: String?,
+        parentstepid: String?,
+        workunitid: String?,
+        reportrouteid: String?,
+        currentstepid: String?,
+        waitingreason: AnyCodable?,
+        heartbeatat: Int?,
+        updatedat: Int,
+        completedat: Int?,
+        refs: [String: AnyCodable],
+        external: [String: AnyCodable],
+        children: [String: AnyCodable],
+        controls: [String: AnyCodable],
+        recovery: [String: AnyCodable]?)
+    {
+        self.runtimerunid = runtimerunid
+        self.operationkind = operationkind
+        self.operationversion = operationversion
+        self.status = status
+        self.recoverystate = recoverystate
+        self.sourcetype = sourcetype
+        self.sourceref = sourceref
+        self.parentruntimerunid = parentruntimerunid
+        self.parentstepid = parentstepid
+        self.workunitid = workunitid
+        self.reportrouteid = reportrouteid
+        self.currentstepid = currentstepid
+        self.waitingreason = waitingreason
+        self.heartbeatat = heartbeatat
+        self.updatedat = updatedat
+        self.completedat = completedat
+        self.refs = refs
+        self.external = external
+        self.children = children
+        self.controls = controls
+        self.recovery = recovery
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runtimerunid = "runtimeRunId"
+        case operationkind = "operationKind"
+        case operationversion = "operationVersion"
+        case status
+        case recoverystate = "recoveryState"
+        case sourcetype = "sourceType"
+        case sourceref = "sourceRef"
+        case parentruntimerunid = "parentRuntimeRunId"
+        case parentstepid = "parentStepId"
+        case workunitid = "workUnitId"
+        case reportrouteid = "reportRouteId"
+        case currentstepid = "currentStepId"
+        case waitingreason = "waitingReason"
+        case heartbeatat = "heartbeatAt"
+        case updatedat = "updatedAt"
+        case completedat = "completedAt"
+        case refs
+        case external
+        case children
+        case controls
+        case recovery
+    }
+}
+
+public struct DurableCoordinationGetResult: Codable, Sendable {
+    public let projection: DurableCoordinationProjection
+
+    public init(
+        projection: DurableCoordinationProjection)
+    {
+        self.projection = projection
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case projection
     }
 }
 
@@ -8773,6 +8899,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let timeoutms: Int?
     public let systeminputprovenance: [String: AnyCodable]?
     public let systemprovenancereceipt: String?
+    public let contextrefs: [[String: AnyCodable]]?
     public let suppresscommandinterpretation: Bool?
     public let expectedsessionroutingcontract: String?
     public let idempotencykey: String
@@ -8794,6 +8921,7 @@ public struct ChatSendParams: Codable, Sendable {
         timeoutms: Int?,
         systeminputprovenance: [String: AnyCodable]?,
         systemprovenancereceipt: String?,
+        contextrefs: [[String: AnyCodable]]?,
         suppresscommandinterpretation: Bool?,
         expectedsessionroutingcontract: String?,
         idempotencykey: String)
@@ -8814,6 +8942,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.timeoutms = timeoutms
         self.systeminputprovenance = systeminputprovenance
         self.systemprovenancereceipt = systemprovenancereceipt
+        self.contextrefs = contextrefs
         self.suppresscommandinterpretation = suppresscommandinterpretation
         self.expectedsessionroutingcontract = expectedsessionroutingcontract
         self.idempotencykey = idempotencykey
@@ -8835,6 +8964,7 @@ public struct ChatSendParams: Codable, Sendable {
         timeoutms: Int?,
         systeminputprovenance: [String: AnyCodable]?,
         systemprovenancereceipt: String?,
+        contextrefs: [[String: AnyCodable]]?,
         suppresscommandinterpretation: Bool?,
         expectedsessionroutingcontract: String?,
         idempotencykey: String)
@@ -8856,6 +8986,7 @@ public struct ChatSendParams: Codable, Sendable {
             timeoutms: timeoutms,
             systeminputprovenance: systeminputprovenance,
             systemprovenancereceipt: systemprovenancereceipt,
+            contextrefs: contextrefs,
             suppresscommandinterpretation: suppresscommandinterpretation,
             expectedsessionroutingcontract: expectedsessionroutingcontract,
             idempotencykey: idempotencykey)
@@ -8878,6 +9009,7 @@ public struct ChatSendParams: Codable, Sendable {
         case timeoutms = "timeoutMs"
         case systeminputprovenance = "systemInputProvenance"
         case systemprovenancereceipt = "systemProvenanceReceipt"
+        case contextrefs = "contextRefs"
         case suppresscommandinterpretation = "suppressCommandInterpretation"
         case expectedsessionroutingcontract = "expectedSessionRoutingContract"
         case idempotencykey = "idempotencyKey"

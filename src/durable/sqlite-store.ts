@@ -2,10 +2,12 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { configureSqliteConnectionPragmas } from "../infra/sqlite-wal.js";
-import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db.js";
+import {
+  OPENCLAW_STATE_SCHEMA_VERSION,
+  closeOpenClawStateDatabaseForPath,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { resolveDurableRuntimeSqlitePath } from "./config.js";
 import type {
   AppendDurableRuntimeEventInput,
@@ -163,16 +165,6 @@ type DurableRuntimeSignalRow = {
 };
 
 type CountRow = { count: number | bigint };
-type DurableSchemaMigrationRow = {
-  schema_name: string;
-  version: number | bigint;
-  applied_at: number | bigint;
-  metadata_json: string | null;
-};
-
-const DURABLE_RUNTIME_SQLITE_BUSY_TIMEOUT_MS = 30_000;
-export const DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION = 1;
-const DURABLE_RUNTIME_SQLITE_SCHEMA_NAME = "durable_runtime";
 
 function optionalText(value: string | undefined): string | null {
   return value && value.trim() ? value : null;
@@ -216,12 +208,12 @@ function rowToRun(row: DurableRuntimeRunRow): DurableRuntimeRun {
     ...(row.work_unit_id ? { workUnitId: row.work_unit_id } : {}),
     ...(row.report_route_id ? { reportRouteId: row.report_route_id } : {}),
     ...(row.claimed_by ? { claimedBy: row.claimed_by } : {}),
-    ...(row.claim_expires_at == null ? {} : { claimExpiresAt: Number(row.claim_expires_at) }),
-    ...(row.heartbeat_at == null ? {} : { heartbeatAt: Number(row.heartbeat_at) }),
+    ...(row.claim_expires_at == null ? {} : { claimExpiresAt: row.claim_expires_at }),
+    ...(row.heartbeat_at == null ? {} : { heartbeatAt: row.heartbeat_at }),
     ...(row.metadata_json ? { metadata: parseJsonRecord(row.metadata_json) } : {}),
-    createdAt: Number(row.created_at),
-    updatedAt: Number(row.updated_at),
-    ...(row.completed_at == null ? {} : { completedAt: Number(row.completed_at) }),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.completed_at == null ? {} : { completedAt: row.completed_at }),
   };
 }
 
@@ -229,9 +221,9 @@ function rowToEvent(row: DurableRuntimeEventRow): DurableRuntimeEvent {
   return {
     eventId: row.event_id,
     runtimeRunId: row.runtime_run_id,
-    eventSeq: Number(row.event_seq),
+    eventSeq: row.event_seq,
     eventType: row.event_type,
-    eventTime: Number(row.event_time),
+    eventTime: row.event_time,
     ...(row.step_id ? { stepId: row.step_id } : {}),
     ...(row.agent_invocation_id ? { agentInvocationId: row.agent_invocation_id } : {}),
     ...(row.tool_invocation_id ? { toolInvocationId: row.tool_invocation_id } : {}),
@@ -241,7 +233,7 @@ function rowToEvent(row: DurableRuntimeEventRow): DurableRuntimeEvent {
     ...(row.checkpoint_ref ? { checkpointRef: row.checkpoint_ref } : {}),
     ...(row.causation_event_id ? { causationEventId: row.causation_event_id } : {}),
     ...(row.correlation_id ? { correlationId: row.correlation_id } : {}),
-    recordedAt: Number(row.recorded_at),
+    recordedAt: row.recorded_at,
   };
 }
 
@@ -253,21 +245,21 @@ function rowToStep(row: DurableRuntimeStepRow): DurableRuntimeStep {
     stepType: row.step_type,
     status: row.status,
     recoveryState: row.recovery_state,
-    attempt: Number(row.attempt),
-    ...(row.max_attempts == null ? {} : { maxAttempts: Number(row.max_attempts) }),
+    attempt: row.attempt,
+    ...(row.max_attempts == null ? {} : { maxAttempts: row.max_attempts }),
     ...(row.idempotency_key ? { idempotencyKey: row.idempotency_key } : {}),
     ...(row.input_ref ? { inputRef: row.input_ref } : {}),
     ...(row.output_ref ? { outputRef: row.output_ref } : {}),
     ...(row.error_ref ? { errorRef: row.error_ref } : {}),
     ...(row.checkpoint_ref ? { checkpointRef: row.checkpoint_ref } : {}),
     ...(row.claimed_by ? { claimedBy: row.claimed_by } : {}),
-    ...(row.claim_expires_at == null ? {} : { claimExpiresAt: Number(row.claim_expires_at) }),
-    ...(row.heartbeat_at == null ? {} : { heartbeatAt: Number(row.heartbeat_at) }),
+    ...(row.claim_expires_at == null ? {} : { claimExpiresAt: row.claim_expires_at }),
+    ...(row.heartbeat_at == null ? {} : { heartbeatAt: row.heartbeat_at }),
     ...(row.metadata_json ? { metadata: parseJsonRecord(row.metadata_json) } : {}),
-    createdAt: Number(row.created_at),
-    ...(row.started_at == null ? {} : { startedAt: Number(row.started_at) }),
-    updatedAt: Number(row.updated_at),
-    ...(row.completed_at == null ? {} : { completedAt: Number(row.completed_at) }),
+    createdAt: row.created_at,
+    ...(row.started_at == null ? {} : { startedAt: row.started_at }),
+    updatedAt: row.updated_at,
+    ...(row.completed_at == null ? {} : { completedAt: row.completed_at }),
   };
 }
 
@@ -282,7 +274,7 @@ function rowToRef(row: DurableRuntimeRefRow): DurableRuntimeRef {
     storageKind: row.storage_kind,
     ...(row.storage_uri ? { storageUri: row.storage_uri } : {}),
     ...(row.metadata_json ? { metadata: parseJsonRecord(row.metadata_json) } : {}),
-    createdAt: Number(row.created_at),
+    createdAt: row.created_at,
   };
 }
 
@@ -294,8 +286,8 @@ function rowToLink(row: DurableRuntimeLinkRow): DurableRuntimeLink {
     linkType: row.link_type,
     status: row.status,
     ...(row.metadata_json ? { metadata: parseJsonRecord(row.metadata_json) } : {}),
-    createdAt: Number(row.created_at),
-    updatedAt: Number(row.updated_at),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -305,12 +297,12 @@ function rowToTimer(row: DurableRuntimeTimerRow): DurableRuntimeTimer {
     runtimeRunId: row.runtime_run_id,
     ...(row.step_id ? { stepId: row.step_id } : {}),
     timerType: row.timer_type,
-    dueAt: Number(row.due_at),
+    dueAt: row.due_at,
     status: row.status,
     ...(row.metadata_json ? { metadata: parseJsonRecord(row.metadata_json) } : {}),
-    createdAt: Number(row.created_at),
-    ...(row.fired_at == null ? {} : { firedAt: Number(row.fired_at) }),
-    ...(row.cancelled_at == null ? {} : { cancelledAt: Number(row.cancelled_at) }),
+    createdAt: row.created_at,
+    ...(row.fired_at == null ? {} : { firedAt: row.fired_at }),
+    ...(row.cancelled_at == null ? {} : { cancelledAt: row.cancelled_at }),
   };
 }
 
@@ -324,317 +316,9 @@ function rowToSignal(row: DurableRuntimeSignalRow): DurableRuntimeSignal {
     ...(row.payload_ref ? { payloadRef: row.payload_ref } : {}),
     ...(row.correlation_id ? { correlationId: row.correlation_id } : {}),
     ...(row.metadata_json ? { metadata: parseJsonRecord(row.metadata_json) } : {}),
-    receivedAt: Number(row.received_at),
-    ...(row.consumed_at == null ? {} : { consumedAt: Number(row.consumed_at) }),
+    receivedAt: row.received_at,
+    ...(row.consumed_at == null ? {} : { consumedAt: row.consumed_at }),
   };
-}
-
-function ensureColumn(db: DatabaseSync, tableName: string, columnDefinition: string): void {
-  try {
-    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnDefinition}`);
-  } catch (err) {
-    if (!String(err).includes("duplicate column name")) {
-      throw err;
-    }
-  }
-}
-
-function tableExists(db: DatabaseSync, tableName: string): boolean {
-  const row = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName) as { name?: string } | undefined;
-  return row?.name === tableName;
-}
-
-function ensureDurableSchemaMigrationTable(db: DatabaseSync): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS durable_schema_migrations (
-      schema_name TEXT NOT NULL PRIMARY KEY,
-      version INTEGER NOT NULL,
-      applied_at INTEGER NOT NULL,
-      metadata_json TEXT
-    );
-  `);
-}
-
-function ensureDurableRuntimeCompatibilityColumns(db: DatabaseSync): void {
-  if (tableExists(db, "durable_runtime_runs")) {
-    for (const column of [
-      "parent_runtime_run_id TEXT",
-      "parent_step_id TEXT",
-      "message_id TEXT",
-      "turn_id TEXT",
-      "work_unit_id TEXT",
-      "report_route_id TEXT",
-      "claimed_by TEXT",
-      "claim_expires_at INTEGER",
-      "heartbeat_at INTEGER",
-    ]) {
-      ensureColumn(db, "durable_runtime_runs", column);
-    }
-  }
-  if (tableExists(db, "durable_runtime_steps")) {
-    for (const column of ["claimed_by TEXT", "claim_expires_at INTEGER", "heartbeat_at INTEGER"]) {
-      ensureColumn(db, "durable_runtime_steps", column);
-    }
-  }
-}
-
-function ensureDurableRuntimeSchema(db: DatabaseSync): void {
-  ensureDurableSchemaMigrationTable(db);
-  assertDurableRuntimeSchemaVersionSupported(db);
-  ensureDurableRuntimeCompatibilityColumns(db);
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS durable_runtime_runs (
-      runtime_run_id TEXT NOT NULL PRIMARY KEY,
-      operation_kind TEXT NOT NULL,
-      operation_version TEXT NOT NULL DEFAULT '1',
-      idempotency_key TEXT,
-      request_hash TEXT,
-      status TEXT NOT NULL,
-      source_type TEXT,
-      source_ref TEXT,
-      input_ref TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      completed_at INTEGER,
-      recovery_state TEXT NOT NULL DEFAULT 'runnable',
-      checkpoint_ref TEXT,
-      parent_runtime_run_id TEXT,
-      parent_step_id TEXT,
-      message_id TEXT,
-      turn_id TEXT,
-      work_unit_id TEXT,
-      report_route_id TEXT,
-      claimed_by TEXT,
-      claim_expires_at INTEGER,
-      heartbeat_at INTEGER,
-      metadata_json TEXT
-    );
-
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_runtime_runs_idempotency
-      ON durable_runtime_runs(operation_kind, idempotency_key)
-      WHERE idempotency_key IS NOT NULL;
-
-    CREATE INDEX IF NOT EXISTS idx_durable_runtime_runs_status
-      ON durable_runtime_runs(status, updated_at, runtime_run_id);
-
-    CREATE INDEX IF NOT EXISTS idx_durable_runtime_runs_work_unit
-      ON durable_runtime_runs(work_unit_id, updated_at, runtime_run_id)
-      WHERE work_unit_id IS NOT NULL;
-
-    CREATE INDEX IF NOT EXISTS idx_durable_runtime_runs_report_route
-      ON durable_runtime_runs(report_route_id, updated_at, runtime_run_id)
-      WHERE report_route_id IS NOT NULL;
-
-    CREATE TABLE IF NOT EXISTS durable_runtime_events (
-      event_id TEXT NOT NULL UNIQUE,
-      runtime_run_id TEXT NOT NULL,
-      event_seq INTEGER NOT NULL,
-      event_type TEXT NOT NULL,
-      event_time INTEGER NOT NULL,
-      step_id TEXT,
-      agent_invocation_id TEXT,
-      tool_invocation_id TEXT,
-      idempotency_key TEXT,
-      payload_json TEXT,
-      payload_hash TEXT,
-      checkpoint_ref TEXT,
-      causation_event_id TEXT,
-      correlation_id TEXT,
-      recorded_at INTEGER NOT NULL,
-      PRIMARY KEY (runtime_run_id, event_seq),
-      FOREIGN KEY (runtime_run_id) REFERENCES durable_runtime_runs(runtime_run_id)
-        ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_durable_runtime_events_type
-      ON durable_runtime_events(event_type, event_time, runtime_run_id);
-
-    CREATE TABLE IF NOT EXISTS durable_runtime_steps (
-      runtime_run_id TEXT NOT NULL,
-      step_id TEXT NOT NULL,
-      parent_step_id TEXT,
-      step_type TEXT NOT NULL,
-      status TEXT NOT NULL,
-      recovery_state TEXT NOT NULL,
-      attempt INTEGER NOT NULL DEFAULT 1,
-      max_attempts INTEGER,
-      idempotency_key TEXT,
-      input_ref TEXT,
-      output_ref TEXT,
-      error_ref TEXT,
-      checkpoint_ref TEXT,
-      claimed_by TEXT,
-      claim_expires_at INTEGER,
-      heartbeat_at INTEGER,
-      created_at INTEGER NOT NULL,
-      started_at INTEGER,
-      updated_at INTEGER NOT NULL,
-      completed_at INTEGER,
-      metadata_json TEXT,
-      PRIMARY KEY (runtime_run_id, step_id),
-      FOREIGN KEY (runtime_run_id) REFERENCES durable_runtime_runs(runtime_run_id)
-        ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_durable_runtime_steps_status
-      ON durable_runtime_steps(status, updated_at, runtime_run_id, step_id);
-
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_runtime_steps_idempotency
-      ON durable_runtime_steps(runtime_run_id, idempotency_key)
-      WHERE idempotency_key IS NOT NULL;
-
-    CREATE TABLE IF NOT EXISTS durable_runtime_refs (
-      ref_id TEXT NOT NULL PRIMARY KEY,
-      runtime_run_id TEXT NOT NULL,
-      step_id TEXT,
-      ref_kind TEXT NOT NULL,
-      media_type TEXT,
-      hash TEXT,
-      storage_kind TEXT NOT NULL,
-      storage_uri TEXT,
-      created_at INTEGER NOT NULL,
-      metadata_json TEXT,
-      FOREIGN KEY (runtime_run_id) REFERENCES durable_runtime_runs(runtime_run_id)
-        ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_durable_runtime_refs_run
-      ON durable_runtime_refs(runtime_run_id, ref_kind, created_at);
-
-    CREATE TABLE IF NOT EXISTS durable_runtime_links (
-      parent_runtime_run_id TEXT NOT NULL,
-      parent_step_id TEXT NOT NULL,
-      child_runtime_run_id TEXT NOT NULL,
-      link_type TEXT NOT NULL,
-      status TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      metadata_json TEXT,
-      PRIMARY KEY (parent_runtime_run_id, parent_step_id, child_runtime_run_id),
-      FOREIGN KEY (parent_runtime_run_id) REFERENCES durable_runtime_runs(runtime_run_id)
-        ON DELETE CASCADE,
-      FOREIGN KEY (child_runtime_run_id) REFERENCES durable_runtime_runs(runtime_run_id)
-        ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_durable_runtime_links_child
-      ON durable_runtime_links(child_runtime_run_id, status);
-
-    CREATE TABLE IF NOT EXISTS durable_runtime_timers (
-      timer_id TEXT NOT NULL PRIMARY KEY,
-      runtime_run_id TEXT NOT NULL,
-      step_id TEXT,
-      timer_type TEXT NOT NULL,
-      due_at INTEGER NOT NULL,
-      status TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      fired_at INTEGER,
-      cancelled_at INTEGER,
-      metadata_json TEXT,
-      FOREIGN KEY (runtime_run_id) REFERENCES durable_runtime_runs(runtime_run_id)
-        ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_durable_runtime_timers_due
-      ON durable_runtime_timers(status, due_at, timer_id);
-
-    CREATE TABLE IF NOT EXISTS durable_runtime_signals (
-      signal_id TEXT NOT NULL PRIMARY KEY,
-      runtime_run_id TEXT NOT NULL,
-      step_id TEXT,
-      signal_type TEXT NOT NULL,
-      idempotency_key TEXT,
-      payload_ref TEXT,
-      correlation_id TEXT,
-      received_at INTEGER NOT NULL,
-      consumed_at INTEGER,
-      metadata_json TEXT,
-      FOREIGN KEY (runtime_run_id) REFERENCES durable_runtime_runs(runtime_run_id)
-        ON DELETE CASCADE
-    );
-
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_runtime_signals_idempotency
-      ON durable_runtime_signals(runtime_run_id, idempotency_key)
-      WHERE idempotency_key IS NOT NULL;
-
-    CREATE INDEX IF NOT EXISTS idx_durable_runtime_signals_pending
-      ON durable_runtime_signals(consumed_at, received_at, signal_id);
-  `);
-  for (const column of [
-    "parent_runtime_run_id TEXT",
-    "parent_step_id TEXT",
-    "message_id TEXT",
-    "turn_id TEXT",
-    "work_unit_id TEXT",
-    "report_route_id TEXT",
-    "claimed_by TEXT",
-    "claim_expires_at INTEGER",
-    "heartbeat_at INTEGER",
-  ]) {
-    ensureColumn(db, "durable_runtime_runs", column);
-  }
-  for (const column of ["claimed_by TEXT", "claim_expires_at INTEGER", "heartbeat_at INTEGER"]) {
-    ensureColumn(db, "durable_runtime_steps", column);
-  }
-  ensureDurableRuntimeSchemaVersion(db);
-}
-
-function readDurableRuntimeSchemaMigration(
-  db: DatabaseSync,
-): DurableSchemaMigrationRow | undefined {
-  const row = db
-    .prepare("SELECT * FROM durable_schema_migrations WHERE schema_name = ?")
-    .get(DURABLE_RUNTIME_SQLITE_SCHEMA_NAME) as DurableSchemaMigrationRow | undefined;
-  return row;
-}
-
-function assertDurableRuntimeSchemaVersionSupported(db: DatabaseSync): void {
-  const row = readDurableRuntimeSchemaMigration(db);
-  const currentVersion = Number(row?.version ?? 0);
-  if (currentVersion > DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION) {
-    throw new Error(
-      `Durable runtime schema version ${currentVersion} is newer than supported version ${DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION}`,
-    );
-  }
-}
-
-function ensureDurableRuntimeSchemaVersion(db: DatabaseSync): void {
-  const now = Date.now();
-  const row = readDurableRuntimeSchemaMigration(db);
-  const currentVersion = Number(row?.version ?? 0);
-  assertDurableRuntimeSchemaVersionSupported(db);
-  if (currentVersion === DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION) {
-    return;
-  }
-
-  const metadata = JSON.stringify({
-    kind: currentVersion === 0 ? "fresh-install" : "schema-upgrade",
-    previousVersion: currentVersion,
-  });
-  if (row) {
-    db.prepare(
-      `UPDATE durable_schema_migrations
-          SET version = ?,
-              applied_at = ?,
-              metadata_json = ?
-        WHERE schema_name = ?`,
-    ).run(DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION, now, metadata, DURABLE_RUNTIME_SQLITE_SCHEMA_NAME);
-    return;
-  }
-
-  db.prepare(
-    `INSERT INTO durable_schema_migrations (schema_name, version, applied_at, metadata_json)
-     VALUES (?, ?, ?, ?)`,
-  ).run(DURABLE_RUNTIME_SQLITE_SCHEMA_NAME, DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION, now, metadata);
-}
-
-function getDurableRuntimeSchemaVersion(db: DatabaseSync): number {
-  const row = db
-    .prepare("SELECT * FROM durable_schema_migrations WHERE schema_name = ?")
-    .get(DURABLE_RUNTIME_SQLITE_SCHEMA_NAME) as DurableSchemaMigrationRow | undefined;
-  return Number(row?.version ?? 0);
 }
 
 function count(db: DatabaseSync, sql: string, values: SQLInputValue[] = []): number {
@@ -682,32 +366,15 @@ function isSameSqlValue(left: SQLInputValue | null, right: SQLInputValue | null)
   return left === right;
 }
 
-export function openDurableRuntimeSqliteStore(options?: {
+export function openDurableRuntimeSqliteStore(storeOptions?: {
   path?: string;
   env?: NodeJS.ProcessEnv;
 }): DurableRuntimeStore {
-  const env = options?.env ?? process.env;
-  const pathname = path.resolve(options?.path ?? resolveDurableRuntimeSqlitePath(env));
-  ensureOpenClawStatePermissions(pathname, env);
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname);
-  const walMaintenance = configureSqliteConnectionPragmas(db, {
-    busyTimeoutMs: DURABLE_RUNTIME_SQLITE_BUSY_TIMEOUT_MS,
-    databaseLabel: "openclaw-durable-runtime",
-    databasePath: pathname,
-    foreignKeys: true,
-    synchronous: "NORMAL",
-  });
-  try {
-    ensureDurableRuntimeSchema(db);
-    ensureOpenClawStatePermissions(pathname, env);
-  } catch (err) {
-    walMaintenance.close();
-    if (db.isOpen) {
-      db.close();
-    }
-    throw err;
-  }
+  const env = storeOptions?.env ?? process.env;
+  const pathname = path.resolve(storeOptions?.path ?? resolveDurableRuntimeSqlitePath(env));
+  const stateDatabase = openOpenClawStateDatabase({ env, path: pathname });
+  const db = stateDatabase.db;
+  let closed = false;
 
   return {
     createRun(input: CreateDurableRuntimeRunInput): DurableRuntimeRun {
@@ -1794,7 +1461,7 @@ export function openDurableRuntimeSqliteStore(options?: {
     getStats(): DurableRuntimeStoreStats {
       return {
         path: pathname,
-        schemaVersion: getDurableRuntimeSchemaVersion(db),
+        schemaVersion: OPENCLAW_STATE_SCHEMA_VERSION,
         runs: count(db, "SELECT COUNT(*) AS count FROM durable_runtime_runs"),
         events: count(db, "SELECT COUNT(*) AS count FROM durable_runtime_events"),
         steps: count(db, "SELECT COUNT(*) AS count FROM durable_runtime_steps"),
@@ -1806,10 +1473,11 @@ export function openDurableRuntimeSqliteStore(options?: {
     },
 
     close(): void {
-      walMaintenance.close();
-      if (db.isOpen) {
-        db.close();
+      if (closed) {
+        return;
       }
+      closed = true;
+      closeOpenClawStateDatabaseForPath({ env, path: pathname });
     },
   };
 }

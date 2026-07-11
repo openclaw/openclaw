@@ -64,13 +64,13 @@ afterEach(() => {
 });
 
 describe("resolveAgentRunLifecycleEndLogLevel", () => {
-  it("logs successful stop and tool-use metadata at info", () => {
+  it("logs tool-use metadata at info without logging successful stops", () => {
     expect(
       testing.resolveAgentRunLifecycleEndLogLevel({
         aborted: false,
         stopReason: "stop",
       }),
-    ).toBe("info");
+    ).toBeUndefined();
     expect(
       testing.resolveAgentRunLifecycleEndLogLevel({
         aborted: false,

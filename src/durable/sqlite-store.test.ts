@@ -4,11 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db.js";
 import { resolveDurableRuntimeSqlitePath } from "./config.js";
-import {
-  DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION,
-  openDurableRuntimeSqliteStore,
-} from "./sqlite-store.js";
+import { openDurableRuntimeSqliteStore } from "./sqlite-store.js";
 
 const DURABLE_TABLES = [
   "durable_runtime_events",
@@ -21,14 +19,14 @@ const DURABLE_TABLES = [
 ] as const;
 
 describe("durable runtime sqlite store", () => {
-  it("records the supported durable schema version", () => {
+  it("reports the shared state schema version", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
     const store = openDurableRuntimeSqliteStore({
       path: path.join(dir, "openclaw.sqlite"),
     });
     try {
       expect(store.getStats()).toMatchObject({
-        schemaVersion: DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION,
+        schemaVersion: OPENCLAW_STATE_SCHEMA_VERSION,
       });
     } finally {
       store.close();
@@ -36,32 +34,19 @@ describe("durable runtime sqlite store", () => {
     }
   });
 
-  it("rejects durable stores from a newer schema version", () => {
+  it("rejects durable stores from a newer shared state schema version", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
     const dbPath = path.join(dir, "openclaw.sqlite");
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(dbPath);
     try {
-      db.exec(`
-        CREATE TABLE durable_schema_migrations (
-          schema_name TEXT NOT NULL PRIMARY KEY,
-          version INTEGER NOT NULL,
-          applied_at INTEGER NOT NULL,
-          metadata_json TEXT
-        );
-      `);
-      db.prepare(
-        `INSERT INTO durable_schema_migrations (schema_name, version, applied_at, metadata_json)
-         VALUES (?, ?, ?, ?)`,
-      ).run("durable_runtime", DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION + 1, 100, null);
+      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
     } finally {
       db.close();
     }
 
     try {
-      expect(() => openDurableRuntimeSqliteStore({ path: dbPath })).toThrow(
-        /newer than supported version/,
-      );
+      expect(() => openDurableRuntimeSqliteStore({ path: dbPath })).toThrow(/newer schema version/);
       const verifyDb = new DatabaseSync(dbPath);
       try {
         const runtimeTables = verifyDb
@@ -81,31 +66,29 @@ describe("durable runtime sqlite store", () => {
     }
   });
 
-  it("upgrades a pre-durable shared state database without touching existing rows", () => {
+  it("opens a pre-durable shared state database without touching existing rows", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-upgrade-"));
     const dbPath = path.join(dir, "openclaw.sqlite");
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(dbPath);
     try {
       db.exec(`
-        CREATE TABLE schema_meta (
-          key TEXT NOT NULL PRIMARY KEY,
-          value TEXT NOT NULL
-        );
-        CREATE TABLE cron_jobs (
-          job_id TEXT NOT NULL PRIMARY KEY,
-          definition_json TEXT NOT NULL,
-          enabled INTEGER NOT NULL
+        CREATE TABLE diagnostic_events (
+          scope TEXT NOT NULL,
+          event_key TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (scope, event_key)
         );
       `);
-      db.prepare("INSERT INTO schema_meta (key, value) VALUES (?, ?)").run(
-        "openclaw_state_schema_version",
-        "2026.6.8",
-      );
-      db.prepare("INSERT INTO cron_jobs (job_id, definition_json, enabled) VALUES (?, ?, ?)").run(
-        "legacy-job",
+      db.prepare(
+        `INSERT INTO diagnostic_events (scope, event_key, payload_json, created_at)
+         VALUES (?, ?, ?, ?)`,
+      ).run(
+        "state",
+        "pre-durable",
         JSON.stringify({ schedule: "*/5 * * * *", task: "legacy" }),
-        1,
+        123,
       );
     } finally {
       db.close();
@@ -114,7 +97,7 @@ describe("durable runtime sqlite store", () => {
     const store = openDurableRuntimeSqliteStore({ path: dbPath });
     try {
       expect(store.getStats()).toMatchObject({
-        schemaVersion: DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION,
+        schemaVersion: OPENCLAW_STATE_SCHEMA_VERSION,
       });
       const run = store.createRun({
         operationKind: "openclaw.chat.send",
@@ -128,7 +111,7 @@ describe("durable runtime sqlite store", () => {
       store.appendEvent({
         runtimeRunId: run.runtimeRunId,
         eventType: "upgrade.smoke",
-        now: 100,
+        eventTime: 100,
       });
     } finally {
       store.close();
@@ -138,22 +121,24 @@ describe("durable runtime sqlite store", () => {
     try {
       expect(
         verifyDb
-          .prepare("SELECT value FROM schema_meta WHERE key = ?")
-          .get("openclaw_state_schema_version"),
-      ).toEqual({ value: "2026.6.8" });
-      expect(verifyDb.prepare("SELECT job_id, enabled FROM cron_jobs").all()).toEqual([
-        { job_id: "legacy-job", enabled: 1 },
-      ]);
-      const migration = verifyDb
-        .prepare(
-          "SELECT version, metadata_json FROM durable_schema_migrations WHERE schema_name = ?",
-        )
-        .get("durable_runtime") as { version: number; metadata_json: string };
-      expect(migration.version).toBe(DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION);
-      expect(JSON.parse(migration.metadata_json)).toMatchObject({
-        kind: "fresh-install",
-        previousVersion: 0,
+          .prepare(
+            `SELECT scope, event_key, payload_json, created_at
+               FROM diagnostic_events
+              WHERE scope = ?
+                AND event_key = ?`,
+          )
+          .get("state", "pre-durable"),
+      ).toEqual({
+        scope: "state",
+        event_key: "pre-durable",
+        payload_json: JSON.stringify({ schedule: "*/5 * * * *", task: "legacy" }),
+        created_at: 123,
       });
+      expect(
+        verifyDb
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+          .get("durable_schema_migrations"),
+      ).toBeUndefined();
       const runtimeTables = verifyDb
         .prepare(
           `SELECT name FROM sqlite_master
@@ -176,14 +161,6 @@ describe("durable runtime sqlite store", () => {
     const db = new DatabaseSync(dbPath);
     try {
       db.exec(`
-        CREATE TABLE durable_schema_migrations (
-          schema_name TEXT NOT NULL PRIMARY KEY,
-          version INTEGER NOT NULL,
-          applied_at INTEGER NOT NULL,
-          metadata_json TEXT
-        );
-        INSERT INTO durable_schema_migrations (schema_name, version, applied_at, metadata_json)
-          VALUES ('durable_runtime', ${DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION}, 100, '{"kind":"early-durable"}');
         CREATE TABLE durable_runtime_runs (
           runtime_run_id TEXT NOT NULL PRIMARY KEY,
           operation_kind TEXT NOT NULL,
@@ -1150,7 +1127,7 @@ describe("durable runtime sqlite store", () => {
             ORDER BY name`,
         )
         .all() as Array<{ name: string }>;
-      expect(durableTablesAfter.map((row) => row.name)).toEqual([...DURABLE_TABLES].sort());
+      expect(durableTablesAfter.map((row) => row.name)).toEqual([...DURABLE_TABLES].toSorted());
       expect(
         upgradedDb
           .prepare(

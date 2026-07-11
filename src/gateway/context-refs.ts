@@ -4,7 +4,7 @@ import { isDurableRuntimesEnabled } from "../durable/config.js";
 import { buildDurableIntakeEnvelope } from "../durable/intake-envelope.js";
 import { acceptDurableRuntimeIntake } from "../durable/intake.js";
 import { DURABLE_CHAT_SEND_OPERATION_KIND } from "../durable/runtime-ids.js";
-import { openDurableRuntimeStore } from "../durable/store-factory.js";
+import { openDurableRuntimeStore } from "../durable/runtime.js";
 
 export type GatewayContextRef = {
   type: string;
@@ -339,16 +339,7 @@ export function recordDurableChatSendFrontdoorIntake(params: {
 function mapChatSendTerminalStepStatus(
   status: ChatSendTerminalStatus,
 ): "succeeded" | "failed" | "cancelled" | "lost" {
-  switch (status) {
-    case "succeeded":
-      return "succeeded";
-    case "cancelled":
-      return "cancelled";
-    case "lost":
-      return "lost";
-    case "failed":
-      return "failed";
-  }
+  return status;
 }
 
 export function recordDurableChatSendTerminal(params: {

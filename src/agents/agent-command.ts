@@ -274,10 +274,13 @@ function resolveAgentRunLifecycleEndLogLevel(meta: {
     timeoutPhase: meta.timeoutPhase,
     providerStarted: meta.providerStarted,
   });
-  if (!outcome.stopReason || outcome.stopReason === "end_turn" || outcome.stopReason === "stop") {
+  if (!outcome.stopReason || outcome.stopReason === "end_turn") {
     return undefined;
   }
   if (outcome.reason === "completed") {
+    if (outcome.stopReason === "stop") {
+      return undefined;
+    }
     return "info";
   }
   return outcome.status === "timeout" ? "warn" : "error";

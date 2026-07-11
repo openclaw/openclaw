@@ -6,7 +6,7 @@ import {
   reconcileDurableChatSendsOnGatewayStartup,
   reconcileDurableSubagentRunsOnGatewayStartup,
 } from "./recovery.js";
-import { openDurableRuntimeStore } from "./store-factory.js";
+import { openDurableRuntimeStore } from "./runtime.js";
 
 const log = createSubsystemLogger("durable/runtimes");
 

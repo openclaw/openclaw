@@ -3,7 +3,7 @@ import {
   buildDurableCoordinationProjection,
   type DurableCoordinationProjection,
 } from "../durable/coordination-projection.js";
-import { openDurableRuntimeStore } from "../durable/store-factory.js";
+import { openDurableRuntimeStore } from "../durable/runtime.js";
 import type {
   DurableRuntimeEvent,
   DurableRuntimeLink,

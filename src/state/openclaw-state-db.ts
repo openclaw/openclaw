@@ -56,6 +56,7 @@ export type OpenClawStateDatabaseSchemaMigration = {
 };
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
+const cachedDatabaseRefCounts = new Map<string, number>();
 
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
 
@@ -936,6 +937,18 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
     repairLegacyTaskDeliveryStatuses(db);
   });
   ensureColumn(db, "subagent_runs", "task_name TEXT");
+  ensureColumn(db, "durable_runtime_runs", "parent_runtime_run_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "parent_step_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "message_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "turn_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "work_unit_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "report_route_id TEXT");
+  ensureColumn(db, "durable_runtime_runs", "claimed_by TEXT");
+  ensureColumn(db, "durable_runtime_runs", "claim_expires_at INTEGER");
+  ensureColumn(db, "durable_runtime_runs", "heartbeat_at INTEGER");
+  ensureColumn(db, "durable_runtime_steps", "claimed_by TEXT");
+  ensureColumn(db, "durable_runtime_steps", "claim_expires_at INTEGER");
+  ensureColumn(db, "durable_runtime_steps", "heartbeat_at INTEGER");
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {
@@ -984,6 +997,7 @@ export function openOpenClawStateDatabase(
   const pathname = resolveDatabasePath(options);
   const cached = cachedDatabases.get(pathname);
   if (cached?.db.isOpen) {
+    cachedDatabaseRefCounts.set(pathname, (cachedDatabaseRefCounts.get(pathname) ?? 1) + 1);
     return cached;
   }
   if (cached) {
@@ -991,6 +1005,7 @@ export function openOpenClawStateDatabase(
     cached.walMaintenance.close();
     clearNodeSqliteKyselyCacheForDatabase(cached.db);
     cachedDatabases.delete(pathname);
+    cachedDatabaseRefCounts.delete(pathname);
   }
 
   ensureOpenClawStatePermissions(pathname, env);
@@ -1017,6 +1032,7 @@ export function openOpenClawStateDatabase(
   ensureOpenClawStatePermissions(pathname, env);
   const database = { db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
+  cachedDatabaseRefCounts.set(pathname, 1);
   return database;
 }
 
@@ -1046,6 +1062,31 @@ export function closeOpenClawStateDatabase(): void {
     }
   }
   cachedDatabases.clear();
+  cachedDatabaseRefCounts.clear();
+}
+
+/** Close one cached shared state database handle resolved from the provided options. */
+export function closeOpenClawStateDatabaseForPath(
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  const pathname = resolveDatabasePath(options);
+  const database = cachedDatabases.get(pathname);
+  if (!database) {
+    return;
+  }
+  const refCount = cachedDatabaseRefCounts.get(pathname) ?? 1;
+  if (refCount > 1) {
+    cachedDatabaseRefCounts.set(pathname, refCount - 1);
+    database.walMaintenance.checkpoint();
+    return;
+  }
+  database.walMaintenance.close();
+  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  if (database.db.isOpen) {
+    database.db.close();
+  }
+  cachedDatabases.delete(pathname);
+  cachedDatabaseRefCounts.delete(pathname);
 }
 
 /** Test whether any cached shared state database handle is still open. */

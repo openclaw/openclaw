@@ -93,6 +93,55 @@ describe("openclaw state database", () => {
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
   });
 
+  it("creates durable runtime tables and indexes as shared state schema", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    const tables = database.db
+      .prepare(
+        `SELECT name
+           FROM sqlite_master
+          WHERE type = 'table'
+            AND name LIKE 'durable_%'
+          ORDER BY name`,
+      )
+      .all() as Array<{ name: string }>;
+    expect(tables.map((row) => row.name)).toEqual([
+      "durable_runtime_events",
+      "durable_runtime_links",
+      "durable_runtime_refs",
+      "durable_runtime_runs",
+      "durable_runtime_signals",
+      "durable_runtime_steps",
+      "durable_runtime_timers",
+    ]);
+    const indexes = database.db
+      .prepare(
+        `SELECT name
+           FROM sqlite_master
+          WHERE type = 'index'
+            AND name LIKE 'idx_durable_runtime_%'
+          ORDER BY name`,
+      )
+      .all() as Array<{ name: string }>;
+    expect(indexes.map((row) => row.name)).toEqual([
+      "idx_durable_runtime_events_type",
+      "idx_durable_runtime_links_child",
+      "idx_durable_runtime_refs_run",
+      "idx_durable_runtime_runs_idempotency",
+      "idx_durable_runtime_runs_report_route",
+      "idx_durable_runtime_runs_status",
+      "idx_durable_runtime_runs_work_unit",
+      "idx_durable_runtime_signals_idempotency",
+      "idx_durable_runtime_signals_pending",
+      "idx_durable_runtime_steps_idempotency",
+      "idx_durable_runtime_steps_status",
+      "idx_durable_runtime_timers_due",
+    ]);
+  });
+
   it("creates the bounded skill curator tables", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
@@ -857,6 +906,53 @@ describe("openclaw state database", () => {
         env: { OPENCLAW_STATE_DIR: stateDir },
       }),
     ).toThrow(/newer schema version 2/);
+  });
+
+  it("preserves existing rows when shared state adds durable runtime schema", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    db.exec(`
+      CREATE TABLE diagnostic_events (
+        scope TEXT NOT NULL,
+        event_key TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, event_key)
+      );
+    `);
+    db.prepare(
+      `INSERT INTO diagnostic_events (scope, event_key, payload_json, created_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run("state", "startup", '{"ok":true}', 123);
+    db.close();
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(
+      database.db
+        .prepare(
+          `SELECT scope, event_key, payload_json, created_at
+             FROM diagnostic_events
+            WHERE scope = ?
+              AND event_key = ?`,
+        )
+        .get("state", "startup"),
+    ).toEqual({
+      scope: "state",
+      event_key: "startup",
+      payload_json: '{"ok":true}',
+      created_at: 123,
+    });
+    expect(
+      database.db
+        .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get("durable_runtime_runs"),
+    ).toEqual({ ok: 1 });
   });
 
   it("does not chmod shared parent directories for explicit database paths", () => {
