@@ -83,6 +83,25 @@ function requestModelsList(params: {
 
 describe("models.list", () => {
   it("keeps source-authored provider inventory when the canonical catalog is missing", async () => {
+    const sourceProvider = {
+      baseUrl: "https://vllm.example/v1",
+      apiKey: {
+        source: "file",
+        provider: "mounted-json",
+        id: "/providers/vllm/apiKey",
+      },
+      models: [
+        {
+          id: "source-model",
+          name: "Source Model",
+          contextWindow: 128_000,
+          reasoning: true,
+          input: ["text", "image"],
+          params: { temperature: 0.2 },
+          compat: { supportsDeveloperRole: false },
+        },
+      ],
+    };
     const sourceConfig = {
       agents: {
         defaults: {
@@ -102,25 +121,7 @@ describe("models.list", () => {
       },
       models: {
         providers: {
-          vllm: {
-            baseUrl: "https://vllm.example/v1",
-            apiKey: {
-              source: "file",
-              provider: "mounted-json",
-              id: "/providers/vllm/apiKey",
-            },
-            models: [
-              {
-                id: "source-model",
-                name: "Source Model",
-                contextWindow: 128_000,
-                reasoning: true,
-                input: ["text", "image"],
-                params: { temperature: 0.2 },
-                compat: { supportsDeveloperRole: false },
-              },
-            ],
-          },
+          vllm: sourceProvider,
         },
       },
     } as unknown as OpenClawConfig;
@@ -129,7 +130,7 @@ describe("models.list", () => {
       models: {
         providers: {
           vllm: {
-            ...sourceConfig.models.providers.vllm,
+            ...sourceProvider,
             apiKey: "test-key",
             models: [{ id: "runtime-only", name: "Runtime Only" }],
           },
