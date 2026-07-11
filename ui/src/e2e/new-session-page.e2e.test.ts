@@ -101,7 +101,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.getByRole("heading", { name: "New session" }).waitFor();
       expect(new URL(page.url()).pathname.endsWith("/new")).toBe(true);
 
-      const folderInput = page.getByLabel("Folder");
+      const folderInput = page.getByRole("textbox", { name: "Folder", exact: true });
       await expect.poll(() => folderInput.inputValue()).toBe(WORKSPACE);
 
       // Browse from the workspace, descend one level, then adopt the folder.
