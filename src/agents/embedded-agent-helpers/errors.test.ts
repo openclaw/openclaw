@@ -4,7 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { formatAssistantErrorText, isLikelyContextOverflowError } from "./errors.js";
+import {
+  extractFailoverSignalDetails,
+  formatAssistantErrorText,
+  isLikelyContextOverflowError,
+} from "./errors.js";
 
 const { toolPolicyAuditInfo } = vi.hoisted(() => ({
   toolPolicyAuditInfo: vi.fn(),
@@ -95,6 +99,34 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
         sandboxMode: "non-main",
       },
     );
+  });
+});
+
+describe("extractFailoverSignalDetails", () => {
+  it("truncates long detail strings without splitting UTF-16 surrogate pairs", () => {
+    // Regression test for UTF-16 safe truncation. The failover classifier
+    // receives arbitrary provider error text that may contain emoji or other
+    // non-BMP characters; truncating at a fixed code-unit boundary can leave
+    // an unpaired surrogate and corrupt downstream string handling.
+    const emoji = "🎉"; // U+1F389, a UTF-16 surrogate pair (2 code units)
+    const message = "a".repeat(999) + emoji + "!";
+    expect(message).toHaveLength(1002);
+
+    const details = extractFailoverSignalDetails(new Error(message));
+    expect(details).toBeDefined();
+    expect(details).toHaveLength(1);
+
+    const detail = details![0];
+
+    // Raw .slice(0, 1000) would cut the surrogate pair, producing a lone high
+    // surrogate (0xD83C) at the end.
+    const rawSlice = message.slice(0, 1000);
+    expect(rawSlice).toHaveLength(1000);
+    expect(rawSlice.charCodeAt(rawSlice.length - 1)).toBe(0xd83c);
+
+    // truncateUtf16Safe backs up to the last complete code point.
+    expect(detail).toHaveLength(999);
+    expect(detail).toBe("a".repeat(999));
   });
 });
 
