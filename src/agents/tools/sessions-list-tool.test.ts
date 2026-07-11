@@ -46,6 +46,10 @@ type SessionsListDetails = {
     effectiveFastModeSource?: "session" | "agent" | "config" | "default";
     fastMode?: boolean | "auto";
     fastAutoOnSeconds?: number;
+    archived?: boolean;
+    archivedAt?: number;
+    pinned?: boolean;
+    pinnedAt?: number;
     reasoningLevel?: string;
     responseUsage?: string;
     thinkingLevel?: string;
@@ -206,6 +210,36 @@ describe("sessions-list-tool", () => {
     expect(session?.reasoningLevel).toBe("deep");
     expect(session?.elevatedLevel).toBe("on");
     expect(session?.responseUsage).toBe("full");
+  });
+
+  it("requests archived sessions and keeps management metadata", async () => {
+    mocks.gatewayCall.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [
+        {
+          key: "agent:main:dashboard:archived",
+          kind: "direct",
+          archived: true,
+          archivedAt: 20,
+          pinned: false,
+        },
+      ],
+    });
+    const tool = createSessionsListTool({ config: {} as never });
+
+    const result = await tool.execute("call-archived", { archived: true });
+
+    expect(mocks.gatewayCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.list",
+        params: expect.objectContaining({ archived: true }),
+      }),
+    );
+    expect(getSessionsListDetails(result).sessions?.[0]).toMatchObject({
+      archived: true,
+      archivedAt: 20,
+      pinned: false,
+    });
   });
 
   it.each([

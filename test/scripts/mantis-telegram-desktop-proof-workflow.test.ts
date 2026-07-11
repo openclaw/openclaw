@@ -260,7 +260,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       'const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";',
     );
     expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).not.toMatch(
-      /from "\.\.\/qa\/convex-credential-broker\/convex\/payload-validation\.js"/u,
+      /from "\.\.\/qa\/convex-credential-broker\/convex\/payload_validation\.js"/u,
     );
   });
 

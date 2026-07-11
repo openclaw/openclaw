@@ -70,7 +70,7 @@ import Testing
             to: "private var usesSidebarTabs: Bool")
         let selection = try Self.extract(
             source,
-            from: "private func selectSidebarDestination(_ destination: SidebarDestination)",
+            from: "private func selectSidebarDestination(",
             to: "private func showSidebar()")
         let resetRange = try #require(selection.range(of: "self.sidebarNavigationPath.removeAll()"))
         let destinationRange = try #require(selection.range(of: "self.selectedSidebarDestination = destination"))

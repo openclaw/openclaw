@@ -2,7 +2,7 @@
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
@@ -24,7 +24,11 @@ import {
 import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
 import {
   dispatchCronDeliveryMock,
+  loadSessionEntryMock,
+  makeCronSession,
   mockRunCronFallbackPassthrough,
+  resetRunCronIsolatedAgentTurnHarness,
+  resolveCronSessionMock,
   runEmbeddedAgentMock,
   updateSessionStoreMock,
 } from "./isolated-agent/run.test-harness.js";
@@ -32,6 +36,18 @@ import { normalizeCronJobCreate } from "./normalize.js";
 import type { CronJob } from "./types.js";
 
 setupRunCronIsolatedAgentTurnSuite();
+
+async function useRealCronSessionState(): Promise<void> {
+  const [sessionRuntime, storeRuntime] = await Promise.all([
+    vi.importActual<typeof import("./isolated-agent/session.js")>("./isolated-agent/session.js"),
+    vi.importActual<typeof import("../config/sessions/store.runtime.js")>(
+      "../config/sessions/store.runtime.js",
+    ),
+  ]);
+  resolveCronSessionMock.mockImplementation(sessionRuntime.resolveCronSession);
+  loadSessionEntryMock.mockImplementation(sessionRuntime.loadCronSessionEntryLatest);
+  updateSessionStoreMock.mockImplementation(storeRuntime.updateSessionStore);
+}
 
 function lastEmbeddedAgentCall(): {
   agentDir?: string;
@@ -61,6 +77,16 @@ function lastEmbeddedAgentCall(): {
 }
 
 describe("runCronIsolatedAgentTurn session identity", () => {
+  beforeAll(async () => {
+    resetRunCronIsolatedAgentTurnHarness();
+    resolveCronSessionMock.mockReturnValue(makeCronSession());
+    vi.spyOn(modelThinkingDefault, "resolveThinkingDefault").mockReturnValue("off");
+    mockRunCronFallbackPassthrough();
+    await withTempHome(async (home) => {
+      await runCronTurn(home, { jobPayload: DEFAULT_AGENT_TURN_PAYLOAD });
+    });
+  });
+
   beforeEach(() => {
     vi.spyOn(modelThinkingDefault, "resolveThinkingDefault").mockReturnValue("off");
     runEmbeddedAgentMock.mockClear();
@@ -214,7 +240,12 @@ describe("runCronIsolatedAgentTurn session identity", () => {
 
       const finalPersist = updateSessionStoreMock.mock.calls.at(-1);
       expect(finalPersist?.[0]).toBe(storePath);
-      const persistedStore: Record<string, { [key: string]: unknown }> = {};
+      // Replay the final persist against the real post-run store: the claim
+      // guard rejects writes into a store that never held the session.
+      const persistedStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { [key: string]: unknown }
+      >;
       (finalPersist![1] as (store: typeof persistedStore) => void)(persistedStore);
       expect(persistedStore[boundSessionKey]).toEqual(
         expect.objectContaining({
@@ -272,6 +303,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
   });
 
   it("starts a fresh session id for each cron run", async () => {
+    await useRealCronSessionState();
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = makeDeps();
@@ -297,6 +329,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
   });
 
   it("preserves an existing cron session label", async () => {
+    await useRealCronSessionState();
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const raw = await fs.readFile(storePath, "utf-8");

@@ -14,13 +14,29 @@ const probeGatewayReachable = vi.hoisted(() =>
 const waitForGatewayReachable = vi.hoisted(() =>
   vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
 );
+const resolveAdvertisedControlUiLinks = vi.hoisted(() =>
+  vi.fn(async () => ({
+    httpUrl: "http://127.0.0.1:18789",
+    wsUrl: "ws://127.0.0.1:18789",
+  })),
+);
+const resolveLocalControlUiProbeLinks = vi.hoisted(() =>
+  vi.fn(() => ({
+    httpUrl: "http://127.0.0.1:18789",
+    wsUrl: "ws://127.0.0.1:18789",
+  })),
+);
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
+const resolveDefaultModelAuthStatus = vi.hoisted(() =>
+  vi.fn(() => ({ provider: "anthropic", model: "claude-opus-4-8", hasAuth: true })),
+);
 const buildGatewayInstallPlan = vi.hoisted(() =>
   vi.fn(async () => ({
     programArguments: [],
     workingDirectory: "/tmp",
     environment: {},
+    environmentValueSources: {},
   })),
 );
 const gatewayServiceInstall = vi.hoisted(() => vi.fn(async () => {}));
@@ -73,17 +89,38 @@ const startGatewayServer = vi.hoisted(() =>
     close: vi.fn(async () => {}),
   })),
 );
+const inspectWindowsGatewayFirewall = vi.hoisted(() =>
+  vi.fn<() => Promise<unknown>>(async () => ({
+    applies: false,
+    severity: "info",
+    code: "windows_firewall_not_applicable",
+    message: "Windows LAN firewall diagnostics do not apply.",
+    details: [],
+  })),
+);
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
   formatControlUiSshHint: vi.fn(() => "ssh hint"),
   openUrl: vi.fn(async () => false),
   probeGatewayReachable,
+  resolveAdvertisedControlUiLinks,
   resolveControlUiLinks: vi.fn(() => ({
     httpUrl: "http://127.0.0.1:18789",
     wsUrl: "ws://127.0.0.1:18789",
   })),
+  resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
+}));
+
+vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
+  inspectWindowsGatewayFirewall,
+  formatWindowsGatewayFirewallGuidance: (params: { bind?: string }) =>
+    params.bind === "lan"
+      ? [
+          "Windows firewall: if another device cannot connect to the LAN URL, run `openclaw gateway status --deep` from this Windows host.",
+        ]
+      : [],
 }));
 
 vi.mock("../commands/daemon-install-helpers.js", () => ({
@@ -171,6 +208,13 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({
 
 vi.mock("../tui/tui-launch.js", () => ({
   launchTuiCli,
+}));
+
+vi.mock("../commands/auth-choice.js", () => ({
+  applyAuthChoice: vi.fn(),
+  resolveDefaultModelAuthStatus,
+  resolvePreferredProviderForAuthChoice: vi.fn(),
+  warnIfModelConfigLooksOff: vi.fn(),
 }));
 
 vi.mock("./setup.secret-input.js", () => ({
@@ -323,6 +367,16 @@ describe("finalizeSetupWizard", () => {
     probeGatewayReachable.mockResolvedValue({ ok: false, detail: "offline" });
     waitForGatewayReachable.mockReset();
     waitForGatewayReachable.mockResolvedValue({ ok: true });
+    resolveAdvertisedControlUiLinks.mockReset();
+    resolveAdvertisedControlUiLinks.mockResolvedValue({
+      httpUrl: "http://127.0.0.1:18789",
+      wsUrl: "ws://127.0.0.1:18789",
+    });
+    resolveLocalControlUiProbeLinks.mockReset();
+    resolveLocalControlUiProbeLinks.mockReturnValue({
+      httpUrl: "http://127.0.0.1:18789",
+      wsUrl: "ws://127.0.0.1:18789",
+    });
     setupWizardShellCompletion.mockClear();
     healthCommand.mockReset();
     healthCommand.mockResolvedValue(undefined);
@@ -354,6 +408,14 @@ describe("finalizeSetupWizard", () => {
     isContainerEnvironment.mockReturnValue(false);
     startGatewayServer.mockReset();
     startGatewayServer.mockResolvedValue({ close: vi.fn(async () => {}) });
+    inspectWindowsGatewayFirewall.mockReset();
+    inspectWindowsGatewayFirewall.mockResolvedValue({
+      applies: false,
+      severity: "info",
+      code: "windows_firewall_not_applicable",
+      message: "Windows LAN firewall diagnostics do not apply.",
+      details: [],
+    });
   });
 
   it("resolves gateway password SecretRef for probe but omits auth from TUI hatch", async () => {
@@ -439,6 +501,80 @@ describe("finalizeSetupWizard", () => {
     );
   });
 
+  it("advertises LAN Control UI links while probing the local gateway", async () => {
+    resolveAdvertisedControlUiLinks.mockResolvedValueOnce({
+      httpUrl: "http://10.211.55.3:18789/",
+      wsUrl: "ws://10.211.55.3:18789",
+    });
+    resolveLocalControlUiProbeLinks.mockReturnValue({
+      httpUrl: "http://127.0.0.1:18789/",
+      wsUrl: "ws://127.0.0.1:18789",
+    });
+    const prompter = createLaterPrompter();
+    const args = createAdvancedFinalizeArgs({
+      nextConfig: {
+        gateway: {
+          bind: "lan",
+        },
+      },
+      prompter,
+    });
+
+    await finalizeSetupWizard({
+      ...args,
+      opts: {
+        ...args.opts,
+        skipHealth: false,
+        skipUi: false,
+      },
+      settings: {
+        ...args.settings,
+        bind: "lan",
+      },
+    });
+
+    expect(resolveAdvertisedControlUiLinks).toHaveBeenCalledWith(
+      expect.objectContaining({ bind: "lan", port: 18789 }),
+    );
+    expect(waitForGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
+    expectNoteContains(prompter, "http://10.211.55.3:18789/", "Control UI");
+    expectNoteContains(prompter, "ws://10.211.55.3:18789", "Control UI");
+  });
+
+  it("shows static Windows Firewall guidance for LAN Control UI links without inspection", async () => {
+    const prompter = createLaterPrompter();
+    const args = createAdvancedFinalizeArgs({
+      nextConfig: {
+        gateway: {
+          bind: "lan",
+        },
+      },
+      prompter,
+    });
+
+    await finalizeSetupWizard({
+      ...args,
+      opts: {
+        ...args.opts,
+        skipHealth: false,
+        skipUi: false,
+      },
+      settings: {
+        ...args.settings,
+        bind: "lan",
+      },
+    });
+
+    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+    expectNoteContains(
+      prompter,
+      "Windows firewall: if another device cannot connect to the LAN URL",
+      "Control UI",
+    );
+  });
+
   it("bounds the bootstrap hatch TUI run timeout", async () => {
     vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
     const select = vi.fn(async (params: { message: string }) => {
@@ -484,6 +620,61 @@ describe("finalizeSetupWizard", () => {
         timeoutMs: 300_000,
       },
       {},
+    );
+  });
+
+  it("skips the doomed hatch seed message and warns when model auth is missing", async () => {
+    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
+    resolveDefaultModelAuthStatus.mockReturnValueOnce({
+      provider: "openai",
+      model: "gpt-5.5",
+      hasAuth: false,
+    });
+    const prompter = buildWizardPrompter({
+      confirm: vi.fn(async () => false),
+    });
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: true,
+        skipUi: false,
+      },
+      baseConfig: {},
+      nextConfig: {
+        agents: {
+          list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: undefined,
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }), {});
+    expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agents: {
+          list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+        },
+      }),
+      { agentDir: "/tmp/custom-agent" },
+    );
+    expectNoteContains(
+      prompter,
+      'No credentials are configured for provider "openai"',
+      "Model auth missing",
     );
   });
 
@@ -673,6 +864,16 @@ describe("finalizeSetupWizard", () => {
       confirm: vi.fn(async () => false),
     });
     const runtime = createRuntime();
+    buildGatewayInstallPlan.mockResolvedValueOnce({
+      programArguments: [],
+      workingDirectory: "/tmp",
+      environment: {
+        DISCORD_BOT_TOKEN: "discord-test-token",
+      },
+      environmentValueSources: {
+        DISCORD_BOT_TOKEN: "file",
+      },
+    });
 
     await finalizeSetupWizard({
       flow: "advanced",
@@ -712,7 +913,13 @@ describe("finalizeSetupWizard", () => {
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
     expectFirstOnboardingInstallPlanCallOmitsToken();
-    expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);
+    expect(gatewayServiceInstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentValueSources: {
+          DISCORD_BOT_TOKEN: "file",
+        },
+      }),
+    );
   });
 
   it("suppresses token-bearing onboarding output when requested", async () => {

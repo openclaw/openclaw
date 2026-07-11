@@ -228,6 +228,14 @@ describe("inworldTTS", () => {
     );
   });
 
+  it("keeps truncated HTTP error bodies UTF-16 safe", async () => {
+    queueGuardedResponse(new Response(`${"e".repeat(399)}😀tail`, { status: 400 }));
+
+    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toMatchObject({
+      message: `Inworld TTS API error (400): ${"e".repeat(399)}…`,
+    });
+  });
+
   it("throws on in-stream errors", async () => {
     const body = JSON.stringify({
       error: { code: 3, message: "Invalid voice ID" },
@@ -249,11 +257,11 @@ describe("inworldTTS", () => {
   });
 
   it("throws descriptive error on non-JSON line in stream", async () => {
-    queueGuardedResponse(new Response("<html>Rate limited</html>", { status: 200 }));
+    queueGuardedResponse(new Response(`${"p".repeat(79)}😀tail`, { status: 200 }));
 
-    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow(
-      "Inworld TTS stream parse error: unexpected non-JSON line:",
-    );
+    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toMatchObject({
+      message: `Inworld TTS stream parse error: unexpected non-JSON line: ${"p".repeat(79)}`,
+    });
   });
 
   it("sends correct request body with defaults", async () => {
@@ -475,8 +483,10 @@ describe("Inworld response read bounding", () => {
     ]);
   });
 
-  it("regression: malformed voices JSON under the cap still throws", async () => {
+  it("regression: malformed voices JSON under the cap throws descriptive error", async () => {
     queueGuardedResponse(new Response("{not-json", { status: 200 }));
-    await expect(listInworldVoices({ apiKey: "test-key" })).rejects.toThrow();
+    await expect(listInworldVoices({ apiKey: "test-key" })).rejects.toThrow(
+      "Inworld voices API returned malformed JSON",
+    );
   });
 });

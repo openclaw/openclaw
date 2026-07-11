@@ -4,7 +4,7 @@ import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtim
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import { resolveTelegramTransport } from "./fetch.js";
-import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import {
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS,
@@ -15,36 +15,59 @@ import type {
   TelegramIngressWorkerMessage,
   TelegramIngressWorkerOptions,
 } from "./telegram-ingress-worker.js";
+import { TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER } from "./telegram-ingress-worker.js";
 
-const options = workerData as TelegramIngressWorkerOptions;
 const pollLimit = 100;
 // getUpdates can return up to 100 updates; 4 MiB is a generous bound that no legitimate
 // Telegram Bot API response will reach, guarding against misbehaving/hostile endpoints.
 const TELEGRAM_GET_UPDATES_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const retryInitialMs = 1000;
 const retryMaxMs = 30_000;
-let stopped = false;
-let activeController: AbortController | undefined;
-let nextSpoolRequestId = 0;
-const pendingSpoolRequests = new Map<
+
+type TelegramGetUpdatesJson = {
+  ok?: unknown;
+  error_code?: unknown;
+  result?: unknown;
+  description?: unknown;
+  parameters?: unknown;
+};
+
+type PendingSpoolRequests = Map<
   string,
   {
     resolve(updateId: number): void;
     reject(err: Error): void;
   }
->();
+>;
 
-function post(message: TelegramIngressWorkerMessage): void {
-  if (parentPort) {
-    Reflect.apply(Reflect.get(parentPort, "postMessage") as (value: unknown) => void, parentPort, [
-      message,
-    ]);
+type TelegramIngressRuntimePort = {
+  postMessage(message: TelegramIngressWorkerMessage): void;
+  onMessage(listener: (message: TelegramIngressWorkerCommand) => void): void;
+  close(): void;
+};
+
+type TelegramIngressRuntimeDeps = {
+  fetch?: typeof fetch;
+  closeTransport?: () => Promise<void>;
+};
+
+type TelegramIngressWorkerRuntimeData = TelegramIngressWorkerOptions & {
+  runtime: typeof TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER;
+};
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.resolve();
   }
-}
-
-function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+    const done = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const timeout = setTimeout(done, ms);
+    timeout.unref?.();
+    signal.addEventListener("abort", done, { once: true });
   });
 }
 
@@ -65,9 +88,9 @@ function readTelegramErrorCode(err: unknown): number | undefined {
   return undefined;
 }
 
-function postPollError(err: unknown): void {
+function postPollError(port: TelegramIngressRuntimePort, err: unknown): void {
   const errorCode = readTelegramErrorCode(err);
-  post({
+  port.postMessage({
     type: "poll-error",
     message: formatErrorMessage(err),
     ...(errorCode === undefined ? {} : { errorCode }),
@@ -79,60 +102,33 @@ function resolveBackoff(attempt: number): number {
   return Math.min(retryMaxMs, retryInitialMs * 2 ** Math.max(0, attempt - 1));
 }
 
-function rejectPendingSpoolRequests(err: Error): void {
+function createTelegramGetUpdatesError(params: {
+  message: string;
+  errorCode?: number;
+  parameters?: unknown;
+}): Error {
+  return Object.assign(
+    new Error(params.message),
+    params.errorCode === undefined ? {} : { error_code: params.errorCode },
+    params.parameters === undefined ? {} : { parameters: params.parameters },
+  );
+}
+
+function rejectPendingSpoolRequests(pendingSpoolRequests: PendingSpoolRequests, err: Error): void {
   for (const pending of pendingSpoolRequests.values()) {
     pending.reject(err);
   }
   pendingSpoolRequests.clear();
 }
 
-parentPort?.on("message", (message: TelegramIngressWorkerCommand) => {
-  if (message?.type === "stop") {
-    stopped = true;
-    const err = new Error("telegram ingress worker stopped");
-    activeController?.abort(err);
-    rejectPendingSpoolRequests(err);
-    return;
-  }
-  if (message?.type !== "spool-ack") {
-    return;
-  }
-  const pending = pendingSpoolRequests.get(message.requestId);
-  if (!pending) {
-    return;
-  }
-  pendingSpoolRequests.delete(message.requestId);
-  if (message.result.ok) {
-    pending.resolve(message.result.updateId);
-    return;
-  }
-  pending.reject(new Error(message.result.message));
-});
-
-async function requestSpoolUpdate(params: { update: unknown; queued: number }): Promise<number> {
-  if (!parentPort) {
-    throw new Error("Telegram ingress worker missing parent port.");
-  }
-  const requestId = String(++nextSpoolRequestId);
-  const updateId = await new Promise<number>((resolve, reject) => {
-    pendingSpoolRequests.set(requestId, { resolve, reject });
-    post({
-      type: "update",
-      requestId,
-      update: params.update,
-      queued: params.queued,
-    });
-  });
-  return updateId;
-}
-
 async function fetchJson(params: {
   fetch: typeof fetch;
   url: string;
   body: unknown;
+  setActiveController(controller: AbortController | undefined): void;
 }): Promise<unknown> {
   const controller = new AbortController();
-  activeController = controller;
+  params.setActiveController(controller);
   const timeout = setTimeout(() => {
     controller.abort(new Error("Telegram getUpdates timed out"));
   }, TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS);
@@ -144,16 +140,21 @@ async function fetchJson(params: {
       body: JSON.stringify(params.body),
       signal: controller.signal,
     });
-    const json = JSON.parse(
-      (await readResponseWithLimit(response, TELEGRAM_GET_UPDATES_MAX_RESPONSE_BYTES)).toString(
-        "utf8",
-      ),
-    ) as {
-      ok?: unknown;
-      error_code?: unknown;
-      result?: unknown;
-      description?: unknown;
-    };
+    const raw = (
+      await readResponseWithLimit(response, TELEGRAM_GET_UPDATES_MAX_RESPONSE_BYTES)
+    ).toString("utf8");
+    let json: TelegramGetUpdatesJson;
+    try {
+      json = JSON.parse(raw) as TelegramGetUpdatesJson;
+    } catch (err) {
+      if (!response.ok) {
+        throw createTelegramGetUpdatesError({
+          message: `Telegram getUpdates failed with HTTP ${response.status}`,
+          errorCode: response.status,
+        });
+      }
+      throw err;
+    }
     if (!response.ok || json.ok !== true) {
       const message =
         typeof json.description === "string"
@@ -162,28 +163,84 @@ async function fetchJson(params: {
       // Preserve the Bot API error_code across the worker boundary so the
       // parent session can distinguish getUpdates conflicts (409) from fatal
       // errors (401) without parsing description strings.
-      throw typeof json.error_code === "number"
-        ? Object.assign(new Error(message), { error_code: json.error_code })
-        : new Error(message);
+      throw createTelegramGetUpdatesError({
+        message,
+        errorCode: typeof json.error_code === "number" ? json.error_code : response.status,
+        parameters: json.parameters,
+      });
     }
     return json.result;
   } finally {
     clearTimeout(timeout);
-    if (activeController === controller) {
-      activeController = undefined;
-    }
+    params.setActiveController(undefined);
   }
 }
 
-async function main(): Promise<void> {
+export async function runTelegramIngressWorkerRuntime(params: {
+  options: TelegramIngressWorkerOptions;
+  port: TelegramIngressRuntimePort;
+  deps?: TelegramIngressRuntimeDeps;
+}): Promise<void> {
+  const { options, port } = params;
+  const stopController = new AbortController();
+  let stopped = false;
+  let activeController: AbortController | undefined;
+  let nextSpoolRequestId = 0;
+  const pendingSpoolRequests: PendingSpoolRequests = new Map();
   const proxyFetch = options.proxy ? makeProxyFetch(options.proxy) : undefined;
-  const transport = resolveTelegramTransport(proxyFetch, { network: options.network });
-  const fetchImpl = transport.fetch ?? globalThis.fetch;
+  const transport =
+    params.deps?.fetch === undefined
+      ? resolveTelegramTransport(proxyFetch, { network: options.network })
+      : undefined;
+  const fetchImpl = params.deps?.fetch ?? transport?.fetch ?? globalThis.fetch;
+  const closeTransport =
+    params.deps?.closeTransport ?? (() => transport?.close() ?? Promise.resolve());
   const apiRoot = normalizeTelegramApiRoot(options.apiRoot ?? "https://api.telegram.org");
   const getUpdatesUrl = `${apiRoot}/bot${options.token}/getUpdates`;
   const pollTimeoutSeconds = resolveTelegramLongPollTimeoutSeconds(options.timeoutSeconds);
   let lastUpdateId = options.initialUpdateId;
   let failures = 0;
+
+  port.onMessage((message) => {
+    if (message?.type === "stop") {
+      stopped = true;
+      const err = new Error("telegram ingress worker stopped");
+      stopController.abort(err);
+      activeController?.abort(err);
+      rejectPendingSpoolRequests(pendingSpoolRequests, err);
+      return;
+    }
+    if (message?.type !== "spool-ack") {
+      return;
+    }
+    const pending = pendingSpoolRequests.get(message.requestId);
+    if (!pending) {
+      return;
+    }
+    pendingSpoolRequests.delete(message.requestId);
+    if (message.result.ok) {
+      pending.resolve(message.result.updateId);
+      return;
+    }
+    pending.reject(new Error(message.result.message));
+  });
+
+  const requestSpoolUpdate = async (requestParams: {
+    update: unknown;
+    queued: number;
+  }): Promise<number> => {
+    const requestId = String(++nextSpoolRequestId);
+    const updateId = await new Promise<number>((resolve, reject) => {
+      pendingSpoolRequests.set(requestId, { resolve, reject });
+      port.postMessage({
+        type: "update",
+        requestId,
+        update: requestParams.update,
+        queued: requestParams.queued,
+      });
+    });
+    return updateId;
+  };
 
   try {
     for (;;) {
@@ -192,7 +249,7 @@ async function main(): Promise<void> {
       }
       const offset = lastUpdateId === null ? null : lastUpdateId + 1;
       const startedAt = Date.now();
-      post({ type: "poll-start", offset, startedAt });
+      port.postMessage({ type: "poll-start", offset, startedAt });
       try {
         const result = await fetchJson({
           fetch: fetchImpl,
@@ -202,6 +259,9 @@ async function main(): Promise<void> {
             limit: pollLimit,
             allowed_updates: resolveTelegramAllowedUpdates(),
             ...(offset === null ? {} : { offset }),
+          },
+          setActiveController(controller) {
+            activeController = controller;
           },
         });
         if (!Array.isArray(result)) {
@@ -215,10 +275,10 @@ async function main(): Promise<void> {
           if (lastUpdateId === null || updateId > lastUpdateId) {
             lastUpdateId = updateId;
           }
-          post({ type: "spooled", updateId, queued: result.length });
+          port.postMessage({ type: "spooled", updateId, queued: result.length });
         }
         failures = 0;
-        post({
+        port.postMessage({
           type: "poll-success",
           offset,
           count: result.length,
@@ -229,24 +289,67 @@ async function main(): Promise<void> {
           break;
         }
         failures += 1;
-        postPollError(err);
-        if (!isRecoverableTelegramNetworkError(err, { context: "polling" })) {
+        postPollError(port, err);
+        // 409 must propagate to the parent: it owns duplicate-poller/webhook
+        // conflict recovery. Transient Bot API errors stay local to this worker.
+        if (!isRetryableTelegramApiError(err, { context: "polling" })) {
           throw err;
         }
-        await sleep(resolveBackoff(failures));
+        await sleep(
+          readTelegramRetryAfterMs(err) ?? resolveBackoff(failures),
+          stopController.signal,
+        );
       }
     }
   } finally {
-    await transport.close();
+    await closeTransport();
   }
 }
 
-main()
-  .then(() => {
-    parentPort?.close();
-  })
-  .catch((err: unknown) => {
-    postPollError(err);
-    parentPort?.close();
-    process.exitCode = stopped ? 0 : 1;
+const workerPort = parentPort;
+const runtimePort =
+  workerPort === null
+    ? null
+    : ({
+        postMessage(message) {
+          Reflect.apply(
+            Reflect.get(workerPort, "postMessage") as (value: unknown) => void,
+            workerPort,
+            [message],
+          );
+        },
+        onMessage(listener) {
+          workerPort.on("message", listener);
+        },
+        close() {
+          workerPort.close();
+        },
+      } satisfies TelegramIngressRuntimePort);
+const runtimeOptions =
+  workerData &&
+  typeof workerData === "object" &&
+  "runtime" in workerData &&
+  workerData.runtime === TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER
+    ? (workerData as TelegramIngressWorkerRuntimeData)
+    : null;
+
+if (runtimePort && runtimeOptions) {
+  let exitedAfterStop = false;
+  runtimePort.onMessage((message) => {
+    if (message?.type === "stop") {
+      exitedAfterStop = true;
+    }
   });
+  runTelegramIngressWorkerRuntime({
+    options: runtimeOptions,
+    port: runtimePort,
+  })
+    .then(() => {
+      runtimePort.close();
+    })
+    .catch((err: unknown) => {
+      postPollError(runtimePort, err);
+      runtimePort.close();
+      process.exitCode = exitedAfterStop ? 0 : 1;
+    });
+}

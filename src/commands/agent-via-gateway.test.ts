@@ -234,6 +234,7 @@ let zeroTimeoutGatewayRequestMs: number | undefined;
 
 function resetAgentCliCommandMocksForTest() {
   vi.clearAllMocks();
+  vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
   agentViaGatewayTesting.resetLazyImportsForTests();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
   loadAgentSessionModuleMock.mockImplementation(async () => await import("./agent/session.js"));
@@ -247,6 +248,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests();
   loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
 });
@@ -290,7 +292,42 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("uses gateway by default", async () => {
+  it("uses owner authority with the configured local gateway by default", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      expect(request.clientName).toBe("cli");
+      expect(request.mode).toBe("cli");
+      expect(request.scopes).toEqual(["operator.admin"]);
+      expect(request.params).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(agentModuleLoadCount).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith("hello");
+    });
+  });
+
+  it.each([
+    {
+      label: "configured remote gateway",
+      overrides: {
+        gateway: {
+          mode: "remote" as const,
+          remote: { url: "wss://gateway.example" },
+        },
+      },
+    },
+    {
+      label: "gateway URL override",
+      gatewayUrl: "wss://gateway-override.example",
+    },
+  ])("keeps ordinary $label runs least-privilege", async ({ gatewayUrl, overrides }) => {
+    if (gatewayUrl) {
+      vi.stubEnv("OPENCLAW_GATEWAY_URL", gatewayUrl);
+    }
     await withTempStore(async () => {
       mockGatewaySuccessReply();
 
@@ -301,11 +338,7 @@ describe("agentCliCommand", () => {
       expect(request.clientName).toBe("cli");
       expect(request.mode).toBe("cli");
       expect(request).not.toHaveProperty("scopes");
-      expect(request.params).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(agentModuleLoadCount).not.toHaveBeenCalled();
-      expect(runtime.log).toHaveBeenCalledWith("hello");
-    });
+    }, overrides);
   });
 
   it("reads a UTF-8 message file for gateway dispatch", async () => {
@@ -436,6 +469,40 @@ describe("agentCliCommand", () => {
       expect(agentCommand).not.toHaveBeenCalled();
       expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
     });
+  });
+
+  it("defers explicit recipient session routing to the Gateway", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand(
+          {
+            message: "hi",
+            agent: "ops",
+            channel: "whatsapp",
+            to: "+15551234567",
+          },
+          runtime,
+        );
+
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params).toMatchObject({
+          agentId: "ops",
+          channel: "whatsapp",
+          to: "+15551234567",
+        });
+        expect(params.sessionKey).toBeUndefined();
+      },
+      {
+        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        session: { dmScope: "per-channel-peer" },
+      },
+    );
   });
 
   it("retries gateway dispatch with shell env fallback only when credentials need it", async () => {
@@ -836,6 +903,88 @@ describe("agentCliCommand", () => {
       expect(signals.listenerCount("SIGTERM")).toBe(0);
       expect(signals.listenerCount("SIGINT")).toBe(0);
     });
+  });
+
+  it("aborts deferred recipient routing by idempotency key before the accepted ack", async () => {
+    await withTempStore(
+      async () => {
+        const signals = createSignalProcess();
+        let sameConnectionAbort:
+          | { method: string; params: unknown; opts?: { timeoutMs?: number | null } }
+          | undefined;
+        callGateway.mockImplementation(async (requestValue: unknown) => {
+          const request = requireRecord(requestValue, "gateway request");
+          if (request.method === "agent") {
+            const params = requireRecord(request.params, "gateway agent params");
+            expect(params).toMatchObject({
+              agentId: "ops",
+              channel: "whatsapp",
+              to: "+15551234567",
+              idempotencyKey: "recipient-pre-accepted-run",
+            });
+            expect(params.sessionKey).toBeUndefined();
+            const onSignalAbort = request.onSignalAbort as
+              | ((
+                  request: (
+                    method: string,
+                    params?: unknown,
+                    opts?: { timeoutMs?: number | null },
+                  ) => Promise<unknown>,
+                ) => Promise<void>)
+              | undefined;
+            const signal = request.signal as AbortSignal | undefined;
+            return await new Promise((_, reject) => {
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  void (async () => {
+                    await onSignalAbort?.(async (method, paramsResult, opts) => {
+                      sameConnectionAbort = { method, params: paramsResult, opts };
+                      return {
+                        ok: true,
+                        aborted: true,
+                        runIds: ["recipient-pre-accepted-run"],
+                      };
+                    });
+                    const err = new Error("gateway recipient routing aborted before accepted ack");
+                    err.name = "AbortError";
+                    reject(err);
+                  })();
+                },
+                { once: true },
+              );
+            });
+          }
+          throw new Error(`unexpected gateway method ${String(request.method)}`);
+        });
+
+        const run = agentCliCommand(
+          {
+            message: "hi",
+            agent: "ops",
+            channel: "whatsapp",
+            to: "+15551234567",
+            runId: "recipient-pre-accepted-run",
+          },
+          runtime,
+          { process: signals.processLike },
+        );
+        await waitForGatewayCall();
+        signals.emit("SIGTERM");
+
+        await run;
+        expect(runtime.exit).toHaveBeenCalledWith(143);
+        expect(sameConnectionAbort?.method).toBe("chat.abort");
+        expect(sameConnectionAbort?.params).toEqual({
+          sessionKey: "agent:ops:main",
+          runId: "recipient-pre-accepted-run",
+        });
+      },
+      {
+        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        session: { dmScope: "per-channel-peer" },
+      },
+    );
   });
 
   it("skips fallback abort when SIGTERM interrupts before the gateway request starts", async () => {

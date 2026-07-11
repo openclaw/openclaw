@@ -1,7 +1,8 @@
 // Control UI module implements main behavior.
 import "./styles.css";
-import "./ui/app.ts";
-import { inferControlUiPublicAssetPath } from "./ui/public-assets.ts";
+import "./app/app-host.ts";
+import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
+import { CONTROL_UI_BUILD_INFO } from "./build-info.ts";
 
 type ViteImportMeta = ImportMeta & {
   readonly env?: {
@@ -9,10 +10,8 @@ type ViteImportMeta = ImportMeta & {
   };
 };
 
-declare const OPENCLAW_CONTROL_UI_BUILD_ID: string | undefined;
-
 const isProd = (import.meta as ViteImportMeta).env?.PROD === true;
-const currentControlUiBuildId = OPENCLAW_CONTROL_UI_BUILD_ID || "dev";
+const currentControlUiBuildId = CONTROL_UI_BUILD_INFO.buildId;
 
 syncDocumentPublicAssetLinks();
 

@@ -19,6 +19,10 @@ enum GatewayLaunchAgentManager {
             .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
     }
 
+    private static var generatedEnvironmentDirectoryURL: URL {
+        OpenClawPaths.stateDirURL.appendingPathComponent("service-env", isDirectory: true)
+    }
+
     static func isLaunchAgentWriteDisabled() -> Bool {
         if FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path) { return true }
         return false
@@ -59,6 +63,11 @@ enum GatewayLaunchAgentManager {
         return loaded
     }
 
+    static func runningGatewayPID() async -> Int32? {
+        guard let service = await self.readDaemonService() else { return nil }
+        return self.runningGatewayPID(from: service)
+    }
+
     static func set(enabled: Bool, bundlePath: String, port: Int) async -> String? {
         _ = bundlePath
         guard !CommandResolver.connectionModeIsRemote() else {
@@ -91,7 +100,12 @@ enum GatewayLaunchAgentManager {
     }
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
-        LaunchAgentPlist.snapshot(url: self.plistURL)
+        let directory = self.generatedEnvironmentDirectoryURL
+        return LaunchAgentPlist.snapshot(
+            url: self.plistURL,
+            generatedEnvironmentFileURL: directory.appendingPathComponent("\(gatewayLaunchdLabel).env"),
+            generatedEnvironmentWrapperURL: directory.appendingPathComponent(
+                "\(gatewayLaunchdLabel)-env-wrapper.sh"))
     }
 
     static func launchdGatewayLogPath() -> String {
@@ -112,6 +126,10 @@ enum GatewayLaunchAgentManager {
 
 extension GatewayLaunchAgentManager {
     private static func readDaemonLoaded() async -> Bool? {
+        await self.readDaemonService()?["loaded"] as? Bool
+    }
+
+    private static func readDaemonService() async -> [String: Any]? {
         let result = await self.runDaemonCommandResult(
             ["status", "--json", "--no-probe"],
             timeout: 15,
@@ -119,12 +137,24 @@ extension GatewayLaunchAgentManager {
         guard result.success, let payload = result.payload else { return nil }
         guard
             let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
-            let service = json["service"] as? [String: Any],
-            let loaded = service["loaded"] as? Bool
+            let service = json["service"] as? [String: Any]
         else {
             return nil
         }
-        return loaded
+        return service
+    }
+
+    private static func runningGatewayPID(from service: [String: Any]) -> Int32? {
+        guard service["loaded"] as? Bool == true,
+              let runtime = service["runtime"] as? [String: Any],
+              runtime["status"] as? String == "running",
+              let pid = runtime["pid"] as? Int,
+              pid > 0,
+              pid <= Int(Int32.max)
+        else {
+            return nil
+        }
+        return Int32(pid)
     }
 
     private struct CommandResult {
@@ -225,6 +255,16 @@ extension GatewayLaunchAgentManager {
 
     static func testingDaemonCommandCallsSnapshot() -> [[String]] {
         self.testingDaemonCommandCalls
+    }
+
+    static func _testRunningGatewayPID(from json: String) -> Int32? {
+        guard let data = json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let service = object["service"] as? [String: Any]
+        else {
+            return nil
+        }
+        return self.runningGatewayPID(from: service)
     }
     #endif
 }

@@ -278,6 +278,39 @@ describe("interactive payload helpers", () => {
     });
   });
 
+  it("preserves command values in button fallback text while keeping callback values private", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [
+            { label: "Approve", value: "/approve req_1 allow-once" },
+            { label: "Deny", action: { type: "command" as const, command: "/approve req_1 deny" } },
+            { label: "Ignore", action: { type: "callback" as const, value: "ignore_123" } },
+            { label: "Docs", url: "https://example.com/docs" },
+            { label: "Disabled", disabled: true },
+            {
+              label: "DisabledCmd",
+              disabled: true,
+              action: { type: "command" as const, command: "/test" },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(
+      [
+        "- Approve",
+        "- Deny: `/approve req_1 deny`",
+        "- Ignore",
+        "- Docs: https://example.com/docs",
+        "- Disabled",
+        "- DisabledCmd",
+      ].join("\n"),
+    );
+  });
+
   it("keeps divider-only fallback empty unless a send transport fallback is requested", () => {
     const presentation = {
       blocks: [{ type: "divider" as const }],
@@ -290,5 +323,137 @@ describe("interactive payload helpers", () => {
         emptyFallback: "---",
       }),
     ).toBe("---");
+  });
+
+  it("normalizes chart data and renders deterministic accessible fallback text", () => {
+    const presentation = normalizeMessagePresentation({
+      blocks: [
+        {
+          type: "chart",
+          chartType: "pie",
+          title: "Requests by region",
+          segments: [
+            { label: "Americas", value: 52 },
+            { label: "Europe", value: 31 },
+          ],
+        },
+        {
+          type: "chart",
+          chartType: "line",
+          title: "Weekly latency",
+          categories: ["Mon", "Tue"],
+          series: [
+            { name: "p50", values: [120, 110] },
+            { name: "p95", values: [250, 230] },
+          ],
+          xLabel: "Day",
+          yLabel: "Milliseconds",
+        },
+      ],
+    });
+
+    expect(presentation).toEqual({
+      blocks: [
+        {
+          type: "chart",
+          chartType: "pie",
+          title: "Requests by region",
+          segments: [
+            { label: "Americas", value: 52 },
+            { label: "Europe", value: 31 },
+          ],
+        },
+        {
+          type: "chart",
+          chartType: "line",
+          title: "Weekly latency",
+          categories: ["Mon", "Tue"],
+          series: [
+            { name: "p50", values: [120, 110] },
+            { name: "p95", values: [250, 230] },
+          ],
+          xLabel: "Day",
+          yLabel: "Milliseconds",
+        },
+      ],
+    });
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(
+      [
+        "Requests by region (pie chart)",
+        "- Americas: 52",
+        "- Europe: 31",
+        "",
+        "Weekly latency (line chart)",
+        "X axis: Day",
+        "Y axis: Milliseconds",
+        "- p50: Mon: 120; Tue: 110",
+        "- p95: Mon: 250; Tue: 230",
+      ].join("\n"),
+    );
+    expect(presentationToInteractiveReply(presentation!)).toEqual({
+      blocks: [
+        {
+          type: "text",
+          text: "Requests by region (pie chart)\n- Americas: 52\n- Europe: 31",
+        },
+        {
+          type: "text",
+          text: [
+            "Weekly latency (line chart)",
+            "X axis: Day",
+            "Y axis: Milliseconds",
+            "- p50: Mon: 120; Tue: 110",
+            "- p95: Mon: 250; Tue: 230",
+          ].join("\n"),
+        },
+      ],
+    });
+  });
+
+  it.each([
+    {
+      name: "non-positive pie values",
+      block: {
+        type: "chart",
+        chartType: "pie",
+        title: "Invalid",
+        segments: [{ label: "Zero", value: 0 }],
+      },
+    },
+    {
+      name: "duplicate categories",
+      block: {
+        type: "chart",
+        chartType: "bar",
+        title: "Invalid",
+        categories: ["Q1", "Q1"],
+        series: [{ name: "Revenue", values: [1, 2] }],
+      },
+    },
+    {
+      name: "mismatched series values",
+      block: {
+        type: "chart",
+        chartType: "area",
+        title: "Invalid",
+        categories: ["Q1", "Q2"],
+        series: [{ name: "Revenue", values: [1] }],
+      },
+    },
+    {
+      name: "duplicate series names",
+      block: {
+        type: "chart",
+        chartType: "line",
+        title: "Invalid",
+        categories: ["Q1"],
+        series: [
+          { name: "Revenue", values: [1] },
+          { name: "Revenue", values: [2] },
+        ],
+      },
+    },
+  ])("drops chart blocks with $name instead of changing their data", ({ block }) => {
+    expect(normalizeMessagePresentation({ blocks: [block] })).toBeUndefined();
   });
 });

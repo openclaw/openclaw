@@ -9,9 +9,9 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
-import { defaultLeasedCodexAppServerClientFactory } from "./client-factory.js";
 import { CodexAppServerClient } from "./client.js";
 import { type CodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import {
   clearSharedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
@@ -101,8 +101,9 @@ function startThreadWithHarness(
   const effectivePluginConfig = overrides?.pluginConfig ?? pluginConfig;
 
   const run = startCodexAttemptThread({
+    bindingStore: testCodexAppServerBindingStore,
     attemptClientFactory:
-      overrides?.attemptClientFactory?.(harness) ?? defaultLeasedCodexAppServerClientFactory,
+      overrides?.attemptClientFactory?.(harness) ?? getLeasedSharedCodexAppServerClient,
     appServer: resolveCodexAppServerRuntimeOptions({ pluginConfig: effectivePluginConfig }),
     pluginConfig: effectivePluginConfig,
     computerUseConfig: effectivePluginConfig.computerUse ?? { enabled: false },
@@ -140,7 +141,7 @@ async function answerInitialize(harness: ClientHarness): Promise<void> {
     timeout: HARNESS_REQUEST_TIMEOUT_MS,
   });
   const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.125.0 (macOS; test)" } });
+  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.143.0 (macOS; test)" } });
 }
 
 async function waitForRequest(
@@ -242,7 +243,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("clears the shared app-server when startup abandons an in-flight thread request", async () => {
-    const { harness, run } = startThreadWithHarness(2_000);
+    const { harness, run } = startThreadWithHarness(500);
     const runError = run.then(
       () => undefined,
       (error: unknown) => error,
@@ -253,7 +254,7 @@ describe("startCodexAttemptThread", () => {
     const error = await runError;
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
       interval: 1,
-      timeout: 2_000,
+      timeout: 1_000,
     });
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("codex app-server startup timed out");
@@ -290,7 +291,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("closes the shared app-server when startup times out during initialize", async () => {
-    const { harness, run } = startThreadWithHarness(2_000);
+    const { harness, run } = startThreadWithHarness(500);
     const runError = run.then(
       () => undefined,
       (error: unknown) => error,
@@ -304,7 +305,7 @@ describe("startCodexAttemptThread", () => {
     expect((error as Error).message).toBe("codex app-server startup timed out");
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
       interval: 1,
-      timeout: 2_000,
+      timeout: 1_000,
     });
     expect(
       readHarnessMessages(harness.writes).some((write) => write.method === "thread/start"),
@@ -323,19 +324,18 @@ describe("startCodexAttemptThread", () => {
       resolveFactoryDone = resolve;
     });
     const { harness, run } = startThreadWithHarness(100, new AbortController().signal, {
-      attemptClientFactory:
-        (factoryHarness) => async (_startOptions, _authProfileId, _agentDir, _config, options) => {
-          try {
-            observedFactoryOptions = options;
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, 250);
-            });
-            options?.onStartedClient?.(factoryHarness.client);
-            return factoryHarness.client;
-          } finally {
-            resolveFactoryDone();
-          }
-        },
+      attemptClientFactory: (factoryHarness) => async (options) => {
+        try {
+          observedFactoryOptions = options;
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 250);
+          });
+          options?.onStartedClient?.(factoryHarness.client);
+          return factoryHarness.client;
+        } finally {
+          resolveFactoryDone();
+        }
+      },
     });
     const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
 

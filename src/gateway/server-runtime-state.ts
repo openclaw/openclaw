@@ -30,7 +30,11 @@ import {
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
-import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import {
+  attachGatewayUpgradeHandler,
+  createGatewayHttpServer,
+  runWithGatewayHttpWorkAdmission,
+} from "./server-http.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { DedupeEntry } from "./server-shared.js";
 import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-request-handler.js";
@@ -100,6 +104,8 @@ export async function createGatewayRuntimeState(params: {
   logHooks: ReturnType<typeof createSubsystemLogger>;
   logPlugins: ReturnType<typeof createSubsystemLogger>;
   getReadiness?: ReadinessChecker;
+  isTerminalEnabled: () => boolean;
+  handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 }): Promise<{
   releasePluginRouteRegistry: () => void;
   httpServer: HttpServer;
@@ -124,6 +130,7 @@ export async function createGatewayRuntimeState(params: {
     sessionKey?: string,
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatQueuedTurns: Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
 }> {
   pinActivePluginHttpRouteRegistry(params.pluginRegistry);
@@ -150,20 +157,22 @@ export async function createGatewayRuntimeState(params: {
       if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
         return false;
       }
-      if (!loadedHooksRequestHandler) {
-        // Hooks are cold for most gateway starts; create the handler only after a request
-        // matches the configured base path so startup avoids importing hook runtime code.
-        const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
-        loadedHooksRequestHandler = createGatewayHooksRequestHandler({
-          deps: params.deps,
-          getHooksConfig: params.hooksConfig,
-          getClientIpConfig: params.getHookClientIpConfig,
-          bindHost: params.bindHost,
-          port: params.port,
-          logHooks: params.logHooks,
-        });
-      }
-      return await loadedHooksRequestHandler(req, res);
+      return await runWithGatewayHttpWorkAdmission(res, async () => {
+        if (!loadedHooksRequestHandler) {
+          // Hooks are cold for most gateway starts; create the handler only after a request
+          // matches the configured base path so startup avoids importing hook runtime code.
+          const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
+          loadedHooksRequestHandler = createGatewayHooksRequestHandler({
+            deps: params.deps,
+            getHooksConfig: params.hooksConfig,
+            getClientIpConfig: params.getHookClientIpConfig,
+            bindHost: params.bindHost,
+            port: params.port,
+            logHooks: params.logHooks,
+          });
+        }
+        return await loadedHooksRequestHandler(req, res);
+      });
     };
 
     let loadedPluginRequestHandler: GatewayPluginRequestHandler | null = null;
@@ -259,6 +268,7 @@ export async function createGatewayRuntimeState(params: {
         openResponsesEnabled: params.openResponsesEnabled,
         openResponsesConfig: params.openResponsesConfig,
         strictTransportSecurityHeader: params.strictTransportSecurityHeader,
+        handleWatchNodeRequest: params.handleWatchNodeRequest,
         handleHooksRequest,
         handlePluginRequest,
         shouldEnforcePluginGatewayAuth,
@@ -267,6 +277,7 @@ export async function createGatewayRuntimeState(params: {
         getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
         getReadiness: params.getReadiness,
+        isTerminalEnabled: params.isTerminalEnabled,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
       });
       // Attach upgrade handler BEFORE listening to prevent race condition
@@ -340,6 +351,7 @@ export async function createGatewayRuntimeState(params: {
     const addChatRun = chatRunRegistry.add;
     const removeChatRun = chatRunRegistry.remove;
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const chatQueuedTurns = new Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>();
     const toolEventRecipients = createToolEventRecipientRegistry();
 
     return {
@@ -372,6 +384,7 @@ export async function createGatewayRuntimeState(params: {
       addChatRun,
       removeChatRun,
       chatAbortControllers,
+      chatQueuedTurns,
       toolEventRecipients,
     };
   } catch (err) {

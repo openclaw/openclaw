@@ -240,7 +240,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.realtime.model": {
     label: "Discord Realtime Model",
-    help: "Provider realtime session model, such as gpt-realtime-2. This is separate from voice.model, which remains the OpenClaw agent brain model.",
+    help: "Provider realtime session model, such as gpt-realtime-2.1. This is separate from voice.model, which remains the OpenClaw agent brain model.",
   },
   "voice.realtime.speakerVoice": {
     label: "Discord Realtime Speaker Voice",

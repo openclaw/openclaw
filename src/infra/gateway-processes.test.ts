@@ -217,7 +217,10 @@ describe("gateway-processes", () => {
         status: 0,
         stdout: [
           "Proto  Local Address          Foreign Address        State           PID",
-          "TCP    0.0.0.0:18789         0.0.0.0:0              LISTENING       200",
+          "TCP    127.0.0.1:18789       127.0.0.1:0            ABHOEREN       998",
+          "TCP    127.0.0.1:18789       127.0.0.1:54321        HERGESTELLT    999",
+          "TCP    0.0.0.0:18789         0.0.0.0:0              ABHOEREN       200",
+          "TCP    [::]:18789            [::]:0                 ABHOEREN       200",
         ].join("\r\n"),
       })
       .mockReturnValueOnce({
@@ -231,6 +234,7 @@ describe("gateway-processes", () => {
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([200]);
     expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(getWindowsPowerShellExePath());
     expect(spawnSyncMock.mock.calls[1]?.[0]).toBe(getWindowsSystem32ExePath("netstat.exe"));
+    expect(spawnSyncMock.mock.calls[1]?.[1]).toEqual(["-ano"]);
     expect(spawnSyncMock.mock.calls[2]?.[0]).toBe(getWindowsPowerShellExePath());
   });
 

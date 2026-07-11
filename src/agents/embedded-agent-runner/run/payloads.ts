@@ -47,6 +47,7 @@ import type { ToolResultFormat } from "../../embedded-agent-subscribe.shared-typ
 import {
   extractAssistantThinking,
   extractAssistantVisibleText,
+  sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
@@ -526,6 +527,16 @@ function resolveToolErrorWarningPolicy(params: {
   if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };
   }
+  // Mutating branch protects "assistant claims success while a user-visible mutation
+  // silently failed". Shell/exec are the agent's own workspace actions: the model sees
+  // the exit code in-context, and a successful final reply is recovery proof (#103574).
+  // Deliberately ignores mutatingAction for exec: codex marks every commandExecution
+  // mutating fail-closed (replay metadata, not display signal).
+  if (isExecLikeToolName(params.lastToolError.toolName)) {
+    // No recoverable-keyword suppression here: with no reply at all, the exec
+    // warning may be the run's only failure signal.
+    return { showWarning: !params.hasUserFacingReply, includeDetails };
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
@@ -533,9 +544,6 @@ function resolveToolErrorWarningPolicy(params: {
       showWarning: !params.hasUserFacingErrorReply && !params.hasUserFacingFailureAcknowledgement,
       includeDetails,
     };
-  }
-  if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails) {
-    return { showWarning: false, includeDetails };
   }
   return {
     showWarning: !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error),
@@ -552,6 +560,7 @@ function resolveToolErrorWarningPolicy(params: {
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   assistantMessageIndex?: number;
+  assistantTranscriptOwned?: boolean;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
@@ -650,7 +659,9 @@ export function buildEmbeddedRunPayloads(params: {
     params.didSendDeterministicApprovalPrompt === true ||
     (params.sourceReplyDeliveryMode === "message_tool_only" && hasSourceReplyPayload) ||
     deliveredSourceReplyViaMessageTool;
-  const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
+  const nonEmptyAssistantTexts = params.assistantTexts
+    .map((text) => sanitizeAssistantVisibleStreamText(text))
+    .filter((text) => text.trim().length > 0);
   const currentAssistant = params.currentAssistant ?? undefined;
   const assistantForPayload =
     currentAssistant ?? (nonEmptyAssistantTexts.length === 1 ? undefined : params.lastAssistant);
@@ -926,9 +937,16 @@ export function buildEmbeddedRunPayloads(params: {
           nonTerminalToolErrorWarning: true,
         });
       }
-      if (!item.isError && !item.isReasoning && params.assistantMessageIndex !== undefined) {
+      if (
+        !item.isError &&
+        !item.isReasoning &&
+        (params.assistantMessageIndex !== undefined || params.assistantTranscriptOwned === true)
+      ) {
         setReplyPayloadMetadata(payload, {
-          assistantMessageIndex: params.assistantMessageIndex,
+          ...(params.assistantMessageIndex !== undefined
+            ? { assistantMessageIndex: params.assistantMessageIndex }
+            : {}),
+          ...(params.assistantTranscriptOwned === true ? { assistantTranscriptOwned: true } : {}),
         });
       }
       if (item.replyToId) {

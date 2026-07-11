@@ -6,10 +6,15 @@ import {
   buildConfiguredModelCatalog,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
+import {
+  concretizeAgentRuntime,
+  resolveEffectiveAgentRuntime,
+} from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
 import {
   listSessionEntries as listAccessorSessionEntries,
@@ -27,6 +32,7 @@ import {
   type ResolvedSessionMaintenanceConfigInput,
 } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
@@ -158,6 +164,53 @@ async function upsertSessionEntry(params: RuntimeUpsertSessionEntryParams): Prom
   await replaceSessionEntry(toSessionAccessScope(params), params.entry);
 }
 
+async function runWithSessionWorkAdmission<T>(
+  params: { storePath: string; sessionKey: string; signal?: AbortSignal },
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const initialEntry = getSessionEntry({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    readConsistency: "latest",
+  });
+  const lifecycleAbortController = new AbortController();
+  const admission = await beginSessionWorkAdmission({
+    scope: params.storePath,
+    identities: [params.sessionKey, initialEntry?.sessionId],
+    signal: params.signal,
+    onInterrupt: () =>
+      lifecycleAbortController.abort(
+        new Error("Agent work interrupted by a session lifecycle change."),
+      ),
+    assertAllowed: () => {
+      const currentEntry = getSessionEntry({
+        storePath: params.storePath,
+        sessionKey: params.sessionKey,
+        readConsistency: "latest",
+      });
+      const changed = initialEntry
+        ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
+        : Boolean(currentEntry);
+      if (changed) {
+        throw new Error(`Session "${params.sessionKey}" changed while starting work. Retry.`);
+      }
+      const archivedSessionError = resolveSessionWorkStartError(params.sessionKey, currentEntry);
+      if (archivedSessionError) {
+        throw new Error(archivedSessionError);
+      }
+    },
+  });
+
+  try {
+    const signal = params.signal
+      ? AbortSignal.any([params.signal, lifecycleAbortController.signal])
+      : lifecycleAbortController.signal;
+    return await admission.run(async () => await run(signal));
+  } finally {
+    admission.release();
+  }
+}
+
 /** Creates the plugin runtime agent facade with lazy embedded-agent/session helpers. */
 export function createRuntimeAgent(): PluginRuntime["agent"] {
   const agentRuntime = {
@@ -171,8 +224,19 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveThinkingDefault,
     normalizeThinkingLevel: normalizeThinkLevel,
     resolveThinkingPolicy: (params) => {
+      const cfg = getRuntimeConfig();
+      const effectiveRuntime = params.agentRuntime
+        ? concretizeAgentRuntime(params.agentRuntime)
+        : params.provider && params.model
+          ? resolveEffectiveAgentRuntime({
+              cfg,
+              provider: params.provider,
+              modelId: params.model,
+            })
+          : undefined;
       const profile = resolveThinkingProfile({
         ...params,
+        agentRuntime: effectiveRuntime,
         catalog: resolveRuntimeThinkingCatalog(params),
       });
       const policy: Omit<
@@ -202,6 +266,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     listSessionEntries,
     patchSessionEntry,
     upsertSessionEntry,
+    runWithWorkAdmission: runWithSessionWorkAdmission,
     loadSessionStore,
     saveSessionStore,
     updateSessionStore,

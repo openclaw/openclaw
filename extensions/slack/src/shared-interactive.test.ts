@@ -1,6 +1,11 @@
 // Slack tests cover shared interactive plugin behavior.
 import { describe, expect, it } from "vitest";
-import { buildSlackInteractiveBlocks, buildSlackPresentationBlocks } from "./blocks-render.js";
+import {
+  buildSlackInteractiveBlocks,
+  buildSlackPresentationBlocks,
+  resolveSlackBlockOffsets,
+  type SlackBlock,
+} from "./blocks-render.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 
 describe("buildSlackInteractiveBlocks", () => {
@@ -198,7 +203,7 @@ describe("buildSlackInteractiveBlocks", () => {
     expect(buttonBlock.elements?.[0]?.value).toBe("a".repeat(2000));
     expect(buttonBlock.elements?.[1]).toEqual({
       type: "button",
-      action_id: "openclaw:reply_button:1:3",
+      action_id: "openclaw:reply_link:1:3",
       text: {
         type: "plain_text",
         text: "Docs",
@@ -273,7 +278,7 @@ describe("buildSlackInteractiveBlocks", () => {
 
     expect(buttonBlock.elements?.[0]).toEqual({
       type: "button",
-      action_id: "openclaw:reply_button:1:1",
+      action_id: "openclaw:reply_link:1:1",
       text: {
         type: "plain_text",
         text: "Docs",
@@ -310,6 +315,29 @@ describe("buildSlackInteractiveBlocks", () => {
 });
 
 describe("buildSlackPresentationBlocks", () => {
+  it("renders presentation blocks in authored order", () => {
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        { type: "text", text: "First" },
+        { type: "buttons", buttons: [{ label: "Approve", value: "approve" }] },
+        { type: "context", text: "After buttons" },
+        { type: "divider" },
+        {
+          type: "select",
+          options: [{ label: "One", value: "one" }],
+        },
+      ],
+    });
+
+    expect(blocks.map((block) => block.type)).toEqual([
+      "section",
+      "actions",
+      "context",
+      "divider",
+      "actions",
+    ]);
+  });
+
   it("renders presentation controls without requiring legacy interactive payloads", () => {
     const blocks = buildSlackPresentationBlocks({
       blocks: [
@@ -400,6 +428,105 @@ describe("buildSlackPresentationBlocks", () => {
               emoji: true,
             },
             value: "/approve req-1 allow-once",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("renders Slack-incompatible charts as visible text", () => {
+    const title = "A".repeat(51);
+
+    expect(
+      buildSlackPresentationBlocks({
+        blocks: [
+          {
+            type: "chart",
+            chartType: "pie",
+            title,
+            segments: [{ label: "Product", value: 60 }],
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        type: "context",
+        elements: [{ type: "mrkdwn", text: `${title} (pie chart)\n- Product: 60` }],
+      },
+    ]);
+  });
+
+  it("renders at most two native charts per message", () => {
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        {
+          type: "chart",
+          chartType: "pie",
+          title: "Issue share",
+          segments: [{ label: "Open", value: 5 }],
+        },
+        {
+          type: "chart",
+          chartType: "bar",
+          title: "Weekly volume",
+          categories: ["Mon"],
+          series: [{ name: "Messages", values: [12] }],
+        },
+        {
+          type: "chart",
+          chartType: "area",
+          title: "Active sessions",
+          categories: ["09:00"],
+          series: [{ name: "Sessions", values: [3] }],
+        },
+      ],
+    });
+
+    expect(blocks.map((block) => block.type)).toEqual([
+      "data_visualization",
+      "data_visualization",
+      "context",
+    ]);
+    expect(blocks[2]).toEqual({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: "Active sessions (area chart)\n- Sessions: 09:00: 3",
+        },
+      ],
+    });
+  });
+
+  it("counts existing native chart blocks toward Slack's per-message limit", () => {
+    const nativeChart = {
+      type: "data_visualization",
+      title: "Existing chart",
+      chart: { type: "pie", segments: [{ label: "Open", value: 5 }] },
+    } as SlackBlock;
+    const offsets = resolveSlackBlockOffsets([nativeChart, nativeChart]);
+
+    expect(
+      buildSlackPresentationBlocks(
+        {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "pie",
+              title: "Presentation chart",
+              segments: [{ label: "Closed", value: 8 }],
+            },
+          ],
+        },
+        offsets,
+      ),
+    ).toEqual([
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: "Presentation chart (pie chart)\n- Closed: 8",
           },
         ],
       },

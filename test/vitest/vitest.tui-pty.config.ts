@@ -14,7 +14,7 @@ function toTuiPtyIncludePatterns(patterns: string[] | null) {
   return patterns?.map((pattern) => pattern.replace(/^src\//u, "")) ?? null;
 }
 
-export function createTuiPtyVitestConfig(env?: Record<string, string | undefined>) {
+function createTuiPtyVitestConfig(env?: Record<string, string | undefined>) {
   const baseTest = sharedVitestConfig.test ?? {};
   const exclude = (baseTest.exclude ?? []).filter((pattern) => pattern !== "**/*.e2e.test.ts");
   const configEnv = env ?? process.env;

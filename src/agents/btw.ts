@@ -44,6 +44,7 @@ import {
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  applySecretRefHeaderSentinels,
   getApiKeyForModel,
   requireApiKey,
 } from "./model-auth.js";
@@ -54,6 +55,10 @@ import {
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
+import {
+  protectPreparedProviderRuntimeAuth,
+  unwrapSecretSentinelsForProviderEgress,
+} from "./provider-secret-egress.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
@@ -721,6 +726,7 @@ export async function runBtwSideQuestion(
     profileId: effectiveAuthProfileId,
     ...(authStore ? { store: authStore } : {}),
     agentDir: params.agentDir,
+    secretSentinels: true,
   });
   const resolvedAuthProfileId = apiKeyInfo.profileId ?? effectiveAuthProfileId;
   let runtimeModel = model;
@@ -729,29 +735,34 @@ export async function runBtwSideQuestion(
       ? undefined
       : requireApiKey(apiKeyInfo, model.provider);
   if (apiKey) {
-    const preparedAuth = await prepareProviderRuntimeAuth({
+    const preparedAuth = protectPreparedProviderRuntimeAuth({
+      sourceApiKey: apiKey,
       provider: model.provider,
-      config: params.cfg,
-      workspaceDir,
-      env: process.env,
-      context: {
+      preparedAuth: await prepareProviderRuntimeAuth({
+        provider: model.provider,
         config: params.cfg,
-        agentDir: params.agentDir,
         workspaceDir,
         env: process.env,
-        provider: model.provider,
-        modelId: model.id,
-        model,
-        apiKey,
-        authMode: apiKeyInfo.mode,
-        profileId: resolvedAuthProfileId,
-      },
+        context: {
+          config: params.cfg,
+          agentDir: params.agentDir,
+          workspaceDir,
+          env: process.env,
+          provider: model.provider,
+          modelId: model.id,
+          model,
+          apiKey: unwrapSecretSentinelsForProviderEgress(apiKey, "provider runtime auth exchange"),
+          authMode: apiKeyInfo.mode,
+          profileId: resolvedAuthProfileId,
+        },
+      }),
     });
     runtimeModel = applyPreparedRuntimeAuthToModel(runtimeModel, preparedAuth);
     if (preparedAuth?.apiKey) {
       apiKey = preparedAuth.apiKey;
     }
   }
+  runtimeModel = applySecretRefHeaderSentinels(runtimeModel, params.cfg);
 
   // Use the provider's own stream fn so providers like Ollama (which build
   // `/api/chat` or `/v1/chat/completions` paths based on api mode) construct

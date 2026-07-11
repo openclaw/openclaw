@@ -7,6 +7,7 @@ import {
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexModelsCommandText,
   isExpectedCodexStatusCommandText,
+  isExpectedYieldedAgentTimeout,
   isRetryableCodexHarnessLiveError,
   isStrictExpectedCodexModelsCommandText,
 } from "./gateway-codex-harness.live-helpers.js";
@@ -39,6 +40,27 @@ describe("gateway codex harness live helpers", () => {
     const error = new Error("subagent child did not emit lifecycle event");
 
     expect(isRetryableCodexHarnessLiveError(error)).toBe(false);
+  });
+
+  it("accepts only paused yielded agent timeouts for native subagent delivery", () => {
+    expect(
+      isExpectedYieldedAgentTimeout({
+        status: "timeout",
+        result: { meta: { livenessState: "paused", yielded: true } },
+      }),
+    ).toBe(true);
+    expect(
+      isExpectedYieldedAgentTimeout({
+        status: "timeout",
+        result: { meta: { livenessState: "paused", yielded: false } },
+      }),
+    ).toBe(false);
+    expect(
+      isExpectedYieldedAgentTimeout({
+        status: "ok",
+        result: { meta: { livenessState: "paused", yielded: true } },
+      }),
+    ).toBe(false);
   });
 
   it("accepts the current codex status prose from the live harness", () => {

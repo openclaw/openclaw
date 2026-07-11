@@ -20,7 +20,7 @@ type SkipInventoryReason =
 
 type SkipInventoryTarget = "describe" | "it" | "test" | "unknown";
 
-export type TestSkipInventoryFinding = {
+type TestSkipInventoryFinding = {
   excerpt: string;
   file: string;
   kind: SkipInventoryKind;

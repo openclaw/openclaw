@@ -192,6 +192,20 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   }
 
+  function useNonStreamingBlockAccount() {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+        blockStreaming: true,
+      },
+    });
+  }
+
   function setupNonStreamingAutoDispatcher() {
     useNonStreamingAutoAccount();
 
@@ -665,6 +679,58 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledWith("plain block", {
       note: "Agent: agent",
     });
+  });
+
+  it("sends complete chunked blocks to the DM target", async () => {
+    useNonStreamingBlockAccount();
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    runtime.channel.text.chunkTextWithMode.mockImplementation((text: string) =>
+      text === "First paragraph." ? ["First ", "paragraph."] : [text],
+    );
+    const mentions = [{ openId: "ou_target", name: "Target User", key: "@_user_1" }];
+    const { options } = createDispatcherHarness({
+      chatId: "oc_p2p_chat",
+      sendTarget: "user:ou_sender",
+      mentionTargets: mentions,
+    });
+
+    await options.deliver({ text: "First paragraph." }, { kind: "block" });
+    await options.deliver(
+      { text: "Second paragraph.", mediaUrl: "https://example.com/block.png" },
+      { kind: "block" },
+    );
+    await options.onIdle?.();
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
+    expectMockArgFields(sendMessageFeishuMock, "first block chunk", {
+      to: "user:ou_sender",
+      text: "First ",
+      mentions,
+    });
+    expectMockArgFields(sendMessageFeishuMock, "second block chunk", { text: "paragraph." }, 1);
+    expectMockArgFields(sendMessageFeishuMock, "second block", { text: "Second paragraph." }, 2);
+    expect(sendMessageFeishuMock.mock.calls[1]?.[0]).not.toHaveProperty("mentions");
+    expect(sendMessageFeishuMock.mock.calls[2]?.[0]).not.toHaveProperty("mentions");
+    expectMockArgFields(sendMediaFeishuMock, "block media", {
+      to: "user:ou_sender",
+      mediaUrl: "https://example.com/block.png",
+    });
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers a final message when it differs from independently sent blocks", async () => {
+    useNonStreamingBlockAccount();
+    const { options } = createDispatcherHarness();
+
+    await options.deliver({ text: "partial block" }, { kind: "block" });
+    await options.deliver({ text: "final answer" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expectMockArgFields(sendMessageFeishuMock, "block message", { text: "partial block" });
+    expectMockArgFields(sendMessageFeishuMock, "final message", { text: "final answer" }, 1);
   });
 
   it("does not prepend automatic mentions to streaming card closes", async () => {

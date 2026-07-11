@@ -16,6 +16,7 @@ import {
   resolveActWaitTimeoutMs,
 } from "./act-policy.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
+import type { BrowserDownloadResult } from "./download-types.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import {
@@ -25,12 +26,15 @@ import {
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
   assertPageNavigationCompletedSafely,
+  beginActionDownloadCaptureOnPage,
   createObservedDialogAbortSignalForPage,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   isBrowserObservedDialogBlockedError,
+  isPolicyDenyNavigationError,
   markObservedDialogsHandledRemotelyForPage,
+  quarantineBlockedNavigationTarget,
   refLocator,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
@@ -57,6 +61,7 @@ type TargetOpts = {
 };
 
 const INTERACTION_NAVIGATION_GRACE_MS = 250;
+const ACT_DOWNLOAD_MAX_DRAIN_MS = 1_000;
 
 type NavigationObservablePage = Pick<Page, "url"> & {
   mainFrame?: () => Frame;
@@ -1492,17 +1497,6 @@ export async function setInputFilesViaPlaywright(opts: {
   } catch (err) {
     throw toFriendlyInteractionError(err, inputRef || element);
   }
-  try {
-    const handle = await locator.elementHandle();
-    if (handle) {
-      await handle.evaluate((el) => {
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-      });
-    }
-  } catch {
-    // Best-effort for sites that don't react to setInputFiles alone.
-  }
 }
 
 async function executeSingleAction(
@@ -1691,6 +1685,30 @@ async function executeSingleAction(
   return undefined;
 }
 
+function actionNeedsStandaloneDownloadGrace(
+  action: BrowserActRequest,
+  ssrfPolicy?: SsrFPolicy,
+): boolean {
+  switch (action.kind) {
+    case "close":
+    case "resize":
+    case "wait":
+      return false;
+    case "hover":
+    case "scrollIntoView":
+    case "drag":
+      return true;
+    case "batch":
+      return action.actions.some((nested) =>
+        actionNeedsStandaloneDownloadGrace(nested, ssrfPolicy),
+      );
+    default:
+      // Navigation-aware interactions already hold a 250 ms event window when
+      // policy is active. Policy-free internal callers need that window here.
+      return !ssrfPolicy;
+  }
+}
+
 /** Executes one high-level browser act request with bounded recursive actions. */
 export async function executeActViaPlaywright(opts: {
   cdpUrl: string;
@@ -1704,12 +1722,35 @@ export async function executeActViaPlaywright(opts: {
   results?: Array<{ ok: boolean; error?: string }>;
   blockedByDialog?: boolean;
   browserState?: unknown;
+  downloads?: BrowserDownloadResult[];
 }> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
   });
+  // Any DOM action can synchronously trigger a download. Capturing all actions
+  // keeps reporting and final-URL policy aligned with the actual file write.
+  const downloadCapture = beginActionDownloadCaptureOnPage(page, {
+    beforeSave: async (download) => {
+      if (!download.url) {
+        throw new Error("Action download URL is unavailable");
+      }
+      await assertBrowserNavigationResultAllowed({
+        url: download.url,
+        ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+      });
+    },
+  });
+  const downloadGraceMs = actionNeedsStandaloneDownloadGrace(opts.action, opts.ssrfPolicy)
+    ? INTERACTION_NAVIGATION_GRACE_MS
+    : 0;
+  const drainDownloads = async () =>
+    await downloadCapture.drain({
+      firstEventGraceMs: downloadGraceMs,
+      maxWaitMs: ACT_DOWNLOAD_MAX_DRAIN_MS,
+      quietMs: INTERACTION_NAVIGATION_GRACE_MS,
+    });
   const dialogAbort = createObservedDialogAbortSignalForPage({
     page,
     parentSignal: opts.signal,
@@ -1725,7 +1766,11 @@ export async function executeActViaPlaywright(opts: {
         evaluateEnabled: opts.evaluateEnabled,
         signal: dialogAbort.signal,
       });
-      return { results: batch.results };
+      const newDownloads = await drainDownloads();
+      return {
+        results: batch.results,
+        ...(newDownloads ? { downloads: newDownloads } : {}),
+      };
     }
     const result = await executeSingleAction(
       opts.action,
@@ -1736,16 +1781,33 @@ export async function executeActViaPlaywright(opts: {
       0,
       dialogAbort.signal,
     );
+    const newDownloads = await drainDownloads();
     if (opts.action.kind === "evaluate") {
-      return { result };
+      return { result, ...(newDownloads ? { downloads: newDownloads } : {}) };
     }
-    return {};
+    return newDownloads ? { downloads: newDownloads } : {};
   } catch (err) {
-    if (isBrowserObservedDialogBlockedError(err)) {
-      return { blockedByDialog: true, browserState: err.browserState };
+    let failure = err;
+    try {
+      await drainDownloads();
+    } catch (downloadErr) {
+      // A download policy/save failure is the action's network-to-file result;
+      // preserve it even when the initiating interaction also failed.
+      failure = downloadErr;
     }
-    throw err;
+    if (isBrowserObservedDialogBlockedError(failure)) {
+      return { blockedByDialog: true, browserState: failure.browserState };
+    }
+    if (isPolicyDenyNavigationError(failure)) {
+      await quarantineBlockedNavigationTarget({
+        cdpUrl: opts.cdpUrl,
+        page,
+        targetId: opts.targetId,
+      });
+    }
+    throw failure;
   } finally {
+    downloadCapture.dispose();
     dialogAbort.cleanup();
   }
 }

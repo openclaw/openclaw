@@ -117,9 +117,13 @@ vi.mock("./channel-tools.js", () => ({
   listChannelAgentTools: () => [],
 }));
 
-vi.mock("./openclaw-tools.js", () => ({
-  createOpenClawTools: () => [],
-}));
+vi.mock("./openclaw-tools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./openclaw-tools.js")>();
+  return {
+    createOpenClawTools: () => [],
+    filterToolsByClientCaps: actual.filterToolsByClientCaps,
+  };
+});
 
 vi.mock("./bash-tools.exec-host-shared.js", async () => {
   const mod = await vi.importActual<typeof import("./bash-tools.exec-host-shared.js")>(
@@ -165,6 +169,7 @@ vi.mock("../infra/exec-approvals.js", async () => {
     ...mod,
     loadExecApprovals: () => approvals.file,
     resolveExecApprovals: () => approvals,
+    resolveExecApprovalsLocked: async () => approvals,
   };
 });
 

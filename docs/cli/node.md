@@ -58,9 +58,11 @@ Options:
 
 - `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
+- `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
 - `--tls`: Use TLS for the gateway connection
+- `--no-tls`: Force a plaintext Gateway connection even when the local Gateway config enables TLS
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
-- `--node-id <id>`: Override node id (clears pairing token)
+- `--node-id <id>`: Override the legacy client instance ID stored in `node.json` (does not reset pairing)
 - `--display-name <name>`: Override the node display name
 
 ## Gateway auth for node host
@@ -85,7 +87,8 @@ present in the install command environment.
 
 ## Service (background)
 
-Install a headless node host as a user service.
+Install a headless node host as a user service (launchd on macOS, systemd on
+Linux, Windows Task Scheduler on Windows).
 
 ```bash
 openclaw node install --host <gateway-host> --port 18789
@@ -95,9 +98,10 @@ Options:
 
 - `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
+- `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
 - `--tls`: Use TLS for the gateway connection
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
-- `--node-id <id>`: Override node id (clears pairing token)
+- `--node-id <id>`: Override the legacy client instance ID stored in `node.json` (does not reset pairing)
 - `--display-name <name>`: Override the node display name
 - `--runtime <runtime>`: Service runtime (`node` or `bun`)
 - `--force`: Reinstall/overwrite if already installed
@@ -118,9 +122,9 @@ Service commands accept `--json` for machine-readable output.
 
 The node host retries Gateway restart and network closes in-process. If the
 Gateway reports a terminal token/password/bootstrap auth pause, the node host
-logs the close detail and exits non-zero so launchd/systemd can restart it with
-fresh config and credentials. Pairing-required pauses stay in the foreground
-flow so the pending request can be approved.
+logs the close detail and exits non-zero so launchd/systemd/Task Scheduler can
+restart it with fresh config and credentials. Pairing-required pauses stay in
+the foreground flow so the pending request can be approved.
 
 ## Pairing
 
@@ -147,16 +151,55 @@ to auto-approving first-time node pairing from trusted CIDRs:
 }
 ```
 
-This is disabled by default. It only applies to fresh `role: node` pairing with
-no requested scopes. Operator/browser clients, Control UI, WebChat, and role,
+This is disabled by default (`autoApproveCidrs` is unset). It only applies to
+fresh `role: node` pairing with no requested scopes, from a client IP the
+Gateway trusts. Operator/browser clients, Control UI, WebChat, and role,
 scope, metadata, or public-key upgrades still require manual approval.
 
 If the node retries pairing with changed auth details (role/scopes/public key),
 the previous pending request is superseded and a new `requestId` is created.
 Run `openclaw devices list` again before approval.
 
-The node host stores its node id, token, display name, and gateway connection info in
-`~/.openclaw/node.json`.
+### Identity and pairing state
+
+The headless node separates its legacy client instance ID from the signed device
+identity that the Gateway uses for pairing and routing. These files live in the
+OpenClaw state directory (`~/.openclaw` by default, or `$OPENCLAW_STATE_DIR`
+when set):
+
+| File                        | Purpose                                                                                                                                       |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node.json`                 | Client instance ID under the legacy `nodeId` key, display name, and Gateway connection metadata. The client sends this value as `instanceId`. |
+| `identity/device.json`      | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity.              |
+| `identity/device-auth.json` | Paired device tokens, keyed by cryptographic device ID and role.                                                                              |
+
+`--node-id` changes only the client instance ID in `node.json`. It does not
+change the cryptographic device ID or clear pairing auth. Deleting only
+`node.json` likewise does not reset pairing. To revoke and re-pair a node:
+
+1. On the Gateway, run `openclaw nodes remove --node <id|name|ip>`.
+2. On the node, restart the installed service with `openclaw node restart`, or
+   stop and rerun the foreground `openclaw node run` command. This starts the
+   device-pairing flow. If `openclaw devices list` does not show a request
+   and the node reports `AUTH_DEVICE_TOKEN_MISMATCH`, restart or rerun it once
+   more. The rejected attempt clears the now-revoked local token; the next
+   attempt can request pairing.
+3. On the Gateway, run `openclaw devices list`, then
+   `openclaw devices approve <deviceRequestId>`.
+4. Restart or rerun the node again. A client paused for pairing does not resume
+   automatically after approval; this reconnect creates the separate
+   command-surface request.
+5. On the Gateway, run `openclaw nodes pending`, then
+   `openclaw nodes approve <nodeRequestId>`.
+
+The two request IDs are distinct. An applicable trusted-CIDR policy can
+auto-approve the first-time device-pairing step; command-surface approval remains
+a separate check.
+
+Older OpenClaw releases could leave a legacy `token` field in `node.json`.
+Current OpenClaw does not use that field and removes it the next time the node
+host saves the file. Keep both files under `identity/` private; they contain the
+device keypair and auth tokens.
 
 ## Exec approvals
 

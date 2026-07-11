@@ -82,6 +82,11 @@ export type DynamicToolBuildParams = {
   onCodexAppServerEvent?: (event: CodexDynamicToolBuildEvent) => void;
   onPersistentWebSearchPolicyResolved?: (allowed: boolean) => void;
   onWebSearchPolicyResolved?: (allowed: boolean) => void;
+  computerContextEpoch?: {
+    value: number;
+    frameToolCallId?: string;
+    frameImageIdentity?: string;
+  };
 };
 
 let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
@@ -231,6 +236,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
+    ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
     ...buildEmbeddedAttemptToolRunContext(params),
     exec: {
       ...params.execOverrides,
@@ -241,6 +247,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     sandbox: input.sandbox,
     messageProvider: resolveCodexMessageToolProvider(params),
     toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
+    // Capability-gated tools (requiredClientCaps) need the originating client's
+    // declared caps in this sibling harness too, not only the embedded runner.
+    clientCaps: params.clientCaps,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
@@ -252,6 +261,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding:
       params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
     ...sessionKeys,
@@ -297,6 +307,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     replyToMode: params.replyToMode,
     hasRepliedRef: params.hasRepliedRef,
     modelHasVision,
+    computerContextEpoch: input.computerContextEpoch,
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -661,7 +672,7 @@ function codexNetworkAccessForOpenClawSandbox(
   return Boolean(network && network !== "none");
 }
 
-/** Returns a Codex config copy with app-server Codex plugin loading disabled for thread tools. */
+/** Returns a Codex config copy with all app exposure disabled for restricted thread tools. */
 export function disableCodexPluginThreadConfig(pluginConfig?: unknown): CodexPluginConfig {
   const config = readCodexPluginConfig(pluginConfig);
   return {

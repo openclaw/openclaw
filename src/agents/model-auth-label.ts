@@ -33,6 +33,7 @@ export function resolveModelAuthLabel(params: {
   sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
   agentDir?: string;
   workspaceDir?: string;
+  codexCliCredentialsHome?: string;
   includeExternalProfiles?: boolean;
   acceptedProviderIds?: readonly string[];
 }): string | undefined {
@@ -116,6 +117,18 @@ export function resolveModelAuthLabel(params: {
     // Preserve the fact that config pointed at a profile while avoiding a
     // misleading auth mode for an incompatible provider/profile pairing.
     return "unknown";
+  }
+
+  if (
+    params.codexCliCredentialsHome &&
+    (providerKey === "openai" || providerKey === "codex") &&
+    readCodexCliCredentialsCached({
+      codexHome: params.codexCliCredentialsHome,
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    })
+  ) {
+    return "oauth (codex-cli)";
   }
 
   const envKey = resolveEnvApiKey(providerKey, process.env, {

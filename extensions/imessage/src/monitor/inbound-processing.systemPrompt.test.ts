@@ -187,6 +187,7 @@ describe("buildIMessageInboundContext forwards GroupSystemPrompt", () => {
   function buildBuildParams(decision: {
     isGroup: boolean;
     groupSystemPrompt?: string;
+    groupRequireMention?: boolean;
   }): Parameters<typeof buildIMessageInboundContext>[0] {
     return {
       cfg: {} as OpenClawConfig,
@@ -213,6 +214,7 @@ describe("buildIMessageInboundContext forwards GroupSystemPrompt", () => {
         createdAt: undefined,
         replyContext: null,
         effectiveWasMentioned: false,
+        groupRequireMention: decision.groupRequireMention ?? false,
         commandAuthorized: false,
         hasControlCommand: false,
         effectiveDmAllowFrom: [],
@@ -236,6 +238,13 @@ describe("buildIMessageInboundContext forwards GroupSystemPrompt", () => {
       buildBuildParams({ isGroup: true, groupSystemPrompt: "Be concise." }),
     );
     expect(ctxPayload.GroupSystemPrompt).toBe("Be concise.");
+  });
+
+  it("forwards the effective group mention policy", async () => {
+    const { ctxPayload } = await buildIMessageInboundContext(
+      buildBuildParams({ isGroup: true, groupRequireMention: true }),
+    );
+    expect(ctxPayload.GroupRequireMention).toBe(true);
   });
 
   it("leaves ctxPayload.GroupSystemPrompt undefined when no per-group prompt is configured", async () => {

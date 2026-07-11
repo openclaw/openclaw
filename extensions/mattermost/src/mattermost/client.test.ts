@@ -15,6 +15,7 @@ import {
   createMattermostClient,
   createMattermostPost,
   normalizeMattermostBaseUrl,
+  readMattermostError,
   updateMattermostPost,
 } from "./client.js";
 
@@ -155,6 +156,38 @@ describe("normalizeMattermostBaseUrl", () => {
   });
 });
 
+// ── readMattermostError ───────────────────────────────────────────────
+
+describe("readMattermostError", () => {
+  it("bounds null-body JSON errors without response.json/text", async () => {
+    const response = new Response(null, {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
+    const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
+
+    await expect(readMattermostError(response)).resolves.toBe("");
+
+    expect(jsonSpy).not.toHaveBeenCalled();
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("parses bounded JSON error messages from response bodies", async () => {
+    const response = new Response(JSON.stringify({ message: "invalid token", id: "app.error" }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
+    const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
+
+    await expect(readMattermostError(response)).resolves.toBe("invalid token");
+
+    expect(jsonSpy).not.toHaveBeenCalled();
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+});
+
 // ── createMattermostClient ───────────────────────────────────────────
 
 describe("createMattermostClient", () => {
@@ -170,6 +203,29 @@ describe("createMattermostClient", () => {
     await expect(client.request("/users/me")).resolves.toEqual({ id: "u1" });
 
     expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads guarded null-body Mattermost errors without response.json/text", async () => {
+    const release = vi.fn(async () => {});
+    const response = new Response(null, {
+      status: 503,
+      statusText: "Service Unavailable",
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
+    const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(client.request("/users/me")).rejects.toThrow(
+      "Mattermost API 503 Service Unavailable: unknown error",
+    );
+    expect(jsonSpy).not.toHaveBeenCalled();
+    expect(textSpy).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
   });
 

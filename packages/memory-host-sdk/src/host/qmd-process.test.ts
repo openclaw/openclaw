@@ -524,4 +524,52 @@ describe("runCliCommand", () => {
     });
     expect(child.kill).not.toHaveBeenCalledWith("SIGKILL");
   });
+
+  it.each(["stdout", "stderr"] as const)(
+    "rejects when %s stream emits an error",
+    async (streamName) => {
+      const child = createMockChild();
+      spawnMock.mockReturnValueOnce(child);
+      const streamError = new Error(`${streamName} EPIPE`);
+
+      const pending = runCliCommand({
+        commandSummary: "qmd query test",
+        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+        env: process.env,
+        cwd: tempDir,
+        maxOutputChars: 10_000,
+      });
+
+      child[streamName].emit("error", streamError);
+
+      await expect(pending).rejects.toMatchObject({
+        message: `qmd query test ${streamName} error: ${streamName} EPIPE`,
+        cause: streamError,
+      });
+      expect(child.kill).toHaveBeenCalledOnce();
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    },
+  );
+
+  it("keeps the other stream guarded after stdout error", async () => {
+    const child = createMockChild();
+    spawnMock.mockReturnValueOnce(child);
+
+    const pending = runCliCommand({
+      commandSummary: "qmd query test",
+      spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+      env: process.env,
+      cwd: tempDir,
+      maxOutputChars: 10_000,
+    });
+
+    child.stdout.emit("error", new Error("stdout EPIPE"));
+
+    expect(() => {
+      child.stderr.emit("error", new Error("stderr later"));
+    }).not.toThrow();
+
+    await expect(pending).rejects.toThrow("qmd query test stdout error: stdout EPIPE");
+    expect(child.kill).toHaveBeenCalledOnce();
+  });
 });

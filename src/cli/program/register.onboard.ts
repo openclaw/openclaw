@@ -171,7 +171,8 @@ export function registerOnboardCommand(program: Command): void {
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run without prompts", false)
-    .option("--modern", "Use the conversational setup/repair assistant", false)
+    .option("--modern", "Open the Crestodian setup chat (kept for compatibility)", false)
+    .option("--classic", "Use the classic multi-step setup wizard", false)
     .option(
       "--accept-risk",
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
@@ -218,6 +219,8 @@ export function registerOnboardCommand(program: Command): void {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       if (opts.modern) {
+        // Deprecated alias for `openclaw crestodian`: skip bootstrap prompts and
+        // open the conversation directly (same as the pre-Commander fast path).
         const { runCrestodian } = await import("../../crestodian/crestodian.js");
         await runCrestodian({
           message: opts.nonInteractive ? "overview" : undefined,
@@ -237,6 +240,7 @@ export function registerOnboardCommand(program: Command): void {
           workspace: opts.workspace as string | undefined,
           nonInteractive: Boolean(opts.nonInteractive),
           acceptRisk: Boolean(opts.acceptRisk),
+          classic: Boolean(opts.classic),
           flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
           mode: opts.mode as "local" | "remote" | undefined,
           ...pickOnboardAuthOptionValues(opts as Record<string, unknown>),

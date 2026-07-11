@@ -4,10 +4,14 @@
  */
 import crypto from "node:crypto";
 import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+  BROWSER_PROXY_ERROR_ENVELOPE,
+  parseBrowserProxyFailure,
+  type BrowserProxyEnvelope,
+  type BrowserProxyFile,
+  type BrowserProxySuccess,
+} from "../browser-proxy-envelope.js";
 import {
   ErrorCodes,
   applyBrowserProxyPaths,
@@ -19,6 +23,7 @@ import {
   isPersistentBrowserProfileMutation,
   persistBrowserProxyFiles,
   resolveNodeCommandAllowlist,
+  resolveNodeIdFromList,
   resolveRequestedBrowserProfile,
   respondUnavailableOnNodeInvokeError,
   safeParseJson,
@@ -37,25 +42,10 @@ type BrowserRequestParams = {
   timeoutMs?: number;
 };
 
-type BrowserProxyFile = {
-  path: string;
-  base64: string;
-  mimeType?: string;
-};
-
-type BrowserProxyResult = {
-  result: unknown;
-  files?: BrowserProxyFile[];
-};
-
 function isBrowserNode(node: NodeSession) {
   const caps = Array.isArray(node.caps) ? node.caps : [];
   const commands = Array.isArray(node.commands) ? node.commands : [];
   return caps.includes("browser") || commands.includes("browser.proxy");
-}
-
-function normalizeNodeKey(value: string) {
-  return normalizeLowercaseStringOrEmpty(value).replace(/[^a-z0-9]+/g, "");
 }
 
 function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | null {
@@ -63,34 +53,8 @@ function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | 
   if (!q) {
     return null;
   }
-  const qNorm = normalizeNodeKey(q);
-  const matches = nodes.filter((node) => {
-    if (node.nodeId === q) {
-      return true;
-    }
-    if (typeof node.remoteIp === "string" && node.remoteIp === q) {
-      return true;
-    }
-    const name = typeof node.displayName === "string" ? node.displayName : "";
-    if (name && normalizeNodeKey(name) === qNorm) {
-      return true;
-    }
-    if (q.length >= 6 && node.nodeId.startsWith(q)) {
-      return true;
-    }
-    return false;
-  });
-  if (matches.length === 1) {
-    return matches[0] ?? null;
-  }
-  if (matches.length === 0) {
-    return null;
-  }
-  throw new Error(
-    `ambiguous node: ${q} (matches: ${matches
-      .map((node) => node.displayName || node.remoteIp || node.nodeId)
-      .join(", ")})`,
-  );
+  const nodeId = resolveNodeIdFromList(nodes, q, false, { allowCompactDisplayName: true });
+  return nodes.find((node) => node.nodeId === nodeId) ?? null;
 }
 
 function resolveBrowserNodeTarget(params: {
@@ -214,6 +178,7 @@ export async function handleBrowserGatewayRequest({
       body,
       timeoutMs,
       profile: resolveRequestedBrowserProfile({ query, body }),
+      errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
     };
     const res = await context.nodeRegistry.invoke({
       nodeId: nodeTarget.nodeId,
@@ -226,14 +191,22 @@ export async function handleBrowserGatewayRequest({
       return;
     }
     const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
-    const proxy = payload && typeof payload === "object" ? (payload as BrowserProxyResult) : null;
+    const failure = parseBrowserProxyFailure(payload);
+    if (failure) {
+      const { status, body: errorBody } = failure.error;
+      const code = status >= 500 ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST;
+      respond(false, undefined, errorShape(code, errorBody.error, { details: errorBody }));
+      return;
+    }
+    const proxy = payload && typeof payload === "object" ? (payload as BrowserProxyEnvelope) : null;
     if (!proxy || !("result" in proxy)) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser proxy failed"));
       return;
     }
-    const mapping = await persistProxyFiles(proxy.files);
-    applyProxyPaths(proxy.result, mapping);
-    respond(true, proxy.result);
+    const success = proxy as BrowserProxySuccess;
+    const mapping = await persistProxyFiles(success.files);
+    applyProxyPaths(success.result, mapping);
+    respond(true, success.result);
     return;
   }
 

@@ -241,4 +241,23 @@ describe("agent harness user input helpers", () => {
       ),
     ).toContain("a &lt; b");
   });
+
+  it("preserves blank fallback lines so skipped answers stay aligned", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          { id: "q1", header: "Q1", question: "First?" },
+          { id: "q2", header: "Q2", question: "Second?" },
+          { id: "q3", header: "Q3", question: "Third?" },
+        ],
+        "\nyes\nno",
+      ),
+    ).toEqual({
+      answers: {
+        q1: { answers: [] },
+        q2: { answers: ["yes"] },
+        q3: { answers: ["no"] },
+      },
+    });
+  });
 });

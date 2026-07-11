@@ -24,7 +24,7 @@ export type CodexPluginConfigEntry = {
   enabled?: boolean;
   marketplaceName?: string;
   pluginName?: string;
-  allow_destructive_actions?: boolean | "auto" | "always";
+  allow_destructive_actions?: boolean | "auto" | "ask";
 };
 
 export type CodexPluginsConfigBlock = {

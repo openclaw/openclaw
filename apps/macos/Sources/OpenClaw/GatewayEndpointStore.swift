@@ -38,6 +38,7 @@ actor GatewayEndpointStore {
         let localPort: @Sendable () -> Int
         let localHost: @Sendable () async -> String
         let remotePortIfRunning: @Sendable () async -> UInt16?
+        let canStartRemoteTunnel: @Sendable () -> Bool
         let ensureRemoteTunnel: @Sendable () async throws -> UInt16
 
         static let live = Deps(
@@ -75,7 +76,14 @@ actor GatewayEndpointStore {
                     tailscaleIP: tailscaleIP)
             },
             remotePortIfRunning: { await RemoteTunnelManager.shared.controlTunnelPortIfRunning() },
+            canStartRemoteTunnel: { GatewayEndpointStore.primaryAppLaunchAdmitted.withValue { $0 } },
             ensureRemoteTunnel: { try await RemoteTunnelManager.shared.ensureControlTunnel() })
+    }
+
+    private static let primaryAppLaunchAdmitted = LockIsolated(false)
+
+    static func admitPrimaryAppLaunch() {
+        self.primaryAppLaunchAdmitted.withValue { $0 = true }
     }
 
     private static func resolveGatewayPassword(
@@ -84,11 +92,16 @@ actor GatewayEndpointStore {
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
     {
+        let serviceEnv = launchdSnapshot?.environment ?? [:]
         let raw = env["OPENCLAW_GATEWAY_PASSWORD"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            if let configPassword = self.resolveConfigPassword(isRemote: isRemote, root: root),
-               !configPassword.isEmpty
+            if let configPassword = self.resolveConfigPassword(
+                isRemote: isRemote,
+                root: root,
+                env: env,
+                serviceEnv: serviceEnv),
+                !configPassword.isEmpty
             {
                 self.warnEnvOverrideOnce(
                     kind: .password,
@@ -113,8 +126,11 @@ actor GatewayEndpointStore {
            let auth = gateway["auth"] as? [String: Any],
            let password = auth["password"] as? String
         {
-            let pw = password.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !pw.isEmpty {
+            if let pw = self.resolveLocalConfigAuthString(
+                password,
+                env: env,
+                serviceEnv: serviceEnv)
+            {
                 return pw
             }
         }
@@ -126,7 +142,12 @@ actor GatewayEndpointStore {
         return nil
     }
 
-    private static func resolveConfigPassword(isRemote: Bool, root: [String: Any]) -> String? {
+    private static func resolveConfigPassword(
+        isRemote: Bool,
+        root: [String: Any],
+        env: [String: String] = [:],
+        serviceEnv: [String: String] = [:]) -> String?
+    {
         if isRemote {
             if let gateway = root["gateway"] as? [String: Any],
                let remote = gateway["remote"] as? [String: Any],
@@ -141,7 +162,7 @@ actor GatewayEndpointStore {
            let auth = gateway["auth"] as? [String: Any],
            let password = auth["password"] as? String
         {
-            return password.trimmingCharacters(in: .whitespacesAndNewlines)
+            return self.resolveLocalConfigAuthString(password, env: env, serviceEnv: serviceEnv)
         }
         return nil
     }
@@ -152,12 +173,17 @@ actor GatewayEndpointStore {
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
     {
+        let serviceEnv = launchdSnapshot?.environment ?? [:]
         let raw = env["OPENCLAW_GATEWAY_TOKEN"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
-               !configToken.isEmpty,
-               configToken != trimmed
+            if let configToken = self.resolveConfigToken(
+                isRemote: isRemote,
+                root: root,
+                env: env,
+                serviceEnv: serviceEnv),
+                !configToken.isEmpty,
+                configToken != trimmed
             {
                 self.warnEnvOverrideOnce(
                     kind: .token,
@@ -167,8 +193,12 @@ actor GatewayEndpointStore {
             return trimmed
         }
 
-        if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
-           !configToken.isEmpty
+        if let configToken = self.resolveConfigToken(
+            isRemote: isRemote,
+            root: root,
+            env: env,
+            serviceEnv: serviceEnv),
+            !configToken.isEmpty
         {
             return configToken
         }
@@ -186,7 +216,12 @@ actor GatewayEndpointStore {
         return nil
     }
 
-    private static func resolveConfigToken(isRemote: Bool, root: [String: Any]) -> String? {
+    private static func resolveConfigToken(
+        isRemote: Bool,
+        root: [String: Any],
+        env: [String: String] = [:],
+        serviceEnv: [String: String] = [:]) -> String?
+    {
         if isRemote {
             return GatewayRemoteConfig.resolveTokenString(root: root)
         }
@@ -195,9 +230,50 @@ actor GatewayEndpointStore {
            let auth = gateway["auth"] as? [String: Any],
            let token = auth["token"] as? String
         {
-            return token.trimmingCharacters(in: .whitespacesAndNewlines)
+            return self.resolveLocalConfigAuthString(token, env: env, serviceEnv: serviceEnv)
         }
         return nil
+    }
+
+    private static func resolveLocalConfigAuthString(
+        _ raw: String,
+        env: [String: String],
+        serviceEnv: [String: String]) -> String?
+    {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let envName = self.envSecretRefName(trimmed) else {
+            return trimmed
+        }
+        // Finder-launched apps cannot see gateway-service-only env values. Resolve
+        // local refs from app env first, then the gateway LaunchAgent snapshot.
+        for source in [env, serviceEnv] {
+            let value = source[envName]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let value, !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private static func envSecretRefName(_ value: String) -> String? {
+        let name: Substring
+        if value.hasPrefix("${"), value.hasSuffix("}") {
+            let nameStart = value.index(value.startIndex, offsetBy: 2)
+            let nameEnd = value.index(before: value.endIndex)
+            name = value[nameStart..<nameEnd]
+        } else if value.hasPrefix("$") {
+            let nameStart = value.index(after: value.startIndex)
+            name = value[nameStart..<value.endIndex]
+        } else {
+            return nil
+        }
+        let candidate = String(name)
+        return self.isValidEnvSecretRefID(candidate) ? candidate : nil
+    }
+
+    private static func isValidEnvSecretRefID(_ value: String) -> Bool {
+        value.range(of: #"^[A-Z][A-Z0-9_]{0,127}$"#, options: .regularExpression) != nil
     }
 
     private static func warnEnvOverrideOnce(
@@ -393,10 +469,15 @@ actor GatewayEndpointStore {
         self.remoteEnsure = nil
     }
 
-    private func kickRemoteEnsureIfNeeded(detail: String) {
+    @discardableResult
+    private func kickRemoteEnsureIfNeeded(detail: String) -> Bool {
+        guard self.deps.canStartRemoteTunnel() else {
+            self.setState(.connecting(mode: .remote, detail: detail))
+            return false
+        }
         if self.remoteEnsure != nil {
             self.setState(.connecting(mode: .remote, detail: detail))
-            return
+            return true
         }
 
         let deps = self.deps
@@ -404,6 +485,7 @@ actor GatewayEndpointStore {
         let task = Task.detached(priority: .utility) { try await deps.ensureRemoteTunnel() }
         self.remoteEnsure = (token: token, task: task)
         self.setState(.connecting(mode: .remote, detail: detail))
+        return true
     }
 
     private func ensureRemoteConfig(detail: String) async throws -> GatewayConnection.Config {
@@ -417,7 +499,9 @@ actor GatewayEndpointStore {
             return (url, token, password)
         }
 
-        self.kickRemoteEnsureIfNeeded(detail: detail)
+        guard self.kickRemoteEnsureIfNeeded(detail: detail) else {
+            throw CancellationError()
+        }
         guard let ensure = self.remoteEnsure else {
             throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connecting…"])
         }

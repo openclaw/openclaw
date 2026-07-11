@@ -2,7 +2,9 @@
  * Tests the registered gateway server method list and exported method names.
  */
 import { describe, expect, it } from "vitest";
+import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
+import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("GATEWAY_EVENTS", () => {
   it("advertises Talk event streams in hello features", () => {
@@ -21,6 +23,14 @@ describe("listGatewayMethods", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("skills.securityVerdicts");
     expect(methods).toContain("skills.skillCard");
+  });
+
+  it("advertises Control UI GitHub previews", () => {
+    expect(listGatewayMethods()).toContain("controlUi.githubPreview");
+  });
+
+  it("advertises Control UI session pull request detection", () => {
+    expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests");
   });
 
   it("does not advertise hidden core handlers", () => {
@@ -47,6 +57,7 @@ describe("listGatewayMethods", () => {
       "exec.approvals.node.set",
       "exec.approval.get",
     ]);
+    expect(methods).toContain("tts.speak");
   });
 
   it("advertises the versioned Talk session RPCs", () => {
@@ -64,5 +75,16 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("talk.session.submitToolResult");
     expect(methods).toContain("talk.session.steer");
     expect(methods).toContain("talk.session.close");
+  });
+
+  it("wires a dispatchable handler for every terminal.* descriptor", () => {
+    // A descriptor without a matching entry in the lazy handler routing table
+    // advertises a method that then dispatches as "unknown method" — exactly
+    // how terminal.attach/list/text first shipped broken. (Approval methods
+    // are excluded: they are injected per-request via extraHandlers.)
+    const missing = listCoreGatewayMethodNames()
+      .filter((method) => method.startsWith("terminal."))
+      .filter((method) => typeof coreGatewayHandlers[method] !== "function");
+    expect(missing).toEqual([]);
   });
 });

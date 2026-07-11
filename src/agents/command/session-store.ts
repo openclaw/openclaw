@@ -8,6 +8,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -37,15 +38,6 @@ function resolvePositiveInteger(value: number | undefined): number | undefined {
   return Math.floor(value);
 }
 
-function removeLifecycleStateFromMetadataPatch(entry: SessionEntry): SessionEntry {
-  const next = { ...entry };
-  delete next.status;
-  delete next.startedAt;
-  delete next.endedAt;
-  delete next.runtimeMs;
-  return next;
-}
-
 /** Applies run result metadata, usage, and CLI bindings to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
@@ -60,6 +52,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
   fallbackModel?: string;
   result: RunResult;
   touchInteraction?: boolean;
+  /**
+   * When false, skip the lastActivityAt bump so heartbeat/internal-event runs
+   * do not re-flag sessions unread; cron and user-facing runs count as activity.
+   */
+  touchActivity?: boolean;
   /**
    * When true, preserve the pre-existing runtime model fields (model,
    * modelProvider, contextTokens) on the session entry instead of overwriting
@@ -83,6 +80,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   } = params;
   const now = Date.now();
   const touchInteraction = params.touchInteraction !== false;
+  const touchActivity = params.touchActivity !== false;
 
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
@@ -125,6 +123,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: now,
     sessionStartedAt: entry.sessionId === sessionId ? (entry.sessionStartedAt ?? now) : now,
     lastInteractionAt: touchInteraction ? now : entry.lastInteractionAt,
+    lastActivityAt: touchActivity ? now : entry.lastActivityAt,
     ...(preserveRuntimeModel
       ? {}
       : {
@@ -209,10 +208,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
     const usageForContext = isCliProvider(providerUsed, cfg)
-      ? promptTokens
-        ? undefined
-        : lastCallUsage
-      : usage;
+      ? lastCallUsage
+      : lastCallUsage?.contextUsage
+        ? lastCallUsage
+        : usage;
     const totalTokens = deriveSessionTotalTokens({
       usage: promptTokens ? undefined : usageForContext,
       contextTokens,
@@ -280,17 +279,19 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   const metadataPatch = preserveUserFacingRunState
     ? {
+        // Preserved-state runs must not alter perceived session state, so the
+        // unread-driving lastActivityAt stays untouched here.
         updatedAt: next.updatedAt,
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }
-    : removeLifecycleStateFromMetadataPatch(next);
+    : next;
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
   const persisted = await patchSessionEntry(
     {
       storePath,
       sessionKey,
     },
-    (_currentEntry, context) => {
+    (currentEntry, context) => {
       if (
         (!preserveUserFacingRunState &&
           context.existingEntry &&
@@ -301,7 +302,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
         // Do not merge stale finalizer metadata after a delete or a competing reset.
         return null;
       }
-      return metadataPatch;
+      return preserveUserFacingRunState
+        ? metadataPatch
+        : projectSessionSnapshotChanges({ initial: entry, next, current: currentEntry });
     },
     {
       ...(preserveUserFacingRunState ? {} : { fallbackEntry: entry }),

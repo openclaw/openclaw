@@ -12,38 +12,8 @@ const {
   detectNodeFastScope,
   listChangedPaths,
   parseArgs,
-} = (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
-  detectChangedScope: (paths: string[]) => {
-    runNode: boolean;
-    runMacos: boolean;
-    runIosBuild: boolean;
-    runAndroid: boolean;
-    runWindows: boolean;
-    runSkillsPython: boolean;
-    runChangedSmoke: boolean;
-    runControlUiI18n: boolean;
-  };
-  detectInstallSmokeScope: (paths: string[]) => {
-    runFastInstallSmoke: boolean;
-    runFullInstallSmoke: boolean;
-  };
-  detectNodeFastScope: (paths: string[]) => {
-    runFastOnly: boolean;
-    runPluginContracts: boolean;
-    runCiRouting: boolean;
-  };
-  listChangedPaths: (
-    base: string,
-    head?: string,
-    cwd?: string,
-    preferMergeHeadFirstParent?: boolean,
-  ) => string[];
-  parseArgs: (argv: string[]) => {
-    base: string;
-    head: string;
-    mergeHeadFirstParent: boolean;
-  };
-};
+  shouldRunNativeI18n,
+} = await import("../../scripts/ci-changed-scope.mjs");
 
 const markerPaths: string[] = [];
 const tempDirs: string[] = [];
@@ -120,9 +90,7 @@ describe("parseArgs", () => {
 
   it("rejects missing CI diff refs", () => {
     expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
-    expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow(
-      "--base requires a value",
-    );
+    expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow("--base requires a value");
     expect(() => parseArgs(["--head"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--head", "-h"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--base", ""])).toThrow("--base requires a value");
@@ -130,6 +98,27 @@ describe("parseArgs", () => {
 });
 
 describe("detectChangedScope", () => {
+  it("routes only native i18n-owned paths to the native inventory job", () => {
+    for (const changedPath of [
+      "apps/.i18n/native-source.json",
+      "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt",
+      "apps/ios/Sources/RootTabs.swift",
+      "apps/macos/Sources/OpenClaw/Settings.swift",
+      "apps/shared/OpenClawKit/Sources/OpenClawKit/Client.swift",
+      "scripts/native-app-i18n.ts",
+      "scripts/android-app-i18n.ts",
+      "scripts/apple-app-i18n.ts",
+      "test/scripts/native-app-i18n.test.ts",
+      ".github/workflows/native-app-locale-refresh.yml",
+      ".github/workflows/ci.yml",
+    ]) {
+      expect(shouldRunNativeI18n([changedPath]), changedPath).toBe(true);
+    }
+
+    expect(shouldRunNativeI18n(["src/config/defaults.ts"])).toBe(false);
+    expect(shouldRunNativeI18n(["scripts/install.sh"])).toBe(false);
+  });
+
   it("fails safe when no paths are provided", () => {
     expect(detectChangedScope([])).toEqual({
       runNode: true,
@@ -234,9 +223,32 @@ describe("detectChangedScope", () => {
     });
   });
 
+  it("runs both Apple lanes for shared Swift tooling changes", () => {
+    for (const toolingPath of [
+      "config/swiftformat",
+      "config/swiftlint.yml",
+      "scripts/check-swift-tools.sh",
+      "scripts/format-swift.sh",
+      "scripts/install-swift-tools.sh",
+      "scripts/lint-swift.sh",
+    ]) {
+      expect(detectChangedScope([toolingPath])).toEqual({
+        runNode: true,
+        runMacos: true,
+        runIosBuild: true,
+        runAndroid: false,
+        runWindows: false,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
+  });
+
   it("enables the iOS build lane for iOS build helper changes", () => {
     for (const helperPath of [
       "scripts/ios-team-id.sh",
+      "scripts/ios-write-swift-filelist.mjs",
       "scripts/ios-version.ts",
       "scripts/lib/ios-version.ts",
       "scripts/lib/npm-publish-plan.mjs",
@@ -351,6 +363,7 @@ describe("detectChangedScope", () => {
       "scripts/codesign-mac-app.sh",
       "scripts/create-dmg.sh",
       "scripts/lib/plistbuddy.sh",
+      "scripts/lib/swift-toolchain.sh",
       "scripts/notarize-mac-artifact.sh",
       "scripts/package-mac-app.sh",
       "scripts/package-mac-dist.sh",
@@ -430,6 +443,24 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
+    for (const daemonPath of [
+      "src/daemon/schtasks.ts",
+      "src/daemon/schtasks-exec.ts",
+      "src/daemon/schtasks.startup-fallback.test.ts",
+      "src/daemon/runtime-hints.windows-paths.test.ts",
+      "src/daemon/test-helpers/schtasks-fixtures.ts",
+    ]) {
+      expect(detectChangedScope([daemonPath]), daemonPath).toEqual({
+        runNode: true,
+        runMacos: false,
+        runIosBuild: false,
+        runAndroid: false,
+        runWindows: true,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
     expect(detectChangedScope(["src/shared/runtime-import.ts"])).toEqual({
       runNode: true,
       runMacos: false,
@@ -480,6 +511,23 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
+    for (const releaseCheckPath of [
+      ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
+      "scripts/github/run-openclaw-cross-os-release-checks.sh",
+      "scripts/openclaw-cross-os-release-checks.ts",
+      "test/scripts/openclaw-cross-os-release-workflow.test.ts",
+    ]) {
+      expect(detectChangedScope([releaseCheckPath]), releaseCheckPath).toEqual({
+        runNode: true,
+        runMacos: false,
+        runIosBuild: false,
+        runAndroid: false,
+        runWindows: true,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
     expect(detectChangedScope(["scripts/install.ps1"])).toEqual({
       runNode: true,
       runMacos: false,
@@ -891,6 +939,7 @@ describe("detectChangedScope", () => {
       run_fast_install_smoke: "false",
       run_full_install_smoke: "false",
       run_control_ui_i18n: "false",
+      run_native_i18n: "false",
     });
   });
 });

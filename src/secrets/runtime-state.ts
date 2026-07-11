@@ -51,7 +51,7 @@ const preparedSnapshotRefreshContext = new WeakMap<
 /**
  * Clones refresh context while preserving callback identity and isolating mutable maps/config.
  */
-export function cloneSecretsRuntimeRefreshContext(
+function cloneSecretsRuntimeRefreshContext(
   context: SecretsRuntimeRefreshContext,
 ): SecretsRuntimeRefreshContext {
   const cloned: SecretsRuntimeRefreshContext = {

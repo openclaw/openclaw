@@ -5,6 +5,7 @@
  * and compact AI snapshots with stable refs and duplicate tracking.
  */
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeString } from "../record-shared.js";
 import type { SnapshotAriaNode } from "./client.types.js";
 import {
@@ -184,7 +185,7 @@ export function buildAiSnapshotFromChromeMcpSnapshot(params: {
       ? Math.floor(params.maxChars)
       : undefined;
   if (maxChars && snapshot.length > maxChars) {
-    snapshot = `${snapshot.slice(0, maxChars)}\n\n[...TRUNCATED - page too large]`;
+    snapshot = `${truncateUtf16Safe(snapshot, maxChars)}\n\n[...TRUNCATED - page too large]`;
     truncated = true;
   }
 

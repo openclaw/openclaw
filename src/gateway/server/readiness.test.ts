@@ -32,6 +32,8 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
     startChannels: vi.fn(),
     startChannel: vi.fn(),
     stopChannel: vi.fn(),
+    setAutostartSuppression: vi.fn(),
+    getAutostartSuppression: vi.fn(() => null),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
@@ -265,6 +267,25 @@ describe("createReadinessChecker", () => {
 
       expect(readiness()).toEqual(readySnapshot());
       expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports crash-loop suppressed stopped channels without failing readiness", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        accounts: {
+          discord: stoppedAccount({
+            restartPending: false,
+            lastError: "safe mode",
+          }),
+        },
+      });
+      vi.mocked(manager.getAutostartSuppression).mockReturnValue({
+        reason: "crash-loop-breaker",
+        message: "safe mode",
+      });
+
+      expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { suppressed: ["discord"] }));
     });
   });
 

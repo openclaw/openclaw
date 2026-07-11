@@ -7,10 +7,15 @@ import {
   type ServerResponse,
 } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
+import {
+  resolveMcpLoopbackClientGrant,
+  revokeMcpLoopbackClientGrantsForRuntime,
+} from "./mcp-grant-store.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
@@ -40,9 +45,9 @@ import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 // bearer-token HTTP endpoint bound to 127.0.0.1. Only one active server/runtime
 // is registered per process.
 export {
+  createMcpAttachGrantServerConfig,
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
-  resolveMcpLoopbackBearerToken,
 } from "./mcp-http.loopback-runtime.js";
 
 type McpLoopbackServer = {
@@ -191,7 +196,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
 
     // Bind the request before body parsing/tool resolution. A CLI may exit while
     // an accepted request is still uploading, and retries must not outrun it.
-    const cliCaptureKey = resolveMcpCliCaptureKey(req);
+    const cliCaptureKey = resolveMcpCliCaptureKey(req, auth);
     const cliRequestCaptureHandle = markMcpLoopbackRequestStarted(cliCaptureKey);
     const requestAbort = createRequestAbortSignal(req, res);
     void (async () => {
@@ -226,14 +231,31 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         markMcpLoopbackRequestClassified(cliRequestCaptureHandle);
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
+        const { boundGrantToken, boundCaptureKey } = auth;
+        const authorizeToolCall =
+          boundGrantToken && boundCaptureKey
+            ? () =>
+                Boolean(
+                  resolveMcpLoopbackClientGrant({
+                    token: boundGrantToken,
+                    runtimeOwnerToken: ownerToken,
+                    captureKey: boundCaptureKey,
+                  }),
+                )
+            : undefined;
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
         const scopedTools = toolCache.resolve({
           cfg,
           sessionKey: requestContext.sessionKey,
+          runtimePolicySessionKey: requestContext.runtimePolicySessionKey,
+          agentId: requestContext.agentId,
           sessionId: requestContext.sessionId,
+          modelProvider: requestContext.modelProvider,
+          modelId: requestContext.modelId,
           yieldContextCacheKey: yieldContext?.cacheKey,
           onYield: yieldContext?.onYield,
           messageProvider: requestContext.messageProvider,
+          clientCaps: requestContext.clientCaps,
           currentChannelId: requestContext.currentChannelId,
           currentThreadTs: requestContext.currentThreadTs,
           currentMessageId: requestContext.currentMessageId,
@@ -241,8 +263,23 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           accountId: requestContext.accountId,
           inboundEventKind: requestContext.inboundEventKind,
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
+          taskSuggestionDeliveryMode: requestContext.taskSuggestionDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
           senderIsOwner: requestContext.senderIsOwner,
+          nodeExecAllowed: requestContext.nodeExecAllowed,
+          execSession: requestContext.execSession,
+          execOverrides: requestContext.execOverrides,
+          bashElevated: requestContext.bashElevated,
+          trigger: requestContext.trigger,
+          approvalReviewerDeviceId: requestContext.approvalReviewerDeviceId,
+          channelContext: requestContext.channelContext,
+          senderName: requestContext.senderName,
+          senderUsername: requestContext.senderUsername,
+          senderE164: requestContext.senderE164,
+          groupId: requestContext.groupId,
+          groupChannel: requestContext.groupChannel,
+          groupSpace: requestContext.groupSpace,
+          spawnedBy: requestContext.spawnedBy,
         });
 
         logMcpLoopbackTraffic("request", {
@@ -252,7 +289,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           ),
           sessionKey: requestContext.sessionKey,
           inboundEventKind: requestContext.inboundEventKind,
-          senderIsOwner: requestContext.senderIsOwner === true,
+          senderIsOwner: requestContext.senderIsOwner,
           toolCount: scopedTools.toolSchema.length,
           cronVisible: scopedTools.toolSchema.some((tool) => tool.name === "cron"),
         });
@@ -273,8 +310,21 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
                 agentId: scopedTools.agentId,
                 config: cfg,
                 sessionKey: requestContext.sessionKey,
+                sessionId: requestContext.sessionId,
+                runId: requestContext.runId,
+                approvalReviewerDeviceId: requestContext.approvalReviewerDeviceId,
+                channelId: requestContext.currentChannelId,
+                turnSourceChannel: requestContext.messageProvider,
+                turnSourceTo: requestContext.currentChannelId,
+                turnSourceAccountId: requestContext.accountId,
+                turnSourceThreadId: requestContext.currentThreadTs,
+                loopDetection: resolveToolLoopDetectionConfig({
+                  cfg,
+                  agentId: scopedTools.agentId,
+                }),
               },
               signal: requestAbort.signal,
+              authorizeToolCall,
               onToolCallPrepared: cliCaptureHandle
                 ? ({ toolName: preparedToolName, args }) => {
                     updateMcpLoopbackToolCallCapture(cliCaptureHandle, {
@@ -284,13 +334,10 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
                   }
                 : undefined,
               onToolCallResult: cliCaptureHandle
-                ? ({ toolName: resultToolName, args, result, isError }) => {
+                ? (result) => {
                     recordMcpLoopbackToolCallResult({
                       captureHandle: cliCaptureHandle,
-                      toolName: resultToolName,
-                      args,
-                      result,
-                      isError,
+                      ...result,
                     });
                   }
                 : undefined,
@@ -378,11 +425,14 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
 
   const server: McpLoopbackServer = {
     port: address.port,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
+    close: () => {
+      // Stop admitting this runtime's child grants before draining accepted
+      // requests. A delayed old-server close cannot revoke a successor runtime.
+      clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
+      revokeMcpLoopbackClientGrantsForRuntime(ownerToken);
+      return new Promise<void>((resolve, reject) => {
         httpServer.close((error) => {
           if (!error) {
-            clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
             if (activeMcpLoopbackServer === server) {
               activeMcpLoopbackServer = undefined;
             }
@@ -394,7 +444,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           resolve();
         });
         closeActiveSseResponses();
-      }),
+      });
+    },
   };
   return server;
 }
