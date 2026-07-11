@@ -413,7 +413,7 @@ async function initSessionStateAttempt(
         // before interrupting, then reacquire any refreshed identity first.
         const revalidated = await runExclusiveSessionStoreWrite(
           attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, undefined),
+          async () => await initSessionStateAttemptLocked(params, attemptContext, 0, undefined),
         );
         if (
           revalidated.kind === "complete" ||
@@ -442,7 +442,7 @@ async function initSessionStateAttempt(
         // must match this exact fenced identity before any rollover side effect.
         return await runExclusiveSessionStoreWrite(
           attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, candidate),
+          async () => await initSessionStateAttemptLocked(params, attemptContext, 0, candidate),
         );
       },
     });
