@@ -99,10 +99,16 @@
   margin-top: 4px;
 }
 
+/* Single line, ellipsized: the footer overlays a fixed 26px rhythm gap, so
+   long configurable sender names must never wrap it taller than the gap. */
 .chat-sender-name {
   font-weight: 500;
   font-size: 12px;
   color: var(--muted);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-group-timestamp {
