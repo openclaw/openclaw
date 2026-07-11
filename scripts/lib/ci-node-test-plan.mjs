@@ -1126,21 +1126,20 @@ function createCompactNodeTestShardBundles(options = {}) {
     }
 
     const wholeGroups = sortedGroups.filter((candidate) => !candidate.includePatterns);
-    for (
-      let offset = 0;
-      offset < wholeGroups.length;
-      offset += COMPACT_WHOLE_NODE_TEST_JOB_GROUPS
-    ) {
-      const groupBatch = wholeGroups.slice(offset, offset + COMPACT_WHOLE_NODE_TEST_JOB_GROUPS);
+    const wholeJobCount = Math.ceil(wholeGroups.length / COMPACT_WHOLE_NODE_TEST_JOB_GROUPS);
+    const wholeGroupBatches = Array.from({ length: wholeJobCount }, () => []);
+    for (const [index, group] of wholeGroups.entries()) {
+      wholeGroupBatches[index % wholeJobCount].push(group);
+    }
+    for (const [index, groupBatch] of wholeGroupBatches.entries()) {
       const runnerClass = groupBatch[0].runner.includes("-8vcpu-") ? "large" : "small";
       const distSuffix = groupBatch[0].requiresDist ? "-dist" : "";
-      const index = offset / COMPACT_WHOLE_NODE_TEST_JOB_GROUPS + 1;
       compactJobs.push({
-        checkName: `checks-node-compact-${runnerClass}${distSuffix}-whole-${index}`,
+        checkName: `checks-node-compact-${runnerClass}${distSuffix}-whole-${index + 1}`,
         groups: groupBatch,
         requiresDist: groupBatch[0].requiresDist,
         runner: groupBatch[0].runner,
-        shardName: `compact-${runnerClass}${distSuffix}-whole-${index}`,
+        shardName: `compact-${runnerClass}${distSuffix}-whole-${index + 1}`,
         timeoutMinutes: COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES,
       });
     }
