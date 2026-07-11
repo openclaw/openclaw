@@ -56,6 +56,10 @@ function fetchSignal(fetchFn: ReturnType<typeof vi.fn>, index = 0): AbortSignal 
   return signal;
 }
 
+function abortReasonError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error("fetch request aborted");
+}
+
 function createHangingFetch(): ReturnType<typeof vi.fn> {
   return vi.fn(
     async (_url: string, init?: RequestInit) =>
@@ -65,14 +69,7 @@ function createHangingFetch(): ReturnType<typeof vi.fn> {
           reject(new Error("Expected fetch AbortSignal"));
           return;
         }
-        signal.addEventListener(
-          "abort",
-          () =>
-            reject(
-              signal.reason instanceof Error ? signal.reason : new Error("fetch request aborted"),
-            ),
-          { once: true },
-        );
+        signal.addEventListener("abort", () => reject(abortReasonError(signal)), { once: true });
       }),
   );
 }
@@ -268,11 +265,7 @@ describe("graph upload request timeouts", () => {
         throw new Error("Expected fetch AbortSignal");
       }
       return await new Promise<Response>((resolve, reject) => {
-        signal.addEventListener(
-          "abort",
-          () => reject(signal.reason ?? new Error("fetch request aborted")),
-          { once: true },
-        );
+        signal.addEventListener("abort", () => reject(abortReasonError(signal)), { once: true });
         setTimeout(
           () =>
             resolve(
@@ -314,11 +307,7 @@ describe("graph upload request timeouts", () => {
           throw new Error("Expected fetch AbortSignal");
         }
         return await new Promise<Response>((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () => reject(signal.reason ?? new Error("fetch request aborted")),
-            { once: true },
-          );
+          signal.addEventListener("abort", () => reject(abortReasonError(signal)), { once: true });
         });
       }
 
