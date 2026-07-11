@@ -209,7 +209,9 @@ describe("GatewayClient", () => {
   test("rejects an unbounded request, reconnects, and does not replay it", async () => {
     const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     wss = server;
-    await new Promise<void>((resolve) => server.once("listening", resolve));
+    await new Promise<void>((resolve) => {
+      server.once("listening", resolve);
+    });
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("websocket server address unavailable");
