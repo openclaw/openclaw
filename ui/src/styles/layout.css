@@ -105,6 +105,22 @@ html.openclaw-native-macos .shell-nav-expand {
   top: 52px;
 }
 
+/* Newer Mac apps host a native sidebar toggle in the titlebar next to
+   back/forward and add openclaw-native-nav; visually retire the floating
+   duplicate but keep it focusable: collapse focus restoration targets it
+   (app-host.ts) and keyboard/screen-reader users still need an in-page
+   expand control, so it reveals itself on keyboard focus like a skip link.
+   Older apps only add openclaw-native-macos and keep it visible. */
+html.openclaw-native-nav .shell-nav-expand {
+  opacity: 0;
+  pointer-events: none;
+}
+
+html.openclaw-native-nav .shell-nav-expand:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .shell--onboarding {
   grid-template-columns: 0 minmax(0, 1fr);
   grid-template-rows: 0 1fr;
@@ -1686,8 +1702,7 @@ openclaw-session-menu[popover] {
   color: var(--accent);
 }
 
-/* Single compact icon row: status dot, then utility icons right-aligned.
-   The footer signals connectivity only; gateway version lives in Settings. */
+/* Single compact row: status, build identity, then utility icons right-aligned. */
 .sidebar-footer-bar {
   display: flex;
   align-items: center;
@@ -1698,6 +1713,26 @@ openclaw-session-menu[popover] {
 
 .sidebar-footer-bar__spacer {
   flex: 1 1 auto;
+}
+
+/* Host elements are display:contents, so the anchor itself is the flex item;
+   min-width 0 lets it yield to the footer icons and ellipsize. */
+.sidebar-footer-build {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.sidebar-footer-build:hover,
+.sidebar-footer-build:focus-visible {
+  color: var(--text);
+  text-decoration: none;
 }
 
 /* Dev-checkout branch strip: only rendered when the gateway runs from a git

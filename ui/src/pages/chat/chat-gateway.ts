@@ -338,6 +338,15 @@ export function handleChatSideResultGatewayEvent(state: ChatState, payload: unkn
   if (state.chatSideResultTerminalRuns?.has(sideResult.runId)) {
     return true;
   }
+  // A same-session result from another run (e.g. a split pane) must not
+  // replace this pane's live pending card — displaying it would also let the
+  // dismiss button retire the hidden pending run. Record it so its trailing
+  // terminal chat event is still swallowed here.
+  const pendingRunId = state.chatSideResultPending?.runId;
+  if (pendingRunId && pendingRunId !== sideResult.runId) {
+    state.chatSideResultTerminalRuns?.add(sideResult.runId);
+    return true;
+  }
   state.chatSideResult = sideResult;
   state.chatSideResultPending = null;
   state.chatSideResultTerminalRuns?.add(sideResult.runId);

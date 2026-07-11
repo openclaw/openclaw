@@ -1010,7 +1010,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         this.searchKeyword(term, limit, options, sourceFilterList).catch(() => []),
       ),
     );
-    return this.mergeKeywordSearchHits(resultSets);
+    return this.mergeKeywordSearchHits(resultSets, query);
   }
 
   private resolveKeywordFallbackTerms(query: string): string[] {
@@ -1020,7 +1020,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return keywords.slice(0, KEYWORD_FALLBACK_SEARCH_TERM_LIMIT);
   }
 
-  private mergeKeywordSearchHits(resultSets: KeywordSearchHit[][]): KeywordSearchHit[] {
+  private mergeKeywordSearchHits(
+    resultSets: KeywordSearchHit[][],
+    exactPathQuery?: string,
+  ): KeywordSearchHit[] {
     const seenIds = new Map<string, KeywordSearchHit>();
     for (const results of resultSets) {
       for (const result of results) {
@@ -1040,7 +1043,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         }
       }
     }
-    return [...seenIds.values()].toSorted(
+    const merged = [...seenIds.values()];
+    if (exactPathQuery !== undefined) {
+      // Fallback terms broaden lexical recall, but only the original user query
+      // can claim exact path, basename, or stem precedence.
+      for (const result of merged) {
+        result.exactPathSpecificity = resolveExactPathSpecificity(exactPathQuery, result.path);
+      }
+    }
+    return merged.toSorted(
       (a, b) =>
         b.exactPathSpecificity - a.exactPathSpecificity ||
         b.score - a.score ||

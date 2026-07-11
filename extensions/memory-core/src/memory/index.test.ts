@@ -2309,6 +2309,32 @@ describe("memory index", () => {
     expect(results[0]?.score).toBe(1);
   });
 
+  it("does not promote a fallback term into the exact filename tier", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      minScore: 0,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    await fs.writeFile(path.join(memoryDir, "alpha.md"), "Unrelated path-only candidate.");
+    await fs.writeFile(
+      path.join(memoryDir, "body-match.md"),
+      "Beta beta beta beta beta strongest fallback body match.",
+    );
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("alpha beta", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/body-match.md");
+  });
+
   it("uses body relevance within the same exact basename tier in FTS-only mode", async () => {
     forceNoProvider = true;
     const cfg = createCfg({
