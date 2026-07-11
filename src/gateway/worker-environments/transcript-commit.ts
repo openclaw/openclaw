@@ -60,7 +60,11 @@ type AppliedTranscriptMessage = {
 
 type ApplyTranscriptCommitResult =
   | { ok: true; messages: AppliedTranscriptMessage[] }
-  | { ok: false; reason: "session-not-attached" | "stale-base-leaf" };
+  | { ok: false; reason: "invalid-batch" | "session-not-attached" | "stale-base-leaf" };
+
+type PersistedCommitResolution =
+  | { kind: "ambiguous" | "missing" }
+  | { kind: "found"; messages: AppliedTranscriptMessage[] };
 
 function cloneContentPart(
   part: WorkerTranscriptMessage["content"][number],
@@ -296,9 +300,64 @@ function resolveActiveCommitPrefix(params: {
   return { activeVisibleEntryCount, ok: true, recoveredMessages };
 }
 
+function resolvePersistedCommitAcrossDag(params: {
+  baseLeafId: string | null;
+  manager: SessionManager;
+  messages: readonly CommittedAgentMessage[];
+}): PersistedCommitResolution {
+  const childrenByParent = new Map<string | null, ReturnType<SessionManager["getEntries"]>>();
+  for (const entry of params.manager.getEntries()) {
+    const children = childrenByParent.get(entry.parentId) ?? [];
+    children.push(entry);
+    childrenByParent.set(entry.parentId, children);
+  }
+
+  const completedPaths: AppliedTranscriptMessage[][] = [];
+  const visit = (
+    parentId: string | null,
+    messageIndex: number,
+    path: AppliedTranscriptMessage[],
+  ): void => {
+    if (completedPaths.length > 1) {
+      return;
+    }
+    if (messageIndex === params.messages.length) {
+      completedPaths.push(path);
+      return;
+    }
+    const expectedKey = readMessageIdempotencyKey(params.messages[messageIndex]);
+    if (!expectedKey) {
+      return;
+    }
+    for (const entry of childrenByParent.get(parentId) ?? []) {
+      if (
+        entry.type !== "message" ||
+        !isCommittedAgentMessage(entry.message) ||
+        readMessageIdempotencyKey(entry.message) !== expectedKey
+      ) {
+        continue;
+      }
+      visit(entry.id, messageIndex + 1, [
+        ...path,
+        { appended: false, message: entry.message, messageId: entry.id },
+      ]);
+    }
+  };
+
+  // The pending ledger binds the request hash while each deterministic key
+  // binds tuple + index. Do not compare re-redacted content across restarts.
+  visit(params.baseLeafId, 0, []);
+  if (completedPaths.length > 1) {
+    return { kind: "ambiguous" };
+  }
+  const messages = completedPaths[0];
+  return messages ? { kind: "found", messages } : { kind: "missing" };
+}
+
 async function applyWorkerTranscriptCommit(params: {
   config: OpenClawConfig;
   messages: readonly CommittedAgentMessage[];
+  recoverPersistedBatch: boolean;
   requestedBaseLeafId: string | null;
   sessionId: string;
   target: ResolvedWorkerTranscriptTarget;
@@ -313,6 +372,21 @@ async function applyWorkerTranscriptCommit(params: {
     }
 
     const manager = SessionManager.open(sessionFile);
+    if (params.recoverPersistedBatch) {
+      // Only a pending ledger row may prove an off-branch batch: the agent DB
+      // can commit before the shared replay ledger records its terminal result.
+      const recovered = resolvePersistedCommitAcrossDag({
+        baseLeafId: params.requestedBaseLeafId,
+        manager,
+        messages: redactedMessages,
+      });
+      if (recovered.kind === "found") {
+        return { ok: true as const, messages: recovered.messages };
+      }
+      if (recovered.kind === "ambiguous") {
+        return { ok: false as const, reason: "invalid-batch" as const };
+      }
+    }
     const prefix = resolveActiveCommitPrefix({
       baseLeafId: params.requestedBaseLeafId,
       manager,
@@ -424,6 +498,7 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
       const applied = await applyWorkerTranscriptCommit({
         config,
         messages,
+        recoverPersistedBatch: started.kind === "recover",
         requestedBaseLeafId: params.request.baseLeafId,
         sessionId,
         target,

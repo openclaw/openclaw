@@ -118,6 +118,19 @@ function messageIdempotencyKey(seq: number, index: number): string {
   return `worker-commit-${digest}`;
 }
 
+function requireAppendableWorkerMessage(
+  message: unknown,
+): Parameters<SessionManager["appendMessage"]>[0] {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    throw new Error("expected committed worker message");
+  }
+  const role = (message as { role?: unknown }).role;
+  if (role !== "assistant" && role !== "toolResult" && role !== "user") {
+    throw new Error("expected committed worker message");
+  }
+  return message as Parameters<SessionManager["appendMessage"]>[0];
+}
+
 describe("worker transcript commit application", () => {
   let root: string;
   let sessionsDir: string;
@@ -393,6 +406,144 @@ describe("worker transcript commit application", () => {
     const reopened = SessionManager.open(sessionFile);
     expect(reopened.getEntries()).toHaveLength(request.messages.length + 1);
     expect(reopened.getLeafId()).toBe(laterLeafId);
+  });
+
+  it("replays an interrupted terminal write after its branch is abandoned", async () => {
+    cfg = { ...cfg, logging: { redactSensitive: "tools" } };
+    const initialManager = SessionManager.open(sessionFile);
+    const baseLeafId = initialManager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "Local base" }],
+      timestamp: 50,
+    });
+    let interruptCompletion = true;
+    const interruptedStore: WorkerTranscriptCommitStore = {
+      begin: ledgerStore.begin,
+      complete: (input) => {
+        if (interruptCompletion) {
+          interruptCompletion = false;
+          throw new Error("simulated off-branch terminal interruption");
+        }
+        return ledgerStore.complete(input);
+      },
+    };
+    const interruptedCommitter = createWorkerTranscriptCommitter({
+      getConfig: () => cfg,
+      store: interruptedStore,
+    });
+    const request = createRequest({
+      baseLeafId,
+      messages: createTurnMessages("my key is sk-abcdef1234567890xyz"),
+    });
+
+    await expect(interruptedCommitter.commit({ identity: IDENTITY, request })).rejects.toThrow(
+      "simulated off-branch terminal interruption",
+    );
+    const afterInterruption = SessionManager.open(sessionFile);
+    const committedEntries = afterInterruption
+      .getEntries()
+      .filter((entry) => entry.id !== baseLeafId);
+    const committedEntryIds = committedEntries.map((entry) => entry.id);
+    expect(committedEntryIds).toHaveLength(request.messages.length);
+    expect(JSON.stringify(committedEntries)).not.toContain("sk-abcdef1234567890xyz");
+
+    const firstCommitted = committedEntries[0];
+    if (firstCommitted?.type !== "message") {
+      throw new Error("expected committed worker message");
+    }
+    afterInterruption.branch(baseLeafId);
+    const duplicatePrefixId = afterInterruption.appendMessage(
+      requireAppendableWorkerMessage(firstCommitted.message),
+      { idempotencyLookup: "caller-checked" },
+    );
+    afterInterruption.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "Incomplete duplicate branch" }],
+      timestamp: 350,
+    });
+    afterInterruption.branch(baseLeafId);
+    const localLeafId = afterInterruption.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "Local branch wins" }],
+      timestamp: 400,
+    });
+    const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
+    unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+    cfg = { ...cfg, logging: { redactSensitive: "off" } };
+
+    const replay = await committer.commit({ identity: IDENTITY, request });
+
+    expect(replay).toEqual({
+      ok: true,
+      result: {
+        entryIds: committedEntryIds,
+        newLeafId: committedEntryIds.at(-1),
+      },
+    });
+    const reopened = SessionManager.open(sessionFile);
+    expect(reopened.getBranch().map((entry) => entry.id)).toEqual([baseLeafId, localLeafId]);
+    if (!replay.ok) {
+      throw new Error(`expected interrupted commit replay, received ${replay.reason}`);
+    }
+    expect(replay.result.entryIds).not.toContain(duplicatePrefixId);
+    expect(updates).toEqual([]);
+  });
+
+  it("rejects ambiguous persisted recovery without appending or publishing", async () => {
+    const initialManager = SessionManager.open(sessionFile);
+    const baseLeafId = initialManager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "Local base" }],
+      timestamp: 50,
+    });
+    let interruptCompletion = true;
+    const interruptedCommitter = createWorkerTranscriptCommitter({
+      getConfig: () => cfg,
+      store: {
+        begin: ledgerStore.begin,
+        complete: (input) => {
+          if (interruptCompletion) {
+            interruptCompletion = false;
+            throw new Error("simulated ambiguous terminal interruption");
+          }
+          return ledgerStore.complete(input);
+        },
+      },
+    });
+    const request = createRequest({ baseLeafId });
+
+    await expect(interruptedCommitter.commit({ identity: IDENTITY, request })).rejects.toThrow(
+      "simulated ambiguous terminal interruption",
+    );
+    const manager = SessionManager.open(sessionFile);
+    const originalEntries = manager.getEntries().filter((entry) => entry.id !== baseLeafId);
+    expect(originalEntries).toHaveLength(request.messages.length);
+    manager.branch(baseLeafId);
+    for (const entry of originalEntries) {
+      if (entry.type !== "message") {
+        throw new Error("expected committed worker message");
+      }
+      manager.appendMessage(requireAppendableWorkerMessage(entry.message), {
+        idempotencyLookup: "caller-checked",
+      });
+    }
+    manager.branch(baseLeafId);
+    const localLeafId = manager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "Local branch wins" }],
+      timestamp: 400,
+    });
+    const entryCountBeforeRetry = manager.getEntries().length;
+    const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
+    unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+
+    const replay = await committer.commit({ identity: IDENTITY, request });
+
+    expect(replay).toEqual({ ok: false, reason: "invalid-batch" });
+    const reopened = SessionManager.open(sessionFile);
+    expect(reopened.getEntries()).toHaveLength(entryCountBeforeRetry);
+    expect(reopened.getBranch().map((entry) => entry.id)).toEqual([baseLeafId, localLeafId]);
+    expect(updates).toEqual([]);
   });
 
   it("rolls back every transcript row when a batch append is interrupted", async () => {
