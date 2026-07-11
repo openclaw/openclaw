@@ -35,6 +35,18 @@ final class AppState {
     @ObservationIgnored private var execApprovalsReadGeneration = 0
     private var isInitializing = true
     private var isApplyingRemoteTokenConfig = false
+    private enum GatewayConfigSyncState: Equatable {
+        case current
+        case pending
+        case failed
+    }
+
+    @ObservationIgnored private var gatewayConfigSyncState = GatewayConfigSyncState.current
+    @ObservationIgnored private var gatewayConfigSyncTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var gatewayRoutingGeneration: UInt64 = 0
+    #if DEBUG
+    @ObservationIgnored private var gatewayConfigSyncEnabledForTesting = false
+    #endif
     private var configWatcher: ConfigFileWatcher?
     private var lastConfigFingerprint: Data?
     private var suppressVoiceWakeGlobalSync = false
@@ -251,12 +263,12 @@ final class AppState {
     var connectionMode: ConnectionMode {
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) }
-            self.syncGatewayConfigIfNeeded()
+            syncGatewayConfigIfNeeded()
         }
     }
 
     var remoteTransport: RemoteTransport {
-        didSet { self.syncGatewayConfigIfNeeded() }
+        didSet { syncGatewayConfigIfNeeded() }
     }
 
     var canvasEnabled: Bool {
@@ -282,12 +294,12 @@ final class AppState {
     var remoteTarget: String {
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.remoteTarget, forKey: remoteTargetKey) }
-            self.syncGatewayConfigIfNeeded()
+            syncGatewayConfigIfNeeded()
         }
     }
 
     var remoteUrl: String {
-        didSet { self.syncGatewayConfigIfNeeded() }
+        didSet { syncGatewayConfigIfNeeded() }
     }
 
     var remoteToken: String {
@@ -295,7 +307,7 @@ final class AppState {
             guard !self.isApplyingRemoteTokenConfig else { return }
             self.remoteTokenDirty = true
             self.remoteTokenUnsupported = false
-            self.syncGatewayConfigIfNeeded()
+            syncGatewayConfigIfNeeded()
         }
     }
 
@@ -303,7 +315,10 @@ final class AppState {
     private(set) var remoteTokenUnsupported = false
 
     var remoteIdentity: String {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.remoteIdentity, forKey: remoteIdentityKey) } }
+        didSet {
+            self.ifNotPreview { UserDefaults.standard.set(self.remoteIdentity, forKey: remoteIdentityKey) }
+            syncGatewayConfigIfNeeded()
+        }
     }
 
     var remoteProjectRoot: String {
@@ -469,7 +484,7 @@ final class AppState {
         }
         self.isInitializing = false
         if !self.isPreview {
-            self.scheduleExecApprovalModeReadRetry()
+            scheduleExecApprovalModeReadRetry()
         }
         if !self.isPreview {
             self.startConfigWatcher()
@@ -479,6 +494,7 @@ final class AppState {
     @MainActor
     deinit {
         self.execApprovalsReadRetryTask?.cancel()
+        self.gatewayConfigSyncTask?.cancel()
         self.configWatcher?.stop()
     }
 
@@ -639,6 +655,7 @@ final class AppState {
     }
 
     private func applyConfigOverrides(_ root: [String: Any]) {
+        advanceGatewayRoutingGeneration()
         let previousSelection = self.gatewaySelectionSnapshot()
         let gateway = root["gateway"] as? [String: Any]
         let remote = gateway?["remote"] as? [String: Any]
@@ -799,56 +816,6 @@ final class AppState {
             root["gateway"] = gateway
         }
         return (root, true)
-    }
-
-    private func syncGatewayConfigIfNeeded() {
-        guard !self.isPreview, !self.isInitializing else { return }
-
-        Task { @MainActor in
-            self.syncGatewayConfigNow()
-        }
-    }
-
-    private static func gatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
-        guard draft.connectionMode == .remote else { return true }
-        switch draft.remoteTransport {
-        case .direct:
-            return GatewayRemoteConfig.normalizeGatewayUrl(draft.remoteUrl) != nil
-        case .ssh:
-            let target = Self.sanitizeSSHTarget(draft.remoteTarget)
-            return !target.isEmpty &&
-                CommandResolver.sshTargetValidationMessage(target) == nil &&
-                CommandResolver.parseSSHTarget(target) != nil
-        }
-    }
-
-    @MainActor
-    @discardableResult
-    func syncGatewayConfigNow() -> Bool {
-        guard !self.isPreview, !self.isInitializing else { return true }
-
-        let draft = GatewayConfigSyncDraft(
-            connectionMode: connectionMode,
-            remoteTransport: remoteTransport,
-            remoteTarget: remoteTarget,
-            remoteIdentity: remoteIdentity,
-            remoteUrl: remoteUrl,
-            remoteToken: remoteToken,
-            remoteTokenDirty: remoteTokenDirty)
-        guard Self.gatewayDraftCanPersist(draft) else { return false }
-
-        // Keep app-only connection settings local to avoid overwriting remote gateway config.
-        let synced = Self.syncedGatewayRoot(
-            currentRoot: OpenClawConfigFile.loadDict(),
-            draft: draft)
-        guard synced.changed else { return true }
-        guard OpenClawConfigFile.saveDict(synced.root) else {
-            Self.logger.warning("gateway config sync rejected to protect persisted gateway auth/mode")
-            return false
-        }
-        self.lastConfigFingerprint = Self.configFingerprint(synced.root)
-        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
-        return true
     }
 
     func triggerVoiceEars(ttl: TimeInterval? = 5) {
@@ -1042,7 +1009,7 @@ extension AppState {
                 }
             }
             guard self.execApprovalsReadGeneration == generation else { return }
-            let result = await self.execApprovalsDefaultsAsyncResolver()
+            let result = await execApprovalsDefaultsAsyncResolver()
             guard self.execApprovalsReadGeneration == generation else { return }
             switch result {
             case let .success(defaults):
@@ -1067,6 +1034,97 @@ extension AppState {
                 maxAttempts: Self.execApprovalsReadRetryAttempts,
                 generation: generation)
         }
+    }
+}
+
+extension AppState {
+    private func syncGatewayConfigIfNeeded() {
+        self.advanceGatewayRoutingGeneration()
+        guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else { return }
+        self.setGatewayConfigSyncState(.pending)
+
+        self.gatewayConfigSyncTask?.cancel()
+        self.gatewayConfigSyncTask = Task { @MainActor in
+            guard !Task.isCancelled else { return }
+            self.syncGatewayConfigNow()
+        }
+    }
+
+    private var gatewayConfigSyncIsEnabled: Bool {
+        #if DEBUG
+        if self.gatewayConfigSyncEnabledForTesting {
+            return true
+        }
+        #endif
+        return !self.isPreview
+    }
+
+    var gatewayConfigIsCurrentForRouting: Bool {
+        self.gatewayConfigSyncState == .current
+    }
+
+    private func setGatewayConfigSyncState(_ state: GatewayConfigSyncState) {
+        guard self.gatewayConfigSyncState != state else { return }
+        self.gatewayConfigSyncState = state
+        self.advanceGatewayRoutingGeneration()
+        guard !self.isPreview, state != .pending else { return }
+        // Failed persistence must retire the old endpoint; recovery must publish
+        // the newly canonical route. Requests also re-check this state directly.
+        Task { await GatewayEndpointStore.shared.refresh() }
+    }
+
+    private func advanceGatewayRoutingGeneration() {
+        self.gatewayRoutingGeneration &+= 1
+    }
+
+    private static func gatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
+        guard draft.connectionMode == .remote else { return true }
+        switch draft.remoteTransport {
+        case .direct:
+            return GatewayRemoteConfig.normalizeGatewayUrl(draft.remoteUrl) != nil
+        case .ssh:
+            let target = Self.sanitizeSSHTarget(draft.remoteTarget)
+            return !target.isEmpty &&
+                CommandResolver.sshTargetValidationMessage(target) == nil &&
+                CommandResolver.parseSSHTarget(target) != nil
+        }
+    }
+
+    @discardableResult
+    func syncGatewayConfigNow() -> Bool {
+        guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else { return true }
+        self.setGatewayConfigSyncState(.pending)
+
+        let draft = GatewayConfigSyncDraft(
+            connectionMode: connectionMode,
+            remoteTransport: remoteTransport,
+            remoteTarget: remoteTarget,
+            remoteIdentity: remoteIdentity,
+            remoteUrl: remoteUrl,
+            remoteToken: remoteToken,
+            remoteTokenDirty: remoteTokenDirty)
+        guard Self.gatewayDraftCanPersist(draft) else {
+            self.setGatewayConfigSyncState(.failed)
+            return false
+        }
+
+        // Keep app-only connection settings local to avoid overwriting remote gateway config.
+        let synced = Self.syncedGatewayRoot(
+            currentRoot: OpenClawConfigFile.loadDict(),
+            draft: draft)
+        guard synced.changed else {
+            self.setGatewayConfigSyncState(.current)
+            return true
+        }
+        guard OpenClawConfigFile.saveDict(synced.root) else {
+            self.setGatewayConfigSyncState(.failed)
+            Self.logger.warning("gateway config sync rejected to protect persisted gateway auth/mode")
+            return false
+        }
+        self.lastConfigFingerprint = Self.configFingerprint(synced.root)
+        self.setGatewayConfigSyncState(.current)
+        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+        return true
     }
 }
 
@@ -1133,6 +1191,18 @@ extension AppState {
 
     func _testApplyConfigOverrides(_ root: [String: Any]) {
         self.applyConfigOverrides(root)
+    }
+
+    func _testEnableGatewayConfigSync() {
+        self.gatewayConfigSyncEnabledForTesting = true
+    }
+
+    func _testAwaitGatewayConfigSync() async {
+        await self.gatewayConfigSyncTask?.value
+    }
+
+    var _testGatewayConfigIsCurrentForRouting: Bool {
+        self.gatewayConfigIsCurrentForRouting
     }
 
     @discardableResult

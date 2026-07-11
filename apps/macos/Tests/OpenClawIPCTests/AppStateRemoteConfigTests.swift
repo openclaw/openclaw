@@ -19,9 +19,77 @@ private func restoreGatewayPreference(_ preference: StoredGatewayPreference) {
         routeBinding: preference.routeBinding)
 }
 
+private actor GatewayConfigReadGate {
+    private var started = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func suspendRead() async {
+        self.started = true
+        for waiter in self.startWaiters {
+            waiter.resume()
+        }
+        self.startWaiters.removeAll()
+        await withCheckedContinuation { continuation in
+            self.releaseWaiter = continuation
+        }
+    }
+
+    func waitUntilStarted() async {
+        guard !self.started else { return }
+        await withCheckedContinuation { continuation in
+            self.startWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        self.releaseWaiter?.resume()
+        self.releaseWaiter = nil
+    }
+}
+
 @Suite(.serialized)
 @MainActor
 struct AppStateRemoteConfigTests {
+    @Test
+    func `route edit during config read fails the source snapshot closed`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [connectionModeKey: AppState.ConnectionMode.remote.rawValue])
+        {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway-a.example.test",
+                        "token": "route-a-token",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+            let gate = GatewayConfigReadGate()
+
+            let read = Task {
+                await GatewayEndpointStore._testLiveSourceSnapshot(
+                    state: state,
+                    beforeConfigRead: { await gate.suspendRead() })
+            }
+            await gate.waitUntilStarted()
+            state.remoteUrl = "wss://gateway-b.example.test"
+            await gate.release()
+
+            let source = await read.value
+            #expect(source.mode == .unconfigured)
+            #expect(source.token == nil)
+            #expect(source.password == nil)
+            #expect(source.deviceAuthGatewayID == nil)
+            #expect(source.directRemoteURL == nil)
+            #expect(source.sshRouteIdentity == nil)
+        }
+    }
+
     @Test
     func `unbound discovery selection cannot inherit a prior route binding`() {
         let previousGatewayPreference = captureGatewayPreference()
@@ -64,6 +132,74 @@ struct AppStateRemoteConfigTests {
             remoteUrl: "ws://127.0.0.1:18789",
             remoteToken: "",
             remoteTokenDirty: false)))
+    }
+
+    @Test
+    func `invalid remote edit retires the prior canonical gateway route`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [connectionModeKey: AppState.ConnectionMode.remote.rawValue])
+        {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "ssh",
+                        "url": "ws://127.0.0.1:18789",
+                        "sshTarget": "alice@gateway-a.example.test",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+
+            state.remoteTarget = ""
+            #expect(!state._testGatewayConfigIsCurrentForRouting)
+            await state._testAwaitGatewayConfigSync()
+
+            #expect(!state._testGatewayConfigIsCurrentForRouting)
+            let persisted = CommandResolver.connectionSettings()
+            #expect(persisted.target == "alice@gateway-a.example.test")
+            #expect(GatewayEndpointStore._testEffectiveSourceMode(
+                appMode: .remote,
+                configMode: .remote,
+                configIsCurrent: state._testGatewayConfigIsCurrentForRouting) == .unconfigured)
+        }
+    }
+
+    @Test
+    func `remote identity edit updates canonical SSH config before routing resumes`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [connectionModeKey: AppState.ConnectionMode.remote.rawValue])
+        {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "ssh",
+                        "url": "ws://127.0.0.1:18789",
+                        "sshTarget": "alice@gateway.example.test",
+                        "sshIdentity": "/tmp/old-identity",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+
+            state.remoteIdentity = " /tmp/new-identity "
+            #expect(!state._testGatewayConfigIsCurrentForRouting)
+            await state._testAwaitGatewayConfigSync()
+
+            #expect(state._testGatewayConfigIsCurrentForRouting)
+            let persisted = CommandResolver.connectionSettings()
+            #expect(persisted.identity == "/tmp/new-identity")
+            let remote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
+                as? [String: Any]
+            #expect(remote?["sshIdentity"] as? String == "/tmp/new-identity")
+        }
     }
 
     @Test
@@ -449,7 +585,7 @@ struct AppStateRemoteConfigTests {
             ])
 
             let state = AppState(preview: true)
-            #expect(state.remoteTarget == "")
+            #expect(state.remoteTarget.isEmpty)
         }
     }
 
