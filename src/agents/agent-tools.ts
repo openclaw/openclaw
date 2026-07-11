@@ -64,6 +64,7 @@ import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
+import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import {
   filterLocalModelLeanTools,
@@ -381,14 +382,6 @@ export const testing = {
   assertRequiredParams,
   applyModelProviderToolPolicy,
 } as const;
-
-export type OpenClawCodingToolConstructionPlan = {
-  includeBaseCodingTools: boolean;
-  includeShellTools: boolean;
-  includeChannelTools: boolean;
-  includeOpenClawTools: boolean;
-  includePluginTools: boolean;
-};
 
 /** Build the runtime tool list for one agent run. */
 export function createOpenClawCodingTools(options?: {
