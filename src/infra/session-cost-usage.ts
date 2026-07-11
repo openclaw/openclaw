@@ -9,7 +9,7 @@ import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import {
-  readSessionArchiveContentSync,
+  materializeSessionArchiveForRead,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
 import {
@@ -1388,35 +1388,15 @@ async function* readTranscriptRecords(
     }
     return;
   }
-  // Compressed archives cannot be byte-range streamed; decompress and parse
-  // whole (archives are cold, budget-bounded artifacts). Without this branch
-  // zstd archives parse as malformed lines and silently count zero usage.
+  // Compressed archives read through the materialized plain-JSONL cache so
+  // startOffset/endOffset keep their byte semantics against decompressed
+  // content — incremental scans persist offsets per path, and mixing raw
+  // zstd bytes with plain offsets would overcount archived usage.
   if (filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
-    for (const record of parseJsonlObjects(readSessionArchiveContentSync(filePath))) {
-      yield record;
-    }
+    yield* readJsonlRecords(materializeSessionArchiveForRead(filePath), startOffset, endOffset);
     return;
   }
   yield* readJsonlRecords(filePath, startOffset, endOffset);
-}
-
-function parseJsonlObjects(content: string): Record<string, unknown>[] {
-  const records: Record<string, unknown>[] = [];
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        records.push(parsed as Record<string, unknown>);
-      }
-    } catch {
-      // Ignore malformed lines, matching the streaming reader's tolerance.
-    }
-  }
-  return records;
 }
 
 async function* readTranscriptRecordsBestEffort(
