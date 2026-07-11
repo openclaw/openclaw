@@ -720,6 +720,57 @@ describe("release-note verification", () => {
     }
   });
 
+  it("leaves CHANGELOG.md untouched when the rendered ledger fails validation", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-"));
+    try {
+      git(cwd, ["init", "-q"]);
+      const changelog = [
+        "# Changelog",
+        "",
+        "## 2026.7.1",
+        "",
+        "### Highlights",
+        "",
+        "- Only one highlight.",
+        "",
+        "### Changes",
+        "",
+        "### Fixes",
+        "",
+      ].join("\n");
+      writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
+      git(cwd, ["add", "CHANGELOG.md"]);
+      git(cwd, ["commit", "-qm", "initial"]);
+      const manifestPath = join(cwd, "release-manifest.json");
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          verifier,
+          "--base",
+          "HEAD",
+          "--target",
+          "HEAD",
+          "--main-ref",
+          "HEAD",
+          "--manifest",
+          manifestPath,
+          "--version",
+          "2026.7.1",
+          "--write-ledger",
+        ],
+        { cwd, encoding: "utf8" },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("1 errors");
+      expect(JSON.parse(readFileSync(manifestPath, "utf8")).version).toBe("2026.7.1");
+      expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(changelog);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a release base that is not an ancestor of the target", () => {
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-"));
     try {
