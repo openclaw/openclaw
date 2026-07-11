@@ -1180,14 +1180,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Publish and maintain
   - H2: Related
 
-## clawhub/index.md
-
-- Route: /clawhub
-- Headings:
-  - H1: ClawHub
-  - H2: Start here
-  - H2: Related
-
 ## clawhub/publishing.md
 
 - Route: /clawhub/publishing
