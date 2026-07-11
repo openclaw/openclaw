@@ -868,6 +868,9 @@ export async function runCli(argv: string[] = process.argv) {
   assertSupportedRuntime();
 
   if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
+    // This defensive wait intentionally runs before dotenv/config I/O.
+    // The activation control port/token must come from inherited orchestrator env,
+    // not from .env-driven CLI env selection.
     await startupTrace.measure("gateway-run-deferred-activation", async () => {
       const { waitForDeferredGatewayActivation } =
         await import("./gateway-cli/deferred-activation.js");

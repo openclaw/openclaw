@@ -3194,6 +3194,26 @@ describe("runCli exit behavior", () => {
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
   });
 
+  it("returns before deferred gateway activation for handled host container gateway runs", async () => {
+    maybeRunCliInContainerMock.mockReturnValueOnce({ handled: true, exitCode: 0 });
+
+    await runCli(["node", "openclaw", "--container", "demo", "gateway", "run"]);
+
+    expect(maybeRunCliInContainerMock).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "--container",
+      "demo",
+      "gateway",
+      "run",
+    ]);
+    expect(waitForDeferredGatewayActivationMock).not.toHaveBeenCalled();
+    expect(loadDotEnvMock).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+  });
+
   it("returns after a handled container-target invocation", async () => {
     maybeRunCliInContainerMock.mockReturnValueOnce({ handled: true, exitCode: 0 });
 
