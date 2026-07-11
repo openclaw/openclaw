@@ -83,7 +83,6 @@ type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_m
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
 const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
-const registeredDatabasePaths = new Set<string>();
 
 type ExistingSchemaMeta = {
   agentId: string | null;
@@ -833,14 +832,16 @@ export function openOpenClawAgentDatabase(
   })();
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const database = { agentId, db, path: pathname, walMaintenance };
+  try {
+    registerAgentDatabase({ agentId, path: pathname, env: options.env });
+  } catch (error) {
+    closeCachedOpenClawAgentDatabase(database);
+    throw error;
+  }
   cachedDatabases.set(pathname, database);
   // Safety net for processes that end without an orderly close: agent DBs have
   // no shutdown owner like the ACP/gateway state DB closes. Closing unregisters.
   unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
-  if (!registeredDatabasePaths.has(pathname)) {
-    registerAgentDatabase({ agentId, path: pathname, env: options.env });
-    registeredDatabasePaths.add(pathname);
-  }
   logSlowAgentDatabaseOpen({
     agentId,
     elapsedMs: Date.now() - openStartedAt,
@@ -936,7 +937,6 @@ export function closeOpenClawAgentDatabases(): void {
     closeCachedOpenClawAgentDatabase(database);
   }
   cachedDatabases.clear();
-  registeredDatabasePaths.clear();
 }
 
 /** Test alias for closing cached agent database handles from teardown code. */

@@ -273,6 +273,15 @@ function readJournalModeResult(row: unknown): string | null {
   return typeof value === "string" ? value.toLowerCase() : null;
 }
 
+function readCheckpointBusyResult(row: unknown): boolean {
+  if (!row || typeof row !== "object") {
+    return false;
+  }
+  const record = row as Record<string, unknown>;
+  const value = record.busy ?? Object.values(record)[0];
+  return value === 1 || value === 1n;
+}
+
 function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintenanceOptions): void {
   const row = db.prepare("PRAGMA journal_mode = DELETE;").get();
   const journalMode = readJournalModeResult(row);
@@ -342,7 +351,13 @@ export function configureSqliteWalMaintenance(
 
   const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
     try {
-      db.exec(`PRAGMA wal_checkpoint(${mode});`);
+      const row = db.prepare(`PRAGMA wal_checkpoint(${mode});`).get();
+      if (readCheckpointBusyResult(row)) {
+        const label = options.databaseLabel ?? "sqlite database";
+        const error = new Error(`${label} WAL checkpoint ${mode} remained busy`);
+        options.onCheckpointError?.(error);
+        return false;
+      }
       return true;
     } catch (error) {
       options.onCheckpointError?.(error);
