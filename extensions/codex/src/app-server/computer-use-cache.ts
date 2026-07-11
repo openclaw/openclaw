@@ -76,14 +76,13 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
   );
   const cachePath = path.join(cacheRoot, version);
   const changed = await ensureRealDirectoryCopy(cachePath, sourcePluginRoot, version);
-  const removedStaleVersions = await removeStalePluginCacheVersions(cacheRoot, version);
   return {
     status: "shared",
-    changed: changed || removedStaleVersions.length > 0,
+    changed,
     cachePath,
     targetPath: sourcePluginRoot,
     version,
-    removedStaleVersions,
+    removedStaleVersions: [],
     warnings: [],
     message: `Computer Use plugin cache ${cachePath} contains bundled plugin ${sourcePluginRoot}.`,
   };
@@ -119,22 +118,6 @@ async function readBundledPluginVersion(sourcePluginRoot: string): Promise<strin
   } catch {
     return undefined;
   }
-}
-
-async function removeStalePluginCacheVersions(
-  cacheRoot: string,
-  activeVersion: string,
-): Promise<string[]> {
-  const entries = await fs.readdir(cacheRoot, { withFileTypes: true }).catch(() => []);
-  const removed: string[] = [];
-  for (const entry of entries) {
-    if (entry.name === activeVersion) {
-      continue;
-    }
-    await fs.rm(path.join(cacheRoot, entry.name), { recursive: true, force: true });
-    removed.push(entry.name);
-  }
-  return removed.toSorted();
 }
 
 async function ensureRealDirectoryCopy(

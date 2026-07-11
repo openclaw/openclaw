@@ -80,7 +80,7 @@ describe("Codex Computer Use shared plugin cache", () => {
     });
   });
 
-  it("copies agent cache entries from the local bundled plugin and removes stale versions", async () => {
+  it("copies the bundled plugin without removing versions used by live clients", async () => {
     const root = tempDirs.make("openclaw-computer-use-cache-");
     const bundledMarketplacePath = path.join(root, "Codex.app", "plugins", "openai-bundled");
     const bundledPluginRoot = path.join(bundledMarketplacePath, "plugins", "computer-use");
@@ -98,10 +98,16 @@ describe("Codex Computer Use shared plugin cache", () => {
       "computer-use",
       "1.0.857",
     );
-    await fs.mkdir(
-      path.join(codexHome, "plugins", "cache", "openai-bundled", "computer-use", "1.0.799"),
-      { recursive: true },
+    const priorCachePath = path.join(
+      codexHome,
+      "plugins",
+      "cache",
+      "openai-bundled",
+      "computer-use",
+      "1.0.799",
     );
+    await fs.mkdir(priorCachePath, { recursive: true });
+    await fs.writeFile(path.join(priorCachePath, "live-client-marker"), "in use");
     await fs.symlink(bundledPluginRoot, activeCachePath, "dir");
 
     const result = await ensureCodexComputerUseSharedPluginCache({
@@ -114,8 +120,11 @@ describe("Codex Computer Use shared plugin cache", () => {
       status: "shared",
       changed: true,
       version: "1.0.857",
-      removedStaleVersions: ["1.0.799"],
+      removedStaleVersions: [],
     });
+    await expect(
+      fs.readFile(path.join(priorCachePath, "live-client-marker"), "utf8"),
+    ).resolves.toBe("in use");
     const cacheEntries = await fs.readdir(path.dirname(activeCachePath), {
       withFileTypes: true,
     });
@@ -127,11 +136,7 @@ describe("Codex Computer Use shared plugin cache", () => {
     await expect(
       fs.access(path.join(activeCachePath, ".codex-plugin", "plugin.json")),
     ).resolves.toBe(undefined);
-    await expect(
-      fs.access(
-        path.join(codexHome, "plugins", "cache", "openai-bundled", "computer-use", "1.0.799"),
-      ),
-    ).rejects.toThrow();
+    await expect(fs.access(priorCachePath)).resolves.toBe(undefined);
   });
 
   it("leaves an up-to-date copied cache entry unchanged", async () => {

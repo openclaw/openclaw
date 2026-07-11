@@ -213,10 +213,11 @@ marketplace JSON file path, not the bundled marketplace root.
 The default `pluginCacheMode: "independent"` leaves each Codex home and its
 plugin cache unmanaged. Set `pluginCacheMode: "shared"` to copy the bundled
 Computer Use plugin into the active Codex home's discoverable plugin cache
-before app-server startup. Shared mode removes stale cached versions after the
-current bundled version is ready; a failed replacement copy preserves the
-active cache. Explicit `marketplaceName` or `marketplacePath` configuration
-disables this reconciliation so OpenClaw does not override that selection.
+before app-server startup. Shared mode preserves older cached versions because
+running Codex clients can still reference their versioned plugin directories; a
+failed replacement copy also preserves the active cache. Explicit
+`marketplaceName` or `marketplacePath` configuration disables this
+reconciliation so OpenClaw does not override that selection.
 
 ## Remote catalog limit
 
