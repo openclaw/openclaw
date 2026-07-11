@@ -139,6 +139,8 @@ describe("handleMSTeamsLifecycleRemove", () => {
         futureTransientState: { shouldNotSurvive: true },
         model: "gpt-5",
         modelProvider: "openai",
+        modelSelectionLocked: true,
+        agentHarnessId: "codex",
         reasoningLevel: "high",
         verboseLevel: "debug",
         ttsAuto: "off",
@@ -149,8 +151,11 @@ describe("handleMSTeamsLifecycleRemove", () => {
         providerOverride: "openai",
         modelOverride: "gpt-5",
         modelOverrideSource: "user",
+        modelOverrideFallbackOriginProvider: "anthropic",
+        modelOverrideFallbackOriginModel: "claude-opus-4",
         authProfileOverride: "work",
         authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 7,
         groupActivation: "mention",
         sendPolicy: "allow",
         queueMode: "collect",
@@ -224,8 +229,10 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(store["msteams:direct:user-aad"].skillCaptureSignalHashes).toBeUndefined();
     expect(store["msteams:direct:user-aad"].pluginExtensionSlotKeys).toBeUndefined();
     expect(store["msteams:direct:user-aad"].futureTransientState).toBeUndefined();
-    expect(store["msteams:direct:user-aad"].model).toBe("gpt-5");
-    expect(store["msteams:direct:user-aad"].modelProvider).toBe("openai");
+    expect(store["msteams:direct:user-aad"].model).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].modelProvider).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].modelSelectionLocked).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].agentHarnessId).toBeUndefined();
     expect(store["msteams:direct:user-aad"].reasoningLevel).toBe("high");
     expect(store["msteams:direct:user-aad"].verboseLevel).toBe("debug");
     expect(store["msteams:direct:user-aad"].ttsAuto).toBe("off");
@@ -236,8 +243,11 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(store["msteams:direct:user-aad"].providerOverride).toBe("openai");
     expect(store["msteams:direct:user-aad"].modelOverride).toBe("gpt-5");
     expect(store["msteams:direct:user-aad"].modelOverrideSource).toBe("user");
+    expect(store["msteams:direct:user-aad"].modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].modelOverrideFallbackOriginModel).toBeUndefined();
     expect(store["msteams:direct:user-aad"].authProfileOverride).toBe("work");
     expect(store["msteams:direct:user-aad"].authProfileOverrideSource).toBe("user");
+    expect(store["msteams:direct:user-aad"].authProfileOverrideCompactionCount).toBe(7);
     expect(store["msteams:direct:user-aad"].groupActivation).toBe("mention");
     expect(store["msteams:direct:user-aad"].sendPolicy).toBe("allow");
     expect(store["msteams:direct:user-aad"].queueMode).toBe("collect");
@@ -296,6 +306,91 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(store["msteams:direct:user-aad"].lastTo).toBeUndefined();
     expect(store["msteams:direct:user-aad"].lastAccountId).toBeUndefined();
     expect(store["msteams:direct:user-aad"].origin).toBeUndefined();
+  });
+
+  it("clears automatic fallback selection and harness ownership during rotation", async () => {
+    const store = {
+      "msteams:direct:user-aad": {
+        sessionId: "locked-fallback-session",
+        updatedAt: 1_000,
+        modelProvider: "anthropic",
+        model: "claude-opus-4",
+        modelSelectionLocked: true,
+        agentHarnessId: "codex",
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-5",
+        authProfileOverride: "runtime-profile",
+        authProfileOverrideSource: "auto",
+        authProfileOverrideCompactionCount: 3,
+      },
+    };
+    setupStore(store);
+    const { deps } = createDeps();
+
+    const result = await handleMSTeamsLifecycleRemove(
+      createContext({
+        type: "installationUpdate",
+        action: "remove",
+        from: { id: "user-bf", aadObjectId: "user-aad" },
+        recipient: { id: "bot-id" },
+        conversation: {
+          id: "19:personal-chat",
+          conversationType: "personal",
+        },
+      }),
+      deps,
+    );
+
+    expect(result.sessionsReset).toBe(1);
+    expect(store["msteams:direct:user-aad"].sessionId).not.toBe("locked-fallback-session");
+    expect(store["msteams:direct:user-aad"].modelProvider).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].model).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].modelSelectionLocked).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].agentHarnessId).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].providerOverride).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].modelOverride).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].modelOverrideSource).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].modelOverrideFallbackOriginModel).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].authProfileOverride).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].authProfileOverrideSource).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].authProfileOverrideCompactionCount).toBeUndefined();
+  });
+
+  it("preserves legacy explicit model selection when no fallback provenance exists", async () => {
+    const store: Record<string, SessionEntry> = {
+      "msteams:direct:user-aad": {
+        sessionId: "legacy-user-selection-session",
+        updatedAt: 1_000,
+        providerOverride: "openai",
+        modelOverride: "gpt-5",
+      },
+    };
+    setupStore(store);
+    const { deps } = createDeps();
+
+    const result = await handleMSTeamsLifecycleRemove(
+      createContext({
+        type: "installationUpdate",
+        action: "remove",
+        from: { id: "user-bf", aadObjectId: "user-aad" },
+        recipient: { id: "bot-id" },
+        conversation: {
+          id: "19:personal-chat",
+          conversationType: "personal",
+        },
+      }),
+      deps,
+    );
+
+    expect(result.sessionsReset).toBe(1);
+    expect(store["msteams:direct:user-aad"].sessionId).not.toBe("legacy-user-selection-session");
+    expect(store["msteams:direct:user-aad"].providerOverride).toBe("openai");
+    expect(store["msteams:direct:user-aad"].modelOverride).toBe("gpt-5");
+    expect(store["msteams:direct:user-aad"].modelOverrideSource).toBe("user");
   });
 
   it("does not recount a clean zero-timestamp session that has no Teams provider bindings", async () => {

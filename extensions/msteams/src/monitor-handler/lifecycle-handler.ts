@@ -122,20 +122,18 @@ type MSTeamsResetCandidateEntry = {
   responseUsage?: unknown;
   providerOverride?: unknown;
   modelOverride?: unknown;
-  agentRuntimeOverride?: unknown;
   modelOverrideSource?: unknown;
+  modelOverrideFallbackOriginProvider?: unknown;
+  modelOverrideFallbackOriginModel?: unknown;
   authProfileOverride?: unknown;
   authProfileOverrideSource?: unknown;
+  authProfileOverrideCompactionCount?: unknown;
   groupActivation?: unknown;
   sendPolicy?: unknown;
   queueMode?: unknown;
   queueDebounceMs?: unknown;
   queueCap?: unknown;
   queueDrop?: unknown;
-  modelProvider?: unknown;
-  model?: unknown;
-  modelSelectionLocked?: unknown;
-  agentHarnessId?: unknown;
   label?: unknown;
   category?: unknown;
   displayName?: unknown;
@@ -174,6 +172,47 @@ function copyDefinedResetField<T extends MSTeamsResetCandidateEntry>(
   }
 }
 
+function normalizeOptionalResetString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function hasMSTeamsAutoModelFallbackProvenance(entry: MSTeamsResetCandidateEntry): boolean {
+  return Boolean(
+    (normalizeOptionalResetString(entry.providerOverride) ||
+      normalizeOptionalResetString(entry.modelOverride)) &&
+    normalizeOptionalResetString(entry.modelOverrideFallbackOriginProvider) &&
+    normalizeOptionalResetString(entry.modelOverrideFallbackOriginModel),
+  );
+}
+
+function copyResetPreservedSelection<T extends MSTeamsResetCandidateEntry>(
+  target: Partial<T>,
+  source: T,
+): void {
+  const recoveredAutoFallbackOverride =
+    source.modelOverrideSource === undefined && hasMSTeamsAutoModelFallbackProvenance(source);
+  const preserveLegacyUserModelOverride =
+    source.modelOverrideSource === "user" ||
+    (source.modelOverrideSource === undefined &&
+      Boolean(normalizeOptionalResetString(source.modelOverride)) &&
+      !recoveredAutoFallbackOverride);
+
+  if (preserveLegacyUserModelOverride && normalizeOptionalResetString(source.modelOverride)) {
+    copyDefinedResetField(target, source, "providerOverride");
+    copyDefinedResetField(target, source, "modelOverride");
+    target.modelOverrideSource = "user" as T[keyof T];
+  }
+
+  if (
+    source.authProfileOverrideSource === "user" &&
+    normalizeOptionalResetString(source.authProfileOverride)
+  ) {
+    copyDefinedResetField(target, source, "authProfileOverride");
+    copyDefinedResetField(target, source, "authProfileOverrideSource");
+    copyDefinedResetField(target, source, "authProfileOverrideCompactionCount");
+  }
+}
+
 function createMSTeamsLifecycleResetEntry<T extends MSTeamsResetCandidateEntry>(
   entry: T,
 ): Partial<T> {
@@ -197,22 +236,13 @@ function createMSTeamsLifecycleResetEntry<T extends MSTeamsResetCandidateEntry>(
   copyDefinedResetField(next, entry, "execAsk");
   copyDefinedResetField(next, entry, "execNode");
   copyDefinedResetField(next, entry, "responseUsage");
-  copyDefinedResetField(next, entry, "providerOverride");
-  copyDefinedResetField(next, entry, "modelOverride");
-  copyDefinedResetField(next, entry, "agentRuntimeOverride");
-  copyDefinedResetField(next, entry, "modelOverrideSource");
-  copyDefinedResetField(next, entry, "authProfileOverride");
-  copyDefinedResetField(next, entry, "authProfileOverrideSource");
+  copyResetPreservedSelection(next, entry);
   copyDefinedResetField(next, entry, "groupActivation");
   copyDefinedResetField(next, entry, "sendPolicy");
   copyDefinedResetField(next, entry, "queueMode");
   copyDefinedResetField(next, entry, "queueDebounceMs");
   copyDefinedResetField(next, entry, "queueCap");
   copyDefinedResetField(next, entry, "queueDrop");
-  copyDefinedResetField(next, entry, "modelProvider");
-  copyDefinedResetField(next, entry, "model");
-  copyDefinedResetField(next, entry, "modelSelectionLocked");
-  copyDefinedResetField(next, entry, "agentHarnessId");
   copyDefinedResetField(next, entry, "label");
   copyDefinedResetField(next, entry, "category");
   copyDefinedResetField(next, entry, "displayName");
