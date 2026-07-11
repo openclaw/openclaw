@@ -20,6 +20,7 @@ import {
 } from "./models.js";
 import {
   buildLmstudioAuthHeaders,
+  resolveLmstudioConfiguredApiKeyForProvider,
   resolveLmstudioProviderHeaders,
   resolveLmstudioRuntimeApiKey,
 } from "./runtime.js";
@@ -67,7 +68,20 @@ function hasAuthorizationHeader(headers: Record<string, string> | undefined): bo
 /** Resolves API key (real or synthetic placeholder) from runtime/provider auth config. */
 async function resolveLmstudioApiKey(
   options: MemoryEmbeddingProviderCreateOptions,
+  providerId?: string,
 ): Promise<string | undefined> {
+  const selectedProviderId = providerId?.trim();
+  const selectedApiKey =
+    selectedProviderId && selectedProviderId !== LMSTUDIO_PROVIDER_ID
+      ? options.config.models?.providers?.[selectedProviderId]?.apiKey
+      : undefined;
+  if (selectedProviderId && selectedApiKey !== undefined && selectedApiKey !== null) {
+    return await resolveLmstudioConfiguredApiKeyForProvider({
+      providerId: selectedProviderId,
+      config: options.config,
+      env: process.env,
+    });
+  }
   try {
     return await resolveLmstudioRuntimeApiKey({
       config: options.config,
@@ -179,8 +193,8 @@ export async function createLmstudioEmbeddingProvider(
   const apiKey = hasAuthorizationHeader(providerHeaders)
     ? undefined
     : !isFallbackActivation
-      ? remoteApiKey?.trim() || (await resolveLmstudioApiKey(options))
-      : await resolveLmstudioApiKey(options);
+      ? remoteApiKey?.trim() || (await resolveLmstudioApiKey(options, resolvedProvider?.providerId))
+      : await resolveLmstudioApiKey(options, resolvedProvider?.providerId);
   const headerOverrides = Object.assign({}, providerHeaders);
   const headers =
     buildLmstudioAuthHeaders({

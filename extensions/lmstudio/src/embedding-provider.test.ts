@@ -146,6 +146,7 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
           providers: {
             "lmstudio-spark": {
               baseUrl: "http://spark.local:1234/v1",
+              apiKey: "spark-key",
               localService: service,
               models: [{ id: EMBEDDING_MODEL }],
             },
@@ -161,13 +162,19 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
     const { provider } = await createLmstudioEmbeddingProvider(options);
     await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
 
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "spark-key" }),
+    );
     expect(acquireLocalService).toHaveBeenCalledTimes(2);
     expect(acquireLocalService).toHaveBeenNthCalledWith(
       1,
       {
         providerId: "lmstudio-spark",
         baseUrl: "http://spark.local:1234/v1",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          Authorization: "Bearer spark-key",
+          "Content-Type": "application/json",
+        },
       },
       undefined,
     );
@@ -176,7 +183,10 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       {
         providerId: "lmstudio-spark",
         baseUrl: "http://spark.local:1234/v1",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          Authorization: "Bearer spark-key",
+          "Content-Type": "application/json",
+        },
       },
       undefined,
     );
