@@ -697,11 +697,11 @@ extension OnboardingAISetupModel {
             } catch {
                 // The Gateway session survives socket loss; cancel by its known
                 // id before reporting failure so it cannot persist config later.
-                let sessionEnded = await GatewayConnection.shared.cancelWizardSession(
+                let cancellation = await GatewayConnection.shared.cancelWizardSession(
                     authSessionID,
                     on: serverLease)
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
-                if !sessionEnded,
+                if cancellation != .cancelled,
                    await self.reconcileProviderAuthAfterUnknownOutcome(
                        token: token,
                        before: self.lastDetectedActivationState,
@@ -709,7 +709,7 @@ extension OnboardingAISetupModel {
                 {
                     return
                 }
-                if sessionEnded {
+                if cancellation != .unresolved {
                     self.authSessionID = nil
                 }
                 self.authBusy = false
@@ -739,13 +739,23 @@ extension OnboardingAISetupModel {
             return
         }
         let authAttemptID = self.authAttemptID
+        let token = self.attemptToken
+        let activationState = self.lastDetectedActivationState
         self.authBusy = true
         Task {
-            let sessionEnded = await GatewayConnection.shared.cancelWizardSession(
+            let cancellation = await GatewayConnection.shared.cancelWizardSession(
                 sessionID,
                 on: authServerLease)
             guard authAttemptID == self.authAttemptID else { return }
-            if sessionEnded {
+            if cancellation == .absent,
+               await self.reconcileProviderAuthAfterUnknownOutcome(
+                   token: token,
+                   before: activationState,
+                   originalServerLease: authServerLease)
+            {
+                return
+            }
+            if cancellation != .unresolved {
                 self.authAttemptID = UUID()
                 self.providerAuthReconciliationPending = false
                 self.clearProviderAuth()
@@ -792,11 +802,11 @@ extension OnboardingAISetupModel {
                     status: wizardStatusString(result.status),
                     error: result.error)
             } catch {
-                let sessionEnded = await GatewayConnection.shared.cancelWizardSession(
+                let cancellation = await GatewayConnection.shared.cancelWizardSession(
                     sessionID,
                     on: serverLease)
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
-                if !sessionEnded,
+                if cancellation != .cancelled,
                    await self.reconcileProviderAuthAfterUnknownOutcome(
                        token: token,
                        before: self.lastDetectedActivationState,
@@ -804,7 +814,7 @@ extension OnboardingAISetupModel {
                 {
                     return
                 }
-                if sessionEnded {
+                if cancellation != .unresolved {
                     self.authSessionID = nil
                 }
                 self.authBusy = false

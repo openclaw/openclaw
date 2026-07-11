@@ -357,22 +357,37 @@ actor GatewayConnection {
             throw OpenClawChatTransportSendError.notDispatched
         }
     }
+}
+
+extension GatewayConnection {
+    enum WizardCancellationOutcome: Equatable {
+        case cancelled
+        case absent
+        case unresolved
+    }
 
     /// Cancel on the socket that created the wizard, or a replacement socket on
-    /// the same route. Returns true only when no server session remains.
+    /// the same route. Absence stays distinct so callers can reconcile a commit.
     @discardableResult
-    func cancelWizardSession(_ sessionID: String, on lease: ServerLease) async -> Bool {
-        if await self.sendWizardCancellation(sessionID, on: lease) {
-            return true
+    func cancelWizardSession(
+        _ sessionID: String,
+        on lease: ServerLease) async -> WizardCancellationOutcome
+    {
+        let initial = await self.sendWizardCancellation(sessionID, on: lease)
+        if initial != .unresolved {
+            return initial
         }
         guard let replacement = try? await self.acquireServerLease(
             ifSameRouteAs: lease,
             timeoutMs: 5000)
-        else { return false }
+        else { return .unresolved }
         return await self.sendWizardCancellation(sessionID, on: replacement)
     }
 
-    private func sendWizardCancellation(_ sessionID: String, on lease: ServerLease) async -> Bool {
+    private func sendWizardCancellation(
+        _ sessionID: String,
+        on lease: ServerLease) async -> WizardCancellationOutcome
+    {
         do {
             let data = try await lease.client.request(
                 method: "wizard.cancel",
@@ -380,17 +395,22 @@ actor GatewayConnection {
                 timeoutMs: 10000,
                 ifCurrentConnectionGeneration: lease.socketGeneration)
             let status = try self.decoder.decode(WizardCancellationStatus.self, from: data)
-            return status.status == "cancelled"
+            return switch status.status {
+            case "cancelled": .cancelled
+            case "running": .unresolved
+            default: .absent
+            }
         } catch {
-            return Self.wizardCancellationMeansSessionEnded(error)
+            return Self.wizardCancellationOutcome(after: error)
         }
     }
 
-    static func wizardCancellationMeansSessionEnded(_ error: Error) -> Bool {
-        guard let response = error as? GatewayResponseError else { return false }
-        return response.method == "wizard.cancel" &&
+    static func wizardCancellationOutcome(after error: Error) -> WizardCancellationOutcome {
+        guard let response = error as? GatewayResponseError else { return .unresolved }
+        let sessionIsAbsent = response.method == "wizard.cancel" &&
             response.code == "INVALID_REQUEST" &&
             response.message == "wizard not found"
+        return sessionIsAbsent ? .absent : .unresolved
     }
 
     private struct WizardCancellationStatus: Decodable {

@@ -18987,7 +18987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1040,
+      "line": 1050,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetup.swift",
       "source": "\\(label) couldn’t complete the test.",
       "surface": "apple",
@@ -18995,7 +18995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1040,
+      "line": 1050,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetup.swift",
       "source": "\\(label) couldn’t complete the test. Show details to inspect or copy the error.",
       "surface": "apple",

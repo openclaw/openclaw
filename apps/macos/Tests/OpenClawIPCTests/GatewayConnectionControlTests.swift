@@ -244,9 +244,9 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
             message: "wizard cancellation is locked",
             details: nil)
 
-        #expect(GatewayConnection.wizardCancellationMeansSessionEnded(notFound))
-        #expect(!GatewayConnection.wizardCancellationMeansSessionEnded(locked))
-        #expect(!GatewayConnection.wizardCancellationMeansSessionEnded(URLError(.timedOut)))
+        #expect(GatewayConnection.wizardCancellationOutcome(after: notFound) == .absent)
+        #expect(GatewayConnection.wizardCancellationOutcome(after: locked) == .unresolved)
+        #expect(GatewayConnection.wizardCancellationOutcome(after: URLError(.timedOut)) == .unresolved)
     }
 
     @Test func `retired socket callbacks cannot mutate cache or subscribers`() async {
