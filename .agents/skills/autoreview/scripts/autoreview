@@ -187,7 +187,7 @@ QUOTED_SECRET_REFERENCE_PATTERNS = (
     re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}$"),
     re.compile(r"^\$\{\{\s*[A-Za-z_][A-Za-z0-9_.-]*\s*\}\}$"),
     re.compile(r"^\{\{\s*[A-Za-z_][A-Za-z0-9_.-]*\s*\}\}$"),
-    re.compile(r"^op://"),
+    re.compile(r"^op://[^\r\n]+$"),
 )
 UNQUOTED_SECRET_REFERENCE_PATTERNS = (
     *QUOTED_SECRET_REFERENCE_PATTERNS,
@@ -1519,6 +1519,38 @@ def require_no_binary_diff(label: str, numstat: str) -> None:
         )
 
 
+def require_no_gitlink_diff(label: str, raw_diff: str) -> None:
+    records = raw_diff.split("\0")
+    gitlink_paths: list[str] = []
+    for index, record in enumerate(records):
+        if not record.startswith(":"):
+            continue
+        fields = record.split()
+        if len(fields) < 5:
+            continue
+        modes: list[str] = []
+        for field_index, field in enumerate(fields):
+            candidate = field.lstrip(":") if field_index == 0 else field
+            if not re.fullmatch(r"[0-7]{6}", candidate):
+                break
+            modes.append(candidate)
+        if "160000" not in modes:
+            continue
+        path = records[index + 1] if index + 1 < len(records) else "<unknown>"
+        gitlink_paths.append(path or "<unknown>")
+    if gitlink_paths:
+        details = "\n".join(f"- {path}" for path in gitlink_paths[:20])
+        more = (
+            f"\n... {len(gitlink_paths) - 20} more"
+            if len(gitlink_paths) > 20
+            else ""
+        )
+        raise SystemExit(
+            f"refusing gitlink/submodule changes in {label} because the referenced "
+            f"dependency contents are not present in the review bundle:\n{details}{more}"
+        )
+
+
 def file_bundle_risk(
     repo: Path,
     path: Path,
@@ -1632,6 +1664,14 @@ def local_bundle(repo: Path) -> tuple[str, bool]:
         "local unstaged diff",
         git(repo, "diff", *SAFE_DIFF_FLAGS, "--numstat", "-z"),
     )
+    require_no_gitlink_diff(
+        "local staged diff",
+        git(repo, "diff", *SAFE_DIFF_FLAGS, "--cached", "--raw", "-z"),
+    )
+    require_no_gitlink_diff(
+        "local unstaged diff",
+        git(repo, "diff", *SAFE_DIFF_FLAGS, "--raw", "-z"),
+    )
     staged_paths = git_path_list(
         repo,
         "diff",
@@ -1704,6 +1744,18 @@ def branch_bundle(repo: Path, base_ref: str) -> tuple[str, bool]:
             diff_range,
         ),
     )
+    require_no_gitlink_diff(
+        "branch diff",
+        git(
+            repo,
+            "diff",
+            *SAFE_DIFF_FLAGS,
+            "--raw",
+            "-z",
+            "--end-of-options",
+            diff_range,
+        ),
+    )
     branch_patch = validate_review_patch("branch diff", branch_paths, branch_patch)
     return "\n\n".join(
         [
@@ -1756,6 +1808,19 @@ def commit_bundle(repo: Path, commit_ref: str) -> tuple[str, bool]:
             "show",
             *SAFE_DIFF_FLAGS,
             "--numstat",
+            "--format=",
+            "-z",
+            "--end-of-options",
+            commit_ref,
+        ),
+    )
+    require_no_gitlink_diff(
+        "commit diff",
+        git(
+            repo,
+            "show",
+            *SAFE_DIFF_FLAGS,
+            "--raw",
             "--format=",
             "-z",
             "--end-of-options",
@@ -4548,7 +4613,9 @@ def self_test_config_defaults() -> None:
 
 def self_test_fallback_scope() -> None:
     keys = [
+        "AUTOREVIEW_MODEL",
         "AUTOREVIEW_FALLBACK_MODEL",
+        "AUTOREVIEW_CODEX_MODEL",
         "AUTOREVIEW_CLAUDE_FALLBACK_MODEL",
         "AUTOREVIEW_CODEX_FALLBACK_MODEL",
     ]
