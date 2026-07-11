@@ -7,7 +7,11 @@ import {
   formatErrorMessage,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { markAuthProfileBlockedUntil } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  markAuthProfileBlockedUntil,
+  type AuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveCodexAppServerAuthProfileStore } from "./auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
@@ -23,6 +27,7 @@ import {
 } from "./rate-limit-cache.js";
 import {
   formatCodexUsageLimitErrorMessage,
+  isCodexUsageLimitError,
   resolveCodexUsageLimitResetAtMs,
   shouldRefreshCodexRateLimitsForUsageLimitMessage,
 } from "./rate-limits.js";
@@ -47,8 +52,26 @@ export async function markCodexAuthProfileBlockedFromRateLimits(params: {
   authProfileId?: string;
   rateLimits?: JsonValue;
 }): Promise<void> {
+  await markCodexAuthProfileBlockedUntilReset({
+    authProfileId: params.authProfileId,
+    authProfileStore: params.params.authProfileStore,
+    agentDir: params.params.agentDir,
+    runId: params.params.runId,
+    modelId: params.params.modelId,
+    rateLimits: params.rateLimits,
+  });
+}
+
+async function markCodexAuthProfileBlockedUntilReset(params: {
+  authProfileId?: string;
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
+  runId?: string;
+  modelId?: string;
+  rateLimits?: JsonValue;
+}): Promise<void> {
   const authProfileId = params.authProfileId?.trim();
-  if (!authProfileId || !params.params.authProfileStore) {
+  if (!authProfileId || !params.authProfileStore) {
     return;
   }
   const blockedUntil = resolveCodexUsageLimitResetAtMs(params.rateLimits);
@@ -57,13 +80,13 @@ export async function markCodexAuthProfileBlockedFromRateLimits(params: {
   }
   try {
     await markAuthProfileBlockedUntil({
-      store: params.params.authProfileStore,
+      store: params.authProfileStore,
       profileId: authProfileId,
       blockedUntil,
       source: "codex_rate_limits",
-      agentDir: params.params.agentDir,
-      runId: params.params.runId,
-      modelId: params.params.modelId,
+      agentDir: params.agentDir,
+      runId: params.runId,
+      modelId: params.modelId,
     });
   } catch (error) {
     embeddedAgentLog.debug("failed to mark Codex auth profile blocked from app-server limits", {
@@ -71,6 +94,73 @@ export async function markCodexAuthProfileBlockedFromRateLimits(params: {
       error: formatErrorMessage(error),
     });
   }
+}
+
+/** Error thrown when a bounded Codex turn fails on a subscription usage limit. */
+export class CodexBoundedTurnUsageLimitError extends Error {
+  readonly authProfileId?: string;
+
+  constructor(message: string, options?: { authProfileId?: string }) {
+    super(message);
+    this.name = "CodexBoundedTurnUsageLimitError";
+    if (options?.authProfileId) {
+      this.authProfileId = options.authProfileId;
+    }
+  }
+}
+
+/**
+ * Converts a bounded-turn failure into a reset-aware usage-limit error while
+ * the app-server client is still open, marking the auth profile blocked when
+ * Codex reports a reset time. Returns undefined for non-usage-limit failures.
+ */
+export async function resolveCodexBoundedTurnUsageLimitError(params: {
+  client: CodexAppServerClient;
+  error: unknown;
+  authProfileId?: string;
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
+  config?: Parameters<typeof resolveCodexAppServerAuthProfileStore>[0]["config"];
+  modelId?: string;
+  rateLimitsRevisionBeforeTurnStart?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<CodexBoundedTurnUsageLimitError | undefined> {
+  const source = readCodexTurnStartUsageLimitErrorSource(
+    params.client,
+    params.error,
+    undefined,
+    params.rateLimitsRevisionBeforeTurnStart,
+  );
+  if (!isCodexUsageLimitError(source.codexErrorInfo, source.message ?? undefined)) {
+    return undefined;
+  }
+  const refreshed = await refreshCodexUsageLimitError({
+    client: params.client,
+    source,
+    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+  });
+  const authProfileId = params.authProfileId?.trim();
+  await markCodexAuthProfileBlockedUntilReset({
+    authProfileId,
+    // Callers without a supplied store (for example hosted web search) still
+    // persist the block through the agent-dir store.
+    authProfileStore:
+      params.authProfileStore ??
+      resolveCodexAppServerAuthProfileStore({
+        agentDir: params.agentDir,
+        authProfileId,
+        config: params.config,
+      }),
+    agentDir: params.agentDir,
+    modelId: params.modelId,
+    rateLimits: refreshed?.rateLimitsForProfile,
+  });
+  return new CodexBoundedTurnUsageLimitError(
+    refreshed?.message ?? source.message ?? formatErrorMessage(params.error),
+    authProfileId ? { authProfileId } : undefined,
+  );
 }
 
 /** Formats a turn-start usage-limit error, refreshing rate limits when needed. */

@@ -207,7 +207,8 @@ export function buildCodexAppServerUsageSnapshot(value: unknown): ProviderUsageS
   };
 }
 
-function isCodexUsageLimitError(
+/** Detects Codex subscription usage-limit errors from error info or message text. */
+export function isCodexUsageLimitError(
   codexErrorInfo: JsonValue | null | undefined,
   message: string | undefined,
 ): boolean {
