@@ -354,6 +354,22 @@ describe("parseCrestodianOperation", () => {
     ).toBe("set config models.providers.local.localService.env.HF_HOME to <redacted>");
   });
 
+  it.each([
+    { source: "env" as const, id: "GATEWAY_TOKEN", provider: "vault" },
+    { source: "file" as const, id: "/run/secrets/gateway-token", provider: "default" },
+    { source: "exec" as const, id: "op://OpenClaw/gateway-token", provider: "onepassword" },
+  ])("shows every $source SecretRef selector in the approval plan", ({ source, id, provider }) => {
+    expect(
+      describeCrestodianPersistentOperation({
+        kind: "config-set-ref",
+        path: "gateway.auth.token",
+        source,
+        id,
+        ...(provider === "default" ? {} : { provider }),
+      }),
+    ).toBe(`set config gateway.auth.token to ${source} SecretRef ${id} using provider ${provider}`);
+  });
+
   it("parses channel listing and connect requests", () => {
     expect(parseCrestodianOperation("channels")).toEqual({ kind: "channel-list" });
     expect(parseCrestodianOperation("list channels")).toEqual({ kind: "channel-list" });

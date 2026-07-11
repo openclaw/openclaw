@@ -598,7 +598,7 @@ function describeCrestodianPersistentOperationUnsafe(operation: CrestodianOperat
     case "config-set":
       return `set config ${operation.path} to ${formatConfigSetValueForPlan(operation.path, operation.value)}`;
     case "config-set-ref":
-      return `set config ${operation.path} to ${operation.source} SecretRef ${operation.source === "env" ? operation.id : "<redacted>"}`;
+      return `set config ${operation.path} to ${operation.source} SecretRef ${operation.id} using provider ${operation.provider ?? "default"}`;
     case "setup":
       return formatSetupPlanDescription(operation);
     case "model-setup":
