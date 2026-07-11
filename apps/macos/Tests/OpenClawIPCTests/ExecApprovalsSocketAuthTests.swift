@@ -182,6 +182,42 @@ struct ExecApprovalsSocketAuthTests {
     }
 
     @Test
+    func `companion denylist provenance matches globstar across slashes`() throws {
+        let binding = ExecHostDenylistAuthorizationSnapshot(
+            command: "rm ./nested/secrets",
+            analysisOk: true,
+            configDenylist: [ExecHostDenylistEntry(pattern: "rm **/secrets", reason: "recursive secret removal")],
+            approvedRuleKeys: [],
+            denylisted: false)
+
+        #expect(binding.requiresFreshApproval(command: ["/bin/rm", "./nested/secrets"]))
+    }
+
+    @Test
+    func `companion denylist provenance keeps single star slash bounded`() throws {
+        let binding = ExecHostDenylistAuthorizationSnapshot(
+            command: "rm ./nested/secrets",
+            analysisOk: true,
+            configDenylist: [ExecHostDenylistEntry(pattern: "rm */secrets", reason: "one segment only")],
+            approvedRuleKeys: [],
+            denylisted: false)
+
+        #expect(!binding.requiresFreshApproval(command: ["/bin/rm", "./nested/secrets"]))
+    }
+
+    @Test
+    func `companion denylist provenance matches argv basename target`() throws {
+        let binding = ExecHostDenylistAuthorizationSnapshot(
+            command: "/usr/bin/git push --force origin main",
+            analysisOk: true,
+            configDenylist: [ExecHostDenylistEntry(pattern: "git push*--force*", reason: "history rewrite")],
+            approvedRuleKeys: [],
+            denylisted: false)
+
+        #expect(binding.requiresFreshApproval(command: ["/usr/bin/git", "push", "--force", "origin", "main"]))
+    }
+
+    @Test
     func `companion denylist provenance accepts already approved matching rule`() throws {
         let binding = ExecHostDenylistAuthorizationSnapshot(
             command: "echo ok",

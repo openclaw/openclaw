@@ -117,59 +117,6 @@ private struct ExecHostSocketRequest: Codable {
     var requestJson: String
 }
 
-struct ExecHostDenylistEntry: Codable, Equatable, Sendable {
-    var pattern: String
-    var reason: String?
-}
-
-struct ExecHostDenylistAuthorizationSnapshot: Codable, Equatable, Sendable {
-    var command: String
-    var analysisOk: Bool
-    var configDenylist: [ExecHostDenylistEntry]
-    var approvedRuleKeys: [String]
-    var denylisted: Bool?
-
-    func requiresFreshApproval(command: [String]) -> Bool {
-        let approvedRuleKeys = Set(self.approvedRuleKeys)
-        let newlyCurrent = self.configDenylist.filter { entry in
-            !approvedRuleKeys.contains(Self.ruleKey(entry))
-        }
-        guard !newlyCurrent.isEmpty else { return false }
-        if !self.analysisOk {
-            return true
-        }
-
-        let targets = Self.denylistTargets(command: command, canonicalCommand: self.command)
-        return newlyCurrent.contains { entry in
-            targets.contains { target in
-                fnmatch(entry.pattern, target, FNM_PATHNAME) == 0
-            }
-        }
-    }
-
-    private static func ruleKey(_ entry: ExecHostDenylistEntry) -> String {
-        "\(entry.pattern)\u{0}\(entry.reason ?? "")"
-    }
-
-    private static func denylistTargets(command: [String], canonicalCommand: String) -> [String] {
-        var targets: [String] = []
-        var seen = Set<String>()
-        func add(_ value: String) {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return }
-            targets.append(trimmed)
-        }
-
-        add(canonicalCommand)
-        guard let executable = command.first else { return targets }
-        add(command.joined(separator: " "))
-        var basenameCommand = command
-        basenameCommand[0] = URL(fileURLWithPath: executable).lastPathComponent
-        add(basenameCommand.joined(separator: " "))
-        return targets
-    }
-}
-
 struct ExecHostRequest: Codable {
     var command: [String]
     var rawCommand: String?
@@ -210,34 +157,6 @@ struct ExecHostRequest: Codable {
         self.approvalSource = approvalSource
         self.policySnapshot = policySnapshot
         self.denylistBinding = denylistBinding
-    }
-}
-
-private struct ExecHostRunResult: Codable {
-    var exitCode: Int?
-    var timedOut: Bool
-    var success: Bool
-    var stdout: String
-    var stderr: String
-    var error: String?
-}
-
-enum ExecHostOutputLimiter {
-    static let maxJsonlResponseBytes = 16 * 1024 * 1024
-    static let maxOutputFieldBytes = 1024 * 1024
-    private static let truncationMarker = "... (truncated) "
-
-    static func truncate(_ value: String) -> String {
-        let bytes = value.utf8
-        guard bytes.count > self.maxOutputFieldBytes else { return value }
-
-        let tailBudget = self.maxOutputFieldBytes - self.truncationMarker.utf8.count
-        var start = bytes.index(bytes.endIndex, offsetBy: -tailBudget)
-        while start < bytes.endIndex, (bytes[start] & 0xC0) == 0x80 {
-            start = bytes.index(after: start)
-        }
-        let tail = String(bytes: bytes[start...], encoding: .utf8) ?? ""
-        return self.truncationMarker + tail
     }
 }
 
