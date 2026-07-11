@@ -18,6 +18,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
@@ -336,13 +337,16 @@ export const mockedIsProfileInCooldown = vi.fn(
   (_store: unknown, _profileId: string, _now?: number, _modelId?: string) => false,
 );
 export const mockedMarkAuthProfileFailure = vi.fn(async () => {});
-export const mockedEnsureAuthProfileStore = vi.fn(() => ({ version: 1 as const, profiles: {} }));
-export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn(
-  (_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => ({
-    version: 1 as const,
-    profiles: {},
-  }),
-);
+export const mockedEnsureAuthProfileStore = vi.fn<() => AuthProfileStore>(() => ({
+  version: 1,
+  profiles: {},
+}));
+export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn<
+  (_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => AuthProfileStore
+>((_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => ({
+  version: 1,
+  profiles: {},
+}));
 
 export function useOpenAIPlatformAuthFixture(): void {
   const profileId = "openai:test";

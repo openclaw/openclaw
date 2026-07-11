@@ -1116,7 +1116,6 @@ export async function runBtwSideQuestion(
       : requireApiKey(apiKeyInfo, runtimeModel.provider);
   if (apiKey) {
     const preparedAuth = protectPreparedProviderRuntimeAuth({
-      sourceApiKey: apiKey,
       provider: runtimeModel.provider,
       preparedAuth: await prepareProviderRuntimeAuth({
         provider: runtimeModel.provider,
