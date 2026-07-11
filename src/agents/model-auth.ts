@@ -706,7 +706,11 @@ export async function resolveApiKeyForProvider(params: {
     return deferredAuthProfileResult;
   }
 
-  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
+  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({
+    cfg,
+    provider,
+    workspaceDir: params.workspaceDir,
+  });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
   }
@@ -841,7 +845,7 @@ export async function hasAvailableAuthForProvider(params: {
   if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
     return true;
   }
-  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
+  if (resolveSyntheticLocalProviderAuth({ cfg, provider, workspaceDir: params.workspaceDir })) {
     return true;
   }
   if (authOverride === undefined && normalizeProviderId(provider) === "amazon-bedrock") {
