@@ -10,6 +10,7 @@ import {
   mapHookExternalContentSource,
   resolveHookExternalContentSource,
 } from "./external-content-source.js";
+import { testRegexWithBoundedInput } from "./safe-regex.js";
 
 /**
  * Security utilities for handling untrusted external content.
@@ -48,7 +49,12 @@ const SUSPICIOUS_PATTERNS = [
 export function detectSuspiciousPatterns(content: string): string[] {
   const matches: string[] = [];
   for (const pattern of SUSPICIOUS_PATTERNS) {
-    if (pattern.test(content)) {
+    // Bound each test to a head/tail window. These patterns run on untrusted,
+    // uncapped external hook bodies (up to hooks.maxBodyBytes), and some are
+    // superlinear, so matching the full body can consume excessive CPU and
+    // block the single-threaded event loop. Detection is best-effort monitoring;
+    // injection markers live at the content head/tail.
+    if (testRegexWithBoundedInput(pattern, content)) {
       matches.push(pattern.source);
     }
   }
