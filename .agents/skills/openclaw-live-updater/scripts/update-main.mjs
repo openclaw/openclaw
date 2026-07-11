@@ -128,7 +128,7 @@ export function classifyActions(
   );
   return {
     dependencyInstall:
-      buildRequired && (dependencyInputsChanged || !nodeModulesPresent || !buildProvenanceKnown),
+      !nodeModulesPresent || (buildRequired && (dependencyInputsChanged || !buildProvenanceKnown)),
     gatewayBuild: buildRequired,
     gatewayProbe: true,
     gatewayRestart: buildRequired,

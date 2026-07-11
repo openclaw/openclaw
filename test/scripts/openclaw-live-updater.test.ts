@@ -354,6 +354,28 @@ describe("openclaw live updater", () => {
     ]);
   });
 
+  test("restores missing dependencies before probing a current build", () => {
+    const { root, mirror } = makeFixture();
+    writeBuild(mirror);
+    const commands = fakeCommands(mirror);
+
+    const output = maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      { runCommand: commands.runCommand },
+    );
+
+    expect(output.actions).toMatchObject({
+      dependencyInstall: true,
+      gatewayBuild: false,
+      gatewayProbe: true,
+    });
+    expect(commands.calls).toEqual([
+      "pnpm install --frozen-lockfile",
+      "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw health --verbose --json",
+    ]);
+  });
+
   test("restarts once when a current exact-SHA Gateway probe fails", () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
