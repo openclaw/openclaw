@@ -18,8 +18,8 @@ struct ExecHostDenylistEntry: Codable, Equatable, Sendable {
             return
         }
         self.init(
-            pattern: ((try? container.decodeIfPresent(String.self, forKey: .pattern)) ?? nil) ?? "",
-            reason: (try? container.decodeIfPresent(String.self, forKey: .reason)) ?? nil)
+            pattern: (try? container.decodeIfPresent(String.self, forKey: .pattern)) ?? "",
+            reason: try? container.decodeIfPresent(String.self, forKey: .reason))
     }
 
     private enum CodingKeys: String, CodingKey {

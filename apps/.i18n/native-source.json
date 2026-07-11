@@ -17467,7 +17467,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 282,
+      "line": 289,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
       "source": "This allowlist entry is inherited. Edit its owning scope and retry.",
       "surface": "apple",
@@ -17475,7 +17475,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 284,
+      "line": 291,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
       "source": "Could not save exec approvals. Last known settings are shown; retry the change.",
       "surface": "apple",
