@@ -1461,11 +1461,8 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   align-items: center;
   box-sizing: border-box;
   width: 100%;
-  min-height: 32px;
-  padding: 6px 10px;
-  border: 1px solid color-mix(in srgb, currentColor 32%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, currentColor 8%, var(--card));
+  min-height: 28px;
+  padding: 4px 12px 0;
   color: var(--muted);
   pointer-events: none;
 }
@@ -1479,15 +1476,9 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   max-width: none;
   height: auto;
   padding: 0;
-  border: 0;
-  border-radius: 0;
   justify-content: flex-start;
   color: inherit;
   font-size: var(--control-ui-text-sm);
-}
-
-.agent-chat__composer-progress--in-progress {
-  color: var(--info);
 }
 
 .agent-chat__composer-progress--done {
@@ -2501,12 +2492,10 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .agent-chat__run-status {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   height: 24px;
   max-width: 132px;
-  padding: 0 8px;
-  border-radius: var(--radius-full);
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  padding: 0 2px;
   color: var(--muted);
   font-size: 0.72rem;
   line-height: 1;
@@ -2532,25 +2521,54 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   text-overflow: ellipsis;
 }
 
-/* Status chips keep their semantic hue in the text/icon only; borders stay
-   near-neutral so the row reads as quiet metadata, not alerts. */
+/* Chrome-free status text: the working state pairs a pulsing dot with the
+   tool-row text wave (chatToolRowPulse/chatToolRowTextWave live in
+   tool-cards.css, same bundle) so active work reads identically everywhere.
+   Terminal states keep their semantic hue in text/icon only. */
 .agent-chat__run-status--in-progress {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 18%, transparent);
+  color: color-mix(in srgb, var(--text) 78%, var(--muted));
 }
 
-.agent-chat__run-status--in-progress svg {
-  animation: chat-run-status-spin 1s linear infinite;
+.agent-chat__run-status-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--accent-2, #14b8a6);
+  animation: chatToolRowPulse 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .agent-chat__run-status--in-progress .agent-chat__run-status-label {
+    background-image: linear-gradient(
+      90deg,
+      var(--text) 0%,
+      var(--text) 35%,
+      color-mix(in srgb, var(--text) 42%, var(--bg) 58%) 50%,
+      var(--text) 65%,
+      var(--text) 100%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: chatToolRowTextWave 2.2s ease-in-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat__run-status-dot {
+    animation: none;
+    opacity: 0.8;
+  }
 }
 
 .agent-chat__run-status--done {
   color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 18%, transparent);
 }
 
 .agent-chat__run-status--interrupted {
   color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 22%, transparent);
 }
 
 @keyframes chat-run-status-spin {

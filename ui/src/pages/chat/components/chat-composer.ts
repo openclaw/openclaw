@@ -1351,9 +1351,11 @@ export function renderChatRunStatusIndicator(
       : status.phase === "done"
         ? "Done"
         : "Interrupted";
+  // In-progress renders the same pulsing dot as running tool rows so "agent
+  // is active" reads identically everywhere; terminal states keep icons.
   const icon =
     status.phase === "in-progress"
-      ? icons.loader
+      ? html`<span class="agent-chat__run-status-dot"></span>`
       : status.phase === "done"
         ? icons.check
         : icons.stop;
