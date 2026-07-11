@@ -737,28 +737,53 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   it.each([
     [1366, 900],
     [1920, 1080],
-  ] as const)("centers direct messages on the composer axis at %sx%s", async (width, height) => {
-    const page = await openFixture(width, height, { direct: true });
-    try {
-      await expectNoHorizontalOverflow(page);
-      const [assistantLane, composer, thread, userLane] = await Promise.all([
-        getRect(page, ".chat-group.assistant .chat-group-messages"),
-        getRect(page, ".agent-chat__composer-shell"),
-        getRect(page, ".chat-thread-inner"),
-        getRect(page, ".chat-group.user .chat-group-messages"),
-      ]);
+  ] as const)(
+    "centers overflowing direct messages on the composer axis at %sx%s",
+    async (width, height) => {
+      const page = await openFixture(width, height, { direct: true });
+      try {
+        await page.evaluate(() => {
+          const thread = document.querySelector<HTMLElement>(".chat-thread");
+          const inner = document.querySelector<HTMLElement>(".chat-thread-inner");
+          if (!thread || !inner) {
+            throw new Error("Missing chat overflow fixture");
+          }
+          inner.style.minHeight = `${thread.clientHeight + 1}px`;
+        });
+        await expectNoHorizontalOverflow(page);
+        const [assistantLane, composer, thread, userLane, overflow] = await Promise.all([
+          getRect(page, ".chat-group.assistant .chat-group-messages"),
+          getRect(page, ".agent-chat__composer-shell"),
+          getRect(page, ".chat-thread-inner"),
+          getRect(page, ".chat-group.user .chat-group-messages"),
+          page.evaluate(() => {
+            const node = document.querySelector<HTMLElement>(".chat-thread");
+            if (!node) {
+              return null;
+            }
+            return {
+              clientHeight: node.clientHeight,
+              gutter: getComputedStyle(node).scrollbarGutter,
+              scrollHeight: node.scrollHeight,
+            };
+          }),
+        ]);
 
-      const threadCenter = thread.left + thread.width / 2;
-      const composerCenter = composer.left + composer.width / 2;
-      expect(Math.abs(threadCenter - composerCenter)).toBeLessThanOrEqual(1);
-      expect(Math.abs(thread.width - composer.width)).toBeLessThanOrEqual(1);
-      expect(thread.width).toBeCloseTo(768, 0);
-      expect(Math.abs(assistantLane.left - thread.left)).toBeLessThanOrEqual(1);
-      expect(Math.abs(userLane.right - thread.right)).toBeLessThanOrEqual(1);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
+        expect(overflow).not.toBeNull();
+        expect(overflow?.scrollHeight).toBeGreaterThan(overflow?.clientHeight ?? 0);
+        expect(overflow?.gutter).toBe("stable both-edges");
+        const threadCenter = thread.left + thread.width / 2;
+        const composerCenter = composer.left + composer.width / 2;
+        expect(Math.abs(threadCenter - composerCenter)).toBeLessThanOrEqual(1);
+        expect(Math.abs(thread.width - composer.width)).toBeLessThanOrEqual(1);
+        expect(thread.width).toBeCloseTo(768, 0);
+        expect(Math.abs(assistantLane.left - thread.left)).toBeLessThanOrEqual(1);
+        expect(Math.abs(userLane.right - thread.right)).toBeLessThanOrEqual(1);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
 
   it.each([
     [393, 852],
