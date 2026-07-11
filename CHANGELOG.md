@@ -6,7 +6,6 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- **Native Codex session supervision:** fold non-archived CLI and VS Code session discovery into the official Codex plugin, continue stored or idle local work as model-locked App Server chats, archive with explicit ownership and status confirmation, expose paired Mac catalogs as read-only, and attempt supervision activation during guided setup when native Codex is detected. (#103235, #88550) Thanks @imwyvern.
 - **GPT-5.6 Ultra and runtime switching:** support Sol, Terra, and Luna across OpenClaw and Codex engines; keep model, runtime, and thinking selection atomic through `/model` and fallback; and add live matrix coverage for both harnesses. (#98021) Thanks @anyech.
 - **OpenAI GPT-5.6 defaults:** use `openai/gpt-5.6` (Sol alias) for fresh API-key setup and exact `openai/gpt-5.6-sol` for fresh Codex/OAuth setup, while preserving existing primaries, fallbacks, aliases, and explicit GPT-5.5 selections. (#103234)
 - **Meta provider:** add bundled `muse-spark-1.1` model support with Responses API streaming, tool calls, encrypted reasoning replay, onboarding, and standalone npm/ClawHub distribution. (#102873) Thanks @HamidShojanazeri.
