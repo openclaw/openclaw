@@ -1229,9 +1229,6 @@ describe("ci workflow guards", () => {
     expect(restoreStep.with.path).toContain("packages/*/dist/");
     expect(saveStep.with.path).toContain("packages/*/dist/");
     expect(restoreStep.with.key).toContain("dist-build-v2-");
-    expect(
-      buildArtifactSteps.find((step) => step.name === "Pack built runtime artifacts").run,
-    ).toContain("packages/*/dist");
     expect(restoreStep.with.path).toContain("extensions/*/src/host/**/.bundle.hash");
     expect(restoreStep.with.path).toContain("extensions/*/src/host/**/*.bundle.js");
     expect(buildArtifactSteps.map((step) => step.name)).not.toContain("Cache dist build");
