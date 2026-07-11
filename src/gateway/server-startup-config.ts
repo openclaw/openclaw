@@ -56,7 +56,6 @@ type PreparedRuntimeSecretsSnapshot = Awaited<ReturnType<PrepareRuntimeSecretsSn
 type RuntimeSecretsActivationParams = {
   reason: "startup" | "reload" | "restart-check";
   activate: boolean;
-  onActivated?: () => void;
 };
 
 /** Gateway startup hook that prepares secrets and optionally activates the prepared snapshot. */
@@ -73,6 +72,7 @@ export type ActivateRuntimeSecrets = ((
     expectedRevision: number,
     params: RuntimeSecretsActivationParams,
     onActivated?: () => Promise<void>,
+    canActivate?: () => boolean,
   ) => Promise<PreparedRuntimeSecretsSnapshot | null>;
 };
 
@@ -229,7 +229,7 @@ export function createRuntimeSecretsActivator(params: {
       activateRuntimeSecretsSnapshot(prepared);
       // Invoke publication at the activation edge so no microtask can replace
       // the candidate before its runtime commit begins.
-      (options?.onActivated ?? activationParams.onActivated)?.();
+      options?.onActivated?.();
       logGatewayAuthSurfaceDiagnostics(prepared, params.logSecrets);
     }
     for (const warning of prepared.warnings) {
@@ -357,6 +357,7 @@ export function createRuntimeSecretsActivator(params: {
     expectedRevision,
     activationParams,
     onActivated,
+    canActivate,
   ) => {
     // Resolve the lazy activator before entering the compare-and-activate
     // section so no await separates revision ownership from state publication.
@@ -364,7 +365,10 @@ export function createRuntimeSecretsActivator(params: {
       ? await loadActivateRuntimeSecretsSnapshot()
       : undefined;
     return await runWithSecretsActivationLock(async () => {
-      if (getActiveSecretsRuntimeSnapshotRevision() !== expectedRevision) {
+      if (
+        getActiveSecretsRuntimeSnapshotRevision() !== expectedRevision ||
+        (canActivate && !canActivate())
+      ) {
         return null;
       }
       let activated: PreparedRuntimeSecretsSnapshot;

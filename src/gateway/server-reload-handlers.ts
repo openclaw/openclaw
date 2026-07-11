@@ -58,9 +58,15 @@ import {
   startGatewayCronWithLogging,
 } from "./server-runtime-services.js";
 import {
+  captureSharedGatewaySessionGenerationOwnership,
+  claimSharedGatewaySessionGenerationIfOwned,
   disconnectStaleSharedGatewayAuthClients,
-  setCurrentSharedGatewaySessionGeneration,
+  finalizeOwnedSharedGatewaySessionGeneration,
+  isSharedGatewaySessionGenerationOwnershipCurrent,
+  restoreOwnedCurrentSharedGatewaySessionGeneration,
+  setRequiredSharedGatewaySessionGenerationIfOwned,
   type SharedGatewayAuthClient,
+  type SharedGatewaySessionGenerationOwnership,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
 import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
@@ -93,9 +99,20 @@ type GatewayHotReloadState = {
 async function activateSecretsRuntimeSnapshotIfCurrent(
   snapshot: PreparedSecretsRuntimeSnapshot,
   expectedRevision: number,
+  options?: {
+    canActivate?: () => boolean;
+    onActivated?: () => void;
+  },
 ): Promise<boolean> {
   const runtime = await import("../secrets/runtime.js");
-  return runtime.activateSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision);
+  if (options?.canActivate && !options.canActivate()) {
+    return false;
+  }
+  if (!runtime.activateSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision)) {
+    return false;
+  }
+  options?.onActivated?.();
+  return true;
 }
 
 type GatewayReloadLog = {
@@ -1126,8 +1143,10 @@ export function startManagedGatewayConfigReloader(
       for (;;) {
         const previousSnapshot = getActiveSecretsRuntimeSnapshot();
         const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
-        const previousSharedGatewaySessionGeneration =
-          params.sharedGatewaySessionGenerationState.current;
+        const previousGenerationOwnership = captureSharedGatewaySessionGenerationOwnership(
+          params.sharedGatewaySessionGenerationState,
+        );
+        const previousSharedGatewaySessionGeneration = previousGenerationOwnership.generation;
         const prepared = await params.activateRuntimeSecrets(nextConfig, {
           reason: "reload",
           activate: false,
@@ -1141,14 +1160,28 @@ export function startManagedGatewayConfigReloader(
           previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration;
         let runtimeSecretsPublished = false;
         let publishedSnapshotRevision: number | null = null;
+        let publishedSharedGatewaySessionGeneration: SharedGatewaySessionGenerationOwnership | null =
+          null;
         try {
           await applyHotReload(plan, prepared.config, {
             publish: async (commit, isCommitted) => {
+              const claimGenerationOwnership = () => {
+                publishedSharedGatewaySessionGeneration ??=
+                  claimSharedGatewaySessionGenerationIfOwned(
+                    params.sharedGatewaySessionGenerationState,
+                    previousGenerationOwnership,
+                    nextSharedGatewaySessionGeneration,
+                  );
+                if (!publishedSharedGatewaySessionGeneration) {
+                  throw new GatewayHotReloadStaleSecretsError();
+                }
+              };
               const publishRuntime = async () => {
                 runtimeSecretsPublished = true;
                 publishedSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
-                params.sharedGatewaySessionGenerationState.current =
-                  nextSharedGatewaySessionGeneration;
+                // Claim the generation at the snapshot activation edge, but keep
+                // `required` until the runtime commit succeeds.
+                claimGenerationOwnership();
                 if (sharedGatewaySessionGenerationChanged) {
                   disconnectStaleSharedGatewayAuthClients({
                     clients: params.clients,
@@ -1159,32 +1192,48 @@ export function startManagedGatewayConfigReloader(
                   await commit();
                 } catch (err) {
                   if (!isCommitted()) {
-                    let restored = false;
-                    if (previousSnapshot) {
-                      restored = await activateSecretsRuntimeSnapshotIfCurrent(
+                    let generationRestored = false;
+                    let snapshotRestored = false;
+                    const generationOwnership = publishedSharedGatewaySessionGeneration;
+                    if (previousSnapshot && generationOwnership) {
+                      snapshotRestored = await activateSecretsRuntimeSnapshotIfCurrent(
                         previousSnapshot,
                         publishedSnapshotRevision ?? -1,
+                        {
+                          onActivated: () => {
+                            generationRestored = restoreOwnedCurrentSharedGatewaySessionGeneration(
+                              params.sharedGatewaySessionGenerationState,
+                              generationOwnership,
+                              previousSharedGatewaySessionGeneration,
+                            );
+                          },
+                        },
                       );
                     } else if (
                       publishedSnapshotRevision !== null &&
                       getActiveSecretsRuntimeSnapshotRevision() === publishedSnapshotRevision
                     ) {
                       clearSecretsRuntimeSnapshot();
-                      restored = true;
+                      snapshotRestored = true;
+                      if (generationOwnership) {
+                        generationRestored = restoreOwnedCurrentSharedGatewaySessionGeneration(
+                          params.sharedGatewaySessionGenerationState,
+                          generationOwnership,
+                          previousSharedGatewaySessionGeneration,
+                        );
+                      }
                     }
-                    if (restored) {
+                    if (snapshotRestored) {
                       if (previousSnapshot && shouldRefreshContextWindowCache(plan)) {
                         await refreshContextWindowCache(previousSnapshot.config);
                       }
-                      params.sharedGatewaySessionGenerationState.current =
-                        previousSharedGatewaySessionGeneration;
-                      if (sharedGatewaySessionGenerationChanged) {
-                        disconnectStaleSharedGatewayAuthClients({
-                          clients: params.clients,
-                          expectedGeneration: previousSharedGatewaySessionGeneration,
-                        });
-                      }
                       runtimeSecretsPublished = false;
+                    }
+                    if (generationRestored && sharedGatewaySessionGenerationChanged) {
+                      disconnectStaleSharedGatewayAuthClients({
+                        clients: params.clients,
+                        expectedGeneration: previousSharedGatewaySessionGeneration,
+                      });
                     }
                   }
                   throw err;
@@ -1201,6 +1250,11 @@ export function startManagedGatewayConfigReloader(
                     activate: true,
                   },
                   publishRuntime,
+                  () =>
+                    isSharedGatewaySessionGenerationOwnershipCurrent(
+                      params.sharedGatewaySessionGenerationState,
+                      previousGenerationOwnership,
+                    ),
                 );
                 if (!activated) {
                   throw new GatewayHotReloadStaleSecretsError();
@@ -1210,6 +1264,14 @@ export function startManagedGatewayConfigReloader(
                   !(await activateSecretsRuntimeSnapshotIfCurrent(
                     prepared,
                     previousSnapshotRevision,
+                    {
+                      canActivate: () =>
+                        isSharedGatewaySessionGenerationOwnershipCurrent(
+                          params.sharedGatewaySessionGenerationState,
+                          previousGenerationOwnership,
+                        ),
+                      onActivated: claimGenerationOwnership,
+                    },
                   ))
                 ) {
                   throw new GatewayHotReloadStaleSecretsError();
@@ -1228,84 +1290,156 @@ export function startManagedGatewayConfigReloader(
           if (runtimeSecretsPublished) {
             const activateIfCurrent =
               params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent;
-            let restored = false;
-            if (previousSnapshot && publishedSnapshotRevision !== null && activateIfCurrent) {
-              restored = Boolean(
-                await activateIfCurrent(previousSnapshot, publishedSnapshotRevision, {
-                  reason: "reload",
-                  activate: true,
-                }),
-              );
-            } else if (publishedSnapshotRevision !== null) {
-              if (previousSnapshot) {
-                restored = await activateSecretsRuntimeSnapshotIfCurrent(
+            let generationRestored = false;
+            let snapshotRestored = false;
+            const generationOwnership = publishedSharedGatewaySessionGeneration;
+            if (
+              previousSnapshot &&
+              publishedSnapshotRevision !== null &&
+              activateIfCurrent &&
+              generationOwnership
+            ) {
+              snapshotRestored = Boolean(
+                await activateIfCurrent(
                   previousSnapshot,
                   publishedSnapshotRevision,
+                  {
+                    reason: "reload",
+                    activate: true,
+                  },
+                  async () => {
+                    generationRestored = restoreOwnedCurrentSharedGatewaySessionGeneration(
+                      params.sharedGatewaySessionGenerationState,
+                      generationOwnership,
+                      previousSharedGatewaySessionGeneration,
+                    );
+                  },
+                ),
+              );
+            } else if (publishedSnapshotRevision !== null && generationOwnership) {
+              if (previousSnapshot) {
+                snapshotRestored = await activateSecretsRuntimeSnapshotIfCurrent(
+                  previousSnapshot,
+                  publishedSnapshotRevision,
+                  {
+                    onActivated: () => {
+                      generationRestored = restoreOwnedCurrentSharedGatewaySessionGeneration(
+                        params.sharedGatewaySessionGenerationState,
+                        generationOwnership,
+                        previousSharedGatewaySessionGeneration,
+                      );
+                    },
+                  },
                 );
               } else if (getActiveSecretsRuntimeSnapshotRevision() === publishedSnapshotRevision) {
                 clearSecretsRuntimeSnapshot();
-                restored = true;
+                snapshotRestored = true;
+                generationRestored = restoreOwnedCurrentSharedGatewaySessionGeneration(
+                  params.sharedGatewaySessionGenerationState,
+                  generationOwnership,
+                  previousSharedGatewaySessionGeneration,
+                );
               }
             }
-            if (restored) {
+            if (snapshotRestored) {
               if (previousSnapshot && shouldRefreshContextWindowCache(plan)) {
                 await refreshContextWindowCache(previousSnapshot.config);
               }
-              params.sharedGatewaySessionGenerationState.current =
-                previousSharedGatewaySessionGeneration;
-              if (sharedGatewaySessionGenerationChanged) {
-                disconnectStaleSharedGatewayAuthClients({
-                  clients: params.clients,
-                  expectedGeneration: previousSharedGatewaySessionGeneration,
-                });
-              }
+            }
+            if (generationRestored && sharedGatewaySessionGenerationChanged) {
+              disconnectStaleSharedGatewayAuthClients({
+                clients: params.clients,
+                expectedGeneration: previousSharedGatewaySessionGeneration,
+              });
             }
           }
           throw err;
         }
-        if (
-          publishedSnapshotRevision !== null &&
-          getActiveSecretsRuntimeSnapshotRevision() === publishedSnapshotRevision
-        ) {
-          setCurrentSharedGatewaySessionGeneration(
+        // Runtime-secret refreshes can legitimately advance the snapshot
+        // revision after this commit. Finalize only while this transaction's
+        // generation is still current so a genuinely newer generation wins.
+        if (publishedSharedGatewaySessionGeneration) {
+          finalizeOwnedSharedGatewaySessionGeneration(
             params.sharedGatewaySessionGenerationState,
-            nextSharedGatewaySessionGeneration,
+            publishedSharedGatewaySessionGeneration,
           );
         }
         return;
       }
     },
     onRestart: async (plan, nextConfig) => {
-      const previousRequiredSharedGatewaySessionGeneration =
-        params.sharedGatewaySessionGenerationState.required;
-      const previousSharedGatewaySessionGeneration =
-        params.sharedGatewaySessionGenerationState.current;
-      let restartTransaction: GatewayRestartTransactionResult | undefined;
-      try {
+      let preparation:
+        | {
+            ownership: SharedGatewaySessionGenerationOwnership;
+            previousRequired: string | undefined | null;
+            previousCurrent: string | undefined;
+            nextGeneration: string | undefined;
+          }
+        | undefined;
+      for (;;) {
+        const ownership = captureSharedGatewaySessionGenerationOwnership(
+          params.sharedGatewaySessionGenerationState,
+        );
+        const previousRequired = params.sharedGatewaySessionGenerationState.required;
         const prepared = await params.activateRuntimeSecrets(nextConfig, {
           reason: "restart-check",
           activate: false,
         });
-        const nextSharedGatewaySessionGeneration =
-          params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
+        if (
+          !isSharedGatewaySessionGenerationOwnershipCurrent(
+            params.sharedGatewaySessionGenerationState,
+            ownership,
+          )
+        ) {
+          continue;
+        }
+        preparation = {
+          ownership,
+          previousRequired,
+          previousCurrent: ownership.generation,
+          nextGeneration: params.resolveSharedGatewaySessionGenerationForConfig(prepared.config),
+        };
+        break;
+      }
+      const {
+        ownership: preparationOwnership,
+        previousRequired: previousRequiredSharedGatewaySessionGeneration,
+        previousCurrent: previousSharedGatewaySessionGeneration,
+        nextGeneration: nextSharedGatewaySessionGeneration,
+      } = preparation;
+      let restartTransaction: GatewayRestartTransactionResult | undefined;
+      let requiredOwnership: SharedGatewaySessionGenerationOwnership | null = null;
+      try {
         restartTransaction = requestGatewayRestart(plan, nextConfig);
         if (restartTransaction.status === "recovery-pending") {
           throw new GatewayHotReloadRecoveryError("config restart");
         }
+        requiredOwnership = setRequiredSharedGatewaySessionGenerationIfOwned(
+          params.sharedGatewaySessionGenerationState,
+          preparationOwnership,
+          previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration
+            ? nextSharedGatewaySessionGeneration
+            : null,
+        );
+        if (!requiredOwnership) {
+          throw new GatewayHotReloadStaleSecretsError();
+        }
         if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
-          params.sharedGatewaySessionGenerationState.required = nextSharedGatewaySessionGeneration;
           disconnectStaleSharedGatewayAuthClients({
             clients: params.clients,
             expectedGeneration: nextSharedGatewaySessionGeneration,
           });
-        } else {
-          params.sharedGatewaySessionGenerationState.required = null;
         }
         restartTransaction.settle("committed");
       } catch (error) {
         restartTransaction?.settle("rejected");
-        params.sharedGatewaySessionGenerationState.required =
-          previousRequiredSharedGatewaySessionGeneration;
+        if (requiredOwnership) {
+          setRequiredSharedGatewaySessionGenerationIfOwned(
+            params.sharedGatewaySessionGenerationState,
+            requiredOwnership,
+            previousRequiredSharedGatewaySessionGeneration,
+          );
+        }
         throw error;
       }
     },

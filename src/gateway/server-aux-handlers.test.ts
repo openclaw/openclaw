@@ -6,10 +6,12 @@ import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshotRevision,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
+import { replaceSharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -45,6 +47,10 @@ function createSnapshot(config: OpenClawConfig): PreparedSecretsRuntimeSnapshot 
       diagnostics: [],
     },
   };
+}
+
+function createSourceSnapshot(config: OpenClawConfig): PreparedSecretsRuntimeSnapshot {
+  return { ...createSnapshot(config), sourceConfig: config };
 }
 
 function slackConfig(signingSecret: string) {
@@ -278,7 +284,6 @@ describe("gateway aux handlers", () => {
       // handler were not serialized.
       await Promise.resolve();
       await Promise.resolve();
-      activateSecretsRuntimeSnapshot(preparedFirst);
       activationOrder.push("first-end");
       return preparedFirst;
     });
@@ -302,6 +307,51 @@ describe("gateway aux handlers", () => {
     expect(startChannel.mock.calls).toEqual([["slack"]]);
     expect(respond).toHaveBeenNthCalledWith(1, true, { ok: true, warningCount: 0 });
     expect(respond).toHaveBeenNthCalledWith(2, true, { ok: true, warningCount: 0 });
+  });
+
+  it("retries from the canonical source when it changes during secrets.reload preparation", async () => {
+    const initialConfig = slackConfig("initial-secret");
+    const canonicalConfig = slackConfig("canonical-secret");
+    activateSecretsRuntimeSnapshot(createSourceSnapshot(initialConfig));
+    const activatePreparedSnapshotIfCurrent = vi.fn(
+      async (
+        snapshot: PreparedSecretsRuntimeSnapshot,
+        expectedRevision: number,
+        _params: unknown,
+        onActivated?: () => Promise<void>,
+      ) => {
+        if (getActiveSecretsRuntimeSnapshotRevision() !== expectedRevision) {
+          return null;
+        }
+        activateSecretsRuntimeSnapshot(snapshot);
+        await onActivated?.();
+        return snapshot;
+      },
+    );
+    const activateRuntimeSecrets = Object.assign(
+      vi.fn(async (config: OpenClawConfig) => {
+        if (activateRuntimeSecrets.mock.calls.length === 1) {
+          activateSecretsRuntimeSnapshot(createSourceSnapshot(canonicalConfig));
+        }
+        return createSourceSnapshot(config);
+      }),
+      { activatePreparedSnapshotIfCurrent },
+    );
+    const { reload, respond } = createSecretsReloadHarness({ activateRuntimeSecrets });
+
+    await reload();
+
+    expect(activateRuntimeSecrets.mock.calls.map(([config]) => config)).toEqual([
+      initialConfig,
+      canonicalConfig,
+    ]);
+    expect(activateRuntimeSecrets.mock.calls.map(([, activation]) => activation)).toEqual([
+      { reason: "reload", activate: false },
+      { reason: "reload", activate: false },
+    ]);
+    expect(activatePreparedSnapshotIfCurrent).toHaveBeenCalledTimes(2);
+    expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(canonicalConfig);
+    expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
   it("rolls back stopped channels when a later restart fails", async () => {
@@ -367,10 +417,8 @@ describe("gateway aux handlers", () => {
     const activateRuntimeSecrets = vi.fn(
       async (
         _config: OpenClawConfig,
-        activationParams: Parameters<GatewayAuxHandlerParams["activateRuntimeSecrets"]>[1],
+        _activationParams: Parameters<GatewayAuxHandlerParams["activateRuntimeSecrets"]>[1],
       ) => {
-        activateSecretsRuntimeSnapshot(prepared);
-        activationParams.onActivated?.();
         return prepared;
       },
     );
@@ -382,8 +430,10 @@ describe("gateway aux handlers", () => {
       .fn()
       .mockImplementationOnce(async () => {
         activateSecretsRuntimeSnapshot(concurrent);
-        sharedGatewaySessionGenerationState.current = "gen-concurrent";
-        sharedGatewaySessionGenerationState.required = "gen-concurrent";
+        replaceSharedGatewaySessionGenerationState(sharedGatewaySessionGenerationState, {
+          current: "gen-concurrent",
+          required: "gen-concurrent",
+        });
         throw new Error("slack refused to start");
       })
       .mockResolvedValue(undefined);
@@ -400,7 +450,46 @@ describe("gateway aux handlers", () => {
     await reload();
 
     expect(firstRespondCall(respond)[0]).toBe(false);
+    expect(startChannel).toHaveBeenCalledTimes(2);
     expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(slackConfig("concurrent-secret"));
+    expect(sharedGatewaySessionGenerationState).toEqual({
+      current: "gen-concurrent",
+      required: "gen-concurrent",
+    });
+  });
+
+  it("rolls back a failed snapshot without overwriting newer generation-only state", async () => {
+    const initialConfig = slackConfig("old-slack-secret");
+    const prepared = createSourceSnapshot(slackConfig("reload-secret"));
+    activateSecretsRuntimeSnapshot(createSourceSnapshot(initialConfig));
+    const sharedGatewaySessionGenerationState = {
+      current: "gen-old" as string | undefined,
+      required: "gen-old" as string | undefined | null,
+    };
+    const startChannel = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        replaceSharedGatewaySessionGenerationState(sharedGatewaySessionGenerationState, {
+          current: "gen-concurrent",
+          required: "gen-concurrent",
+        });
+        throw new Error("slack refused to start");
+      })
+      .mockResolvedValue(undefined);
+    const { reload, respond } = createSecretsReloadHarness({
+      activateRuntimeSecrets: vi.fn(async () => prepared),
+      buildReloadPlan: buildRestartChannelsPlan("slack"),
+      sharedGatewaySessionGenerationState,
+      resolveSharedGatewaySessionGenerationForConfig: () => "gen-reload",
+      startChannel,
+      stopChannel: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await reload();
+
+    expect(firstRespondCall(respond)[0]).toBe(false);
+    expect(startChannel).toHaveBeenCalledTimes(2);
+    expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(initialConfig);
     expect(sharedGatewaySessionGenerationState).toEqual({
       current: "gen-concurrent",
       required: "gen-concurrent",
