@@ -320,8 +320,9 @@ struct ExecHostRequestEvaluatorTests {
             approvalSource: nil,
             explicitlyApproved: true,
             persistAllowlist: false)
-        if case let .explicitOnce(security) = explicit.authorization {
+        if case let .explicitOnce(security, policySnapshot) = explicit.authorization {
             #expect(security == .full)
+            #expect(policySnapshot == currentContext.policySnapshot)
         } else {
             Issue.record("expected explicit authorization")
         }
@@ -356,8 +357,9 @@ struct ExecHostRequestEvaluatorTests {
             approvalSource: .autoReview,
             explicitlyApproved: true,
             persistAllowlist: false)
-        if case let .autoReview(security) = autoReview.authorization {
+        if case let .autoReview(security, policySnapshot) = autoReview.authorization {
             #expect(security == .allowlist)
+            #expect(policySnapshot == autoReviewContext.policySnapshot)
         } else {
             Issue.record("expected auto-review authorization")
         }

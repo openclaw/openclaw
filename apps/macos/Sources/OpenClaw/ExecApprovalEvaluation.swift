@@ -75,6 +75,15 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
         })
     }
 
+    init(resolved approvals: ExecApprovalsResolved) {
+        self.init(
+            security: approvals.agent.security,
+            ask: approvals.agent.ask,
+            askFallback: approvals.agent.askFallback,
+            autoAllowSkills: approvals.agent.autoAllowSkills,
+            allowlist: approvals.allowlist)
+    }
+
     func isCurrent(_ current: Self) -> Bool {
         self.security == current.security &&
             self.ask == current.ask &&
@@ -94,8 +103,12 @@ enum ExecApprovalAuthorization: Sendable {
 
     case currentPolicy(evaluatedSecurity: ExecSecurity, evaluatedAsk: ExecAsk, basis: Basis?)
     case askFallback(evaluatedSecurity: ExecSecurity, basis: Basis?)
-    case autoReview(evaluatedSecurity: ExecSecurity)
-    case explicitOnce(evaluatedSecurity: ExecSecurity)
+    case autoReview(
+        evaluatedSecurity: ExecSecurity,
+        policySnapshot: ExecApprovalPolicySnapshot)
+    case explicitOnce(
+        evaluatedSecurity: ExecSecurity,
+        policySnapshot: ExecApprovalPolicySnapshot)
     case explicitAlways(
         evaluatedSecurity: ExecSecurity,
         policySnapshot: ExecApprovalPolicySnapshot,
@@ -121,13 +134,19 @@ struct ExecApprovalExecutionCommit: Sendable {
             : []
         let grants = persistAllowlist ? self.allowAlwaysGrants(context: context) : []
         let basis = effectiveSecurity == .allowlist ? context.authorizationBasis : nil
+        // The socket and native runtime both cross an asynchronous approval
+        // boundary. Carry the evaluated policy into their shared commit path.
         let authorization: ExecApprovalAuthorization = if approvalSource == .askFallback {
             .askFallback(evaluatedSecurity: effectiveSecurity, basis: basis)
         } else if approvalSource == .autoReview {
-            .autoReview(evaluatedSecurity: effectiveSecurity)
+            .autoReview(
+                evaluatedSecurity: effectiveSecurity,
+                policySnapshot: context.policySnapshot)
         } else if explicitlyApproved {
             if grants.isEmpty {
-                .explicitOnce(evaluatedSecurity: effectiveSecurity)
+                .explicitOnce(
+                    evaluatedSecurity: effectiveSecurity,
+                    policySnapshot: context.policySnapshot)
             } else {
                 .explicitAlways(
                     evaluatedSecurity: effectiveSecurity,
@@ -258,12 +277,7 @@ enum ExecApprovalEvaluator {
             allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: allowlistSatisfied ? allowlistMatches.first : nil,
             skillAllow: skillAllow,
-            policySnapshot: ExecApprovalPolicySnapshot(
-                security: approvals.agent.security,
-                ask: approvals.agent.ask,
-                askFallback: approvals.agent.askFallback,
-                autoAllowSkills: approvals.agent.autoAllowSkills,
-                allowlist: approvals.allowlist))
+            policySnapshot: ExecApprovalPolicySnapshot(resolved: approvals))
     }
 
     static func isSkillAutoAllowed(
