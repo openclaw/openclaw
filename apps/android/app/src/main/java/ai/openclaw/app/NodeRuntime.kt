@@ -3790,25 +3790,7 @@ class NodeRuntime private constructor(
       val root = json.parseToJsonElement(res).asObjectOrNull() ?: return
       val defaultAgentId = root["defaultId"].asStringOrNull()?.trim().orEmpty()
       val mainKey = normalizeMainKey(root["mainKey"].asStringOrNull())
-      val agents =
-        (root["agents"] as? JsonArray)?.mapNotNull { item ->
-          val obj = item.asObjectOrNull() ?: return@mapNotNull null
-          val id = obj["id"].asStringOrNull()?.trim().orEmpty()
-          if (id.isEmpty()) return@mapNotNull null
-          val name = obj["name"].asStringOrNull()?.trim()
-          val emoji =
-            obj["identity"]
-              .asObjectOrNull()
-              ?.get("emoji")
-              .asStringOrNull()
-              ?.trim()
-          GatewayAgentSummary(
-            id = id,
-            name = name?.takeIf { it.isNotEmpty() },
-            emoji = emoji?.takeIf { it.isNotEmpty() },
-            workspaceGit = (obj["workspaceGit"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() == true,
-          )
-        } ?: emptyList()
+      val agents = parseGatewayAgentSummaries(root)
 
       publishGatewayData(gatewayScope) {
         _gatewayDefaultAgentId.value = defaultAgentId.ifEmpty { null }
@@ -5650,13 +5632,6 @@ private enum class HomeCanvasGatewayState {
   Error,
   Offline,
 }
-
-data class GatewayAgentSummary(
-  val id: String,
-  val name: String?,
-  val emoji: String?,
-  val workspaceGit: Boolean = false,
-)
 
 data class GatewayModelSummary(
   val id: String,

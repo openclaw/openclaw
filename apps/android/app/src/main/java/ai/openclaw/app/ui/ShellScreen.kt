@@ -18,6 +18,8 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.ui.chat.ChatScreen
+import ai.openclaw.app.ui.design.AgentAvatarSource
+import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawBottomNav
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawEmptyState
@@ -31,6 +33,7 @@ import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
+import ai.openclaw.app.ui.design.agentAvatarSource
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -436,6 +439,7 @@ private fun OverviewScreen(
   val headerRoute = overviewHeaderRoute(attentionRows)
   val activeAgentName = overviewAgentName(agents = agents, defaultAgentId = defaultAgentId)
   val activeAgentBadge = overviewAgentBadgeText(agents = agents, defaultAgentId = defaultAgentId)
+  val activeAgentAvatar = overviewAgentAvatar(agents = agents, defaultAgentId = defaultAgentId)
   val overviewSessions = overviewRecentSessions(sessions)
   val overviewSessionCount = overviewSessions.size
   val candidateRecentRows =
@@ -495,6 +499,7 @@ private fun OverviewScreen(
           OverviewPrimaryPanel(
             agentName = activeAgentName,
             agentBadge = activeAgentBadge,
+            agentAvatarSource = activeAgentAvatar,
             statusText = gatewaySummary(gatewayConnectionDisplay),
             isConnected = gatewayConnectionDisplay.isConnected,
             pendingRunCount = pendingRunCount,
@@ -626,6 +631,7 @@ private fun OverviewStatusPill(
 private fun OverviewPrimaryPanel(
   agentName: String,
   agentBadge: String,
+  agentAvatarSource: AgentAvatarSource?,
   statusText: String,
   isConnected: Boolean,
   pendingRunCount: Int,
@@ -640,7 +646,7 @@ private fun OverviewPrimaryPanel(
     Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xs)) {
       Text(text = "ACTIVE AGENT", style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp), color = ClawTheme.colors.textMuted)
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-        OverviewAgentBadge(text = agentBadge, active = isConnected)
+        OverviewAgentBadge(text = agentBadge, active = isConnected, avatarSource = agentAvatarSource)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
           Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             Text(text = if (pendingRunCount > 0) "$agentName is working" else agentName, style = ClawTheme.type.title.copy(fontSize = 19.sp, lineHeight = 23.sp), color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
@@ -729,6 +735,7 @@ private fun OverviewLayeredPanel(
 private fun OverviewAgentBadge(
   text: String,
   active: Boolean,
+  avatarSource: AgentAvatarSource?,
 ) {
   Surface(
     modifier = Modifier.size(42.dp),
@@ -738,12 +745,14 @@ private fun OverviewAgentBadge(
     tonalElevation = if (active) 3.dp else 1.dp,
     shadowElevation = if (active) 5.dp else 1.dp,
   ) {
-    Box(contentAlignment = Alignment.Center) {
-      Text(
-        text = text,
-        style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp),
-        maxLines = 1,
-      )
+    ClawAgentAvatar(source = avatarSource, size = 42.dp) {
+      Box(contentAlignment = Alignment.Center) {
+        Text(
+          text = text,
+          style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp),
+          maxLines = 1,
+        )
+      }
     }
   }
 }
@@ -1105,6 +1114,11 @@ internal fun overviewAgentBadgeText(
   val source = agent.name?.takeIf { it.isNotBlank() } ?: agent.id.takeIf { it.isNotBlank() } ?: "OpenClaw"
   return agentInitials(source)
 }
+
+internal fun overviewAgentAvatar(
+  agents: List<GatewayAgentSummary>,
+  defaultAgentId: String?,
+): AgentAvatarSource? = overviewAgent(agents = agents, defaultAgentId = defaultAgentId)?.let(::agentAvatarSource)
 
 private fun overviewAgent(
   agents: List<GatewayAgentSummary>,
