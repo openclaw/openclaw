@@ -42,6 +42,16 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("<code>foo()</code>")).toBe("`foo()`");
   });
 
+  it("preserves inline formatting when opening tags carry attributes", () => {
+    expect(sanitizeForPlainText('<b class="x">bold</b>')).toBe("*bold*");
+    expect(sanitizeForPlainText('<strong style="font-weight:bold">bold</strong>')).toBe("*bold*");
+    expect(sanitizeForPlainText('<i id="y">italic</i>')).toBe("_italic_");
+    expect(sanitizeForPlainText('<em data-lang="en">italic</em>')).toBe("_italic_");
+    expect(sanitizeForPlainText('<s class="del">deleted</s>')).toBe("~deleted~");
+    expect(sanitizeForPlainText('<strike style="text-decoration">old</strike>')).toBe("~old~");
+    expect(sanitizeForPlainText('<del data-revision="3">removed</del>')).toBe("~removed~");
+  });
+
   // --- block elements -----------------------------------------------------
 
   it("converts <p> and <div> to newlines", () => {
