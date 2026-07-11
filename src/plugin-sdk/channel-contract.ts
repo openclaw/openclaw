@@ -45,6 +45,5 @@ export type {
   ChannelOutboundPayloadHint,
   ChannelStatusAdapter,
 } from "../channels/plugins/types.adapters.js";
-export type {
-} from "../channels/plugins/channel-login-method.types.js";
+export type { ChannelLoginMethod } from "../channels/plugins/channel-login-method.types.js";
 export type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";

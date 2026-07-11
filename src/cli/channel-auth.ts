@@ -8,7 +8,7 @@ import {
   listChannelPlugins,
   normalizeChannelId,
 } from "../channels/plugins/index.js";
-import type { ChannelLoginMethod, ChannelLoginMethodKind } from "../channels/plugins/types.js";
+import type { ChannelLoginMethod } from "../channels/plugins/types.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
 import { parseAccountSelector } from "../commands/channels/account-selector.js";
 import { parseChannelSelector } from "../commands/channels/channel-selector.js";
@@ -63,7 +63,7 @@ function assertSupportedLoginMethod(plugin: ChannelPlugin, method: ChannelLoginM
   }
   const labelByKind = {
     "phone-number": "--phone-number",
-  } satisfies Record<ChannelLoginMethodKind, string>;
+  } satisfies Record<ChannelLoginMethod["kind"], string>;
   throw new Error(`Channel "${plugin.id}" does not support ${labelByKind[method.kind]} login.`);
 }
 
