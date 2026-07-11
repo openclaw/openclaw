@@ -10,8 +10,13 @@ describe("duckduckgo abort signal proof", () => {
     const controller = new AbortController();
     let capturedSignal: AbortSignal | null | undefined;
 
+    let resolveOnFetch: () => void;
+    const fetchWasCalled = new Promise<void>((r) => {
+      resolveOnFetch = r;
+    });
     const mockFetch = vi.fn(async (_input?: unknown, init?: unknown) => {
       capturedSignal = (init as RequestInit)?.signal ?? undefined;
+      resolveOnFetch();
       return new Promise<Response>((_resolve, reject) => {
         capturedSignal?.addEventListener(
           "abort",
@@ -31,9 +36,7 @@ describe("duckduckgo abort signal proof", () => {
         query: "abort propagation",
         signal: controller.signal,
       });
-      await new Promise((r) => {
-        setTimeout(r, 10);
-      });
+      await fetchWasCalled;
 
       expect(capturedSignal).toBeDefined();
 
