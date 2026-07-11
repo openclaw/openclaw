@@ -571,7 +571,7 @@ export const id: TranslationMap = {
     dockBottom: "Tambatkan ke bawah",
     dockRight: "Tambatkan ke kanan",
     annotate: "Anotasi halaman",
-    inspect: "Inspeksi elemen",
+    inspect: "Periksa elemen",
     annotateSend: "Kirim ke chat",
     annotateUndo: "Urungkan",
     annotateClear: "Hapus",
@@ -585,23 +585,23 @@ export const id: TranslationMap = {
     starting: "Memulai browser…",
     notRunning: "Browser gateway tidak berjalan.",
     start: "Mulai browser",
-    empty: "Tidak ada tab yang terbuka. Masukkan URL di atas untuk menjelajah.",
+    empty: "Tidak ada tab terbuka. Masukkan URL di atas untuk menjelajah.",
     refresh: "Segarkan tampilan",
-    noChatTarget: "Buka sesi chat terlebih dahulu agar anotasi memiliki tujuan pengiriman.",
-    inspectUnavailable: "Pemeriksaan elemen dinonaktifkan (browser.evaluateEnabled=false).",
+    noChatTarget: "Buka sesi chat terlebih dahulu agar anotasi memiliki tujuan.",
+    inspectUnavailable: "Inspeksi elemen dinonaktifkan (browser.evaluateEnabled=false).",
     annotationSent: "Anotasi ditambahkan ke penyusun chat.",
     annotatePrompt: {
       introTitled:
-        'Saya memberi anotasi pada halaman di {url} (judul yang dilaporkan halaman: "{title}") — tangkapan layar terlampir menunjukkan markup saya.',
+        'Saya menganotasi halaman di {url} (judul yang dilaporkan halaman: "{title}") — tangkapan layar terlampir menunjukkan markup saya.',
       introUntitled:
-        "Saya memberi anotasi pada halaman di {url} — tangkapan layar terlampir menunjukkan markup saya.",
+        "Saya menganotasi halaman di {url} — tangkapan layar terlampir menunjukkan markup saya.",
       region:
-        "Wilayah bertanda {index}: berpusat sekitar {x}% ke kanan / {y}% ke bawah, mencakup sekitar {width}% × {height}% dari tampilan.",
+        "Wilayah yang ditandai {index}: berpusat sekitar {x}% ke samping / {y}% ke bawah, mencakup sekitar {width}% × {height}% dari tampilan.",
       moreRegions:
-        "…ditambah {count} wilayah bertanda lainnya, semuanya terlihat di tangkapan layar.",
+        "…ditambah {count} wilayah lain yang ditandai, semuanya terlihat di tangkapan layar.",
       elementDetail:
         "Elemen yang ditandai (dilaporkan halaman): {descriptor} — {width}×{height}px pada ({x}, {y}).",
-      outro: "Harap lihat area yang ditandai dan beri tahu saya pendapat Anda tentangnya.",
+      outro: "Silakan lihat area yang ditandai dan beri tahu saya pendapat Anda tentangnya.",
     },
   },
   tabs: {

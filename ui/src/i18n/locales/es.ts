@@ -557,7 +557,7 @@ export const es: TranslationMap = {
   },
   browser: {
     title: "Navegador",
-    toggle: "Mostrar/ocultar panel del navegador",
+    toggle: "Mostrar u ocultar panel del navegador",
     hide: "Ocultar panel del navegador",
     resize: "Redimensionar panel del navegador",
     newTab: "Nueva pestaña",
@@ -567,9 +567,9 @@ export const es: TranslationMap = {
     forward: "Adelante",
     reload: "Recargar",
     openExternal: "Abrir en tu navegador",
-    urlPlaceholder: "Introduce una URL y pulsa Intro",
-    dockBottom: "Acoplar abajo",
-    dockRight: "Acoplar a la derecha",
+    urlPlaceholder: "Introduce una URL y pulsa Enter",
+    dockBottom: "Anclar abajo",
+    dockRight: "Anclar a la derecha",
     annotate: "Anotar página",
     inspect: "Inspeccionar elemento",
     annotateSend: "Enviar al chat",
@@ -587,20 +587,20 @@ export const es: TranslationMap = {
     start: "Iniciar navegador",
     empty: "No hay pestañas abiertas. Introduce una URL arriba para navegar.",
     refresh: "Actualizar vista",
-    noChatTarget: "Abre primero una sesión de chat para que la anotación tenga dónde enviarse.",
+    noChatTarget: "Abre primero una sesión de chat para que la anotación tenga un destino.",
     inspectUnavailable:
       "La inspección de elementos está deshabilitada (browser.evaluateEnabled=false).",
-    annotationSent: "Anotación añadida al redactor del chat.",
+    annotationSent: "Anotación añadida al compositor del chat.",
     annotatePrompt: {
       introTitled:
-        'Anoté la página en {url} (título informado por la página: "{title}") — la captura de pantalla adjunta muestra mis marcas.',
+        'He anotado la página en {url} (título indicado por la página: "{title}") — la captura de pantalla adjunta muestra mi marcado.',
       introUntitled:
         "He anotado la página en {url} — la captura de pantalla adjunta muestra mi marcado.",
       region:
-        "Región marcada {index}: centrada alrededor de {x}% horizontal / {y}% vertical, abarcando aproximadamente el {width}% × {height}% de la vista.",
+        "Región marcada {index}: centrada alrededor de {x}% en horizontal / {y}% hacia abajo, abarca aproximadamente el {width}% × {height}% de la vista.",
       moreRegions: "…más {count} región(es) marcada(s), todas visibles en la captura de pantalla.",
       elementDetail:
-        "Elemento marcado (informado por la página): {descriptor} — {width}×{height}px en ({x}, {y}).",
+        "Elemento marcado (indicado por la página): {descriptor} — {width}×{height}px en ({x}, {y}).",
       outro: "Mira el área marcada y dime qué opinas.",
     },
   },

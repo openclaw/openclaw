@@ -571,15 +571,15 @@ export const nl: TranslationMap = {
     reload: "Herladen",
     openExternal: "Openen in je browser",
     urlPlaceholder: "Voer een URL in en druk op Enter",
-    dockBottom: "Aan onderkant vastzetten",
-    dockRight: "Aan rechterkant vastzetten",
+    dockBottom: "Onderaan vastzetten",
+    dockRight: "Rechts vastzetten",
     annotate: "Pagina annoteren",
     inspect: "Element inspecteren",
-    annotateSend: "Naar chat sturen",
+    annotateSend: "Naar chat verzenden",
     annotateUndo: "Ongedaan maken",
     annotateClear: "Wissen",
     annotateDone: "Annotatiemodus afsluiten",
-    annotateHint: "Teken op de pagina en stuur de markering daarna naar je chat.",
+    annotateHint: "Teken op de pagina en stuur de markering vervolgens naar je chat.",
     inspectHint: "Beweeg de cursor om te inspecteren; klik om het element naar je chat te sturen.",
     inspectName: "Naam",
     inspectRole: "Rol",
@@ -592,18 +592,18 @@ export const nl: TranslationMap = {
     refresh: "Weergave vernieuwen",
     noChatTarget: "Open eerst een chatsessie zodat de annotatie ergens naartoe kan.",
     inspectUnavailable: "Elementinspectie is uitgeschakeld (browser.evaluateEnabled=false).",
-    annotationSent: "Annotatie toegevoegd aan de chatcomponist.",
+    annotationSent: "Annotatie toegevoegd aan de chatcomposer.",
     annotatePrompt: {
       introTitled:
-        'Ik heb de pagina op {url} geannoteerd (door de pagina gerapporteerde titel: "{title}") — de bijgevoegde schermafbeelding toont mijn markering.',
+        'Ik heb de pagina op {url} geannoteerd (door de pagina gerapporteerde titel: "{title}") — de bijgevoegde screenshot toont mijn markering.',
       introUntitled:
         "Ik heb de pagina op {url} geannoteerd — de bijgevoegde screenshot toont mijn markering.",
       region:
-        "Gemarkeerd gebied {index}: gecentreerd rond {x}% horizontaal / {y}% omlaag, beslaat ongeveer {width}% × {height}% van de weergave.",
-      moreRegions: "…plus nog {count} gemarkeerde gebied(en), allemaal zichtbaar in de screenshot.",
+        "Gemarkeerd gebied {index}: gecentreerd rond {x}% horizontaal / {y}% verticaal, beslaat ongeveer {width}% × {height}% van de weergave.",
+      moreRegions: "…plus nog {count} gemarkeerde regio('s), allemaal zichtbaar in de screenshot.",
       elementDetail:
         "Gemarkeerd element (door de pagina gerapporteerd): {descriptor} — {width}×{height}px op ({x}, {y}).",
-      outro: "Bekijk het gemarkeerde gebied en vertel me wat je ervan vindt.",
+      outro: "Kijk naar het gemarkeerde gebied en vertel me wat je ervan vindt.",
     },
   },
   tabs: {

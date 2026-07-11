@@ -560,17 +560,17 @@ export const de: TranslationMap = {
   },
   browser: {
     title: "Browser",
-    toggle: "Browserbereich umschalten",
-    hide: "Browserbereich ausblenden",
-    resize: "Browserbereich skalieren",
+    toggle: "Browser-Bereich ein-/ausblenden",
+    hide: "Browser-Bereich ausblenden",
+    resize: "Browser-Bereich anpassen",
     newTab: "Neuer Tab",
     closeTab: "Tab schließen",
     untitledTab: "Neuer Tab",
     back: "Zurück",
-    forward: "Vorwärts",
+    forward: "Weiter",
     reload: "Neu laden",
     openExternal: "In Ihrem Browser öffnen",
-    urlPlaceholder: "URL eingeben und Enter drücken",
+    urlPlaceholder: "URL eingeben und Eingabetaste drücken",
     dockBottom: "Unten andocken",
     dockRight: "Rechts andocken",
     annotate: "Seite kommentieren",
@@ -579,7 +579,8 @@ export const de: TranslationMap = {
     annotateUndo: "Rückgängig",
     annotateClear: "Löschen",
     annotateDone: "Kommentarmodus beenden",
-    annotateHint: "Zeichnen Sie auf der Seite und senden Sie dann die Markierung an Ihren Chat.",
+    annotateHint:
+      "Zeichnen Sie auf der Seite und senden Sie anschließend die Markierung an Ihren Chat.",
     inspectHint:
       "Zum Untersuchen den Mauszeiger darüber bewegen; klicken, um das Element an Ihren Chat zu senden.",
     inspectName: "Name",
@@ -593,10 +594,10 @@ export const de: TranslationMap = {
     refresh: "Ansicht aktualisieren",
     noChatTarget: "Öffnen Sie zuerst eine Chat-Sitzung, damit die Annotation ein Ziel hat.",
     inspectUnavailable: "Elementprüfung ist deaktiviert (browser.evaluateEnabled=false).",
-    annotationSent: "Annotation wurde dem Chat-Composer hinzugefügt.",
+    annotationSent: "Annotation zum Chat-Composer hinzugefügt.",
     annotatePrompt: {
       introTitled:
-        'Ich habe die Seite unter {url} mit Anmerkungen versehen (von der Seite gemeldeter Titel: "{title}") — der angehängte Screenshot zeigt meine Markierung.',
+        'Ich habe die Seite unter {url} annotiert (von der Seite gemeldeter Titel: "{title}") — der angehängte Screenshot zeigt meine Markierung.',
       introUntitled:
         "Ich habe die Seite unter {url} annotiert — der angehängte Screenshot zeigt meine Markierung.",
       region:

@@ -566,7 +566,7 @@ export const ko: TranslationMap = {
     reload: "새로고침",
     openExternal: "브라우저에서 열기",
     urlPlaceholder: "URL을 입력하고 Enter를 누르세요",
-    dockBottom: "아래쪽에 고정",
+    dockBottom: "하단에 고정",
     dockRight: "오른쪽에 고정",
     annotate: "페이지에 주석 달기",
     inspect: "요소 검사",
@@ -574,8 +574,8 @@ export const ko: TranslationMap = {
     annotateUndo: "실행 취소",
     annotateClear: "지우기",
     annotateDone: "주석 모드 종료",
-    annotateHint: "페이지에 그린 다음 마크업을 채팅으로 보내세요.",
-    inspectHint: "검사하려면 마우스를 올리고, 요소를 채팅으로 보내려면 클릭하세요.",
+    annotateHint: "페이지에 그린 다음, 마크업을 채팅으로 보내세요.",
+    inspectHint: "마우스를 올려 검사하고, 클릭하여 요소를 채팅으로 보내세요.",
     inspectName: "이름",
     inspectRole: "역할",
     inspectFocusable: "포커스 가능",
@@ -591,13 +591,14 @@ export const ko: TranslationMap = {
     annotatePrompt: {
       introTitled:
         '{url}의 페이지에 주석을 달았습니다(페이지에서 보고한 제목: "{title}") — 첨부된 스크린샷에 제 마크업이 표시되어 있습니다.',
-      introUntitled: "{url} 페이지에 주석을 달았습니다 — 첨부된 스크린샷에 제 마크업이 표시됩니다.",
+      introUntitled:
+        "{url}의 페이지에 주석을 달았습니다 — 첨부된 스크린샷에 제 마크업이 표시되어 있습니다.",
       region:
-        "표시된 영역 {index}: 가로 {x}% / 세로 {y}% 지점을 중심으로 하며, 보기의 약 {width}% × {height}%를 차지합니다.",
-      moreRegions: "…그 외 {count}개의 표시된 영역이 더 있으며, 모두 스크린샷에 표시됩니다.",
+        "표시된 영역 {index}: 가로 {x}% / 세로 {y}% 지점을 중심으로, 보기의 약 {width}% × {height}% 범위입니다.",
+      moreRegions: "…추가로 표시된 영역 {count}개가 더 있으며, 모두 스크린샷에 표시됩니다.",
       elementDetail:
-        "표시된 요소(페이지에서 보고함): {descriptor} — ({x}, {y}) 위치의 {width}×{height}px.",
-      outro: "표시된 영역을 보고 어떻게 생각하시는지 알려주세요.",
+        "표시된 요소(페이지에서 보고됨): {descriptor} — ({x}, {y}) 위치의 {width}×{height}px.",
+      outro: "표시된 영역을 보고 어떻게 생각하는지 알려주세요.",
     },
   },
   tabs: {

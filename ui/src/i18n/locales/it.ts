@@ -562,7 +562,7 @@ export const it: TranslationMap = {
   },
   browser: {
     title: "Browser",
-    toggle: "Attiva/disattiva pannello browser",
+    toggle: "Mostra/nascondi pannello browser",
     hide: "Nascondi pannello browser",
     resize: "Ridimensiona pannello browser",
     newTab: "Nuova scheda",
@@ -581,16 +581,16 @@ export const it: TranslationMap = {
     annotateUndo: "Annulla",
     annotateClear: "Cancella",
     annotateDone: "Esci dalla modalità annotazione",
-    annotateHint: "Disegna sulla pagina, quindi invia il markup alla chat.",
+    annotateHint: "Disegna sulla pagina, poi invia il markup alla chat.",
     inspectHint: "Passa il puntatore per ispezionare; fai clic per inviare l'elemento alla chat.",
     inspectName: "Nome",
     inspectRole: "Ruolo",
     inspectFocusable: "Attivabile",
     loading: "Caricamento pagina…",
     starting: "Avvio del browser…",
-    notRunning: "Il browser del gateway non è in esecuzione.",
+    notRunning: "Il browser del Gateway non è in esecuzione.",
     start: "Avvia browser",
-    empty: "Nessuna scheda aperta. Inserisci un URL sopra per navigare.",
+    empty: "Nessuna scheda aperta. Inserisci un URL qui sopra per navigare.",
     refresh: "Aggiorna vista",
     noChatTarget:
       "Apri prima una sessione di chat in modo che l'annotazione abbia una destinazione.",
@@ -599,14 +599,15 @@ export const it: TranslationMap = {
     annotationSent: "Annotazione aggiunta al compositore della chat.",
     annotatePrompt: {
       introTitled:
-        'Ho annotato la pagina all\'indirizzo {url} (titolo riportato dalla pagina: "{title}") — lo screenshot allegato mostra le mie annotazioni.',
+        'Ho annotato la pagina all\'indirizzo {url} (titolo segnalato dalla pagina: "{title}") — lo screenshot allegato mostra il mio markup.',
       introUntitled:
         "Ho annotato la pagina all'indirizzo {url} — lo screenshot allegato mostra il mio markup.",
       region:
-        "Area contrassegnata {index}: centrata circa al {x}% in orizzontale / {y}% in verticale, estesa per circa il {width}% × {height}% della vista.",
-      moreRegions: "…più altre {count} area/e contrassegnata/e, tutte visibili nello screenshot.",
+        "Regione contrassegnata {index}: centrata circa a {x}% in orizzontale / {y}% in verticale, copre circa {width}% × {height}% della vista.",
+      moreRegions:
+        "…più altre {count} regione/i contrassegnata/e, tutte visibili nello screenshot.",
       elementDetail:
-        "Elemento contrassegnato (riportato dalla pagina): {descriptor} — {width}×{height}px in ({x}, {y}).",
+        "Elemento contrassegnato (segnalato dalla pagina): {descriptor} — {width}×{height}px a ({x}, {y}).",
       outro: "Guarda l'area contrassegnata e dimmi cosa ne pensi.",
     },
   },

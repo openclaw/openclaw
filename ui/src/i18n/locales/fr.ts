@@ -586,7 +586,7 @@ export const fr: TranslationMap = {
     inspectHint: "Survolez pour inspecter ; cliquez pour envoyer l’élément à votre chat.",
     inspectName: "Nom",
     inspectRole: "Rôle",
-    inspectFocusable: "Focusable",
+    inspectFocusable: "Focalisable",
     loading: "Chargement de la page…",
     starting: "Démarrage du navigateur…",
     notRunning: "Le navigateur Gateway n’est pas en cours d’exécution.",
@@ -598,16 +598,16 @@ export const fr: TranslationMap = {
     annotationSent: "Annotation ajoutée au compositeur de chat.",
     annotatePrompt: {
       introTitled:
-        "J’ai annoté la page à l’adresse {url} (titre indiqué par la page : « {title} ») — la capture d’écran jointe montre mon balisage.",
+        'J’ai annoté la page à l’adresse {url} (titre indiqué par la page : "{title}") — la capture d’écran jointe montre mon annotation.',
       introUntitled:
         "J’ai annoté la page à l’adresse {url} — la capture d’écran jointe montre mon annotation.",
       region:
-        "Région marquée {index} : centrée environ à {x} % horizontalement / {y} % verticalement, couvrant environ {width} % × {height} % de la vue.",
+        "Région marquée {index} : centrée autour de {x}% horizontalement / {y}% verticalement, couvrant environ {width}% × {height}% de la vue.",
       moreRegions:
         "…plus {count} autre(s) région(s) marquée(s), toutes visibles dans la capture d’écran.",
       elementDetail:
         "Élément marqué (indiqué par la page) : {descriptor} — {width}×{height}px à ({x}, {y}).",
-      outro: "Veuillez examiner la zone marquée et me dire ce que vous en pensez.",
+      outro: "Veuillez regarder la zone marquée et me dire ce que vous en pensez.",
     },
   },
   tabs: {
