@@ -267,7 +267,7 @@ DEFAULT_THINKING_BY_ENGINE = {
     "codex": "high",
 }
 THINKING_LEVELS_BY_ENGINE = {
-    "codex": {"none", "minimal", "low", "medium", "high", "xhigh"},
+    "codex": {"none", "minimal", "low", "medium", "high", "xhigh", "max"},
     "claude": {"low", "medium", "high", "xhigh", "max"},
     "droid": {"off", "none", "low", "medium", "high", "xhigh", "max"},
     "copilot": set(),
@@ -4096,7 +4096,7 @@ def parse_args() -> argparse.Namespace:
         action="append",
         help="Model for all reviewers or engine=model. Repeatable. Defaults: codex=gpt-5.6-sol with an access-only gpt-5.6-terra retry, claude=claude-fable-5.",
     )
-    parser.add_argument("--thinking", action="append", help="Thinking/effort for all reviewers or engine=level. Repeatable. Codex: none, minimal, low, medium, high, xhigh. Claude: low, medium, high, xhigh, max. Droid: off, none, low, medium, high. Pi: off, minimal, low, medium, high, xhigh. OpenCode: minimal, low, medium, high, max. Cursor: none.")
+    parser.add_argument("--thinking", action="append", help="Thinking/effort for all reviewers or engine=level. Repeatable. Codex: none, minimal, low, medium, high, xhigh, max. Claude: low, medium, high, xhigh, max. Droid: off, none, low, medium, high. Pi: off, minimal, low, medium, high, xhigh. OpenCode: minimal, low, medium, high, max. Cursor: none.")
     parser.add_argument(
         "--fallback-model",
         action="append",
@@ -4519,6 +4519,9 @@ def self_test_config_defaults() -> None:
             )
         if default_codex.thinking != "high":
             raise SystemExit(f"self-test config defaults failed: default codex thinking={default_codex.thinking!r}")
+        max_effort = reviewer_args(reviewer_test_args(engine="codex", thinking=["max"]))[0]
+        if max_effort.thinking != "max":
+            raise SystemExit("self-test config defaults failed: Codex max thinking should be accepted")
         default_claude = reviewer_args(reviewer_test_args(engine="claude"))[0]
         if default_claude.model != "claude-fable-5":
             raise SystemExit(f"self-test config defaults failed: default claude model={default_claude.model!r}")
