@@ -74,6 +74,7 @@ Options:
   --no-github-snapshot  Disable GitHub GraphQL snapshot reuse.
   --refresh-github-snapshot
                         Ignore an existing exact-range snapshot and rebuild it.
+  --main-ref <ref>      Canonical mainline used to replace backport PRs.
   --seed-ref <ref>      Use an existing release section as editorial input.
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
   --write-ledger        Write the verified ledger back into CHANGELOG.md.
@@ -91,6 +92,7 @@ function parseArgs(argv) {
     json: false,
     manifestPath: undefined,
     githubSnapshotPath: undefined,
+    mainRef: undefined,
     noGithubSnapshot: false,
     refreshGithubSnapshot: false,
     seedRef: undefined,
@@ -131,6 +133,7 @@ function parseArgs(argv) {
       arg === "--release-tag" ||
       arg === "--shipped-ref" ||
       arg === "--github-snapshot" ||
+      arg === "--main-ref" ||
       arg === "--manifest" ||
       arg === "--seed-ref"
     ) {
@@ -146,6 +149,8 @@ function parseArgs(argv) {
         options.manifestPath = value;
       } else if (arg === "--github-snapshot") {
         options.githubSnapshotPath = value;
+      } else if (arg === "--main-ref") {
+        options.mainRef = value;
       } else if (arg === "--seed-ref") {
         options.seedRef = value;
       } else {
@@ -217,6 +222,21 @@ function gitIsAncestor(base, target) {
       result.stderr?.trim() || result.signal || result.status
     }`,
   );
+}
+
+function gitCommit(ref, required = false) {
+  const result = spawnSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status === 0) {
+    return result.stdout.trim();
+  }
+  if (!required) {
+    return undefined;
+  }
+  fail(`could not resolve canonical main ref ${ref}: ${result.stderr?.trim() || result.status}`);
 }
 
 function fetchGithubApi(args) {
@@ -759,7 +779,112 @@ function appendReferences(references, additions) {
   }
 }
 
-function sourceCommits(base, target) {
+function normalizedCommitSubject(subject) {
+  return subject
+    .replace(/\s+\(#\d+\)\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function cherryPickOrigins(message) {
+  return [...message.matchAll(/^\(cherry picked from commit ([0-9a-f]{40})\)$/gim)].map((match) =>
+    match[1].toLowerCase(),
+  );
+}
+
+function changedPathsForCommit(hash) {
+  return new Set(
+    git(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", hash, "--"])
+      .split("\n")
+      .filter(Boolean),
+  );
+}
+
+function authorsMatch(left, right) {
+  const leftEmail = left.authorEmail?.trim().toLowerCase();
+  const rightEmail = right.authorEmail?.trim().toLowerCase();
+  if (leftEmail && rightEmail && leftEmail === rightEmail) {
+    return true;
+  }
+  return (
+    left.authorName?.trim().toLowerCase() === right.authorName?.trim().toLowerCase() &&
+    Boolean(left.authorName?.trim())
+  );
+}
+
+function pathsOverlap(left, right) {
+  for (const path of left) {
+    if (right.has(path)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function canonicalMainCommitMatches(commit, candidates) {
+  const exact = candidates.find((candidate) => candidate.hash === commit.hash);
+  if (exact) {
+    return [exact.hash];
+  }
+
+  const origins = new Set(cherryPickOrigins(commit.body));
+  const explicit = candidates
+    .filter((candidate) => origins.has(candidate.hash))
+    .map((candidate) => candidate.hash);
+  if (explicit.length > 0) {
+    return [...new Set(explicit)];
+  }
+
+  const subject = normalizedCommitSubject(commit.subject);
+  const matches = candidates.filter(
+    (candidate) =>
+      normalizedCommitSubject(candidate.subject) === subject &&
+      authorsMatch(commit, candidate) &&
+      pathsOverlap(commit.changedPaths, candidate.changedPaths),
+  );
+  return matches.length === 1 ? [matches[0].hash] : [];
+}
+
+export function canonicalPullRequests(
+  currentPullRequests,
+  mainPullRequests,
+  hasCanonicalMainCommit = mainPullRequests.length > 0,
+) {
+  const pullRequests = hasCanonicalMainCommit ? mainPullRequests : currentPullRequests;
+  return [...new Set(pullRequests)].toSorted((left, right) => left - right);
+}
+
+function canonicalMainCommits(base, mainRef) {
+  if (!mainRef) {
+    return [];
+  }
+  const mainCommit = gitCommit(mainRef, true);
+  const mainBase = git(["merge-base", base, mainCommit]);
+  const output = git([
+    "log",
+    "--reverse",
+    "--format=%H%x1f%s%x1f%an%x1f%ae%x1e",
+    `${mainBase}..${mainCommit}`,
+  ]);
+  const commits = [];
+  for (const record of output.split("\x1e")) {
+    if (!record) {
+      continue;
+    }
+    const [rawHash, subject, authorName, authorEmail] = record.split("\x1f");
+    const hash = rawHash.trim();
+    commits.push({
+      authorEmail,
+      authorName,
+      hash,
+      subject,
+    });
+  }
+  return commits;
+}
+
+function sourceCommits(base, target, mainRef) {
   const targetCommit = git(["rev-parse", `${target}^{commit}`]);
   if (!gitIsAncestor(base, targetCommit)) {
     fail(`release range base ${base} must be an ancestor of target ${target}`);
@@ -931,12 +1056,72 @@ function sourceCommits(base, target) {
     activeCommits.map((commit) => commit.hash),
     targetTimestamp,
   );
+  const mainCommits = canonicalMainCommits(base, mainRef);
+  const mainCommitsByHash = new Map(mainCommits.map((commit) => [commit.hash, commit]));
+  const mainCommitsBySubject = new Map();
+  for (const commit of mainCommits) {
+    const subject = normalizedCommitSubject(commit.subject);
+    const matches = mainCommitsBySubject.get(subject) ?? [];
+    matches.push(commit);
+    mainCommitsBySubject.set(subject, matches);
+  }
+  const canonicalMainCommitsByReleaseCommit = new Map();
+  const canonicalMainHashes = new Set();
+  const changedPathsByCommit = new Map();
+  const withChangedPaths = (commit) => {
+    if (!changedPathsByCommit.has(commit.hash)) {
+      changedPathsByCommit.set(commit.hash, changedPathsForCommit(commit.hash));
+    }
+    return { ...commit, changedPaths: changedPathsByCommit.get(commit.hash) };
+  };
+  for (const commit of activeCommits) {
+    const exact = mainCommitsByHash.get(commit.hash);
+    if (exact) {
+      canonicalMainCommitsByReleaseCommit.set(commit.hash, []);
+      continue;
+    }
+    const explicit = cherryPickOrigins(commit.body)
+      .map((origin) => mainCommitsByHash.get(origin))
+      .filter(Boolean);
+    const matches =
+      explicit.length > 0
+        ? [...new Set(explicit.map((candidate) => candidate.hash))]
+        : canonicalMainCommitMatches(
+            withChangedPaths(commit),
+            (mainCommitsBySubject.get(normalizedCommitSubject(commit.subject)) ?? []).map(
+              withChangedPaths,
+            ),
+          );
+    canonicalMainCommitsByReleaseCommit.set(commit.hash, matches);
+    for (const hash of matches) {
+      canonicalMainHashes.add(hash);
+    }
+  }
+  const canonicalMainPullRequests = resolveAssociatedPullRequests(
+    [...canonicalMainHashes],
+    Number.POSITIVE_INFINITY,
+  );
   const resolvedCoauthors = resolveCommitCoauthors(activeCommits);
   const pullRequests = new Set();
   const nonRevertPullRequests = new Set();
   for (const commit of activeCommits) {
-    const associatedPullRequests = activePullRequests.get(commit.hash) ?? [];
+    const currentPullRequests = activePullRequests.get(commit.hash) ?? [];
+    const mainPullRequests = (canonicalMainCommitsByReleaseCommit.get(commit.hash) ?? []).flatMap(
+      (hash) => canonicalMainPullRequests.get(hash) ?? [],
+    );
+    const matchedMainCommits = canonicalMainCommitsByReleaseCommit.get(commit.hash) ?? [];
+    const associatedPullRequests = canonicalPullRequests(
+      currentPullRequests,
+      mainPullRequests,
+      matchedMainCommits.length > 0,
+    );
     commit.pullRequests = associatedPullRequests;
+    const suppressedBackportPullRequests = new Set(
+      currentPullRequests.filter((number) => !associatedPullRequests.includes(number)),
+    );
+    commit.references = commit.references.filter(
+      (number) => !suppressedBackportPullRequests.has(number),
+    );
     addHandles(commit.coauthors, resolvedCoauthors.get(commit.hash) ?? []);
     appendReferences(commit.references, associatedPullRequests);
     for (const number of associatedPullRequests) {
@@ -1900,7 +2085,7 @@ function main() {
   githubSnapshotState = initializeGithubSnapshot(options);
   let changelog = readFileSync("CHANGELOG.md", "utf8");
   let section = sectionFor(changelog, options.version);
-  const source = sourceCommits(options.base, options.target);
+  const source = sourceCommits(options.base, options.target, options.mainRef ?? "origin/main");
   const shippedBaselineRecords = options.shippedRefs.map(shippedBaselineFor);
   const shippedExclusions = subtractShippedPullRequests(source, shippedBaselineRecords);
   source.shippedBaselines = shippedExclusions.baselines;
