@@ -1930,6 +1930,40 @@ class ChatControllerOutboxTest {
     }
 
   @Test
+  fun directSendPersistenceFailureRearmsRecoveryInsteadOfStrandingSending() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      chat.load("main")
+      advanceUntilIdle()
+
+      // The acknowledged transition to accepted cannot be made durable mid-direct-send.
+      gateway.echoDeliveredSendsInHistory = false
+      outbox.acceptedStatusUpdateFailure = IllegalStateException("storage unavailable")
+      chat.sendMessageAwaitAcceptance(message = "stranded claim", thinkingLevel = "off", attachments = emptyList())
+      runCurrent()
+      assertEquals(
+        ChatOutboxStatus.Sending,
+        outbox.rows.values
+          .single()
+          .status,
+      )
+      assertFalse(chat.healthOk.value)
+
+      // The re-armed recovery sweep parks the row on the next health transition, so the
+      // session is not blocked forever by a claim with no user action available.
+      outbox.acceptedStatusUpdateFailure = null
+      chat.handleGatewayEvent("health", null)
+      advanceTimeBy(5_000)
+      runCurrent()
+      val parked = outbox.rows.values.single()
+      assertEquals(ChatOutboxStatus.Failed, parked.status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, parked.lastError)
+    }
+
+  @Test
   fun notEnqueuedDirectSendKeepsTheJournaledRowQueuedForReconnect() =
     runTest {
       val gateway = FakeGateway()

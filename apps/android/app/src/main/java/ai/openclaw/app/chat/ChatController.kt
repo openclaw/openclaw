@@ -917,7 +917,7 @@ class ChatController internal constructor(
       // reconnect flush owns delivery, exactly like the flush path treats not-dispatched sends;
       // deleting here could lose fire-and-forget input if the process died after the delete.
       if (journaled != null) {
-        runCatching { commandOutbox?.updateStatus(journaled.id, ChatOutboxStatus.Queued, 0, err.message) }
+        persistJournaledSendState(journaled, ChatOutboxStatus.Queued, err.message)
         if (sendCacheScope != currentCacheScope()) return true
         clearPendingRun(runId)
         removeOptimisticMessage(runId)
@@ -1063,18 +1063,34 @@ class ChatController internal constructor(
   ): Boolean = normalizeRequestedSessionKey(left) == normalizeRequestedSessionKey(right)
 
   private suspend fun markJournaledSendAccepted(row: ChatOutboxItem?) {
-    val outbox = commandOutbox ?: return
-    if (row == null) return
-    runCatching { outbox.updateStatus(row.id, ChatOutboxStatus.Accepted, row.retryCount, null) }
-    publishOutbox()
-    kickFlushForRoutedBacklog()
+    persistJournaledSendState(row, ChatOutboxStatus.Accepted, null)
   }
 
   private suspend fun markJournaledSendUnconfirmed(row: ChatOutboxItem?) {
+    persistJournaledSendState(row, ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+  }
+
+  // Mirrors the flush path's fail-closed persistence handling: a claimed row whose follow-up
+  // state cannot be made durable must not silently stay 'sending' (it would block its session
+  // with no user action available); the re-armed recovery sweep parks it once storage recovers.
+  private suspend fun persistJournaledSendState(
+    row: ChatOutboxItem?,
+    status: ChatOutboxStatus,
+    lastError: String?,
+  ) {
     val outbox = commandOutbox ?: return
     if (row == null) return
-    runCatching {
-      outbox.updateStatus(row.id, ChatOutboxStatus.Failed, row.retryCount, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+    val persisted =
+      try {
+        outbox.updateStatus(row.id, status, row.retryCount, lastError)
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        null
+      }
+    if (persisted == null) {
+      rearmOutboxRecovery()
+      _healthOk.value = false
     }
     publishOutbox()
     kickFlushForRoutedBacklog()
