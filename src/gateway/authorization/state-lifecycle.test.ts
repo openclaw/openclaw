@@ -492,10 +492,10 @@ describe("authorization state lifecycle", () => {
       db
         .prepare(
           `UPDATE authorization_resources
-           SET retired_at = ?
+           SET retired_at = ?, retired_by_principal_id = ?
            WHERE namespace = ? AND resource_type = ? AND resource_id = ?`,
         )
-        .run(Date.now(), workspace.namespace, workspace.type, workspace.id),
+        .run(Date.now(), owner.id, workspace.namespace, workspace.type, workspace.id),
     ).toThrow(/active child/i);
   });
 
@@ -591,6 +591,99 @@ describe("authorization state lifecycle", () => {
 
     expect(() => openOpenClawStateDatabase(database)).toThrow(
       /noncanonical authorization resource schema/i,
+    );
+  });
+
+  it("replaces the prior retirement trigger when adding retirement provenance", () => {
+    const database = createDatabase();
+    const sqlite = requireNodeSqlite();
+    const legacy = new sqlite.DatabaseSync(database.path);
+    legacy.exec(`
+      CREATE TABLE authorization_resources (
+        namespace TEXT NOT NULL,
+        resource_type TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        domain_id TEXT NOT NULL,
+        owner_principal_id TEXT NOT NULL,
+        parent_namespace TEXT,
+        parent_resource_type TEXT,
+        parent_resource_id TEXT,
+        retired_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (domain_id, namespace, resource_type, resource_id)
+      );
+      CREATE TRIGGER authorization_resources_retirement_monotonic
+      BEFORE UPDATE OF retired_at ON authorization_resources
+      FOR EACH ROW
+      WHEN OLD.retired_at IS NOT NULL OR NEW.retired_at IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'old retirement trigger');
+      END;
+      INSERT INTO authorization_resources (
+        namespace, resource_type, resource_id, domain_id, owner_principal_id,
+        parent_namespace, parent_resource_type, parent_resource_id,
+        retired_at, created_at, updated_at
+      ) VALUES (
+        'workspaces', 'workspace', 'workspace-1', 'domain-1', 'principal-owner',
+        NULL, NULL, NULL, NULL, 1, 1
+      );
+    `);
+    legacy.close();
+
+    const { db } = openOpenClawStateDatabase(database);
+    putAuthorizationPrincipal({ ...owner, database });
+    createIsolationDomain({ id: "domain-1", ownerPrincipalId: owner.id, database });
+    addMember(database, "domain-1", member);
+    db.prepare(
+      `UPDATE authorization_resources
+       SET retired_at = ?, retired_by_principal_id = ?
+       WHERE domain_id = ? AND namespace = ? AND resource_type = ? AND resource_id = ?`,
+    ).run(2, owner.id, "domain-1", "workspaces", "workspace", "workspace-1");
+
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE authorization_resources
+           SET retired_by_principal_id = ?
+           WHERE domain_id = ? AND namespace = ? AND resource_type = ? AND resource_id = ?`,
+        )
+        .run(member.id, "domain-1", "workspaces", "workspace", "workspace-1"),
+    ).toThrow(/retired authorization resources/i);
+  });
+
+  it("fails closed when an upgraded retired resource has no trustworthy provenance", () => {
+    const database = createDatabase();
+    const sqlite = requireNodeSqlite();
+    const legacy = new sqlite.DatabaseSync(database.path);
+    legacy.exec(`
+      CREATE TABLE authorization_resources (
+        namespace TEXT NOT NULL,
+        resource_type TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        domain_id TEXT NOT NULL,
+        owner_principal_id TEXT NOT NULL,
+        parent_namespace TEXT,
+        parent_resource_type TEXT,
+        parent_resource_id TEXT,
+        retired_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (domain_id, namespace, resource_type, resource_id)
+      );
+      INSERT INTO authorization_resources (
+        namespace, resource_type, resource_id, domain_id, owner_principal_id,
+        parent_namespace, parent_resource_type, parent_resource_id,
+        retired_at, created_at, updated_at
+      ) VALUES (
+        'workspaces', 'workspace', 'workspace-1', 'domain-1', 'principal-owner',
+        NULL, NULL, NULL, 2, 1, 2
+      );
+    `);
+    legacy.close();
+
+    expect(() => openOpenClawStateDatabase(database)).toThrow(
+      /noncanonical authorization retirement provenance/i,
     );
   });
 });

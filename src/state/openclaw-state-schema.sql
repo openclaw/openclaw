@@ -399,6 +399,7 @@ CREATE TABLE IF NOT EXISTS authorization_resources (
   parent_resource_type TEXT,
   parent_resource_id TEXT,
   retired_at INTEGER,
+  retired_by_principal_id TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (domain_id, namespace, resource_type, resource_id),
@@ -419,8 +420,14 @@ CREATE TABLE IF NOT EXISTS authorization_resources (
       )
     )
   ),
+  CHECK (
+    (retired_at IS NULL AND retired_by_principal_id IS NULL)
+    OR (retired_at IS NOT NULL AND retired_by_principal_id IS NOT NULL)
+  ),
   FOREIGN KEY (domain_id, owner_principal_id)
     REFERENCES authorization_domain_memberships(domain_id, principal_id),
+  FOREIGN KEY (retired_by_principal_id)
+    REFERENCES authorization_principals(principal_id),
   FOREIGN KEY (domain_id, parent_namespace, parent_resource_type, parent_resource_id)
     REFERENCES authorization_resources(domain_id, namespace, resource_type, resource_id)
 );
@@ -550,10 +557,36 @@ BEGIN
   SELECT RAISE(ABORT, 'authorization resource has an active child resource');
 END;
 
-CREATE TRIGGER IF NOT EXISTS authorization_resources_retirement_monotonic
-BEFORE UPDATE OF retired_at ON authorization_resources
+CREATE TRIGGER IF NOT EXISTS authorization_resources_retirement_insert_guard
+BEFORE INSERT ON authorization_resources
 FOR EACH ROW
-WHEN OLD.retired_at IS NOT NULL OR NEW.retired_at IS NULL
+WHEN
+  (NEW.retired_at IS NULL) <> (NEW.retired_by_principal_id IS NULL)
+  OR (
+    NEW.retired_by_principal_id IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1
+      FROM authorization_principals AS principal
+      WHERE principal.principal_id = NEW.retired_by_principal_id
+    )
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'retired authorization resources require a known retiring principal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_resources_retirement_monotonic
+BEFORE UPDATE OF retired_at, retired_by_principal_id ON authorization_resources
+FOR EACH ROW
+WHEN
+  OLD.retired_at IS NOT NULL
+  OR OLD.retired_by_principal_id IS NOT NULL
+  OR NEW.retired_at IS NULL
+  OR NEW.retired_by_principal_id IS NULL
+  OR NOT EXISTS (
+    SELECT 1
+    FROM authorization_principals AS principal
+    WHERE principal.principal_id = NEW.retired_by_principal_id
+  )
 BEGIN
   SELECT RAISE(ABORT, 'retired authorization resources cannot be reactivated or retimestamped');
 END;
@@ -630,6 +663,440 @@ BEFORE UPDATE ON authorization_grants
 FOR EACH ROW
 BEGIN
   SELECT RAISE(ABORT, 'authorization grants are immutable; revoke and recreate instead');
+END;
+
+CREATE TABLE IF NOT EXISTS authorization_agent_sponsors (
+  domain_id TEXT NOT NULL,
+  agent_principal_id TEXT NOT NULL,
+  sponsor_principal_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (domain_id, agent_principal_id),
+  UNIQUE (domain_id, agent_principal_id, sponsor_principal_id),
+  FOREIGN KEY (domain_id) REFERENCES authorization_domains(domain_id),
+  FOREIGN KEY (agent_principal_id) REFERENCES authorization_principals(principal_id),
+  FOREIGN KEY (sponsor_principal_id) REFERENCES authorization_principals(principal_id)
+);
+
+CREATE TRIGGER IF NOT EXISTS authorization_agent_sponsors_insert_guard
+BEFORE INSERT ON authorization_agent_sponsors
+FOR EACH ROW
+WHEN
+  NOT EXISTS (
+    SELECT 1
+    FROM authorization_domain_memberships AS membership
+    INNER JOIN authorization_principals AS principal
+      ON principal.principal_id = membership.principal_id
+    WHERE membership.domain_id = NEW.domain_id
+      AND membership.principal_id = NEW.agent_principal_id
+      AND principal.kind = 'service'
+  )
+  OR NOT EXISTS (
+    SELECT 1
+    FROM authorization_domain_memberships AS membership
+    INNER JOIN authorization_principals AS principal
+      ON principal.principal_id = membership.principal_id
+    WHERE membership.domain_id = NEW.domain_id
+      AND membership.principal_id = NEW.sponsor_principal_id
+      AND membership.role = 'owner'
+      AND principal.kind = 'human'
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'authorization agent canonical sponsor must be the human domain owner');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_agent_sponsors_immutable
+BEFORE UPDATE ON authorization_agent_sponsors
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'authorization agent canonical sponsor is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_agent_sponsors_delete_forbidden
+BEFORE DELETE ON authorization_agent_sponsors
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'authorization agent canonical sponsors cannot be deleted');
+END;
+
+CREATE TABLE IF NOT EXISTS authorization_delegations (
+  domain_id TEXT NOT NULL,
+  delegation_id TEXT NOT NULL,
+  assignment_id TEXT NOT NULL,
+  agent_principal_id TEXT NOT NULL,
+  sponsor_principal_id TEXT NOT NULL,
+  created_by_principal_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('active', 'revoked')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  revoked_at INTEGER,
+  PRIMARY KEY (domain_id, delegation_id),
+  UNIQUE (domain_id, assignment_id),
+  UNIQUE (
+    domain_id,
+    delegation_id,
+    assignment_id,
+    agent_principal_id,
+    sponsor_principal_id
+  ),
+  CHECK (created_by_principal_id = sponsor_principal_id),
+  CHECK (
+    (state = 'active' AND revoked_at IS NULL)
+    OR (state = 'revoked' AND revoked_at IS NOT NULL)
+  ),
+  FOREIGN KEY (domain_id) REFERENCES authorization_domains(domain_id),
+  FOREIGN KEY (agent_principal_id) REFERENCES authorization_principals(principal_id),
+  FOREIGN KEY (sponsor_principal_id) REFERENCES authorization_principals(principal_id),
+  FOREIGN KEY (created_by_principal_id) REFERENCES authorization_principals(principal_id),
+  FOREIGN KEY (domain_id, agent_principal_id, sponsor_principal_id)
+    REFERENCES authorization_agent_sponsors(
+      domain_id,
+      agent_principal_id,
+      sponsor_principal_id
+    )
+);
+
+CREATE TRIGGER IF NOT EXISTS authorization_delegations_insert_guard
+BEFORE INSERT ON authorization_delegations
+FOR EACH ROW
+WHEN
+  NOT EXISTS (
+    SELECT 1
+    FROM authorization_domain_memberships AS membership
+    INNER JOIN authorization_principals AS principal
+      ON principal.principal_id = membership.principal_id
+    WHERE membership.domain_id = NEW.domain_id
+      AND membership.principal_id = NEW.agent_principal_id
+      AND principal.kind = 'service'
+  )
+  OR NOT EXISTS (
+    SELECT 1
+    FROM authorization_domain_memberships AS membership
+    INNER JOIN authorization_principals AS principal
+      ON principal.principal_id = membership.principal_id
+    WHERE membership.domain_id = NEW.domain_id
+      AND membership.principal_id = NEW.sponsor_principal_id
+      AND principal.kind = 'human'
+  )
+  OR NOT EXISTS (
+    SELECT 1
+    FROM authorization_agent_sponsors AS sponsor
+    WHERE sponsor.domain_id = NEW.domain_id
+      AND sponsor.agent_principal_id = NEW.agent_principal_id
+      AND sponsor.sponsor_principal_id = NEW.sponsor_principal_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'authorization delegation requires its canonical human sponsor and service agent in the domain');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_delegations_payload_immutable
+BEFORE UPDATE OF
+  domain_id,
+  delegation_id,
+  assignment_id,
+  agent_principal_id,
+  sponsor_principal_id,
+  created_by_principal_id,
+  created_at
+ON authorization_delegations
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'authorization delegation payload is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_delegations_state_monotonic
+BEFORE UPDATE OF state, revoked_at ON authorization_delegations
+FOR EACH ROW
+WHEN NOT (
+  OLD.state = 'active'
+  AND OLD.revoked_at IS NULL
+  AND NEW.state = 'revoked'
+  AND NEW.revoked_at IS NOT NULL
+)
+BEGIN
+  SELECT RAISE(ABORT, 'authorization delegation revocation is monotonic');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_delegations_delete_forbidden
+BEFORE DELETE ON authorization_delegations
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'authorization delegations cannot be deleted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_membership_delete_revokes_delegations
+BEFORE DELETE ON authorization_domain_memberships
+FOR EACH ROW
+WHEN EXISTS (
+  SELECT 1
+  FROM authorization_delegations AS delegation
+  WHERE delegation.domain_id = OLD.domain_id
+    AND delegation.state = 'active'
+    AND (
+      delegation.agent_principal_id = OLD.principal_id
+      OR delegation.sponsor_principal_id = OLD.principal_id
+    )
+)
+BEGIN
+  UPDATE authorization_delegations
+  SET
+    state = 'revoked',
+    revoked_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+    updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+  WHERE domain_id = OLD.domain_id
+    AND state = 'active'
+    AND (
+      agent_principal_id = OLD.principal_id
+      OR sponsor_principal_id = OLD.principal_id
+    );
+END;
+
+CREATE TABLE IF NOT EXISTS authorization_resource_operations (
+  operation_id TEXT NOT NULL PRIMARY KEY,
+  operation_scope TEXT NOT NULL CHECK (length(trim(operation_scope)) > 0),
+  idempotency_key TEXT NOT NULL CHECK (length(trim(idempotency_key)) > 0),
+  operation_type TEXT NOT NULL CHECK (operation_type IN ('register', 'retire')),
+  domain_id TEXT NOT NULL,
+  namespace TEXT NOT NULL CHECK (length(trim(namespace)) > 0),
+  resource_type TEXT NOT NULL CHECK (length(trim(resource_type)) > 0),
+  resource_id TEXT NOT NULL CHECK (length(trim(resource_id)) > 0),
+  parent_namespace TEXT,
+  parent_resource_type TEXT,
+  parent_resource_id TEXT,
+  actor_principal_id TEXT NOT NULL,
+  owner_principal_id TEXT NOT NULL,
+  delegation_id TEXT,
+  assignment_id TEXT,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'applied')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  applied_at INTEGER,
+  UNIQUE (domain_id, operation_scope, idempotency_key),
+  CHECK (
+    (state = 'pending' AND applied_at IS NULL)
+    OR (state = 'applied' AND applied_at IS NOT NULL)
+  ),
+  CHECK (
+    (
+      parent_namespace IS NULL
+      AND parent_resource_type IS NULL
+      AND parent_resource_id IS NULL
+    )
+    OR (
+      parent_namespace IS NOT NULL
+      AND parent_resource_type IS NOT NULL
+      AND parent_resource_id IS NOT NULL
+    )
+  ),
+  CHECK (
+    (delegation_id IS NULL AND assignment_id IS NULL)
+    OR (delegation_id IS NOT NULL AND assignment_id IS NOT NULL)
+  ),
+  FOREIGN KEY (domain_id) REFERENCES authorization_domains(domain_id),
+  FOREIGN KEY (actor_principal_id) REFERENCES authorization_principals(principal_id),
+  FOREIGN KEY (owner_principal_id) REFERENCES authorization_principals(principal_id),
+  FOREIGN KEY (
+    domain_id,
+    delegation_id,
+    assignment_id,
+    actor_principal_id,
+    owner_principal_id
+  ) REFERENCES authorization_delegations(
+    domain_id,
+    delegation_id,
+    assignment_id,
+    agent_principal_id,
+    sponsor_principal_id
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_authorization_resource_operations_pending
+  ON authorization_resource_operations(state, domain_id, operation_scope, created_at);
+
+CREATE TRIGGER IF NOT EXISTS authorization_resource_operations_insert_guard
+BEFORE INSERT ON authorization_resource_operations
+FOR EACH ROW
+WHEN
+  NEW.state <> 'pending'
+  OR NEW.applied_at IS NOT NULL
+  OR (
+    NEW.operation_type = 'register'
+    AND NOT (
+      (
+        NEW.delegation_id IS NULL
+        AND NEW.assignment_id IS NULL
+        AND NEW.actor_principal_id = NEW.owner_principal_id
+        AND EXISTS (
+          SELECT 1
+          FROM authorization_domain_memberships AS membership
+          INNER JOIN authorization_principals AS principal
+            ON principal.principal_id = membership.principal_id
+          WHERE membership.domain_id = NEW.domain_id
+            AND membership.principal_id = NEW.actor_principal_id
+            AND principal.kind = 'human'
+        )
+      )
+      OR (
+        NEW.delegation_id IS NOT NULL
+        AND NEW.assignment_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM authorization_delegations AS delegation
+          INNER JOIN authorization_domain_memberships AS agent_membership
+            ON agent_membership.domain_id = delegation.domain_id
+           AND agent_membership.principal_id = delegation.agent_principal_id
+          INNER JOIN authorization_domain_memberships AS sponsor_membership
+            ON sponsor_membership.domain_id = delegation.domain_id
+           AND sponsor_membership.principal_id = delegation.sponsor_principal_id
+          WHERE delegation.domain_id = NEW.domain_id
+            AND delegation.delegation_id = NEW.delegation_id
+            AND delegation.assignment_id = NEW.assignment_id
+            AND delegation.agent_principal_id = NEW.actor_principal_id
+            AND delegation.sponsor_principal_id = NEW.owner_principal_id
+            AND delegation.state = 'active'
+        )
+      )
+    )
+  )
+  OR (
+    NEW.operation_type = 'retire'
+    AND NOT (
+      NEW.delegation_id IS NULL
+      AND NEW.assignment_id IS NULL
+      AND EXISTS (
+        SELECT 1
+        FROM authorization_resources AS resource
+        INNER JOIN authorization_domain_memberships AS membership
+          ON membership.domain_id = resource.domain_id
+         AND membership.principal_id = NEW.actor_principal_id
+        INNER JOIN authorization_principals AS principal
+          ON principal.principal_id = membership.principal_id
+        WHERE resource.domain_id = NEW.domain_id
+          AND resource.namespace = NEW.namespace
+          AND resource.resource_type = NEW.resource_type
+          AND resource.resource_id = NEW.resource_id
+          AND resource.owner_principal_id = NEW.owner_principal_id
+          AND resource.retired_at IS NULL
+          AND principal.kind = 'human'
+          AND (
+            membership.role = 'owner'
+            OR resource.owner_principal_id = NEW.actor_principal_id
+          )
+      )
+    )
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'authorization operation must start pending and requires a human actor-owner or active delegation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_resource_operations_payload_immutable
+BEFORE UPDATE OF
+  operation_id,
+  operation_scope,
+  idempotency_key,
+  operation_type,
+  domain_id,
+  namespace,
+  resource_type,
+  resource_id,
+  parent_namespace,
+  parent_resource_type,
+  parent_resource_id,
+  actor_principal_id,
+  owner_principal_id,
+  delegation_id,
+  assignment_id,
+  created_at
+ON authorization_resource_operations
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'authorization resource operation payload is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_resource_operations_apply_guard
+BEFORE UPDATE OF state, applied_at ON authorization_resource_operations
+FOR EACH ROW
+WHEN NOT (
+  OLD.state = 'pending'
+  AND OLD.applied_at IS NULL
+  AND NEW.state = 'applied'
+  AND NEW.applied_at IS NOT NULL
+  AND (
+    (
+      OLD.operation_type = 'register'
+      AND EXISTS (
+        SELECT 1
+        FROM authorization_resources AS resource
+        WHERE resource.domain_id = OLD.domain_id
+          AND resource.namespace = OLD.namespace
+          AND resource.resource_type = OLD.resource_type
+          AND resource.resource_id = OLD.resource_id
+          AND resource.owner_principal_id = OLD.owner_principal_id
+          AND resource.retired_at IS NULL
+          AND resource.parent_namespace IS OLD.parent_namespace
+          AND resource.parent_resource_type IS OLD.parent_resource_type
+          AND resource.parent_resource_id IS OLD.parent_resource_id
+          AND (
+            (
+              OLD.delegation_id IS NULL
+              AND OLD.assignment_id IS NULL
+              AND OLD.actor_principal_id = OLD.owner_principal_id
+              AND EXISTS (
+                SELECT 1
+                FROM authorization_domain_memberships AS membership
+                INNER JOIN authorization_principals AS principal
+                  ON principal.principal_id = membership.principal_id
+                WHERE membership.domain_id = OLD.domain_id
+                  AND membership.principal_id = OLD.actor_principal_id
+                  AND principal.kind = 'human'
+              )
+            )
+            OR (
+              OLD.delegation_id IS NOT NULL
+              AND OLD.assignment_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1
+                FROM authorization_delegations AS delegation
+                INNER JOIN authorization_domain_memberships AS agent_membership
+                  ON agent_membership.domain_id = delegation.domain_id
+                 AND agent_membership.principal_id = delegation.agent_principal_id
+                INNER JOIN authorization_domain_memberships AS sponsor_membership
+                  ON sponsor_membership.domain_id = delegation.domain_id
+                 AND sponsor_membership.principal_id = delegation.sponsor_principal_id
+                WHERE delegation.domain_id = OLD.domain_id
+                  AND delegation.delegation_id = OLD.delegation_id
+                  AND delegation.assignment_id = OLD.assignment_id
+                  AND delegation.agent_principal_id = OLD.actor_principal_id
+                  AND delegation.sponsor_principal_id = OLD.owner_principal_id
+                  AND delegation.state = 'active'
+              )
+            )
+          )
+      )
+    )
+    OR (
+      OLD.operation_type = 'retire'
+      AND EXISTS (
+        SELECT 1
+        FROM authorization_resources AS resource
+        WHERE resource.domain_id = OLD.domain_id
+          AND resource.namespace = OLD.namespace
+          AND resource.resource_type = OLD.resource_type
+          AND resource.resource_id = OLD.resource_id
+          AND resource.retired_at IS NOT NULL
+          AND resource.retired_by_principal_id = OLD.actor_principal_id
+      )
+    )
+  )
+)
+BEGIN
+  SELECT RAISE(ABORT, 'authorization operation cannot be applied before resource state matches');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_resource_operations_delete_forbidden
+BEFORE DELETE ON authorization_resource_operations
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'authorization resource operations cannot be deleted');
 END;
 
 CREATE TABLE IF NOT EXISTS device_pairing_pending (
