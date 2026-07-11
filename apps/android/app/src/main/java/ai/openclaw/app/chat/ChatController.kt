@@ -855,6 +855,12 @@ class ChatController internal constructor(
         return true
       }
       if (claimed == 0) return true
+      if (journaled.gatedEpoch != null && journaled.gatedEpoch != currentCacheScope()?.connectionGeneration) {
+        // A reconnect landed between admission and this claim; command-shaped input never
+        // auto-replays across connection epochs, so the claimed row parks for explicit retry.
+        persistJournaledSendState(journaled, ChatOutboxStatus.Failed, OUTBOX_CONNECTION_CHANGED_ERROR)
+        return true
+      }
     }
 
     val runId = journaled?.id ?: UUID.randomUUID().toString()
@@ -1854,10 +1860,18 @@ class ChatController internal constructor(
         row.status == ChatOutboxStatus.Queued &&
           row.gatedEpoch != null &&
           row.gatedEpoch != flushScope.connectionGeneration
-      if (stale) {
-        runCatching { outbox.updateStatus(row.id, ChatOutboxStatus.Failed, row.retryCount, OUTBOX_CONNECTION_CHANGED_ERROR) }
-        parked = true
+      if (!stale) continue
+      // A park that cannot be persisted must fail closed: reporting it as parked would make
+      // the flush loop reload the same queued row and spin while health stays OK.
+      val persisted = updateOutboxStatusOrNull(outbox, row, ChatOutboxStatus.Failed, OUTBOX_CONNECTION_CHANGED_ERROR)
+      if (persisted == null) {
+        // Returning true here re-enters the loop, whose health check now stops the pass;
+        // falling through instead would dispatch the still-queued stale row this pass.
+        rearmOutboxRecovery()
+        _healthOk.value = false
+        return true
       }
+      parked = true
     }
     return parked
   }

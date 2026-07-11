@@ -54,6 +54,7 @@ class ChatControllerOutboxTest {
     var acceptedStatusUpdateFailure: Throwable? = null
     var queuedStatusUpdateFailure: Throwable? = null
     var sendingStatusUpdateFailure: Throwable? = null
+    var claimGate: CompletableDeferred<Unit>? = null
     var deleteFailure: Throwable? = null
     var deleteOnFailedStatus = false
     var loadGate: LoadGate? = null
@@ -145,6 +146,7 @@ class ChatControllerOutboxTest {
       retryCount: Int,
       lastError: String?,
     ): Int {
+      claimGate?.await()
       sendingStatusUpdateFailure?.let { throw it }
       val current = rows[id] ?: return 0
       if (current.status != ChatOutboxStatus.Queued) return 0
@@ -1846,6 +1848,87 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
       assertEquals(listOf("/clear"), gateway.sentMessages)
       assertTrue(chat.outboxItems.value.isEmpty())
+    }
+
+  @Test
+  fun directSlashSendParksWhenReconnectLandsBeforeDispatch() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      var generation = 1L
+      val chat =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = generation) },
+          commandOutbox = outbox,
+        )
+      gateway.online = true
+      chat.load("main")
+      advanceUntilIdle()
+
+      // Hold the direct dispatch at its durable claim, then reconnect underneath it. The
+      // command was captured under epoch 1 and must not auto-send on the new connection.
+      outbox.claimGate = CompletableDeferred()
+      var accepted: Boolean? = null
+      val send =
+        launch {
+          accepted = chat.sendMessageAwaitAcceptance(message = "/clear", thinkingLevel = "off", attachments = emptyList())
+        }
+      runCurrent()
+      generation = 2L
+      outbox.claimGate?.complete(Unit)
+      send.join()
+      advanceUntilIdle()
+
+      assertEquals(true, accepted)
+      assertTrue(gateway.sentMessages.isEmpty())
+      val parked = outbox.rows.values.single()
+      assertEquals(ChatOutboxStatus.Failed, parked.status)
+      assertEquals(OUTBOX_CONNECTION_CHANGED_ERROR, parked.lastError)
+    }
+
+  @Test
+  fun staleGatedParkFailureFailsClosedInsteadOfSpinning() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      outbox.seed(
+        ChatOutboxItem(
+          id = "stale-command",
+          sessionKey = "main",
+          text = "/clear",
+          thinkingLevel = "off",
+          createdAtMs = System.currentTimeMillis(),
+          status = ChatOutboxStatus.Queued,
+          retryCount = 0,
+          lastError = null,
+          gatedEpoch = 5L,
+        ),
+      )
+      chat.load("main")
+      advanceUntilIdle()
+
+      // The park write fails; the flush must drop health and stop instead of reloading the
+      // same stale row forever on a healthy connection.
+      outbox.failedStatusUpdateFailure = IllegalStateException("storage unavailable")
+      gateway.online = true
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      assertFalse(chat.healthOk.value)
+      assertEquals(ChatOutboxStatus.Queued, outbox.rows.getValue("stale-command").status)
+      assertTrue(gateway.sentMessages.isEmpty())
+
+      // Storage recovers; the next health transition parks the stale command for review.
+      outbox.failedStatusUpdateFailure = null
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      val parked = outbox.rows.getValue("stale-command")
+      assertEquals(ChatOutboxStatus.Failed, parked.status)
+      assertEquals(OUTBOX_CONNECTION_CHANGED_ERROR, parked.lastError)
+      assertTrue(gateway.sentMessages.isEmpty())
     }
 
   @Test
