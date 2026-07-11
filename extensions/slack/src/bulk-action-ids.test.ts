@@ -35,17 +35,37 @@ describe("OpenClaw bulk action contract", () => {
     expect(isSlackBulkActionsBlock(block)).toBe(true);
   });
 
-  it("recognizes legacy bare select_all/deselect_all rows", () => {
+  it("rejects bare select_all/deselect_all rows without the OpenClaw marker", () => {
     expect(
       isSlackBulkActionsBlock({
         type: "actions",
         block_id: "legacy_bulk_row",
-        elements: [
-          { action_id: "select_all" },
-          { action_id: "deselect_all" },
-        ],
+        elements: [{ action_id: "select_all" }, { action_id: "deselect_all" }],
       }),
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "single select_all",
+      elements: [{ action_id: "select_all" }],
+    },
+    {
+      label: "single deselect_all",
+      elements: [{ action_id: "deselect_all" }],
+    },
+    {
+      label: "duplicate select_all",
+      elements: [{ action_id: "select_all" }, { action_id: "select_all" }],
+    },
+  ])("rejects unsupported legacy bulk shapes ($label)", ({ elements }) => {
+    expect(
+      isSlackBulkActionsBlock({
+        type: "actions",
+        block_id: "legacy_bulk_row",
+        elements,
+      }),
+    ).toBe(false);
   });
 
   it("rejects generic rows even when action IDs end with _all", () => {
@@ -68,7 +88,7 @@ describe("OpenClaw bulk action contract", () => {
     ).toBe(false);
   });
 
-  it("does not treat deploy_all_services rows as legacy bulk", () => {
+  it("does not treat deploy_all_services rows as OpenClaw bulk", () => {
     expect(
       isSlackBulkActionsBlock({
         type: "actions",
