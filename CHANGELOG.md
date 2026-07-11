@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Plain-text XML tool calls:** repair zero-argument calls and keep byte/character-bounded stream normalization from leaking incomplete or oversized tool syntax while preserving visible suffix text. (#98984, #102240, #102933, #102975, #103220, #103585) Thanks @wangyan2026, @qingminglong, @wuqxuan, and @ZOOWH.
 - **QQBot token requests:** bound token acquisition with the shared 30-second guarded-fetch deadline so stalled singleflight callers fail together, clean up, and can retry. (#102897) Thanks @maweibin.
 - **Canvas A2UI validation:** reject malformed or unsupported JSONL at CLI, agent-tool, and final node-invoke boundaries while preserving native v0.8 dispatch. (#103713) Thanks @qingminglong.
 - **Twilio RCS inbound routing:** normalize RCS consumer addresses only after signed webhook validation so sender matching and sessions work without changing outbound RCS semantics. (#102373) Thanks @clawSean.

@@ -686,6 +686,97 @@ describe("chat compaction divider", () => {
   });
 });
 
+describe("direct thread avatar mode", () => {
+  function sessionsListWithKind(sessionKey: string, kind: "direct" | "group") {
+    return {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5.5", contextTokens: 200_000 },
+      sessions: [{ key: sessionKey, kind, updatedAt: 1 }],
+    };
+  }
+
+  const labeledHistory = [
+    { role: "user", content: "hi", timestamp: 1 },
+    { role: "assistant", content: "hello", timestamp: 2 },
+    { role: "user", content: "me too", senderLabel: "Mario", timestamp: 3 },
+  ];
+
+  it("classifies by canonical session kind even when DM rows carry sender labels", () => {
+    const direct = renderChatView({
+      sessionKey: "kind-direct",
+      sessions: sessionsListWithKind("kind-direct", "direct"),
+      messages: labeledHistory,
+    });
+    expect(
+      requireElement(direct, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
+
+    const group = renderChatView({
+      sessionKey: "kind-group",
+      sessions: sessionsListWithKind("kind-group", "group"),
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(group, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps avatars in global sessions, which can aggregate group senders", () => {
+    const globalThread = renderChatView({
+      sessionKey: "global",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(globalThread, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
+  it("matches session metadata across equivalent alias keys", () => {
+    // Default session travels as "main" or "agent:main:main" depending on caller.
+    const aliased = renderChatView({
+      sessionKey: "main",
+      sessions: sessionsListWithKind("agent:main:main", "direct"),
+      messages: labeledHistory,
+    });
+    expect(
+      requireElement(aliased, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
+  });
+
+  it("falls back to session-key shape when session metadata is missing", () => {
+    // Labeled DM rows must not flip the mode: sanitization labels 1:1 DMs too.
+    const direct = renderChatView({
+      sessionKey: "agent:main:telegram:direct:2",
+      messages: labeledHistory,
+    });
+    expect(
+      requireElement(direct, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
+
+    const group = renderChatView({
+      sessionKey: "agent:main:telegram:group:42",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(group, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("chat code-block copy", () => {
   it("copies decoded QR block-art boundary spaces from the delegated button handler", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
