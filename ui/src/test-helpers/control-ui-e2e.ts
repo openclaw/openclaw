@@ -501,6 +501,40 @@ function installControlUiMockGateway(input: {
     };
   }
 
+  function buildPaginatedHistoryPayload(params: unknown): Record<string, unknown> {
+    const all = scenario.historyMessages;
+    const totalMessages = all.length;
+    const base = {
+      sessionId: "control-ui-e2e-session",
+      thinkingLevel: null,
+    };
+    const hasOffset =
+      isRecord(params) && typeof params.offset === "number" && Number.isFinite(params.offset);
+    // Preserve the legacy all-messages response when callers omit offset so
+    // existing non-paginated Control UI e2e fixtures stay deterministic.
+    if (!hasOffset) {
+      return { ...base, messages: all };
+    }
+    const offset = Math.max(0, Math.floor(params.offset as number));
+    const limit =
+      isRecord(params) && typeof params.limit === "number" && Number.isFinite(params.limit)
+        ? Math.max(1, Math.floor(params.limit))
+        : 100;
+    const end = Math.max(0, totalMessages - offset);
+    const start = Math.max(0, end - limit);
+    const messages = all.slice(start, end);
+    const nextOffset = offset + messages.length;
+    const hasMore = nextOffset < totalMessages;
+    return {
+      ...base,
+      messages,
+      offset,
+      hasMore,
+      totalMessages,
+      ...(hasMore ? { nextOffset } : {}),
+    };
+  }
+
   function buildResponse(method: string, params: unknown): unknown {
     if (method === "sessions.patch") {
       recordSessionPatch(params);
@@ -587,13 +621,10 @@ function installControlUiMockGateway(input: {
       case "artifacts.download":
         return null;
       case "chat.history":
-        return {
-          messages: scenario.historyMessages,
-          sessionId: "control-ui-e2e-session",
-          thinkingLevel: null,
-        };
+        return buildPaginatedHistoryPayload(params);
       case "chat.startup":
         return {
+          ...buildPaginatedHistoryPayload(params),
           agentsList: {
             agents: [
               {
@@ -607,12 +638,9 @@ function installControlUiMockGateway(input: {
             mainKey: "main",
             scope: "agent",
           },
-          messages: scenario.historyMessages,
           metadata: {
             models: scenario.models,
           },
-          sessionId: "control-ui-e2e-session",
-          thinkingLevel: null,
         };
       case "chat.metadata":
         return {
