@@ -214,7 +214,7 @@ describe("createDiscordDraftStream", () => {
     stream.update("first draft");
     await stream.flush();
     await stream.clear();
-    await stream.forceNewMessage();
+    stream.forceNewMessage();
     stream.update("queued turn draft");
     await stream.flush();
 
