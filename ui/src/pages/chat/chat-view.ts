@@ -72,6 +72,7 @@ export type ChatProps = {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
+  historyPagination?: { loading: boolean; onLoadOlder: () => void };
   sideResult?: ChatSideResult | null;
   sideResultPending?: ChatSideResultPending | null;
   toolMessages: unknown[];
@@ -394,6 +395,18 @@ export function renderChat(props: ChatProps) {
         },
         requestUpdate,
       )}
+      ${props.historyPagination
+        ? html`<div class="chat-history-pagination">
+            <button
+              class="btn btn--sm"
+              type="button"
+              ?disabled=${props.historyPagination.loading}
+              @click=${props.historyPagination.onLoadOlder}
+            >
+              ${props.historyPagination.loading ? t("common.loading") : t("chat.loadOlder")}
+            </button>
+          </div>`
+        : nothing}
 
       <div
         class="chat-workbench ${props.sessionWorkspace?.collapsed
