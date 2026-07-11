@@ -13,6 +13,7 @@ const record: ManagedWorktreeRecord = {
   branch: "openclaw/task-one",
   baseRef: "HEAD",
   ownerKind: "manual",
+  readiness: "ready",
   createdAt: 1,
   lastActiveAt: 2,
 };

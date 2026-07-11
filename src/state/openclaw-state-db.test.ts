@@ -1585,8 +1585,8 @@ describe("openclaw state database", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const legacyDb = new DatabaseSync(databasePath);
     legacyDb.exec("ALTER TABLE worktrees DROP COLUMN readiness");
-    // Shipped releases inserted worktree rows only after provisioning finished, so a
-    // pre-column row is by construction a fully provisioned checkout.
+    // No release tag contains the worktrees feature; pre-column rows come only from
+    // unreleased main builds whose create() was insert-last, so they are fully provisioned.
     legacyDb
       .prepare(
         `INSERT INTO worktrees (

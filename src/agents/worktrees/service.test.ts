@@ -953,6 +953,59 @@ describe("ManagedWorktreeService", () => {
     expect(rows.map((entry) => [entry.id, entry.readiness])).toEqual([[first.id, "ready"]]);
   });
 
+  it("restore() revives a removed provisioning row as ready", async () => {
+    const created = await service.create({
+      repoRoot: repo,
+      name: "restore-prov",
+      ownerKind: "workboard",
+      ownerId: "card-restore",
+    });
+    // Constructed post-claim crash: the row is left 'provisioning' over a real checkout,
+    // then the operator recovers it via the normal remove -> restore path.
+    updateRegistryWorktree(env, created.id, { readiness: "provisioning" });
+    await service.remove({ id: created.id, reason: "operator-recovery" });
+
+    const restored = await service.restore({ id: created.id });
+
+    expect(restored.readiness).toBe("ready");
+    expect(getRegistryWorktree(env, created.id)?.readiness).toBe("ready");
+    // The revived row must not be reapable via its original claim timestamp.
+    now += PROVISIONING_STALE_MS + 1;
+    await service.gc();
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+    expect(await fs.stat(restored.path)).toBeTruthy();
+    expect(service.findLiveByOwner("workboard", "card-restore")?.id).toBe(created.id);
+  });
+
+  it("create() fails closed when its provisioning row is reaped mid-flight", async () => {
+    const syncDir = path.join(root, "sync-reap");
+    await fs.mkdir(syncDir, { recursive: true });
+    const startedFlag = path.join(syncDir, "setup-started");
+    const releaseFlag = path.join(syncDir, "setup-release");
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      `#!/bin/sh\n: > "${startedFlag}"\ni=0\nwhile [ ! -f "${releaseFlag}" ]; do\n  i=$((i + 1))\n  [ "$i" -gt 400 ] && exit 9\n  sleep 0.1\ndone\nexit 0\n`,
+      { mode: 0o755 },
+    );
+
+    const firstPromise = service.create({ repoRoot: repo, name: "reaped" });
+    while (!(await fs.stat(startedFlag).catch(() => undefined))) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    }
+    // Simulates gc reaping the claim while the (suspended/overlong) holder still runs:
+    // the ready flip then updates zero rows and create() must not return a dead record.
+    const parked = listRegistryWorktrees(env).find((entry) => entry.name === "reaped");
+    deleteRegistryWorktree(env, parked!.id);
+    await fs.writeFile(releaseFlag, "");
+
+    await expect(firstPromise).rejects.toThrow(
+      "worktree provisioning exceeded its window and was reclaimed: reaped",
+    );
+  });
+
   it("gc reaps stale provisioning rows and preserves fresh ones", async () => {
     await fs.mkdir(path.join(repo, ".openclaw"));
     await fs.writeFile(

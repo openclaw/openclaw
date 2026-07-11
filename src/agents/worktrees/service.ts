@@ -48,9 +48,10 @@ export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain rest
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
 const SETUP_SCRIPT_TIMEOUT_MS = 120_000;
-// Provisioning rows are transient by contract: copy + setup are bounded by
-// SETUP_SCRIPT_TIMEOUT_MS, so a row still 'provisioning' this long after its claim has a
-// dead holder and gc may reclaim the path and branch for the next create().
+// Provisioning rows are transient by contract: setup is hard-bounded by
+// SETUP_SCRIPT_TIMEOUT_MS and the include-file copy is short in practice, so a row still
+// 'provisioning' this long after its claim has a dead holder and gc may reclaim the path
+// and branch for the next create().
 export const PROVISIONING_STALE_MS = 10 * SETUP_SCRIPT_TIMEOUT_MS;
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -68,6 +69,13 @@ export class WorktreeSnapshotError extends Error {
 export class WorktreeProvisioningError extends Error {
   constructor(name: string) {
     super(`worktree provisioning in progress: ${name}`);
+  }
+}
+
+/** Provisioning outlived PROVISIONING_STALE_MS and gc reclaimed the path mid-create. */
+export class WorktreeProvisioningReapedError extends Error {
+  constructor(name: string) {
+    super(`worktree provisioning exceeded its window and was reclaimed: ${name}`);
   }
 }
 const SNAPSHOT_REF_PREFIX = "refs/openclaw/snapshots";
@@ -712,11 +720,18 @@ export class ManagedWorktreeService {
       throw error;
     }
     const lastActiveAt = this.now();
-    updateRegistryWorktree(this.env, params.id, { removedAt: undefined, lastActiveAt });
+    // Restore fully rematerializes the checkout, so the row is ready regardless of the
+    // readiness it was removed with; reviving a stale 'provisioning' row would let the next
+    // gc reap the freshly restored worktree and strand its snapshot ref.
+    updateRegistryWorktree(this.env, params.id, {
+      removedAt: undefined,
+      lastActiveAt,
+      readiness: "ready",
+    });
     // Clear any lease rows or removal marker stranded by a crash between git removal
     // and finalize so the restored worktree admits runs again.
     finalizeWorktreeRemoval(this.env, params.id);
-    const restored = { ...record, lastActiveAt };
+    const restored: ManagedWorktreeRecord = { ...record, lastActiveAt, readiness: "ready" };
     delete restored.removedAt;
     return restored;
   }
@@ -911,6 +926,13 @@ export class ManagedWorktreeService {
     // Readiness flips only after provisioning fully succeeded; every usable-record path
     // (entry shortcut, findLiveByOwner) filters on it.
     updateRegistryWorktree(this.env, record.id, { readiness: "ready" });
+    // Provisioning can outlive PROVISIONING_STALE_MS (suspension; copy is unbounded) and be
+    // reaped by gc mid-create; the flip above then updated zero rows. Never hand back a
+    // record whose path was already reclaimed.
+    const flipped = getRegistryWorktree(this.env, record.id);
+    if (!flipped || flipped.removedAt !== undefined) {
+      throw new WorktreeProvisioningReapedError(name);
+    }
     return { ...record, readiness: "ready" };
   }
 
