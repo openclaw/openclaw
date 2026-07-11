@@ -3421,6 +3421,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Safety guarantees
   - H2: Related
 
+## gateway/killswitch.md
+
+- Route: /gateway/killswitch
+- Headings:
+  - H2: Layer 1: hard stop (CLI / SSH)
+  - H2: Layer 2: soft pause (killswitch)
+  - H3: Via CLI / SSH
+  - H3: Via Signal (owner DM only)
+  - H2: Persistence
+  - H2: What it does not cover
+
 ## gateway/local-model-services.md
 
 - Route: /gateway/local-model-services

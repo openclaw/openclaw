@@ -337,6 +337,9 @@ const getReplyFromConfigRuntimeLoader = createLazyImportLoader(
   () => import("./get-reply-from-config.runtime.js"),
 );
 const abortRuntimeLoader = createLazyImportLoader(() => import("./abort.runtime.js"));
+const killswitchRuntimeLoader = createLazyImportLoader(
+  () => import("./killswitch-command.runtime.js"),
+);
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 const runtimePluginsLoader = createLazyImportLoader(
   () => import("../../plugins/runtime-plugins.runtime.js"),
@@ -355,6 +358,10 @@ function loadGetReplyFromConfigRuntime() {
 
 function loadAbortRuntime() {
   return abortRuntimeLoader.load();
+}
+
+function loadKillswitchRuntime() {
+  return killswitchRuntimeLoader.load();
 }
 
 function loadTtsRuntime() {
@@ -2339,6 +2346,49 @@ export async function dispatchReplyFromConfig(
   markProcessing();
 
   try {
+    const killswitchRuntime = params.fastKillswitchResolver ? null : await loadKillswitchRuntime();
+    const fastKillswitchResolver =
+      params.fastKillswitchResolver ?? killswitchRuntime?.tryFastKillswitchFromMessage;
+    const fastKillswitch = fastKillswitchResolver
+      ? await fastKillswitchResolver({ ctx, cfg })
+      : { handled: false as const };
+    if (fastKillswitch.handled) {
+      if (pluginOwnedBinding) {
+        touchConversationBindingRecord(pluginOwnedBinding.bindingId);
+      }
+      emitMessageReceivedHooks();
+      let queuedFinal = false;
+      let routedFinalCount = 0;
+      if (!suppressDelivery && fastKillswitch.replyText) {
+        const payload = { text: fastKillswitch.replyText } satisfies ReplyPayload;
+        const result = await routeReplyToOriginating(payload);
+        if (result) {
+          queuedFinal = result.ok;
+          if (isRoutedReplyDelivered(result)) {
+            routedFinalCount += 1;
+          }
+          if (!result.ok) {
+            logVerbose(
+              `dispatch-from-config: route-reply (killswitch) failed: ${result.error ?? "unknown error"}`,
+            );
+          }
+        } else {
+          markInboundDedupeReplayUnsafe();
+          queuedFinal = dispatcher.sendFinalReply(payload);
+        }
+      } else if (suppressDelivery) {
+        logVerbose(
+          `dispatch-from-config: fast_killswitch reply suppressed by ${deliverySuppressionReason} (session=${sessionKey ?? "unknown"})`,
+        );
+      }
+      const counts = dispatcher.getQueuedCounts();
+      counts.final += routedFinalCount;
+      recordProcessed("completed", { reason: "fast_killswitch" });
+      markIdle("message_completed");
+      commitInboundDedupeIfClaimed();
+      completeDispatchReplyOperation();
+      return attachSourceReplyDeliveryMode({ queuedFinal, counts });
+    }
     const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
     const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
     const formatAbortReplyTextResolver =

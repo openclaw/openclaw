@@ -36,6 +36,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { getKillswitchStatusSync } from "../infra/killswitch.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
@@ -503,6 +504,17 @@ export function buildGatewayCronService(params: {
       onExecutionPhase,
       onLaneWait,
     }) => {
+      // Structural gate, not a prompt-level instruction: scheduled runs must not
+      // fire while the operator killswitch is engaged, same as interactive runs.
+      const killswitchStatus = getKillswitchStatusSync();
+      if (killswitchStatus.engaged) {
+        return {
+          status: "skipped",
+          error: `agent runs are paused by the operator killswitch${
+            killswitchStatus.reason ? `: ${killswitchStatus.reason}` : ""
+          }`,
+        };
+      }
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
       try {
