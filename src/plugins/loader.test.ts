@@ -8794,6 +8794,28 @@ module.exports = {
     });
   });
 
+  it("stays quiet when every non-bundled plugin is explicitly enabled", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-explicitly-enabled-plugin",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+          entries: { "warn-explicitly-enabled-plugin": { enabled: true } },
+        },
+      },
+    });
+
+    expect(warnings.join("\n")).not.toContain("plugins.allow is empty");
+  });
+
   it("warns when plugins.allow entries do not match any discovered plugin ids", () => {
     useNoBundledPlugins();
     clearPluginLoaderCache();
