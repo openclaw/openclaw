@@ -220,9 +220,20 @@ async function collectUntrackedFiles(
   const files: SessionDiffFile[] = [];
   for (const path of paths.slice(0, MAX_UNTRACKED_FILES)) {
     // Exit code 1 is git's "files differ" for --no-index, not a failure.
+    // --no-textconv: checkout-configurable textconv drivers must never run
+    // from this read-scoped RPC (same reason as --no-ext-diff).
     const patch = await gitOut(
       root,
-      ["diff", "--no-color", "--no-ext-diff", "--no-index", "--", "/dev/null", path],
+      [
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-index",
+        "--",
+        "/dev/null",
+        path,
+      ],
       [0, 1],
     );
     if (patch === null) {
@@ -280,25 +291,45 @@ async function collectTrackedFiles(
     (sum, entry) => sum + entry.additions + entry.deletions,
     0,
   );
+  // --no-textconv alongside --no-ext-diff: repo config + .gitattributes can
+  // define textconv commands, and a read RPC must never execute them.
   const patchText =
     totalChangedLines > MAX_TOTAL_CHANGED_LINES
       ? null
-      : await gitOut(root, [...diffArgs, "--patch", "--no-color", "--no-ext-diff"]);
+      : await gitOut(root, [
+          ...diffArgs,
+          "--patch",
+          "--no-color",
+          "--no-ext-diff",
+          "--no-textconv",
+        ]);
   const chunks = patchText === null ? new Map<string, string>() : splitPatchByFile(patchText);
   const truncated = entries.length > MAX_FILES;
   const files = entries.slice(0, MAX_FILES).map((entry): SessionDiffFile => {
     const stat = numstat.get(entry.path);
     const chunk = chunks.get(entry.path);
     const binary = stat?.binary === true || (chunk !== undefined && isBinaryChunk(chunk));
-    return {
+    const file: SessionDiffFile = {
       path: entry.path,
-      ...(entry.oldPath ? { oldPath: entry.oldPath } : {}),
       status: entry.status,
       additions: stat?.additions ?? 0,
       deletions: stat?.deletions ?? 0,
-      ...(binary ? { binary: true } : {}),
-      ...(binary ? {} : takePatch(chunk, budget)),
     };
+    if (entry.oldPath) {
+      file.oldPath = entry.oldPath;
+    }
+    if (binary) {
+      file.binary = true;
+      return file;
+    }
+    const taken = takePatch(chunk, budget);
+    if (taken.patch !== undefined) {
+      file.patch = taken.patch;
+    }
+    if (taken.truncated) {
+      file.truncated = true;
+    }
+    return file;
   });
   return { files, truncated };
 }

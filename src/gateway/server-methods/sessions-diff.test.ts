@@ -59,8 +59,11 @@ describe("sessions.diff parsers", () => {
   });
 
   it("parses numstat -z including rename and binary entries", () => {
-    // Split literals: "\0" followed by "0" would otherwise parse as an octal escape.
-    const byPath = parseNumstatZ("2\t1\ta.txt\0-\t-\tblob.bin\0" + "0\t0\t\0old.txt\0new.txt\0");
+    // NUL separators written as \u0000: a bare \0 before a digit would
+    // parse as an octal escape.
+    const byPath = parseNumstatZ(
+      "2\t1\ta.txt\u0000-\t-\tblob.bin\u00000\t0\t\u0000old.txt\u0000new.txt\u0000",
+    );
     expect(byPath.get("a.txt")).toEqual({ additions: 2, deletions: 1, binary: false });
     expect(byPath.get("blob.bin")).toEqual({ additions: 0, deletions: 0, binary: true });
     expect(byPath.get("new.txt")).toEqual({ additions: 0, deletions: 0, binary: false });
@@ -193,6 +196,25 @@ describe("loadSessionDiff", () => {
     expect(result.baseRef).toBe("HEAD");
     expect(result.files).toHaveLength(1);
     expect(result.files[0]?.additions).toBe(1);
+  });
+
+  it("never executes configured textconv drivers from the read RPC", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, ".gitattributes"), "*.txt diff=evil\n");
+    fs.writeFileSync(path.join(repoRoot, "a.txt"), "one\n");
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "init");
+    const marker = path.join(repoRoot, "pwned");
+    git(repoRoot, "config", "diff.evil.textconv", `touch ${marker}; cat`);
+    fs.writeFileSync(path.join(repoRoot, "a.txt"), "one\ntwo\n");
+    fs.writeFileSync(path.join(repoRoot, "untracked.txt"), "new\n");
+    mockSession(repoRoot);
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    expect(fs.existsSync(marker)).toBe(false);
+    const tracked = result.files.find((file) => file.path === "a.txt");
+    expect(tracked?.patch).toContain("+two");
   });
 
   it("rejects invalid params through the handler", async () => {
