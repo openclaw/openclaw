@@ -184,10 +184,9 @@ describe("buildFeishuPostMessagePayload", () => {
     });
   });
 
-  it("keeps original post text when materialized line breaks would exceed a fixed max", () => {
+  it("keeps materialized post text instead of reverting at send limits", () => {
     const payload = buildFeishuPostMessagePayload({
       messageText: "abcd\nefgh",
-      maxMarkdownTextLength: 6,
     });
 
     expect(JSON.parse(payload.content)).toEqual({
@@ -196,7 +195,7 @@ describe("buildFeishuPostMessagePayload", () => {
           [
             {
               tag: "md",
-              text: "abcd\nefgh",
+              text: "abcd\n\nefgh",
             },
           ],
         ],
@@ -391,8 +390,11 @@ describe("getMessageFeishu", () => {
     });
   });
 
-  it("does not expand post markdown past the resolved send limit", async () => {
-    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_limited" } });
+  it("chunks materialized post markdown past the resolved send limit", async () => {
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_limited_1" } })
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_limited_2" } });
     mockResolveFeishuAccount.mockReturnValue({
       accountId: "default",
       configured: true,
@@ -417,19 +419,24 @@ describe("getMessageFeishu", () => {
       mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
     });
 
-    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledTimes(2);
     expect(JSON.parse(create.mock.calls[0][0].data.content)).toEqual({
       zh_cn: {
         content: [
           [
             { tag: "at", user_id: "ou_target", user_name: "Target User" },
-            { tag: "md", text: "abcd\nefgh" },
+            { tag: "md", text: "abcd" },
           ],
         ],
       },
     });
-    expect(result.messageId).toBe("om_limited");
-    expect(result.receipt.platformMessageIds).toEqual(["om_limited"]);
+    expect(JSON.parse(create.mock.calls[1][0].data.content)).toEqual({
+      zh_cn: {
+        content: [[{ tag: "md", text: "efgh" }]],
+      },
+    });
+    expect(result.messageId).toBe("om_limited_1");
+    expect(result.receipt.platformMessageIds).toEqual(["om_limited_1", "om_limited_2"]);
   });
 
   it("extracts text content from interactive card elements", async () => {
@@ -869,6 +876,24 @@ describe("editMessageFeishu", () => {
       },
     });
     expect(result).toEqual({ messageId: "om_card", contentType: "interactive" });
+  });
+
+  it("rejects text edits whose materialized post markdown exceeds the send limit", async () => {
+    mockResolveFeishuAccount.mockReturnValue({
+      accountId: "default",
+      configured: true,
+      config: { textChunkLimit: 6 },
+    });
+
+    await expect(
+      editMessageFeishu({
+        cfg: {} as ClawdbotConfig,
+        messageId: "om_edit",
+        text: "abcd\nefgh",
+      }),
+    ).rejects.toThrow(/textChunkLimit/);
+
+    expect(mockClientPatch).not.toHaveBeenCalled();
   });
 });
 
