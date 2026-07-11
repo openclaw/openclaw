@@ -13,6 +13,7 @@ import {
   renderMessagePresentationFallbackText,
   resolveInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceAndFinalize,
@@ -24,6 +25,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
@@ -41,6 +43,7 @@ import {
   sanitizeNativeFeishuCard,
 } from "./native-card.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
+import { materializeFeishuPostMarkdownLineBreaks } from "./post-markdown.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationCardElements,
@@ -334,21 +337,32 @@ async function sendCommentThreadReply(params: {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   const client = createFeishuClient(account);
   const replyId = params.replyId?.trim();
+  const chunks = params.text ? chunkTextForOutbound(params.text, FEISHU_TEXT_CHUNK_LIMIT) : [""];
+  let lastResult:
+    | {
+        messageId: string;
+        chatId: string;
+        result: Awaited<ReturnType<typeof deliverCommentThreadText>>;
+      }
+    | undefined;
   try {
-    const result = await deliverCommentThreadText(client, {
-      file_token: target.fileToken,
-      file_type: target.fileType,
-      comment_id: target.commentId,
-      content: params.text,
-    });
-    return {
-      messageId:
-        (typeof result.reply_id === "string" && result.reply_id) ||
-        (typeof result.comment_id === "string" && result.comment_id) ||
-        "",
-      chatId: target.commentId,
-      result,
-    };
+    for (const chunk of chunks) {
+      const result = await deliverCommentThreadText(client, {
+        file_token: target.fileToken,
+        file_type: target.fileType,
+        comment_id: target.commentId,
+        content: chunk,
+      });
+      lastResult = {
+        messageId:
+          (typeof result.reply_id === "string" && result.reply_id) ||
+          (typeof result.comment_id === "string" && result.comment_id) ||
+          "",
+        chatId: target.commentId,
+        result,
+      };
+    }
+    return lastResult ?? null;
   } finally {
     if (replyId) {
       void cleanupAmbientCommentTypingReaction({
@@ -367,11 +381,13 @@ async function sendOutboundText(params: {
   cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
   to: string;
   text: string;
+  preparedPostMarkdown?: boolean;
   replyToMessageId?: string;
   replyInThread?: boolean;
   accountId?: string;
 }) {
-  const { cfg, to, text, accountId, replyToMessageId, replyInThread } = params;
+  const { cfg, to, text, accountId, replyToMessageId, replyInThread, preparedPostMarkdown } =
+    params;
   const commentResult = await sendCommentThreadReply({
     cfg,
     to,
@@ -386,7 +402,10 @@ async function sendOutboundText(params: {
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
-  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
+  if (
+    preparedPostMarkdown !== true &&
+    (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text)))
+  ) {
     return sendMarkdownCardFeishu({
       cfg,
       to,
@@ -397,7 +416,26 @@ async function sendOutboundText(params: {
     });
   }
 
-  return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId, replyInThread });
+  return sendMessageFeishu({
+    cfg,
+    to,
+    text,
+    accountId,
+    replyToMessageId,
+    replyInThread,
+    preparedPostMarkdown,
+  });
+}
+
+function prepareFeishuPostMarkdownForChunking(params: {
+  cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
+  text: string;
+}): string {
+  const tableMode = resolveMarkdownTableMode({
+    cfg: params.cfg,
+    channel: "feishu",
+  });
+  return materializeFeishuPostMarkdownLineBreaks(convertMarkdownTables(params.text, tableMode));
 }
 
 async function sendFeishuFallbackPayload(params: {
@@ -407,10 +445,16 @@ async function sendFeishuFallbackPayload(params: {
 }) {
   const ctx = { ...params.ctx, payload: params.payload };
   const mediaUrls = normalizeStringEntries(resolvePayloadMediaUrls(params.payload));
-  const text = params.payload.text ?? "";
+  const rawText = params.payload.text ?? "";
+  const sendsCommentReply = Boolean(parseFeishuCommentTarget(ctx.to));
+  const text = sendsCommentReply
+    ? rawText
+    : prepareFeishuPostMarkdownForChunking({ cfg: ctx.cfg, text: rawText });
   const textChunks = text ? chunkTextForOutbound(text, FEISHU_TEXT_CHUNK_LIMIT) : [];
+  const hasChunkedText = textChunks.length > 1;
   const shouldSeparate =
-    mediaUrls.length > 0 && (params.separateMediaAndText === true || textChunks.length > 1);
+    (mediaUrls.length > 0 && (params.separateMediaAndText === true || hasChunkedText)) ||
+    (params.separateMediaAndText === true && hasChunkedText);
   if (!shouldSeparate) {
     return await sendTextMediaPayload({
       channel: "feishu",
@@ -429,14 +473,13 @@ async function sendFeishuFallbackPayload(params: {
     replyToMode: ctx.replyToMode,
   });
   const sendMedia = feishuOutbound.sendMedia;
-  const sendText = feishuOutbound.sendText;
-  if (!sendMedia || !sendText) {
+  if (!sendMedia) {
     throw new Error("Feishu fallback delivery is not available.");
   }
 
   // Card fallbacks can exceed media-caption limits. Deliver attachments first,
   // then preserve the complete fallback through the normal 4k text fanout.
-  let lastResult: Awaited<ReturnType<typeof sendText>> | undefined;
+  let lastResult: Awaited<ReturnType<NonNullable<ChannelOutboundAdapter["sendText"]>>> | undefined;
   for (const mediaUrl of mediaUrls) {
     lastResult = await sendMedia({
       ...ctx,
@@ -449,12 +492,20 @@ async function sendFeishuFallbackPayload(params: {
     await ctx.onDeliveryResult?.(lastResult);
   }
   for (const chunk of textChunks) {
-    lastResult = await sendText({
-      ...ctx,
-      text: chunk,
+    const { replyToMessageId, replyInThread } = resolveFeishuReplyMode({
       replyToId: nextReplyToId(),
-      onDeliveryResult: undefined,
+      threadId: ctx.threadId,
     });
+    const textResult = await sendOutboundText({
+      cfg: ctx.cfg,
+      to: ctx.to,
+      text: chunk,
+      accountId: ctx.accountId ?? undefined,
+      replyToMessageId,
+      replyInThread,
+      preparedPostMarkdown: sendsCommentReply ? undefined : true,
+    });
+    lastResult = attachChannelToResult("feishu", textResult);
     await ctx.onDeliveryResult?.(lastResult);
   }
   return lastResult!;
@@ -462,8 +513,6 @@ async function sendFeishuFallbackPayload(params: {
 
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: chunkTextForOutbound,
-  chunkerMode: "markdown",
   textChunkLimit: FEISHU_TEXT_CHUNK_LIMIT,
   presentationCapabilities: {
     supported: true,

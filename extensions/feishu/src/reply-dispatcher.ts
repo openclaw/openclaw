@@ -17,6 +17,7 @@ import { createFeishuClient } from "./client.js";
 import { resolveFeishuIdentityEmoji } from "./identity-header.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
+import { materializeFeishuPostMarkdownLineBreaks } from "./post-markdown.js";
 import {
   createReplyPrefixContext,
   type ClawdbotConfig,
@@ -497,7 +498,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   }) => {
     const chunkSource = paramsLocal.useCard
       ? paramsLocal.text
-      : core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode);
+      : materializeFeishuPostMarkdownLineBreaks(
+          core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode),
+        );
     const chunkText = paramsLocal.useCard
       ? core.channel.text.chunkMarkdownTextWithMode
       : core.channel.text.chunkTextWithMode;
@@ -549,6 +552,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 replyInThread: effectiveReplyInThread,
                 allowTopLevelReplyFallback,
                 accountId,
+                preparedPostMarkdown: true,
               });
             },
           });
@@ -576,6 +580,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                     replyInThread: effectiveReplyInThread,
                     allowTopLevelReplyFallback,
                     accountId,
+                    preparedPostMarkdown: true,
                   });
                 },
               });
@@ -738,6 +743,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                       replyInThread: effectiveReplyInThread,
                       allowTopLevelReplyFallback,
                       accountId,
+                      preparedPostMarkdown: true,
                       ...(isFirstBlock && isFirst && mentionTargets?.length
                         ? { mentions: mentionTargets }
                         : {}),
@@ -822,6 +828,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   replyInThread: effectiveReplyInThread,
                   allowTopLevelReplyFallback,
                   accountId,
+                  preparedPostMarkdown: true,
                   ...(info?.kind === "final" && isFirst && mentionTargets?.length
                     ? { mentions: mentionTargets }
                     : {}),

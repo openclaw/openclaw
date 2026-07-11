@@ -526,6 +526,7 @@ type SendFeishuMessageParams = {
   cfg: ClawdbotConfig;
   to: string;
   text: string;
+  preparedPostMarkdown?: boolean;
   replyToMessageId?: string;
   /** When true, reply creates a Feishu topic thread instead of an inline reply */
   replyInThread?: boolean;
@@ -573,12 +574,15 @@ function resolveFeishuPostTextChunkLimit(params: {
 export function buildFeishuPostMessagePayload(params: {
   messageText: string;
   mentions?: MentionTarget[];
+  preparedPostMarkdown?: boolean;
 }): {
   content: string;
   msgType: string;
 } {
   return buildFeishuPostMessagePayloadFromText({
-    postText: materializeFeishuPostMarkdownLineBreaks(params.messageText),
+    postText: params.preparedPostMarkdown
+      ? params.messageText
+      : materializeFeishuPostMarkdownLineBreaks(params.messageText),
     mentions: params.mentions,
   });
 }
@@ -612,8 +616,11 @@ function buildFeishuPostMessagePayloads(params: {
   messageText: string;
   mentions?: MentionTarget[];
   maxMarkdownTextLength: number;
+  preparedPostMarkdown?: boolean;
 }): ReturnType<typeof buildFeishuPostMessagePayload>[] {
-  const materializedText = materializeFeishuPostMarkdownLineBreaks(params.messageText);
+  const materializedText = params.preparedPostMarkdown
+    ? params.messageText
+    : materializeFeishuPostMarkdownLineBreaks(params.messageText);
   const chunks =
     materializedText.length > params.maxMarkdownTextLength
       ? chunkTextForOutbound(materializedText, params.maxMarkdownTextLength)
@@ -670,23 +677,28 @@ export async function sendMessageFeishu(
     allowTopLevelReplyFallback,
     mentions,
     accountId,
+    preparedPostMarkdown,
   } = params;
   const { client, account, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
   });
-  const tableMode = resolveMarkdownTableMode({
-    cfg,
-    channel: "feishu",
-  });
-
-  const messageText = convertMarkdownTables(text ?? "", tableMode);
+  const messageText = preparedPostMarkdown
+    ? (text ?? "")
+    : convertMarkdownTables(
+        text ?? "",
+        resolveMarkdownTableMode({
+          cfg,
+          channel: "feishu",
+        }),
+      );
   const textChunkLimit = resolveFeishuPostTextChunkLimit({ account });
   const payloads = buildFeishuPostMessagePayloads({
     messageText,
     mentions,
     maxMarkdownTextLength: textChunkLimit,
+    preparedPostMarkdown,
   });
 
   const results: FeishuSendResult[] = [];

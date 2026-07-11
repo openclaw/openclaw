@@ -63,7 +63,6 @@ import type {
 import {
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
-  chunkTextForOutbound,
   createActionGate,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
@@ -1840,8 +1839,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
     },
     outbound: {
       deliveryMode: "direct",
-      chunker: chunkTextForOutbound,
-      chunkerMode: "markdown",
       textChunkLimit: 4000,
       sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
       presentationCapabilities: {

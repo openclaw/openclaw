@@ -494,6 +494,48 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("normalizes complete non-card fenced markdown before reply chunking", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "raw",
+        streaming: false,
+      },
+    });
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(20);
+    runtime.channel.text.resolveChunkMode.mockReturnValue("length");
+    const text = "Intro\n```ts\nconst a = 1;\nconst b = 2;\n```\nAfter";
+    const firstChunk = "Intro\n```ts\nconst a = 1;";
+    const secondChunk = "\nconst b = 2;\n```\nAfter";
+    runtime.channel.text.chunkTextWithMode.mockReturnValue([firstChunk, secondChunk]);
+
+    const { options } = createDispatcherHarness();
+    await options.deliver({ text }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(runtime.channel.text.convertMarkdownTables).toHaveBeenCalledWith(text, "preserve");
+    expect(runtime.channel.text.chunkTextWithMode).toHaveBeenCalledWith(text, 20, "length");
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expectMockArgFields(sendMessageFeishuMock, "first fenced chunk", {
+      text: firstChunk,
+      preparedPostMarkdown: true,
+    });
+    expectMockArgFields(
+      sendMessageFeishuMock,
+      "second fenced chunk",
+      {
+        text: secondChunk,
+        preparedPostMarkdown: true,
+      },
+      1,
+    );
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("keeps oversized auto mode markdown final text on the chunked card path", async () => {
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);

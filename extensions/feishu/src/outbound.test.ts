@@ -317,13 +317,9 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     ).toBe(true);
   });
 
-  it("chunks outbound text without requiring Feishu runtime initialization", () => {
-    const chunker = feishuOutbound.chunker;
-    if (!chunker) {
-      throw new Error("feishuOutbound.chunker missing");
-    }
-
-    expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
+  it("keeps outbound post chunking inside the Feishu sender", () => {
+    expect(feishuOutbound.chunker).toBeUndefined();
+    expect(feishuOutbound.textChunkLimit).toBe(4000);
   });
 
   async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {

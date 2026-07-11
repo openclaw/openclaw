@@ -313,6 +313,36 @@ describe("getMessageFeishu", () => {
     });
   });
 
+  it("does not re-materialize already prepared post markdown chunks", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_prepared" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "line\nnext",
+      preparedPostMarkdown: true,
+    });
+
+    expect(mockResolveMarkdownTableMode).not.toHaveBeenCalled();
+    expect(mockConvertMarkdownTables).not.toHaveBeenCalled();
+    expect(JSON.parse(create.mock.calls[0][0].data.content)).toEqual({
+      zh_cn: {
+        content: [[{ tag: "md", text: "line\nnext" }]],
+      },
+    });
+  });
+
   it("sends automatic mentions as native post elements without rewriting body text", async () => {
     const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_mentions" } });
     mockCreateFeishuClient.mockReturnValue({
