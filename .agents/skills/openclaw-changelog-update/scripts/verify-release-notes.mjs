@@ -1101,7 +1101,7 @@ function sourceCommits(base, target, mainRef) {
   }
   const canonicalMainPullRequests = resolveAssociatedPullRequests(
     [...canonicalMainHashes],
-    targetTimestamp,
+    Number.POSITIVE_INFINITY,
   );
   const resolvedCoauthors = resolveCommitCoauthors(activeCommits);
   const pullRequests = new Set();
