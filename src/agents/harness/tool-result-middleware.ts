@@ -53,7 +53,7 @@ function isValidMiddlewareContentBlock(value: unknown): boolean {
   return false;
 }
 
-function isValidMiddlewareDetails(
+function hasValidMiddlewareDetailsShape(
   value: unknown,
   state: { keys: number; bytes: number; seen: WeakSet<object> } = {
     keys: 0,
@@ -69,11 +69,11 @@ function isValidMiddlewareDetails(
     return false;
   }
   if (typeof value === "string") {
-    state.bytes += value.length;
+    state.bytes += Buffer.byteLength(value);
     return state.bytes <= MAX_MIDDLEWARE_DETAILS_BYTES;
   }
   if (typeof value === "number" || typeof value === "boolean") {
-    state.bytes += String(value).length;
+    state.bytes += Buffer.byteLength(String(value));
     return state.bytes <= MAX_MIDDLEWARE_DETAILS_BYTES;
   }
   if (typeof value !== "object") {
@@ -89,7 +89,7 @@ function isValidMiddlewareDetails(
       return false;
     }
     for (const entry of value) {
-      if (!isValidMiddlewareDetails(entry, state, depth + 1)) {
+      if (!hasValidMiddlewareDetailsShape(entry, state, depth + 1)) {
         return false;
       }
     }
@@ -97,15 +97,32 @@ function isValidMiddlewareDetails(
   }
   for (const [key, entry] of Object.entries(value)) {
     state.keys += 1;
-    state.bytes += key.length;
+    state.bytes += Buffer.byteLength(key);
     if (state.keys > MAX_MIDDLEWARE_DETAILS_KEYS || state.bytes > MAX_MIDDLEWARE_DETAILS_BYTES) {
       return false;
     }
-    if (!isValidMiddlewareDetails(entry, state, depth + 1)) {
+    if (!hasValidMiddlewareDetailsShape(entry, state, depth + 1)) {
       return false;
     }
   }
   return true;
+}
+
+function isValidMiddlewareDetails(value: unknown): boolean {
+  if (!hasValidMiddlewareDetailsShape(value)) {
+    return false;
+  }
+  if (value === undefined) {
+    return true;
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    return (
+      serialized !== undefined && Buffer.byteLength(serialized) <= MAX_MIDDLEWARE_DETAILS_BYTES
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isValidMiddlewareToolResult(value: unknown): value is OpenClawAgentToolResult {
@@ -386,8 +403,9 @@ function sanitizeMiddlewareDetailsValue(value: unknown): unknown {
     if (serialized === undefined) {
       return null;
     }
-    if (serialized.length > MAX_MIDDLEWARE_DETAILS_BYTES) {
-      return { truncated: true, originalSizeBytes: serialized.length };
+    const serializedBytes = Buffer.byteLength(serialized);
+    if (serializedBytes > MAX_MIDDLEWARE_DETAILS_BYTES) {
+      return { truncated: true, originalSizeBytes: serializedBytes };
     }
     return JSON.parse(serialized);
   } catch {

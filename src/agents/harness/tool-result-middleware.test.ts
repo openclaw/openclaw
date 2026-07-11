@@ -550,6 +550,28 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(sanitized.originalSizeBytes ?? 0).toBeGreaterThan(100_000);
   });
 
+  it("measures multibyte incoming details by serialized UTF-8 bytes", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      () => undefined,
+    ]);
+    const details = { blob: "é".repeat(60_000) };
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: {},
+      result: {
+        content: [{ type: "text", text: "ok" }],
+        details,
+      },
+    });
+
+    expect(result.details).toEqual({
+      truncated: true,
+      originalSizeBytes: Buffer.byteLength(JSON.stringify(details)),
+    });
+  });
+
   it("snapshots confirmed delivery before oversized details are collapsed", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => {
