@@ -355,6 +355,9 @@ describe("resolveReplySessionPreprocessingState", () => {
     });
   });
 
+  // A "missing session id" case is unrepresentable post-flip: sessions rows
+  // are NOT NULL on session_id and upsert repairs id-less patches at write
+  // time, so the store can never hand preprocessing such an entry.
   it.each([
     ["missing row", undefined],
     [
@@ -363,14 +366,6 @@ describe("resolveReplySessionPreprocessingState", () => {
         sessionId: "native-media-session",
         updatedAt: 1,
         agentHarnessId: "other",
-        modelSelectionLocked: true,
-      },
-    ],
-    [
-      "missing session id",
-      {
-        updatedAt: 1,
-        agentHarnessId: "codex",
         modelSelectionLocked: true,
       },
     ],
