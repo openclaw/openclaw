@@ -19,10 +19,19 @@ const require = createRequire(import.meta.url);
 const SETUP_REGISTRY_RUNTIME_CANDIDATES = ["./setup-registry.js", "./setup-registry.ts"] as const;
 
 let setupRegistryRuntimeModule: SetupRegistryRuntimeModule | null | undefined;
+// Bundled plugin CLI backends are fixed for the process lifetime (they come
+// from the shipped image, not user/workspace config), so memoize them once
+// instead of re-deriving on every call. Re-deriving used to call
+// loadManifestMetadataSnapshot with an empty config object, which never
+// matches the real gateway-owned snapshot's policy hash and forced a full
+// synchronous plugin manifest rescan on every isCliProvider() check (e.g.
+// once per session row in sessions.list).
+let bundledSetupCliBackendsCache: SetupCliBackendRuntimeEntry[] | undefined;
 
 export const __testing = {
   resetRuntimeState(): void {
     setupRegistryRuntimeModule = undefined;
+    bundledSetupCliBackendsCache = undefined;
   },
   setRuntimeModuleForTest(module: SetupRegistryRuntimeModule | null | undefined): void {
     setupRegistryRuntimeModule = module;
@@ -30,8 +39,11 @@ export const __testing = {
 };
 
 function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
+  if (bundledSetupCliBackendsCache) {
+    return bundledSetupCliBackendsCache;
+  }
   const snapshot = loadManifestMetadataSnapshot({ config: {}, env: process.env });
-  return snapshot.plugins.flatMap((plugin) => {
+  bundledSetupCliBackendsCache = snapshot.plugins.flatMap((plugin) => {
     if (plugin.origin !== "bundled" || !isInstalledPluginEnabled(snapshot.index, plugin.id)) {
       return [];
     }
@@ -43,6 +55,7 @@ function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
         }) satisfies SetupCliBackendRuntimeEntry,
     );
   });
+  return bundledSetupCliBackendsCache;
 }
 
 function loadSetupRegistryRuntime(): SetupRegistryRuntimeModule | null {
