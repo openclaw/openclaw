@@ -15171,7 +15171,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 142,
+      "line": 145,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportPrompter.swift",
       "source": "Browser login imported",
       "surface": "apple",
@@ -15179,15 +15179,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 143,
-      "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportPrompter.swift",
-      "source": "Imported \\(result.cookies.imported) of \\(result.cookies.total) cookies into \\(result.into). This profile is now the default for agent browsing.",
-      "surface": "apple",
-      "id": "native.apple.42c1800febf15077"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 145,
+      "line": 148,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportPrompter.swift",
       "source": "Browser import failed",
       "surface": "apple",
