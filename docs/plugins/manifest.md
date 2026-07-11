@@ -806,7 +806,7 @@ Keep `preferOver` scoped to plugin ids that can really provide the same channel.
 
 ## modelSupport reference
 
-Use `modelSupport` when OpenClaw should infer your provider plugin from shorthand model ids like `gpt-5.5` or `claude-sonnet-4.6` before plugin runtime loads.
+Use `modelSupport` when OpenClaw should infer your provider plugin from shorthand model ids like `gpt-5.6-sol` or `claude-sonnet-4.6` before plugin runtime loads.
 
 ```json
 {

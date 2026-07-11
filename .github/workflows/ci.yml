@@ -435,7 +435,7 @@ jobs:
                 timeout_minutes: shard.timeoutMinutes,
                 requires_go:
                   shard.shardName === "core-tooling" ||
-                  shard.groups?.some((group) => group.shard_name === "core-tooling"),
+                  shard.groups?.some((group) => group.shard_name.startsWith("core-tooling")),
               }))
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);

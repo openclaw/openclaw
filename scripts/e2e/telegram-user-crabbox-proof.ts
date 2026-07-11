@@ -1117,14 +1117,16 @@ function writeSutConfig(params: {
   const config = {
     agents: {
       defaults: {
-        model: { primary: "openai/gpt-5.5" },
-        models: { "openai/gpt-5.5": { params: { openaiWsWarmup: false, transport: "sse" } } },
+        model: { primary: "openai/gpt-5.6-luna" },
+        models: {
+          "openai/gpt-5.6-luna": { params: { openaiWsWarmup: false, transport: "sse" } },
+        },
       },
       list: [
         {
           default: true,
           id: "main",
-          model: { primary: "openai/gpt-5.5" },
+          model: { primary: "openai/gpt-5.6-luna" },
           name: "Main",
           workspace,
         },
@@ -1158,7 +1160,12 @@ function writeSutConfig(params: {
           apiKey: { id: "OPENAI_API_KEY", provider: "default", source: "env" },
           baseUrl: `http://127.0.0.1:${params.mockPort}/v1`,
           models: [
-            { api: "openai-responses", contextWindow: 128000, id: "gpt-5.5", name: "gpt-5.5" },
+            {
+              api: "openai-responses",
+              contextWindow: 128000,
+              id: "gpt-5.6-luna",
+              name: "gpt-5.6-luna",
+            },
           ],
           request: { allowPrivateNetwork: true },
         },

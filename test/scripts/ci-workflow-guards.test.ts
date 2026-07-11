@@ -1857,7 +1857,7 @@ describe("ci workflow guards", () => {
 
     expect(JSON.stringify(preflightJob.steps)).toContain("timeout_minutes: shard.timeoutMinutes");
     expect(manifestStep.run).toContain(
-      'shard.groups?.some((group) => group.shard_name === "core-tooling")',
+      'shard.groups?.some((group) => group.shard_name.startsWith("core-tooling"))',
     );
     expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");

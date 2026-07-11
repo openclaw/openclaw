@@ -52,7 +52,8 @@ export function resolveProviderAuth(input: {
       apiKeyEnv: input.apiKeyEnv || "OPENAI_API_KEY",
       authChoice: "openai-api-key",
       authKeyFlag: "openai-api-key",
-      modelId: input.modelId || process.env.OPENCLAW_PARALLELS_OPENAI_MODEL || "openai/gpt-5.5",
+      modelId:
+        input.modelId || process.env.OPENCLAW_PARALLELS_OPENAI_MODEL || "openai/gpt-5.6-luna",
     },
   };
   const resolved = providerDefaults[input.provider];
@@ -79,7 +80,7 @@ export function resolveWindowsProviderAuth(input: {
   if (process.env.OPENCLAW_PARALLELS_OPENAI_MODEL?.trim()) {
     return auth;
   }
-  return { ...auth, modelId: "openai/gpt-5.5" };
+  return { ...auth, modelId: "openai/gpt-5.6-luna" };
 }
 
 export function providerIdFromModelId(modelId: string): string {
