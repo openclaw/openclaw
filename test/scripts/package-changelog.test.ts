@@ -48,6 +48,12 @@ describe("package-changelog", () => {
       "2026.5.28",
       "Unreleased",
     ]);
+    expect(resolvePackageChangelogVersions("2026.5.28+jm")).toEqual(["2026.5.28"]);
+    expect(resolvePackageChangelogVersions("2026.5.28-beta.1+jm")).toEqual([
+      "2026.5.28-beta.1",
+      "2026.5.28",
+      "Unreleased",
+    ]);
   });
 
   it("extracts only the package version stable release section", () => {
