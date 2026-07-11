@@ -509,7 +509,9 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   const channelPlugins = plugins.filter((record) => record.channels.length > 0);
   return [
     ...CORE_SECRET_TARGET_REGISTRY,
-    ...listBundledWebProviderSecretTargetRegistryEntries(bundledPlugins),
+    // All plugins (bundled + installed) contribute web-provider secret targets
+    // so the gateway recognizes their target IDs in `secrets.resolve` (#104320).
+    ...listBundledWebProviderSecretTargetRegistryEntries(plugins),
     ...listBundledPluginConfigSecretTargetRegistryEntries([
       ...bundledPlugins,
       ...listSourceBundledPluginConfigContractRecords(),
