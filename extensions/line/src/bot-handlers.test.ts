@@ -127,6 +127,7 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
 }));
 const downloadLineMediaMock = vi.hoisted(() => vi.fn());
 const pathExistsMock = vi.hoisted(() => vi.fn(async (_path: string) => true));
+const deleteMediaBufferMock = vi.hoisted(() => vi.fn(async (_id: string, _subdir?: string) => {}));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   resolvePairingIdLabel: () => "lineUserId",
@@ -140,6 +141,10 @@ vi.mock("./download.js", () => ({
 
 vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
   pathExists: pathExistsMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/media-store", () => ({
+  deleteMediaBuffer: deleteMediaBufferMock,
 }));
 
 vi.mock("./send.js", () => ({
@@ -383,6 +388,8 @@ describe("handleLineWebhookEvents", () => {
     });
     pathExistsMock.mockReset();
     pathExistsMock.mockImplementation(async () => true);
+    deleteMediaBufferMock.mockReset();
+    deleteMediaBufferMock.mockImplementation(async () => {});
   });
   it("blocks group messages when groupPolicy is disabled", async () => {
     const processMessage = vi.fn();
@@ -1188,6 +1195,69 @@ describe("handleLineWebhookEvents", () => {
     const queue = pendingMediaQueues.get("group-pending");
     expect(queue).toHaveLength(2);
     expect(queue?.map((m) => m.path)).toEqual(["/media/pending-2.jpg", "/media/pending-3.jpg"]);
+  });
+
+  it("deletes evicted pending media files from disk when the queue exceeds pendingMediaLimit", async () => {
+    // Regression test for PR #103761 review (confidence 0.98): "disk leak on
+    // queue eviction", extensions/line/src/bot-handlers.ts:579-584.
+    // `pushBoundedPendingMedia` only bounded the in-memory queue by splicing
+    // out the oldest entries; the corresponding downloaded files on disk were
+    // never deleted, so a busy opted-in group with `media.ttlHours` unset
+    // would accumulate unbounded orphaned files. Assert the evicted (oldest)
+    // entries' underlying files get deleted via the shared media-store
+    // `deleteMediaBuffer` helper, while the retained entries' files are
+    // left untouched.
+    const processMessage = vi.fn();
+    let counter = 0;
+    downloadLineMediaMock.mockImplementation(async () => {
+      counter += 1;
+      return { path: `/media/inbound/pending-evict-${counter}.jpg`, contentType: "image/jpeg" };
+    });
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaLimit: 2,
+      pendingMediaQueues,
+    });
+
+    for (let i = 1; i <= 3; i += 1) {
+      const event = createTestMessageEvent({
+        message: {
+          id: `m-pending-evict-${i}`,
+          type: "image",
+          contentProvider: { type: "line" },
+          quoteToken: `q-pending-evict-${i}`,
+        },
+        source: { type: "group", groupId: "group-pending-evict", userId: "user-pending-evict" },
+        webhookEventId: `evt-pending-evict-${i}`,
+      });
+      await handleLineWebhookEvents([event], context);
+    }
+
+    expect(processMessage).not.toHaveBeenCalled();
+    const queue = pendingMediaQueues.get("group-pending-evict");
+    expect(queue).toHaveLength(2);
+    expect(queue?.map((m) => m.path)).toEqual([
+      "/media/inbound/pending-evict-2.jpg",
+      "/media/inbound/pending-evict-3.jpg",
+    ]);
+
+    // Eviction cleanup is fired without being awaited by the push path, so
+    // let pending microtasks (the deleteMediaBuffer call inside
+    // deleteEvictedPendingMedia) flush before asserting.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    // The oldest (evicted) entry's file must have been deleted.
+    expect(deleteMediaBufferMock).toHaveBeenCalledWith("pending-evict-1.jpg", "inbound");
+    // The retained entries' files must not have been touched.
+    expect(deleteMediaBufferMock).not.toHaveBeenCalledWith("pending-evict-2.jpg", "inbound");
+    expect(deleteMediaBufferMock).not.toHaveBeenCalledWith("pending-evict-3.jpg", "inbound");
+    expect(deleteMediaBufferMock).toHaveBeenCalledTimes(1);
   });
 
   it("flushes queued pending media into allMedia when a later mentioned message triggers processing, then clears the queue", async () => {

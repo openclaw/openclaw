@@ -164,6 +164,21 @@ media is then attached to that mentioned message's context. `pendingMediaLimit`
 defaults to `3` when unset; older entries are dropped once the limit is
 exceeded.
 
+Pending-media retention is best-effort, not a durable delivery guarantee:
+
+- The queue is in-memory and process-local — it is lost on gateway restart,
+  so media skipped just before a restart will not be recovered even if a
+  mention arrives afterward.
+- The gateway's independent `media.ttlHours` cleanup sweep doesn't know about
+  this queue and can delete a saved file before it is flushed; the flush path
+  checks each queued entry still exists on disk and silently drops any that
+  are already gone.
+- When older entries are evicted for exceeding `pendingMediaLimit`, their
+  underlying downloaded files are deleted from disk as well.
+
+Don't rely on stronger guarantees than "delivered if the gateway stays up and
+the file survives until the next mention."
+
 ```json5
 {
   channels: {

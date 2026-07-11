@@ -1,3 +1,4 @@
+import path from "node:path";
 // Line plugin module implements bot handlers behavior.
 import type { webhook } from "@line/bot-sdk";
 import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/channel-inbound";
@@ -11,6 +12,7 @@ import {
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { deleteMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -82,9 +84,66 @@ interface LineHandlerContext {
 
 const DEFAULT_LINE_PENDING_MEDIA_LIMIT = 3;
 
+// `downloadLineMedia` always persists into the shared media store's "inbound"
+// subdir (see download.ts), and `MediaRef.path` is the store's absolute path
+// for that saved file (dir + id, see buildSavedMediaResult in
+// src/media/store.ts). `deleteMediaBuffer` re-derives its own scoped path
+// from a bare `id` under that same subdir, so recovering the id here is just
+// the path's basename -- no separate id needs to be threaded through the
+// queue.
+const PENDING_MEDIA_STORE_SUBDIR = "inbound";
+
+function pendingMediaStoreIdFromPath(mediaPath: string): string {
+  return path.basename(mediaPath);
+}
+
+/**
+ * Best-effort delete the underlying media-store files for pending-media
+ * entries evicted from a group's bounded queue.
+ *
+ * `pushBoundedPendingMedia` only bounds the in-memory queue: `downloadLineMedia`
+ * has already persisted every entry to disk before it is ever pushed here, so
+ * once an entry is evicted (dropped for being older than the `limit` most
+ * recent), nothing else refers to its file again. Without this cleanup, a
+ * busy opted-in group with `media.ttlHours` unset accumulates unbounded
+ * orphaned files on disk even though the in-memory queue itself stays
+ * correctly bounded. See PR #103761 review (confidence 0.98): "disk leak on
+ * queue eviction", extensions/line/src/bot-handlers.ts:579-584.
+ *
+ * Reuses the same `deleteMediaBuffer` media-store helper the gateway's
+ * `media.ttlHours` cleanup path and other offload-cleanup call sites already
+ * use (see src/gateway/chat-attachments.ts, src/gateway/server-methods/chat.ts),
+ * rather than calling `fs.unlink` directly, so eviction cleanup stays
+ * consistent with the store's existing path-safety guards. Deletion failures
+ * are logged at verbose level and never thrown -- an already-missing file
+ * (e.g. previously swept by `media.ttlHours`) is an expected, harmless race,
+ * not an error, and one failed deletion must not block cleanup of the other
+ * evicted entries.
+ */
+async function deleteEvictedPendingMedia(evicted: readonly MediaRef[]): Promise<void> {
+  await Promise.all(
+    evicted.map(async (media) => {
+      try {
+        await deleteMediaBuffer(
+          pendingMediaStoreIdFromPath(media.path),
+          PENDING_MEDIA_STORE_SUBDIR,
+        );
+      } catch (err) {
+        logVerbose(
+          `line: failed to delete evicted pending media file ${media.path}: ${String(err)}`,
+        );
+      }
+    }),
+  );
+}
+
 /**
  * Push a media ref onto a group's pending queue, capped at `limit`, dropping
  * the oldest entries when over the cap so the N most recent are kept.
+ *
+ * Evicted entries' underlying media-store files are deleted best-effort (see
+ * `deleteEvictedPendingMedia`) so the bounded in-memory queue doesn't leave
+ * unbounded orphaned files behind on disk.
  */
 export function pushBoundedPendingMedia(params: {
   queues: Map<string, MediaRef[]>;
@@ -96,7 +155,8 @@ export function pushBoundedPendingMedia(params: {
   const queue = queues.get(key) ?? [];
   queue.push(media);
   if (queue.length > limit) {
-    queue.splice(0, queue.length - limit);
+    const evicted = queue.splice(0, queue.length - limit);
+    void deleteEvictedPendingMedia(evicted);
   }
   queues.set(key, queue);
   return queue;
