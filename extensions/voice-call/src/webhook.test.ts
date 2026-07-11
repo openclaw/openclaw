@@ -1999,7 +1999,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       };
     };
 
-  it("logs transcript char count without logging transcript content", async () => {
+  it("logs transcript counts without logging transcript content", async () => {
     const manager = {
       getActiveCalls: () => [],
       getCallByProviderCallId: vi.fn(() => undefined),
@@ -2035,59 +2035,15 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
 
     try {
       const transcript = `${"a".repeat(199)}\uD83D\uDE80tail`;
-      getMediaCallbacks(server).config.onTranscript?.("CA-utf16", transcript);
-
-      expectPrivateLogMetadata({
-        messages,
-        identifiers: ["CA-utf16"],
-        privateText: [transcript],
-      });
-    } finally {
-      await server.stop();
-    }
-  });
-
-  it("logs partial transcript char count without logging partial content", async () => {
-    const manager = {
-      getActiveCalls: () => [],
-      endCall: vi.fn(async () => ({ success: true })),
-      speakInitialMessage: vi.fn(async () => {}),
-      processEvent: vi.fn(),
-    } as unknown as CallManager;
-    const config = createConfig({
-      provider: "twilio",
-      streaming: {
-        ...createConfig().streaming,
-        enabled: true,
-        providers: {
-          openai: {
-            apiKey: "test-key", // pragma: allowlist secret
-          },
-        },
-      },
-    });
-
-    const { logger, messages } = createCapturingLogger();
-
-    const server = new VoiceCallWebhookServer(
-      config,
-      manager,
-      createTwilioProvider(vi.fn()),
-      undefined,
-      undefined,
-      undefined,
-      logger,
-    );
-    await server.start();
-
-    try {
       const partialText = "user is saying something sensitive";
-      getMediaCallbacks(server).config.onPartialTranscript?.("CA-partial", partialText);
+      const callbacks = getMediaCallbacks(server).config;
+      callbacks.onTranscript?.("CA-utf16", transcript);
+      callbacks.onPartialTranscript?.("CA-partial", partialText);
 
       expectPrivateLogMetadata({
         messages,
-        identifiers: ["CA-partial"],
-        privateText: [partialText],
+        identifiers: ["CA-utf16", "CA-partial"],
+        privateText: [transcript, partialText],
       });
     } finally {
       await server.stop();
