@@ -39,6 +39,7 @@ export function registerMaintenanceCommands(program: Command) {
       "--session-sqlite <mode>",
       "Run session SQLite migration mode (dry-run|import|validate|inspect|compact|restore|recover)",
     )
+    .option("--state-sqlite <mode>", "Run shared state SQLite maintenance mode (compact)")
     .option("--session-sqlite-store <path>", "With --session-sqlite: inspect one session store")
     .option("--session-sqlite-agent <id>", "With --session-sqlite: inspect one agent")
     .option(
@@ -53,7 +54,7 @@ export function registerMaintenanceCommands(program: Command) {
     )
     .option(
       "--json",
-      "With --lint, --post-upgrade, or --session-sqlite: emit machine-readable JSON output",
+      "With --lint, --post-upgrade, --state-sqlite, or --session-sqlite: emit machine-readable JSON output",
       false,
     )
     .option(
@@ -74,6 +75,16 @@ export function registerMaintenanceCommands(program: Command) {
       [],
     )
     .action(async (opts) => {
+      if (
+        typeof opts.stateSqlite === "string" &&
+        (opts.lint === true || opts.postUpgrade === true || typeof opts.sessionSqlite === "string")
+      ) {
+        defaultRuntime.error(
+          "doctor shared-state SQLite maintenance cannot be combined with lint, post-upgrade, or session SQLite modes.",
+        );
+        defaultRuntime.exit(2);
+        return;
+      }
       if (opts.lint === true) {
         await runCommandWithRuntime(
           defaultRuntime,
@@ -113,6 +124,7 @@ export function registerMaintenanceCommands(program: Command) {
       }
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { doctorCommand } = await import("../../commands/doctor.js");
+        const stateSqlite = parseDoctorStateSqliteMode(opts.stateSqlite);
         const sessionSqlite = parseDoctorSessionSqliteMode(opts.sessionSqlite);
         await doctorCommand(defaultRuntime, {
           workspaceSuggestions: opts.workspaceSuggestions,
@@ -124,6 +136,7 @@ export function registerMaintenanceCommands(program: Command) {
           allowExec: Boolean(opts.allowExec),
           deep: Boolean(opts.deep),
           postUpgrade: Boolean(opts.postUpgrade),
+          ...(stateSqlite ? { stateSqlite } : {}),
           ...(sessionSqlite ? { sessionSqlite } : {}),
           ...(typeof opts.sessionSqliteStore === "string"
             ? { sessionSqliteStore: opts.sessionSqliteStore }
@@ -220,6 +233,7 @@ export function registerMaintenanceCommands(program: Command) {
 function hasLintOnlyDoctorOptions(opts: {
   readonly json?: boolean;
   readonly postUpgrade?: boolean;
+  readonly stateSqlite?: unknown;
   readonly sessionSqlite?: unknown;
   readonly severityMin?: unknown;
   readonly all?: boolean;
@@ -227,7 +241,10 @@ function hasLintOnlyDoctorOptions(opts: {
   readonly only?: unknown;
 }): boolean {
   return (
-    (opts.json === true && opts.postUpgrade !== true && typeof opts.sessionSqlite !== "string") ||
+    (opts.json === true &&
+      opts.postUpgrade !== true &&
+      typeof opts.stateSqlite !== "string" &&
+      typeof opts.sessionSqlite !== "string") ||
     typeof opts.severityMin === "string" ||
     opts.all === true ||
     (Array.isArray(opts.skip) && opts.skip.length > 0) ||
@@ -249,6 +266,18 @@ function hasSessionSqliteOnlyDoctorOptions(opts: {
       opts.sessionSqliteAllAgents === true ||
       typeof opts.sessionSqliteStore === "string")
   );
+}
+
+function parseDoctorStateSqliteMode(value: unknown): "compact" | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === "compact") {
+    return value;
+  }
+  defaultRuntime.error("Invalid --state-sqlite mode. Use compact.");
+  defaultRuntime.exit(2);
+  throw new Error("unreachable");
 }
 
 function parseDoctorSessionSqliteMode(
