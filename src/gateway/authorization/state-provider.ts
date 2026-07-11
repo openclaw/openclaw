@@ -72,6 +72,7 @@ function authorizeFromState(
         "resource.resource_type",
         "resource.resource_id",
         "resource.domain_id",
+        "resource.owner_principal_id",
         "membership.role as membership_role",
         "grant.permission as granted_permission",
       ])
@@ -105,7 +106,9 @@ function authorizeFromState(
   if (
     bindings.some(
       (binding) =>
-        (binding.membership_role !== "owner" || request.principal.kind !== "human") &&
+        (request.principal.kind !== "human" ||
+          (binding.membership_role !== "owner" &&
+            binding.owner_principal_id !== principal.principal_id)) &&
         !binding.granted_permission,
     )
   ) {
