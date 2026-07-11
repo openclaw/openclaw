@@ -987,10 +987,16 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   margin: 0 -8px;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-color: color-mix(in srgb, currentColor 8%, transparent) transparent;
   scrollbar-width: thin;
   /* Sessions are app chrome, not hyperlinks: the whole region uses the
      default arrow cursor; the pointer hand is reserved for real links. */
   cursor: default;
+}
+
+.sidebar-recent-sessions::-webkit-scrollbar,
+.sidebar-recent-sessions::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* The scroller's children must not flex-shrink: shrink squeezes each section
