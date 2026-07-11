@@ -62,6 +62,7 @@ import type {
   ThinkingLevel,
 } from "../llm/types.js";
 import "../llm/ai-transport-host.js";
+import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -70,6 +71,7 @@ import {
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
+import { unwrapModelHeaderSentinelsForProviderEgress } from "./provider-secret-egress.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -288,7 +290,9 @@ function adjustMaxTokensForThinking(params: {
 }
 
 function isAnthropicOAuthToken(apiKey: string): boolean {
-  return apiKey.includes("sk-ant-oat");
+  // Auth routing may inspect the real shape, but guarded fetch still receives the sentinel.
+  const resolved = looksLikeSecretSentinel(apiKey) ? resolveSecretSentinel(apiKey) : apiKey;
+  return (resolved ?? apiKey).includes("sk-ant-oat");
 }
 
 function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" | "baseUrl">) {
@@ -910,7 +914,11 @@ function createAnthropicTransportClient(params: {
       isOAuthToken: false,
     };
   }
-  if (usesFoundryBearerAuth(model)) {
+  if (
+    usesFoundryBearerAuth(
+      unwrapModelHeaderSentinelsForProviderEgress(model, "Anthropic Foundry auth routing"),
+    )
+  ) {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
       client: createAnthropicMessagesClient({
@@ -1248,7 +1256,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         );
         const blocks = output.content;
         const blockIndexes = new Map<number, number>();
-        const signatureDeltaIndexes = new Set<number>();
+        // Signature deltas are opaque and only complete at content_block_stop.
+        // Keep partial bytes out of output so interrupted streams cannot poison replay.
+        const pendingThinkingSignatures = new Map<number, string>();
         const allowReasoningContentReplay = supportsReasoningContentReplay(model);
         const reasoningContentThinkingBlocks = new Map<number, number>();
         const reasoningContentTextBlocks = new Map<number, number>();
@@ -1445,6 +1455,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               refusalBuffer?.discard();
               pendingTextEnds.length = 0;
               blockIndexes.clear();
+              pendingThinkingSignatures.clear();
               applyAnthropicFallbackBoundary({
                 output,
                 boundary: fallbackBoundary,
@@ -1484,6 +1495,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               }
               continue;
             }
+            pendingThinkingSignatures.delete(index);
             if (contentBlock?.type === "text") {
               const text =
                 typeof contentBlock.text === "string"
@@ -1687,16 +1699,23 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               typeof delta.signature === "string"
             ) {
               const signatureIndex = eventIndexKey(event.index);
-              if (!signatureDeltaIndexes.has(signatureIndex)) {
-                signatureDeltaIndexes.add(signatureIndex);
+              const pendingSignature = pendingThinkingSignatures.get(signatureIndex);
+              if (pendingSignature === undefined) {
                 block.thinkingSignature = "";
+                pendingThinkingSignatures.set(signatureIndex, delta.signature);
+              } else {
+                pendingThinkingSignatures.set(signatureIndex, pendingSignature + delta.signature);
               }
-              block.thinkingSignature = (block.thinkingSignature || "") + delta.signature;
             }
             continue;
           }
           if (event.type === "content_block_stop") {
             const eventIndex = typeof event.index === "number" ? event.index : undefined;
+            const pendingSignature =
+              eventIndex === undefined ? undefined : pendingThinkingSignatures.get(eventIndex);
+            if (eventIndex !== undefined) {
+              pendingThinkingSignatures.delete(eventIndex);
+            }
             const index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
             const block = index === undefined ? undefined : blocks[index];
             if (eventIndex === undefined || index === undefined || !block) {
@@ -1716,6 +1735,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             if (block.type === "thinking") {
+              if (pendingSignature !== undefined) {
+                block.thinkingSignature = pendingSignature;
+              }
               eventSink.push({
                 type: "thinking_end",
                 contentIndex: index,

@@ -27,6 +27,7 @@ import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { logWarn } from "../logger.js";
 import { resolveProviderEndpoint } from "./provider-model-shared.js";
 
 export type { OpenClawConfig } from "../config/config.js";
@@ -127,10 +128,122 @@ export {
   buildCopilotIdeHeaders,
 } from "../agents/copilot-dynamic-headers.js";
 
-const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
-
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
+
+/**
+ * Data-residency GitHub Enterprise (`*.ghe.com`) support.
+ *
+ * Copilot on a data-residency GHE tenant lives at `<domain>` / `api.<domain>` /
+ * `copilot-api.<domain>` rather than the public github.com endpoints. The host
+ * is resolved (in priority order) from the `COPILOT_GITHUB_DOMAIN` env override,
+ * the persisted `models.providers.github-copilot.params.githubDomain` config, and
+ * finally public `github.com`.
+ */
+const COPILOT_PROVIDER_ID = "github-copilot";
+
+const DEFAULT_GITHUB_COPILOT_DOMAIN = "github.com";
+
+// Matches a data-residency GHE tenant root (`<tenant>.ghe.com`, single label).
+// GitHub defines a GHE.com enterprise as a dedicated `SUBDOMAIN.ghe.com` domain;
+// nested hosts (`api.<tenant>.ghe.com`, `copilot-api.<tenant>.ghe.com`) are
+// derived service endpoints, not tenants — accepting one would template broken
+// hosts like `api.api.<tenant>.ghe.com` for the token exchange. Bare `ghe.com`
+// is likewise excluded: it is not a tenant and hosts no Copilot endpoint.
+const GHE_DATA_RESIDENCY_HOST = /^[a-z0-9-]+\.ghe\.com$/;
+
+/**
+ * Coerce a user/config-supplied GitHub host to a safe bare lowercase hostname.
+ *
+ * Fails closed to public `github.com`: only the public host and data-residency
+ * GHE tenants (`*.ghe.com`) are trusted. Any other value falls back to the
+ * default rather than being used verbatim, because the resolved host becomes the
+ * `api.<host>` endpoint that receives the GitHub OAuth token during exchange — a
+ * typo or injected value like `evil.com` must never redirect that token.
+ * (Classic self-hosted GHE Server uses arbitrary hostnames but does not host
+ * Copilot, so it is deliberately out of scope.)
+ */
+export function normalizeGithubCopilotDomain(raw: string | undefined | null): string {
+  const trimmed = (raw ?? "").trim().toLowerCase();
+  if (!trimmed) {
+    return DEFAULT_GITHUB_COPILOT_DOMAIN;
+  }
+  // Reject scheme/path/credentials so template URL construction cannot be hijacked.
+  if (!/^[a-z0-9.-]+$/.test(trimmed)) {
+    return DEFAULT_GITHUB_COPILOT_DOMAIN;
+  }
+  if (trimmed === DEFAULT_GITHUB_COPILOT_DOMAIN || GHE_DATA_RESIDENCY_HOST.test(trimmed)) {
+    return trimmed;
+  }
+  return DEFAULT_GITHUB_COPILOT_DOMAIN;
+}
+
+function readGithubCopilotDomainFromConfig(config?: OpenClawConfig): string | undefined {
+  const params = config?.models?.providers?.[COPILOT_PROVIDER_ID]?.params;
+  const value = params && typeof params === "object" ? params.githubDomain : undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  warnOnceOnRejectedConfigDomain(trimmed);
+  return trimmed;
+}
+
+// Configured `githubDomain` values that fail the allowlist fall back to public
+// github.com (fail-closed for the token). That silent fallback turns a typo like
+// `acme.ghe.co` into an opaque 401 (tenant token vs public endpoint), so warn the
+// user loudly — once per distinct bad value — that their config was ignored.
+const warnedRejectedConfigDomains = new Set<string>();
+function warnOnceOnRejectedConfigDomain(configured: string): void {
+  const lowered = configured.toLowerCase();
+  if (lowered === DEFAULT_GITHUB_COPILOT_DOMAIN) {
+    return;
+  }
+  if (normalizeGithubCopilotDomain(configured) !== DEFAULT_GITHUB_COPILOT_DOMAIN) {
+    return;
+  }
+  if (warnedRejectedConfigDomains.has(lowered)) {
+    return;
+  }
+  warnedRejectedConfigDomains.add(lowered);
+  logWarn(
+    `Ignoring configured GitHub Copilot domain "${configured}": only github.com and *.ghe.com tenants are accepted. Falling back to github.com.`,
+  );
+}
+
+// Provider-internal host resolver (env > explicit caller value > persisted
+// config), always passed through the fail-closed allowlist. Not exported: the
+// provider extension owns its own copy so the SDK surface stays minimal.
+function resolveGithubCopilotDomain(params?: {
+  env?: NodeJS.ProcessEnv;
+  explicit?: string;
+  config?: OpenClawConfig;
+}): string {
+  const env = params?.env ?? process.env;
+  const fromEnv = env.COPILOT_GITHUB_DOMAIN?.trim();
+  if (fromEnv) {
+    return normalizeGithubCopilotDomain(fromEnv);
+  }
+  if (params?.explicit) {
+    return normalizeGithubCopilotDomain(params.explicit);
+  }
+  return normalizeGithubCopilotDomain(readGithubCopilotDomainFromConfig(params?.config));
+}
+
+/**
+ * Data-residency GHE Copilot tokens carry no `proxy-ep`, so the completions base
+ * URL cannot be derived from the token. Point it at the tenant Copilot proxy
+ * (`copilot-api.<domain>`) instead of the public individual endpoint.
+ */
+function copilotTokenUrl(domain: string): string {
+  return `https://api.${domain}/copilot_internal/v2/token`;
+}
+
+function copilotApiBaseFallback(domain: string): string {
+  return domain === DEFAULT_GITHUB_COPILOT_DOMAIN
+    ? DEFAULT_COPILOT_API_BASE_URL
+    : `https://copilot-api.${domain}`;
+}
 
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export type CachedCopilotToken = {
@@ -142,16 +255,33 @@ export type CachedCopilotToken = {
   updatedAt: number;
   /** Copilot integration id that produced this cached token. */
   integrationId?: string;
+  /**
+   * GitHub host this token was minted for. Guards against reusing a public
+   * `github.com` Copilot token against a `*.ghe.com` tenant host (or vice
+   * versa) after a domain switch. Shipped caches predate this field and were
+   * only ever minted for public github.com, so a missing value means
+   * `github.com` (keeps valid public entries usable across upgrade).
+   */
+  domain?: string;
 };
 
 function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
   return path.join(resolveStateDir(env), "credentials", "github-copilot.token.json");
 }
 
-function isCopilotTokenUsable(cache: CachedCopilotToken, now = Date.now()): boolean {
+function isCopilotTokenUsable(
+  cache: CachedCopilotToken,
+  domain: string,
+  now = Date.now(),
+): boolean {
   const expiresAt = asDateTimestampMs(cache.expiresAt);
+  // Legacy entries (pre domain-stamp) could only have been minted for public
+  // github.com; defaulting keeps them usable across upgrade while tenant
+  // requests still force a re-exchange.
+  const cacheDomain = cache.domain ?? DEFAULT_GITHUB_COPILOT_DOMAIN;
   return (
     cache.integrationId === COPILOT_INTEGRATION_ID &&
+    cacheDomain === domain &&
     expiresAt !== undefined &&
     expiresAt - now > 5 * 60 * 1000
   );
@@ -267,6 +397,18 @@ export async function resolveCopilotApiToken(params: {
   loadJsonFileImpl?: (path: string) => unknown;
   /** Cache writer override for tests and alternate storage backends. */
   saveJsonFileImpl?: (path: string, value: CachedCopilotToken) => void;
+  /**
+   * Data-residency GitHub Enterprise host (e.g. `acme.ghe.com`). Resolved from
+   * config by callers that have it; the `COPILOT_GITHUB_DOMAIN` env override
+   * still wins. Defaults to `github.com`.
+   */
+  githubDomain?: string;
+  /**
+   * OpenClaw config used to resolve the persisted `githubDomain` provider
+   * param when an explicit `githubDomain` is not supplied. Precedence is
+   * `COPILOT_GITHUB_DOMAIN` env > explicit `githubDomain` > config.
+   */
+  config?: OpenClawConfig;
 }): Promise<{
   /** Copilot API token, from cache or fresh exchange. */
   token: string;
@@ -278,25 +420,33 @@ export async function resolveCopilotApiToken(params: {
   baseUrl: string;
 }> {
   const env = params.env ?? process.env;
+  const domain = resolveGithubCopilotDomain({
+    env,
+    explicit: params.githubDomain,
+    config: params.config,
+  });
   const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
+  const tokenUrl = copilotTokenUrl(domain);
+  const apiBaseFallback = copilotApiBaseFallback(domain);
   const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
   const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
   const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
   if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
-    // Token cache entries are scoped to the current Copilot integration id so
-    // stale tokens from older editor identities are exchanged again.
-    if (isCopilotTokenUsable(cached)) {
+    // Token cache entries are scoped to the current Copilot integration id and
+    // GitHub host so stale tokens from older editor identities or a different
+    // domain are exchanged again.
+    if (isCopilotTokenUsable(cached, domain)) {
       return {
         token: cached.token,
         expiresAt: cached.expiresAt,
         source: `cache:${cachePath}`,
-        baseUrl: deriveCopilotApiBaseUrlFromToken(cached.token) ?? DEFAULT_COPILOT_API_BASE_URL,
+        baseUrl: deriveCopilotApiBaseUrlFromToken(cached.token) ?? apiBaseFallback,
       };
     }
   }
 
   const fetchImpl = params.fetchImpl ?? fetch;
-  const res = await fetchImpl(COPILOT_TOKEN_URL, {
+  const res = await fetchImpl(tokenUrl, {
     method: "GET",
     headers: {
       Accept: "application/json",
@@ -319,14 +469,15 @@ export async function resolveCopilotApiToken(params: {
     expiresAt: json.expiresAt,
     updatedAt: Date.now(),
     integrationId: COPILOT_INTEGRATION_ID,
+    domain,
   };
   saveJsonFileFn(cachePath, payload);
 
   return {
     token: payload.token,
     expiresAt: payload.expiresAt,
-    source: `fetched:${COPILOT_TOKEN_URL}`,
-    baseUrl: deriveCopilotApiBaseUrlFromToken(payload.token) ?? DEFAULT_COPILOT_API_BASE_URL,
+    source: `fetched:${tokenUrl}`,
+    baseUrl: deriveCopilotApiBaseUrlFromToken(payload.token) ?? apiBaseFallback,
   };
 }
 

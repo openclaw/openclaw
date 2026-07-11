@@ -95,6 +95,18 @@ describe("gateway.restart.request handler", () => {
     expectRestartRequest(false);
   });
 
+  it("backs off before an emoji that crosses the reason limit", async () => {
+    mockScheduledRestart({ safe: true, summary: "safe to restart now" });
+
+    await invokeRestartRequest({ reason: "x".repeat(199) + "🧠tail" });
+
+    expect(requestSafeGatewayRestart).toHaveBeenCalledWith({
+      reason: "x".repeat(199),
+      delayMs: 0,
+      skipDeferral: false,
+    });
+  });
+
   it("rejects non-object params without scheduling a restart", async () => {
     const respond = await invokeRestartRequest("operator");
 

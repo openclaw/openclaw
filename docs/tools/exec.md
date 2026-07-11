@@ -90,6 +90,8 @@ Notes:
 | `tools.exec.security`                | `deny` for sandbox, `full` for gateway/node when unset |                                                                                                                                                         |
 | `tools.exec.ask`                     | `off`                                                  |                                                                                                                                                         |
 | `tools.exec.mode`                    | unset                                                  | Normalized policy knob. See [Modes](#modes) below. Cannot be combined with `tools.exec.security`/`tools.exec.ask`.                                      |
+| `tools.exec.reviewer.model`          | configured agent primary                               | Optional provider/model override for `mode=auto` review.                                                                                                |
+| `tools.exec.reviewer.timeoutMs`      | `30000`                                                | Per-stage timeout for reviewer model preparation and completion before human fallback.                                                                  |
 | `tools.exec.node`                    | unset                                                  |                                                                                                                                                         |
 | `tools.exec.notifyOnExit`            | `true`                                                 | When true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.                                                           |
 | `tools.exec.approvalRunningNoticeMs` | `10000`                                                | Emit a single "running" notice when an approval-gated exec runs longer than this (`0` disables).                                                        |
@@ -127,6 +129,10 @@ Example:
 | `full`      | `full`      | `off`     | No approval gate.                                                                                                              |
 
 `ask`/`ask=always` still asks a human every time regardless of mode.
+
+Auto-review approval is single-use. On the gateway, OpenClaw supplies the resolved executable path to the reviewer and pins execution to that same path. Commands that cannot be reduced to one enforceable execution plan—such as heredocs, shell expansions, or unsupported wrapper quoting—fall back to human approval even if the model would otherwise allow them.
+
+Codex app-server command approvals that are not already decided by explicit runtime or native policy use the human approval route. OpenClaw does not run its configured exec reviewer for these requests because Codex does not expose an enforceable resolved executable that can bind the review decision to the command Codex runs.
 
 ### Inline eval (`strictInlineEval`)
 
@@ -189,7 +195,7 @@ Use the two controls for different jobs:
 
 Do not treat `safeBins` as a generic allowlist, and do not add interpreter/runtime binaries (for example `python3`, `node`, `ruby`, `bash`). If you need those, use explicit allowlist entries and keep approval prompts enabled.
 
-`openclaw security audit` warns when interpreter/runtime `safeBins` entries are missing explicit profiles, and `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles` entries. `openclaw security audit` and `openclaw doctor` also warn when you explicitly add broad-behavior bins such as `jq` back into `safeBins` (`jq` supports broad programs and builtins, so prefer explicit allowlist entries or approval-gated runs instead). If you explicitly allowlist interpreters, enable `tools.exec.strictInlineEval` so inline code-eval forms still require reviewer or explicit approval.
+`openclaw security audit` warns when interpreter/runtime `safeBins` entries are missing explicit profiles, and `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles` entries. `openclaw security audit` and `openclaw doctor` also warn when you explicitly add broad-behavior bins such as `jq` back into `safeBins` (`jq` can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead). `jq` is denied as a safe bin even when it is explicitly listed. If you explicitly allowlist interpreters, enable `tools.exec.strictInlineEval` so inline code-eval forms still require reviewer or explicit approval.
 
 For full policy details and examples, see [Exec approvals](/tools/exec-approvals-advanced#safe-bins-stdin-only) and [Safe bins versus allowlist](/tools/exec-approvals-advanced#safe-bins-versus-allowlist).
 

@@ -20,6 +20,7 @@ import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { abortEmbeddedAgentRun, waitForEmbeddedAgentRunEnd } from "../agents/embedded-agent.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -49,6 +50,7 @@ import { getSessionBindingService } from "../infra/outbound/session-binding-serv
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -78,7 +80,6 @@ import {
   loadSessionEntry,
   resolveGatewaySessionStoreTarget,
   resolveSessionStoreKey,
-  resolveSessionModelRef,
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
@@ -116,22 +117,6 @@ function resolveResetSessionFile(params: {
       agentId: params.agentId,
     }),
   );
-}
-
-function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
-  if (!entry) {
-    return entry;
-  }
-  return {
-    ...entry,
-    // Reset should keep user selection preferences but drop per-run resolved
-    // model state so the next turn rehydrates from current config.
-    model: undefined,
-    modelProvider: undefined,
-    contextTokens: undefined,
-    contextBudgetStatus: undefined,
-    systemPromptReport: undefined,
-  };
 }
 
 export function archiveSessionTranscriptsForSessionDetailed(params: {
@@ -204,7 +189,9 @@ export function emitGatewaySessionEndPluginHook(params: {
     nextSessionId: params.nextSessionId,
     nextSessionKey: params.nextSessionKey,
   });
-  void hookRunner.runSessionEnd(payload.event, payload.context).catch((err: unknown) => {
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    await hookRunner.runSessionEnd(payload.event, payload.context);
+  }).catch((err: unknown) => {
     logVerbose(`session_end hook failed: ${String(err)}`);
   });
 }
@@ -247,7 +234,9 @@ export function emitGatewaySessionStartPluginHook(params: {
     cfg: params.cfg,
     resumedFrom: params.resumedFrom,
   });
-  void hookRunner.runSessionStart(payload.event, payload.context).catch((err: unknown) => {
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    await hookRunner.runSessionStart(payload.event, payload.context);
+  }).catch((err: unknown) => {
     logVerbose(`session_start hook failed: ${String(err)}`);
   });
 }
@@ -868,6 +857,10 @@ export async function performGatewaySessionReset(params: {
   key: string;
   agentId?: string;
   spawnedCwd?: string;
+  /** Managed worktree adopted by this reset; cleared together with spawnedCwd. */
+  worktree?: { id: string; branch: string; repoRoot: string };
+  /** Bind session exec to host=node with this node id; caller scope-checks. */
+  execNode?: string;
   // A plain New Chat must return to the agent workspace instead of inheriting the previous
   // turn's session worktree cwd; only worktree-requested resets carry a spawnedCwd forward.
   clearSpawnedCwd?: boolean;
@@ -876,7 +869,14 @@ export async function performGatewaySessionReset(params: {
   assertCurrent?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }): Promise<
-  | { ok: true; key: string; entry: SessionEntry; agentId: string; storePath: string }
+  | {
+      ok: true;
+      key: string;
+      entry: SessionEntry;
+      resolved: { modelProvider: string; model: string };
+      agentId: string;
+      storePath: string;
+    }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
   const resetTarget = (() => {
@@ -1080,17 +1080,6 @@ export async function performGatewaySessionReset(params: {
           const resetPreservedSelection = resolveResetPreservedSelection({
             entry: currentEntry,
           });
-          const resetEntry = {
-            ...stripRuntimeModelState(currentEntry),
-            providerOverride: undefined,
-            modelOverride: undefined,
-            modelOverrideSource: undefined,
-            authProfileOverride: undefined,
-            authProfileOverrideSource: undefined,
-            authProfileOverrideCompactionCount: undefined,
-            ...resetPreservedSelection,
-          };
-          const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
           const now = Date.now();
           const nextSessionId = randomUUID();
           const sessionFile = resolveResetSessionFile({
@@ -1112,10 +1101,10 @@ export async function performGatewaySessionReset(params: {
             reasoningLevel: currentEntry?.reasoningLevel,
             elevatedLevel: currentEntry?.elevatedLevel,
             ttsAuto: currentEntry?.ttsAuto,
-            execHost: currentEntry?.execHost,
+            execHost: params.execNode ? "node" : currentEntry?.execHost,
             execSecurity: currentEntry?.execSecurity,
             execAsk: currentEntry?.execAsk,
-            execNode: currentEntry?.execNode,
+            execNode: params.execNode ?? currentEntry?.execNode,
             responseUsage: currentEntry?.responseUsage,
             pinnedAt: currentEntry?.pinnedAt,
             // Resets should keep the user's explicit selection, but clear any
@@ -1124,9 +1113,6 @@ export async function performGatewaySessionReset(params: {
             groupActivation: currentEntry?.groupActivation,
             groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
             chatType: currentEntry?.chatType,
-            model: resolvedModel.model,
-            modelProvider: resolvedModel.provider,
-            contextTokens: resetEntry?.contextTokens,
             compactionCount: currentEntry?.compactionCount,
             compactionCheckpoints: currentEntry?.compactionCheckpoints,
             sendPolicy: currentEntry?.sendPolicy,
@@ -1139,6 +1125,9 @@ export async function performGatewaySessionReset(params: {
             spawnedCwd: params.clearSpawnedCwd
               ? undefined
               : (params.spawnedCwd ?? currentEntry?.spawnedCwd),
+            worktree: params.clearSpawnedCwd
+              ? undefined
+              : (params.worktree ?? currentEntry?.worktree),
             parentSessionKey: currentEntry?.parentSessionKey,
             forkedFromParent: currentEntry?.forkedFromParent,
             spawnDepth: currentEntry?.spawnDepth,
@@ -1235,6 +1224,18 @@ export async function performGatewaySessionReset(params: {
         },
       });
       const next = lifecycle.nextEntry;
+      const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);
+      const resolved = {
+        modelProvider: selectedModel.provider,
+        model: selectedModel.model,
+      };
+      // Runtime model identity is a response projection, not reset persistence. Keep the
+      // established RPC entry shape while the stored row retains selection intent only.
+      const responseEntry: SessionEntry = {
+        ...next,
+        modelProvider: resolved.modelProvider,
+        model: resolved.model,
+      };
       const oldSessionId = lifecycle.previousSessionId;
       const oldSessionFile = lifecycle.previousSessionFile;
 
@@ -1268,7 +1269,8 @@ export async function performGatewaySessionReset(params: {
       return {
         ok: true,
         key: target.canonicalKey,
-        entry: next,
+        entry: responseEntry,
+        resolved,
         agentId: target.agentId,
         storePath,
       };

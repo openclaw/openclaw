@@ -868,6 +868,9 @@ Reply -> TTS enabled?
     <ParamField path="timeoutMs" type="number">Command timeout in milliseconds. Default `120000`.</ParamField>
     <ParamField path="cwd" type="string">Optional command working directory.</ParamField>
     <ParamField path="env" type="Record<string, string>">Optional environment overrides for the command.</ParamField>
+
+    Command stdout and generated or converted audio are limited to 50 MiB. Diagnostic stderr is limited to 1 MiB. OpenClaw terminates the command and fails synthesis when either limit is exceeded.
+
   </Accordion>
 
   <Accordion title="Microsoft (no API key)">
@@ -926,7 +929,7 @@ Reply -> TTS enabled?
   <Accordion title="xAI">
     <ParamField path="apiKey" type="string">Env: `XAI_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.x.ai/v1`. Env: `XAI_BASE_URL`.</ParamField>
-    <ParamField path="speakerVoiceId" type="string">Default `eve`. Live voices: `ara`, `eve`, `leo`, `rex`, `sal`, `una`. Legacy alias: `voiceId`.</ParamField>
+    <ParamField path="speakerVoiceId" type="string">Default `eve`. With auth, `openclaw infer tts voices --provider xai` fetches the current built-in catalog; without auth it lists offline fallbacks `ara`, `eve`, `leo`, `rex`, and `sal`. Account custom voice IDs are forwarded even when absent from the built-in list. Legacy alias: `voiceId`.</ParamField>
     <ParamField path="language" type="string">BCP-47 language code or `auto`. Default `en`.</ParamField>
     <ParamField path="responseFormat" type='"mp3" | "wav" | "pcm" | "mulaw" | "alaw"'>Default `mp3`.</ParamField>
     <ParamField path="speed" type="number">Provider-native speed override, `0.7..1.5`.</ParamField>

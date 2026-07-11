@@ -655,7 +655,13 @@ export type ProviderResolveUsageAuthContext = {
   resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderUsageAuthToken | null>;
 };
 
-export type ProviderUsageAuthToken = { token: string; accountId?: string };
+export type ProviderUsageAuthToken = {
+  token: string;
+  accountId?: string;
+  /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
+  subscriptionType?: string;
+  rateLimitTier?: string;
+};
 
 /**
  * Result of `resolveUsageAuth`.
@@ -688,6 +694,9 @@ export type ProviderFetchUsageSnapshotContext = {
   token: string;
   accountId?: string;
   authProfileId?: string;
+  /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
+  subscriptionType?: string;
+  rateLimitTier?: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
 };
@@ -713,6 +722,9 @@ export type ProviderAuthDoctorHintContext = {
  * Use this to set provider defaults or rewrite provider-specific config keys
  * into the merged `extraParams` object. Return the full next extraParams object.
  */
+/** Provider-facing effort after OpenClaw lowers orchestration-only modes. */
+export type ProviderTransportThinkingLevel = Exclude<ThinkLevel, "ultra">;
+
 export type ProviderPrepareExtraParamsContext = {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -723,7 +735,7 @@ export type ProviderPrepareExtraParamsContext = {
   modelId: string;
   model?: ProviderRuntimeModel;
   extraParams?: Record<string, unknown>;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderTransportThinkingLevel;
 };
 
 export type ProviderExtraParamsForTransportContext = Omit<
@@ -2211,10 +2223,19 @@ export type OpenClawPluginReloadRegistration = {
   noopPrefixes?: string[];
 };
 
+export type OpenClawPluginNodeHostCommandAvailabilityContext = {
+  /** Node-local configuration used to build this host's Gateway declaration. */
+  config: OpenClawConfig;
+  /** Node-host process environment. */
+  env: NodeJS.ProcessEnv;
+};
+
 export type OpenClawPluginNodeHostCommand = {
   command: string;
   cap?: string;
   dangerous?: boolean;
+  /** Return false to omit this command and capability from the node declaration. */
+  isAvailable?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => boolean;
   handle: (paramsJSON?: string | null) => Promise<string>;
 };
 

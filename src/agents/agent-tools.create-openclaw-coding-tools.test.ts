@@ -37,15 +37,7 @@ const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
   "base64",
 );
-const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
-  "minLength",
-  "maxLength",
-  "minItems",
-  "maxItems",
-  "minContains",
-  "maxContains",
-]);
-
+const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set(["minContains", "maxContains"]);
 function collectActionValues(schema: unknown, values: Set<string>): void {
   if (!schema || typeof schema !== "object") {
     return;
@@ -597,6 +589,53 @@ describe("createOpenClawCodingTools", () => {
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     expect(latestCreateOpenClawToolsOptions().sourceReplyDeliveryMode).toBe("message_tool_only");
+  });
+
+  it("passes configured filesystem policy to OpenClaw tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { fs: { workspaceOnly: true } } },
+    });
+
+    expect(latestCreateOpenClawToolsOptions().fsPolicy).toEqual({ workspaceOnly: true });
+  });
+
+  it("uses the canonical spawn workspace for follow-up task suggestions", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const sandboxDir = "/sandbox/workspace";
+
+    createOpenClawCodingTools({
+      sandbox: createAgentToolsSandboxContext({
+        workspaceDir: sandboxDir,
+        workspaceAccess: "ro",
+        fsBridge: createHostSandboxFsBridge(sandboxDir),
+      }),
+      workspaceDir: "/agent/workspace",
+      cwd: sandboxDir,
+      spawnWorkspaceDir: "/host/project",
+    });
+
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      workspaceDir: "/agent/workspace",
+      spawnWorkspaceDir: "/host/project",
+      cwd: "/host/project",
+    });
+  });
+
+  it("keeps an unsandboxed task repo as the follow-up suggestion cwd", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      workspaceDir: "/agent/workspace",
+      cwd: "/task/repo",
+      spawnWorkspaceDir: "/agent/workspace",
+    });
+
+    expect(latestCreateOpenClawToolsOptions().cwd).toBe("/task/repo");
   });
 
   it("skips unrelated tool families when construction is planned from a narrow allowlist", () => {
@@ -1473,12 +1512,7 @@ describe("createOpenClawCodingTools", () => {
         `${tool.name}.parameters`,
         XAI_UNSUPPORTED_SCHEMA_KEYWORDS,
       );
-      expect(
-        violations.filter((violation) => {
-          const keyword = violation.split(".").at(-1) ?? "";
-          return XAI_UNSUPPORTED_SCHEMA_KEYWORDS.has(keyword);
-        }),
-      ).toStrictEqual([]);
+      expect(violations).toStrictEqual([]);
     }
   });
 

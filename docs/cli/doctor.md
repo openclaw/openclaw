@@ -168,6 +168,13 @@ openclaw doctor --lint --all --skip core/doctor/session-locks
 
 `openclaw doctor --post-upgrade` runs plugin compatibility probes for chaining after a build or upgrade. Findings go to stdout; exit code is 1 if any finding has `level: "error"`. Add `--json` for a machine-readable envelope (`{ probesRun, findings }`), suitable for CI, the community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the installed plugin index is missing or malformed, JSON mode still emits the envelope with a `plugin.index_unavailable` error finding.
 
+Container image startup is the exception to the usual "run doctor after
+updating" flow. When `openclaw gateway run` starts on a new OpenClaw version, it
+runs safe state and plugin repairs before reporting ready. If repair cannot
+finish safely, startup exits and tells you to run the same image once with
+`openclaw doctor --fix` against the same mounted state/config before restarting
+the container normally.
+
 ## Notes
 
 - In Nix mode (`OPENCLAW_NIX_MODE=1`), read-only doctor checks still work, but `doctor --fix`, `doctor --repair`, `doctor --yes`, and `doctor --generate-gateway-token` are disabled because `openclaw.json` is immutable. Edit the Nix source for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
@@ -185,6 +192,7 @@ openclaw doctor --lint --all --skip core/doctor/session-locks
 - On Linux, doctor warns when the user's crontab still runs the unmaintained legacy `~/.openclaw/bin/ensure-whatsapp.sh`, which can misreport `Gateway inactive` when cron lacks the systemd user-bus environment.
 - When WhatsApp is enabled, doctor checks for a degraded Gateway event loop with local `openclaw-tui` clients still running. `doctor --fix` stops only verified local TUI clients so WhatsApp replies are not queued behind stale TUI refresh loops.
 - Doctor rewrites legacy `openai-codex/*` model refs to canonical `openai/*` refs across primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale session route pins. `--fix` also migrates legacy `openai-codex:*` auth profiles and `auth.order.openai-codex` entries to `openai:*`, moves Codex intent onto provider/model-scoped `agentRuntime.id: "codex"` entries, removes stale whole-agent/session runtime pins, and keeps repaired OpenAI agent refs on Codex auth routing instead of direct OpenAI API-key auth.
+- Doctor reports nonempty `auth.order.<provider>` lists whose referenced profiles are all gone while compatible stored credentials exist. `doctor --fix` deletes only those stale overrides, restoring automatic per-agent credential selection; explicit empty orders, partially live lists, and orders without a compatible stored credential stay unchanged. If an active SQLite auth store is unreadable or malformed, doctor explains why it skipped this repair. Restart a running Gateway before rechecking auth status if its config reload mode does not apply the write automatically.
 - Doctor cleans legacy plugin dependency staging state from older OpenClaw versions and relinks the host `openclaw` package for managed npm plugins that declare it as a peer dependency. It also repairs missing downloadable plugins referenced by config (`plugins.entries`, configured channels, configured provider/search settings, configured agent runtimes). During package updates, doctor skips package-manager plugin repair until the package swap completes; rerun `openclaw doctor --fix` afterward if a configured plugin still needs recovery. If a download fails, doctor reports the install error and preserves the configured plugin entry for the next repair attempt.
 - Doctor repairs stale plugin config by removing missing plugin ids from `plugins.allow`/`plugins.deny`/`plugins.entries`, plus matching dangling channel config, heartbeat targets, and channel model overrides, when plugin discovery is healthy.
 - Doctor quarantines invalid plugin config by disabling the affected `plugins.entries.<id>` entry and removing its invalid `config` payload. Gateway startup already skips only that bad plugin so other plugins and channels keep running.

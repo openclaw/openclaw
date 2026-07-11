@@ -37,6 +37,39 @@ function makeQaSuiteTestLabHandle(): QaLabServerHandle {
 }
 
 describe("qa suite", () => {
+  it("continues ordered cleanup after a resource reports failure", async () => {
+    const calls: string[] = [];
+    const failure = new Error("gateway pipe failed");
+
+    const errors = await qaSuiteProgressTesting.runQaSuiteCleanupSteps([
+      async () => {
+        calls.push("gateway");
+        throw failure;
+      },
+      async () => {
+        calls.push("transport");
+      },
+      async () => {
+        calls.push("lab");
+      },
+    ]);
+
+    expect(calls).toEqual(["gateway", "transport", "lab"]);
+    expect(errors).toEqual([failure]);
+  });
+
+  it("keeps the primary suite error as the cause of aggregated cleanup failures", () => {
+    const runError = new Error("gateway infrastructure failed");
+
+    expect(() =>
+      qaSuiteProgressTesting.throwQaSuiteCleanupErrors({
+        cleanupErrors: [new Error("transport cleanup failed")],
+        runFailed: true,
+        runError,
+      }),
+    ).toThrow(expect.objectContaining({ cause: runError }));
+  });
+
   it("rejects unsupported transport ids before starting the lab", async () => {
     const startLab = vi.fn();
 
@@ -540,6 +573,10 @@ describe("qa suite", () => {
         },
       },
     });
+    const sutOpenClawCommand = {
+      executablePath: "/usr/local/bin/openclaw-telegram-sut-launcher",
+      usePackagedPlugins: true,
+    };
 
     expect(
       qaSuiteProgressTesting.buildQaIsolatedScenarioWorkerParams({
@@ -556,6 +593,7 @@ describe("qa suite", () => {
           adapterFactories: [adapterFactory],
           channelId: "telegram",
           adapterOptions: { repoRoot: "/repo" },
+          sutOpenClawCommand,
           thinkingDefault: "minimal",
           claudeCliAuthMode: "subscription",
           enabledPluginIds: ["acpx"],
@@ -569,6 +607,7 @@ describe("qa suite", () => {
       adapterFactories: [adapterFactory],
       channelId: "telegram",
       adapterOptions: { repoRoot: "/repo" },
+      sutOpenClawCommand,
       concurrency: 1,
       startLab,
       controlUiEnabled: true,

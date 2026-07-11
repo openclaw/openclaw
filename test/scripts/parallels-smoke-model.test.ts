@@ -282,6 +282,11 @@ describe("Parallels smoke model selection", () => {
     expect(parseMacosSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
     expect(parseLinuxSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
     expect(parseWindowsSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
+    for (const parseArgs of [parseMacosSmokeArgs, parseLinuxSmokeArgs, parseWindowsSmokeArgs]) {
+      expect(parseArgs(["--npm-registry", "http://192.0.2.2:48123"]).npmRegistry).toBe(
+        "http://192.0.2.2:48123",
+      );
+    }
     expect(parseNpmUpdateSmokeArgs(["--", "--package-spec", "openclaw@2026.5.1"]).packageSpec).toBe(
       "openclaw@2026.5.1",
     );
@@ -406,6 +411,8 @@ describe("Parallels smoke model selection", () => {
     expect(parallelsVm).toContain("export function resolveMacosVmName");
     expect(parallelsVm).toContain("export function waitForVmStatus");
     expect(hostServer).toContain("export async function startHostServer");
+    expect(hostServer).toContain("export async function startNpmRegistryServer");
+    expect(hostServer).toContain('OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org"');
     expect(hostServer).toContain("http.server");
     expect(snapshots).toContain("export function resolveSnapshot");
     expect(smokeCommon).toContain("runSmokeLane");
@@ -429,6 +436,19 @@ describe("Parallels smoke model selection", () => {
       12,
     );
     expect(retained).toBe(`${"a".repeat(2)}${"b".repeat(10)}`);
+  });
+
+  it("accepts npm 10/11 array and npm 12 workspace result shapes", () => {
+    expect(
+      packageArtifactTesting.resolveNpmPackTarballFilename([
+        { filename: "openclaw-2026.6.11.tgz" },
+      ]),
+    ).toBe("openclaw-2026.6.11.tgz");
+    expect(
+      packageArtifactTesting.resolveNpmPackTarballFilename({
+        openclaw: { filename: "openclaw-2026.6.11.tgz" },
+      }),
+    ).toBe("openclaw-2026.6.11.tgz");
   });
 
   it("keeps fresh package locks with malformed owner pids", async () => {

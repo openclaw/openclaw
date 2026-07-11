@@ -49,10 +49,12 @@ trap abort_install_int INT
 trap abort_install_term TERM
 
 mktempfile() {
-    local f
+    local output_var="${1:?output variable required}" f
     f="$(mktemp)"
+    # Assign into caller scope; command substitution would lose this cleanup
+    # registration in its subshell.
     TMPFILES+=("$f")
-    echo "$f"
+    printf -v "$output_var" '%s' "$f"
 }
 
 resolve_openclaw_effective_home() {
@@ -117,7 +119,7 @@ download_file() {
 run_remote_bash() {
     local url="$1"
     local tmp
-    tmp="$(mktempfile)"
+    mktempfile tmp
     download_file "$url" "$tmp"
     /bin/bash "$tmp"
 }
@@ -479,8 +481,8 @@ run_with_spinner() {
 
     if [[ -n "$GUM" ]] && gum_is_tty && ! is_shell_function "${1:-}"; then
         local gum_err gum_out
-        gum_err="$(mktempfile)"
-        gum_out="$(mktempfile)"
+        mktempfile gum_err
+        mktempfile gum_out
         if "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err"; then
             if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then
                 GUM=""
@@ -523,7 +525,7 @@ run_quiet_step() {
     fi
 
     local log
-    log="$(mktempfile)"
+    mktempfile log
     local showed_progress=false
 
     local cmd_exit=0
@@ -1012,7 +1014,7 @@ print_npm_failure_diagnostics() {
 install_openclaw_npm() {
     local spec="$1"
     local log
-    log="$(mktempfile)"
+    mktempfile log
     if ! run_npm_global_install "$spec" "$log"; then
         local attempted_build_tool_fix=false
         if auto_install_build_tools_for_npm_failure "$log"; then
@@ -1073,8 +1075,6 @@ TAGLINES+=("I run on caffeine, JSON5, and the audacity of \"it worked on my mach
 TAGLINES+=("Gateway online—please keep hands, feet, and appendages inside the shell at all times.")
 TAGLINES+=("I speak fluent bash, mild sarcasm, and aggressive tab-completion energy.")
 TAGLINES+=("One CLI to rule them all, and one more restart because you changed the port.")
-TAGLINES+=("If it works, it's automation; if it breaks, it's a \"learning opportunity.\"")
-TAGLINES+=("Pairing codes exist because even bots believe in consent—and good security hygiene.")
 TAGLINES+=("Your .env is showing; don't worry, I'll pretend I didn't see it.")
 TAGLINES+=("I'll do the boring stuff while you dramatically stare at the logs like it's cinema.")
 TAGLINES+=("I'm not saying your workflow is chaotic... I'm just bringing a linter and a helmet.")
@@ -1085,13 +1085,10 @@ TAGLINES+=("Hot reload for config, cold sweat for deploys.")
 TAGLINES+=("I'm the assistant your terminal demanded, not the one your sleep schedule requested.")
 TAGLINES+=("I keep secrets like a vault... unless you print them in debug logs again.")
 TAGLINES+=("Automation with claws: minimal fuss, maximal pinch.")
-TAGLINES+=("I'm basically a Swiss Army knife, but with more opinions and fewer sharp edges.")
 TAGLINES+=("If you're lost, run doctor; if you're brave, run prod; if you're wise, run tests.")
 TAGLINES+=("Your task has been queued; your dignity has been deprecated.")
-TAGLINES+=("I can't fix your code taste, but I can fix your build and your backlog.")
 TAGLINES+=("I'm not magic—I'm just extremely persistent with retries and coping strategies.")
 TAGLINES+=("It's not \"failing,\" it's \"discovering new ways to configure the same thing wrong.\"")
-TAGLINES+=("Give me a workspace and I'll give you fewer tabs, fewer toggles, and more oxygen.")
 TAGLINES+=("I read logs so you can keep pretending you don't have to.")
 TAGLINES+=("If something's on fire, I can't extinguish it—but I can write a beautiful postmortem.")
 TAGLINES+=("I'll refactor your busywork like it owes me money.")
@@ -1101,13 +1098,10 @@ TAGLINES+=("I'm like tmux: confusing at first, then suddenly you can't live with
 TAGLINES+=("I can run local, remote, or purely on vibes—results may vary with DNS.")
 TAGLINES+=("If you can describe it, I can probably automate it—or at least make it funnier.")
 TAGLINES+=("Your config is valid, your assumptions are not.")
-TAGLINES+=("I don't just autocomplete—I auto-commit (emotionally), then ask you to review (logically).")
-TAGLINES+=("Less clicking, more shipping, fewer \"where did that file go\" moments.")
 TAGLINES+=("Claws out, commit in—let's ship something mildly responsible.")
 TAGLINES+=("I'll butter your workflow like a lobster roll: messy, delicious, effective.")
 TAGLINES+=("Shell yeah—I'm here to pinch the toil and leave you the glory.")
 TAGLINES+=("If it's repetitive, I'll automate it; if it's hard, I'll bring jokes and a rollback plan.")
-TAGLINES+=("Because texting yourself reminders is so 2024.")
 TAGLINES+=("WhatsApp, but make it ✨engineering✨.")
 TAGLINES+=("Turning \"I'll reply later\" into \"my bot replied instantly\".")
 TAGLINES+=("The only crab in your contacts you actually want to hear from. 🦞")
@@ -1124,7 +1118,6 @@ TAGLINES+=("WhatsApp automation without the \"please accept our new privacy poli
 TAGLINES+=("Chat APIs that don't require a Senate hearing.")
 TAGLINES+=("Because Threads wasn't the answer either.")
 TAGLINES+=("Your messages, your servers, Meta's tears.")
-TAGLINES+=("iMessage green bubble energy, but for everyone.")
 TAGLINES+=("Siri's competent cousin.")
 TAGLINES+=("Works on Android. Crazy concept, we know.")
 TAGLINES+=("No \$999 stand required.")
@@ -1869,7 +1862,7 @@ install_node() {
         ui_info "Installing Node.js via NodeSource"
         if command -v apt-get &> /dev/null; then
             local tmp
-            tmp="$(mktempfile)"
+            mktempfile tmp
             run_required_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"
@@ -1880,7 +1873,7 @@ install_node() {
             fi
         elif command -v dnf &> /dev/null; then
             local tmp
-            tmp="$(mktempfile)"
+            mktempfile tmp
             run_required_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"
@@ -1891,7 +1884,7 @@ install_node() {
             fi
         elif command -v yum &> /dev/null; then
             local tmp
-            tmp="$(mktempfile)"
+            mktempfile tmp
             run_required_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"

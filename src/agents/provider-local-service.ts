@@ -17,6 +17,7 @@ import {
   signalChildProcessTree,
   shouldDetachChildForProcessTree,
 } from "../process/child-process-tree.js";
+import { unwrapHeadersInitSentinelsForProviderEgress } from "./provider-secret-egress.js";
 
 const log = createSubsystemLogger("provider-local-service");
 const DEFAULT_READY_TIMEOUT_MS = 120_000;
@@ -222,6 +223,12 @@ async function probeHealth(
   signal?: AbortSignal | null,
 ): Promise<boolean> {
   throwIfAborted(signal);
+  // Local-service orchestration retains sentinel headers across retries. Only
+  // the actual health request may materialize credentials.
+  const egressHeaders = unwrapHeadersInitSentinelsForProviderEgress(
+    headers,
+    "to probe local model provider health",
+  );
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_PROBE_TIMEOUT_MS);
   timeout.unref?.();
@@ -229,7 +236,7 @@ async function probeHealth(
   signal?.addEventListener("abort", onAbort, { once: true });
   let response: Response | undefined;
   try {
-    response = await fetch(url, { headers, signal: controller.signal });
+    response = await fetch(url, { headers: egressHeaders, signal: controller.signal });
     return response.ok;
   } catch {
     if (signal?.aborted) {

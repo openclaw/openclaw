@@ -672,6 +672,7 @@ export async function resolveModelRuntimeApiKey(params: {
     model: params.model,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    secretSentinels: true,
   });
   // Bedrock's runtime client owns AWS credential-chain resolution. Keep the
   // empty sentinel out of auth storage and pass it through to the stream.
