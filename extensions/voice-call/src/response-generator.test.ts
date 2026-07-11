@@ -27,6 +27,7 @@ type EmbeddedAgentArgs = {
   extraSystemPrompt: string;
   provider?: string;
   model?: string;
+  modelSelectionLocked?: boolean;
   sessionKey?: string;
   sessionTarget?: {
     agentId?: string;
@@ -564,7 +565,7 @@ describe("generateVoiceResponse", () => {
   });
 
   it("rejects responseModel for a model-locked session without running the embedded agent", async () => {
-    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([]);
+    const { runtime, runEmbeddedAgent, patchSessionEntry, sessionStore } = createAgentRuntime([]);
     sessionStore["agent:main:voice:15550001111"] = {
       sessionId: "locked-session",
       updatedAt: 100,
@@ -593,6 +594,7 @@ describe("generateVoiceResponse", () => {
       error: "Model selection is locked for this session.",
     });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(patchSessionEntry).not.toHaveBeenCalled();
     expect(sessionStore["agent:main:voice:15550001111"]).toMatchObject({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -601,11 +603,12 @@ describe("generateVoiceResponse", () => {
     expect(sessionStore["agent:main:voice:15550001111"]?.modelOverride).toBeUndefined();
   });
 
-  it("keeps a catalog-adopted voice session on its persisted Codex harness", async () => {
+  it("propagates the lock for a same-agent supervised Codex session", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Native Codex continued."}' },
     ]);
-    sessionStore["agent:main:voice:15550001111"] = {
+    const sessionKey = "agent:main:harness:codex:supervision:019f-codex-thread";
+    sessionStore[sessionKey] = {
       sessionId: "catalog-adopted-session",
       updatedAt: 100,
       agentHarnessId: "codex",
@@ -626,6 +629,7 @@ describe("generateVoiceResponse", () => {
       coreConfig: {} as CoreConfig,
       agentRuntime: runtime,
       callId: "call-123",
+      sessionKey,
       from: "+15550001111",
       transcript: [{ speaker: "user", text: "continue" }],
       userMessage: "continue",
@@ -635,8 +639,10 @@ describe("generateVoiceResponse", () => {
     expect(requireEmbeddedAgentArgs(runEmbeddedAgent)).toMatchObject({
       provider: "together",
       model: "Qwen/Qwen2.5-7B-Instruct-Turbo",
+      modelSelectionLocked: true,
       agentHarnessId: "codex",
       agentHarnessRuntimeOverride: "codex",
+      sessionKey,
     });
   });
 

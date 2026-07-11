@@ -910,6 +910,15 @@ describe("Discord model picker interactions", () => {
       agentId: "worker",
     });
     const pickerData = createDefaultModelPickerData();
+    pickerData.runtimeChoicesByProvider = new Map([
+      [
+        "openai",
+        [
+          { id: "codex", label: "Codex", description: "Use Codex." },
+          { id: "openclaw", label: "OpenClaw Default", description: "Use OpenClaw." },
+        ],
+      ],
+    ]);
     const modelCommand = createModelCommandDefinition();
     const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
     await upsertSessionEntry({
@@ -918,6 +927,10 @@ describe("Discord model picker interactions", () => {
       entry: {
         updatedAt: Date.now(),
         sessionId: "bound-session",
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "codex",
         modelSelectionLocked: true,
       },
     });
@@ -932,14 +945,19 @@ describe("Discord model picker interactions", () => {
       id: "thread-bound",
     };
 
-    await button.run(
-      submitInteraction as unknown as PickerButtonInteraction,
-      createModelsViewSubmitData(),
-    );
+    await button.run(submitInteraction as unknown as PickerButtonInteraction, {
+      ...createModelsViewSubmitData(),
+      r: "openclaw",
+    });
 
     const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store["agent:worker:subagent:bound"]?.providerOverride).toBeUndefined();
-    expect(store["agent:worker:subagent:bound"]?.modelOverride).toBeUndefined();
+    expect(store["agent:worker:subagent:bound"]).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "codex",
+      modelSelectionLocked: true,
+    });
     expect(
       JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
     ).toContain("❌ Model selection is locked for this session.");

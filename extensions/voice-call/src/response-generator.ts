@@ -290,6 +290,9 @@ export async function generateVoiceResponse(
         const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
 
         let sessionEntry = existingSessionEntry;
+        if (sessionEntry?.modelSelectionLocked === true && voiceConfig.responseModel) {
+          throw new ModelSelectionLockedError();
+        }
         if (!sessionEntry?.sessionId || voiceConfig.responseModel) {
           sessionEntry =
             (await agentRuntime.session.patchSessionEntry({
@@ -327,6 +330,7 @@ export async function generateVoiceResponse(
           };
         }
         const sessionId = sessionEntry.sessionId;
+        const modelSelectionLocked = sessionEntry.modelSelectionLocked === true;
         const persistedRuntimeId = resolvePersistedSessionRuntimeId(sessionEntry);
 
         // Resolve thinking level
@@ -378,6 +382,7 @@ export async function generateVoiceResponse(
           prompt: userMessage,
           provider,
           model,
+          modelSelectionLocked,
           ...(persistedRuntimeId
             ? {
                 agentHarnessId: persistedRuntimeId,

@@ -2242,7 +2242,16 @@ describe("ci workflow guards", () => {
     expect(workflow).toContain(
       'codex_transport="extensions/codex/src/app-server/transport-websocket.ts"',
     );
-    expect(workflow).toContain('grep -Fv "$codex_transport: " "$added_lines"');
+    expect(workflow).toContain(
+      '| select(.filename != "extensions/codex/src/app-server/transport-websocket.ts")',
+    );
+    expect(workflow).not.toContain('grep -Fv "$codex_transport: " "$added_lines"');
+    // Raw-socket exclusions are filename-structural. A monitored package line may
+    // contain the transport path as data without disappearing from the scan.
+    expect(workflow).toContain("packages/net-policy/src/");
+    expect(workflow).toContain(
+      "grep -En 'HTTP_PROXY|HTTPS_PROXY|NO_PROXY|GLOBAL_AGENT_|OPENCLAW_PROXY_' \"$added_lines\"",
+    );
     expect(workflow).toContain('echo "full_codeql=true" >> "$GITHUB_OUTPUT"');
     expect(workflow).toContain(
       "if: ${{ github.event_name != 'pull_request' || steps.network-diff-scan.outputs.full_codeql == 'true' }}",

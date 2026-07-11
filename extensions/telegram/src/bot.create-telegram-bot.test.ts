@@ -6051,7 +6051,7 @@ describe("createTelegramBot", () => {
           updatedAt: Date.now(),
           modelSelectionLocked: true,
         };
-        params.update(entry);
+        params.update(entry, { existingEntry: entry });
         return entry;
       });
     const ctx = {
