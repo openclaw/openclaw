@@ -712,9 +712,7 @@ describe("CLI attempt execution", () => {
       string,
       SessionEntry
     >;
-    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
-      cliSessionId,
-    );
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(cliSessionId);
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(cliSessionId);
     expect(persisted[sessionKey]?.claudeCliSessionId).toBe(cliSessionId);
   });
