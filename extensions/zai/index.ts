@@ -345,6 +345,17 @@ export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Z.AI Provider",
   description: "Bundled Z.AI provider plugin",
+  classifyFailoverReason: ({ errorMessage, code }) => {
+    // z.ai code 1305 can indicate overload, rate-limit, or possible
+    // content-based rejection from the Coding Plan endpoint.
+    // Explicitly classify as "overloaded" before the generic classifier
+    // runs, so the ZAI_CODE_1305_RE check in formatRateLimitOrOverloadedErrorCopy
+    // can surface a more specific diagnostic for this known payload.
+    if (code === "1305" || /"code"\s*:\s*"?"?1305"?\b/.test(errorMessage)) {
+      return "overloaded";
+    }
+    return undefined;
+  },
   register(api) {
     api.registerProvider({
       id: PROVIDER_ID,

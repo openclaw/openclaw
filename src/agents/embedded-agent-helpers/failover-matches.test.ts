@@ -223,7 +223,7 @@ describe("z.ai code 1305 — overload vs content rejection (#98101, #103529)", (
     // while still preserving the "overloaded" diagnosis for the user.
     const result = formatRateLimitOrOverloadedErrorCopy(message);
     expect(result).toContain("1305");
-    expect(result).toContain("provider filter");
+    expect(result).toContain("content restriction");
     expect(result).not.toBe(
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
@@ -245,7 +245,7 @@ it("matches canonical z.ai payload with quoted code value (#103529)", () => {
     '{"error":{"code":"1305","message":"The service may be temporarily overloaded, please try again later."}}';
   const result = formatRateLimitOrOverloadedErrorCopy(canonMessage);
   expect(result).toContain("1305");
-  expect(result).toContain("provider filter");
+  expect(result).toContain("content restriction");
   expect(result).not.toBe(
     "The AI service is temporarily overloaded. Please try again in a moment.",
   );
