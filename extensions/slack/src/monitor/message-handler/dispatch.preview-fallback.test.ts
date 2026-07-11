@@ -10,6 +10,7 @@ const deliverRepliesMock = vi.fn(
   async () => undefined as { messageId?: string; channelId?: string } | undefined,
 );
 const finalizeSlackPreviewEditMock = vi.fn(async () => {});
+const normalizeSlackOutboundTextMock = vi.fn((value: string) => value.trim());
 const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const chatUpdateMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const recordInboundSessionMock = vi.fn(async () => undefined);
@@ -844,7 +845,7 @@ vi.mock("../../draft-stream.js", () => ({
 
 vi.mock("../../format.js", () => ({
   markdownToSlackMrkdwnChunks: (value: string) => [value],
-  normalizeSlackOutboundText: (value: string) => value.trim(),
+  normalizeSlackOutboundText: normalizeSlackOutboundTextMock,
 }));
 
 vi.mock("../../limits.js", () => ({
@@ -1246,6 +1247,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReset();
     deliverRepliesMock.mockReset();
     finalizeSlackPreviewEditMock.mockReset();
+    normalizeSlackOutboundTextMock.mockClear();
     postMessageMock.mockClear();
     chatUpdateMock.mockClear();
     recordInboundSessionMock.mockReset();
@@ -1660,7 +1662,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
-  it("finalizes native chart blocks with accessible preview text", async () => {
+  it("finalizes native chart blocks without re-escaping accessible preview text", async () => {
     const draftStream = {
       ...createDraftStreamStub(),
       flush: vi.fn(noopAsync),
@@ -1668,7 +1670,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       discardPending: vi.fn(noopAsync),
       seal: vi.fn(noopAsync),
     };
-    const accessibleText = "Quarterly results\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18";
+    const accessibleText =
+      "Quarterly results\n\nRevenue (bar chart)\n- &lt;@U123&gt;: Q1: 12; Q2: 18";
     mockedSlackReplyBlocks = [
       {
         type: "section",
@@ -1681,7 +1684,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           type: "bar",
           series: [
             {
-              name: "USD",
+              name: "<@U123>",
               data: [
                 { label: "Q1", value: 12 },
                 { label: "Q2", value: 18 },
@@ -1706,7 +1709,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
                 chartType: "bar",
                 title: "Revenue",
                 categories: ["Q1", "Q2"],
-                series: [{ name: "USD", values: [12, 18] }],
+                series: [{ name: "<@U123>", values: [12, 18] }],
               },
             ],
           },
@@ -1723,6 +1726,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       blocks: mockedSlackReplyBlocks,
       threadTs: THREAD_TS,
     });
+    expect(normalizeSlackOutboundTextMock).not.toHaveBeenCalled();
     expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "chart preview message_sent", {
       content: accessibleText,
       success: true,
@@ -1730,6 +1734,47 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
     expect(deliverRepliesMock).not.toHaveBeenCalled();
     expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("normalizes only authored preview text when blocks own their fallback", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          text: "**Summary**",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  {
+                    label: "Owner <@U123>",
+                    action: { type: "callback", value: "owner" },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(normalizeSlackOutboundTextMock).toHaveBeenCalledTimes(1);
+    expect(normalizeSlackOutboundTextMock).toHaveBeenCalledWith("**Summary**");
+    expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "block preview edit params", {
+      text: "**Summary**",
+    });
   });
 
   it("delivers split table fallbacks normally instead of hiding them in a preview edit", async () => {
@@ -3712,7 +3757,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           type: "bar",
           series: [
             {
-              name: "USD",
+              name: "<@U123>",
               data: [
                 { label: "Q1", value: 12 },
                 { label: "Q2", value: 18 },
@@ -3740,7 +3785,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
                 chartType: "bar",
                 title: "Revenue",
                 categories: ["Q1", "Q2"],
-                series: [{ name: "USD", values: [12, 18] }],
+                series: [{ name: "<@U123>", values: [12, 18] }],
               },
             ],
           },
@@ -3751,9 +3796,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
     expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "chart TTS preview edit params", {
-      text: "Spoken answer\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18",
+      text: "Spoken answer\n\nRevenue (bar chart)\n- &lt;@U123&gt;: Q1: 12; Q2: 18",
       blocks: mockedSlackReplyBlocks,
     });
+    expect(normalizeSlackOutboundTextMock).not.toHaveBeenCalled();
 
     const delivered = requireRecord(
       requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
@@ -3773,7 +3819,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
               chartType: "bar",
               title: "Revenue",
               categories: ["Q1", "Q2"],
-              series: [{ name: "USD", values: [12, 18] }],
+              series: [{ name: "<@U123>", values: [12, 18] }],
             },
           ],
         },

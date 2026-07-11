@@ -1273,10 +1273,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
     const reply = resolveSendableOutboundReplyParts(payload);
     const ttsSupplement = getReplyPayloadTtsSupplement(payload);
-    const replyRenderPlan = resolveSlackReplyRenderPlan(
-      payload,
-      payload.text ?? ttsSupplement?.spokenText,
-    );
+    const replySourceText = payload.text ?? ttsSupplement?.spokenText;
+    const replyRenderPlan = resolveSlackReplyRenderPlan(payload, replySourceText);
     const plannedBlocks =
       replyRenderPlan.mode === "single"
         ? replyRenderPlan.blocks
@@ -1287,6 +1285,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyRenderPlan.mode === "single"
         ? replyRenderPlan.text.trim()
         : replyRenderPlan.fallbackText.trim();
+    const previewFinalText =
+      replyRenderPlan.mode === "single" && replyRenderPlan.textIsSlackMrkdwn
+        ? trimmedFinalText
+        : normalizeSlackOutboundText((replySourceText ?? "").trim());
     const shouldRestoreTtsSupplementTextForPreviewFallback =
       Boolean(ttsSupplement) &&
       ttsSupplement?.visibleTextAlreadyDelivered !== true &&
@@ -1320,7 +1322,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             accountId: account.accountId,
             channelId,
             messageId,
-            text: normalizeSlackOutboundText(trimmedFinalText),
+            text: previewFinalText,
             ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
             threadTs: finalThreadTs,
           });
@@ -1394,7 +1396,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             return undefined;
           }
           return {
-            text: normalizeSlackOutboundText(trimmedFinalText),
+            text: previewFinalText,
             blocks: slackBlocks,
             threadTs: usedReplyThreadTs ?? statusThreadTs,
           };
