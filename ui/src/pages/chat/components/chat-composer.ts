@@ -20,7 +20,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import type { ChatSideResult } from "../../../lib/chat/side-result.ts";
+import type { ChatSideResult, ChatSideResultPending } from "../../../lib/chat/side-result.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
 import {
@@ -92,6 +92,7 @@ type ChatComposerProps = {
   messages: unknown[];
   stream: string | null;
   sideResult?: ChatSideResult | null;
+  sideResultPending?: ChatSideResultPending | null;
   queue: ChatQueueItem[];
   draft: string;
   sessions: SessionsListResult | null;
@@ -1029,10 +1030,41 @@ export function renderChatQueue(props: ChatQueueProps) {
 
 export function renderSideResult(
   sideResult: ChatSideResult | null | undefined,
+  pending?: ChatSideResultPending | null,
   onDismiss?: () => void,
 ): TemplateResult | typeof nothing {
   if (!sideResult) {
-    return nothing;
+    // A fresh side result always supersedes the pending placeholder; the
+    // pending card only bridges the gap until chat.side_result arrives.
+    if (!pending) {
+      return nothing;
+    }
+    return html`
+      <section
+        class="chat-side-result chat-side-result--pending"
+        role="status"
+        aria-live="polite"
+        aria-label="BTW side question pending"
+      >
+        <div class="chat-side-result__header">
+          <div class="chat-side-result__label-row">
+            <span class="chat-side-result__label">BTW</span>
+            <span class="chat-side-result__meta">Thinking…</span>
+          </div>
+          <openclaw-tooltip content="Dismiss">
+            <button
+              class="btn chat-side-result__dismiss"
+              type="button"
+              aria-label="Dismiss BTW question"
+              @click=${() => onDismiss?.()}
+            >
+              ${icons.x}
+            </button>
+          </openclaw-tooltip>
+        </div>
+        <div class="chat-side-result__question">${pending.question}</div>
+      </section>
+    `;
   }
   return html`
     <section
@@ -1107,13 +1139,16 @@ function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
   return registerChatAttachmentPayload({ attachment, dataUrl, file });
 }
 
-function dataImageClipboardFile(dataUrl: string): { file: File; dataUrl: string } | null {
+function dataImageClipboardFile(
+  dataUrl: string,
+  baseName = "pasted-image",
+): { file: File; dataUrl: string } | null {
   const match = /^\s*data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)\s*$/i.exec(dataUrl);
   if (!match) {
     return null;
   }
   const mimeType = match[1].toLowerCase();
-  if (!isSupportedChatAttachmentFile({ name: "pasted-image", type: mimeType })) {
+  if (!isSupportedChatAttachmentFile({ name: baseName, type: mimeType })) {
     return null;
   }
   const base64 = match[2].replace(/\s+/g, "");
@@ -1125,12 +1160,22 @@ function dataImageClipboardFile(dataUrl: string): { file: File; dataUrl: string 
     }
     const extension = mimeType.split("/")[1]?.replace(/[^a-z0-9.+-]/gi, "") || "png";
     return {
-      file: new File([bytes], `pasted-image.${extension}`, { type: mimeType }),
+      file: new File([bytes], `${baseName}.${extension}`, { type: mimeType }),
       dataUrl: `data:${mimeType};base64,${base64}`,
     };
   } catch {
     return null;
   }
+}
+
+/** Builds a registered chat attachment from a base64 image data URL (e.g. a browser-panel annotation). */
+export function chatAttachmentFromDataUrl(
+  dataUrl: string,
+  fileName: string,
+): ChatAttachment | null {
+  const baseName = fileName.replace(/\.[a-z0-9]+$/i, "") || "image";
+  const parsed = dataImageClipboardFile(dataUrl, baseName);
+  return parsed ? chatAttachmentFromFile(parsed.file, parsed.dataUrl) : null;
 }
 
 function isImageAttachment(att: ChatAttachment): boolean {
@@ -2397,7 +2442,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
       onQueueRemove: props.onQueueRemove,
     })}
-    ${renderSideResult(props.sideResult, props.onDismissSideResult)}
+    ${renderSideResult(props.sideResult, props.sideResultPending, props.onDismissSideResult)}
     ${props.showNewMessages
       ? html`
           <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>

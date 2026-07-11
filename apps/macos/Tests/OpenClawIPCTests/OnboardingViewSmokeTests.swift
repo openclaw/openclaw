@@ -115,6 +115,7 @@ struct OnboardingViewSmokeTests {
             isLocal: true,
             visible: true,
             statusKnown: false,
+            executableReady: false,
             installed: false,
             installing: false))
         #expect(OnboardingView.shouldAutoInstallCLI(
@@ -122,6 +123,7 @@ struct OnboardingViewSmokeTests {
             isLocal: true,
             visible: true,
             statusKnown: true,
+            executableReady: false,
             installed: false,
             installing: false))
         #expect(!OnboardingView.shouldAutoInstallCLI(
@@ -129,8 +131,32 @@ struct OnboardingViewSmokeTests {
             isLocal: true,
             visible: false,
             statusKnown: true,
+            executableReady: false,
             installed: false,
             installing: false))
+        #expect(!OnboardingView.shouldAutoInstallCLI(
+            onCLIPage: true,
+            isLocal: true,
+            visible: true,
+            statusKnown: true,
+            executableReady: true,
+            installed: false,
+            installing: false))
+    }
+
+    @Test func `detected CLI starts its gateway after this Mac is selected`() {
+        #expect(!OnboardingView.shouldStartExistingCLIActivation(
+            isLocal: false,
+            executableReady: true,
+            installing: false))
+        #expect(OnboardingView.shouldStartExistingCLIActivation(
+            isLocal: true,
+            executableReady: true,
+            installing: false))
+        #expect(!OnboardingView.shouldStartExistingCLIActivation(
+            isLocal: true,
+            executableReady: true,
+            installing: true))
     }
 
     @Test func `connection mode change restarts full page monitoring`() {

@@ -355,6 +355,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}",
       OPENCLAW_CI_RUN_SKILLS_PYTHON:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}",
+      OPENCLAW_CI_RUN_UI_TESTS:
+        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}",
       OPENCLAW_CI_RUN_WINDOWS:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}",
     });
@@ -498,6 +500,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         include_release_path_suites: false,
         include_repo_e2e: false,
         live_models_only: false,
+        allow_unreleased_changelog: true,
         ref: "${{ needs.preflight.outputs.checkout_revision }}",
         shared_image_artifact_namespace: "plugin-prerelease",
         shared_image_policy: "no-push-artifact",

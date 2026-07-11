@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 struct ExecApprovalEvaluation {
     let displayCommand: String
@@ -71,7 +72,7 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
         self.allowlistRules = Set(allowlist.map { entry in
             AllowlistRule(
                 match: ExecApprovalsStore.allowlistEntryMatchKey(entry),
-                source: entry.source)
+                source: entry.source == "allow-always" ? "allow-always" : nil)
         })
     }
 
@@ -82,6 +83,43 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
             askFallback: approvals.agent.askFallback,
             autoAllowSkills: approvals.agent.autoAllowSkills,
             allowlist: approvals.allowlist)
+    }
+
+    init(portable: OpenClawSystemRunApprovalPolicySnapshot) {
+        self.init(
+            security: ExecSecurity(rawValue: portable.security.rawValue)!,
+            ask: ExecAsk(rawValue: portable.ask.rawValue)!,
+            askFallback: ExecSecurity(rawValue: portable.askFallback.rawValue)!,
+            autoAllowSkills: portable.autoAllowSkills,
+            allowlist: portable.allowlistRules.map { rule in
+                ExecAllowlistEntry(
+                    pattern: rule.pattern,
+                    source: rule.source?.rawValue,
+                    argPattern: rule.argPattern)
+            })
+    }
+
+    var portable: OpenClawSystemRunApprovalPolicySnapshot {
+        OpenClawSystemRunApprovalPolicySnapshot(
+            security: .init(rawValue: self.security.rawValue)!,
+            ask: .init(rawValue: self.ask.rawValue)!,
+            askFallback: .init(rawValue: self.askFallback.rawValue)!,
+            autoAllowSkills: self.autoAllowSkills,
+            allowlistRules: self.allowlistRules.map { rule in
+                OpenClawSystemRunApprovalPolicySnapshot.Rule(
+                    pattern: Self.portableString(rule.match.pattern),
+                    argPattern: rule.match.argPattern.isEmpty
+                        ? nil
+                        : Self.portableString(rule.match.argPattern),
+                    source: rule.source == "allow-always" ? .allowAlways : nil)
+            })
+    }
+
+    private static func portableString(_ data: Data) -> String {
+        guard let value = String(data: data, encoding: .utf8) else {
+            preconditionFailure("exec approval match keys must contain UTF-8 strings")
+        }
+        return value
     }
 
     func isCurrent(_ current: Self) -> Bool {
@@ -126,7 +164,8 @@ struct ExecApprovalExecutionCommit: Sendable {
         effectiveSecurity: ExecSecurity,
         approvalSource: ExecApprovalRequestSource?,
         explicitlyApproved: Bool,
-        persistAllowlist: Bool) -> ExecApprovalExecutionCommit
+        persistAllowlist: Bool,
+        delayedPolicySnapshot: ExecApprovalPolicySnapshot? = nil) -> ExecApprovalExecutionCommit
     {
         let uses = effectiveSecurity == .allowlist &&
             context.authorizationBasis == .allowlistEntries
@@ -134,23 +173,24 @@ struct ExecApprovalExecutionCommit: Sendable {
             : []
         let grants = persistAllowlist ? self.allowAlwaysGrants(context: context) : []
         let basis = effectiveSecurity == .allowlist ? context.authorizationBasis : nil
-        // The socket and native runtime both cross an asynchronous approval
-        // boundary. Carry the evaluated policy into their shared commit path.
+        // Forwarded decisions were evaluated before the Mac rebuilt its context.
+        // Local prompt decisions have no override and bind to this evaluation.
+        let policySnapshot = delayedPolicySnapshot ?? context.policySnapshot
         let authorization: ExecApprovalAuthorization = if approvalSource == .askFallback {
             .askFallback(evaluatedSecurity: effectiveSecurity, basis: basis)
         } else if approvalSource == .autoReview {
             .autoReview(
                 evaluatedSecurity: effectiveSecurity,
-                policySnapshot: context.policySnapshot)
+                policySnapshot: policySnapshot)
         } else if explicitlyApproved {
             if grants.isEmpty {
                 .explicitOnce(
                     evaluatedSecurity: effectiveSecurity,
-                    policySnapshot: context.policySnapshot)
+                    policySnapshot: policySnapshot)
             } else {
                 .explicitAlways(
                     evaluatedSecurity: effectiveSecurity,
-                    policySnapshot: context.policySnapshot,
+                    policySnapshot: policySnapshot,
                     grants: grants)
             }
         } else {
