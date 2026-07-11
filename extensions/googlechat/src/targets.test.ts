@@ -337,6 +337,44 @@ describe("downloadGoogleChatMedia", () => {
     await expectDownloadToRejectForResponse(response);
   });
 
+  it("retries rate-limited media downloads with bounded backoff", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("quota", { status: 429 }))
+      .mockResolvedValueOnce(new Response("quota", { status: 429 }))
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const download = downloadGoogleChatMedia({
+      account,
+      resourceName: "media/123",
+      maxBytes: 10,
+    });
+    await vi.runAllTimersAsync();
+
+    await expect(download).resolves.toEqual({
+      buffer: Buffer.from([1, 2, 3]),
+      contentType: "image/png",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not retry non-rate-limit media failures", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("forbidden", { status: 403 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
+    ).rejects.toThrow("Google Chat API 403: forbidden");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("cancels a media body that stops producing chunks", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(createStalledResponse()));

@@ -1,5 +1,6 @@
 // Googlechat plugin module implements monitor behavior.
 import {
+  formatInboundMediaUnavailableText,
   recordChannelBotPairLoopAndCheckSuppression,
   type ChannelBotLoopProtectionFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -31,6 +32,11 @@ import { warnAppPrincipalMisconfiguration } from "./monitor-webhook.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import { isGoogleChatGroupSpace } from "./targets.js";
 import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
+
+// Google Chat accepts at most 20 images or videos in one message. Apply the
+// same bound to every inbound attachment type so one event cannot fan out work.
+const MAX_INBOUND_ATTACHMENTS = 20;
+const INBOUND_MEDIA_PLACEHOLDER = "<media:attachment>";
 
 setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
 
@@ -210,7 +216,8 @@ async function processMessageWithPipeline(params: {
   const messageText = (message.argumentText ?? message.text ?? "").trim();
   const attachments = message.attachment ?? [];
   const hasMedia = attachments.length > 0;
-  const rawBody = messageText || (hasMedia ? "<media:attachment>" : "");
+  const mediaPlaceholder = !messageText && hasMedia ? INBOUND_MEDIA_PLACEHOLDER : undefined;
+  const rawBody = messageText || mediaPlaceholder || "";
   if (!rawBody) {
     return;
   }
@@ -264,16 +271,45 @@ async function processMessageWithPipeline(params: {
     sessionStore: config.session?.store,
   });
 
-  let mediaPath: string | undefined;
-  let mediaType: string | undefined;
-  if (attachments.length > 0) {
-    const first = attachments[0];
-    const attachmentData = await downloadAttachment(first, account, mediaMaxMb, core);
-    if (attachmentData) {
-      mediaPath = attachmentData.path;
-      mediaType = attachmentData.contentType;
+  const media: Array<{ path: string; url: string; contentType?: string }> = [];
+  const attachmentBatch = attachments.slice(0, MAX_INBOUND_ATTACHMENTS);
+  let unavailableAttachmentCount = attachments.length - attachmentBatch.length;
+  for (const attachment of attachmentBatch) {
+    const resourceName = attachment.attachmentDataRef?.resourceName;
+    if (!resourceName) {
+      unavailableAttachmentCount += 1;
+      continue;
+    }
+    try {
+      const attachmentData = await downloadAttachment(
+        attachment,
+        resourceName,
+        account,
+        mediaMaxMb,
+        core,
+      );
+      media.push({
+        path: attachmentData.path,
+        url: attachmentData.path,
+        contentType: attachmentData.contentType,
+      });
+    } catch (err) {
+      unavailableAttachmentCount += 1;
+      runtime.error?.(
+        `[${account.accountId}] Google Chat attachment processing failed: ${String(err)}`,
+      );
     }
   }
+  const unavailableLabel =
+    unavailableAttachmentCount === 1 ? "attachment" : `${unavailableAttachmentCount} attachments`;
+  const agentBody =
+    unavailableAttachmentCount > 0
+      ? formatInboundMediaUnavailableText({
+          body: rawBody,
+          mediaPlaceholder: media.length === 0 ? mediaPlaceholder : undefined,
+          notice: `[googlechat ${unavailableLabel} unavailable]`,
+        })
+      : rawBody;
 
   const fromLabel = isGroup
     ? space.displayName || `space:${spaceId}`
@@ -283,7 +319,7 @@ async function processMessageWithPipeline(params: {
     channel: "Google Chat",
     from: fromLabel,
     timestamp: timestampMs,
-    body: rawBody,
+    body: agentBody,
   });
 
   const replyThreadName = isGroup ? message.thread?.name : undefined;
@@ -318,20 +354,11 @@ async function processMessageWithPipeline(params: {
     },
     message: {
       body,
-      bodyForAgent: rawBody,
+      bodyForAgent: agentBody,
       rawBody,
       commandBody: rawBody,
     },
-    media:
-      mediaPath || mediaType
-        ? [
-            {
-              path: mediaPath,
-              url: mediaPath,
-              contentType: mediaType,
-            },
-          ]
-        : undefined,
+    media: media.length > 0 ? media : undefined,
     supplemental: {
       groupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
     },
@@ -391,7 +418,7 @@ async function processMessageWithPipeline(params: {
         id: message.name ?? spaceId,
         timestamp: timestampMs,
         rawText: rawBody,
-        textForAgent: rawBody,
+        textForAgent: agentBody,
         textForCommands: rawBody,
         raw: message,
       }),
@@ -457,14 +484,11 @@ export const testing = {
 
 async function downloadAttachment(
   attachment: GoogleChatAttachment,
+  resourceName: string,
   account: ResolvedGoogleChatAccount,
   mediaMaxMb: number,
   core: GoogleChatCoreRuntime,
-): Promise<{ path: string; contentType?: string } | null> {
-  const resourceName = attachment.attachmentDataRef?.resourceName;
-  if (!resourceName) {
-    return null;
-  }
+): Promise<{ path: string; contentType?: string }> {
   const maxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const downloaded = await downloadGoogleChatMedia({ account, resourceName, maxBytes });
   const saved = await core.channel.media.saveMediaBuffer(

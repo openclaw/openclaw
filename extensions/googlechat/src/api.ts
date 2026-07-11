@@ -5,6 +5,7 @@ import {
   readResponseTextSnippet,
 } from "openclaw/plugin-sdk/media-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { shouldSuppressGoogleChatManualExecApprovalFollowupText } from "./approval-card-actions.js";
@@ -19,6 +20,24 @@ const GOOGLECHAT_MEDIA_MAX_TIMEOUT_MS = 15 * 60_000;
 const GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS = 30_000;
 const GOOGLECHAT_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const GOOGLECHAT_ERROR_BODY_MAX_BYTES = 16 * 1024;
+// media.download is idempotent. Retry only Google's explicit quota response,
+// while bounding webhook-to-agent latency when the space remains saturated.
+const GOOGLECHAT_MEDIA_RETRY = {
+  attempts: 3,
+  minDelayMs: 1_000,
+  maxDelayMs: 4_000,
+  jitter: 0.2,
+} as const;
+
+class GoogleChatApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "GoogleChatApiError";
+    this.status = status;
+  }
+}
 
 function resolveGoogleChatMediaTimeoutMs(maxBytes?: number): number {
   if (!maxBytes) {
@@ -95,7 +114,10 @@ async function withGoogleChatResponse<T>(params: {
   try {
     if (!response.ok) {
       const text = await readGoogleChatErrorResponse(response, errorPrefix);
-      throw new Error(`${errorPrefix} ${response.status}: ${text || response.statusText}`);
+      throw new GoogleChatApiError(
+        `${errorPrefix} ${response.status}: ${text || response.statusText}`,
+        response.status,
+      );
     }
     return await handleResponse(response);
   } finally {
@@ -258,7 +280,11 @@ export async function downloadGoogleChatMedia(params: {
 }): Promise<{ buffer: Buffer; contentType?: string }> {
   const { account, resourceName, maxBytes } = params;
   const url = `${CHAT_API_BASE}/media/${resourceName}?alt=media`;
-  return await fetchBuffer(account, url, undefined, { maxBytes });
+  return await retryAsync(() => fetchBuffer(account, url, undefined, { maxBytes }), {
+    ...GOOGLECHAT_MEDIA_RETRY,
+    label: "googlechat media download",
+    shouldRetry: (error) => error instanceof GoogleChatApiError && error.status === 429,
+  });
 }
 
 export async function findGoogleChatDirectMessage(params: {

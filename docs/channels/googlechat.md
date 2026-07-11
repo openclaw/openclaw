@@ -196,7 +196,7 @@ Notes:
 - Native approval cards use Google Chat `cardsV2` button clicks, not reaction events. Approvers come from `dm.allowFrom` or `defaultTo` and must be stable numeric `users/<id>` values.
 - Message actions expose text `send` only. Google Chat attachment upload requires user authentication, while this plugin uses service-account authentication, so outbound file upload is not exposed.
 - `typingIndicator`: `message` (default) posts a `_<Bot> is typing..._` placeholder and edits it into the first reply; `none` disables it; `reaction` requires user OAuth and currently falls back to `message` with a logged error under service-account auth.
-- Inbound attachments (first attachment per message) are downloaded through the Chat API into the media pipeline, capped by `mediaMaxMb` (default 20).
+- Inbound uploaded-content attachments are downloaded through the Chat API in message order. OpenClaw attempts the first 20 attachments per message, retries rate-limited downloads with bounded backoff, caps each file by `mediaMaxMb` (default 20), and adds an unavailable marker to agent context for failed, unsupported (including Drive-backed), or excess attachments.
 - Bot-authored messages are ignored by default. With `allowBots: true`, accepted bot messages use shared [bot loop protection](/channels/bot-loop-protection): configure `channels.defaults.botLoopProtection`, then override with `channels.googlechat.botLoopProtection` or `channels.googlechat.groups.<space>.botLoopProtection`.
 
 Secrets reference details: [Secrets Management](/gateway/secrets).
