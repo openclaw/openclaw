@@ -92,6 +92,47 @@ describe("fetchPluralKitMessageInfo", () => {
     expect(receivedHeaders?.Authorization).toBe("pk_test");
   });
 
+  it("aborts PluralKit response body reads that exceed the lookup timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+        observedSignal = init?.signal ?? undefined;
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            observedSignal?.addEventListener(
+              "abort",
+              () => controller.error(new DOMException("PluralKit lookup timed out", "AbortError")),
+              { once: true },
+            );
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+
+      const lookupPromise = fetchPluralKitMessageInfo({
+        messageId: "slow-body",
+        config: { enabled: true },
+        fetcher,
+        timeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(observedSignal?.aborted).toBe(false);
+      const lookupRejection = expect(lookupPromise).rejects.toThrow(/timed out|abort/i);
+
+      await vi.advanceTimersByTimeAsync(25);
+      await lookupRejection;
+      expect(observedSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("bounds PluralKit API error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"plural failure ".repeat(1024)}tail`, {
       status: 500,
