@@ -18,7 +18,7 @@ type ManifestSnapshot = {
 type PublicWebSearchProvider = Pick<
   PluginWebSearchProviderEntry,
   "id" | "pluginId" | "requiresCredential"
->;
+> & { envVars?: string[] };
 
 const manifestMocks = vi.hoisted(() => ({
   loadManifestMetadataSnapshot: vi.fn<() => ManifestSnapshot>(() => ({ plugins: [] })),
@@ -715,6 +715,55 @@ describe("hasConfiguredWebSearchCredential", () => {
       hasConfiguredWebSearchCredential({
         config: {} as OpenClawConfig,
         env: { BRAVE_API_KEY: "$BRAVE_API_KEY" },
+        origin: "bundled",
+      }),
+    ).toBe(true);
+  });
+
+  it("scopes manifest env credentials to the selected web-search provider contract", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "google",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["gemini"] },
+          setup: {
+            providers: [
+              { id: "google-vertex", envVars: ["GOOGLE_CLOUD_API_KEY"] },
+              { id: "google", envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"] },
+            ],
+          },
+          providerAuthEnvVars: {},
+        },
+      ],
+    });
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValue(
+      [
+        {
+          id: "gemini",
+          pluginId: "google",
+          requiresCredential: true,
+          envVars: ["GEMINI_API_KEY"],
+        },
+      ],
+    );
+
+    const config = {
+      tools: { web: { search: { provider: "gemini" } } },
+    } as OpenClawConfig;
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config,
+        env: { GOOGLE_CLOUD_API_KEY: "vertex-key" },
+        origin: "bundled",
+      }),
+    ).toBe(false);
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config,
+        env: { GEMINI_API_KEY: "gemini-key" },
         origin: "bundled",
       }),
     ).toBe(true);

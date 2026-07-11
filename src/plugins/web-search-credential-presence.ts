@@ -302,6 +302,44 @@ function hasExplicitKeylessProviderCandidate(params: {
   }
 }
 
+function resolveBundledProviderContractEnvVars(params: {
+  manifestRecords: readonly PluginManifestRecord[];
+  providerId: string | undefined;
+}): readonly string[] | undefined {
+  if (!params.providerId || params.manifestRecords.length === 0) {
+    return undefined;
+  }
+  try {
+    const providers = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+      onlyPluginIds: params.manifestRecords.map((plugin) => plugin.id),
+    });
+    const envVars = providers
+      ?.filter((provider) => provider.id === params.providerId)
+      ?.flatMap((provider) => provider.envVars ?? []);
+    return envVars && envVars.length > 0 ? envVars : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveManifestEnvVarsForProvider(
+  plugin: PluginManifestRecord,
+  providerId: string | undefined,
+): readonly string[] {
+  if (!providerId) {
+    return [
+      ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
+      ...Object.values(plugin.providerAuthEnvVars ?? {}).flat(),
+    ];
+  }
+  return [
+    ...(plugin.setup?.providers ?? [])
+      .filter((provider) => provider.id === providerId)
+      .flatMap((provider) => provider.envVars ?? []),
+    ...(plugin.providerAuthEnvVars?.[providerId] ?? []),
+  ];
+}
+
 function hasManifestWebSearchEnvCredentialCandidate(params: {
   manifestRecords: readonly PluginManifestRecord[];
   env?: NodeJS.ProcessEnv;
@@ -310,6 +348,18 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
   const env = params.env;
   if (!env) {
     return false;
+  }
+  if (!Object.values(env).some(hasConfiguredLiteralCredentialValue)) {
+    return false;
+  }
+  const providerContractEnvVars = resolveBundledProviderContractEnvVars({
+    manifestRecords: params.manifestRecords,
+    providerId: params.providerId,
+  });
+  if (providerContractEnvVars) {
+    return providerContractEnvVars.some((envVar) =>
+      hasConfiguredLiteralCredentialValue(env[envVar]),
+    );
   }
   return params.manifestRecords.some((plugin) => {
     if (
@@ -321,10 +371,7 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
     if ((plugin.contracts?.webSearchProviders?.length ?? 0) === 0) {
       return false;
     }
-    const envVars = [
-      ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
-      ...Object.values(plugin.providerAuthEnvVars ?? {}).flat(),
-    ];
+    const envVars = resolveManifestEnvVarsForProvider(plugin, params.providerId);
     return envVars.some((envVar) => hasConfiguredLiteralCredentialValue(env[envVar]));
   });
 }
