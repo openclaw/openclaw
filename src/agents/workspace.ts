@@ -1104,16 +1104,106 @@ function globPrefixCanDescend(dirSegments: string[], patternSegments: string[]):
   return match(0, 0);
 }
 
+// A path segment is "literal" for symlink-descent purposes when its aligned
+// pattern segment carries no glob metacharacters. Index alignment only holds
+// while no earlier `**` is present, because `**` matches a variable number of
+// segments; once a `**` precedes the depth, the symlink was reached through a
+// wildcard and must stay terminal — fs.glob never follows a wildcard-reached
+// symlink even when a later literal segment names it (`**/wl/AGENTS.md` yields
+// nothing for a `wl` symlink).
+function patternSegmentIsLiteralAtDepth(depth: number, patternSegments: string[]): boolean {
+  if (depth < 0 || depth >= patternSegments.length) {
+    return false;
+  }
+  for (let index = 0; index < depth; index += 1) {
+    if (patternSegments[index] === "**") {
+      return false;
+    }
+  }
+  return !hasGlobPattern(patternSegments[depth]);
+}
+
+// Ancestor chain node for the active descent path. Only symlinks can create
+// cycles, so we carry each directory's canonical realpath forward to refuse
+// re-entering a directory already on the path (`a/loop -> a`).
+type WalkFrame = { relativeDir: string; realpath: string; parent: WalkFrame | null };
+
+// Decide whether a literal-named directory symlink should be descended, mirroring
+// fs.glob which follows literal-named directory symlinks. Returns a child frame
+// when the link resolves to a directory that stays inside the workspace and is
+// not already an ancestor on the current path; otherwise null so the caller
+// keeps the symlink as a terminal leaf candidate.
+async function resolveSymlinkDescent(
+  workspaceDir: string,
+  workspaceRealpath: string,
+  childRelativePath: string,
+  parent: WalkFrame,
+): Promise<WalkFrame | null> {
+  const childAbs = path.resolve(workspaceDir, childRelativePath);
+  let stat: syncFs.Stats;
+  try {
+    // fs.stat follows the link; only directory targets are descended.
+    stat = await fs.stat(childAbs);
+  } catch {
+    return null;
+  }
+  if (!stat.isDirectory()) {
+    return null;
+  }
+  let targetRealpath: string;
+  try {
+    targetRealpath = await fs.realpath(childAbs);
+  } catch {
+    return null;
+  }
+  // Containment: the canonical target must stay within the workspace root, or the
+  // walk would escape the workspace via the link.
+  const relToRoot = path.relative(workspaceRealpath, targetRealpath);
+  if (relToRoot.startsWith("..") || path.isAbsolute(relToRoot)) {
+    return null;
+  }
+  // Cycle guard: refuse to re-enter a directory already on the descent path so an
+  // ancestor-pointing symlink cannot loop. This diverges from fs.glob (which
+  // follows such a link once) to guarantee termination.
+  for (let frame: WalkFrame | null = parent; frame; frame = frame.parent) {
+    if (frame.realpath === targetRealpath) {
+      return null;
+    }
+  }
+  return { relativeDir: childRelativePath, realpath: targetRealpath, parent };
+}
+
 async function* walkWorkspaceFiles(
   workspaceDir: string,
   initialRelativeDir: string,
   normalizedPattern: string,
 ): AsyncGenerator<string> {
   const patternSegments = normalizedPattern.split("/");
-  const stack = [initialRelativeDir === "." ? "" : initialRelativeDir];
+  // Canonical workspace root bounds symlink descent (see resolveSymlinkDescent).
+  let workspaceRealpath: string;
+  try {
+    workspaceRealpath = await fs.realpath(workspaceDir);
+  } catch {
+    workspaceRealpath = path.resolve(workspaceDir);
+  }
+  const rootRelativeDir = initialRelativeDir === "." ? "" : initialRelativeDir;
+  const rootAbs = path.resolve(workspaceDir, rootRelativeDir);
+  let rootRealpath: string;
+  try {
+    rootRealpath = await fs.realpath(rootAbs);
+  } catch {
+    rootRealpath = rootAbs;
+  }
+  const stack: WalkFrame[] = [
+    { relativeDir: rootRelativeDir, realpath: rootRealpath, parent: null },
+  ];
   let visitedEntries = 0;
   while (stack.length > 0) {
-    const currentRelativeDir = stack.pop() ?? "";
+    const frame = stack.pop();
+    if (!frame) {
+      continue;
+    }
+    const currentRelativeDir = frame.relativeDir;
     const currentDir = path.resolve(workspaceDir, currentRelativeDir);
     const relativeToWorkspace = path.relative(workspaceDir, currentDir);
     if (relativeToWorkspace.startsWith("..") || path.isAbsolute(relativeToWorkspace)) {
@@ -1147,10 +1237,35 @@ async function* walkWorkspaceFiles(
         ) {
           continue;
         }
-        stack.push(childRelativePath);
+        // A real subdirectory's canonical path is parent-canonical/name, so the
+        // ancestor chain extends without an extra realpath syscall.
+        stack.push({
+          relativeDir: childRelativePath,
+          realpath: path.join(frame.realpath, entry.name),
+          parent: frame,
+        });
         continue;
       }
-      if (entry.isFile() || entry.isSymbolicLink()) {
+      if (entry.isSymbolicLink()) {
+        // fs.glob descends a directory symlink named literally at its aligned
+        // pattern depth but never one reached through a `*`/`**` wildcard.
+        const childSegments = normalizeWorkspacePatternPath(childRelativePath).split("/");
+        if (patternSegmentIsLiteralAtDepth(childSegments.length - 1, patternSegments)) {
+          const descendFrame = await resolveSymlinkDescent(
+            workspaceDir,
+            workspaceRealpath,
+            childRelativePath,
+            frame,
+          );
+          if (descendFrame) {
+            stack.push(descendFrame);
+            continue;
+          }
+        }
+        yield normalizeWorkspacePatternPath(childRelativePath);
+        continue;
+      }
+      if (entry.isFile()) {
         yield normalizeWorkspacePatternPath(childRelativePath);
       }
     }
