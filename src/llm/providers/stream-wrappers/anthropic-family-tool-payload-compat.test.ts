@@ -13,8 +13,8 @@ const model = {
 
 function runWrapper(payload: Record<string, unknown>, nextModel = model) {
   const payloads: Array<Record<string, unknown>> = [];
-  const baseStreamFn: StreamFn = (nextModel, context, options) => {
-    options?.onPayload?.(payload, nextModel);
+  const baseStreamFn: StreamFn = (streamModel, context, options) => {
+    options?.onPayload?.(payload, streamModel);
     payloads.push(structuredClone(payload));
     return createAssistantMessageEventStream();
   };
