@@ -11,7 +11,6 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import { resolveInternalSessionEffectsTranscriptPath } from "./internal-session-effects.js";
 import { resolveInternalSessionEffectsTarget } from "./internal-session-effects.js";
 import * as announceDelivery from "./subagent-announce-delivery.js";
 import {
@@ -350,9 +349,6 @@ describe("subagent-orphan-recovery", () => {
       },
     };
     vi.mocked(sessions.loadSessionStore).mockReturnValue(store);
-    vi.mocked(sessions.updateSessionStore).mockImplementation(async (_storePath, update) => {
-      update(store);
-    });
     const activeRuns = createActiveRuns(
       createTestRunRecord({
         runId: "fresh-run",
@@ -903,14 +899,14 @@ describe("subagent-orphan-recovery", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(gateway.callGateway).not.toHaveBeenCalled();
-    expect(sessions.updateSessionStore).not.toHaveBeenCalled();
+    expect(sessionAccessor.patchSessionEntry).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
 
     expect(suspension?.release()).toBe(true);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(gateway.callGateway).toHaveBeenCalledOnce();
-    expect(sessions.updateSessionStore).toHaveBeenCalledOnce();
+    expect(sessionAccessor.patchSessionEntry).toHaveBeenCalledOnce();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
