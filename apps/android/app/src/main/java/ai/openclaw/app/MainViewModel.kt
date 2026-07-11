@@ -65,6 +65,7 @@ internal class ChatShareDraftQueue(
 ) {
   private val lock = Any()
   private val drafts = ArrayDeque<ChatShareDraft>()
+  private val headLease = Mutex()
   private val _head = MutableStateFlow<ChatShareDraft?>(null)
   val head: StateFlow<ChatShareDraft?> = _head.asStateFlow()
 
@@ -86,6 +87,17 @@ internal class ChatShareDraftQueue(
       if (drafts.firstOrNull()?.id != id) return@synchronized false
       drafts.removeFirst()
       _head.value = drafts.firstOrNull()
+      true
+    }
+
+  /** Serializes loaders across overlapping Activity instances while rechecking the stable head. */
+  suspend fun withHeadLease(
+    id: Long,
+    block: suspend () -> Unit,
+  ): Boolean =
+    headLease.withLock {
+      if (synchronized(lock) { drafts.firstOrNull()?.id } != id) return@withLock false
+      block()
       true
     }
 
@@ -138,9 +150,9 @@ class MainViewModel(
   private val gatewayConfigOperationSeq = AtomicLong()
   private val gatewayConfigOperationMutex = Mutex()
 
-  // Stable ids distinguish identical shares; the queue stays heap-only and dies with this process.
-  private val chatShareDraftSeq = AtomicLong()
-  private val chatShareDraftQueue = ChatShareDraftQueue()
+  // Multiple MainActivity instances can overlap across sender tasks; the process owns one queue.
+  private val chatShareDraftSeq = nodeApp.chatShareDraftSeq
+  private val chatShareDraftQueue = nodeApp.chatShareDraftQueue
 
   // One bounded heap-only slot follows the ViewModel across Activity recreation.
   // Detail disposal clears it; process death drops it with the ViewModel.
@@ -662,6 +674,11 @@ class MainViewModel(
   fun acknowledgeChatShareDraft(id: Long) {
     chatShareDraftQueue.acknowledgeHead(id)
   }
+
+  suspend fun withChatShareDraftLease(
+    id: Long,
+    block: suspend () -> Unit,
+  ): Boolean = chatShareDraftQueue.withHeadLease(id, block)
 
   fun setChatReplyDraft(value: String) {
     _pendingAssistantAutoSend.value = null

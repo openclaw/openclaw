@@ -3,6 +3,9 @@ package ai.openclaw.app
 import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -122,4 +125,39 @@ class ShareLaunchTest {
     assertEquals(1, queue.size())
     assertEquals(first, queue.head.value)
   }
+
+  @Test
+  fun overlappingActivityLoadersCannotCommitTheSameHead() =
+    runBlocking {
+      val queue = ChatShareDraftQueue(capacity = 2)
+      val first = ChatShareDraft(id = 1, text = "first", imageUris = emptyList(), droppedImageCount = 0)
+      val next = ChatShareDraft(id = 2, text = "second", imageUris = emptyList(), droppedImageCount = 0)
+      queue.enqueue(first)
+      queue.enqueue(next)
+      val entered = CompletableDeferred<Unit>()
+      val release = CompletableDeferred<Unit>()
+
+      val firstLoader =
+        async {
+          queue.withHeadLease(first.id) {
+            entered.complete(Unit)
+            release.await()
+            assertTrue(queue.acknowledgeHead(first.id))
+          }
+        }
+      entered.await()
+      var staleLoaderRan = false
+      val staleLoader =
+        async {
+          queue.withHeadLease(first.id) {
+            staleLoaderRan = true
+          }
+        }
+      release.complete(Unit)
+
+      assertTrue(firstLoader.await())
+      assertFalse(staleLoader.await())
+      assertFalse(staleLoaderRan)
+      assertEquals(next, queue.head.value)
+    }
 }

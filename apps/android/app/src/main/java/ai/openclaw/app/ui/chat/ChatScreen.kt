@@ -29,7 +29,6 @@ import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -263,6 +262,7 @@ fun ChatScreen(
   }
 
   var input by rememberSaveable { mutableStateOf("") }
+  var shareImportNotice by rememberSaveable { mutableStateOf<String?>(null) }
 
   LaunchedEffect(chatDraft) {
     input = mergeChatDraft(chatDraft, input) ?: return@LaunchedEffect
@@ -271,31 +271,36 @@ fun ChatScreen(
 
   LaunchedEffect(chatShareDraft?.id) {
     val share = chatShareDraft ?: return@LaunchedEffect
-    val attachmentSnapshot = attachments.toList()
-    val staged =
-      withContext(Dispatchers.IO) {
-        stageChatShareDraft(share, currentAttachments = attachmentSnapshot) { uri ->
-          loadSizedImageAttachment(resolver, uri)
+    viewModel.withChatShareDraftLease(share.id) {
+      val attachmentSnapshot = attachments.toList()
+      val staged =
+        withContext(Dispatchers.IO) {
+          stageChatShareDraft(share, currentAttachments = attachmentSnapshot) { uri ->
+            loadSizedImageAttachment(resolver, uri)
+          }
         }
+      val merged =
+        mergeStagedChatShare(
+          staged = staged,
+          currentInput = input,
+          currentAttachments = attachments,
+        )
+      if (!canCommitStagedChatShare(stagedId = share.id, currentHead = viewModel.chatShareDraft.value)) {
+        return@withChatShareDraftLease
       }
-    val merged =
-      mergeStagedChatShare(
-        staged = staged,
-        currentInput = input,
-        currentAttachments = attachments,
-      )
-    if (!canCommitStagedChatShare(stagedId = share.id, currentHead = viewModel.chatShareDraft.value)) {
-      return@LaunchedEffect
+      // Keep the head pending through both mutations: Send stays gated until text and images
+      // have been merged together, and disposal before this point leaves the head for retry.
+      input = merged.input
+      attachments.clear()
+      attachments.addAll(merged.attachments)
+      shareImportNotice =
+        if (merged.failedImageCount + merged.droppedImageCount > 0) {
+          "Some shared images were omitted or could not be added."
+        } else {
+          null
+        }
+      viewModel.acknowledgeChatShareDraft(share.id)
     }
-    // Keep the head pending through both mutations: Send stays gated until text and images
-    // have been merged together, and disposal before this point leaves the head for retry.
-    input = merged.input
-    attachments.clear()
-    attachments.addAll(merged.attachments)
-    if (merged.failedImageCount + merged.droppedImageCount > 0) {
-      Toast.makeText(context, "Some shared images were omitted or could not be added.", Toast.LENGTH_SHORT).show()
-    }
-    viewModel.acknowledgeChatShareDraft(share.id)
   }
 
   LaunchedEffect(gatewayConnectionDisplay.isConnected) {
@@ -406,6 +411,8 @@ fun ChatScreen(
       offlineStatus = offlineStatus,
       pendingRunCount = pendingRunCount,
       shareStaging = chatShareDraft != null,
+      shareImportNotice = shareImportNotice,
+      onDismissShareImportNotice = { shareImportNotice = null },
       commands = chatCommands,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
       onOpenModelPicker = { showModelPicker = true },
@@ -434,6 +441,7 @@ fun ChatScreen(
         if (viewModel.chatShareDraft.value != null) return@ChatComposer
         val message = input.trim()
         if (message.isEmpty() && attachments.isEmpty()) return@ChatComposer
+        shareImportNotice = null
         val outgoing = attachments.map(PendingAttachment::toOutgoingAttachment)
         val pendingAttachments = attachments.toList()
         input = ""
@@ -1157,6 +1165,8 @@ private fun ChatComposer(
   offlineStatus: String,
   pendingRunCount: Int,
   shareStaging: Boolean,
+  shareImportNotice: String?,
+  onDismissShareImportNotice: () -> Unit,
   commands: List<ChatCommandEntry>,
   onThinkingLevelChange: (String) -> Unit,
   onOpenModelPicker: () -> Unit,
@@ -1195,6 +1205,23 @@ private fun ChatComposer(
     )
 
   Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    if (shareImportNotice != null) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        Text(
+          text = shareImportNotice,
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.warning,
+          modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onDismissShareImportNotice, modifier = Modifier.size(32.dp)) {
+          Icon(Icons.Default.Close, contentDescription = "Dismiss shared-image warning")
+        }
+      }
+    }
     if (attachments.isNotEmpty()) {
       AttachmentStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
     }
