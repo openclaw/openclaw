@@ -16,6 +16,7 @@ import { CHAT_HISTORY_RENDER_LIMIT } from "../../../lib/chat/chat-types.ts";
 import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import {
   buildCachedChatItems,
   coalesceStreamRuns,
@@ -677,7 +678,11 @@ export function renderChatThread(props: ChatThreadProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   ensureRelativeTimeRefresh(state, requestUpdate);
   const displayStream = props.stream ?? null;
-  const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
+  // Equivalence, not exact match: the default session travels under alias
+  // keys ("main" vs "agent:main:main") depending on the caller.
+  const activeSession = props.sessions?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, props.sessionKey),
+  );
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {

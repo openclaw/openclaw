@@ -727,6 +727,20 @@ describe("direct thread avatar mode", () => {
     ).toBe(false);
   });
 
+  it("matches session metadata across equivalent alias keys", () => {
+    // Default session travels as "main" or "agent:main:main" depending on caller.
+    const aliased = renderChatView({
+      sessionKey: "main",
+      sessions: sessionsListWithKind("agent:main:main", "direct"),
+      messages: labeledHistory,
+    });
+    expect(
+      requireElement(aliased, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
+  });
+
   it("falls back to sender-label history when session metadata is missing", () => {
     const direct = renderChatView({
       sessionKey: "fallback-direct",
