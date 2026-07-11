@@ -9,7 +9,6 @@ enum ShareDraftComposer {
         "text:",
         "shared attachment(s):",
         "please help me with this.",
-        "please help me with this.w",
     ]
 
     static func compose(from payload: SharedContentPayload) -> String {
@@ -35,5 +34,31 @@ enum ShareDraftComposer {
             }
         let cleaned = cleanedLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned.isEmpty ? nil : cleaned
+    }
+}
+
+enum SharePayloadNormalizer {
+    static func distinctAttributedText(_ raw: String?, sharedText: String?, sharedURL: URL?) -> String? {
+        guard let candidate = self.trimmed(raw) else { return nil }
+        let duplicates = [self.trimmed(sharedText), self.trimmed(sharedURL?.absoluteString)].compactMap(\.self)
+        return duplicates.contains(candidate) ? nil : candidate
+    }
+
+    static func webURL(from raw: String) -> URL? {
+        guard let trimmed = self.trimmed(raw) else { return nil }
+        guard let components = URLComponents(string: trimmed),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              components.host?.isEmpty == false
+        else {
+            return nil
+        }
+        return components.url
+    }
+
+    private static func trimmed(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

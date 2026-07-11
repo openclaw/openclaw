@@ -356,6 +356,7 @@ final class ShareViewController: UIViewController {
         var title: String?
         var sharedURL: URL?
         var sharedText: String?
+        var attributedContentText: String?
         var imageCount = 0
         var videoCount = 0
         var fileCount = 0
@@ -365,7 +366,10 @@ final class ShareViewController: UIViewController {
 
         for item in items {
             if title == nil {
-                title = item.attributedTitle?.string ?? item.attributedContentText?.string
+                title = item.attributedTitle?.string
+            }
+            if attributedContentText == nil {
+                attributedContentText = item.attributedContentText?.string
             }
 
             for provider in item.attachments ?? [] {
@@ -399,8 +403,14 @@ final class ShareViewController: UIViewController {
         _ = fileCount
         _ = unknownCount
 
+        // Share hosts often mirror provider text in attributedContentText.
+        // Preserve distinct content as the historical title, but do not duplicate provider data.
+        let supplementalTitle = SharePayloadNormalizer.distinctAttributedText(
+            attributedContentText,
+            sharedText: sharedText,
+            sharedURL: sharedURL)
         return ExtractedShareContent(
-            payload: SharedContentPayload(title: title, url: sharedURL, text: sharedText),
+            payload: SharedContentPayload(title: title ?? supplementalTitle, url: sharedURL, text: sharedText),
             attachments: attachments)
     }
 
@@ -459,8 +469,7 @@ final class ShareViewController: UIViewController {
 
         if provider.hasItemConformingToTypeIdentifier(UTType.text.identifier) {
             if let text = await self.loadTextValue(from: provider, typeIdentifier: UTType.text.identifier),
-               let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
-               url.scheme != nil
+               let url = SharePayloadNormalizer.webURL(from: text)
             {
                 return url
             }
