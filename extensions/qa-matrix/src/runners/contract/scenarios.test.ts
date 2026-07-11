@@ -72,9 +72,9 @@ function sha256Hex32(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 32);
 }
 
-// Mirrors the matrix plugin's core claimable-dedupe rows: hashed account
-// namespace under `matrix.inbound-dedupe.`, hashed `k.` entry key, and a
-// `{key, seenAt}` value recording the NUL-joined (room, event) dedupe key.
+// Mirrors the matrix plugin's core claimable-dedupe rows: the shared "global"
+// namespace under `matrix.inbound-dedupe.`, a hashed `k.` entry key, and a
+// `{key, seenAt}` value recording the NUL-joined (account, room, event) key.
 async function writeMatrixInboundDedupePluginStateEntry(params: {
   accountId: string;
   eventId: string;
@@ -85,7 +85,7 @@ async function writeMatrixInboundDedupePluginStateEntry(params: {
   const databasePath = path.join(params.stateRoot, "state", "openclaw.sqlite");
   await mkdir(path.dirname(databasePath), { recursive: true });
   const db = new sqlite.DatabaseSync(databasePath);
-  const eventKey = `${params.roomId.trim()}\0${params.eventId.trim()}`;
+  const eventKey = `${params.accountId.trim() || "default"}\0${params.roomId.trim()}\0${params.eventId.trim()}`;
   try {
     db.exec(`
       CREATE TABLE IF NOT EXISTS plugin_state_entries (
@@ -108,7 +108,7 @@ async function writeMatrixInboundDedupePluginStateEntry(params: {
         expires_at = excluded.expires_at
     `).run(
       "matrix",
-      `matrix.inbound-dedupe.${sha256Hex32(params.accountId.trim() || "default")}`,
+      `matrix.inbound-dedupe.${sha256Hex32("global")}`,
       `k.${sha256Hex32(eventKey)}`,
       JSON.stringify({
         key: eventKey,

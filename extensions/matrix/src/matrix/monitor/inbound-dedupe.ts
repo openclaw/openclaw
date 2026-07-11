@@ -10,10 +10,13 @@ import type { MatrixAuth } from "../client/types.js";
 import { LogService } from "../sdk/logger.js";
 
 const MATRIX_INBOUND_DEDUPE_PLUGIN_ID = "matrix";
-// Persisted state namespaces resolve to `matrix.inbound-dedupe.<accountId hash>`
-// in the shared plugin-state SQLite store; the qa-matrix runtime-state probe
-// mirrors this prefix and the event-key shape when asserting commits.
+// One shared "global" namespace with the account baked into each key: the
+// plugin-state fuse sheds only the writing namespace, so per-account
+// namespaces could starve a new account once older ones fill the per-plugin
+// row budget. A single bounded pool stays far under that fuse. The qa-matrix
+// runtime-state probe mirrors this prefix and key shape when asserting commits.
 const MATRIX_INBOUND_DEDUPE_NAMESPACE_PREFIX = "matrix.inbound-dedupe";
+const MATRIX_INBOUND_DEDUPE_NAMESPACE = "global";
 // 30d window: a /sync backlog after long downtime can resurface old events.
 export const MATRIX_INBOUND_DEDUPE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MATRIX_INBOUND_DEDUPE_MEMORY_MAX = 5_000;
@@ -28,7 +31,12 @@ export type MatrixInboundEventDeduper = {
   releaseEvent: (params: { roomId: string; eventId: string }) => void;
 };
 
+export function resolveMatrixInboundDedupeAccountId(accountId: string): string {
+  return accountId.trim() || "default";
+}
+
 export function buildMatrixInboundDedupeEventKey(params: {
+  accountId: string;
   roomId: string;
   eventId: string;
 }): string | null {
@@ -37,19 +45,15 @@ export function buildMatrixInboundDedupeEventKey(params: {
   if (!roomId || !eventId) {
     return null;
   }
-  // NUL separator: room-version 1/2 event ids may contain ":", so a printable
-  // separator could collide two distinct (room, event) pairs into one key.
-  return `${roomId}\0${eventId}`;
+  // NUL separators: room-version 1/2 event ids may contain ":", so a printable
+  // separator could collide two distinct (account, room, event) triples.
+  return `${resolveMatrixInboundDedupeAccountId(params.accountId)}\0${roomId}\0${eventId}`;
 }
 
-export function resolveMatrixInboundDedupeAccountNamespace(accountId: string): string {
-  return accountId.trim() || "default";
-}
-
-/** Persisted plugin-state namespace holding one account's inbound dedupe rows. */
-export function resolveMatrixInboundDedupeStateNamespace(accountId: string): string {
+/** Persisted plugin-state namespace holding the inbound dedupe rows. */
+export function resolveMatrixInboundDedupeStateNamespace(): string {
   return resolvePersistentDedupePluginStateNamespace({
-    namespace: resolveMatrixInboundDedupeAccountNamespace(accountId),
+    namespace: MATRIX_INBOUND_DEDUPE_NAMESPACE,
     namespacePrefix: MATRIX_INBOUND_DEDUPE_NAMESPACE_PREFIX,
   });
 }
@@ -71,10 +75,11 @@ export function createMatrixInboundEventDeduper(params: {
       LogService.warn("MatrixInboundDedupe", "Matrix inbound dedupe persistence failed:", err);
     },
   });
-  const namespace = resolveMatrixInboundDedupeAccountNamespace(params.auth.accountId);
+  const accountId = params.auth.accountId;
+  const namespace = MATRIX_INBOUND_DEDUPE_NAMESPACE;
   return {
     claimEvent: async (ids) => {
-      const key = buildMatrixInboundDedupeEventKey(ids);
+      const key = buildMatrixInboundDedupeEventKey({ accountId, ...ids });
       if (!key) {
         // Fail open: never suppress an event we cannot identify.
         return true;
@@ -82,14 +87,14 @@ export function createMatrixInboundEventDeduper(params: {
       return (await guard.claim(key, { namespace })).kind === "claimed";
     },
     commitEvent: async (ids) => {
-      const key = buildMatrixInboundDedupeEventKey(ids);
+      const key = buildMatrixInboundDedupeEventKey({ accountId, ...ids });
       if (!key) {
         return;
       }
       await guard.commit(key, { namespace });
     },
     releaseEvent: (ids) => {
-      const key = buildMatrixInboundDedupeEventKey(ids);
+      const key = buildMatrixInboundDedupeEventKey({ accountId, ...ids });
       if (key) {
         guard.release(key, { namespace });
       }

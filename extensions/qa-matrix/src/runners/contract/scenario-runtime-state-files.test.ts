@@ -23,7 +23,7 @@ describe("Matrix QA persisted state probes", () => {
     const roomId = "!room:matrix-qa.test";
     // Mirrors the matrix monitor's guard configuration so the probe is proven
     // against the exact persisted row shape the runtime writes, including the
-    // account-hash namespace the probe must match by prefix.
+    // account-scoped key the probe must match by suffix.
     const guard = createClaimableDedupe({
       pluginId: "matrix",
       namespacePrefix: "matrix.inbound-dedupe",
@@ -32,9 +32,9 @@ describe("Matrix QA persisted state probes", () => {
       stateMaxEntries: 100,
       env: { ...process.env, OPENCLAW_STATE_DIR: accountRoot },
     });
-    const key = `${roomId}\0${eventId}`;
-    await guard.claim(key, { namespace: "runtime-default" });
-    await guard.commit(key, { namespace: "runtime-default" });
+    const key = `runtime-default\0${roomId}\0${eventId}`;
+    await guard.claim(key);
+    await guard.commit(key);
     resetPluginStateStoreForTests();
 
     await expect(

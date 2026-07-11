@@ -22,7 +22,12 @@ import {
   readMatrixLegacyCryptoMigrationState,
   readMatrixRecoveryKeyState,
 } from "./src/matrix/crypto-state-store.js";
-import { createMatrixInboundEventDeduper } from "./src/matrix/monitor/inbound-dedupe.js";
+import { importNewestInboundDedupeMarkers } from "./src/matrix/monitor/inbound-dedupe-migration.js";
+import {
+  createMatrixInboundEventDeduper,
+  MATRIX_INBOUND_DEDUPE_TTL_MS,
+  resolveMatrixInboundDedupeStateNamespace,
+} from "./src/matrix/monitor/inbound-dedupe.js";
 import { installMatrixTestRuntime } from "./src/test-runtime.js";
 
 function createContext(): PluginDoctorStateMigrationContext {
@@ -404,8 +409,8 @@ describe("matrix doctor contract state migrations", () => {
 
     await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
       changes: [
-        `Migrated Matrix inbound dedupe rows to the claimable dedupe store for ${sqliteRoot} (1 of 2 entries)`,
-        `Migrated Matrix inbound dedupe JSON to the claimable dedupe store for ${jsonRoot} (1 of 1 entries)`,
+        "Migrated Matrix inbound dedupe markers to the claimable dedupe store (2 of 3 entries)",
+        `Retired Matrix inbound dedupe rows for ${sqliteRoot}`,
         `Archived Matrix inbound dedupe legacy source -> ${path.join(jsonRoot, "inbound-dedupe.json")}.migrated`,
       ],
       warnings: [],
@@ -433,5 +438,44 @@ describe("matrix doctor contract state migrations", () => {
     expect(fs.existsSync(path.join(jsonRoot, "inbound-dedupe.json"))).toBe(false);
     expect(fs.existsSync(path.join(jsonRoot, "inbound-dedupe.json.migrated"))).toBe(true);
     await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toBeNull();
+  });
+
+  it("keeps newer runtime dedupe rows when legacy imports hit capacity", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
+    tempDirs.push(stateDir);
+    const io = { context: createContext(), env: { OPENCLAW_STATE_DIR: stateDir } };
+    const roomId = "!room:example.org";
+    const now = Date.now();
+    // Simulate the row the upgraded runtime already committed post-upgrade.
+    await expect(
+      importNewestInboundDedupeMarkers({
+        io,
+        now,
+        stateMaxEntries: 2,
+        markers: [{ accountId: "ops", roomId, eventId: "$runtime", ts: now - 1_000 }],
+      }),
+    ).resolves.toEqual({ imported: 1, total: 1 });
+
+    // Only one slot remains: the newest legacy marker wins, the runtime row survives.
+    await expect(
+      importNewestInboundDedupeMarkers({
+        io,
+        now,
+        stateMaxEntries: 2,
+        markers: [
+          { accountId: "ops", roomId, eventId: "$old", ts: now - 60_000 },
+          { accountId: "ops", roomId, eventId: "$newer", ts: now - 30_000 },
+        ],
+      }),
+    ).resolves.toEqual({ imported: 1, total: 2 });
+
+    const store = createPluginStateKeyedStoreForTests<{ key: string }>("matrix", {
+      namespace: resolveMatrixInboundDedupeStateNamespace(),
+      maxEntries: 2,
+      defaultTtlMs: MATRIX_INBOUND_DEDUPE_TTL_MS,
+      env: io.env,
+    });
+    const keys = (await store.entries()).map((entry) => entry.value.key).toSorted();
+    expect(keys).toEqual([`ops\0${roomId}\0$runtime`, `ops\0${roomId}\0$newer`].toSorted());
   });
 });

@@ -9,8 +9,8 @@ import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 const MATRIX_SYNC_STORE_FILENAME = "bot-storage.json";
 const MATRIX_PLUGIN_ID = "matrix";
 const MATRIX_SYNC_CACHE_NAMESPACE = "sync-cache";
-// Mirrors the matrix plugin's core claimable-dedupe state namespaces:
-// `matrix.inbound-dedupe.<accountId hash>` (extensions/matrix monitor/inbound-dedupe.ts).
+// Mirrors the matrix plugin's core claimable-dedupe state namespace:
+// `matrix.inbound-dedupe.<hash>` (extensions/matrix monitor/inbound-dedupe.ts).
 const MATRIX_INBOUND_DEDUPE_NAMESPACE_LIKE = "matrix.inbound-dedupe.%";
 const MATRIX_STATE_POLL_INTERVAL_MS = 100;
 const MATRIX_SYNC_CACHE_MAX_ENTRIES = 20_000;
@@ -496,8 +496,9 @@ async function hasPersistedMatrixPluginStateDedupeEntry(params: {
   stateDir: string;
 }): Promise<string | null> {
   // Mirrors extensions/matrix monitor/inbound-dedupe.ts: the persisted entry
-  // value records the NUL-joined (room, event) dedupe key.
-  const expectedKey = `${params.roomId.trim()}\0${params.eventId.trim()}`;
+  // value records the NUL-joined (account, room, event) dedupe key; suffix
+  // matching keeps the probe independent of the runtime account id.
+  const expectedKeySuffix = `\0${params.roomId.trim()}\0${params.eventId.trim()}`;
   const databasePaths = await findFilesByName({
     filename: "openclaw.sqlite",
     rootDir: params.stateDir,
@@ -513,8 +514,6 @@ async function hasPersistedMatrixPluginStateDedupeEntry(params: {
     try {
       const db = new sqlite.DatabaseSync(databasePath, { readOnly: true });
       try {
-        // The state namespace hashes the runtime account id, so match every
-        // inbound-dedupe namespace and compare the recorded key instead.
         const rows = db
           .prepare(
             `SELECT value_json AS valueJson
@@ -528,7 +527,11 @@ async function hasPersistedMatrixPluginStateDedupeEntry(params: {
         }>;
         const matched = rows.some((row) => {
           const entry = parsePluginStateJson(row.valueJson);
-          return isRecord(entry) && entry.key === expectedKey;
+          return (
+            isRecord(entry) &&
+            typeof entry.key === "string" &&
+            entry.key.endsWith(expectedKeySuffix)
+          );
         });
         if (matched) {
           return databasePath;
