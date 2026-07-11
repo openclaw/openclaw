@@ -89,14 +89,15 @@ async function requestRealAdminRpc(port: number, contentLength: number): Promise
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
         res.on("end", () => {
+          const headers: CapturedResponse["headers"] = {};
+          for (const [name, value] of Object.entries(res.headers)) {
+            if (value !== undefined) {
+              headers[name] = value;
+            }
+          }
           resolve({
             statusCode: res.statusCode ?? 0,
-            headers: Object.fromEntries(
-              Object.entries(res.headers).filter(
-                (entry): entry is [string, string | number | readonly string[]] =>
-                  entry[1] !== undefined,
-              ),
-            ),
+            headers,
             body: Buffer.concat(chunks).toString("utf8"),
           });
         });
