@@ -1147,10 +1147,7 @@ export function loadChatComposerSnapshot(
       queue: (session.queue ?? [])
         .map((item) => serializeQueueItemForScope(item, scope))
         .filter((item): item is StoredChatQueueItem => item !== null)
-        .map((item) => ({
-          ...stripQueueItemPersistenceMetadata(item),
-          sessionKey,
-        })),
+        .map((item) => Object.assign(stripQueueItemPersistenceMetadata(item), { sessionKey })),
     };
   } catch {
     return null;
