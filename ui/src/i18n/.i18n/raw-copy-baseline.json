@@ -4038,21 +4038,35 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
-      "text": "No paired nodes or devices."
+      "text": "Details"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
-      "text": "Nodes & devices"
+      "text": "Devices"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
-      "text": "One entry per paired client: roles, tokens, live links."
+      "text": "gateway"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "No paired devices."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "One row per paired client: status, roles, tokens."
     },
     {
       "count": 1,
@@ -4102,13 +4116,6 @@
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
       "text": "Tokens"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view-inventory.ts",
-      "text": "Tokens & capabilities"
     },
     {
       "count": 1,
