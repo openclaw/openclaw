@@ -340,11 +340,11 @@ export async function ensureGatewayServiceForOnboarding(params: {
       const progress = prompter.progress(t("wizard.finalize.gatewayService"));
       let installError: string | null = null;
       const installWarnings: Array<{ message: string; title?: string }> = [];
-      let nextInstallWarning = 0;
       const flushInstallWarnings = async () => {
-        while (nextInstallWarning < installWarnings.length) {
-          const warning = installWarnings[nextInstallWarning];
-          nextInstallWarning += 1;
+        let warning: (typeof installWarnings)[number] | undefined;
+        // Remove before awaiting so a rejected note is not replayed when the
+        // outer catch drains warnings that remain in the planner's queue.
+        while ((warning = installWarnings.shift()) !== undefined) {
           await prompter.note(warning.message, warning.title);
         }
       };
