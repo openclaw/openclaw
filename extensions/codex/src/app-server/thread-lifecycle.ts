@@ -75,6 +75,7 @@ import {
   type CodexAppServerContextEngineProjectionBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
+import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
@@ -860,6 +861,9 @@ export async function startOrResumeThread(params: {
           };
         } catch (error) {
           resumeReservation?.release();
+          if (isCodexAppServerStartSelectionChangedError(error)) {
+            throw error;
+          }
           if (isCodexAppServerUnsafeSubscriptionError(error)) {
             // The resume client is already retired; a fresh start here would
             // race the possibly-live subscription on the abandoned process.

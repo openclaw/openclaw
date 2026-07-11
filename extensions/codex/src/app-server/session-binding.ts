@@ -133,6 +133,7 @@ const pluginAppPolicyContextSchema = z
   .strict();
 const threadBindingSchema = z.object({
   threadId: z.string().refine((value) => Boolean(value.trim())),
+  clientId: optionalStringSchema,
   cwd: z.string(),
   authProfileId: optionalStringSchema,
   model: optionalStringSchema,

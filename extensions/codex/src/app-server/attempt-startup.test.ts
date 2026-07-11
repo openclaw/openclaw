@@ -11,7 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { CodexAppServerClient } from "./client.js";
 import { type CodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
-import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
+import {
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 import {
   clearSharedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
@@ -166,12 +169,48 @@ async function waitForThreadStart(harness: ClientHarness): Promise<{ id?: number
   return waitForRequest(harness, "thread/start");
 }
 
+function threadStartResult(threadId = "thread-1") {
+  return {
+    thread: {
+      id: threadId,
+      sessionId: "session-1",
+      forkedFromId: null,
+      preview: "",
+      ephemeral: false,
+      modelProvider: "openai",
+      createdAt: 1,
+      updatedAt: 1,
+      status: { type: "idle" },
+      path: null,
+      cwd: "/repo",
+      cliVersion: "0.143.0",
+      source: "unknown",
+      agentNickname: null,
+      agentRole: null,
+      gitInfo: null,
+      name: null,
+      turns: [],
+    },
+    model: "gpt-5.4-codex",
+    modelProvider: "openai",
+    serviceTier: null,
+    cwd: "/repo",
+    instructionSources: [],
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: { type: "dangerFullAccess" },
+    permissionProfile: null,
+    reasoningEffort: null,
+  };
+}
+
 describe("startCodexAttemptThread", () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     clearSharedCodexAppServerClient();
+    resetCodexTestBindingStore();
   });
 
   afterEach(async () => {
@@ -196,6 +235,90 @@ describe("startCodexAttemptThread", () => {
 
     await expect(run).rejects.toThrow("Invalid bearer token");
     expect(harness.process.stdin.destroyed).toBe(true);
+  });
+
+  it("restarts managed app-server when Computer Use is enabled after acquire", async () => {
+    const first = createClientHarness();
+    const second = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(second.client);
+    const paths = createAttemptPaths();
+    let persistedComputerUse = false;
+    const { run } = startThreadWithHarness(10_000, new AbortController().signal, {
+      harness: first,
+      paths,
+      pluginConfig: {},
+      skipStartSpy: true,
+      attemptClientFactory: () => async (options) => {
+        const client = await getLeasedSharedCodexAppServerClient(options);
+        if (!persistedComputerUse) {
+          persistedComputerUse = true;
+          await getLeasedSharedCodexAppServerClient(options);
+          const codexHome = path.join(paths.agentDir, "codex-home");
+          await fs.mkdir(codexHome, { recursive: true });
+          await fs.writeFile(
+            path.join(codexHome, "config.toml"),
+            '[plugins."computer-use@openai-bundled"]\nenabled = true\n',
+          );
+        }
+        return client;
+      },
+    });
+
+    await answerInitialize(first);
+    await vi.waitFor(() => expect(startSpy).toHaveBeenCalledTimes(2), {
+      timeout: HARNESS_REQUEST_TIMEOUT_MS,
+    });
+    expect(first.process.stdin.destroyed).toBe(false);
+    expect(readHarnessMessages(first.writes).some((entry) => entry.method === "thread/start")).toBe(
+      false,
+    );
+
+    await answerInitialize(second);
+    const threadStart = await waitForThreadStart(second);
+    second.send({ id: threadStart.id, result: threadStartResult("thread-restarted") });
+
+    const result = await run;
+    expect(result.thread.threadId).toBe("thread-restarted");
+    result.turnRoute.release();
+    result.releaseSharedClientLease();
+    expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
+    await vi.waitFor(() => expect(first.process.stdin.destroyed).toBe(true));
+  });
+
+  it("retires the startup generation when context restart sees a new executable owner", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const paths = createAttemptPaths();
+    const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      harness,
+      paths,
+      pluginConfig: {},
+      skipStartSpy: true,
+    });
+
+    await answerInitialize(harness);
+    const threadStart = await waitForThreadStart(harness);
+    harness.send({ id: threadStart.id, result: threadStartResult("thread-original") });
+    const result = await run;
+    const writesBeforeRestart = harness.writes.length;
+    const codexHome = path.join(paths.agentDir, "codex-home");
+    await fs.mkdir(codexHome, { recursive: true });
+    await fs.writeFile(
+      path.join(codexHome, "config.toml"),
+      '[plugins."computer-use@openai-bundled"]\nenabled = true\n',
+    );
+
+    await expect(result.restartContextEngineCodexThread()).rejects.toThrow(
+      "codex app-server client is closed",
+    );
+    expect(harness.writes).toHaveLength(writesBeforeRestart);
+
+    result.turnRoute.release();
+    result.releaseSharedClientLease();
+    await vi.waitFor(() => expect(harness.process.stdin.destroyed).toBe(true));
   });
 
   it("retires a failed startup client after another active lease releases", async () => {
@@ -261,7 +384,7 @@ describe("startCodexAttemptThread", () => {
     expect(harness.stdinDestroyed).toBe(true);
   });
 
-  it("aborts abandoned thread startup when another lease keeps the shared app-server alive", async () => {
+  it("closes indeterminate thread startup even when another lease shares the app-server", async () => {
     const retained = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(retained.client);
     const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
@@ -283,11 +406,10 @@ describe("startCodexAttemptThread", () => {
     const threadStart = await waitForThreadStart(retained);
 
     await rejected;
-    expect(retained.process.stdin.destroyed).toBe(false);
+    expect(threadStart.id).toBeDefined();
+    expect(retained.process.stdin.destroyed).toBe(true);
 
-    retained.send({ id: threadStart.id, result: { threadId: "late-thread" } });
     expect(releaseLeasedSharedCodexAppServerClient(retained.client)).toBe(true);
-    await vi.waitFor(() => expect(retained.process.stdin.destroyed).toBe(true));
   });
 
   it("closes the shared app-server when startup times out during initialize", async () => {

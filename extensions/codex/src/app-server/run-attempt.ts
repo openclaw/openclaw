@@ -100,7 +100,10 @@ import {
   isInvalidCodexImagePayloadError,
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
-import { startCodexAttemptThread } from "./attempt-startup.js";
+import {
+  isCodexContextRestartSelectionChangedError,
+  startCodexAttemptThread,
+} from "./attempt-startup.js";
 import { createCodexSteeringQueue, type CodexSteeringQueueOptions } from "./attempt-steering.js";
 import {
   resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
@@ -3092,6 +3095,22 @@ export async function runCodexAppServerAttempt(
             messagesSnapshot: turnStartFailureMessages,
             systemPromptReport,
           }),
+        };
+      }
+      if (isCodexContextRestartSelectionChangedError(turnStartError)) {
+        return {
+          ...buildCodexTurnStartFailureResult({
+            params,
+            message: turnStartErrorMessage,
+            messagesSnapshot: turnStartFailureMessages,
+            systemPromptReport,
+          }),
+          codexAppServerFailure: {
+            kind: "client_closed_before_turn_completed",
+            transport: appServer.start.transport,
+            threadId: thread.threadId,
+            replaySafe: true,
+          },
         };
       }
       throw turnStartError;
