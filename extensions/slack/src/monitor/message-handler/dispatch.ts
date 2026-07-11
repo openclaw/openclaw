@@ -1509,12 +1509,18 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let hasStreamedMessage = false;
   const streamMode = slackStreaming.draftMode;
   const useNativeProgressStreaming = useStreaming && slackStreaming.mode === "progress";
+  const progressDraftActive = Boolean(draftStream) || useNativeProgressStreaming;
   const previewToolProgressEnabled =
-    (Boolean(draftStream) || useNativeProgressStreaming) &&
-    resolveChannelStreamingPreviewToolProgress(account.config);
+    progressDraftActive && resolveChannelStreamingPreviewToolProgress(account.config);
   const commentaryProgressEnabled =
-    (Boolean(draftStream) || useNativeProgressStreaming) &&
-    resolveChannelStreamingProgressCommentary(account.config);
+    progressDraftActive && resolveChannelStreamingProgressCommentary(account.config);
+  // Slack shipped Codex preambles through toolProgress before commentary gained
+  // an independent switch. Omitted commentary preserves that released behavior.
+  const commentaryDraftEnabled =
+    progressDraftActive &&
+    (slackStreaming.mode === "progress"
+      ? resolveChannelStreamingProgressCommentary(account.config, previewToolProgressEnabled)
+      : previewToolProgressEnabled);
   let shouldYieldDraftProgress: () => boolean = () => false;
   const suppressDefaultToolProgressMessages =
     resolveChannelStreamingSuppressDefaultToolProgressMessages(account.config, {
@@ -1716,12 +1722,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     line?: ChannelProgressDraftLine,
     options?: { toolName?: string; lane?: "tool" | "commentary" },
   ) => {
+    const lane = options?.lane ?? "tool";
     const progressEnabled =
-      options?.lane === "commentary" ? commentaryProgressEnabled : previewToolProgressEnabled;
+      lane === "commentary" ? commentaryDraftEnabled : previewToolProgressEnabled;
     if (!draftStream && !useNativeProgressStreaming) {
       return;
     }
-    if (shouldYieldDraftProgress()) {
+    if (lane === "commentary" && commentaryProgressEnabled && shouldYieldDraftProgress()) {
       return;
     }
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
@@ -1902,9 +1909,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         onModelSelected,
         suppressDefaultToolProgressMessages: suppressDefaultToolProgressMessages ? true : undefined,
         commentaryProgressEnabled: commentaryProgressEnabled ? true : undefined,
-        onVerboseProgressVisibility: (isActive) => {
-          shouldYieldDraftProgress = isActive;
-        },
+        onVerboseProgressVisibility: commentaryProgressEnabled
+          ? (isActive) => {
+              shouldYieldDraftProgress = isActive;
+            }
+          : undefined,
         allowProgressCallbacksWhenSourceDeliverySuppressed:
           sourceReplyDeliveryMode === "message_tool_only" && statusReactionsEnabled
             ? true
