@@ -66,16 +66,19 @@ struct PairingApprovalPanelView: View {
                 notNow
                 Spacer()
                 // No keyboard shortcuts here: bulk approval is a security
-                // decision and must never be a stray Return press.
+                // decision and must never be a stray Return press. Both
+                // actions resolve the rendered `cards` snapshot, never the
+                // live queue, so a request that arrives mid-click cannot be
+                // approved before it was ever displayed.
                 Button(role: .destructive) {
-                    self.center.decideAll(.reject)
+                    self.center.decideAll(cards, .reject)
                 } label: {
                     Text("Reject All")
                         .padding(.horizontal, 6)
                 }
                 .pairingActionStyle(prominent: false)
                 Button {
-                    self.center.decideAll(.approve)
+                    self.center.decideAll(cards, .approve)
                 } label: {
                     Text("Approve All")
                         .padding(.horizontal, 6)

@@ -107,11 +107,12 @@ final class PairingApprovalCenter {
         }
     }
 
-    /// Resolve every visible card with one decision. Iterates a snapshot so
-    /// handler completions that resync the queue cannot skip neighbors;
+    /// Resolve a batch of cards with one decision. Takes the caller's
+    /// rendered snapshot instead of reading the live queue: a request that
+    /// arrives between render and click must never be resolved unseen.
     /// `decide`'s in-flight guard keeps repeated clicks idempotent.
-    func decideAll(_ decision: Decision) {
-        for card in self.cards {
+    func decideAll(_ cards: [Card], _ decision: Decision) {
+        for card in cards {
             self.decide(card, decision)
         }
     }
@@ -170,8 +171,8 @@ final class PairingApprovalCenter {
     }
 
     #if DEBUG
-    /// Test seam: seed the queue without presenting the panel (tests run
-    /// without an NSApplication, so `updatePanel` must not fire).
+    /// Test seam: seed the live queue without presenting the panel (tests
+    /// run without an NSApplication, so `updatePanel` must not fire).
     func _testSetCards(_ cards: [Card]) {
         self.cards = cards
     }
