@@ -8,6 +8,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
 import {
@@ -120,26 +121,30 @@ describe("provider local service", () => {
   it("resolves process configuration from the host config", async () => {
     const port = await freePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
-    const acquire = createConfiguredProviderLocalServiceAcquirer(() => ({
-      models: {
-        providers: {
-          "gpu-spark": {
-            baseUrl: `127.0.0.1:${port}/v1`,
-            models: [],
-            localService: {
-              command: process.execPath,
-              args: [
-                "-e",
-                `const http=require("http");http.createServer((req,res)=>{res.writeHead(200);res.end("ok");}).listen(${port},"127.0.0.1");`,
-              ],
-              healthUrl,
-              readyTimeoutMs: 5_000,
-              idleStopMs: 1,
+    const acquire = createConfiguredProviderLocalServiceAcquirer(
+      () =>
+        ({
+          models: {
+            providers: {
+              "gpu-spark": {
+                baseUrl: "",
+                baseURL: `127.0.0.1:${port}/v1`,
+                models: [],
+                localService: {
+                  command: process.execPath,
+                  args: [
+                    "-e",
+                    `const http=require("http");http.createServer((req,res)=>{res.writeHead(200);res.end("ok");}).listen(${port},"127.0.0.1");`,
+                  ],
+                  healthUrl,
+                  readyTimeoutMs: 5_000,
+                  idleStopMs: 1,
+                },
+              },
             },
           },
-        },
-      },
-    }));
+        }) as OpenClawConfig,
+    );
 
     const lease = await acquire({
       providerId: "gpu-spark",

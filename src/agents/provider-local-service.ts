@@ -97,13 +97,24 @@ export function createConfiguredProviderLocalServiceAcquirer(
     if (!service) {
       return undefined;
     }
-    if (!isConfiguredProviderBaseUrl(target.baseUrl, provider.baseUrl)) {
+    if (!isConfiguredProviderBaseUrl(target.baseUrl, readConfiguredProviderBaseUrl(provider))) {
       throw new Error(
         `Local service target must match models.providers.${target.providerId}.baseUrl`,
       );
     }
     return await ensureProviderLocalService({ ...target, service }, signal);
   };
+}
+
+function readConfiguredProviderBaseUrl(
+  provider: { baseUrl?: string; baseURL?: unknown } | undefined,
+): string | undefined {
+  const canonical = provider?.baseUrl?.trim();
+  if (canonical) {
+    return canonical;
+  }
+  const alternate = provider?.baseURL;
+  return typeof alternate === "string" && alternate.trim() ? alternate.trim() : undefined;
 }
 
 function normalizeProviderBaseUrl(value: string): string | undefined {
