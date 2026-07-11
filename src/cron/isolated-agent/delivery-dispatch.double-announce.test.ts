@@ -394,6 +394,26 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
   });
 
+  it("uses non-empty summary text when structured direct payloads are textless", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = "Pablo Daily Summary\n- One task needs attention.";
+    params.outputText = "Pablo Daily Summary\n- One task needs attention.";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [{ text: "   " }, {}] as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [{ text: "Pablo Daily Summary\n- One task needs attention." }],
+      skipQueue: true,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
   it("skips announce fallback after verified message-tool source delivery", async () => {
     const params = makeBaseParams({ synthesizedText: "Fallback cron summary." });
     params.sourceDeliveryOutcome = {

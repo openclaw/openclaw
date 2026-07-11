@@ -463,6 +463,18 @@ function resolveCronAwarenessText(params: {
         normalizeOptionalString(params.synthesizedText));
 }
 
+function resolveDirectCronSummaryFallbackText(params: {
+  outputText?: string;
+  summary?: string;
+  synthesizedText?: string;
+}): string | undefined {
+  return (
+    normalizeOptionalString(params.outputText) ??
+    normalizeOptionalString(params.summary) ??
+    normalizeOptionalString(params.synthesizedText)
+  );
+}
+
 function formatTargetCronDeliveryAwarenessText(text: string): string {
   return `A scheduled cron job delivered this message to this channel:\n${text}`;
 }
@@ -1089,23 +1101,30 @@ export async function dispatchCronDelivery(
       delivery,
     });
     try {
-      const rawPayloads =
-        deliveryPayloads.length > 0
-          ? deliveryPayloads
-          : synthesizedText
-            ? [{ text: synthesizedText }]
-            : [];
-      const normalizedPayloads = rawPayloads
-        .map((p) => {
-          if (!p.text) {
-            return p;
-          }
-          const normalized = normalizeSilentReplyText(p.text);
-          return Object.assign({}, p, {
-            text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
-          });
-        })
-        .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
+      const summaryFallbackText = resolveDirectCronSummaryFallbackText({
+        outputText,
+        summary,
+        synthesizedText,
+      });
+      const fallbackPayloads = summaryFallbackText ? [{ text: summaryFallbackText }] : [];
+      const normalizeDirectPayloads = (payloads: ReplyPayload[]) =>
+        payloads
+          .map((p) => {
+            if (!p.text) {
+              return p;
+            }
+            const normalized = normalizeSilentReplyText(p.text);
+            return Object.assign({}, p, {
+              text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
+            });
+          })
+          .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
+      let normalizedPayloads = normalizeDirectPayloads(
+        deliveryPayloads.length > 0 ? deliveryPayloads : fallbackPayloads,
+      );
+      if (normalizedPayloads.length === 0 && deliveryPayloads.length > 0) {
+        normalizedPayloads = normalizeDirectPayloads(fallbackPayloads);
+      }
       if (normalizedPayloads.length === 0) {
         return await finishSilentReplyDelivery();
       }
