@@ -839,8 +839,21 @@ class ChatController internal constructor(
       }
       // Atomically claim the row for this direct dispatch: a vanished row (user delete) or a
       // concurrent flush claim must not lead to a second send of the same idempotency key.
-      val claimed = runCatching { outbox.claimForSending(journaled.id, 0, null) }.getOrDefault(0)
+      val claimed =
+        try {
+          outbox.claimForSending(journaled.id, 0, null)
+        } catch (err: CancellationException) {
+          throw err
+        } catch (_: Throwable) {
+          null
+        }
       publishOutbox()
+      if (claimed == null) {
+        // The claim could not be made durable, so the admitted row still has no dispatcher.
+        // Hand delivery to the flush lane instead of reporting success with no active owner.
+        requestOutboxFlush()
+        return true
+      }
       if (claimed == 0) return true
     }
 

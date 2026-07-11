@@ -1968,6 +1968,39 @@ class ChatControllerOutboxTest {
     }
 
   @Test
+  fun directSendClaimFailureHandsDeliveryToTheFlushLane() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      chat.load("main")
+      advanceUntilIdle()
+
+      // The durable claim itself cannot be persisted; the admitted row must not be reported
+      // as sent-with-no-owner. The flush lane takes over and fails closed on the same error.
+      outbox.sendingStatusUpdateFailure = IllegalStateException("storage unavailable")
+      val accepted = chat.sendMessageAwaitAcceptance(message = "owned by flush", thinkingLevel = "off", attachments = emptyList())
+      advanceUntilIdle()
+      assertTrue(accepted)
+      assertEquals(
+        ChatOutboxStatus.Queued,
+        outbox.rows.values
+          .single()
+          .status,
+      )
+      assertTrue(gateway.sentMessages.isEmpty())
+      assertFalse(chat.healthOk.value)
+
+      // Storage recovers; the next health transition delivers the queued row exactly once.
+      outbox.sendingStatusUpdateFailure = null
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      assertEquals(listOf("owned by flush"), gateway.sentMessages)
+      assertTrue(outbox.rows.isEmpty())
+    }
+
+  @Test
   fun directSendPersistenceFailureRearmsRecoveryInsteadOfStrandingSending() =
     runTest {
       val gateway = FakeGateway()
