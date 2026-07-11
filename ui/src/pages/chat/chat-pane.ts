@@ -1050,7 +1050,7 @@ class ChatPane extends OpenClawLightDomElement {
     );
   }
 
-  private readonly createSession = async (): Promise<boolean> => {
+  private readonly createSession = async (params: { label?: string } = {}): Promise<boolean> => {
     const state = this.state;
     if (!state || !state.client || !state.connected) {
       return false;
@@ -1087,6 +1087,7 @@ class ChatPane extends OpenClawLightDomElement {
     state.chatError = null;
     const previousSessionKey = state.sessionKey;
     const nextSessionKey = await sessions.create({
+      ...params,
       currentSessionKey: previousSessionKey,
       agentId:
         scopedAgentParamsForSession(state, previousSessionKey).agentId ??
@@ -1305,8 +1306,8 @@ class ChatPane extends OpenClawLightDomElement {
       this.removeEventListener("focusin", this.handlePaneFocus);
     });
     const pageState = createPageState(this.context, chatState.createRenderLifecycle(), this);
-    pageState.createChatSession = async () => {
-      await this.createSession();
+    pageState.createChatSession = async (params) => {
+      await this.createSession(params);
     };
     pageState.exportCurrentChat = () =>
       exportChatMarkdown(pageState.chatMessages, pageState.assistantName);

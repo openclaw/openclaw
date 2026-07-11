@@ -1356,6 +1356,25 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("passes a typed /new name to session creation", async () => {
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const createChatSession = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/new Research Plan",
+      sessionKey: "agent:main",
+      createChatSession,
+    });
+
+    await handleSendChat(host);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(createChatSession).toHaveBeenCalledWith({ label: "Research Plan" });
+    expect(host.chatMessage).toBe("");
+  });
+
   it("does not queue typed /new behind an active run", async () => {
     const createChatSession = vi.fn();
     const host = makeHost({

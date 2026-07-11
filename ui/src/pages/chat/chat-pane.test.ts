@@ -28,7 +28,7 @@ type TestChatPane = HTMLElement & {
   connectedClient: GatewayBrowserClient | null;
   connectedCallback: () => void;
   connectionGeneration: number;
-  createSession: () => Promise<boolean>;
+  createSession: (params?: { label?: string }) => Promise<boolean>;
   disconnectedCallback: () => void;
   acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
@@ -227,6 +227,19 @@ describe("chat pane keyboard shortcuts", () => {
 });
 
 describe("chat pane session creation lifecycle", () => {
+  it("forwards a new-session label through the existing create request", async () => {
+    const sessions = {
+      create: vi.fn(async () => "agent:main:research-plan"),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane } = createTestChatPane({ client, sessions });
+
+    await expect(pane.createSession({ label: "Research Plan" })).resolves.toBe(true);
+    expect(sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({ label: "Research Plan" }),
+    );
+  });
+
   it("drops a created session after a same-client reconnect", async () => {
     const created = createDeferred<string | null>();
     const sessions = {

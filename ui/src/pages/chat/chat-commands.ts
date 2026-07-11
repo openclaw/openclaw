@@ -57,7 +57,7 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     chatModelCatalog: ModelCatalogEntry[];
     sessionsResult?: SessionsListResult | null;
     sessionsResultAgentId?: string | null;
-    createChatSession?: () => Promise<void>;
+    createChatSession?: (params?: { label?: string }) => Promise<void>;
     exportCurrentChat?: () => Promise<void> | void;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
@@ -206,13 +206,15 @@ export async function dispatchChatSlashCommand(
     case "stop":
       await handleAbortChat(host);
       return "completed";
-    case "new":
+    case "new": {
       if (!host.createChatSession) {
         setChatCommandError(host, "New Chat is unavailable.");
         return "failed";
       }
-      await host.createChatSession();
+      const label = args.trim();
+      await host.createChatSession(label ? { label } : undefined);
       return "completed";
+    }
     case "reset":
       await opts.sendResetMessage(args ? `/reset ${args}` : "/reset", opts);
       return "completed";
