@@ -72,7 +72,7 @@ export type OAuthSelectPrompt = {
 /** UI/runtime callbacks used by provider OAuth login implementations. */
 export interface OAuthLoginCallbacks {
   /** Emits authorization URL/instructions to the UI before waiting for completion. */
-  onAuth: (info: OAuthAuthInfo) => Promise<void> | void;
+  onAuth: (info: OAuthAuthInfo) => void;
   /** Prompts for manual input such as pasted callback URLs or authorization codes. */
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   /** Reports human-readable login progress without exposing secrets. */
