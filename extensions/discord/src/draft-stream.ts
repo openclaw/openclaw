@@ -24,7 +24,7 @@ type DiscordDraftStream = {
   seal: () => Promise<void>;
   stop: () => Promise<void>;
   /** Reset internal state so the next update creates a new message instead of editing. */
-  forceNewMessage: () => void;
+  forceNewMessage: () => Promise<void>;
 };
 
 export function createDiscordDraftStream(params: {
@@ -143,12 +143,16 @@ export function createDiscordDraftStream(params: {
     warnPrefix: "discord stream preview cleanup failed",
   });
 
-  const forceNewMessage = () => {
+  const forceNewMessage = async () => {
+    // Rotation is a barrier: queued-turn updates must not overtake an older
+    // create and adopt its message id after we clear the prior identity.
+    streamState.stopped = true;
+    loop.stop();
+    await loop.waitForInFlight();
     streamState.stopped = false;
     streamState.final = false;
     streamMessageId = undefined;
     lastSentText = "";
-    loop.resetPending();
     loop.resetThrottleWindow();
   };
   const deleteCurrentMessage = async () => {

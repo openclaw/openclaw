@@ -214,12 +214,44 @@ describe("createDiscordDraftStream", () => {
     stream.update("first draft");
     await stream.flush();
     await stream.clear();
-    stream.forceNewMessage();
+    await stream.forceNewMessage();
     stream.update("queued turn draft");
     await stream.flush();
 
     expect(rest.post).toHaveBeenCalledTimes(2);
     expect(rest.delete).toHaveBeenCalledTimes(1);
+    expect(stream.messageId()).toBe("m2");
+  });
+
+  it("waits for an in-flight create before rotating to a queued turn", async () => {
+    let finishFirstCreate: ((value: { id: string }) => void) | undefined;
+    const firstCreate = new Promise<{ id: string }>((resolve) => {
+      finishFirstCreate = resolve;
+    });
+    const rest = {
+      post: vi.fn().mockReturnValueOnce(firstCreate).mockResolvedValueOnce({ id: "m2" }),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "c1",
+      throttleMs: 250,
+    });
+
+    stream.update("old turn draft");
+    await vi.waitFor(() => expect(rest.post).toHaveBeenCalledTimes(1));
+    const rotation = stream.forceNewMessage();
+    stream.update("must not overtake rotation");
+    finishFirstCreate?.({ id: "m1" });
+    await rotation;
+    stream.update("queued turn draft");
+    await stream.flush();
+
+    expect(rest.post).toHaveBeenCalledTimes(2);
+    expect(rest.post.mock.calls[1]?.[1]).toMatchObject({
+      body: { content: "queued turn draft" },
+    });
     expect(stream.messageId()).toBe("m2");
   });
 

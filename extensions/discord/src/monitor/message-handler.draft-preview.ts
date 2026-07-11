@@ -137,10 +137,10 @@ export function createDiscordDraftPreviewController(params: {
     progressDraft.reset();
   };
 
-  const forceNewMessageIfNeeded = () => {
+  const forceNewMessageIfNeeded = async () => {
     if (shouldSplitPreviewMessages && hasStreamedMessage) {
       params.log("discord: calling forceNewMessage() for draft stream");
-      draftStream?.forceNewMessage();
+      await draftStream?.forceNewMessage();
     }
     resetProgressState();
   };
@@ -283,7 +283,7 @@ export function createDiscordDraftPreviewController(params: {
         },
       });
     },
-    handleAssistantMessageBoundary() {
+    async handleAssistantMessageBoundary() {
       // Queued/followup turns need a fresh progress draft after the primary final.
       const beganNewTurn = progressDraft.beginNewTurn();
       if (beganNewTurn) {
@@ -294,11 +294,11 @@ export function createDiscordDraftPreviewController(params: {
       }
       if (discordStreamMode === "progress") {
         if (beganNewTurn) {
-          draftStream?.forceNewMessage();
+          await draftStream?.forceNewMessage();
         }
         return beganNewTurn;
       }
-      forceNewMessageIfNeeded();
+      await forceNewMessageIfNeeded();
       return beganNewTurn;
     },
     async flush() {
