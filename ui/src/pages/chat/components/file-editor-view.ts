@@ -172,7 +172,7 @@ export async function createFileEditorView(params: {
       }
       const decorations = [...lineNumbersToDecorate]
         .filter((line) => Number.isInteger(line) && line >= 1 && line <= view.state.doc.lines)
-        .sort((a, b) => a - b)
+        .toSorted((a, b) => a - b)
         .map((line) => {
           const classes: string[] = [];
           if (line === targetLine) {

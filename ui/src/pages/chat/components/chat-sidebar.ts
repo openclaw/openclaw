@@ -1024,7 +1024,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     this.fileSaving = true;
     this.fileSaveNotice = null;
     void this.saveFileContent(content, editor.getContent(), this.fileHash, version)
-      .catch((error) => {
+      .catch((error: unknown) => {
         if (version === this.fileOperationVersion) {
           this.fileSaveNotice = {
             kind: "error",
@@ -1071,7 +1071,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           this.visibleContent = readOnly;
         }
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         if (version === this.fileOperationVersion) {
           this.fileSaveNotice = {
             kind: "error",
@@ -1114,7 +1114,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         }
         await this.saveFileContent(content, localContent, latest.hash, version);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         if (version === this.fileOperationVersion) {
           this.fileSaveNotice = {
             kind: "error",

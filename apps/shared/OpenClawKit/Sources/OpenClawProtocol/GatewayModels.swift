@@ -3034,6 +3034,7 @@ public struct SessionFileEntry: Codable, Sendable {
     public let size: Int?
     public let updatedatms: Int?
     public let content: String?
+    public let hash: String?
 
     public init(
         path: String,
@@ -3043,7 +3044,8 @@ public struct SessionFileEntry: Codable, Sendable {
         missing: Bool,
         size: Int? = nil,
         updatedatms: Int? = nil,
-        content: String? = nil)
+        content: String? = nil,
+        hash: String? = nil)
     {
         self.path = path
         self.workspacepath = workspacepath
@@ -3053,6 +3055,7 @@ public struct SessionFileEntry: Codable, Sendable {
         self.size = size
         self.updatedatms = updatedatms
         self.content = content
+        self.hash = hash
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -3064,6 +3067,7 @@ public struct SessionFileEntry: Codable, Sendable {
         case size
         case updatedatms = "updatedAtMs"
         case content
+        case hash
     }
 }
 
@@ -3142,6 +3146,58 @@ public struct SessionsFilesGetParams: Codable, Sendable {
 }
 
 public struct SessionsFilesGetResult: Codable, Sendable {
+    public let sessionkey: String
+    public let root: String?
+    public let file: SessionFileEntry
+
+    public init(
+        sessionkey: String,
+        root: String? = nil,
+        file: SessionFileEntry)
+    {
+        self.sessionkey = sessionkey
+        self.root = root
+        self.file = file
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case root
+        case file
+    }
+}
+
+public struct SessionsFilesSetParams: Codable, Sendable {
+    public let sessionkey: String
+    public let path: String
+    public let agentid: String?
+    public let content: String
+    public let expectedhash: String
+
+    public init(
+        sessionkey: String,
+        path: String,
+        agentid: String? = nil,
+        content: String,
+        expectedhash: String)
+    {
+        self.sessionkey = sessionkey
+        self.path = path
+        self.agentid = agentid
+        self.content = content
+        self.expectedhash = expectedhash
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case path
+        case agentid = "agentId"
+        case content
+        case expectedhash = "expectedHash"
+    }
+}
+
+public struct SessionsFilesSetResult: Codable, Sendable {
     public let sessionkey: String
     public let root: String?
     public let file: SessionFileEntry

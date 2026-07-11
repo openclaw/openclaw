@@ -360,7 +360,7 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
 
 function resolveSessionFileCandidates(params: {
   root: string;
-  fileRoot?: string;
+  fileRoot: string | undefined;
   filePath: string;
 }): string[] {
   return [
