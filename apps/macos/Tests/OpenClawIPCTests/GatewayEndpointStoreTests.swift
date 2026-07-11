@@ -6,6 +6,7 @@ import Testing
 private actor GatewayEndpointSourceGate {
     private var current: GatewayEndpointStore.SourceSnapshot
     private var suspendNext = false
+    private var returnCapturedSource = false
     private var suspendedReadStarted = false
     private var startWaiters: [CheckedContinuation<Void, Never>] = []
     private var releaseWaiter: CheckedContinuation<Void, Never>?
@@ -17,6 +18,8 @@ private actor GatewayEndpointSourceGate {
     func snapshot() async -> GatewayEndpointStore.SourceSnapshot {
         guard self.suspendNext else { return self.current }
         self.suspendNext = false
+        let capturedSource = self.returnCapturedSource ? self.current : nil
+        self.returnCapturedSource = false
         self.suspendedReadStarted = true
         for waiter in self.startWaiters {
             waiter.resume()
@@ -25,11 +28,12 @@ private actor GatewayEndpointSourceGate {
         await withCheckedContinuation { continuation in
             self.releaseWaiter = continuation
         }
-        return self.current
+        return capturedSource ?? self.current
     }
 
-    func suspendNextRead() {
+    func suspendNextRead(returningCapturedSource: Bool = false) {
         self.suspendNext = true
+        self.returnCapturedSource = returningCapturedSource
         self.suspendedReadStarted = false
     }
 
@@ -172,9 +176,11 @@ struct GatewayEndpointStoreTests {
         bindMode: String? = "loopback",
         transport: AppState.RemoteTransport = .ssh,
         directURL: URL? = nil,
-        deviceAuthGatewayID: String = "test-gateway-route") -> GatewayEndpointStore.SourceSnapshot
+        deviceAuthGatewayID: String = "test-gateway-route",
+        routingGeneration: UInt64? = nil) -> GatewayEndpointStore.SourceSnapshot
     {
         GatewayEndpointStore.SourceSnapshot(
+            routingGeneration: routingGeneration,
             mode: .init(mode),
             token: token,
             password: password,
@@ -544,7 +550,9 @@ struct GatewayEndpointStoreTests {
         let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
         #expect(resolved.mode == .remote)
     }
+}
 
+extension GatewayEndpointStoreTests {
     @Test func `remote tunnel waits for primary app launch admission`() async {
         await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
             let admitted = LockIsolated(false)
@@ -561,6 +569,7 @@ struct GatewayEndpointStoreTests {
                     tunnelStarts.withValue { $0 += 1 }
                     return .init(localPort: 18789, generation: 1)
                 },
+                routingGenerationIsCurrent: { _ in true },
                 sourceSnapshot: { source }))
 
             await store.refresh()
@@ -586,6 +595,7 @@ struct GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { _ in true },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { throw CancellationError() },
+                routingGenerationIsCurrent: { _ in true },
                 sourceSnapshot: { await sourceGate.snapshot() }))
 
             let first = Task { try await store.requireEndpoint() }
@@ -621,6 +631,7 @@ struct GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { _ in true },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { throw CancellationError() },
+                routingGenerationIsCurrent: { _ in true },
                 sourceSnapshot: { await sourceGate.snapshot() }))
 
             let staleRequest = Task { try await store.requireEndpoint() }
@@ -638,6 +649,52 @@ struct GatewayEndpointStoreTests {
         }
     }
 
+    @Test func `require endpoint rejects a generation superseded after source read`() async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let remoteURL = try #require(URL(string: "ws://192.168.1.20:18789"))
+            let sourceA = self.source(
+                mode: .remote,
+                token: "same-token",
+                transport: .direct,
+                directURL: remoteURL,
+                routingGeneration: 1)
+            let sourceB = self.source(
+                mode: .remote,
+                token: "same-token",
+                transport: .direct,
+                directURL: remoteURL,
+                routingGeneration: 2)
+            let currentRoutingGeneration = LockIsolated<UInt64>(1)
+            let sourceGate = GatewayEndpointSourceGate(sourceA)
+            await sourceGate.suspendNextRead(returningCapturedSource: true)
+            let store = GatewayEndpointStore(deps: .init(
+                token: { nil },
+                password: { nil },
+                localPort: { 18789 },
+                remoteRouteIfRunning: { nil },
+                remoteRouteIsCurrent: { _ in true },
+                canStartRemoteTunnel: { true },
+                ensureRemoteTunnel: { throw CancellationError() },
+                routingGenerationIsCurrent: { generation in
+                    currentRoutingGeneration.withValue { $0 == generation }
+                },
+                sourceSnapshot: { await sourceGate.snapshot() }))
+
+            let staleRequest = Task { try await store.requireEndpoint() }
+            await sourceGate.waitUntilSuspendedReadStarts()
+            currentRoutingGeneration.withValue { $0 = 2 }
+            await sourceGate.releaseSuspendedRead()
+
+            await #expect(throws: CancellationError.self) {
+                try await staleRequest.value
+            }
+            await sourceGate.update(sourceB)
+            let currentEndpoint = try await store.requireEndpoint()
+            #expect(currentEndpoint.config.url == remoteURL)
+            #expect(currentEndpoint.config.token == "same-token")
+        }
+    }
+
     @Test func `require endpoint rejects cancellation during endpoint resolution`() async {
         await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
             let sourceGate = GatewayEndpointSourceGate(self.source(mode: .local))
@@ -650,6 +707,7 @@ struct GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { _ in true },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { throw CancellationError() },
+                routingGenerationIsCurrent: { _ in true },
                 sourceSnapshot: { await sourceGate.snapshot() }))
 
             let request = Task { try await store.requireEndpoint() }
@@ -685,6 +743,7 @@ struct GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { _ in true },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { throw CancellationError() },
+                routingGenerationIsCurrent: { _ in true },
                 sourceSnapshot: { await sourceGate.snapshot() }))
             let initialURL = try #require(URL(string: "ws://127.0.0.1:18789"))
 
@@ -725,6 +784,7 @@ struct GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { _ in true },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { throw CancellationError() },
+                routingGenerationIsCurrent: { _ in true },
                 sourceSnapshot: { await sourceGate.snapshot() }))
             let stream = await store.subscribe(bufferingNewest: 10)
             var iterator = stream.makeAsyncIterator()
@@ -768,6 +828,7 @@ struct GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { await remoteGate.ensure() },
+                routingGenerationIsCurrent: { _ in true },
                 sourceSnapshot: { source }))
 
             let cancelledWaiter = Task { try await store.requireEndpoint() }
@@ -807,6 +868,7 @@ struct GatewayEndpointStoreTests {
                 remoteRouteIsCurrent: { await remoteGate.isCurrent($0) },
                 canStartRemoteTunnel: { true },
                 ensureRemoteTunnel: { await remoteGate.ensure() },
+                routingGenerationIsCurrent: { _ in true },
                 sourceSnapshot: { source }))
 
             let first = Task { try await store.requireEndpoint() }
