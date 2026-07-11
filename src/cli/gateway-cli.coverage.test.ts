@@ -14,6 +14,7 @@ import { registerGatewayCli } from "./gateway-cli.js";
 type DiscoveredBeacon = Awaited<
   ReturnType<typeof import("../infra/bonjour-discovery.js").discoverGatewayBeacons>
 >[number];
+type UsageCostHandlerArgs = Parameters<(typeof usageHandlers)["usage.cost"]>[0];
 
 const defaultCallGateway = async (): Promise<unknown> => ({ ok: true });
 const callGateway = vi.fn<(opts: unknown) => Promise<unknown>>(defaultCallGateway);
@@ -308,19 +309,20 @@ describe("gateway-cli coverage", () => {
             return { ok: true };
           }
           return await new Promise((resolve, reject) => {
+            const respond: UsageCostHandlerArgs["respond"] = (ok, payload, error) => {
+              if (!ok) {
+                reject(new Error(error?.message ?? "usage.cost failed"));
+                return;
+              }
+              const summary = payload as { cacheStatus?: { status?: string } };
+              observedStatuses.push(summary.cacheStatus?.status);
+              resolve(payload);
+            };
             const result = usageHandlers["usage.cost"]({
-              respond: (ok, payload, error) => {
-                if (!ok) {
-                  reject(new Error(error?.message ?? "usage.cost failed"));
-                  return;
-                }
-                const summary = payload as { cacheStatus?: { status?: string } };
-                observedStatuses.push(summary.cacheStatus?.status);
-                resolve(payload);
-              },
+              respond,
               params: request.params ?? {},
               context: { getRuntimeConfig: () => config },
-            } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+            } as unknown as UsageCostHandlerArgs);
             Promise.resolve(result).catch(reject);
           });
         });
