@@ -40,6 +40,10 @@ export function compactDoctorSessionSqliteTarget(
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     checkpointTruncate(database);
     const before = readCompactSnapshot(database, sqlitePath);
+    // Doctor's offline VACUUM is the one sanctioned window to retrofit
+    // incremental auto-vacuum onto databases created before the pragma
+    // existed; runtime maintenance then releases pages in bounded passes.
+    database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     database.exec("VACUUM;");
     checkpointTruncate(database);
     const after = readCompactSnapshot(database, sqlitePath);

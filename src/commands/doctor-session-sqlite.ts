@@ -277,6 +277,11 @@ async function inspectOrMigrateTarget(params: {
         params.activeRun,
       );
     }
+    if (validationPassed) {
+      // Post-import compact retrofits auto_vacuum=INCREMENTAL onto pre-flip
+      // databases and returns the pages the import churn freed.
+      compactSqliteDatabase(params.target, report);
+    }
   }
   report.unreferencedJsonlFiles = listUnreferencedJsonlFiles(params.target.storePath, [
     ...referencedTranscriptFiles,
