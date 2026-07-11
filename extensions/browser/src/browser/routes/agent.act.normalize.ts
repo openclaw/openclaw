@@ -25,7 +25,7 @@ import {
   readRouteNonNegativeInteger,
   readRouteTimerTimeoutMs,
 } from "./route-numeric.js";
-import { toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
+import { toBoolean, toStringArray, toStringOrEmpty } from "./utils.js";
 
 function normalizeActKind(raw: unknown): ActKind {
   const kind = toStringOrEmpty(raw);
@@ -174,9 +174,13 @@ export function normalizeActRequest(
       };
     }
     case "clickCoords": {
-      const x = toNumber(body.x);
-      const y = toNumber(body.y);
-      if (x === undefined || y === undefined || x < 0 || y < 0) {
+      const x = readRouteNonNegativeInteger(body.x, "x", {
+        invalidMessage: "clickCoords requires non-negative x and y",
+      });
+      const y = readRouteNonNegativeInteger(body.y, "y", {
+        invalidMessage: "clickCoords requires non-negative x and y",
+      });
+      if (x === undefined || y === undefined) {
         throw new Error("clickCoords requires non-negative x and y");
       }
       const buttonRaw = toStringOrEmpty(body.button);

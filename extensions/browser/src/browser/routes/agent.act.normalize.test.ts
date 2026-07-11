@@ -92,6 +92,18 @@ describe("normalizeActRequest numeric fields", () => {
       timeMs: 25,
       timeoutMs: 5000,
     });
+
+    expect(
+      normalizeActRequest({
+        kind: "clickCoords",
+        x: "10",
+        y: "20",
+      }),
+    ).toMatchObject({
+      kind: "clickCoords",
+      x: 10,
+      y: 20,
+    });
   });
 
   it("caps oversized action timeouts", () => {
@@ -131,6 +143,22 @@ describe("normalizeActRequest numeric fields", () => {
         timeoutMs: "1000ms",
       }),
     ).toThrow("timeoutMs must be a positive integer.");
+
+    expect(() =>
+      normalizeActRequest({
+        kind: "clickCoords",
+        x: "0x10",
+        y: 1,
+      }),
+    ).toThrow("clickCoords requires non-negative x and y");
+
+    expect(() =>
+      normalizeActRequest({
+        kind: "clickCoords",
+        x: 1,
+        y: "1e3",
+      }),
+    ).toThrow("clickCoords requires non-negative x and y");
   });
 
   it("rejects fractional viewport dimensions before dispatch", () => {
