@@ -17,17 +17,19 @@ export const browserPanelStyles = css`
     overflow: hidden;
   }
   /* Docked panels get a single hairline separator on the inner edge so they
-     read as layout, not as a floating card. */
+     read as layout, not as a floating card. The browser dock yields to the
+     terminal dock's reserved edges so the two panels tile instead of
+     overlapping when both are open. */
   .bp--bottom {
     left: var(--shell-nav-width, 0);
-    right: 0;
-    bottom: 0;
+    right: var(--oc-terminal-reserve-right, 0px);
+    bottom: var(--oc-terminal-reserve-bottom, 0px);
     border-top: 1px solid var(--border, #262b34);
   }
   .bp--right {
     top: var(--shell-topbar-height, 0);
-    right: 0;
-    bottom: 0;
+    right: var(--oc-terminal-reserve-right, 0px);
+    bottom: var(--oc-terminal-reserve-bottom, 0px);
     border-left: 1px solid var(--border, #262b34);
   }
   .bp-resizer {

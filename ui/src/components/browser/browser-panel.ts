@@ -306,6 +306,8 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
     this.inspected = null;
     this.inspectPointer = null;
     this.pendingNewTab = false;
+    // Re-probe per connection: another gateway may have evaluate enabled.
+    this.evaluateUnavailable = false;
   }
 
   /** Publishes the dock footprint so the shell content reflows around it. */
