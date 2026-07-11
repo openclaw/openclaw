@@ -109,8 +109,10 @@ actor TalkMLXSpeechSynthesizer {
                 self.finishRequest(id: id)
                 throw SynthesizeError.canceled
             } catch {
+                let attemptNumber = attempt + 1
+                let errorDescription = error.localizedDescription
                 self.logger.error(
-                    "talk mlx helper transport failed attempt=\(attempt + 1, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    "mlx failed try=\(attemptNumber, privacy: .public) error=\(errorDescription, privacy: .public)")
                 await self.discardTransport()
                 if self.fallbackRequiredID == id {
                     self.finishRequest(id: id)
