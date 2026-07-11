@@ -48,6 +48,13 @@ function hasConfiguredSearchCredentialCandidate(
   if (!isRecord(searchConfig) || policy?.pluginsDisabled) {
     return false;
   }
+  if (
+    providerId !== undefined &&
+    policy !== undefined &&
+    !policy.enabledProviderIds.has(normalizeProviderId(providerId))
+  ) {
+    return false;
+  }
   const allKnownProvidersDisabled =
     policy !== undefined &&
     policy.enabledProviderIds.size === 0 &&

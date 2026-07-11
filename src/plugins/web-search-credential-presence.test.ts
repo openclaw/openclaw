@@ -574,7 +574,7 @@ describe("hasConfiguredWebSearchCredential", () => {
     ).toBe(false);
   });
 
-  it("does not treat unknown explicit provider selection as configured", () => {
+  it("does not treat unknown explicit provider selection or credentials as configured", () => {
     manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
       plugins: [
         {
@@ -598,6 +598,42 @@ describe("hasConfiguredWebSearchCredential", () => {
       hasConfiguredWebSearchCredential({
         config: {
           tools: { web: { search: { provider: "missing-search" } } },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "missing-search",
+                apiKey: "search-key",
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "missing-search",
+                "missing-search": {
+                  apiKey: "search-key",
+                },
+              },
+            },
+          },
         } as OpenClawConfig,
         env: {},
         origin: "bundled",
