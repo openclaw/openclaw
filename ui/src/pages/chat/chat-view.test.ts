@@ -1164,6 +1164,7 @@ describe("chat composer workbench", () => {
         error: null,
         activeId: "file:/workspace/AGENTS.md",
         dock: "right",
+        narrowLayout: false,
         dockDragging: false,
         dockDragZone: null,
         onToggleCollapsed,
@@ -1259,6 +1260,7 @@ describe("chat composer workbench", () => {
         error: null,
         activeId: null,
         dock: "right",
+        narrowLayout: false,
         dockDragging: false,
         dockDragZone: null,
         onToggleCollapsed,
@@ -1297,6 +1299,7 @@ describe("chat composer workbench", () => {
         error: null,
         activeId: null,
         dock: "right",
+        narrowLayout: false,
         dockDragging: false,
         dockDragZone: null,
         onToggleCollapsed: () => undefined,
@@ -1313,6 +1316,57 @@ describe("chat composer workbench", () => {
 
     expect(container.querySelector(".chat-workspace-open")).toBeNull();
     expect(container.querySelector(".chat-workspace-rail")).toBeNull();
+  });
+
+  it("stacks the detail sidebar under the thread with a horizontal divider on narrow panes", () => {
+    const sidebarProps = {
+      sidebarOpen: true,
+      sidebarContent: { kind: "markdown", content: "Stacked detail" } as const,
+      onCloseSidebar: () => undefined,
+    };
+    const wide = renderChatView(sidebarProps);
+    const wideContainer = wide.querySelector(".chat-split-container");
+    expect(wideContainer?.classList.contains("chat-split-container--open")).toBe(true);
+    expect(wideContainer?.classList.contains("chat-split-container--stacked")).toBe(false);
+    // Attribute reflection is async; the property binding lands synchronously.
+    expect(wide.querySelector("resizable-divider")?.orientation).toBe("vertical");
+
+    const stacked = renderChatView({ ...sidebarProps, sidebarStacked: true });
+    const stackedContainer = stacked.querySelector(".chat-split-container");
+    expect(stackedContainer?.classList.contains("chat-split-container--stacked")).toBe(true);
+    expect(stacked.querySelector("resizable-divider")?.orientation).toBe("horizontal");
+  });
+
+  it("forces the workspace rail to the bottom dock and drops side-dock controls on narrow panes", () => {
+    const container = renderChatView({
+      sessionWorkspace: {
+        collapsed: false,
+        sessionKey: "agent:main",
+        list: null,
+        loading: false,
+        error: null,
+        activeId: null,
+        dock: "right",
+        narrowLayout: true,
+        dockDragging: false,
+        dockDragZone: null,
+        onToggleCollapsed: () => undefined,
+        onSetDock: () => undefined,
+        onDockDragStart: () => undefined,
+        onRefresh: () => undefined,
+        onBrowsePath: () => undefined,
+        onCopyPath: () => undefined,
+        onOpenFile: () => undefined,
+        onSearch: () => undefined,
+        onOpenArtifact: () => undefined,
+      },
+    });
+
+    const workbench = container.querySelector(".chat-workbench");
+    expect(workbench?.classList.contains("chat-workbench--dock-bottom")).toBe(true);
+    expect(container.querySelector(".chat-workspace-rail")).not.toBeNull();
+    expect(container.querySelector(".chat-workspace-rail__dock")).toBeNull();
+    expect(container.querySelector(".chat-workspace-rail__grip")).toBeNull();
   });
 
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {

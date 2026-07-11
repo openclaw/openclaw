@@ -33,6 +33,8 @@ function sessionRow(
     hasActiveRun?: boolean;
     status?: string;
     spawnedBy?: string;
+    execNode?: string;
+    worktree?: { branch?: string; repoRoot?: string };
   } = {},
 ) {
   return {
@@ -964,6 +966,119 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       });
       await expect.poll(() => pinnedGroup.locator(".sidebar-recent-session").count()).toBe(0);
       await expect.poll(() => chatsGroup.locator(".sidebar-recent-session").count()).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps raw ids out of work rows and survives rows growing subtitles in place", async () => {
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const nodeHash = "11c38726acc6fac280357576c87acc6fac280357";
+    const rows = (withWork: boolean) => {
+      const ts = baseTime + (withWork ? 5_000 : 0);
+      return [
+        sessionRow("agent:main:main", "Main", ts),
+        sessionRow(
+          "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d",
+          "",
+          ts - 60_000,
+          withWork ? { execNode: nodeHash } : {},
+        ),
+        sessionRow(
+          "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6e",
+          "",
+          ts - 120_000,
+          withWork
+            ? {
+                execNode: nodeHash,
+                worktree: { branch: "openclaw/wt-1", repoRoot: "/Users/dev/Projects/clawdbot" },
+              }
+            : {},
+        ),
+        sessionRow("agent:main:node-mcp-debug-4de003fbff138fcb9239c9378b2e", "", ts - 180_000),
+      ];
+    };
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse(rows(false)),
+      },
+      // Defer every list request; the test resolves them per phase so rows
+      // first paint single-line and only then grow a subtitle line in place.
+      deferredMethods: Array.from({ length: 12 }, () => "sessions.list"),
+      sessionKey: "agent:main:main",
+    });
+    const resolveNextList = async (withWork: boolean) => {
+      try {
+        await gateway.resolveDeferred("sessions.list", sessionsListResponse(rows(withWork)));
+      } catch {
+        // No list request queued yet; the poll below retries.
+      }
+    };
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await expect
+        .poll(
+          async () => {
+            await resolveNextList(false);
+            return page.locator(".sidebar-recent-session").count();
+          },
+          { timeout: 15_000 },
+        )
+        .toBeGreaterThan(0);
+      // Rows grow a second subtitle line only after first layout: the WebKit
+      // overlap regression needs in-place growth, not a static two-line list.
+      await gateway.emitGatewayEvent("sessions.changed", {});
+      await expect
+        .poll(
+          async () => {
+            await resolveNextList(true);
+            return page.locator(".sidebar-recent-session__subtitle").count();
+          },
+          { timeout: 15_000 },
+        )
+        .toBeGreaterThan(0);
+
+      // Names and subtitles never show raw node ids or raw agent keys.
+      const names = await trimmedTextContents(page.locator(".sidebar-recent-session__name"));
+      expect(names).toContain("New session");
+      expect(names).toContain("clawdbot ⎇ wt-1 · …0357");
+      expect(names).toContain("node-mcp-debug-…8b2e");
+      const subtitles = await trimmedTextContents(
+        page.locator(".sidebar-recent-session__subtitle"),
+      );
+      expect(subtitles).toContain("…0357");
+      for (const text of [...names, ...subtitles]) {
+        expect(text).not.toContain(nodeHash);
+        expect(text).not.toContain("agent:main:");
+      }
+
+      // Sections must lay out below the rows above them, not paint over them.
+      const overlaps = await page.evaluate(() => {
+        const rects = [
+          ...document.querySelectorAll(".sidebar-recent-session, .sidebar-recent-sessions__head"),
+        ]
+          .map((element) => {
+            const rect = element.getBoundingClientRect();
+            return { top: rect.top, bottom: rect.bottom };
+          })
+          .filter((rect) => rect.bottom > rect.top)
+          .toSorted((a, b) => a.top - b.top);
+        let bad = 0;
+        for (let index = 1; index < rects.length; index += 1) {
+          if (rects[index].top < rects[index - 1].bottom - 2) {
+            bad += 1;
+          }
+        }
+        return bad;
+      });
+      expect(overlaps).toBe(0);
     } finally {
       await context.close();
     }

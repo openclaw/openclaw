@@ -135,6 +135,16 @@
   color: color-mix(in srgb, var(--ok) 70%, var(--muted) 30%);
 }
 
+.chat-tool-row__title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--text);
+}
+
 .chat-tool-row__cmd {
   flex: 0 1 auto;
   min-width: 0;
@@ -145,6 +155,12 @@
   font-size: calc(var(--control-ui-text-sm) - 1px);
   color: var(--text);
 }
+
+.chat-tool-row__cmd--secondary {
+  flex: 0 100000 auto;
+  color: color-mix(in srgb, var(--muted) 85%, var(--text) 15%);
+}
+
 
 .chat-tool-row__verb {
   flex-shrink: 0;

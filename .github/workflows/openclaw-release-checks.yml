@@ -1466,21 +1466,113 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  # The dispatched child owns Telegram evidence/status artifacts; this blocking job
+  # carries its exact conclusion into the parent summary without copying secrets or artifacts.
   qa_live_telegram_release_checks:
     name: Run QA Lab live Telegram lane
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 210
     permissions:
-      actions: read
-      attestations: write
+      actions: write
       contents: read
-      id-token: write
-      pull-requests: read
-    uses: openclaw/openclaw/.github/workflows/openclaw-release-telegram-qa.yml@main
-    with:
-      expected_trusted_workflow_sha: ${{ needs.resolve_target.outputs.trusted_workflow_sha }}
-      target_ref: ${{ needs.resolve_target.outputs.ref }}
-      target_sha: ${{ needs.resolve_target.outputs.revision }}
+    steps:
+      - name: Dispatch and await trusted Telegram QA
+        env:
+          EXPECTED_TRUSTED_WORKFLOW_SHA: ${{ needs.resolve_target.outputs.trusted_workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REF: ${{ needs.resolve_target.outputs.ref }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          workflow="openclaw-release-telegram-qa.yml"
+          dispatch_id="release-checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(openssl rand -hex 16)"
+          run_name="OpenClaw Release Telegram QA ${dispatch_id}"
+          current_main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [[ "$current_main_sha" != "$EXPECTED_TRUSTED_WORKFLOW_SHA" ]]; then
+            echo "Trusted main moved to ${current_main_sha}, expected ${EXPECTED_TRUSTED_WORKFLOW_SHA}; refusing dispatch." >&2
+            exit 1
+          fi
+
+          find_child_runs() {
+            RUN_NAME="$run_name" gh api -X GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+              -F event=workflow_dispatch \
+              -F branch=main \
+              -F per_page=100 \
+              --jq '[.workflow_runs[] | select(.display_title == env.RUN_NAME) | {id, head_sha}]'
+          }
+          run_id=""
+          cancel_child_on_failure() {
+            status="$?"
+            trap - EXIT
+            if [[ "$status" -ne 0 ]]; then
+              set +e
+              # The nonce makes delayed discovery safe after an ambiguous dispatch response.
+              for _ in $(seq 1 6); do
+                matches_json="$(find_child_runs 2>/dev/null)" || matches_json="[]"
+                if [[ "$(jq 'length' <<<"$matches_json" 2>/dev/null)" == "1" ]]; then
+                  run_id="$(jq -r '.[0].id' <<<"$matches_json")"
+                  gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>&1 || true
+                  break
+                fi
+                sleep 2
+              done
+            fi
+            exit "$status"
+          }
+          trap cancel_child_on_failure EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          gh workflow run "$workflow" \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f dispatch_id="$dispatch_id" \
+            -f expected_trusted_workflow_sha="$EXPECTED_TRUSTED_WORKFLOW_SHA" \
+            -f target_ref="$TARGET_REF" \
+            -f target_sha="$TARGET_SHA"
+
+          for _ in $(seq 1 60); do
+            matches_json="$(find_child_runs)"
+            match_count="$(jq 'length' <<<"$matches_json")"
+            if ((match_count > 1)); then
+              echo "Multiple Telegram QA runs matched ${run_name}; refusing to guess." >&2
+              exit 1
+            fi
+            if ((match_count == 1)); then
+              run_id="$(jq -r '.[0].id' <<<"$matches_json")"
+              child_head_sha="$(jq -r '.[0].head_sha' <<<"$matches_json")"
+              [[ "$child_head_sha" == "$EXPECTED_TRUSTED_WORKFLOW_SHA" ]]
+              break
+            fi
+            sleep 5
+          done
+          if [[ -z "$run_id" ]]; then
+            echo "Could not find exact dispatched Telegram QA run ${run_name}." >&2
+            exit 1
+          fi
+
+          child_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          echo "Dispatched trusted Telegram QA: ${child_url}"
+          for _ in $(seq 1 1080); do
+            run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            status="$(jq -r .status <<<"$run_json")"
+            if [[ "$status" == "completed" ]]; then
+              conclusion="$(jq -r .conclusion <<<"$run_json")"
+              if [[ "$conclusion" != "success" ]]; then
+                echo "Trusted Telegram QA concluded ${conclusion}: ${child_url}" >&2
+                exit 1
+              fi
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Timed out awaiting trusted Telegram QA: ${child_url}" >&2
+          exit 1
 
   qa_live_discord_release_checks:
     name: Run QA Lab live Discord lane
@@ -1882,7 +1974,6 @@ jobs:
             "qa_lab_parity_report_release_checks=${QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT}"
             "qa_lab_runtime_parity_release_checks=${QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT}"
             "qa_live_matrix_release_checks=${QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT}"
-            "qa_live_telegram_release_checks=${QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT}"
             "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT}"
             "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
             "qa_live_slack_release_checks=${QA_LIVE_SLACK_RELEASE_CHECKS_RESULT}"
@@ -2036,7 +2127,7 @@ jobs:
           }
           advisory_status_override_allowed() {
             case "$1" in
-              qa_lab_parity_lane_release_checks|qa_lab_parity_report_release_checks|qa_lab_runtime_parity_release_checks|qa_live_matrix_release_checks|qa_live_telegram_release_checks|qa_live_discord_release_checks|qa_live_whatsapp_release_checks|qa_live_slack_release_checks)
+              qa_lab_parity_lane_release_checks|qa_lab_parity_report_release_checks|qa_lab_runtime_parity_release_checks|qa_live_matrix_release_checks|qa_live_discord_release_checks|qa_live_whatsapp_release_checks|qa_live_slack_release_checks)
                 return 0
                 ;;
               *)

@@ -1758,6 +1758,37 @@ describe("exec approvals store helpers", () => {
     ).rejects.toThrow("Exec approval changed before execution");
   });
 
+  it("normalizes legacy allowlist sources in portable policy snapshots", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "allowlist", ask: "always" },
+        agents: {
+          main: {
+            allowlist: [
+              { pattern: "/usr/bin/jq", source: "legacy" },
+              { pattern: "/usr/bin/rg", source: "allow-always" },
+            ],
+          },
+        },
+      }),
+    );
+
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+
+    expect(policySnapshot.allowlistRules).toEqual([
+      { pattern: "/usr/bin/jq" },
+      { pattern: "/usr/bin/rg", source: "allow-always" },
+    ]);
+  });
+
   it("rejects an explicit approval after policy changes to deny without persisting its grant", async () => {
     const dir = createHomeDir();
     saveExecApprovals({
