@@ -32,12 +32,6 @@ function resolveParentSessionKeyCandidate(params: {
   return null;
 }
 
-function isSubagentSessionEntry(entry?: SessionEntry): boolean {
-  return (
-    (typeof entry?.spawnDepth === "number" && entry.spawnDepth >= 1) || Boolean(entry?.subagentRole)
-  );
-}
-
 /** Resolves the persisted model override visible to the current session. */
 export function resolveStoredModelOverride(params: {
   loadSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
@@ -59,14 +53,11 @@ export function resolveStoredModelOverride(params: {
   if (direct) {
     return { ...direct, source: "session" };
   }
-  // Spawned subagent sessions intentionally follow the configured subagent
-  // model precedence (`agents.list[<id>].subagents.model` ->
-  // `agents.defaults.subagents.model` -> `agents.list[<id>].model`) rather than
-  // inheriting an interactive `/model` override the user applied to the parent
-  // conversation. Without this guard the parent override would silently
-  // replace the configured subagent default whenever the child entry has no
-  // direct override of its own.
-  if (isSubagentSessionEntry(params.sessionEntry)) {
+  const isSubagent =
+    (typeof params.sessionEntry?.spawnDepth === "number" && params.sessionEntry.spawnDepth >= 1) ||
+    Boolean(params.sessionEntry?.subagentRole);
+  if (isSubagent) {
+    // Spawned subagents use their configured model unless the child has a direct override.
     return null;
   }
   const parentKey = resolveParentSessionKeyCandidate({

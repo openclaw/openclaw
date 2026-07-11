@@ -21,7 +21,7 @@ Each agent in a multi-agent setup can override the global sandbox and tool polic
 </CardGroup>
 
 <Warning>
-Auth is scoped by agent: each agent has its own `agentDir` auth store at `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`. Never reuse `agentDir` across agents. Agents can read through to the default/main agent's auth profiles when they do not have a local profile, but OAuth refresh tokens are not cloned into secondary agent stores. If you copy credentials manually, copy only portable static `api_key` or `token` profiles.
+Auth is scoped by agent: each agent has its own `agentDir` auth store in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Never reuse `agentDir` across agents. Agents can read through to the default/main agent's auth profiles when they do not have a local profile, but OAuth refresh tokens are not cloned into secondary agent stores. If you copy credentials manually, copy only portable static `api_key` or `token` profiles.
 </Warning>
 
 ---
@@ -180,7 +180,7 @@ When both global (`agents.defaults.*`) and agent-specific (`agents.list[].*`) co
 
 Agent-specific settings override global:
 
-```
+```text
 agents.list[].sandbox.mode > agents.defaults.sandbox.mode
 agents.list[].sandbox.scope > agents.defaults.sandbox.scope
 agents.list[].sandbox.workspaceRoot > agents.defaults.sandbox.workspaceRoot
@@ -288,7 +288,7 @@ Per-agent elevated overrides (`agents.list[].tools.elevated`) can further restri
 </Tabs>
 
 <Note>
-Legacy `agent.*` configs are migrated by `openclaw doctor`; prefer `agents.defaults` + `agents.list` going forward.
+Legacy `agents.defaults.*`/`agents.list[].*` config keys (such as `sandbox.perSession`, `agentRuntime`, `embeddedPi`) are migrated by `openclaw doctor`; prefer `agents.defaults` + `agents.list` going forward.
 </Note>
 
 ---
@@ -342,7 +342,7 @@ Legacy `agent.*` configs are migrated by `openclaw doctor`; prefer `agents.defau
 ## Common pitfall: "non-main"
 
 <Warning>
-`agents.defaults.sandbox.mode: "non-main"` is based on `session.mainKey` (default `"main"`), not the agent id. Group/channel sessions always get their own keys, so they are treated as non-main and will be sandboxed. If you want an agent to never sandbox, set `agents.list[].sandbox.mode: "off"`.
+`agents.defaults.sandbox.mode: "non-main"` checks the session key against the main session key (always `"main"`; `session.mainKey` is not user-configurable, and OpenClaw warns and ignores any other value), not the agent id. Group/channel sessions always get their own keys, so they are treated as non-main and will be sandboxed. If you want an agent to never sandbox, set `agents.list[].sandbox.mode: "off"`.
 </Warning>
 
 ---
@@ -369,7 +369,7 @@ After configuring multi-agent sandbox and tools:
   </Step>
   <Step title="Monitor logs">
     ```bash
-    tail -f "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/logs/gateway.log" | grep -E "routing|sandbox|tools"
+    openclaw logs --follow | grep -E "routing|sandbox|tools"
     ```
   </Step>
 </Steps>
@@ -385,14 +385,14 @@ After configuring multi-agent sandbox and tools:
 
   </Accordion>
   <Accordion title="Tools still available despite deny list">
-    - Check tool filtering order: global → agent → sandbox → subagent.
+    - Check the [full filtering order](#tool-restrictions): profile → provider profile → global policy → provider policy → agent policy → agent provider policy → sandbox → subagent.
     - Each level can only further restrict, not grant back.
-    - Verify with logs: `[tools] filtering tools for agent:${agentId}`.
+    - See [Sandbox vs tool policy vs elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for step-by-step debugging.
 
   </Accordion>
   <Accordion title="Container not isolated per agent">
-    - Set `scope: "agent"` in agent-specific sandbox config.
-    - Default is `"session"` which creates one container per session.
+    - Default `scope` is `"agent"` (one container per agent id).
+    - Set `scope: "session"` for one container per session, or `scope: "shared"` to reuse one container across agents.
 
   </Accordion>
 </AccordionGroup>

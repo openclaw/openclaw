@@ -6,6 +6,7 @@ import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/act-policy.js";
 type SchemaRecord = Record<string, { maximum?: number; properties?: SchemaRecord }>;
 type SchemaProperty = {
   description?: string;
+  enum?: string[];
   maximum?: number;
   properties?: SchemaRecord;
 };
@@ -29,5 +30,30 @@ describe("browser tool schema", () => {
     expect(properties.targetId.description).toContain("Prefer suggestedTargetId");
     expect(properties.targetId.description).toContain("raw CDP targetId");
     expect(requestProperties.targetId.description).toBe(properties.targetId.description);
+  });
+
+  it("exposes explicit download actions and their output path", () => {
+    const properties = BrowserToolSchema.properties as BrowserSchemaRecord;
+
+    expect(properties.action.enum).toEqual(expect.arrayContaining(["download", "waitfordownload"]));
+    expect(properties.path).toBeDefined();
+  });
+
+  it("exposes scrollIntoView on nested and flattened act params", () => {
+    const properties = BrowserToolSchema.properties as BrowserSchemaRecord;
+    const requestProperties = properties.request.properties as BrowserSchemaRecord;
+
+    expect(properties.kind.enum).toContain("scrollIntoView");
+    expect(requestProperties.kind.enum).toContain("scrollIntoView");
+  });
+
+  it("exposes batch actions on nested and flattened act params", () => {
+    const properties = BrowserToolSchema.properties as BrowserSchemaRecord;
+    const requestProperties = properties.request.properties as BrowserSchemaRecord;
+
+    expect(properties.kind.enum).toContain("batch");
+    expect(properties.actions).toBeDefined();
+    expect(requestProperties.kind.enum).toContain("batch");
+    expect(requestProperties.actions).toBeDefined();
   });
 });

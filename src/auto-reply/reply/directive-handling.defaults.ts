@@ -32,44 +32,38 @@ export function resolveDefaultModel(params: { cfg: OpenClawConfig; agentId?: str
   return { defaultProvider, defaultModel, aliasIndex };
 }
 
-// For subagent sessions (entry.subagentRole set or entry.spawnDepth >= 1) the
-// reply runtime would otherwise start the run on the parent agent's
-// `model.primary` and then post-run write that model back into the session
-// entry, clobbering the configured subagent default that
-// `resolveSubagentSpawnModelSelection` wrote at spawn time. This helper resolves
-// the configured subagent default (agentConfig.subagents.model ->
-// defaults.subagents.model -> agentConfig.model) so the Pi runtime harness can
-// boot the run on the right model.
+/**
+ * Resolve the configured model for a spawned subagent reply.
+ * Locked sessions keep their durable model selection.
+ */
 export function resolveSubagentSessionDefaultModel(params: {
   cfg: OpenClawConfig;
   agentId?: string;
-  sessionEntry?: Pick<SessionEntry, "spawnDepth" | "subagentRole">;
+  sessionEntry?: Partial<
+    Pick<SessionEntry, "modelSelectionLocked" | "spawnDepth" | "subagentRole">
+  >;
   defaultProvider: string;
 }): { provider: string; model: string } | null {
   const isSubagent =
     (typeof params.sessionEntry?.spawnDepth === "number" && params.sessionEntry.spawnDepth >= 1) ||
     Boolean(params.sessionEntry?.subagentRole);
-  if (!isSubagent || !params.agentId) {
+  if (!isSubagent || !params.agentId || params.sessionEntry?.modelSelectionLocked === true) {
     return null;
   }
-  const subagentSelection = resolveSubagentConfiguredModelSelection({
+  const configured = resolveSubagentConfiguredModelSelection({
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  if (!subagentSelection) {
+  if (!configured) {
     return null;
   }
-  // Use alias-aware resolution so a configured alias such as `gpt` resolves
-  // through the model alias index instead of being parsed as a bare model
-  // under the default provider. This keeps the reply-time fallback in sync
-  // with `resolveSubagentSpawnModelSelection`.
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
   });
   const resolved = resolveModelRefFromString({
     cfg: params.cfg,
-    raw: subagentSelection,
+    raw: configured,
     defaultProvider: params.defaultProvider,
     aliasIndex,
   });

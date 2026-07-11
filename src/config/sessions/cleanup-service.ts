@@ -27,12 +27,13 @@ import {
   type SessionEntryLifecycleUpsert,
 } from "./session-accessor.js";
 import { cloneSessionStoreRecord } from "./store-cache.js";
-import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
+import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   pruneStaleModelRunEntries,
   pruneStaleEntries,
+  shouldPreserveMaintenanceEntry,
   shouldRunModelRunPrune,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
@@ -317,6 +318,12 @@ function pruneMissingTranscriptEntries(params: {
   let removed = 0;
   let repaired = 0;
   for (const [key, entry] of Object.entries(params.store)) {
+    // `--fix-missing` is explicit repair for ordinary rows, but it cannot
+    // release a harness ownership lock. Header-only supervised transcripts are
+    // valid while their first native turn is still pending.
+    if (entry?.modelSelectionLocked === true && shouldPreserveMaintenanceEntry({ key, entry })) {
+      continue;
+    }
     if (!entry?.sessionId) {
       if (parseAgentSessionKey(key)) {
         // Agent-scoped keys without session ids are valid routing entries; keep them.
@@ -436,7 +443,11 @@ async function previewStoreCleanup(params: {
           },
         })
       : 0;
-  const preserveSessionKeys = collectSessionMaintenancePreserveKeys([params.activeKey]);
+  const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
+    storePath: params.target.storePath,
+    store: previewStore,
+    baseKeys: [params.activeKey],
+  });
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,
     entryCount: Object.keys(previewStore).length,
@@ -668,6 +679,7 @@ export async function runSessionsCleanup(params: {
         removals,
         upserts: missingRepairs,
         activeSessionKey: opts.activeKey,
+        preserveActiveWork: true,
         maintenanceOverride: {
           mode,
         },

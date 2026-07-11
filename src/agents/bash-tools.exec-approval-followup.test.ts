@@ -18,6 +18,12 @@ import os from "node:os";
 import path from "node:path";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import {
   buildExecApprovalFollowupPrompt,
@@ -39,6 +45,7 @@ function writeTempSessionStore(entries: Record<string, { sessionId: string }>): 
 
 afterEach(() => {
   vi.resetAllMocks();
+  resetDiagnosticEventsForTest();
   clearSessionStoreCacheForTest();
   while (tempStoreDirs.length > 0) {
     const dir = tempStoreDirs.pop();
@@ -171,6 +178,10 @@ describe("exec approval followup", () => {
     const sessionStore = writeTempSessionStore({
       "agent:main:main": { sessionId: "session-after-reset" },
     });
+    const diagnostics: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => {
+      diagnostics.push(event);
+    });
 
     const result = await sendExecApprovalFollowup({
       approvalId: "req-denied-rebound",
@@ -184,6 +195,15 @@ describe("exec approval followup", () => {
     });
 
     expect(result).toBe(false);
+    await waitForDiagnosticEventsDrained();
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        type: "exec.approval.followup_suppressed",
+        approvalId: "req-denied-rebound",
+        reason: "session_rebound",
+        phase: "direct_delivery",
+      }),
+    );
     expect(sendMessage).not.toHaveBeenCalled();
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
@@ -212,6 +232,10 @@ describe("exec approval followup", () => {
     const sessionStore = writeTempSessionStore({
       "agent:main:main": { sessionId: "session-after-reset" },
     });
+    const diagnostics: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => {
+      diagnostics.push(event);
+    });
 
     const result = await sendExecApprovalFollowup({
       approvalId: "req-finished-rebound",
@@ -225,6 +249,15 @@ describe("exec approval followup", () => {
     });
 
     expect(result).toBe(false);
+    await waitForDiagnosticEventsDrained();
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        type: "exec.approval.followup_suppressed",
+        approvalId: "req-finished-rebound",
+        reason: "session_rebound",
+        phase: "direct_delivery",
+      }),
+    );
     expect(sendMessage).not.toHaveBeenCalled();
     expect(callGatewayTool).not.toHaveBeenCalled();
   });

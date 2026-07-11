@@ -16,10 +16,19 @@ const mocks = vi.hoisted(() => ({
     requesterInternalKey: undefined,
     restrictToSpawned: false,
   })),
+  getSessionStateVersions: vi.fn(
+    (_refs: Array<{ sessionKey: string; agentId: string }>) =>
+      ({}) as Record<string, Record<string, number>>,
+  ),
 }));
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => mocks.gatewayCall(opts),
+}));
+
+vi.mock("../../sessions/session-state-events.js", () => ({
+  getSessionStateVersions: (refs: Array<{ sessionKey: string; agentId: string }>) =>
+    mocks.getSessionStateVersions(refs),
 }));
 
 vi.mock("./sessions-helpers.js", async (importActual) => {
@@ -46,6 +55,11 @@ type SessionsListDetails = {
     effectiveFastModeSource?: "session" | "agent" | "config" | "default";
     fastMode?: boolean | "auto";
     fastAutoOnSeconds?: number;
+    archived?: boolean;
+    archivedAt?: number;
+    pinned?: boolean;
+    pinnedAt?: number;
+    stateVersion?: number;
     reasoningLevel?: string;
     responseUsage?: string;
     thinkingLevel?: string;
@@ -71,6 +85,29 @@ describe("sessions-list-tool", () => {
       requesterInternalKey: undefined,
       restrictToSpawned: false,
     });
+    mocks.getSessionStateVersions.mockReturnValue({});
+  });
+
+  it("adds nonzero state versions with one batch lookup", async () => {
+    mocks.gatewayCall.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [
+        { key: "agent:main:main", kind: "main", sessionId: "main-1" },
+        { key: "agent:main:subagent:child", kind: "other", sessionId: "child-1" },
+      ],
+    });
+    mocks.getSessionStateVersions.mockReturnValue({
+      main: { "agent:main:main": 7, "agent:main:subagent:child": 0 },
+    });
+
+    const result = await createSessionsListTool({ config: {} as never }).execute("call-state", {});
+
+    expect(mocks.getSessionStateVersions).toHaveBeenCalledWith([
+      { sessionKey: "agent:main:main", agentId: "main" },
+      { sessionKey: "agent:main:subagent:child", agentId: "main" },
+    ]);
+    expect(getSessionsListDetails(result).sessions?.[0]?.stateVersion).toBe(7);
+    expect(getSessionsListDetails(result).sessions?.[1]?.stateVersion).toBeUndefined();
   });
 
   it("keeps deliveryContext.threadId in sessions_list results", async () => {
@@ -206,6 +243,36 @@ describe("sessions-list-tool", () => {
     expect(session?.reasoningLevel).toBe("deep");
     expect(session?.elevatedLevel).toBe("on");
     expect(session?.responseUsage).toBe("full");
+  });
+
+  it("requests archived sessions and keeps management metadata", async () => {
+    mocks.gatewayCall.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [
+        {
+          key: "agent:main:dashboard:archived",
+          kind: "direct",
+          archived: true,
+          archivedAt: 20,
+          pinned: false,
+        },
+      ],
+    });
+    const tool = createSessionsListTool({ config: {} as never });
+
+    const result = await tool.execute("call-archived", { archived: true });
+
+    expect(mocks.gatewayCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.list",
+        params: expect.objectContaining({ archived: true }),
+      }),
+    );
+    expect(getSessionsListDetails(result).sessions?.[0]).toMatchObject({
+      archived: true,
+      archivedAt: 20,
+      pinned: false,
+    });
   });
 
   it.each([

@@ -542,19 +542,6 @@ describe("OpenClaw SDK", () => {
     expect(transport.calls).toStrictEqual([]);
   });
 
-  it("throws explicit unsupported errors for SDK namespaces without Gateway RPCs", async () => {
-    const transport = new FakeTransport({});
-    const oc = new OpenClaw({ transport });
-
-    await expect(oc.environments.create({ provider: "testbox" })).rejects.toThrow(
-      "oc.environments.create is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.environments.delete("environment_123")).rejects.toThrow(
-      "oc.environments.delete is not supported by the current OpenClaw Gateway yet",
-    );
-    expect(transport.calls).toStrictEqual([]);
-  });
-
   it("invokes tools through the Gateway tools.invoke method", async () => {
     const transport = new FakeTransport({
       "tools.invoke": { ok: true, toolName: "demo", output: { value: 1 }, source: "core" },
@@ -575,6 +562,7 @@ describe("OpenClaw SDK", () => {
         method: "tools.invoke",
         params: {
           name: "demo",
+          conversationReadOrigin: "direct-operator",
           args: { mode: "test" },
           sessionKey: "agent:main:main",
           confirm: false,
@@ -660,7 +648,7 @@ describe("OpenClaw SDK", () => {
     ]);
   });
 
-  it("lists and reads environment status through current Gateway methods", async () => {
+  it("manages environments through current Gateway methods", async () => {
     const gatewayEnvironment = {
       id: "gateway",
       type: "local",
@@ -668,9 +656,25 @@ describe("OpenClaw SDK", () => {
       status: "available",
       capabilities: ["agent.run"],
     };
+    const workerEnvironment = {
+      id: "worker_123",
+      type: "worker",
+      status: "available",
+      worker: {
+        providerId: "static-ssh",
+        leaseId: "lease_123",
+        state: "ready",
+        ageMs: 1000,
+        idleMs: 250,
+        attachedSessionIds: [],
+        tunnelStatus: "stopped",
+      },
+    };
     const transport = new FakeTransport({
       "environments.list": { environments: [gatewayEnvironment] },
       "environments.status": gatewayEnvironment,
+      "environments.create": workerEnvironment,
+      "environments.destroy": { ...workerEnvironment, status: "unavailable" },
     });
     const oc = new OpenClaw({ transport });
 
@@ -678,15 +682,29 @@ describe("OpenClaw SDK", () => {
       environments: [gatewayEnvironment],
     });
     await expect(oc.environments.status("gateway")).resolves.toEqual(gatewayEnvironment);
-    await expect(oc.environments.create({ provider: "testbox" })).rejects.toThrow(
-      "oc.environments.create is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.environments.delete("gateway")).rejects.toThrow(
+    await expect(
+      oc.environments.create({ profileId: "development", idempotencyKey: "request_123" }),
+    ).resolves.toEqual(workerEnvironment);
+    await expect(oc.environments.destroy("worker_123")).resolves.toEqual({
+      ...workerEnvironment,
+      status: "unavailable",
+    });
+    await expect(oc.environments.delete("worker_123")).rejects.toThrow(
       "oc.environments.delete is not supported by the current OpenClaw Gateway yet",
     );
     expect(transport.calls).toEqual([
       { method: "environments.list", params: {}, options: undefined },
       { method: "environments.status", params: { environmentId: "gateway" }, options: undefined },
+      {
+        method: "environments.create",
+        params: { profileId: "development", idempotencyKey: "request_123" },
+        options: undefined,
+      },
+      {
+        method: "environments.destroy",
+        params: { environmentId: "worker_123" },
+        options: undefined,
+      },
     ]);
   });
 
@@ -1349,12 +1367,14 @@ describe("OpenClaw SDK", () => {
     const transport = new FakeTransport({
       "sessions.create": { key: "session-main", label: "Main" },
       "sessions.send": { status: "accepted", runId: "run_session" },
+      "sessions.compact": { ok: true, compacted: true },
     });
     const oc = new OpenClaw({ transport });
 
     const session = await oc.sessions.create({ key: "session-main" });
     const run = await session.send({ message: "continue", thinking: "medium", timeoutMs: 1_500 });
     const noTimeoutRun = await session.send({ message: "continue without timeout", timeoutMs: 0 });
+    await session.compact();
 
     expect(run.id).toBe("run_session");
     expect(noTimeoutRun.id).toBe("run_session");
@@ -1373,6 +1393,11 @@ describe("OpenClaw SDK", () => {
         method: "sessions.send",
         options: { expectFinal: true, timeoutMs: null },
         params: { key: "session-main", message: "continue without timeout", timeoutMs: 0 },
+      },
+      {
+        method: "sessions.compact",
+        options: { timeoutMs: null },
+        params: { key: "session-main" },
       },
     ]);
   });

@@ -37,6 +37,7 @@ const ROOT_SECTIONS = [
   "discovery",
   "talk",
   "gateway",
+  "cloudWorkers",
   "memory",
   "plugins",
 ] as const;
@@ -204,6 +205,10 @@ const TARGET_KEYS = [
   "nodeHost.browserProxy",
   "nodeHost.browserProxy.enabled",
   "nodeHost.browserProxy.allowProfiles",
+  "nodeHost.mcp",
+  "nodeHost.mcp.servers",
+  "nodeHost.skills",
+  "nodeHost.skills.enabled",
   "media",
   "media.preserveFilenames",
   "audio",
@@ -471,7 +476,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "logging.consoleStyle": ['"pretty"', '"compact"', '"json"'],
   "logging.redactSensitive": ['"off"', '"tools"'],
   "cli.banner.taglineMode": ['"random"', '"default"', '"off"'],
-  "update.channel": ['"stable"', '"beta"', '"dev"'],
+  "update.channel": ['"stable"', '"extended-stable"', '"beta"', '"dev"'],
   "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
   "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
 };

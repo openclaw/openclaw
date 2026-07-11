@@ -161,6 +161,14 @@ describe("tsdown config", () => {
     );
   });
 
+  it("keeps worker environment bootstrap behind one stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["gateway/worker-environments/runtime"]).toBe(
+      "src/gateway/worker-environments/runtime.ts",
+    );
+  });
+
   it("keeps PI model discovery synthetic auth refs behind one stable runtime dist entry", () => {
     const distGraph = requireUnifiedDistGraph();
     const importSpecifiers = [
@@ -268,6 +276,8 @@ describe("tsdown config", () => {
 
     expect(alwaysBundle("@openclaw/fs-safe")).toBe(true);
     expect(alwaysBundle("@openclaw/fs-safe/path")).toBe(true);
+    expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime-internal")).toBe(true);
+    expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime")).toBe(false);
     expect(alwaysBundle("zod")).toBe(true);
     expect(alwaysBundle("zod/v4/core")).toBe(true);
     expect(alwaysBundle("not-a-runtime-dependency")).toBe(false);

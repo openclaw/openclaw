@@ -190,6 +190,7 @@ type MatrixJsClientStub = {
   getJoinedRoomMembers: ReturnType<typeof vi.fn>;
   getStateEvent: ReturnType<typeof vi.fn>;
   getAccountData: ReturnType<typeof vi.fn>;
+  getAccountDataFromServer: ReturnType<typeof vi.fn>;
   setAccountData: ReturnType<typeof vi.fn>;
   getRoomIdForAlias: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -226,6 +227,7 @@ function createMatrixJsClientStub(): MatrixJsClientStub {
   client.getJoinedRoomMembers = vi.fn(async () => ({ joined: {} }));
   client.getStateEvent = vi.fn(async () => ({}));
   client.getAccountData = vi.fn(() => undefined);
+  client.getAccountDataFromServer = vi.fn(async () => null);
   client.setAccountData = vi.fn(async () => {});
   client.getRoomIdForAlias = vi.fn(async () => ({ room_id: "!resolved:example.org" }));
   client.sendMessage = vi.fn(async () => ({ event_id: "$sent" }));
@@ -324,6 +326,19 @@ describe("MatrixClient request hardening", () => {
     resetPluginStateStoreForTests();
   });
 
+  it("reads account data through the server-aware SDK path before initial sync", async () => {
+    matrixJsClient.getAccountDataFromServer.mockResolvedValue({
+      "@alice:example.org": ["!dm:example.org"],
+    });
+    const client = new MatrixClient("https://matrix.example.org", "token");
+
+    await expect(client.getAccountData("m.direct")).resolves.toEqual({
+      "@alice:example.org": ["!dm:example.org"],
+    });
+    expect(matrixJsClient.getAccountDataFromServer).toHaveBeenCalledWith("m.direct");
+    expect(matrixJsClient.getAccountData).not.toHaveBeenCalled();
+  });
+
   it("blocks absolute endpoints unless explicitly allowed", async () => {
     const fetchMock = vi.fn(async () => {
       return new Response("{}", {
@@ -408,6 +423,50 @@ describe("MatrixClient request hardening", () => {
     const secondUrl = requestUrl(secondInput);
     expect(firstUrl).toContain("/_matrix/client/v1/media/download/example.org/media");
     expect(secondUrl).toContain("/_matrix/media/v3/download/example.org/media");
+  });
+
+  it("preserves encrypted media download limits through the crypto facade", async () => {
+    const payload = Buffer.from([9, 10, 11, 12, 13]);
+    const fetchMock = vi.fn(async () => new Response(payload, { status: 200 }));
+    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+
+    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
+      encryption: true,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+    await (
+      client as unknown as {
+        ensureCryptoSupportInitialized: () => Promise<void>;
+      }
+    ).ensureCryptoSupportInitialized();
+
+    const cryptoFacade = client.crypto;
+    if (!cryptoFacade) {
+      throw new Error("expected Matrix crypto facade");
+    }
+    await expect(
+      cryptoFacade.decryptMedia(
+        {
+          url: "mxc://example.org/encrypted",
+          key: {
+            alg: "A256CTR",
+            ext: true,
+            k: "unused",
+            key_ops: ["encrypt", "decrypt"],
+            kty: "oct",
+          },
+          iv: "unused",
+          hashes: { sha256: "unused" },
+          v: "v2",
+        },
+        {
+          maxBytes: 4,
+          readIdleTimeoutMs: 25,
+        },
+      ),
+    ).rejects.toThrow(/Matrix media exceeds configured size limit/);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("decrypts encrypted room events returned by getEvent", async () => {

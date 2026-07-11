@@ -64,6 +64,11 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
       expect(result.status).toBe(0);
       const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
       expect(config.gateway.port).toBe(19000);
+      expect(config.browser.noSandbox).toBe(true);
+      expect(config.browser.extraArgs).toEqual([
+        "--remote-debugging-address=127.0.0.1",
+        "about:blank",
+      ]);
       expect(config.browser.profiles["docker-cdp"].cdpUrl).toBe("http://127.0.0.1:19223");
     } finally {
       rmSync(root, { recursive: true, force: true });
