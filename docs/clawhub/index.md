@@ -9,8 +9,8 @@ title: "ClawHub"
 # ClawHub
 
 ClawHub is the registry for OpenClaw skills and plugins. Use it to discover
-community packages, install trusted releases, and publish your own skills or
-plugins.
+community packages, review release trust details, and publish your own skills
+or plugins.
 
 ## Start here
 
