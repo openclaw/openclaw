@@ -297,7 +297,9 @@ describe("Google embedding-batch bounded JSON reads", () => {
               const encoder = new TextEncoder();
               for (const chunk of chunks) {
                 controller.enqueue(encoder.encode(chunk));
-                await new Promise((resolve) => setTimeout(resolve, 5));
+                await new Promise((resolve) => {
+                  setTimeout(resolve, 5);
+                });
               }
               controller.close();
             },
