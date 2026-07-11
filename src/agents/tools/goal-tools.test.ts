@@ -134,7 +134,7 @@ describe("goal tools", () => {
         }),
       ).rejects.toThrow("token_budget must be a positive integer");
 
-      expect(loadSessionStore(storePath, { skipCache: true }).global?.goal).toBeUndefined();
+      expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal).toBeUndefined();
     },
   );
 
