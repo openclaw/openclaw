@@ -50,6 +50,8 @@ function expectUnresolvedProbeTokenWarning(cfg: OpenClawConfig) {
   expect(result.auth).toStrictEqual({});
   expect(result.warning).toContain("gateway.auth.token");
   expect(result.warning).toContain("unresolved");
+  // Fail-fast results skip the probe, so the warning must not claim one ran.
+  expect(result.warning).not.toContain("probing without configured auth credentials");
   expect(result.failureReason).toMatch(/gateway auth token|gateway\.auth\.token/i);
 }
 
@@ -211,7 +213,23 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
     expect(result.auth).toStrictEqual({});
     expect(result.warning).toContain("gateway.auth.token");
     expect(result.warning).toContain("unresolved");
+    expect(result.warning).not.toContain("probing without configured auth credentials");
     expect(result.failureReason).toMatch(/gateway auth token|gateway\.auth\.token/i);
+  });
+
+  it("keeps the probing warning when the unresolved SecretRef does not fail-fast", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: configWithDefaultEnvProvider({
+        // No auth.mode configured: open gateway, so no failureReason and the
+        // caller still probes without credentials.
+        auth: { token: envSecretRef("MISSING_TOKEN_XYZ") },
+      } as NonNullable<OpenClawConfig["gateway"]>),
+      mode: "local",
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(result.failureReason).toBeUndefined();
+    expect(result.warning).toContain("probing without configured auth credentials");
   });
 });
 

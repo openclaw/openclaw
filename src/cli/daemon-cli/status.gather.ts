@@ -697,6 +697,7 @@ export async function gatherDaemonStatus(
   // local daemon endpoint. When the caller passes an explicit RPC URL override
   // (probeUrlOverride), local auth config requirements do not apply and the
   // probe should be attempted regardless of local credential resolution.
+  const skippedProbeForMissingLocalAuth = Boolean(rpcFailureReason) && !probeUrlOverride;
   const rpc = !opts.probe
     ? undefined
     : rpcFailureReason && !probeUrlOverride
@@ -721,8 +722,12 @@ export async function gatherDaemonStatus(
   if (rpc?.ok && !skippedProbeAuthForDisabledExecSecretRef) {
     rpcAuthWarning = undefined;
   }
+  // When the rpc failure was synthesized by the missing-local-auth fail-fast,
+  // skip restart-health too: inspectGatewayRestart re-probes loopback via
+  // confirmGatewayReachable and would run the unauthenticated probe the
+  // fail-fast just avoided.
   const health =
-    opts.probe && loaded && rpc?.ok !== true
+    opts.probe && loaded && rpc?.ok !== true && !skippedProbeForMissingLocalAuth
       ? await loadRestartHealthModule()
           .then(({ inspectGatewayRestart }) =>
             inspectGatewayRestart({

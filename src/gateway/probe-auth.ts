@@ -73,15 +73,12 @@ function hasExplicitProbeAuth(auth: { token?: string; password?: string }): bool
   return Boolean(auth.token || auth.password);
 }
 
-function buildUnresolvedProbeAuthWarning(path: string): string {
-  return `${path} SecretRef is unresolved in this command path; probing without configured auth credentials.`;
-}
-
-function resolveGatewayProbeWarning(error: unknown): string | undefined {
-  if (!isGatewaySecretRefUnavailableError(error)) {
-    throw error;
-  }
-  return buildUnresolvedProbeAuthWarning(error.path);
+function buildUnresolvedProbeAuthWarning(path: string, failFast: boolean): string {
+  // Fail-fast results carry a paired failureReason that makes callers skip the
+  // probe, so that warning variant must not claim an unauthenticated probe ran.
+  return failFast
+    ? `${path} SecretRef is unresolved in this command path.`
+    : `${path} SecretRef is unresolved in this command path; probing without configured auth credentials.`;
 }
 
 /** Resolves synchronous probe auth, throwing when configured secrets cannot be read. */
@@ -134,12 +131,13 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(params: {
     const failureReason = await resolveLocalProbeFailureReason(params, auth);
     return failureReason ? { auth, failureReason } : { auth };
   } catch (error) {
-    const result = {
-      auth: {},
-      warning: resolveGatewayProbeWarning(error),
-    };
-    const failureReason = await resolveLocalProbeFailureReason(params, result.auth);
-    return failureReason ? { ...result, failureReason } : result;
+    if (!isGatewaySecretRefUnavailableError(error)) {
+      throw error;
+    }
+    const auth = {};
+    const failureReason = await resolveLocalProbeFailureReason(params, auth);
+    const warning = buildUnresolvedProbeAuthWarning(error.path, Boolean(failureReason));
+    return failureReason ? { auth, warning, failureReason } : { auth, warning };
   }
 }
 
@@ -166,12 +164,13 @@ export function resolveGatewayProbeAuthSafe(params: {
     const failureReason = resolveLocalProbeFailureReasonSync(params, auth);
     return failureReason ? { auth, failureReason } : { auth };
   } catch (error) {
-    const result = {
-      auth: {},
-      warning: resolveGatewayProbeWarning(error),
-    };
-    const failureReason = resolveLocalProbeFailureReasonSync(params, result.auth);
-    return failureReason ? { ...result, failureReason } : result;
+    if (!isGatewaySecretRefUnavailableError(error)) {
+      throw error;
+    }
+    const auth = {};
+    const failureReason = resolveLocalProbeFailureReasonSync(params, auth);
+    const warning = buildUnresolvedProbeAuthWarning(error.path, Boolean(failureReason));
+    return failureReason ? { auth, warning, failureReason } : { auth, warning };
   }
 }
 
@@ -216,24 +215,14 @@ async function resolveLocalProbeFailureReason(
 export async function hasCachedPairedDeviceToken(env?: NodeJS.ProcessEnv): Promise<boolean> {
   // Mirror probeGateway's device-identity check: only attach a paired
   // identity when this CLI has a cached operator device token. If the
-  // resolution throws (read-only state dir, missing identity file, etc.)
+  // resolution throws (read-only state dir, missing identity store, etc.)
   // we treat it as "no cached token" and let the failure reason apply.
   try {
-    const [
-      { loadDeviceIdentityIfPresent },
-      { resolveStateDir },
-      { loadDeviceAuthToken },
-      pathModule,
-    ] = await Promise.all([
+    const [{ loadDeviceIdentityIfPresent }, { loadDeviceAuthToken }] = await Promise.all([
       import("../infra/device-identity.js"),
-      import("../config/paths.js"),
       import("../infra/device-auth-store.js"),
-      import("node:path"),
     ]);
-    const stateDir = resolveStateDir(env);
-    const identity = loadDeviceIdentityIfPresent(
-      pathModule.join(stateDir, "identity", "device.json"),
-    );
+    const identity = loadDeviceIdentityIfPresent({ env });
     if (!identity) {
       return false;
     }
