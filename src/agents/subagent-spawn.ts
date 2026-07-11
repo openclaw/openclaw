@@ -34,6 +34,7 @@ import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { recordSubagentSpawned } from "../sessions/session-state-events.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
@@ -1491,6 +1492,8 @@ export async function spawnSubagentDirect(
     task,
   });
 
+  const childIdem = crypto.randomUUID();
+  let childRunId: string = childIdem;
   const spawnedMetadata = normalizeSpawnedRunMetadata({
     spawnedBy: spawnedByKey,
     ...toolSpawnMetadata,
@@ -1514,6 +1517,12 @@ export async function spawnSubagentDirect(
       childSessionKey,
     };
   }
+  recordSubagentSpawned({
+    childSessionKey,
+    childRunId,
+    requesterSessionKey: requesterInternalKey,
+    agentId: targetAgentId,
+  });
   const contextEnginePrepareResult =
     params.lightContext && preparedSpawnContext.mode === "isolated"
       ? ({ status: "ok", preparation: undefined } as const)
@@ -1539,8 +1548,6 @@ export async function spawnSubagentDirect(
   }
   const contextEnginePreparation = contextEnginePrepareResult.preparation;
 
-  const childIdem = crypto.randomUUID();
-  let childRunId: string = childIdem;
   const deliverInitialChildRunDirectly =
     requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
   const shouldAnnounceCompletion = deliverInitialChildRunDirectly

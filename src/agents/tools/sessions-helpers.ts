@@ -62,6 +62,7 @@ export type SessionListRow = {
   pinned?: boolean;
   pinnedAt?: number;
   sessionId?: string;
+  stateVersion?: number;
   model?: string;
   contextTokens?: number | null;
   totalTokens?: number | null;
