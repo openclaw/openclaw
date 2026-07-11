@@ -138,9 +138,12 @@ final class BrowserProfileImportPrompter {
                 path: "/profiles/import",
                 body: body,
                 timeoutMs: 120_000)
+            let importedSummary =
+                "Imported \(result.cookies.imported) of \(result.cookies.total) cookies into \(result.into). " +
+                "This profile is now the default for agent browsing."
             Self.showMessage(
                 title: "Browser login imported",
-                message: "Imported \(result.cookies.imported) of \(result.cookies.total) cookies into \(result.into). This profile is now the default for agent browsing.")
+                message: importedSummary)
         } catch {
             Self.showMessage(title: "Browser import failed", message: error.localizedDescription)
         }
