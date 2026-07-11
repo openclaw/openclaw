@@ -1,10 +1,7 @@
 /**
  * Classifies incomplete terminal assistant turns and retry instructions.
  */
-import {
-  asFiniteNumber,
-  parseStrictNonNegativeInteger,
-} from "@openclaw/normalization-core/number-coercion";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   isSilentReplyPayloadText,
@@ -131,24 +128,10 @@ const RETRY_GUARD_MODEL_APIS = new Set([
   "openclaw-openai-responses-transport",
   "openclaw-azure-openai-responses-transport",
 ]);
-function resolveRetryLimitFromEnv(envVar: string, fallback: number): number {
-  const raw = process.env[envVar]?.trim();
-  if (!raw) {
-    return fallback;
-  }
-  return parseStrictNonNegativeInteger(raw) ?? fallback;
-}
-
 // Allow one immediate continuation plus one follow-up continuation before
 // surfacing the existing incomplete-turn error path.
-export const DEFAULT_REASONING_ONLY_RETRY_LIMIT = resolveRetryLimitFromEnv(
-  "OPENCLAW_REASONING_ONLY_RETRY_LIMIT",
-  2,
-);
-export const DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT = resolveRetryLimitFromEnv(
-  "OPENCLAW_EMPTY_RESPONSE_RETRY_LIMIT",
-  1,
-);
+export const DEFAULT_REASONING_ONLY_RETRY_LIMIT = 2;
+export const DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT = 1;
 export const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 export const EMPTY_RESPONSE_RETRY_INSTRUCTION =

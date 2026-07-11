@@ -1,5 +1,5 @@
 // Coverage for incomplete-turn safety, retry instructions, and liveness states.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
@@ -1517,114 +1517,6 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         isError: true,
       },
     ]);
-  });
-
-  describe("OPENCLAW_REASONING_ONLY_RETRY_LIMIT override", () => {
-    const previousLimitEnv = process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT;
-
-    afterEach(() => {
-      if (previousLimitEnv === undefined) {
-        delete process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT;
-      } else {
-        process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT = previousLimitEnv;
-      }
-    });
-
-    it("surfaces the incomplete-turn error on the first reasoning-only turn with no retries when set to 0", async () => {
-      process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT = "0";
-      const { runEmbeddedAgent: freshRunEmbeddedAgent } = await loadRunOverflowCompactionHarness();
-      await warmRunOverflowCompactionHarness(freshRunEmbeddedAgent);
-      resetRunOverflowCompactionHarnessMocks();
-      mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
-      mockedClassifyFailoverReason.mockReturnValue(null);
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-        makeAttemptResult({
-          assistantTexts: [],
-          lastAssistant: {
-            role: "assistant",
-            stopReason: "end_turn",
-            provider: "openai",
-            model: "gpt-5.4",
-            content: [
-              {
-                type: "thinking",
-                thinking: "internal reasoning",
-                thinkingSignature: JSON.stringify({
-                  id: "rs_env_limit_zero",
-                  type: "reasoning",
-                }),
-              },
-            ],
-          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-        }),
-      );
-
-      const result = await freshRunEmbeddedAgent({
-        ...overflowBaseRunParams,
-        provider: "openai",
-        model: "gpt-5.4",
-        reasoningLevel: "on",
-        runId: "run-reasoning-only-env-limit-zero",
-      });
-
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-      expect(result.payloads?.[0]?.isError).toBe(true);
-      expect(result.payloads?.[0]?.text).toContain("Please try again");
-      expectWarnMessageWith("reasoning-only retries exhausted");
-    });
-  });
-
-  describe("retry limit env var parsing", () => {
-    const RETRY_LIMIT_ENV_VARS = [
-      "OPENCLAW_REASONING_ONLY_RETRY_LIMIT",
-      "OPENCLAW_EMPTY_RESPONSE_RETRY_LIMIT",
-    ] as const;
-    const previousEnv: Record<string, string | undefined> = {};
-
-    beforeEach(() => {
-      for (const key of RETRY_LIMIT_ENV_VARS) {
-        previousEnv[key] = process.env[key];
-      }
-    });
-
-    afterEach(() => {
-      for (const key of RETRY_LIMIT_ENV_VARS) {
-        if (previousEnv[key] === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = previousEnv[key];
-        }
-      }
-    });
-
-    async function importIncompleteTurnFresh(): Promise<typeof import("./run/incomplete-turn.js")> {
-      vi.resetModules();
-      return import("./run/incomplete-turn.js");
-    }
-
-    it("reads valid non-negative integer overrides from env", async () => {
-      process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT = "5";
-      process.env.OPENCLAW_EMPTY_RESPONSE_RETRY_LIMIT = "0";
-      const mod = await importIncompleteTurnFresh();
-      expect(mod.DEFAULT_REASONING_ONLY_RETRY_LIMIT).toBe(5);
-      expect(mod.DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(0);
-    });
-
-    it.each(["abc", "-1"])("falls back to the default for invalid value %s", async (value) => {
-      process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT = value;
-      process.env.OPENCLAW_EMPTY_RESPONSE_RETRY_LIMIT = value;
-      const mod = await importIncompleteTurnFresh();
-      expect(mod.DEFAULT_REASONING_ONLY_RETRY_LIMIT).toBe(2);
-      expect(mod.DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(1);
-    });
-
-    it("falls back to the default when unset", async () => {
-      delete process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT;
-      delete process.env.OPENCLAW_EMPTY_RESPONSE_RETRY_LIMIT;
-      const mod = await importIncompleteTurnFresh();
-      expect(mod.DEFAULT_REASONING_ONLY_RETRY_LIMIT).toBe(2);
-      expect(mod.DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(1);
-    });
   });
 
   it("marks incomplete-turn retries as replay-invalid abandoned runs", () => {
