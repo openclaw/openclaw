@@ -159,13 +159,13 @@ import {
 } from "../run-session-target.js";
 import { createAgentRunDirectAbortError } from "../run-termination.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
-import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import {
   canRunPreparedAgentRuntimeAuthAttempt,
   prepareAgentRuntimeAuth,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../runtime-plan/prepare-auth.js";
+import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import {
