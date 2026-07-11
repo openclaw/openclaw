@@ -102,6 +102,13 @@ export type GatewayConfigReloadTransactionOwnership = {
   isCurrent: () => boolean;
 };
 
+class GatewayConfigReloadSupersededError extends Error {
+  constructor() {
+    super("config reload superseded by a newer config write");
+    this.name = "GatewayConfigReloadSupersededError";
+  }
+}
+
 function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
   return {
     plugins: {
@@ -242,6 +249,11 @@ export function startGatewayConfigReloader(opts: {
     const ownership: GatewayConfigReloadTransactionOwnership = {
       isCurrent: () => configWriteEpoch === transactionEpoch,
     };
+    const assertCurrent = () => {
+      if (!ownership.isCurrent()) {
+        throw new GatewayConfigReloadSupersededError();
+      }
+    };
     const configChangedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
     const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
       currentCompareConfig,
@@ -257,6 +269,7 @@ export function startGatewayConfigReloader(opts: {
     } catch (err) {
       opts.log.warn(`config reload plugin install record check failed: ${String(err)}`);
     }
+    assertCurrent();
     const previousPluginInstallConfig = asPluginInstallConfig(currentPluginInstallRecords);
     const nextPluginInstallConfig = asPluginInstallConfig(nextPluginInstallRecords);
     const pluginInstallRecordChangedPaths = diffConfigPaths(
@@ -282,7 +295,9 @@ export function startGatewayConfigReloader(opts: {
     ];
     const nextSettings = resolveGatewayReloadSettings(nextConfig);
     const commitReloadBaseline = async () => {
+      assertCurrent();
       await opts.onConfigAccepted?.(nextConfig, ownership);
+      assertCurrent();
       currentConfig = nextConfig;
       currentCompareConfig = nextCompareConfig;
       currentPluginInstallRecords = nextPluginInstallRecords;
@@ -324,6 +339,7 @@ export function startGatewayConfigReloader(opts: {
       // No-op plans still change the runtime config snapshot. Commit before
       // marking applied so getRuntimeConfig() readers do not stay stale until restart.
       await opts.onNoopConfigCommit(plan, nextConfig, ownership);
+      assertCurrent();
       await opts.onConfigApplied?.(plan, nextConfig);
       await commitReloadBaseline();
       return;
@@ -364,6 +380,7 @@ export function startGatewayConfigReloader(opts: {
 
     await opts.onConfigChange?.(plan, nextConfig);
     await opts.onHotReload(plan, nextConfig, ownership);
+    assertCurrent();
     await opts.onConfigApplied?.(plan, nextConfig);
     await commitReloadBaseline();
   };
@@ -480,6 +497,15 @@ export function startGatewayConfigReloader(opts: {
   }
 
   const scheduleFromWatcher = () => {
+    // Revoke the transaction synchronously. The debounced reread owns this new
+    // epoch; a slow prior reload must not publish after a newer disk write.
+    configWriteEpoch += 1;
+    if (pendingInProcessConfig) {
+      if (lastAppliedWriteHash === pendingInProcessConfig.persistedHash) {
+        lastAppliedWriteHash = null;
+      }
+      pendingInProcessConfig = null;
+    }
     schedule();
   };
 
