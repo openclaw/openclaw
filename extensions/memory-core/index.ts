@@ -175,7 +175,7 @@ export default definePluginEntry({
   description: "File-backed memory search tools and CLI",
   kind: "memory",
   register(api) {
-    configureMemoryCoreEmbeddingLocalService(api.runtime.llm.acquireLocalService);
+    configureMemoryCoreEmbeddingLocalService(api.runtime.llm?.acquireLocalService);
     configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
       api.runtime.state.openKeyedStore<T>(options),
     );
