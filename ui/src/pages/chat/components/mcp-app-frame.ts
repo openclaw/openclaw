@@ -8,6 +8,15 @@
  * Security: the iframe runs with `sandbox="allow-scripts"` only — never
  * `allow-same-origin` — so the untrusted document cannot reach the Control UI
  * origin. The app-declared CSP (`_meta.ui.csp`) is injected as a meta tag.
+ *
+ * KNOWN LIMITATION: `about:srcdoc` documents inherit the embedding page's
+ * CSP. The gateway serves the Control UI with `script-src 'self'`
+ * (src/gateway/control-ui-csp.ts), which blocks app scripts before they can
+ * initialize, so this inline preview only functions on deployments without
+ * that header (e.g. dev servers). The follow-up host serves app documents
+ * from a dedicated ticketed route with their own CSP headers — the
+ * spec-required sandbox-proxy pattern — and this module's bridge, sizing,
+ * and registry carry over unchanged.
  */
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
@@ -191,14 +200,15 @@ function buildCspContent(preview: McpAppToolPreview): string {
 }
 
 function buildAppSrcdoc(preview: McpAppToolPreview): string {
-  const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${buildCspContent(preview)}">`;
-  const html = preview.html;
-  const headMatch = /<head[^>]*>/i.exec(html);
-  if (headMatch && headMatch.index !== undefined) {
-    const insertAt = headMatch.index + headMatch[0].length;
-    return `${html.slice(0, insertAt)}${cspMeta}${html.slice(insertAt)}`;
-  }
-  return `${cspMeta}${html}`;
+  // Structural insertion via DOMParser: regexes over attacker-controlled
+  // markup can be steered (e.g. `<head data-x=">">`) to land the CSP meta
+  // inside an attribute where the browser never enforces it.
+  const doc = new DOMParser().parseFromString(preview.html, "text/html");
+  const meta = doc.createElement("meta");
+  meta.setAttribute("http-equiv", "Content-Security-Policy");
+  meta.setAttribute("content", buildCspContent(preview));
+  doc.head.insertBefore(meta, doc.head.firstChild);
+  return `<!doctype html>${doc.documentElement.outerHTML}`;
 }
 
 function buildAllowAttribute(preview: McpAppToolPreview): string {
@@ -212,11 +222,19 @@ function registerAppFrame(preview: McpAppToolPreview) {
   // Registration must happen synchronously when the element attaches — before
   // the srcdoc document executes — or an app that connects immediately posts
   // ui/initialize into the void and hangs waiting for the response.
+  let registered: HTMLIFrameElement | undefined;
   return (element: Element | undefined) => {
     if (!(element instanceof HTMLIFrameElement)) {
+      // Lit invokes the ref with undefined on detach; drop the strong registry
+      // entry immediately or multi-MB srcdoc frames outlive their chat view.
+      if (registered) {
+        appFrameRegistry.delete(registered);
+        registered = undefined;
+      }
       return;
     }
     installAppHostListener();
+    registered = element;
     appFrameRegistry.add(element);
     if (!appFrameHosts.has(element)) {
       appFrameHosts.set(element, { preview, initialized: false });

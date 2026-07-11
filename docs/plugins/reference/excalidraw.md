@@ -67,5 +67,10 @@ detach the server.
   rejected with a JSON-RPC method-not-found error until the full host bridge
   lands. A follow-up `create_view` that starts from `restoreCheckpoint`
   renders only the new elements.
+- Known limitation: the gateway-served Control UI ships a strict CSP that
+  srcdoc iframes inherit, which blocks the inline app preview on standard
+  deployments (the tool's text result still works everywhere). The dedicated
+  app-document route with per-app CSP headers is the tracked follow-up that
+  makes the preview function under the production CSP.
 
 <!-- openclaw-plugin-reference:manual-end -->
