@@ -1,4 +1,5 @@
 // Legacy session runtime config migrations for retired maintenance/fork sizing keys.
+import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import {
   defineLegacyConfigMigration,
@@ -17,18 +18,22 @@ function hasLegacyParentForkMaxTokens(value: unknown): boolean {
   return Boolean(session && Object.hasOwn(session, "parentForkMaxTokens"));
 }
 
-/** Returns `true` when `pruneAfter` is a string that `parseDurationMs` evaluates to ≤ 0. */
+/** Returns `true` when `pruneAfter` is a string or number that `parseDurationMs` evaluates to ≤ 0. */
 function isZeroDurationPruneAfter(raw: unknown): boolean {
   const maintenance = getRecord(raw);
   if (!maintenance || !Object.hasOwn(maintenance, "pruneAfter")) {
     return false;
   }
   const val = maintenance.pruneAfter;
-  if (typeof val !== "string") {
+  if (val === false) {
+    return false;
+  }
+  const normalized = normalizeStringifiedOptionalString(val);
+  if (!normalized) {
     return false;
   }
   try {
-    const ms = parseDurationMs(val, { defaultUnit: "d" });
+    const ms = parseDurationMs(normalized, { defaultUnit: "d" });
     return ms <= 0;
   } catch {
     return false;
@@ -95,12 +100,13 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
         return;
       }
       const val = maintenance.pruneAfter;
-      if (typeof val !== "string") {
+      const normalized = normalizeStringifiedOptionalString(val);
+      if (!normalized) {
         return;
       }
       let ms: number;
       try {
-        ms = parseDurationMs(val, { defaultUnit: "d" });
+        ms = parseDurationMs(normalized, { defaultUnit: "d" });
       } catch {
         return;
       }
@@ -108,8 +114,9 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
         return;
       }
       delete maintenance.pruneAfter;
+      const label = typeof val === "number" ? String(val) : val;
       changes.push(
-        `Removed session.maintenance.pruneAfter "${val}" (zero duration); documented 30d default applies.`,
+        `Removed session.maintenance.pruneAfter "${label}" (zero duration); documented 30d default applies.`,
       );
     },
   }),

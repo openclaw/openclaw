@@ -56,6 +56,18 @@ describe("session.maintenance.pruneAfter zero-duration migration", () => {
     expect(rule.match?.({ pruneAfter: "" }, {} as Record<string, unknown>)).toBe(false);
   });
 
+  // ── Numeric rule match ─────────────────────────────────────
+
+  it("detects numeric zero", () => {
+    expect(rule.match?.({ pruneAfter: 0 }, {} as Record<string, unknown>)).toBe(true);
+    expect(rule.match?.({ pruneAfter: 0.0 }, {} as Record<string, unknown>)).toBe(true);
+  });
+
+  it("does not match numeric positive durations", () => {
+    expect(rule.match?.({ pruneAfter: 30 }, {} as Record<string, unknown>)).toBe(false);
+    expect(rule.match?.({ pruneAfter: 7 }, {} as Record<string, unknown>)).toBe(false);
+  });
+
   // ── Migration apply (doctor --fix): parser-backed ───────────
 
   it("removes zero-duration strings and reports change", () => {
@@ -72,6 +84,31 @@ describe("session.maintenance.pruneAfter zero-duration migration", () => {
 
   it("preserves positive durations", () => {
     for (const val of ["30d", "24h", "7d", "500ms"]) {
+      const changes: string[] = [];
+      const raw = { session: { maintenance: { pruneAfter: val } } };
+      migration.apply(raw, changes);
+
+      expect((raw.session as Record<string, unknown>)?.maintenance).toEqual({
+        pruneAfter: val,
+      });
+      expect(changes).toHaveLength(0);
+    }
+  });
+
+  it("removes numeric zero and reports change", () => {
+    for (const val of [0, 0.0]) {
+      const changes: string[] = [];
+      const raw = { session: { maintenance: { pruneAfter: val } } };
+      migration.apply(raw, changes);
+
+      expect(raw.session?.maintenance).not.toHaveProperty("pruneAfter");
+      expect(changes).toHaveLength(1);
+      expect(changes[0]).toContain(String(val));
+    }
+  });
+
+  it("preserves numeric positive values", () => {
+    for (const val of [30, 7]) {
       const changes: string[] = [];
       const raw = { session: { maintenance: { pruneAfter: val } } };
       migration.apply(raw, changes);
