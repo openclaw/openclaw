@@ -51,7 +51,7 @@ export function createStaticSshWorkerProvider(): WorkerProvider {
         ssh: parseStaticSshWorkerSettings(profile),
       };
     },
-    async inspect(leaseId) {
+    async inspect({ leaseId }) {
       const active =
         leaseId.startsWith(STATIC_SSH_LEASE_PREFIX) &&
         leaseId.length > STATIC_SSH_LEASE_PREFIX.length;
@@ -59,6 +59,6 @@ export function createStaticSshWorkerProvider(): WorkerProvider {
     },
     // Development-only: a static worker is a shared host, not an isolation boundary.
     // Destroy releases the logical lease; it does not stop or clean the host.
-    async destroy() {},
+    async destroy(_lease) {},
   };
 }

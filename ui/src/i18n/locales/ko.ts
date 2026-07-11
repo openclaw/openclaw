@@ -970,6 +970,8 @@ export const ko: TranslationMap = {
       openChat: "Chat 열기",
       continuing: "계속하는 중…",
       archive: "보관",
+      readTranscript: "읽음",
+      readTranscriptLabel: "{title}의 전사 내용 읽기",
       continueLabel: "{title} 계속",
       continueAsBranchLabel: "{title}을(를) 브랜치로 계속",
       openChatLabel: "{title}의 Chat 열기",
@@ -1009,6 +1011,24 @@ export const ko: TranslationMap = {
       search: "이 호스트에 검색어와 일치하는 세션이 없습니다.",
       nonArchived: "이 호스트에 보관 처리되지 않은 세션이 없습니다.",
     },
+    sidebar: {
+      title: "Codex 세션",
+      unavailable: "Codex 세션을 사용할 수 없음",
+      viewAll: "모든 Codex 세션 보기",
+      truncated: "전체 카탈로그에서 더 많은 세션을 사용할 수 있습니다.",
+    },
+    transcript: {
+      eyebrow: "Codex 전사",
+      back: "모든 Codex 세션",
+      you: "나",
+      reasoning: "추론",
+      command: "명령",
+      fileChange: "파일 변경",
+      item: "Codex 항목",
+      details: "전체 세부 정보",
+      loading: "전사 내용을 불러오는 중…",
+      loadMore: "이전 전사 항목 불러오기",
+    },
   },
   logbook: {
     duration: {
@@ -1032,7 +1052,7 @@ export const ko: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",

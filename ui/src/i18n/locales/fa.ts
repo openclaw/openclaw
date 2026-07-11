@@ -968,6 +968,8 @@ export const fa: TranslationMap = {
       openChat: "باز کردن Chat",
       continuing: "در حال ادامه…",
       archive: "بایگانی",
+      readTranscript: "خوانده‌شده",
+      readTranscriptLabel: "خواندن رونوشت برای {title}",
       continueLabel: "ادامهٔ {title}",
       continueAsBranchLabel: "ادامهٔ {title} به‌عنوان شاخه",
       openChatLabel: "باز کردن Chat برای {title}",
@@ -1007,6 +1009,24 @@ export const fa: TranslationMap = {
       search: "هیچ نشستی روی این میزبان با جست‌وجوی شما مطابقت ندارد.",
       nonArchived: "هیچ نشست بایگانی‌نشده‌ای روی این میزبان وجود ندارد.",
     },
+    sidebar: {
+      title: "جلسات Codex",
+      unavailable: "جلسات Codex در دسترس نیست",
+      viewAll: "مشاهده همه جلسات Codex",
+      truncated: "جلسات بیشتری در کاتالوگ کامل موجود است.",
+    },
+    transcript: {
+      eyebrow: "رونوشت Codex",
+      back: "همه جلسات Codex",
+      you: "شما",
+      reasoning: "استدلال",
+      command: "دستور",
+      fileChange: "تغییر فایل",
+      item: "مورد Codex",
+      details: "جزئیات کامل",
+      loading: "در حال بارگیری رونوشت…",
+      loadMore: "بارگیری موارد قدیمی‌تر رونوشت",
+    },
   },
   logbook: {
     duration: {
@@ -1030,7 +1050,7 @@ export const fa: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",

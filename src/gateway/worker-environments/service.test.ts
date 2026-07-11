@@ -26,6 +26,8 @@ const SSH_ENDPOINT: WorkerSshEndpoint = {
   keyRef: { source: "file", provider: "worker-keys", id: "/development-key" },
 };
 
+type WorkerLifecycleLease = Parameters<WorkerProvider["inspect"]>[0];
+
 describe("worker environment service", () => {
   let root: string;
   let store: WorkerEnvironmentStore;
@@ -273,12 +275,13 @@ describe("worker environment service", () => {
     },
   );
 
-  it("adopts a persisted in-flight lease through provider inspection", async () => {
+  it("inspects a persisted lease with its profile snapshot after profile removal", async () => {
     seedBootstrapping("worker-crash");
-    const inspected: string[] = [];
+    config.cloudWorkers!.profiles = {};
+    const inspected: WorkerLifecycleLease[] = [];
     const provider = createProvider({
-      inspect: async (leaseId) => {
-        inspected.push(leaseId);
+      inspect: async (lease) => {
+        inspected.push(lease);
         return { status: "active" };
       },
       provision: async () => {
@@ -288,7 +291,7 @@ describe("worker environment service", () => {
 
     await createService(provider).reconcileOnce();
 
-    expect(inspected).toEqual(["lease:worker-crash"]);
+    expect(inspected).toEqual([{ leaseId: "lease:worker-crash", profile: { region: "test" } }]);
     expect(store.get("worker-crash")).toMatchObject({
       state: "ready",
     });
@@ -310,7 +313,7 @@ describe("worker environment service", () => {
       to: "destroying",
     });
     const provider = createProvider({
-      inspect: async (leaseId) => {
+      inspect: async ({ leaseId }) => {
         if (leaseId !== "lease:worker-transient") {
           return { status: "unknown" };
         }
@@ -383,11 +386,12 @@ describe("worker environment service", () => {
 
   it("keeps a failed destroy retryable and makes completed destroy idempotent", async () => {
     seedReady("worker-destroy");
+    config.cloudWorkers!.profiles = {};
     let fail = true;
-    const destroyed: string[] = [];
+    const destroyed: WorkerLifecycleLease[] = [];
     const provider = createProvider({
-      destroy: async (leaseId) => {
-        destroyed.push(leaseId);
+      destroy: async (lease) => {
+        destroyed.push(lease);
         if (fail) {
           throw new Error("destroy timeout");
         }
@@ -407,7 +411,10 @@ describe("worker environment service", () => {
     await workerService.reconcileOnce();
     expect(store.get("worker-destroy")).toMatchObject({ state: "destroyed" });
     await workerService.destroy("worker-destroy");
-    expect(destroyed).toEqual(["lease:worker-destroy", "lease:worker-destroy"]);
+    expect(destroyed).toEqual([
+      { leaseId: "lease:worker-destroy", profile: { region: "test" } },
+      { leaseId: "lease:worker-destroy", profile: { region: "test" } },
+    ]);
   });
 
   it("adopts an unpersisted provision result before destroying", async () => {
@@ -423,19 +430,19 @@ describe("worker environment service", () => {
       from: "requested",
       to: "provisioning",
     });
-    const destroyed: string[] = [];
+    const destroyed: WorkerLifecycleLease[] = [];
     const provider = createProvider({
       provision: async () => {
         expect(store.get(intent.environmentId)?.destroyRequestedAtMs).not.toBeNull();
         return { leaseId: "lease-1", ssh: SSH_ENDPOINT };
       },
-      destroy: async (leaseId) => void destroyed.push(leaseId),
+      destroy: async (lease) => void destroyed.push(lease),
     });
 
     const result = await createService(provider).destroy(intent.environmentId);
 
     expect(result.state).toBe("destroyed");
-    expect(destroyed).toEqual(["lease-1"]);
+    expect(destroyed).toEqual([{ leaseId: "lease-1", profile: { region: "test" } }]);
   });
 
   it("retains teardown intent across an indeterminate provision failure", async () => {
@@ -452,7 +459,7 @@ describe("worker environment service", () => {
       to: "provisioning",
     });
     let provisionFails = true;
-    const destroyed: string[] = [];
+    const destroyed: WorkerLifecycleLease[] = [];
     const provider = createProvider({
       provision: async () => {
         if (provisionFails) {
@@ -460,7 +467,7 @@ describe("worker environment service", () => {
         }
         return { leaseId: "lease-retried", ssh: SSH_ENDPOINT };
       },
-      destroy: async (leaseId) => void destroyed.push(leaseId),
+      destroy: async (lease) => void destroyed.push(lease),
     });
     const workerService = createService(provider);
 
@@ -482,7 +489,7 @@ describe("worker environment service", () => {
     provisionFails = false;
     await workerService.reconcileOnce();
     expect(store.get(intent.environmentId)?.state).toBe("destroyed");
-    expect(destroyed).toEqual(["lease-retried"]);
+    expect(destroyed).toEqual([{ leaseId: "lease-retried", profile: { region: "test" } }]);
   });
 
   it("reconciles unrelated leases concurrently", async () => {
@@ -492,10 +499,10 @@ describe("worker environment service", () => {
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const inspected: string[] = [];
+    const inspected: WorkerLifecycleLease[] = [];
     const provider = createProvider({
-      inspect: async (leaseId) => {
-        inspected.push(leaseId);
+      inspect: async (lease) => {
+        inspected.push(lease);
         await blocked;
         return { status: "active" };
       },
@@ -509,7 +516,7 @@ describe("worker environment service", () => {
     }
     await reconciliation;
 
-    expect(new Set(inspected)).toEqual(
+    expect(new Set(inspected.map(({ leaseId }) => leaseId))).toEqual(
       new Set(["lease:worker-concurrent-a", "lease:worker-concurrent-b"]),
     );
   });

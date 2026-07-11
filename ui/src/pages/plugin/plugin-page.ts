@@ -9,7 +9,7 @@ import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { searchForSession } from "../../lib/sessions/navigation.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { pluginTabKey } from "./route.ts";
+import { pluginTabKey, pluginTabSearch } from "./route.ts";
 
 /**
  * Bundled plugin tab views ship with the Control UI and render natively; every
@@ -31,6 +31,10 @@ type BundledPluginTabView = {
     // key (prompt dispatch). Bundled views that don't use them ignore these.
     basePath?: string;
     sessionKey?: string;
+    selectedHostId?: string;
+    selectedThreadId?: string;
+    onOpenSession?: (hostId: string, threadId: string) => void;
+    onCloseSession?: () => void;
   }) => unknown;
   stop: (host: object) => void;
 };
@@ -63,6 +67,8 @@ const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
 export class PluginPage extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) pluginId = "";
   @property({ attribute: false }) tabId = "";
+  @property({ attribute: false }) hostId = "";
+  @property({ attribute: false }) threadId = "";
 
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
@@ -188,6 +194,21 @@ export class PluginPage extends OpenClawLightDomContentsElement {
           context.navigate("chat", { search: searchForSession(sessionKey) }),
         basePath: context.basePath,
         sessionKey: snapshot.sessionKey,
+        selectedHostId: this.hostId,
+        selectedThreadId: this.threadId,
+        onOpenSession: (hostId, threadId) =>
+          context.navigate("plugin", {
+            search: pluginTabSearch({
+              pluginId: this.pluginId,
+              id: this.tabId,
+              hostId,
+              threadId,
+            }),
+          }),
+        onCloseSession: () =>
+          context.navigate("plugin", {
+            search: pluginTabSearch({ pluginId: this.pluginId, id: this.tabId }),
+          }),
       });
     }
     if (info?.path) {
