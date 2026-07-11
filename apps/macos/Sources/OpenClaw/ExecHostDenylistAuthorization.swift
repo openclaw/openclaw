@@ -57,7 +57,7 @@ enum ExecHostDenylist {
     /// De-duplicated union across layers: a deny in ANY layer denies
     /// (TS `resolveEffectiveExecDenylist`).
     static func union(_ layers: [[ExecHostDenylistEntry]?]) -> [ExecHostDenylistEntry] {
-        self.normalize(layers.compactMap { $0 }.flatMap { $0 })
+        self.normalize(layers.compactMap(\.self).flatMap(\.self))
     }
 }
 
