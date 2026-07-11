@@ -13,7 +13,8 @@ import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
-import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { resolveConfigIncludes } from "../config/includes.js";
+import { resolveConfigPath, resolveIncludeRoots, resolveStateDir } from "../config/paths.js";
 import type { CliBackendConfig } from "../config/types.agent-defaults.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { SecurityAuditSuppression } from "../config/types.openclaw.js";
@@ -146,6 +147,7 @@ export type AuditExecutionContext = {
   deepProbeAuth?: SecurityAuditExplicitGatewayAuth;
   auditGatewayAuthOverride?: SecurityAuditGatewayAuthOverride;
   workspaceDir?: string;
+  authoredEnvVarEntries: Array<{ key: string; value: string; path: "env.vars" | "env" }>;
 };
 
 const loadReadOnlyChannelPlugins = createLazyRuntimeModule(
@@ -1336,12 +1338,40 @@ async function createAuditExecutionContext(
   const configPath = opts.configPath ?? resolveConfigPath(env, stateDir);
   const workspaceDir =
     opts.workspaceDir ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  const { readConfigSnapshotForAudit } = await loadAuditNonDeepModule();
-  const configSnapshot = includeFilesystem
-    ? opts.configSnapshot !== undefined
+  const { readConfigSnapshotForAudit, getConfigEnvVarEntries } = await loadAuditNonDeepModule();
+  const configSnapshot =
+    opts.configSnapshot !== undefined
       ? opts.configSnapshot
-      : await readConfigSnapshotForAudit({ env, configPath }).catch(() => null)
-    : null;
+      : includeFilesystem
+        ? await readConfigSnapshotForAudit({ env, configPath }).catch(() => null)
+        : null;
+
+  const authoredEnvVarEntries = ((): Array<{
+    key: string;
+    value: string;
+    path: "env.vars" | "env";
+  }> => {
+    if (
+      configSnapshot?.exists &&
+      configSnapshot.parsed &&
+      typeof configSnapshot.parsed === "object"
+    ) {
+      try {
+        const resolvedIncludes = resolveConfigIncludes(
+          configSnapshot.parsed,
+          configPath,
+          undefined,
+          { allowedRoots: resolveIncludeRoots(env) },
+        );
+        return getConfigEnvVarEntries(resolvedIncludes as OpenClawConfig);
+      } catch {
+        // Include resolution failed; fall back to sourceConfig entries.
+      }
+    }
+    const sourceEntries = getConfigEnvVarEntries(sourceConfig);
+    return sourceEntries.length > 0 ? sourceEntries : getConfigEnvVarEntries(cfg);
+  })();
+
   return {
     cfg,
     sourceConfig,
@@ -1363,6 +1393,7 @@ async function createAuditExecutionContext(
     codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map<string, Promise<unknown>>(),
     deepProbeAuth: opts.deepProbeAuth,
     auditGatewayAuthOverride: opts.auditGatewayAuthOverride,
+    authoredEnvVarEntries,
   };
 }
 
@@ -1407,7 +1438,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...auditNonDeep.collectNodeDenyCommandPatternFindings(cfg));
   findings.push(...auditNonDeep.collectNodeDangerousAllowCommandFindings(cfg));
   findings.push(...auditNonDeep.collectMinimalProfileOverrideFindings(cfg));
-  findings.push(...auditNonDeep.collectSecretsInConfigFindings(cfg));
+  findings.push(...auditNonDeep.collectSecretsInConfigFindings(cfg, context.authoredEnvVarEntries));
   findings.push(...auditNonDeep.collectModelHygieneFindings(cfg));
   findings.push(...auditNonDeep.collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg));
