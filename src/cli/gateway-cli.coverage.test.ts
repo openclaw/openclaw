@@ -332,6 +332,8 @@ describe("gateway-cli coverage", () => {
         expect(observedStatuses[0]).toBe("refreshing");
         expect(observedStatuses.at(-1)).toBe("fresh");
         expect(callGateway.mock.calls.length).toBeGreaterThanOrEqual(2);
+        const firstCostCall = firstMockArg(callGateway) as { timeoutMs?: number };
+        expect(firstCostCall.timeoutMs).toBeGreaterThan(290_000);
         expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
           expect.objectContaining({
             totals: expect.objectContaining({ totalTokens: 100, totalCost: 0.1 }),

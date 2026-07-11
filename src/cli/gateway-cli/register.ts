@@ -53,6 +53,7 @@ const daemonStatusGatherModuleLoader = createLazyImportLoader(
 );
 
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
+const DEFAULT_USAGE_COST_TIMEOUT_MS = 5 * 60_000;
 const USAGE_COST_SETTLE_INITIAL_POLL_MS = 250;
 const USAGE_COST_SETTLE_MAX_POLL_MS = 5_000;
 
@@ -96,12 +97,12 @@ function loadDaemonStatusGatherModule() {
   return daemonStatusGatherModuleLoader.load();
 }
 
-function gatewayCallOpts(cmd: Command): Command {
+function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TIMEOUT_MS): Command {
   return cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
-    .option("--timeout <ms>", "Timeout in ms", String(DEFAULT_GATEWAY_RPC_TIMEOUT_MS))
+    .option("--timeout <ms>", "Timeout in ms", String(defaultTimeoutMs))
     .option("--expect-final", "Wait for final response (agent)", false)
     .option("--json", "Output JSON", false);
 }
@@ -115,7 +116,7 @@ async function loadSettledCostUsageSummary(
   rpcOpts: GatewayRpcOpts,
   params: { days: number; agentId?: string; agentScope?: "all" },
 ): Promise<CostUsageSummary> {
-  const timeoutMs = parseTimeoutMsWithFallback(rpcOpts.timeout, DEFAULT_GATEWAY_RPC_TIMEOUT_MS, {
+  const timeoutMs = parseTimeoutMsWithFallback(rpcOpts.timeout, DEFAULT_USAGE_COST_TIMEOUT_MS, {
     invalidType: "error",
   });
   const deadline = Date.now() + timeoutMs;
@@ -633,6 +634,7 @@ export function registerGatewayCli(program: Command) {
           { json: Boolean(opts.json) },
         );
       }),
+    DEFAULT_USAGE_COST_TIMEOUT_MS,
   );
 
   gatewayCallOpts(
