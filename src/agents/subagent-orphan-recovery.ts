@@ -257,7 +257,6 @@ export async function recoverOrphanedSubagentSessions(params: {
     }
 
     let cfg: ReturnType<typeof getRuntimeConfig> | undefined;
-    const storeCache = new Map<string, Record<string, SessionEntry>>();
     const scanNow = Date.now();
     const runEntries = [...activeRuns.entries()].toSorted(([, left], [, right]) => {
       const leftIsStale = isStaleUnendedSubagentRun(left, scanNow);

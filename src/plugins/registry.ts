@@ -3188,7 +3188,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           const agent: PluginRuntime["agent"] = getRuntimeProperty();
           const session = agent.session;
           const scopedSession = {
-            ...session,
+            resolveStorePath: session.resolveStorePath,
+            getSessionEntry: session.getSessionEntry,
+            listSessionEntries: session.listSessionEntries,
             createSessionEntry: async (params) =>
               await runWithPluginScope(async () => {
                 // Session ownership follows the registered harness capability,

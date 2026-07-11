@@ -17,8 +17,7 @@
     "src/config/sessions/store-load.ts": 5,
     "src/config/sessions/store.ts": 16,
     "src/config/sessions/test-helpers.ts": 2,
-    "src/config/sessions/transcript.ts": 2,
-    "src/plugins/registry.ts": 2
+    "src/config/sessions/transcript.ts": 2
   },
   "sessionAccessorWrite": {
     "src/agents/session-suspension.ts": 2,
@@ -31,7 +30,7 @@
     "src/commands/doctor/shared/codex-route-warnings.ts": 2,
     "src/gateway/test-helpers.mocks.ts": 1,
     "src/infra/state-migrations.ts": 2,
-    "src/plugins/registry.ts": 3
+    "src/plugins/registry.ts": 1
   },
   "sessionCompactManualTrim": {},
   "sessionLifecycleCleanup": {

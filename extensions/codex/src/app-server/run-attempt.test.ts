@@ -4419,18 +4419,20 @@ describe("runCodexAppServerAttempt", () => {
         }) as never,
     );
 
-    const run = runCodexAppServerAttempt(
-      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-      {
-        pluginConfig: {
-          computerUse: {
-            enabled: true,
-            marketplaceName: "openai-bundled",
-            mcpServerName: "desktop-control",
-          },
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    attachSqliteSessionTarget(params, path.join(tempDir, "sessions.json"), "session-computer-use");
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          marketplaceName: "openai-bundled",
+          mcpServerName: "desktop-control",
         },
       },
-    );
+    });
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"));
     // The keyed router only accepts turn-scoped requests once the turn is bound.
     await vi.waitFor(() =>
@@ -4466,11 +4468,11 @@ describe("runCodexAppServerAttempt", () => {
     expect(bridgeCall.requestParams?.serverName).toBe("desktop-control");
     expect(bridgeCall.computerUseMcpServerName).toBe("desktop-control");
     const requestCalls = request.mock.calls as unknown as Array<[string, unknown, unknown?]>;
-    const threadStart = requestCalls.find(([method]) => method === "thread/start");
-    const threadStartParams = threadStart?.[1] as
+    const turnStart = requestCalls.find(([method]) => method === "turn/start");
+    const turnStartParams = turnStart?.[1] as
       | { approvalPolicy?: { granular?: { mcp_elicitations?: boolean } } }
       | undefined;
-    expect(threadStartParams?.approvalPolicy?.granular?.mcp_elicitations).toBe(true);
+    expect(turnStartParams?.approvalPolicy?.granular?.mcp_elicitations).toBe(true);
 
     await notify({
       method: "turn/completed",

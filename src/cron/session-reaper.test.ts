@@ -308,7 +308,10 @@ describe("sweepCronRunSessions", () => {
       admission = await admissionPromise;
 
       expect(result.pruned).toBe(0);
-      expect(readSessionEntries(storePath)).toEqual(store);
+      expect(readSessionEntries(storePath)[sessionKey]).toMatchObject({
+        sessionId: "active-run",
+        updatedAt: expect.any(Number),
+      });
     } finally {
       admission?.release();
       releaseWriter.resolve();

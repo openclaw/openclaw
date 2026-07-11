@@ -619,10 +619,18 @@ describe("codex command", () => {
     const codexControlRequest = vi.fn(async () =>
       createThreadResumeResponse({ threadId: "thread-123" }),
     );
+    const storePath = path.join(tempDir, "worker-sessions.json");
+    await upsertSessionEntry({
+      agentId: "worker",
+      storePath,
+      sessionKey: "agent:worker:session-1",
+      entry: { sessionId: "session-1", updatedAt: Date.now() },
+    });
 
     await handleCodexCommand(
       createContext("resume thread-123", undefined, {
         sessionKey: "agent:worker:session-1",
+        config: { session: { store: storePath } },
       }),
       { deps: createDeps({ codexControlRequest }) },
     );
