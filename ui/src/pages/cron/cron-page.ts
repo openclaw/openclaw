@@ -402,10 +402,28 @@ class CronPage extends OpenClawLightDomElement {
           onClosePanel: () => this.closePanel(),
           onClone: (job) => this.cloneJob(job),
           onToggle: (job, enabled) =>
-            void this.runCronTask((cronState) => toggleCronJob(cronState, job, enabled)),
+            void this.runCronTask(async (cronState) => {
+              await toggleCronJob(cronState, job, enabled);
+              // Header pause/resume must not be undone by a later Save: the
+              // editor form still carries the pre-toggle enabled value. Sync
+              // from the reloaded job so a failed toggle stays truthful too.
+              const refreshed = cronState.cronJobs.find((entry) => entry.id === job.id);
+              if (cronState.cronEditingJobId === job.id && refreshed) {
+                cronState.cronForm = { ...cronState.cronForm, enabled: refreshed.enabled };
+              }
+            }),
           onRun: (job, mode) =>
             void this.runCronTask((cronState) => runCronJob(cronState, job, mode ?? "force")),
-          onRemove: (job) => void this.runCronTask((cronState) => removeCronJob(cronState, job)),
+          onRemove: (job) =>
+            void this.runCronTask(async (cronState) => {
+              await removeCronJob(cronState, job);
+              // Removing the selected task drops the panel back to overview;
+              // the runs scope must follow or recent activity stays empty.
+              if (cronState.cronRunsScope === "job" && cronState.cronRunsJobId === null) {
+                updateCronRunsFilter(cronState, { cronRunsScope: "all" });
+                await loadCronRuns(cronState, null);
+              }
+            }),
           onLoadMoreJobs: () =>
             void this.runCronTask((cronState) =>
               loadCronJobsPage(cronState, { append: true, tableFilters: true }),

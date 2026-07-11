@@ -100,10 +100,12 @@ function createContext(gateway: TestGateway): ApplicationContext {
   } as unknown as ApplicationContext;
 }
 
-function createPage(context: ApplicationContext): CronTestPage {
+function createPage(context: ApplicationContext, options: { render?: boolean } = {}): CronTestPage {
   const page = document.createElement("openclaw-cron-page") as CronTestPage;
   page.context = context;
-  page.render = () => nothing;
+  if (!options.render) {
+    page.render = () => nothing;
+  }
   document.body.append(page);
   return page;
 }
@@ -126,6 +128,75 @@ function createRequest() {
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+});
+
+describe("CronPage editor state sync", () => {
+  it("syncs form enabled after header pause and resets runs scope after remove", async () => {
+    const job = {
+      id: "job-1",
+      name: "Nightly digest",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "digest" },
+    };
+    let serverEnabled = true;
+    let removed = false;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.list") {
+        return {
+          jobs: removed ? [] : [{ ...job, enabled: serverEnabled }],
+          total: removed ? 0 : 1,
+          offset: 0,
+          hasMore: false,
+        };
+      }
+      if (method === "cron.update") {
+        const patch = (params as { patch?: { enabled?: boolean } }).patch;
+        if (typeof patch?.enabled === "boolean") {
+          serverEnabled = patch.enabled;
+        }
+        return {};
+      }
+      if (method === "cron.remove") {
+        removed = true;
+        return {};
+      }
+      if (method === "cron.runs") {
+        return { entries: [], total: 0, offset: 0, hasMore: false };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      return {};
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const gateway = createGateway(client, true);
+    const page = createPage(createContext(gateway), { render: true });
+
+    await vi.waitFor(() => expect(page.querySelector(".cron-task")).not.toBeNull());
+    (page.querySelector(".cron-task") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(page.cron.cronEditingJobId).toBe("job-1"));
+    expect(page.cron.cronRunsScope).toBe("job");
+    expect(page.cron.cronForm.enabled).toBe(true);
+
+    await vi.waitFor(() =>
+      expect(page.querySelector('[data-test-id="cron-toggle-enabled"]')).not.toBeNull(),
+    );
+    (page.querySelector('[data-test-id="cron-toggle-enabled"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(page.cron.cronForm.enabled).toBe(false));
+    expect(serverEnabled).toBe(false);
+
+    const removeButton = Array.from(page.querySelectorAll(".cron-job-menu__item")).find(
+      (item) => item.textContent?.trim() === "Remove",
+    ) as HTMLButtonElement;
+    removeButton.click();
+    await vi.waitFor(() => expect(page.cron.cronEditingJobId).toBeNull());
+    await vi.waitFor(() => expect(page.cron.cronRunsScope).toBe("all"));
+  });
 });
 
 describe("CronPage lifecycle", () => {

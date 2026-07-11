@@ -1,9 +1,13 @@
 /* ── Automations (cron) page: task list pane + detail pane ── */
 
 /* Fixed app-frame layout (like the logs page): the page never scrolls; the
-   list and detail panes own their scroll regions. */
+   list and detail panes own their scroll regions. Flex column (not height:
+   100%) so in-flow connection/update banners above the outlet shrink it
+   instead of pushing its bottom past the clipped container. */
 .content:has(openclaw-cron-page) {
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .content:has(openclaw-cron-page) > openclaw-router-outlet {
@@ -11,7 +15,7 @@
   flex-direction: column;
   margin-top: 0;
   min-height: 0;
-  height: 100%;
+  flex: 1 1 auto;
   width: 100%;
 }
 
@@ -635,11 +639,11 @@ openclaw-cron-page {
 }
 
 .cron-error {
-  color: var(--danger-color);
+  color: var(--danger);
 }
 
 .cron-required-marker {
-  color: var(--danger-color);
+  color: var(--danger);
   font-weight: 700;
   margin-left: 3px;
 }
@@ -790,7 +794,7 @@ openclaw-cron-page {
 }
 
 .cron-job-menu__item.danger {
-  color: var(--danger-color);
+  color: var(--danger);
 }
 
 /* ── Overview (recent activity) ── */
