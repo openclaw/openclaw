@@ -657,8 +657,8 @@ async function invokeMcpProofTool(rpc, tool, proof) {
 }
 
 function assertToolIds(label, tools, expectedIds) {
-  const actual = tools.map((tool) => tool.id).toSorted();
-  const expected = [...expectedIds].toSorted();
+  const actual = tools.map((tool) => tool.id).toSorted((a, b) => a.localeCompare(b));
+  const expected = [...expectedIds].toSorted((a, b) => a.localeCompare(b));
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(`${label}: expected ${expected.join(", ")}, got ${actual.join(", ")}`);
   }
