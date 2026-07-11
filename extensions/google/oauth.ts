@@ -82,6 +82,7 @@ async function manualFlow(
 ): Promise<GeminiCliOAuthCredentials> {
   ctx.progress.update("OAuth URL ready");
   ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);
+  await ctx.openUrl(authUrl);
   await ctx.note(`Open this URL in your LOCAL browser:\n\n${authUrl}`, "Gemini CLI OAuth");
   ctx.progress.update("Waiting for you to paste the callback URL...");
   const callbackInput = await ctx.prompt("Paste the redirect URL here: ");

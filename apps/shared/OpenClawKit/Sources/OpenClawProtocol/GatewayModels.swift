@@ -4767,6 +4767,7 @@ public struct WizardStep: Codable, Sendable {
     public let placeholder: String?
     public let sensitive: Bool?
     public let executor: AnyCodable?
+    public let externalurl: String?
 
     public init(
         id: String,
@@ -4778,7 +4779,8 @@ public struct WizardStep: Codable, Sendable {
         initialvalue: AnyCodable? = nil,
         placeholder: String? = nil,
         sensitive: Bool? = nil,
-        executor: AnyCodable? = nil)
+        executor: AnyCodable? = nil,
+        externalurl: String? = nil)
     {
         self.id = id
         self.type = type
@@ -4790,6 +4792,7 @@ public struct WizardStep: Codable, Sendable {
         self.placeholder = placeholder
         self.sensitive = sensitive
         self.executor = executor
+        self.externalurl = externalurl
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -4803,6 +4806,7 @@ public struct WizardStep: Codable, Sendable {
         case placeholder
         case sensitive
         case executor
+        case externalurl = "externalUrl"
     }
 }
 

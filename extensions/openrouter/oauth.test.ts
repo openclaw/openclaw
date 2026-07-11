@@ -292,7 +292,7 @@ describe("OpenRouter OAuth", () => {
       fetchImpl,
     });
 
-    expect(openUrl).not.toHaveBeenCalled();
+    expect(openUrl).toHaveBeenCalledWith(expect.stringContaining("https://openrouter.ai/auth?"));
     expect(log.mock.calls[0]?.[0]).toContain("https://openrouter.ai/auth?");
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("https://openrouter.ai/auth?"),

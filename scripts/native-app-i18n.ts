@@ -912,6 +912,21 @@ function nativeEntryIdentity(entry: Pick<NativeI18nEntry, "path" | "source" | "s
   return [entry.surface, entry.path, entry.source].join("\u0000");
 }
 
+function nativeEntryContentIdentity(entry: Pick<NativeI18nEntry, "source" | "surface">): string {
+  return [entry.surface, entry.source].join("\u0000");
+}
+
+function groupByContentIdentity<T extends Pick<NativeI18nEntry, "source" | "surface">>(
+  entries: readonly T[],
+): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const entry of entries) {
+    const key = nativeEntryContentIdentity(entry);
+    grouped.set(key, [...(grouped.get(key) ?? []), entry]);
+  }
+  return grouped;
+}
+
 export function assignNativeI18nIds(
   entries: readonly Candidate[],
   previousEntries: readonly NativeI18nEntry[] = [],
@@ -921,6 +936,22 @@ export function assignNativeI18nIds(
     previousEntries.map((entry) => [nativeEntryIdentity(entry), entry.id]),
   );
   const unique = [...new Map(entries.map((entry) => [nativeEntryIdentity(entry), entry])).values()];
+  const currentIdentities = new Set(unique.map(nativeEntryIdentity));
+  const previousMoved = groupByContentIdentity(
+    previousEntries.filter((entry) => !currentIdentities.has(nativeEntryIdentity(entry))),
+  );
+  const currentMoved = groupByContentIdentity(
+    unique.filter((entry) => !previousIds.has(nativeEntryIdentity(entry))),
+  );
+  const movedIds = new Map<string, string>();
+  for (const [contentIdentity, currentMatches] of currentMoved) {
+    const previousMatches = previousMoved.get(contentIdentity);
+    // A file-only move must not orphan translations. Ambiguous duplicate strings
+    // deliberately get new IDs rather than guessing which translation belongs where.
+    if (currentMatches.length === 1 && previousMatches?.length === 1) {
+      movedIds.set(nativeEntryIdentity(currentMatches[0]), previousMatches[0].id);
+    }
+  }
   return unique
     .toSorted(
       (left, right) =>
@@ -931,11 +962,9 @@ export function assignNativeI18nIds(
         compareCodePoints(left.source, right.source),
     )
     .map((entry) => {
-      const previousId = previousIds.get(nativeEntryIdentity(entry));
-      const digest = createHash("sha256")
-        .update(nativeEntryIdentity(entry))
-        .digest("hex")
-        .slice(0, 16);
+      const identity = nativeEntryIdentity(entry);
+      const previousId = previousIds.get(identity) ?? movedIds.get(identity);
+      const digest = createHash("sha256").update(identity).digest("hex").slice(0, 16);
       const baseId = `native.${entry.surface}.${digest}`;
       let id = previousId && !seen.has(previousId) ? previousId : baseId;
       for (let suffix = 2; seen.has(id); suffix += 1) {

@@ -65,6 +65,22 @@ describe("WizardSession", () => {
     expect(done.done).toBe(true);
   });
 
+  test("attaches an explicit browser destination to the next client step", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.openUrl?.("https://provider.example/oauth?state=state-1");
+      await prompter.text({ message: "Paste the redirect URL" });
+    });
+
+    const first = await session.next();
+    expect(first.step?.externalUrl).toBe("https://provider.example/oauth?state=state-1");
+    expect(first.step?.type).toBe("text");
+    if (!first.step) {
+      throw new Error("expected provider sign-in step");
+    }
+    await session.answer(first.step.id, "http://localhost/callback?code=done");
+    expect((await session.next()).status).toBe("done");
+  });
+
   test("invalid answers throw", async () => {
     const session = noteRunner();
     const first = await session.next();

@@ -73,6 +73,16 @@ struct OnboardingAISetupTests {
         #expect(OnboardingAISetupModel.providerAuthRequestTimeoutMs > 15 * 60 * 1000)
     }
 
+    @Test func `provider auth opens only safe external links`() {
+        let safe = OnboardingProviderAuthLink.safeURL(
+            "https://auth.openai.com/oauth/authorize?client_id=test")
+        #expect(safe?.host() == "auth.openai.com")
+        #expect(OnboardingProviderAuthLink.safeURL("http://localhost:1455/callback") == nil)
+        #expect(OnboardingProviderAuthLink.safeURL("file:///tmp/token") == nil)
+        #expect(OnboardingProviderAuthLink.safeURL("https://user:secret@example.com") == nil)
+        #expect(OnboardingProviderAuthLink.safeURL("Read https://docs.openclaw.ai/start/faq") == nil)
+    }
+
     @Test func `terminal provider failure remains copyable and can dismiss`() {
         let model = OnboardingAISetupModel()
         let option = OnboardingAISetupModel.AuthOption(

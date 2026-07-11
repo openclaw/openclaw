@@ -54,10 +54,24 @@ enum OnboardingProviderIcon {
     }
 }
 
+enum OnboardingProviderAuthLink {
+    static func safeURL(_ rawValue: String?) -> URL? {
+        guard let rawValue,
+              let url = URL(string: rawValue),
+              url.scheme?.lowercased() == "https",
+              url.host() != nil,
+              url.user() == nil,
+              url.password() == nil
+        else { return nil }
+        return url
+    }
+}
+
 struct OnboardingAISetupView: View {
     @Bindable var model: OnboardingAISetupModel
     var crestodianChat: CrestodianOnboardingChatModel
     @Binding var showCrestodianChat: Bool
+    @State private var openedProviderAuthURL: URL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -426,6 +440,7 @@ struct OnboardingAISetupView: View {
 
     private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
         Button {
+            self.openedProviderAuthURL = nil
             self.model.startProviderAuth(option)
         } label: {
             HStack(spacing: 10) {
@@ -479,6 +494,10 @@ struct OnboardingAISetupView: View {
                     }
                     .frame(maxHeight: 190)
                 }
+                if let url = OnboardingProviderAuthLink.safeURL(step.externalurl) {
+                    Link("Open sign-in page…", destination: url)
+                        .font(.caption.weight(.semibold))
+                }
                 self.authStepInput(step)
             } else if self.model.authBusy {
                 HStack(spacing: 10) {
@@ -511,6 +530,20 @@ struct OnboardingAISetupView: View {
         .padding(22)
         .frame(width: 560)
         .frame(minHeight: 330)
+        .onAppear {
+            self.openProviderAuthURLIfNeeded(self.model.authStep?.externalurl)
+        }
+        .onChange(of: self.model.authStep?.externalurl) { _, rawURL in
+            self.openProviderAuthURLIfNeeded(rawURL)
+        }
+    }
+
+    private func openProviderAuthURLIfNeeded(_ rawURL: String?) {
+        guard let url = OnboardingProviderAuthLink.safeURL(rawURL),
+              url != self.openedProviderAuthURL
+        else { return }
+        self.openedProviderAuthURL = url
+        NSWorkspace.shared.open(url)
     }
 
     @ViewBuilder

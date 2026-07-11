@@ -22,6 +22,7 @@ export type WizardStep = {
   placeholder?: string;
   sensitive?: boolean;
   executor?: "gateway" | "client";
+  externalUrl?: string;
 };
 
 type WizardSessionStatus = "running" | "done" | "cancelled" | "error";
@@ -121,15 +122,14 @@ class WizardSessionPrompter implements WizardPrompter {
     sensitive?: boolean;
   }): Promise<string> {
     const res = await this.session.awaitAnswer(
-      {
+      this.createStep({
         type: "text",
         message: params.message,
         initialValue: params.initialValue,
         placeholder: params.placeholder,
         sensitive: params.sensitive,
         executor: "client",
-        id: randomUUID(),
-      },
+      }),
       params.validate,
     );
     const value =
@@ -160,13 +160,24 @@ class WizardSessionPrompter implements WizardPrompter {
     };
   }
 
+  async openUrl(url: string): Promise<void> {
+    this.session.queueExternalUrl(url);
+  }
+
   private async prompt(step: Omit<WizardStep, "id">): Promise<unknown> {
+    return await this.session.awaitAnswer(this.createStep(step));
+  }
+
+  private createStep(step: Omit<WizardStep, "id">): WizardStep {
     // Each emitted step receives an id so remote clients can answer the exact
-    // pending prompt and stale answers can be rejected.
-    return await this.session.awaitAnswer({
+    // pending prompt and stale answers can be rejected. Explicit browser
+    // destinations bind to the very next step regardless of its input type.
+    const externalUrl = this.session.consumeExternalUrl();
+    return {
       ...step,
+      ...(externalUrl ? { externalUrl } : {}),
       id: randomUUID(),
-    });
+    };
   }
 }
 
@@ -177,6 +188,7 @@ export class WizardSession {
   private stepDeferred: Deferred<WizardStep | null> | null = null;
   private pendingTerminalResolution = false;
   private cancellationLocked = false;
+  private pendingExternalUrl: string | undefined;
   private answerDeferred = new Map<
     string,
     {
@@ -270,6 +282,16 @@ export class WizardSession {
   pushStep(step: WizardStep) {
     this.currentStep = step;
     this.resolveStep(step);
+  }
+
+  queueExternalUrl(url: string) {
+    this.pendingExternalUrl = url;
+  }
+
+  consumeExternalUrl(): string | undefined {
+    const url = this.pendingExternalUrl;
+    this.pendingExternalUrl = undefined;
+    return url;
   }
 
   private async run(prompter: WizardPrompter) {

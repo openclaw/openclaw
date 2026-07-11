@@ -276,13 +276,12 @@ export async function loginMiniMaxPortalOAuth(params: {
     `If prompted, enter the code ${oauth.user_code}.`,
     `Interval: ${oauth.interval ?? "default (2000ms)"}, Expires at: ${new Date(oauth.expired_in).toISOString()}`,
   ];
-  await params.note(noteLines.join("\n"), "MiniMax OAuth");
-
   try {
     await params.openUrl(verificationUrl);
   } catch {
     // Fall back to manual copy/paste if browser open fails.
   }
+  await params.note(noteLines.join("\n"), "MiniMax OAuth");
 
   let pollIntervalMs = resolvePositiveTimerTimeoutMs(oauth.interval, 2000);
   // The authorization endpoint returns an absolute millisecond deadline.

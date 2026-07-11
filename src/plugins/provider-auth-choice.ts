@@ -289,7 +289,8 @@ export async function runProviderPluginAuthMethodUnpersisted(params: {
     isRemote: params.isRemote ?? isRemoteEnvironment(),
     openUrl: async (url) => {
       if (params.isRemote === true) {
-        throw new Error("Browser opening is handled by the connected setup client.");
+        await params.prompter.openUrl?.(url);
+        return;
       }
       await openUrl(url);
     },

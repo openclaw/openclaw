@@ -614,8 +614,11 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
       deviceAuthorizationEndpoint: discovery.deviceAuthorizationEndpoint,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
-    await noteXaiDeviceCode(ctx, deviceCode);
     const browserUrl = deviceCode.verificationUriComplete ?? deviceCode.verificationUri;
+    if (ctx.isRemote) {
+      await ctx.openUrl(browserUrl);
+    }
+    await noteXaiDeviceCode(ctx, deviceCode);
     const logUrl = deviceCode.verificationUri;
     if (ctx.isRemote) {
       ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${logUrl}\n`);

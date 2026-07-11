@@ -353,6 +353,7 @@ async function resolveOpenRouterOAuthCode(
 
   if (ctx.isRemote) {
     ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${params.authorizeUrl}\n`);
+    await ctx.openUrl(params.authorizeUrl);
     await ctx.prompter.note(
       `Open this URL in your LOCAL browser:\n\n${params.authorizeUrl}`,
       "OpenRouter OAuth",
