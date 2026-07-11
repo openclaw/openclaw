@@ -621,9 +621,8 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 
-  it("keeps local exec SecretRef fallback enabled by default", async () => {
+  it("resolves active exec SecretRefs locally without calling the gateway", async () => {
     const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
 
     const result = await resolveCommandSecretRefsViaGateway({
       config,
@@ -632,10 +631,151 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       mode: "read_only_status",
     });
 
+    expect(callGateway).not.toHaveBeenCalled();
     expect(await markerExists(markerPath)).toBe(true);
     expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("exec-local-key");
     expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
-    expectGatewayUnavailableLocalFallbackDiagnostics(result);
+    expect(
+      result.diagnostics.some((entry) =>
+        entry.includes(
+          `memory status: resolved exec SecretRefs locally without gateway secrets.resolve at ${TALK_TEST_PROVIDER_API_KEY_PATH}`,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("falls back to gateway resolution when a local exec provider fails", async () => {
+    const { config } = await createExecProviderConfig("talk/providers/failing-api-key");
+    const provider = config.secrets?.providers?.default;
+    if (!provider || provider.source !== "exec") {
+      throw new Error("expected exec provider");
+    }
+    (provider as { args?: string[] }).args = ["-e", "process.exit(7)"];
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+          value: "gateway-exec-key",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const result = await resolveCommandSecretRefsViaGateway({
+      config,
+      commandName: "reply",
+      targetIds: new Set(["talk.providers.*.apiKey"]),
+      mode: "read_only_status",
+    });
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("gateway-exec-key");
+    expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_gateway");
+    expect(result.hadUnresolvedTargets).toBe(false);
+    expect(result.diagnostics.some((entry) => entry.includes("continuing with degraded"))).toBe(
+      false,
+    );
+    expect(
+      result.diagnostics.some(
+        (entry) => entry.includes("failed to resolve") && entry.includes("locally"),
+      ),
+    ).toBe(false);
+  });
+
+  it("preserves the local exec failure when gateway recovery also leaves the path unresolved", async () => {
+    const { config } = await createExecProviderConfig("talk/providers/failing-api-key");
+    const provider = config.secrets?.providers?.default;
+    if (!provider || provider.source !== "exec") {
+      throw new Error("expected exec provider");
+    }
+    (provider as { args?: string[] }).args = ["-e", "process.exit(7)"];
+    callGateway.mockResolvedValueOnce({
+      assignments: [],
+      diagnostics: ["gateway did not resolve the exec-backed path"],
+    });
+
+    const result = await resolveCommandSecretRefsViaGateway({
+      config,
+      commandName: "reply",
+      targetIds: new Set(["talk.providers.*.apiKey"]),
+      mode: "read_only_status",
+    });
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(readTalkProviderApiKey(result.resolvedConfig)).toBeUndefined();
+    expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("unresolved");
+    expect(result.hadUnresolvedTargets).toBe(true);
+    expect(result.diagnostics).toContain("gateway did not resolve the exec-backed path");
+    expect(
+      result.diagnostics.some(
+        (entry) =>
+          entry.includes(`failed to resolve ${TALK_TEST_PROVIDER_API_KEY_PATH} locally`) &&
+          entry.includes("exited with code 7"),
+      ),
+    ).toBe(true);
+    expect(
+      result.diagnostics.filter((entry) =>
+        entry.includes(`failed to resolve ${TALK_TEST_PROVIDER_API_KEY_PATH} locally`),
+      ),
+    ).toHaveLength(1);
+    expect(
+      result.diagnostics.some((entry) => entry.includes("skipped local exec SecretRef resolution")),
+    ).toBe(false);
+    expect(result.diagnostics.some((entry) => entry.includes("rerun with --allow-exec"))).toBe(
+      false,
+    );
+    expect(result.diagnostics).toHaveLength(3);
+  });
+
+  it("keeps non-exec targets on gateway resolution when the command also uses exec refs", async () => {
+    const { config: execConfig, markerPath } =
+      await createExecProviderConfig("talk/providers/api-key");
+    const gatewayPath = "talk.providers.gateway-speech.apiKey";
+    const config = {
+      ...execConfig,
+      talk: {
+        ...execConfig.talk,
+        providers: {
+          ...execConfig.talk?.providers,
+          "gateway-speech": {
+            apiKey: { source: "env", provider: "env", id: "GATEWAY_SPEECH_API_KEY" },
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          ...execConfig.secrets?.providers,
+          env: { source: "env" },
+        },
+      },
+    } as OpenClawConfig;
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: gatewayPath,
+          pathSegments: ["talk", "providers", "gateway-speech", "apiKey"],
+          value: "gateway-only-key",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const result = await resolveCommandSecretRefsViaGateway({
+      config,
+      commandName: "reply",
+      targetIds: new Set(["talk.providers.*.apiKey"]),
+      mode: "read_only_status",
+    });
+
+    expect(await markerExists(markerPath)).toBe(true);
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("exec-local-key");
+    expect(result.resolvedConfig.talk?.providers?.["gateway-speech"]?.apiKey).toBe(
+      "gateway-only-key",
+    );
+    expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
+    expect(result.targetStatesByPath[gatewayPath]).toBe("resolved_gateway");
   });
 
   it("skips local exec SecretRef fallback when the caller disallows exec providers", async () => {
