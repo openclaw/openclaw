@@ -82,6 +82,11 @@ export type DynamicToolBuildParams = {
   onCodexAppServerEvent?: (event: CodexDynamicToolBuildEvent) => void;
   onPersistentWebSearchPolicyResolved?: (allowed: boolean) => void;
   onWebSearchPolicyResolved?: (allowed: boolean) => void;
+  computerContextEpoch?: {
+    value: number;
+    frameToolCallId?: string;
+    frameImageIdentity?: string;
+  };
 };
 
 let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
@@ -245,9 +250,12 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     // Capability-gated tools (requiredClientCaps) need the originating client's
     // declared caps in this sibling harness too, not only the embedded runner.
     clientCaps: params.clientCaps,
+    chatType: params.chatType,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
+    nativeChannelId: params.chatId,
+    messageActionTurnCapability: params.messageActionTurnCapability,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
@@ -302,6 +310,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     replyToMode: params.replyToMode,
     hasRepliedRef: params.hasRepliedRef,
     modelHasVision,
+    computerContextEpoch: input.computerContextEpoch,
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

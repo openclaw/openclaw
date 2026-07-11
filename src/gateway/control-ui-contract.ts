@@ -34,6 +34,41 @@ export type ControlUiGitHubPreview = {
   updatedAt: string;
 };
 
+// Control UI ships inside the gateway dist, so these payloads move in
+// lockstep with the server; shapes here are not independently versioned.
+/** Check-run rollup for a PR head commit, chip pill + CI monitoring popover. */
+export type ControlUiSessionPullRequestChecks = {
+  state: "pending" | "passing" | "failing";
+  passed: number;
+  failed: number;
+  skipped: number;
+  /** Queued/in-progress runs plus stale conclusions GitHub invalidated. */
+  running: number;
+};
+
+/** One GitHub pull request whose head is the session's working branch. */
+export type ControlUiSessionPullRequest = {
+  number: number;
+  owner: string;
+  repo: string;
+  branch: string;
+  title: string;
+  url: string;
+  state: "open" | "draft" | "merged" | "closed";
+  additions?: number;
+  deletions?: number;
+  /** Latest check-run rollup for the head commit; absent when no checks ran. */
+  checks?: ControlUiSessionPullRequestChecks;
+  checksUrl?: string;
+};
+
+/** Pull requests detected for a session's git branch, chip row payload. */
+export type ControlUiSessionPullRequests = {
+  pullRequests: ControlUiSessionPullRequest[];
+  /** GitHub quota exhausted; entries may be stale until the limit resets. */
+  rateLimited: boolean;
+};
+
 /** Runtime config consumed by the browser Control UI during bootstrap. */
 export type ControlUiBootstrapConfig = {
   basePath: string;

@@ -9,18 +9,21 @@ import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
+  adaptMessagePresentationForChannel,
   normalizeInteractiveReply,
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import { notifyDiscordInboundEventOutboundSuccess } from "../inbound-event-delivery.js";
+import { DISCORD_PRESENTATION_CAPABILITIES } from "../outbound-components.js";
 import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
 } from "../shared-interactive.js";
 import { resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
+import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
 
 const providerId = "discord";
 
@@ -42,6 +45,7 @@ export async function handleDiscordMessageAction(
     | "params"
     | "cfg"
     | "accountId"
+    | "requesterAccountId"
     | "requesterSenderId"
     | "senderIsOwner"
     | "toolContext"
@@ -50,14 +54,35 @@ export async function handleDiscordMessageAction(
     | "mediaReadFile"
     | "sessionKey"
     | "inboundEventKind"
+    | "conversationReadOrigin"
   >,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(params, "accountId");
+  const readContext =
+    ctx.requesterAccountId &&
+    ctx.toolContext?.currentChannelProvider &&
+    ctx.toolContext.currentChannelId
+      ? {
+          requesterAccountId: ctx.requesterAccountId,
+          currentChannelProvider: ctx.toolContext.currentChannelProvider,
+          currentChannelId: ctx.toolContext.currentChannelId,
+        }
+      : undefined;
+  const readPolicyOptions: DiscordMessagingActionOptions | undefined =
+    ctx.conversationReadOrigin || readContext
+      ? {
+          ...(ctx.conversationReadOrigin
+            ? { conversationReadOrigin: ctx.conversationReadOrigin }
+            : {}),
+          ...(readContext ? { readContext } : {}),
+        }
+      : undefined;
   const actionOptions = {
     mediaAccess: ctx.mediaAccess,
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
+    ...readPolicyOptions,
   } as const;
   const notifyVisibleOutbound = (to: string, fallbackSessionKey?: string) =>
     notifyDiscordInboundEventOutboundSuccess({
@@ -92,9 +117,17 @@ export async function handleDiscordMessageAction(
   if (action === "send") {
     const to = readSendTarget();
     const asVoice = readBooleanParam(params, "asVoice") === true;
+    const presentation =
+      params.components == null ? normalizeMessagePresentation(params.presentation) : undefined;
+    const adaptedPresentation = presentation
+      ? adaptMessagePresentationForChannel({
+          presentation,
+          capabilities: DISCORD_PRESENTATION_CAPABILITIES,
+        })
+      : undefined;
     const rawComponents =
       params.components ??
-      buildDiscordPresentationComponents(normalizeMessagePresentation(params.presentation)) ??
+      buildDiscordPresentationComponents(adaptedPresentation) ??
       buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive));
     const hasComponents =
       Boolean(rawComponents) &&
@@ -387,6 +420,7 @@ export async function handleDiscordMessageAction(
   const adminResult = await tryHandleDiscordMessageActionGuildAdmin({
     ctx,
     resolveChannelId,
+    readPolicyOptions,
   });
   if (adminResult !== undefined) {
     if (action === "thread-reply") {

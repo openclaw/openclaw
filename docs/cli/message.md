@@ -70,8 +70,8 @@ unresolved SecretRef on the selected channel/account fails the action closed.
 | --------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `send`          | Discord, Google Chat, iMessage, Matrix, Mattermost (plugin), Microsoft Teams, Signal, Slack, Telegram, WhatsApp | `--target`, plus one of `--message`/`--media`/`--presentation` | See [Send](#send) below.                                                                                                                                                                                                                                                                               |
 | `poll`          | Discord, Matrix, Microsoft Teams, Telegram, WhatsApp                                                            | `--target`, `--poll-question`, `--poll-option` (repeat)        | See [Poll](#poll) below.                                                                                                                                                                                                                                                                               |
-| `react`         | Discord, Google Chat, Matrix, Nextcloud Talk, Signal, Slack, Telegram, WhatsApp                                 | `--message-id`, `--target`                                     | `--emoji`, `--remove` (needs `--emoji`; omit it to clear own reactions where supported, see [Reactions](/tools/reactions)). WhatsApp: `--participant`, `--from-me`. Signal group reactions require `--target-author` or `--target-author-uuid`. Nextcloud Talk only adds reactions; `--remove` errors. |
-| `reactions`     | Discord, Google Chat, Matrix, Microsoft Teams, Slack                                                            | `--message-id`, `--target`                                     | `--limit`.                                                                                                                                                                                                                                                                                             |
+| `react`         | Discord, Matrix, Nextcloud Talk, Signal, Slack, Telegram, WhatsApp                                              | `--message-id`, `--target`                                     | `--emoji`, `--remove` (needs `--emoji`; omit it to clear own reactions where supported, see [Reactions](/tools/reactions)). WhatsApp: `--participant`, `--from-me`. Signal group reactions require `--target-author` or `--target-author-uuid`. Nextcloud Talk only adds reactions; `--remove` errors. |
+| `reactions`     | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--message-id`, `--target`                                     | `--limit`.                                                                                                                                                                                                                                                                                             |
 | `read`          | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--target`                                                     | `--limit`, `--message-id`, `--before`, `--after`. Discord: `--around`, `--include-thread`. Slack: `--message-id` reads a specific timestamp, combine with `--thread-id` for an exact thread reply.                                                                                                     |
 | `edit`          | Discord, Matrix, Microsoft Teams, Slack, Telegram                                                               | `--message-id`, `--message`, `--target`                        | Telegram forum threads use `--thread-id`.                                                                                                                                                                                                                                                              |
 | `delete`        | Discord, Matrix, Microsoft Teams, Slack, Telegram                                                               | `--message-id`, `--target`                                     |                                                                                                                                                                                                                                                                                                        |
@@ -91,7 +91,7 @@ openclaw message send --channel discord \
 - `--media <path-or-url>`: attach image/audio/video/document (local path or
   URL).
 - `--presentation <json>`: shared payload with `text`, `context`, `divider`,
-  `buttons`, `select` blocks, rendered per channel capability. See
+  `chart`, `buttons`, and `select` blocks, rendered per channel capability. See
   [Message Presentation](/plugins/message-presentation).
 - `--delivery <json>`: generic delivery preferences, for example `{"pin":
 true}`. `--pin` is shorthand for pinned delivery when the channel supports
@@ -112,6 +112,14 @@ openclaw message send --channel discord \
 ```bash
 openclaw message send --channel telegram --target @mychat --message "Choose:" \
   --presentation '{"blocks":[{"type":"buttons","buttons":[{"label":"Yes","value":"cmd:yes"},{"label":"No","value":"cmd:no"}]}]}'
+```
+
+Slack renders supported chart blocks natively; other channels receive the same
+data as readable text:
+
+```bash
+openclaw message send --channel slack --target channel:C123 \
+  --presentation '{"blocks":[{"type":"chart","chartType":"bar","title":"Quarterly revenue","categories":["Q1","Q2"],"series":[{"name":"Revenue","values":[120,145]}],"xLabel":"Quarter"}]}'
 ```
 
 Telegram Mini App buttons use `webApp` (`web_app` still parses for legacy

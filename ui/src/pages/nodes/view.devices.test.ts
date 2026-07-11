@@ -292,6 +292,7 @@ describe("nodes inventory rendering", () => {
 
   it("shows token rows with rotate and revoke inside entry details", () => {
     const rotations: Array<{ deviceId: string; role: string }> = [];
+    const revocations: Array<{ deviceId: string; role: string }> = [];
     const container = renderNodesContainer({
       devicesList: {
         pending: [],
@@ -305,12 +306,15 @@ describe("nodes inventory rendering", () => {
         ],
       },
       onDeviceRotate: (deviceId, role) => rotations.push({ deviceId, role }),
+      onDeviceRevoke: (deviceId, role) => revocations.push({ deviceId, role }),
     });
     const card = getInventoryCard(container);
 
     expect(card.textContent).toContain("operator · active · scopes: operator.read");
     findButton(card, "Rotate").click();
     expect(rotations).toEqual([{ deviceId: "device-1", role: "operator" }]);
+    findButton(card, "Revoke").click();
+    expect(revocations).toEqual([{ deviceId: "device-1", role: "operator" }]);
   });
 });
 

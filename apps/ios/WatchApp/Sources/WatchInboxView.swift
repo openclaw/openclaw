@@ -320,7 +320,10 @@ private struct WatchControlSurfaceView: View {
                 accessory: self.directNode.isConnected ? "Online" : "Offline")
 
             WatchDetailText(
-                text: "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.")
+                text: """
+                Direct mode supports device info, status, and notifications. \
+                Chat, Talk, and approvals still use the iPhone.
+                """)
 
             if self.directNode.isConfigured {
                 Toggle(isOn: Binding(
@@ -1090,7 +1093,15 @@ private struct WatchChatTimelineView: View {
                     }
 
                     if let voiceStatusText = self.voiceStatusText {
-                        WatchTinyStatus(text: voiceStatusText)
+                        VStack(alignment: .leading, spacing: 3) {
+                            // Watch TTS runs through AVSpeechSynthesizer, which has no
+                            // metering API, so speaking uses the wave's synthetic pulse.
+                            TalkWaveformView(
+                                phase: self.speechPlayback.isSpeaking ? .speaking(level: nil) : .thinking)
+                                .frame(height: 24)
+                                .accessibilityHidden(true)
+                            WatchTinyStatus(text: voiceStatusText)
+                        }
                     }
 
                     WatchSecondaryButton(title: "Refresh") {

@@ -10,7 +10,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { getRuntimeConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
-import { assertCdpEndpointAllowed } from "./cdp.helpers.js";
+import { assertCdpEndpointAllowed, redactCdpUrl } from "./cdp.helpers.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { createBrowserProfileConfig, deleteBrowserProfileConfig } from "./config-mutations.js";
 import { parseHttpUrl, resolveProfile } from "./config.js";
@@ -22,7 +22,16 @@ import {
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { isValidProfileName } from "./profiles.js";
 import type { BrowserRouteContext, ProfileStatus } from "./server-context.js";
+import {
+  importSystemProfileCookies,
+  listSystemProfiles as discoverSystemProfiles,
+  type ImportSystemProfileParams,
+  type ImportSystemProfileResult,
+  type SystemProfileInfo,
+} from "./system-profiles.js";
 import { movePathToTrash } from "./trash.js";
+
+export type { ImportSystemProfileParams, ImportSystemProfileResult, SystemProfileInfo };
 
 /** Input accepted when creating a browser profile. */
 type CreateProfileParams = {
@@ -134,11 +143,24 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       profile: name,
       transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
       cdpPort: capabilities.usesChromeMcp ? null : resolved.cdpPort,
-      cdpUrl: resolved.cdpUrl || null,
+      cdpUrl: resolved.cdpUrl ? (redactCdpUrl(resolved.cdpUrl) ?? null) : null,
       userDataDir: resolved.userDataDir ?? null,
       color: resolved.color,
       isRemote: !resolved.cdpIsLoopback,
     };
+  };
+
+  const listSystemProfiles = async (browser?: string): Promise<SystemProfileInfo[]> => {
+    if (process.platform !== "darwin") {
+      return [];
+    }
+    return discoverSystemProfiles(browser);
+  };
+
+  const importSystemProfile = async (
+    params: ImportSystemProfileParams,
+  ): Promise<ImportSystemProfileResult> => {
+    return await importSystemProfileCookies(params, { ctx, createProfile });
   };
 
   const deleteProfile = async (nameRaw: string): Promise<DeleteProfileResult> => {
@@ -191,7 +213,9 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
 
   return {
     listProfiles,
+    listSystemProfiles,
     createProfile,
+    importSystemProfile,
     deleteProfile,
   };
 }

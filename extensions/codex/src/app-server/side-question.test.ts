@@ -478,8 +478,11 @@ describe("runCodexAppServerSideQuestion", () => {
       sideParams({
         messageChannel: "discord",
         messageProvider: "discord-voice",
+        chatId: "discord-native-room",
+        chatType: "channel",
         sessionKey: "agent:main:conversation",
         sandboxSessionKey: "agent:main:runtime-policy",
+        messageActionTurnCapability: "turn-capability-1",
         currentChannelId: "voice-room",
         agentAccountId: "account-1",
         messageTo: "channel-1",
@@ -594,7 +597,9 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolOptions).toHaveProperty("modelId", "gpt-5.5");
     expect(toolOptions).toHaveProperty("messageProvider", "discord");
     expect(toolOptions).toHaveProperty("toolPolicyMessageProvider", "discord-voice");
+    expect(toolOptions).toHaveProperty("chatType", "channel");
     expect(toolOptions).toHaveProperty("currentChannelId", "voice-room");
+    expect(toolOptions).toHaveProperty("nativeChannelId", "discord-native-room");
     expect(toolOptions).toMatchObject({
       agentAccountId: "account-1",
       sessionKey: "agent:main:runtime-policy",
@@ -610,6 +615,7 @@ describe("runCodexAppServerSideQuestion", () => {
       senderUsername: "rosita",
       senderE164: "+15550001",
       senderIsOwner: true,
+      messageActionTurnCapability: "turn-capability-1",
     });
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
   });
@@ -1867,6 +1873,62 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolResponse).toEqual({
       success: true,
       contentItems: [{ type: "inputText", text: "tool output" }],
+    });
+  });
+
+  it("omits computer control from side threads without a compaction owner", async () => {
+    const client = createFakeClient();
+    const computerExecute = vi.fn();
+    let toolResponse: unknown;
+    createOpenClawCodingToolsMock.mockReturnValue([
+      {
+        name: "computer",
+        description: "Control a desktop",
+        parameters: { type: "object", properties: {} },
+        execute: computerExecute,
+      },
+    ]);
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          void (async () => {
+            toolResponse = await client.handleRequest({
+              id: 43,
+              method: "item/tool/call",
+              params: {
+                threadId: "side-thread",
+                turnId: "turn-1",
+                callId: "computer-1",
+                tool: "computer",
+                arguments: { action: "screenshot" },
+              },
+            });
+            client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+            client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+          })();
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(runCodexAppServerSideQuestion(sideParams())).resolves.toEqual({
+      text: "Side answer.",
+    });
+    expect(computerExecute).not.toHaveBeenCalled();
+    expect(toolResponse).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: computer" }],
     });
   });
 

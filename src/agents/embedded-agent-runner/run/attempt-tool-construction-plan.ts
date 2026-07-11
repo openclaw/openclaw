@@ -23,6 +23,7 @@ const OPENCLAW_TOOL_FACTORY_NAMES = new Set([
   "agents_list",
   "crestodian",
   "canvas",
+  "computer",
   "cron",
   "gateway",
   "get_goal",

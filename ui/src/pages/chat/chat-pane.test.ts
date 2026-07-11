@@ -12,18 +12,26 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
 import type { ChatPageHost } from "./chat-state.ts";
+import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import type { SidebarContent } from "./components/chat-sidebar.ts";
 
 type TestChatPane = HTMLElement & {
+  active: boolean;
+  chatState: { attach: (state: ChatPageHost) => void };
   context: ApplicationContext;
   state: ChatPageHost;
   connectedClient: GatewayBrowserClient | null;
+  connectedCallback: () => void;
   connectionGeneration: number;
   createSession: () => Promise<boolean>;
+  disconnectedCallback: () => void;
   acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
+  handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
   refreshTaskSuggestions: () => Promise<void>;
   taskSuggestions: TaskSuggestion[];
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
+  sessionKey: string;
 };
 
 const suggestion: TaskSuggestion = {
@@ -43,6 +51,17 @@ function createDeferred<T>() {
     resolve = nextResolve;
   });
   return { promise, resolve };
+}
+
+function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
+  const event = new KeyboardEvent("keydown", {
+    cancelable: true,
+    key: "b",
+    metaKey: true,
+    shiftKey,
+  });
+  pane.handleDocumentKeydown(event);
+  return event;
 }
 
 function createSessionContext(
@@ -88,6 +107,8 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
     sessions: params.sessions,
     sessionsError: null,
     sessionsLoading: false,
+    sidebarContent: null,
+    sidebarOpen: false,
   } as unknown as ChatPageHost;
   pane.context = createSessionContext(params.client, params.sessions);
   pane.state = state;
@@ -95,6 +116,93 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
   pane.connectionGeneration = 4;
   return { pane, requestUpdate, state };
 }
+
+describe("chat pane initialization", () => {
+  it("sets the pane route before attaching outbox projection", () => {
+    const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+    const targetSessionKey = "agent:main:pane-b";
+    pane.sessionKey = targetSessionKey;
+    pane.context = {
+      basePath: "",
+      gateway: { snapshot: { hello: null } },
+      config: {
+        current: {
+          assistantIdentity: {
+            agentId: null,
+            name: "Assistant",
+            avatar: null,
+            avatarSource: null,
+            avatarStatus: null,
+            avatarReason: null,
+          },
+          serverVersion: null,
+          localMediaPreviewRoots: [],
+          embedSandboxMode: "strict",
+          allowExternalEmbedUrls: false,
+          chatMessageMaxWidth: null,
+          terminalEnabled: false,
+        },
+      },
+      agentSelection: { state: { selectedId: "main" } },
+      agents: { state: { agentsList: null } },
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const stopAfterAttach = new Error("stop after attach");
+    let attachedSessionKey: string | undefined;
+    vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
+      attachedSessionKey = state.sessionKey;
+      throw stopAfterAttach;
+    });
+
+    try {
+      expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+      expect(attachedSessionKey).toBe(targetSessionKey);
+    } finally {
+      pane.disconnectedCallback();
+    }
+  });
+});
+
+describe("chat pane keyboard shortcuts", () => {
+  it("toggles only the active pane's session workspace", () => {
+    const client = {} as GatewayBrowserClient;
+    const sessions = {} as SessionCapability;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    const canvasContent: SidebarContent = {
+      kind: "canvas",
+      docId: "canvas-1",
+      entryUrl: "/__openclaw__/canvas/canvas-1/index.html",
+    };
+    pane.active = true;
+    state.connected = false;
+    state.sidebarContent = canvasContent;
+    state.sidebarOpen = true;
+
+    expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
+
+    const expandEvent = dispatchSidebarShortcut(pane);
+
+    expect(expandEvent.defaultPrevented).toBe(true);
+    expect(createSessionWorkspaceProps(state).collapsed).toBe(false);
+    expect(state.sidebarOpen).toBe(true);
+    expect(state.sidebarContent).toBe(canvasContent);
+
+    const collapseEvent = dispatchSidebarShortcut(pane);
+
+    expect(collapseEvent.defaultPrevented).toBe(true);
+    expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
+    expect(state.sidebarOpen).toBe(true);
+    expect(state.sidebarContent).toBe(canvasContent);
+
+    const mainSidebarEvent = dispatchSidebarShortcut(pane, false);
+    expect(mainSidebarEvent.defaultPrevented).toBe(false);
+
+    pane.active = false;
+    const inactivePaneEvent = dispatchSidebarShortcut(pane);
+    expect(inactivePaneEvent.defaultPrevented).toBe(false);
+    expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
+  });
+});
 
 describe("chat pane session creation lifecycle", () => {
   it("drops a created session after a same-client reconnect", async () => {

@@ -154,6 +154,7 @@ describe("Crestodian assistant", () => {
         runEmbeddedAgent,
         createTempDir: async () => "/tmp/crestodian-planner",
         removeTempDir: async () => {},
+        randomInt: () => 0,
       },
     });
     if (result === null) {
@@ -184,10 +185,11 @@ describe("Crestodian assistant", () => {
           claude: { command: "claude", found: true },
           codex: { command: "codex", found: true },
         }),
+        { randomInt: () => 0 },
       ).map((backend) => backend.kind),
     ).toEqual(["claude-cli", "codex-app-server"]);
 
-    // Setup-ladder order: Claude Code, Codex, Gemini.
+    // Gemini remains after the available peer runtimes.
     expect(
       selectCrestodianLocalPlannerBackends(
         overview({
@@ -195,6 +197,7 @@ describe("Crestodian assistant", () => {
           codex: { command: "codex", found: true },
           gemini: { command: "gemini", found: true },
         }),
+        { randomInt: () => 0 },
       ).map((backend) => backend.kind),
     ).toEqual(["claude-cli", "codex-app-server", "gemini-cli"]);
 
@@ -211,8 +214,27 @@ describe("Crestodian assistant", () => {
     const codexAppServerEntries = requireRecord(codexAppServerPlugins.entries);
     const codexAppServerCodexEntry = requireRecord(codexAppServerEntries.codex);
     expect(codexAppServerDefaults.workspace).toBe("/tmp/workspace");
-    expect(codexAppServerModel.primary).toBe("openai/gpt-5.5");
+    expect(codexAppServerModel.primary).toBe("openai/gpt-5.6-sol");
     expect(codexAppServerCodexEntry.enabled).toBe(true);
+  });
+
+  it("does not prefer Claude or Codex when both local runtimes are available", () => {
+    const available = overview({
+      claude: { command: "claude", found: true },
+      codex: { command: "codex", found: true },
+      gemini: { command: "gemini", found: true },
+    });
+
+    expect(
+      selectCrestodianLocalPlannerBackends(available, { randomInt: () => 0 }).map(
+        (backend) => backend.kind,
+      ),
+    ).toEqual(["claude-cli", "codex-app-server", "gemini-cli"]);
+    expect(
+      selectCrestodianLocalPlannerBackends(available, { randomInt: () => 1 }).map(
+        (backend) => backend.kind,
+      ),
+    ).toEqual(["codex-app-server", "claude-cli", "gemini-cli"]);
   });
 
   it("falls back to Codex app-server when Claude CLI planning fails", async () => {
@@ -239,6 +261,7 @@ describe("Crestodian assistant", () => {
         runEmbeddedAgent,
         createTempDir: async () => "/tmp/crestodian-planner",
         removeTempDir: async () => {},
+        randomInt: () => 0,
       },
     });
     if (result === null) {
@@ -246,12 +269,12 @@ describe("Crestodian assistant", () => {
     }
     expect(result.command).toBe("gateway status");
     expect(result.reply).toBe("Codex planner online.");
-    expect(result.modelLabel).toBe("openai/gpt-5.5 via codex");
+    expect(result.modelLabel).toBe("openai/gpt-5.6-sol via codex");
 
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
     const firstEmbeddedCall = firstMockArg(runEmbeddedAgent);
     expect(firstEmbeddedCall.provider).toBe("openai");
-    expect(firstEmbeddedCall.model).toBe("gpt-5.5");
+    expect(firstEmbeddedCall.model).toBe("gpt-5.6-sol");
     expect(firstEmbeddedCall.agentHarnessId).toBe("codex");
     expect(firstEmbeddedCall.disableTools).toBe(true);
     expect(firstEmbeddedCall.toolsAllow).toEqual([]);
@@ -262,7 +285,7 @@ describe("Crestodian assistant", () => {
     const embeddedPlugins = requireRecord(embeddedConfig.plugins);
     const embeddedEntries = requireRecord(embeddedPlugins.entries);
     const embeddedCodexEntry = requireRecord(embeddedEntries.codex);
-    expect(embeddedModel.primary).toBe("openai/gpt-5.5");
+    expect(embeddedModel.primary).toBe("openai/gpt-5.6-sol");
     expect(embeddedCodexEntry.enabled).toBe(true);
   });
 
