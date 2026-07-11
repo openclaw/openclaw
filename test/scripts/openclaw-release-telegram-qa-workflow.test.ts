@@ -503,6 +503,13 @@ describe("release Telegram QA workflow", () => {
 
   it("derives SUT-writable paths from the verified runtime root after sudo", () => {
     const source = readFileSync(WORKFLOW_PATH, "utf8");
+    expect(source).toContain("Telegram SUT launcher failed: stage=%s line=%s status=%s");
+    expect(source).toContain("launcher_stage=root-run-setup");
+    expect(source).toContain("launcher_stage=enter-mount-namespace");
+    expect(source).toContain("launcher_stage=mask-host-paths");
+    expect(source).toContain("launcher_stage=mount-proc");
+    expect(source).toContain("launcher_stage=write-identity");
+    expect(source).not.toContain("set -x");
     expect(source).toContain('temp_root="$(realpath -e "${OPENCLAW_QA_TEMP_ROOT:?}")"');
     expect(source).toContain('proc_stat="$(cat "/proc/${pid}/stat")"');
     expect(source).not.toContain('proc_stat="$(cat /proc/self/stat)"');
