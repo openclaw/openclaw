@@ -11,6 +11,8 @@ openclaw-chat-page {
 }
 
 .chat {
+  --chat-thread-max-width: 48rem;
+
   position: relative;
   display: flex;
   flex-direction: column;
@@ -99,6 +101,13 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 
 .chat-thread-inner > :first-child {
   margin-top: 0 !important;
+}
+
+.chat-thread-inner {
+  box-sizing: border-box;
+  width: calc(100% - 36px);
+  max-width: var(--chat-thread-max-width);
+  margin-inline: auto;
 }
 
 /* New messages indicator - floating pill above compose */
