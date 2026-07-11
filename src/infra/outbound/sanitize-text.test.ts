@@ -62,6 +62,9 @@ describe("sanitizeForPlainText", () => {
   it("converts headings to bold text with newlines", () => {
     expect(sanitizeForPlainText("<h1>Title</h1>")).toBe("\n*Title*\n");
     expect(sanitizeForPlainText("<h3>Section</h3>")).toBe("\n*Section*\n");
+    expect(sanitizeForPlainText('<h2 title="section">Markdown</h2>', { style: "markdown" })).toBe(
+      "\n**Markdown**\n",
+    );
   });
 
   it("converts <li> to bullet points", () => {
