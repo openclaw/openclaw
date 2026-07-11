@@ -8772,7 +8772,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /specs/durable-core-beta3-architecture
 - Headings:
   - H1: Durable Core Beta 3 Architecture
+  - H2: General Durable Runtime RFC
   - H2: What Problem This Solves
+  - H2: Why Beta 3 Needs This Foundation
   - H2: Stack Position
   - H2: Durable Core Boundary
   - H2: Beta 3 User Promise
@@ -8788,6 +8790,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: Durable Core Beta 3 Test Plan
   - H2: Scope
+  - H2: Root-Cause Coverage
   - H2: Exact Head Rules
   - H2: PR1 Gate
   - H2: Cumulative Proof Matrix
