@@ -1055,50 +1055,6 @@ function resolveInstalledNpmResolutionMismatch(params: {
   return null;
 }
 
-async function listManagedNpmRootPackageNames(npmRoot: string): Promise<Set<string>> {
-  const nodeModulesDir = path.join(npmRoot, "node_modules");
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(nodeModulesDir, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return new Set();
-    }
-    throw error;
-  }
-
-  const packageNames = new Set<string>();
-  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-    if (entry.name === ".bin" || entry.name === "openclaw") {
-      continue;
-    }
-    if (entry.name.startsWith("@")) {
-      const scopeDir = path.join(nodeModulesDir, entry.name);
-      let scopedEntries: Dirent[];
-      try {
-        scopedEntries = await fs.readdir(scopeDir, { withFileTypes: true });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          continue;
-        }
-        throw error;
-      }
-      for (const scopedEntry of scopedEntries.toSorted((left, right) =>
-        left.name.localeCompare(right.name),
-      )) {
-        if (scopedEntry.isDirectory() || scopedEntry.isSymbolicLink()) {
-          packageNames.add(`${entry.name}/${scopedEntry.name}`);
-        }
-      }
-      continue;
-    }
-    if (entry.isDirectory() || entry.isSymbolicLink()) {
-      packageNames.add(entry.name);
-    }
-  }
-  return packageNames;
-}
-
 function resolveManagedNpmRootPackageDir(npmRoot: string, packageName: string): string {
   return path.join(npmRoot, "node_modules", ...packageName.split("/"));
 }
@@ -1275,17 +1231,6 @@ function resolveRequiredPlatformPackageNames(
   return { ok: true, packageNames: [...packageNames] };
 }
 
-async function listNewManagedNpmRootPackageDirs(params: {
-  beforeInstallPackageNames: Set<string>;
-  npmRoot: string;
-}): Promise<string[]> {
-  const afterInstallPackageNames = await listManagedNpmRootPackageNames(params.npmRoot);
-  return [...afterInstallPackageNames]
-    .filter((packageName) => !params.beforeInstallPackageNames.has(packageName))
-    .map((packageName) => resolveManagedNpmRootPackageDir(params.npmRoot, packageName))
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
 function resolveTrustedNpmPackPackageName(packageName: string | undefined):
   | {
       ok: true;
@@ -1440,7 +1385,6 @@ async function installPluginFromManagedNpmRoot(
         logger.info?.(`Repaired stale openclaw peer dependency in ${npmRoot}`);
       }
     }
-    let preInstallRootPackageNames = await listManagedNpmRootPackageNames(npmRoot);
     const managedOverrides = await readOpenClawManagedNpmRootOverrides();
     const rollbackPeerDependencySnapshot = await readManagedNpmRootPeerDependencySnapshot({
       npmRoot,
@@ -1572,7 +1516,6 @@ async function installPluginFromManagedNpmRoot(
       logger.warn?.(
         `npm reported a managed npm project corruption signature; quarantined ${formatManagedNpmProjectQuarantineArtifacts(quarantine.movedArtifactNames)} at ${quarantine.quarantineDir} and rebuilding once before retrying.`,
       );
-      preInstallRootPackageNames = await listManagedNpmRootPackageNames(npmRoot);
       const recoveryPeerSync = await syncManagedPeerDependenciesForInstall({
         omitUnsupportedManagedOverrides,
       });
@@ -1772,14 +1715,9 @@ async function installPluginFromManagedNpmRoot(
       });
     }
 
-    const newRootPackageDirs = await listNewManagedNpmRootPackageDirs({
-      beforeInstallPackageNames: preInstallRootPackageNames,
-      npmRoot,
-    });
     const result = await installPluginFromInstalledPackageDirInternal({
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       config: params.config,
-      additionalDependencyPackageDirs: newRootPackageDirs,
       packageDir: installRoot,
       dependencyScanRootDir: npmRoot,
       logger,
@@ -2522,7 +2460,6 @@ async function validatePackagePluginInstallSource(params: {
         pluginId,
         logger: params.logger,
         extensions,
-        ...(packageMetadata ? { packageMetadata } : {}),
         requestKind: params.installPolicyRequest?.kind,
         requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
         source: params.installPolicyRequest?.source,
@@ -2553,11 +2490,9 @@ async function validatePackagePluginInstallSource(params: {
 async function scanAndLinkInstalledPackage(params: {
   runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   installedDir: string;
-  additionalDependencyPackageDirs?: string[];
   dependencyScanRootDir?: string;
   pluginId: string;
   peerDependencies: Record<string, string>;
-  dangerouslyForceUnsafeInstall?: boolean;
   trustedSourceLinkedOfficialInstall?: boolean;
   mode?: "install" | "update";
   requestKind?: PluginInstallPolicyRequest["kind"];
@@ -2576,13 +2511,6 @@ async function scanAndLinkInstalledPackage(params: {
     ),
     scan: async () =>
       await params.runtime.scanInstalledPackageDependencyTree({
-        ...(params.additionalDependencyPackageDirs
-          ? { additionalPackageDirs: params.additionalDependencyPackageDirs }
-          : {}),
-        allowManagedNpmRootPackagePeerSymlinks:
-          params.dependencyScanRootDir !== undefined &&
-          path.resolve(params.dependencyScanRootDir) !== path.resolve(params.installedDir),
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         dependencyScanRootDir: params.dependencyScanRootDir,
         logger: params.logger,
         mode: params.mode,
@@ -2614,7 +2542,6 @@ async function scanAndLinkInstalledPackage(params: {
 
 export async function installPluginFromInstalledPackageDir(
   params: {
-    additionalDependencyPackageDirs?: string[];
     emitSuccessSecurityEvent?: boolean;
     packageDir: string;
     dependencyScanRootDir?: string;
@@ -2625,7 +2552,6 @@ export async function installPluginFromInstalledPackageDir(
 
 async function installPluginFromInstalledPackageDirInternal(
   params: {
-    additionalDependencyPackageDirs?: string[];
     emitSuccessSecurityEvent?: boolean;
     packageDir: string;
     dependencyScanRootDir?: string;
@@ -2652,13 +2578,9 @@ async function installPluginFromInstalledPackageDirInternal(
   const postInstallError = await scanAndLinkInstalledPackage({
     runtime,
     installedDir: params.packageDir,
-    ...(params.additionalDependencyPackageDirs
-      ? { additionalDependencyPackageDirs: params.additionalDependencyPackageDirs }
-      : {}),
     dependencyScanRootDir: params.dependencyScanRootDir,
     pluginId: validated.plugin.pluginId,
     peerDependencies: validated.plugin.peerDependencies,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
     mode: params.mode ?? "install",
@@ -2771,7 +2693,6 @@ async function installPluginFromPackageDir(
         installedDir,
         pluginId: plugin.pluginId,
         peerDependencies: plugin.peerDependencies,
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
         config: params.config,
         mode: effectiveMode,

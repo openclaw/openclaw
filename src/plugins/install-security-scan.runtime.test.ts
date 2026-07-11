@@ -1,11 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runInstallPolicyMock = vi.fn();
-const findBlockedManifestDependenciesMock = vi.fn();
-const findBlockedNodeModulesDirectoryMock = vi.fn();
-const findBlockedNodeModulesFileAliasMock = vi.fn();
-const findBlockedPackageDirectoryInPathMock = vi.fn();
-const findBlockedPackageFileAliasInPathMock = vi.fn();
 const getGlobalHookRunnerMock = vi.fn();
 
 vi.mock("../security/install-policy.js", async (importOriginal) => {
@@ -13,23 +8,6 @@ vi.mock("../security/install-policy.js", async (importOriginal) => {
   return {
     ...actual,
     runInstallPolicy: (...args: unknown[]) => runInstallPolicyMock(...args),
-  };
-});
-
-vi.mock("./dependency-denylist.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./dependency-denylist.js")>();
-  return {
-    ...actual,
-    findBlockedManifestDependencies: (...args: unknown[]) =>
-      findBlockedManifestDependenciesMock(...args),
-    findBlockedNodeModulesDirectory: (...args: unknown[]) =>
-      findBlockedNodeModulesDirectoryMock(...args),
-    findBlockedNodeModulesFileAlias: (...args: unknown[]) =>
-      findBlockedNodeModulesFileAliasMock(...args),
-    findBlockedPackageDirectoryInPath: (...args: unknown[]) =>
-      findBlockedPackageDirectoryInPathMock(...args),
-    findBlockedPackageFileAliasInPath: (...args: unknown[]) =>
-      findBlockedPackageFileAliasInPathMock(...args),
   };
 });
 
@@ -45,22 +23,12 @@ const {
 
 function expectOnlyOperatorPolicyRan() {
   expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
-  expect(findBlockedManifestDependenciesMock).not.toHaveBeenCalled();
-  expect(findBlockedNodeModulesDirectoryMock).not.toHaveBeenCalled();
-  expect(findBlockedNodeModulesFileAliasMock).not.toHaveBeenCalled();
-  expect(findBlockedPackageDirectoryInPathMock).not.toHaveBeenCalled();
-  expect(findBlockedPackageFileAliasInPathMock).not.toHaveBeenCalled();
   expect(getGlobalHookRunnerMock).not.toHaveBeenCalled();
 }
 
 describe("install security scan official bypass", () => {
   beforeEach(() => {
     runInstallPolicyMock.mockReset();
-    findBlockedManifestDependenciesMock.mockReset();
-    findBlockedNodeModulesDirectoryMock.mockReset();
-    findBlockedNodeModulesFileAliasMock.mockReset();
-    findBlockedPackageDirectoryInPathMock.mockReset();
-    findBlockedPackageFileAliasInPathMock.mockReset();
     getGlobalHookRunnerMock.mockReset();
   });
 

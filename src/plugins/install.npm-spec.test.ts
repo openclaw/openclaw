@@ -1610,7 +1610,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
   });
 
-  it("blocks npm installs with denied hoisted transitive dependencies", async () => {
+  it("allows npm installs with formerly denied hoisted transitive dependencies", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
 
@@ -1629,14 +1629,7 @@ describe("installPluginFromNpmSpec", () => {
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
-      expect(result.error.replaceAll("\\", "/")).toContain(
-        "node_modules/plain-crypto-js/package.json",
-      );
-    }
+    expect(result.ok).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(

@@ -40,19 +40,12 @@ export type SkillInstallSpecMetadata = {
   targetDir?: string;
 };
 
-/** Package executable metadata used to scope dependency and entrypoint scans. */
-export type PackageExecutableScanMetadata = {
-  runtimeExtensions?: readonly string[];
-  runtimeSetupEntry?: string;
-  setupEntry?: string;
-};
-
-/** Lazily loads install scanning so normal plugin startup avoids policy/runtime imports. */
+/** Lazily loads install policy checks so normal plugin startup avoids policy/runtime imports. */
 async function loadInstallSecurityScanRuntime() {
   return await import("./install-security-scan.runtime.js");
 }
 
-/** Scans an unpacked bundle source before plugin install/update. */
+/** Runs install policy and hooks for an unpacked bundle source before plugin install/update. */
 export async function scanBundleInstallSource(
   params: InstallSafetyOverrides & {
     config?: OpenClawConfig;
@@ -70,14 +63,13 @@ export async function scanBundleInstallSource(
   return await scanBundleInstallSourceRuntime(params);
 }
 
-/** Scans a package source directory and executable metadata before install/update. */
+/** Runs install policy and hooks for a package source directory before install/update. */
 export async function scanPackageInstallSource(
   params: InstallSafetyOverrides & {
     config?: OpenClawConfig;
     extensions: string[];
     logger: InstallScanLogger;
     packageDir: string;
-    packageMetadata?: PackageExecutableScanMetadata;
     pluginId: string;
     requestKind?: PluginInstallRequestKind;
     requestedSpecifier?: string;
@@ -93,12 +85,9 @@ export async function scanPackageInstallSource(
   return await scanPackageInstallSourceRuntime(params);
 }
 
-/** Scans the installed package dependency tree after npm resolution. */
+/** Runs install policy for the installed package dependency tree after npm resolution. */
 export async function scanInstalledPackageDependencyTree(params: {
-  additionalPackageDirs?: string[];
-  allowManagedNpmRootPackagePeerSymlinks?: boolean;
   config?: OpenClawConfig;
-  dangerouslyForceUnsafeInstall?: boolean;
   dependencyScanRootDir?: string;
   logger: InstallScanLogger;
   mode?: "install" | "update";
