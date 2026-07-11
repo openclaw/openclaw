@@ -141,8 +141,12 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
     sessionId: string,
     prompt: string,
     options: unknown,
-  ) =>
-    state.queueEmbeddedAgentMessageMock(sessionId, prompt, options)
+  ) => {
+    const result = state.queueEmbeddedAgentMessageMock(sessionId, prompt, options);
+    if (typeof result === "object") {
+      return result;
+    }
+    return result
       ? {
           queued: true,
           sessionId,
@@ -156,7 +160,8 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
           reason: "no_active_run",
           target: "none",
           gatewayHealth: "live",
-        },
+        };
+  },
 }));
 
 vi.mock("./queue.js", () => ({
@@ -316,6 +321,65 @@ describe("runReplyAgent active steering", () => {
         userTurnTranscriptRecorder: recorder,
       }),
     );
+  });
+
+  it("waits for transcript commit and keeps a rejected adoption finalizer irrevocably adopted", async () => {
+    const finalizerError = new Error("dedupe finalizer failed");
+    const events: string[] = [];
+    state.queueEmbeddedAgentMessageMock.mockImplementationOnce(
+      (_sessionId: string, _prompt: string, options: unknown) => {
+        expect(requireRecord(options, "embedded queue options")).toMatchObject({
+          steeringMode: "all",
+          waitForTranscriptCommit: true,
+        });
+        events.push("transcript-committed");
+        return true;
+      },
+    );
+    const onTurnAdopted = vi.fn(async () => {
+      events.push("adoption-finalizer");
+      throw finalizerError;
+    });
+    const { run, typing } = createMinimalRun({
+      opts: { onTurnAdopted },
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(events).toEqual(["transcript-committed", "adoption-finalizer"]);
+    expect(onTurnAdopted).toHaveBeenCalledTimes(1);
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues a follow-up when transcript-backed steering is unsupported", async () => {
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce({
+      queued: false,
+      sessionId: "session",
+      reason: "transcript_commit_wait_unsupported",
+      target: "none",
+      gatewayHealth: "live",
+    });
+    const onTurnAdopted = vi.fn();
+    const { run } = createMinimalRun({
+      opts: { onTurnAdopted },
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(onTurnAdopted).not.toHaveBeenCalled();
   });
 });
 
@@ -741,6 +805,105 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
     expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+  });
+
+  it("fires onTurnAdopted after restart recovery delivery context persist completes", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const events: string[] = [];
+    const onTurnAdopted = vi.fn(async () => {
+      const storedAtAdoption = await readStoredMainSession(storePath);
+      expect(storedAtAdoption.restartRecoveryDeliveryContext).toEqual({
+        channel: "discord",
+        to: "channel:24680",
+        accountId: "work",
+        threadId: "1503645939964055592",
+      });
+      expect(typeof storedAtAdoption.restartRecoveryDeliveryRunId).toBe("string");
+      events.push("adopted");
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      events.push("agent-run");
+      return {
+        payloads: [{ text: "visible final" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onTurnAdopted },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        AccountId: "work",
+        MessageSid: "1503645939964055592",
+        MessageThreadId: "1503645939964055592",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(events).toEqual(["adopted", "agent-run"]);
+  });
+
+  it("fires onTurnAdopted for suppressed-delivery runs before the agent turn", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const events: string[] = [];
+    const onTurnAdopted = vi.fn(async () => {
+      const storedAtAdoption = await readStoredMainSession(storePath);
+      expect(storedAtAdoption.restartRecoveryDeliveryContext).toBeUndefined();
+      expect(storedAtAdoption.restartRecoveryDeliveryRunId).toBeUndefined();
+      events.push("adopted");
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      events.push("agent-run");
+      return {
+        payloads: [{ text: "ambient final" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      opts: {
+        onTurnAdopted,
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:123",
+        AccountId: "default",
+        MessageSid: "42",
+        InboundEventKind: "room_event",
+      },
+      runOverrides: { messageProvider: "telegram" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      currentInboundEventKind: "room_event",
+    });
+
+    await run();
+
+    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(events).toEqual(["adopted", "agent-run"]);
   });
 
   it("keeps heartbeat replies with real content in pending final delivery", async () => {
@@ -1276,6 +1439,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("announces model fallback transitions across verbose levels", async () => {
+    const storeRoot = await mkdtemp(join(tmpdir(), "openclaw-fallback-pin-"));
+    const storePath = join(storeRoot, "sessions.json");
     const cases = [
       { name: "verbose on", verbose: "on" as const },
       { name: "verbose off", verbose: "off" as const },
@@ -1284,17 +1449,23 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const sessionEntry: SessionEntry = {
         sessionId: "session",
         updatedAt: Date.now(),
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-luna",
+        modelOverrideSource: "user",
       };
+      await saveSessionStore(storePath, { main: sessionEntry }, { skipMaintenance: true });
       const sessionStore = { main: sessionEntry };
       state.runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "final" }],
-        meta: {},
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
       });
       vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
         const { run, onFallbackStep } = args;
+        expect(args.provider, testCase.name).toBe("openai");
+        expect(args.model, testCase.name).toBe("gpt-5.6-luna");
         await onFallbackStep?.({
           fallbackStepType: "fallback_step",
-          fallbackStepFromModel: "fireworks/fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+          fallbackStepFromModel: "openai/gpt-5.6-luna",
           fallbackStepToModel: "deepinfra/moonshotai/Kimi-K2.5",
           fallbackStepFromFailureReason: "rate_limit",
           fallbackStepFinalOutcome: "succeeded",
@@ -1306,9 +1477,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
           model: "moonshotai/Kimi-K2.5",
           attempts: [
             {
-              provider: "fireworks",
-              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-              error: "Provider fireworks is in cooldown (all profiles unavailable)",
+              provider: "openai",
+              model: "gpt-5.6-luna",
+              error: "Provider openai is in cooldown (all profiles unavailable)",
               reason: "rate_limit",
             },
           ],
@@ -1320,6 +1491,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
         sessionEntry,
         sessionStore,
         sessionKey: "main",
+        storePath,
+        runOverrides: { provider: "openai", model: "gpt-5.6-luna" },
       });
       const phases: string[] = [];
       const off = onAgentEvent((evt) => {
@@ -1333,15 +1506,26 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const payload = Array.isArray(res)
         ? (res[0] as { text?: string })
         : (res as { text?: string });
+      const stored = requireStoredSessionEntry(storePath);
       expect(payload.text, testCase.name).toContain("Model Fallback:");
       expect(payload.text, testCase.name).toContain("deepinfra/moonshotai/Kimi-K2.5");
-      expect(sessionEntry.fallbackNoticeReason, testCase.name).toBe("rate limit");
+      expect(stored.providerOverride, testCase.name).toBe("openai");
+      expect(stored.modelOverride, testCase.name).toBe("gpt-5.6-luna");
+      expect(stored.modelOverrideSource, testCase.name).toBe("user");
+      expect(stored.modelProvider, testCase.name).toBe("deepinfra");
+      expect(stored.model, testCase.name).toBe("moonshotai/Kimi-K2.5");
+      expect(stored.fallbackNoticeSelectedModel, testCase.name).toBe("openai/gpt-5.6-luna");
+      expect(stored.fallbackNoticeActiveModel, testCase.name).toBe(
+        "deepinfra/moonshotai/Kimi-K2.5",
+      );
+      expect(stored.fallbackNoticeReason, testCase.name).toBe("rate limit");
       expect(
         phases.filter((phase) => phase === "fallback"),
         testCase.name,
       ).toHaveLength(1);
       expect(phases, testCase.name).toContain("fallback_step");
     }
+    await rm(storeRoot, { recursive: true, force: true });
   });
 
   it("does not report an exhausted fallback candidate as a successful winner", async () => {

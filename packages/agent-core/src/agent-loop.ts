@@ -793,6 +793,7 @@ type ImmediateToolCallOutcome = {
 type ExecutedToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
+  executionStarted: boolean;
 };
 
 type FinalizedToolCallOutcome = {
@@ -985,6 +986,16 @@ async function executePreparedToolCall(
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
 ): Promise<ExecutedToolCallOutcome> {
+  // Parallel batches prepare every call first. A later preflight abort must not
+  // let an earlier prepared, side-effectful tool start afterward.
+  if (signal?.aborted) {
+    return {
+      result: createErrorToolResult("Operation aborted"),
+      isError: true,
+      executionStarted: false,
+    };
+  }
+
   const updateEvents: Promise<void>[] = [];
   let acceptingUpdates = true;
 
@@ -1015,13 +1026,14 @@ async function executePreparedToolCall(
     );
     acceptingUpdates = false;
     await Promise.all(updateEvents);
-    return { result, isError: false };
+    return { result, isError: false, executionStarted: true };
   } catch (error) {
     acceptingUpdates = false;
     await Promise.all(updateEvents);
     return {
       result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
+      executionStarted: true,
     };
   } finally {
     acceptingUpdates = false;
@@ -1039,7 +1051,7 @@ async function finalizeExecutedToolCall(
   let result = executed.result;
   let isError = executed.isError;
 
-  if (config.afterToolCall) {
+  if (executed.executionStarted && config.afterToolCall) {
     try {
       const afterResult = await config.afterToolCall(
         {
@@ -1070,7 +1082,7 @@ async function finalizeExecutedToolCall(
     toolCall: prepared.toolCall,
     result,
     isError,
-    executionStarted: true,
+    executionStarted: executed.executionStarted,
     ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
   };
 }

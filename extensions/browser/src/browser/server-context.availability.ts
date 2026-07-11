@@ -22,7 +22,7 @@ import {
   stopOpenClawChrome,
 } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
-import { BrowserProfileUnavailableError } from "./errors.js";
+import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 import { getExtensionRelayModule } from "./extension-relay.runtime.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import {
@@ -182,10 +182,10 @@ export function createProfileAvailability({
   ) => {
     await ensureExtensionRelay();
     if (capabilities.usesChromeMcp) {
-      // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required.
+      // countChromeMcpTabs creates the session if needed — no separate availability call required.
       // Status probes opt into ephemeral so they reuse a cached attach session if one exists,
       // but do not seed a new persistent session as a side effect of read-only status calls.
-      const { listChromeMcpTabs } = await getChromeMcpModule();
+      const { countChromeMcpTabs } = await getChromeMcpModule();
       const callOptions: { timeoutMs?: number; ephemeral?: boolean; signal?: AbortSignal } = {};
       if (timeoutMs != null) {
         callOptions.timeoutMs = timeoutMs;
@@ -196,7 +196,7 @@ export function createProfileAvailability({
       if (options?.signal) {
         callOptions.signal = options.signal;
       }
-      await listChromeMcpTabs(profile.name, profile, callOptions);
+      await countChromeMcpTabs(profile.name, profile, callOptions);
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
@@ -349,7 +349,16 @@ export function createProfileAvailability({
     try {
       return await launchOpenClawChrome(current.resolved, profile, launchOptions);
     } catch (err) {
-      recordManagedLaunchFailure(profileState, err);
+      // Missing-display rejection happens before a process launch. Do not let
+      // repeated headed requests block the explicit headless recovery path.
+      if (
+        !(
+          err instanceof BrowserProfileUnavailableError &&
+          err.metadata?.reason === BROWSER_ERROR_REASONS.noDisplayForHeadedProfile
+        )
+      ) {
+        recordManagedLaunchFailure(profileState, err);
+      }
       throw err;
     }
   };

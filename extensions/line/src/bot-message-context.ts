@@ -20,6 +20,7 @@ import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-s
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import type { ResolvedLineAccount } from "./types.js";
@@ -387,7 +388,7 @@ async function finalizeLineInboundContext(params: {
     sessionKey: params.route.sessionKey,
   });
   if (shouldLogVerbose()) {
-    const preview = body.slice(0, 200).replace(/\n/g, "\\n");
+    const preview = truncateUtf16Safe(body, 200).replace(/\n/g, "\\n");
     const mediaInfo =
       params.verboseLog.kind === "inbound" && (params.verboseLog.mediaCount ?? 0) > 1
         ? ` mediaCount=${params.verboseLog.mediaCount}`

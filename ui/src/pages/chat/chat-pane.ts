@@ -1,6 +1,16 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
-import { property } from "lit/decorators.js";
+import { html, nothing } from "lit";
+import { property, state as litState } from "lit/decorators.js";
+import type {
+  TaskSuggestion,
+  TaskSuggestionEvent,
+  TaskSuggestionsAcceptResult,
+  TaskSuggestionsListResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequests,
+} from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -8,7 +18,8 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { beginNativeWindowDrag } from "../../app/native-window-drag.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
@@ -28,6 +39,7 @@ import {
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import {
   applyChatAgentsList,
@@ -57,6 +69,7 @@ import {
   refreshPageChat,
   refreshRouteSessionOptions,
   resetChatStateForRouteSession,
+  retryChatComposerMemoryFallback,
   resolveAssistantAttachmentAuthToken,
   resolveChatAgentId,
   resolveChatAvatarUrl,
@@ -64,17 +77,37 @@ import {
   type ChatPageHost,
 } from "./chat-state.ts";
 import { renderChat, resetChatViewState, type ChatProps } from "./chat-view.ts";
+import {
+  createBackgroundTasksProps,
+  renderBackgroundTasksToggle,
+  type BackgroundTasksProps,
+} from "./components/chat-background-tasks.ts";
+import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
+import {
+  chatPullRequestId,
+  dismissChatPullRequest,
+  listDismissedChatPullRequests,
+} from "./components/chat-pull-requests.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
+  renderSessionWorkspaceToggle,
   revealSessionWorkspaceFile,
+  toggleSessionWorkspace,
+  type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
 import {
   CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
   type DetailFullMessageResult,
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
+import {
+  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
+  loadChatComposerSnapshot,
+  resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+} from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
 import {
   hasAbortableSessionRun,
@@ -85,15 +118,34 @@ import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 
 type ChatPageContext = ApplicationContext;
 type PaneSessionChangeOptions = { replace?: boolean };
+type ChatPaneConnectionScope = {
+  context: ChatPageContext;
+  state: ChatPageHost;
+  client: GatewayBrowserClient;
+  generation: number;
+  sessions: ChatPageContext["sessions"];
+};
 
 const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open]";
+  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 const CHAT_TEXT_ENTRY_SELECTOR =
   "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox']";
 const CHAT_SPACE_ACTIVATION_SELECTOR =
   "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='radio'], [role='switch']";
 const CHAT_MODAL_SELECTOR = "dialog[open], [aria-modal='true']";
+
+/* Pane-width thresholds (CSS px). Split panes and compact windows can be far
+ * narrower than the viewport, so side-by-side layouts key off the pane's own
+ * measured width, never viewport media queries. */
+// Side rail (230-280px) plus a readable thread; below this the rail docks bottom.
+const WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH = 800;
+// Widest the rail's grid column gets; a side-docked rail takes this from the
+// width available to the chat + detail-panel split.
+const WORKSPACE_RAIL_MAX_WIDTH = 280;
+// .chat-main min-width (312) + divider + .chat-sidebar min-width (300) + slack;
+// below this the detail panel stacks under the thread.
+const DETAIL_SIDEBAR_SIDE_MIN_WIDTH = 680;
 
 const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
@@ -108,8 +160,8 @@ function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boole
     .some((target) => target instanceof Element && target.matches(selector));
 }
 
-class ChatPane extends LitElement {
-  @consume({ context: applicationContext, subscribe: false })
+class ChatPane extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ChatPageContext;
   @property({ attribute: false }) paneId = "single";
   // Empty means "no route/layout opinion yet": the pane boots on the page
@@ -118,7 +170,6 @@ class ChatPane extends LitElement {
   // before route data resolves).
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) active = false;
-  @property({ attribute: false }) chrome: "none" | "pane" = "none";
   @property({ attribute: false }) draft?: string;
   @property({ attribute: false }) onFocusPane?: (paneId: string) => void;
   @property({ attribute: false }) onPaneSessionChange?: (
@@ -126,17 +177,283 @@ class ChatPane extends LitElement {
     nextSessionKey: string,
     options?: PaneSessionChangeOptions,
   ) => void;
-  @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
+  /** Split mode renders an in-pane header row (title + workspace/split/close
+   * controls); classic single-pane mode renders none. */
+  @property({ attribute: false }) showPaneHeader = false;
+  @property({ attribute: false }) paneTitle = "";
+  @property({ attribute: false }) narrow = false;
   @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
+  @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
   @property({ attribute: false }) onClosePane?: (paneId: string) => void;
-  @property({ attribute: false }) onOpenSplitView?: () => void;
 
   private readonly chatState = new ChatStateController<ChatPageHost>(this);
   private state: ChatPageHost | undefined;
+  /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
+   * the wide side-by-side layout instead of flashing the stacked one. */
+  @litState() private paneWidth = Number.POSITIVE_INFINITY;
+  private paneResizeObserver: ResizeObserver | null = null;
   private connectedClient: GatewayBrowserClient | null = null;
   private connectionGeneration = 0;
   private nativeDraftCleanup: (() => void) | null = null;
   private readonly unreadPatchGuard = new SessionUnreadPatchGuard();
+  private taskSuggestions: TaskSuggestion[] = [];
+  private readonly taskSuggestionBusyIds = new Set<string>();
+  private readonly taskSuggestionOperations = new Map<string, symbol>();
+  private taskSuggestionsRequestVersion = 0;
+  private sessionPullRequests: ControlUiSessionPullRequest[] = [];
+  private sessionPullRequestsRateLimited = false;
+  private sessionPullRequestsRequestVersion = 0;
+  private sessionPullRequestsExpanded = false;
+  private dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
+
+  private captureConnectionScope(): ChatPaneConnectionScope | null {
+    const context = this.context;
+    const state = this.state;
+    const client = state?.client;
+    if (
+      !this.isConnected ||
+      !state?.connected ||
+      !client ||
+      this.connectedClient !== client ||
+      !context.gateway.snapshot.connected ||
+      context.gateway.snapshot.client !== client
+    ) {
+      return null;
+    }
+    return {
+      context,
+      state,
+      client,
+      generation: this.connectionGeneration,
+      sessions: context.sessions,
+    };
+  }
+
+  private isConnectionScopeCurrent(scope: ChatPaneConnectionScope): boolean {
+    return (
+      this.isConnected &&
+      this.context === scope.context &&
+      this.context.sessions === scope.sessions &&
+      this.state === scope.state &&
+      scope.state.connected &&
+      scope.state.client === scope.client &&
+      this.connectedClient === scope.client &&
+      scope.context.gateway.snapshot.connected &&
+      scope.context.gateway.snapshot.client === scope.client &&
+      this.connectionGeneration === scope.generation
+    );
+  }
+
+  private taskSuggestionMatchesCurrentSession(suggestion: TaskSuggestion): boolean {
+    const state = this.state;
+    return Boolean(
+      state?.connected &&
+      uiSessionEventMatches(
+        {
+          agentsList: this.context.agents.state.agentsList,
+          hello: this.context.gateway.snapshot.hello,
+          sessionKey: state.sessionKey,
+        },
+        suggestion.sessionKey,
+        suggestion.agentId,
+      ),
+    );
+  }
+
+  private async refreshTaskSuggestions(): Promise<void> {
+    const requestVersion = ++this.taskSuggestionsRequestVersion;
+    const scope = this.captureConnectionScope();
+    if (
+      !scope ||
+      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "taskSuggestions.list")
+    ) {
+      this.taskSuggestions = [];
+      this.requestUpdate();
+      return;
+    }
+    const sessionKey = scope.state.sessionKey;
+    const agentId = resolveChatAgentId(scope.state);
+    try {
+      const result = await scope.client.request<TaskSuggestionsListResult>("taskSuggestions.list", {
+        agentId,
+      });
+      if (
+        requestVersion !== this.taskSuggestionsRequestVersion ||
+        !this.isConnectionScopeCurrent(scope) ||
+        sessionKey !== scope.state.sessionKey
+      ) {
+        return;
+      }
+      this.taskSuggestions = result.suggestions.filter((suggestion) =>
+        this.taskSuggestionMatchesCurrentSession(suggestion),
+      );
+      this.requestUpdate();
+    } catch {
+      // Suggestions are an optional ephemeral affordance; chat remains usable
+      // when an older Gateway or a reconnect loses the process-local registry.
+      // Keep event-delivered cards when a background reconciliation fails.
+    }
+  }
+
+  private async refreshSessionPullRequests(): Promise<void> {
+    const requestVersion = ++this.sessionPullRequestsRequestVersion;
+    const scope = this.captureConnectionScope();
+    if (
+      !scope ||
+      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "controlUi.sessionPullRequests")
+    ) {
+      this.sessionPullRequests = [];
+      this.sessionPullRequestsRateLimited = false;
+      this.requestUpdate();
+      return;
+    }
+    const sessionKey = scope.state.sessionKey;
+    if (!sessionKey.trim()) {
+      return;
+    }
+    try {
+      const result = await scope.client.request<ControlUiSessionPullRequests>(
+        "controlUi.sessionPullRequests",
+        { sessionKey, ...scopedAgentParamsForSession(scope.state, sessionKey) },
+      );
+      if (
+        requestVersion !== this.sessionPullRequestsRequestVersion ||
+        !this.isConnectionScopeCurrent(scope) ||
+        sessionKey !== scope.state.sessionKey
+      ) {
+        return;
+      }
+      this.sessionPullRequests = result.pullRequests;
+      this.sessionPullRequestsRateLimited = result.rateLimited;
+      this.dismissedSessionPullRequestIds = listDismissedChatPullRequests(sessionKey);
+      this.requestUpdate();
+    } catch {
+      // PR chips are an optional affordance; keep the last snapshot so a
+      // transient gateway or GitHub failure does not clear the row.
+    }
+  }
+
+  private resetSessionPullRequests(): void {
+    this.sessionPullRequestsRequestVersion += 1;
+    this.sessionPullRequests = [];
+    this.sessionPullRequestsRateLimited = false;
+    this.sessionPullRequestsExpanded = false;
+    this.dismissedSessionPullRequestIds = new Set();
+  }
+
+  private readonly dismissSessionPullRequest = (pullRequest: ControlUiSessionPullRequest): void => {
+    const sessionKey = this.state?.sessionKey;
+    if (!sessionKey) {
+      return;
+    }
+    this.dismissedSessionPullRequestIds = dismissChatPullRequest(sessionKey, pullRequest);
+    this.requestUpdate();
+  };
+
+  private handleTaskSuggestionEvent(event: TaskSuggestionEvent): void {
+    if (event.action === "created") {
+      if (!this.taskSuggestionMatchesCurrentSession(event.suggestion)) {
+        return;
+      }
+      this.taskSuggestions = [
+        event.suggestion,
+        ...this.taskSuggestions.filter((item) => item.id !== event.suggestion.id),
+      ];
+    } else {
+      this.taskSuggestions = this.taskSuggestions.filter((item) => item.id !== event.taskId);
+      this.taskSuggestionBusyIds.delete(event.taskId);
+    }
+    this.requestUpdate();
+    // The replacement snapshot includes the event plus unrelated suggestions;
+    // its request version prevents any older snapshot from overwriting either.
+    void this.refreshTaskSuggestions();
+  }
+
+  private readonly acceptTaskSuggestion = async (suggestion: TaskSuggestion): Promise<void> => {
+    const scope = this.captureConnectionScope();
+    if (
+      !scope ||
+      !this.taskSuggestionMatchesCurrentSession(suggestion) ||
+      this.taskSuggestionOperations.has(suggestion.id)
+    ) {
+      return;
+    }
+    const sessionKey = scope.state.sessionKey;
+    const operation = Symbol();
+    const isCurrent = () =>
+      this.isConnectionScopeCurrent(scope) &&
+      scope.state.sessionKey === sessionKey &&
+      this.taskSuggestionOperations.get(suggestion.id) === operation;
+    this.taskSuggestionOperations.set(suggestion.id, operation);
+    this.taskSuggestionBusyIds.add(suggestion.id);
+    this.requestUpdate();
+    try {
+      const result = await scope.client.request<TaskSuggestionsAcceptResult>(
+        "taskSuggestions.accept",
+        { taskId: suggestion.id },
+      );
+      if (!isCurrent()) {
+        return;
+      }
+      this.taskSuggestions = this.taskSuggestions.filter((item) => item.id !== suggestion.id);
+      this.onPaneSessionChange?.(this.paneId, result.key);
+    } catch (error) {
+      if (!isCurrent()) {
+        return;
+      }
+      scope.state.lastError = error instanceof Error ? error.message : String(error);
+      scope.state.chatError = scope.state.lastError;
+    } finally {
+      if (this.taskSuggestionOperations.get(suggestion.id) === operation) {
+        this.taskSuggestionOperations.delete(suggestion.id);
+        this.taskSuggestionBusyIds.delete(suggestion.id);
+        if (this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
+          this.requestUpdate();
+        }
+      }
+    }
+  };
+
+  private readonly dismissTaskSuggestion = async (suggestion: TaskSuggestion): Promise<void> => {
+    const scope = this.captureConnectionScope();
+    if (
+      !scope ||
+      !this.taskSuggestionMatchesCurrentSession(suggestion) ||
+      this.taskSuggestionOperations.has(suggestion.id)
+    ) {
+      return;
+    }
+    const sessionKey = scope.state.sessionKey;
+    const operation = Symbol();
+    const isCurrent = () =>
+      this.isConnectionScopeCurrent(scope) &&
+      scope.state.sessionKey === sessionKey &&
+      this.taskSuggestionOperations.get(suggestion.id) === operation;
+    this.taskSuggestionOperations.set(suggestion.id, operation);
+    this.taskSuggestionBusyIds.add(suggestion.id);
+    this.requestUpdate();
+    try {
+      await scope.client.request("taskSuggestions.dismiss", { taskId: suggestion.id });
+      if (!isCurrent()) {
+        return;
+      }
+      this.taskSuggestions = this.taskSuggestions.filter((item) => item.id !== suggestion.id);
+    } catch (error) {
+      if (!isCurrent()) {
+        return;
+      }
+      scope.state.lastError = error instanceof Error ? error.message : String(error);
+      scope.state.chatError = scope.state.lastError;
+    } finally {
+      if (this.taskSuggestionOperations.get(suggestion.id) === operation) {
+        this.taskSuggestionOperations.delete(suggestion.id);
+        this.taskSuggestionBusyIds.delete(suggestion.id);
+        if (this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
+          this.requestUpdate();
+        }
+      }
+    }
+  };
 
   private markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
@@ -195,7 +512,47 @@ class ChatPane extends LitElement {
     const previousSessionsResult = state.sessionsResult;
     const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
     const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
-    resetChatStateForRouteSession(state, nextSessionKey);
+    const previousComposerScope =
+      this.chatState.composerScopeForRouteSwitch() ??
+      resolveStoredChatOutboxScope(state, previousSessionKey);
+    const previousComposerScopeKey = storedChatOutboxScopeKey(previousComposerScope);
+    const existingFallback = state.chatComposerFallbackByScope[previousComposerScopeKey];
+    const draftPersistResult = this.chatState.persistComposerForRouteSwitch();
+    const draftPersisted = draftPersistResult.status === "persisted";
+    const previousStoredSnapshot = loadChatComposerSnapshot(
+      state,
+      previousSessionKey,
+      previousComposerScope.agentId,
+    );
+    const previousStoredDraft = previousStoredSnapshot ? previousStoredSnapshot.draft : null;
+    const storedDraftMatches = previousStoredDraft === state.chatMessage;
+    const hasStagedAttachments = state.chatAttachments.length > 0;
+    const retainExistingFallback = existingFallback !== undefined && !storedDraftMatches;
+    const previousDraftRetry =
+      draftPersistResult.status === "storage-failed"
+        ? {
+            expectedDraftRevision: draftPersistResult.expectedDraftRevision,
+            draftRevision: draftPersistResult.draftRevision,
+          }
+        : existingFallback?.storageFailed && !storedDraftMatches
+          ? existingFallback.draftRetry
+          : undefined;
+    resetChatStateForRouteSession(state, nextSessionKey, {
+      retainPreviousComposerInMemory:
+        !draftPersisted || hasStagedAttachments || retainExistingFallback,
+      previousDraftRetry,
+      previousComposerScope,
+    });
+    retryChatComposerMemoryFallback(state, nextSessionKey);
+    // Route restoration is the new persistence baseline. An untouched pane
+    // must not later erase a draft written by another split pane. Memory-only
+    // fallbacks stay pane-local until a later edit persists successfully.
+    this.chatState.adoptComposerRoute();
+    this.taskSuggestionsRequestVersion += 1;
+    this.taskSuggestions = [];
+    this.taskSuggestionBusyIds.clear();
+    this.taskSuggestionOperations.clear();
+    this.resetSessionPullRequests();
     this.markSessionRead(nextSessionRow);
     if (previousSessionKey !== nextSessionKey) {
       state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
@@ -204,8 +561,17 @@ class ChatPane extends LitElement {
     void refreshChatAvatar(state);
     void refreshChatMetadata(state).finally(() => state.requestUpdate?.());
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
+    const composerStorageError = state.chatError === CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
     const historyLoad = loadChatHistory(state);
+    if (composerStorageError) {
+      // History loading clears the shared error slot synchronously. Restore the
+      // pane-local storage warning unless the retry above made the draft durable.
+      state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+      state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+    }
     state.requestUpdate();
+    void this.refreshTaskSuggestions();
+    void this.refreshSessionPullRequests();
     const scheduleHistoryScroll = () => {
       if (state.sessionKey !== nextSessionKey) {
         return;
@@ -261,6 +627,21 @@ class ChatPane extends LitElement {
     if (!state || !state.client || !state.connected) {
       return false;
     }
+    const context = this.context;
+    const sessions = context.sessions;
+    const client = state.client;
+    const connectionGeneration = this.connectionGeneration;
+    const isCurrent = () =>
+      this.isConnected &&
+      this.state === state &&
+      this.context === context &&
+      this.context.sessions === sessions &&
+      state.client === client &&
+      state.connected &&
+      this.connectedClient === client &&
+      context.gateway.snapshot.client === client &&
+      context.gateway.snapshot.connected &&
+      this.connectionGeneration === connectionGeneration;
     if (!canCreateChatSession(state)) {
       state.lastError = NEW_SESSION_ACTIVE_RUN_MESSAGE;
       state.chatError = state.lastError;
@@ -277,12 +658,15 @@ class ChatPane extends LitElement {
     state.lastError = null;
     state.chatError = null;
     const previousSessionKey = state.sessionKey;
-    const nextSessionKey = await this.context.sessions.create({
+    const nextSessionKey = await sessions.create({
       currentSessionKey: previousSessionKey,
       agentId:
         scopedAgentParamsForSession(state, previousSessionKey).agentId ??
         resolveAgentIdFromSessionKey(previousSessionKey),
     });
+    if (!isCurrent()) {
+      return false;
+    }
     if (
       !nextSessionKey ||
       state.sessionKey !== previousSessionKey ||
@@ -356,6 +740,24 @@ class ChatPane extends LitElement {
     if (
       this.active &&
       !event.defaultPrevented &&
+      !event.altKey &&
+      event.shiftKey &&
+      event.metaKey &&
+      !event.ctrlKey &&
+      event.key.toLowerCase() === "b"
+    ) {
+      const state = this.state;
+      if (!state) {
+        return;
+      }
+      event.preventDefault();
+      toggleSessionWorkspace(state);
+      return;
+    }
+
+    if (
+      this.active &&
+      !event.defaultPrevented &&
       !event.isComposing &&
       !event.metaKey &&
       !event.ctrlKey &&
@@ -423,12 +825,18 @@ class ChatPane extends LitElement {
     state.setChatMobileControlsOpen(false);
   };
 
-  override createRenderRoot() {
-    return this;
-  }
-
   override connectedCallback() {
     super.connectedCallback();
+    if (typeof ResizeObserver === "function") {
+      this.paneResizeObserver = new ResizeObserver((entries) => {
+        const width = entries.at(-1)?.contentRect.width;
+        // Hidden panes (narrow split view) report 0; keep the last real width.
+        if (typeof width === "number" && width > 0 && width !== this.paneWidth) {
+          this.paneWidth = width;
+        }
+      });
+      this.paneResizeObserver.observe(this);
+    }
     this.addEventListener("pointerdown", this.handlePaneFocus);
     this.addEventListener("focusin", this.handlePaneFocus);
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
@@ -440,7 +848,7 @@ class ChatPane extends LitElement {
       this.removeEventListener("pointerdown", this.handlePaneFocus);
       this.removeEventListener("focusin", this.handlePaneFocus);
     });
-    const pageState = createPageState(this.context, chatState.requestUpdate, this);
+    const pageState = createPageState(this.context, chatState.createRenderLifecycle(), this);
     pageState.createChatSession = async () => {
       await this.createSession();
     };
@@ -455,6 +863,9 @@ class ChatPane extends LitElement {
       pageState.requestUpdate?.();
     };
     this.state = pageState;
+    if (this.sessionKey) {
+      this.setPaneSessionKey(this.sessionKey);
+    }
     chatState.attach(pageState);
     const mediaDevices = globalThis.navigator?.mediaDevices;
     if (mediaDevices?.addEventListener) {
@@ -464,23 +875,30 @@ class ChatPane extends LitElement {
         mediaDevices.removeEventListener("devicechange", handleDeviceChange),
       );
     }
-    if (this.sessionKey) {
-      this.setPaneSessionKey(this.sessionKey);
-    }
     chatState.restoreComposer({ preserveCurrent: true });
+    chatState.startComposerPersistence();
     if (this.draft !== undefined) {
       this.state.handleChatDraftChange(this.draft);
     }
-    chatState.startComposerPersistence();
     chatState.addCleanup(
       this.context.gateway.subscribe((snapshot) => {
         this.applyGatewaySnapshot(snapshot);
       }),
     );
+    // PRs open, merge, and finish CI outside any gateway event stream, so the
+    // chip row refreshes on a coarse timer between session/connect refreshes.
+    const pullRequestTimer = window.setInterval(
+      () => void this.refreshSessionPullRequests(),
+      60_000,
+    );
+    chatState.addCleanup(() => window.clearInterval(pullRequestTimer));
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
         if (state) {
+          if (event.event === "task.suggestion" && event.payload) {
+            this.handleTaskSuggestionEvent(event.payload as TaskSuggestionEvent);
+          }
           handlePageGatewayEvent(state, event);
         }
       }),
@@ -524,17 +942,15 @@ class ChatPane extends LitElement {
     }
   }
 
-  override updated() {
-    // The header <select> options arrive after the sessions list loads; a
-    // .value template binding committed before the options exist leaves the
-    // browser on the first option, so re-sync after every render.
-    const select = this.querySelector<HTMLSelectElement>(".chat-pane__session-select");
-    if (select && this.state && select.value !== this.state.sessionKey) {
-      select.value = this.state.sessionKey;
-    }
-  }
-
   override disconnectedCallback() {
+    this.paneResizeObserver?.disconnect();
+    this.paneResizeObserver = null;
+    this.connectionGeneration += 1;
+    this.taskSuggestionsRequestVersion += 1;
+    this.taskSuggestions = [];
+    this.taskSuggestionBusyIds.clear();
+    this.taskSuggestionOperations.clear();
+    this.resetSessionPullRequests();
     this.nativeDraftCleanup?.();
     this.nativeDraftCleanup = null;
     this.announceCommandPaletteTarget(null);
@@ -635,9 +1051,21 @@ class ChatPane extends LitElement {
       return;
     }
     const wasConnected = state.connected;
+    const sourceChanged = state.client !== snapshot.client || wasConnected !== snapshot.connected;
     const clientChanged = this.connectedClient !== snapshot.client;
+    if (sourceChanged) {
+      // A reconnect can retain the browser client. Keep async ownership tied
+      // to the logical connection, not only the transport object identity.
+      this.connectionGeneration += 1;
+      this.taskSuggestionsRequestVersion += 1;
+      this.taskSuggestions = [];
+      this.taskSuggestionBusyIds.clear();
+      this.taskSuggestionOperations.clear();
+      state.chatLoading = false;
+    }
     state.client = snapshot.client;
     state.connected = snapshot.connected;
+    state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
     state.terminalAvailable =
       this.context.config.current.terminalEnabled &&
@@ -661,7 +1089,6 @@ class ChatPane extends LitElement {
     state.assistantName = this.context.config.current.assistantIdentity.name;
     if (!snapshot.connected) {
       if (wasConnected) {
-        this.connectionGeneration += 1;
         const currentSessionId =
           typeof state.currentSessionId === "string" ? state.currentSessionId.trim() : "";
         if (currentSessionId) {
@@ -674,13 +1101,14 @@ class ChatPane extends LitElement {
       state.realtimeTalkSession = null;
       state.realtimeTalkActive = false;
       state.realtimeTalkStatus = "idle";
+      state.realtimeTalkInputLevel.set(0);
       state.resetToolStream();
       state.requestUpdate?.();
       return;
     }
     if (clientChanged && snapshot.client) {
       const startupClient = snapshot.client;
-      const startupGeneration = ++this.connectionGeneration;
+      const startupGeneration = this.connectionGeneration;
       const startupSessionKey = state.sessionKey;
       const agentsListBeforeStartup = this.context.agents.state.agentsList;
       const clientIsCurrent = () =>
@@ -715,46 +1143,29 @@ class ChatPane extends LitElement {
       });
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
+      void this.refreshTaskSuggestions();
+      void this.refreshSessionPullRequests();
     }
     state.requestUpdate?.();
   }
 
-  private renderPaneHeader(state: ChatPageHost) {
-    if (this.chrome !== "pane") {
-      return null;
-    }
-    const sessions = state.sessionsResult?.sessions ?? [];
-    const currentSession = sessions.find((row) => row.key === state.sessionKey);
-    const options = currentSession ? sessions : [{ key: state.sessionKey }, ...sessions];
+  private renderPaneHeader(
+    sessionWorkspace: SessionWorkspaceProps,
+    backgroundTasks: BackgroundTasksProps,
+  ) {
     return html`
-      <div class="chat-pane__header ${this.active ? "chat-pane--active" : ""}">
-        <label class="chat-pane__session-label">
-          <span class="agent-chat__sr-only">${t("chat.splitView.sessionSelect")}</span>
-          <select
-            class="chat-pane__session-select"
-            aria-label=${t("chat.splitView.sessionSelect")}
-            .value=${state.sessionKey}
-            @change=${(event: Event) => {
-              const nextSessionKey = (event.target as HTMLSelectElement).value;
-              if (nextSessionKey && nextSessionKey !== state.sessionKey) {
-                this.onPaneSessionChange?.(this.paneId, nextSessionKey);
-              }
-            }}
-          >
-            ${options.map(
-              (row) => html`
-                <option value=${row.key}>
-                  ${resolveSessionDisplayName(
-                    row.key,
-                    sessions.find((session) => session.key === row.key),
-                  )}
-                </option>
-              `,
-            )}
-          </select>
-        </label>
+      <div
+        class="chat-pane__header ${this.active ? "chat-pane__header--active" : ""}"
+        @mousedown=${beginNativeWindowDrag}
+      >
+        <!-- Static text on purpose: an interactive session picker here would
+             fight pane focus. Panes change sessions via the sidebar or
+             drag-and-drop. -->
+        <span class="chat-pane__session-title" title=${this.paneTitle}>${this.paneTitle}</span>
         <div class="chat-pane__actions">
-          ${this.onSplitDown
+          ${renderBackgroundTasksToggle(backgroundTasks, "pane-header")}
+          ${renderSessionWorkspaceToggle(sessionWorkspace, "pane-header")}
+          ${!this.narrow
             ? html`
                 <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
                   <button
@@ -766,10 +1177,6 @@ class ChatPane extends LitElement {
                     ${icons.panelBottomOpen}
                   </button>
                 </openclaw-tooltip>
-              `
-            : null}
-          ${this.onSplitRight
-            ? html`
                 <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
                   <button
                     class="btn btn--ghost btn--icon"
@@ -781,21 +1188,17 @@ class ChatPane extends LitElement {
                   </button>
                 </openclaw-tooltip>
               `
-            : null}
-          ${this.onClosePane
-            ? html`
-                <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
-                  <button
-                    class="btn btn--ghost btn--icon"
-                    type="button"
-                    aria-label=${t("chat.splitView.closePane")}
-                    @click=${() => this.onClosePane?.(this.paneId)}
-                  >
-                    ${icons.x}
-                  </button>
-                </openclaw-tooltip>
-              `
-            : null}
+            : nothing}
+          <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
+            <button
+              class="btn btn--ghost btn--icon"
+              type="button"
+              aria-label=${t("chat.splitView.closePane")}
+              @click=${() => this.onClosePane?.(this.paneId)}
+            >
+              ${icons.x}
+            </button>
+          </openclaw-tooltip>
         </div>
       </div>
     `;
@@ -807,6 +1210,15 @@ class ChatPane extends LitElement {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
     const currentAgentId = resolveChatAgentId(state);
+    // Tool rows consult the global title store while rendering; point its
+    // fetcher at this pane's connection. Requests capture session + agent at
+    // schedule time, so later renders of other panes cannot re-route them.
+    configureToolTitleFetcher({
+      client: state.connected ? state.client : null,
+      sessionKey: state.sessionKey || null,
+      agentId: currentAgentId || null,
+      onTitlesChanged: () => state.requestUpdate?.(),
+    });
     const agentDefaultModel = this.context.agents.state.agentsList?.agents.find(
       (agent) => agent.id === currentAgentId,
     )?.model?.primary;
@@ -815,14 +1227,26 @@ class ChatPane extends LitElement {
       state.sessionsResult?.sessions.some(
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true;
-    const disabledReason = !state.connected
-      ? t("chat.disconnected")
-      : selectedSessionArchived
-        ? t("chat.archivedSessionDisabled")
-        : null;
+    const disabledReason = selectedSessionArchived ? t("chat.archivedSessionDisabled") : null;
     const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
       this.context.gateway.snapshot.hello?.auth ?? null,
     );
+    const sessionWorkspace = createSessionWorkspaceProps(state, {
+      narrowLayout: this.paneWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
+    });
+    const backgroundTasks = createBackgroundTasksProps(state, {
+      onOpenSession: (sessionKey) => {
+        this.onPaneSessionChange?.(this.paneId, sessionKey);
+      },
+    });
+    const railSideDocked =
+      !sessionWorkspace.collapsed &&
+      !sessionWorkspace.narrowLayout &&
+      sessionWorkspace.dock !== "bottom";
+    // Every open side rail (workspace and/or background tasks) narrows the
+    // room left for the chat + detail split.
+    const sideRailCount = (railSideDocked ? 1 : 0) + (backgroundTasks.collapsed ? 0 : 1);
+    const detailSplitWidth = this.paneWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
     const props: ChatProps = {
       paneId: this.paneId,
       sessionKey: state.sessionKey,
@@ -852,13 +1276,14 @@ class ChatPane extends LitElement {
       realtimeTalkActive: state.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalkStatus,
       realtimeTalkDetail: state.realtimeTalkDetail,
+      realtimeTalkInputLevel: state.realtimeTalkInputLevel,
       realtimeTalkConversation: state.realtimeTalkConversation,
       connected: state.connected,
-      canSend: state.connected && !selectedSessionArchived,
+      canSend: !selectedSessionArchived,
       disabledReason,
       error: state.lastError,
       sessions: state.sessionsResult,
-      providerQuota: {
+      providerUsage: {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
       },
@@ -873,7 +1298,6 @@ class ChatPane extends LitElement {
           activeRunId: state.chatRunId,
           agentDefaultModel,
           connected: state.connected,
-          draftScope: state,
           gatewayAvailable: Boolean(state.client),
           loading: state.chatLoading,
           modelCatalog: state.chatModelCatalog,
@@ -926,9 +1350,30 @@ class ChatPane extends LitElement {
           state.sessionsHideCron = !state.sessionsHideCron;
           state.requestUpdate?.();
         },
-        onOpenSplitView: this.onOpenSplitView,
       }),
-      sessionWorkspace: createSessionWorkspaceProps(state),
+      sessionWorkspace,
+      backgroundTasks,
+      paneHeaderActive: this.showPaneHeader,
+      taskSuggestions: this.taskSuggestions,
+      pullRequests: this.sessionPullRequests.filter(
+        (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
+      ),
+      pullRequestsRateLimited: this.sessionPullRequestsRateLimited,
+      pullRequestsExpanded: this.sessionPullRequestsExpanded,
+      onExpandPullRequests: () => {
+        this.sessionPullRequestsExpanded = true;
+        this.requestUpdate();
+      },
+      onDismissPullRequest: this.dismissSessionPullRequest,
+      taskSuggestionBusyIds: this.taskSuggestionBusyIds,
+      canAcceptTaskSuggestions:
+        state.connected &&
+        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+      canDismissTaskSuggestions:
+        state.connected &&
+        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+      onAcceptTaskSuggestion: (suggestion) => void this.acceptTaskSuggestion(suggestion),
+      onDismissTaskSuggestion: (suggestion) => void this.dismissTaskSuggestion(suggestion),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),
       onRefresh: () => {
@@ -1012,6 +1457,7 @@ class ChatPane extends LitElement {
       },
       sidebarOpen: state.sidebarOpen,
       sidebarContent: state.sidebarContent,
+      sidebarStacked: detailSplitWidth < DETAIL_SIDEBAR_SIDE_MIN_WIDTH,
       splitRatio: state.splitRatio,
       canvasPluginSurfaceUrl: state.hello?.pluginSurfaceUrls?.canvas ?? null,
       onOpenSidebar: state.handleOpenSidebar,
@@ -1029,7 +1475,10 @@ class ChatPane extends LitElement {
       onAssistantAttachmentLoaded: () => state.scrollToBottom(),
       basePath: state.basePath,
     };
-    return html`${this.renderPaneHeader(state)}${renderChat(props)}`;
+    if (!this.showPaneHeader) {
+      return renderChat(props);
+    }
+    return html`${this.renderPaneHeader(sessionWorkspace, backgroundTasks)}${renderChat(props)}`;
   }
 }
 

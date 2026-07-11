@@ -121,48 +121,57 @@ function assignTabAlias(params: {
   };
 }
 
-function isConfidentReplacement(params: {
-  staleEntry: { url?: string };
-  tab: BrowserTab;
-  staleCount: number;
-  newCandidateCount: number;
-}): boolean {
-  const staleUrl = params.staleEntry.url?.trim();
-  const tabUrl = params.tab.url?.trim();
-  if (staleUrl && tabUrl && staleUrl === tabUrl) {
-    return true;
-  }
-  return params.staleCount === 1 && params.newCandidateCount === 1;
+type TabAliasEntry = NonNullable<ProfileRuntimeState["tabAliases"]>["byTargetId"][string];
+
+function normalizeReplacementUrl(url: string | undefined): string | undefined {
+  return url?.trim() || undefined;
 }
 
-function assignTabAliases(profileState: ProfileRuntimeState, tabs: BrowserTab[]): BrowserTab[] {
+function findConfidentReplacement(params: {
+  staleEntry: TabAliasEntry;
+  staleEntries: Array<[targetId: string, entry: TabAliasEntry]>;
+  newCandidates: BrowserTab[];
+}): BrowserTab | undefined {
+  const { staleEntry, staleEntries, newCandidates } = params;
+  // Preserve shipped form-submit continuity when the replacement set is one-for-one.
+  if (staleEntries.length === 1 && newCandidates.length === 1) {
+    return newCandidates[0];
+  }
+
+  const url = normalizeReplacementUrl(staleEntry.url);
+  if (!url) {
+    return undefined;
+  }
+  const staleMatches = staleEntries.filter(
+    ([, entry]) => normalizeReplacementUrl(entry.url) === url,
+  );
+  const candidates = newCandidates.filter((tab) => normalizeReplacementUrl(tab.url) === url);
+  // Duplicate URL buckets have no ordering contract, so only migrate an exact 1:1 bucket.
+  return staleMatches.length === 1 && candidates.length === 1 ? candidates[0] : undefined;
+}
+
+function assignTabAliases(
+  profileState: ProfileRuntimeState,
+  tabs: BrowserTab[],
+  migrateReplacements: boolean,
+): BrowserTab[] {
   const aliases = getTabAliasState(profileState);
   const liveTargetIds = new Set(tabs.map((tab) => tab.targetId));
   const staleEntries = Object.entries(aliases.byTargetId).filter(
     ([targetId]) => !liveTargetIds.has(targetId),
   );
   const newCandidates = tabs.filter((tab) => !aliases.byTargetId[tab.targetId]);
-  const claimedTargetIds = new Set<string>();
-
-  for (const [oldTargetId, staleEntry] of staleEntries) {
-    const candidate = newCandidates.find(
-      (tab) =>
-        !claimedTargetIds.has(tab.targetId) &&
-        isConfidentReplacement({
-          staleEntry,
-          tab,
-          staleCount: staleEntries.length,
-          newCandidateCount: newCandidates.length,
-        }),
-    );
-    if (!candidate) {
-      continue;
-    }
-    aliases.byTargetId[candidate.targetId] = staleEntry;
-    delete aliases.byTargetId[oldTargetId];
-    claimedTargetIds.add(candidate.targetId);
-    if (profileState.lastTargetId === oldTargetId) {
-      profileState.lastTargetId = candidate.targetId;
+  if (migrateReplacements) {
+    for (const [oldTargetId, staleEntry] of staleEntries) {
+      const candidate = findConfidentReplacement({ staleEntry, staleEntries, newCandidates });
+      if (!candidate) {
+        continue;
+      }
+      aliases.byTargetId[candidate.targetId] = staleEntry;
+      delete aliases.byTargetId[oldTargetId];
+      if (profileState.lastTargetId === oldTargetId) {
+        profileState.lastTargetId = candidate.targetId;
+      }
     }
   }
 
@@ -267,7 +276,9 @@ export function createProfileTabOps({
 
   const listTabs = async (options?: BrowserOperationOptions): Promise<BrowserTab[]> => {
     const tabs = await readTabs(options);
-    return assignTabAliases(getProfileState(), tabs);
+    // Chrome MCP target identity is authoritative. A replacement tab cannot
+    // inherit an alias safely, even when its URL matches the closed tab.
+    return assignTabAliases(getProfileState(), tabs, !capabilities.usesChromeMcp);
   };
 
   const enforceManagedTabLimit = async (keepTargetId: string): Promise<void> => {

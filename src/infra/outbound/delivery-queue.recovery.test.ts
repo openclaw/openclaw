@@ -4,7 +4,11 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { RECOVERY_REPLAY_SPACING_MS } from "../delivery-recovery.shared.js";
-import { OutboundDeliveryError, type OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+  type OutboundPayloadDeliveryOutcome,
+} from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
 import {
   enqueueDelivery,
@@ -18,6 +22,7 @@ import {
   asDeliverFn,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
+  readQueuedEntry,
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
@@ -116,6 +121,60 @@ describe("delivery-queue recovery", () => {
     });
 
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+  });
+
+  it("permanently rejects provider-blocked rows before backoff or reconciliation", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "slack",
+        to: "C123",
+        accountId: "enterprise",
+        payloads: [{ text: "blocked" }],
+      },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: MAX_RETRIES,
+      lastAttemptAt: Date.now(),
+      recoveryState: "unknown_after_send",
+      platformSendStartedAt: Date.now(),
+    });
+    const admitDeferredDelivery = vi.fn(() => ({
+      status: "permanent_rejection" as const,
+      reason: "unsupported_enterprise_slack_delivery",
+    }));
+    const reconcileUnknownSend = vi.fn();
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: { admitDeferredDelivery, reconcileUnknownSend },
+    });
+    const deliver = vi.fn();
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(admitDeferredDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "enterprise",
+        channel: "slack",
+        phase: "recovery",
+        to: "C123",
+      }),
+    );
+    expect(reconcileUnknownSend).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      recovered: 0,
+      failed: 1,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+    });
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    expect(readQueuedEntry(tmpDir(), id).lastError).toBe("unsupported_enterprise_slack_delivery");
+
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: { admitDeferredDelivery: () => ({ status: "allowed" }) },
+    });
+    await runRecovery({ deliver });
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("paces startup replay instead of draining eligible entries back-to-back", async () => {
@@ -251,6 +310,28 @@ describe("delivery-queue recovery", () => {
     expect(entries[0]?.platformSendStartedAt).toBeUndefined();
   });
 
+  it("keeps a repeated provider-not-dispatched recovery failure replayable", async () => {
+    const id = await enqueueDelivery(
+      { channel: "demo-channel-c", to: "#ch", payloads: [{ text: "x" }] },
+      tmpDir(),
+    );
+    const deliver = vi.fn(async () => {
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+      throw new PlatformMessageNotDispatchedError("upload stopped before finalization", {
+        cause: new Error("request timed out"),
+      });
+    });
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 0, failed: 1 });
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.retryCount).toBe(1);
+    expect(entries[0]?.recoveryState).toBeUndefined();
+    expect(entries[0]?.platformSendStartedAt).toBeUndefined();
+  });
+
   it("does not replay a recovery batch that rejected after an earlier send succeeded", async () => {
     const id = await enqueueDelivery(
       {
@@ -357,7 +438,46 @@ describe("delivery-queue recovery", () => {
     expect(entries[0]?.platformSendStartedAt).toBeUndefined();
   });
 
-  it("preserves send evidence when any best-effort recovery failure is ambiguous", async () => {
+  it("clears send evidence for an all-not-dispatched best-effort recovery failure", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "demo-channel-c",
+        to: "#ch",
+        payloads: [{ text: "first" }],
+        bestEffort: true,
+      },
+      tmpDir(),
+    );
+    const deliver = vi.fn(
+      async (params: {
+        onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
+      }) => {
+        await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+        params.onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "failed",
+          error: new PlatformMessageNotDispatchedError(
+            "upload timed out before completion dispatch",
+            { cause: new Error("request timed out") },
+          ),
+          sentBeforeError: false,
+          stage: "platform_send",
+        });
+        return [];
+      },
+    );
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 0, failed: 1 });
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.retryCount).toBe(1);
+    expect(entries[0]?.recoveryState).toBeUndefined();
+    expect(entries[0]?.platformSendStartedAt).toBeUndefined();
+  });
+
+  it("preserves send evidence when a marked recovery batch has an ambiguous failure", async () => {
     const id = await enqueueDelivery(
       {
         channel: "demo-channel-c",
@@ -375,10 +495,10 @@ describe("delivery-queue recovery", () => {
         params.onPayloadDeliveryOutcome?.({
           index: 0,
           status: "failed",
-          error: Object.assign(new Error("connect ECONNREFUSED"), {
-            code: "ECONNREFUSED",
-            syscall: "connect",
-          }),
+          error: new PlatformMessageNotDispatchedError(
+            "upload timed out before completion dispatch",
+            { cause: new Error("request timed out") },
+          ),
           sentBeforeError: false,
           stage: "platform_send",
         });

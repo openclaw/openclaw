@@ -14,11 +14,13 @@ import { BrowserError, toBrowserErrorResponse } from "../errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { parseSystemProfileDomains } from "../system-profile-domains.js";
 import { resolveProfileContext } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import {
   asyncBrowserRoute,
   getProfileContext,
+  jsonBrowserError,
   jsonError,
   toBoolean,
   toStringOrEmpty,
@@ -53,7 +55,7 @@ async function probeChromeMcpPageReady(profileCtx: ProfileContext, timeoutMs: nu
 function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   const mapped = toBrowserErrorResponse(err);
   if (mapped) {
-    return jsonError(res, mapped.status, mapped.message);
+    return jsonBrowserError(res, mapped);
   }
   jsonError(res, 500, String(err));
 }
@@ -316,6 +318,23 @@ function parseHeadlessStartOverride(params: {
 
 /** Register basic browser lifecycle, status, doctor, and profile endpoints. */
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+  app.get(
+    "/system-profiles",
+    asyncBrowserRoute(async (req, res) => {
+      await sendBasicJsonResponse({
+        res,
+        run: async () => {
+          const service = createBrowserProfilesService(ctx);
+          return {
+            systemProfiles: await service.listSystemProfiles(
+              toStringOrEmpty(req.query.browser) || undefined,
+            ),
+          };
+        },
+      });
+    }),
+  );
+
   // List all profiles with their status
   app.get(
     "/profiles",
@@ -421,6 +440,32 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
                 : driver === "openclaw" || driver === "clawd"
                   ? "openclaw"
                   : undefined,
+          }),
+      });
+    }),
+  );
+
+  app.post(
+    "/profiles/import",
+    asyncBrowserRoute(async (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      // Fail closed on a malformed domain filter: a caller that meant to scope
+      // the import must never silently import every cookie instead.
+      let domains: string[] | undefined;
+      try {
+        domains = parseSystemProfileDomains(body.domains);
+      } catch (err) {
+        return jsonError(res, 400, err instanceof Error ? err.message : "invalid domains");
+      }
+      await withProfilesServiceMutation({
+        res,
+        ctx,
+        run: async (service) =>
+          await service.importSystemProfile({
+            browser: toStringOrEmpty(body.browser) || undefined,
+            systemProfile: toStringOrEmpty(body.systemProfile) || undefined,
+            into: toStringOrEmpty(body.into) || undefined,
+            domains,
           }),
       });
     }),
