@@ -15,6 +15,7 @@ export type TaskSummary = {
   agentId?: string;
   sessionKey?: string;
   childSessionKey?: string;
+  ownerKey?: string;
   createdAt?: TaskTimestamp;
   updatedAt?: TaskTimestamp;
   startedAt?: TaskTimestamp;
@@ -89,6 +90,7 @@ export function normalizeTaskSummary(value: unknown): TaskSummary | null {
   const agentId = optionalString(value.agentId);
   const sessionKey = optionalString(value.sessionKey);
   const childSessionKey = optionalString(value.childSessionKey);
+  const ownerKey = optionalString(value.ownerKey);
   const createdAt = normalizeTimestamp(value.createdAt);
   const updatedAt = normalizeTimestamp(value.updatedAt);
   const startedAt = normalizeTimestamp(value.startedAt);
@@ -106,6 +108,7 @@ export function normalizeTaskSummary(value: unknown): TaskSummary | null {
     ...(agentId ? { agentId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(childSessionKey ? { childSessionKey } : {}),
+    ...(ownerKey ? { ownerKey } : {}),
     ...(createdAt !== undefined ? { createdAt } : {}),
     ...(updatedAt !== undefined ? { updatedAt } : {}),
     ...(startedAt !== undefined ? { startedAt } : {}),

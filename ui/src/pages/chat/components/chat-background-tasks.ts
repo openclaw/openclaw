@@ -166,11 +166,13 @@ function loadBackgroundTasks(
 
 function taskMatchesAgentScope(task: TaskSummary, agentId: string): boolean {
   // Mirrors the gateway's tasks.list agent filter: an explicit task agentId is
-  // authoritative; legacy records fall back to agent-style session keys.
+  // authoritative; legacy records fall back to agent-style requester/child/
+  // owner keys. Dropping ownerKey here would make owner-scoped legacy rows
+  // load but never receive live event updates.
   if (task.agentId) {
     return task.agentId === agentId;
   }
-  return [task.sessionKey, task.childSessionKey].some(
+  return [task.sessionKey, task.childSessionKey, task.ownerKey].some(
     (key) => key !== undefined && parseAgentSessionKey(key)?.agentId === agentId,
   );
 }

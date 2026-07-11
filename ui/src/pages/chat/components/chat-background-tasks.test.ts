@@ -12,7 +12,9 @@ import {
 } from "./chat-background-tasks.ts";
 
 function flushAsync() {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 function makeTask(overrides: Partial<TaskSummary> & { id: string }): TaskSummary {
@@ -164,6 +166,22 @@ describe("background tasks rail events", () => {
 
     const props = createBackgroundTasksProps(host, openSession);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
+  });
+
+  it("matches legacy tasks through their owner key like the gateway filter", async () => {
+    const { host } = await loadedHost([makeTask({ id: "task-1" })]);
+
+    handleBackgroundTasksEvent(host, {
+      action: "upserted",
+      task: {
+        ...makeTask({ id: "task-owner", updatedAt: 9_000 }),
+        agentId: undefined,
+        ownerKey: "agent:main:owner",
+      },
+    });
+
+    const props = createBackgroundTasksProps(host, openSession);
+    expect(props.tasks?.map((task) => task.id)).toEqual(["task-owner", "task-1"]);
   });
 
   it("refetches after a registry restore", async () => {

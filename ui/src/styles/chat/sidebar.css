@@ -1604,7 +1604,8 @@
     display: flex;
   }
 
-  .chat-workspace-rail {
+  .chat-workspace-rail,
+  .chat-tasks-rail {
     display: none;
   }
 }
