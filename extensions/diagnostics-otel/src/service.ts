@@ -25,7 +25,7 @@ import {
   ParentBasedSampler,
   TraceIdRatioBasedSampler,
 } from "@opentelemetry/sdk-trace-base";
-import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import { ATTR_SERVICE_INSTANCE_ID, ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import {
   ATTR_GEN_AI_INPUT_MESSAGES,
   ATTR_GEN_AI_OUTPUT_MESSAGES,
@@ -1662,13 +1662,19 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const headers = otel.headers ?? undefined;
       const serviceName =
         otel.serviceName?.trim() || process.env.OTEL_SERVICE_NAME || DEFAULT_SERVICE_NAME;
+      const serviceInstanceId =
+        otel.serviceInstanceId?.trim() || process.env.OTEL_SERVICE_INSTANCE_ID?.trim() || undefined;
       const sampleRate = resolveSampleRate(otel.sampleRate);
       const contentCapturePolicy = resolveContentCapturePolicy(otel.captureContent);
       const sdkPreloaded = hasPreloadedOtelSdk();
 
-      const resource = resourceFromAttributes({
+      const resourceAttributes: Record<string, string> = {
         [ATTR_SERVICE_NAME]: serviceName,
-      });
+      };
+      if (serviceInstanceId) {
+        resourceAttributes[ATTR_SERVICE_INSTANCE_ID] = serviceInstanceId;
+      }
+      const resource = resourceFromAttributes(resourceAttributes);
 
       const logUrl = resolveSignalOtelUrl({
         signalEndpoint: otel.logsEndpoint,

@@ -306,6 +306,12 @@ export type DiagnosticsOtelConfig = {
   protocol?: "http/protobuf" | "grpc";
   headers?: Record<string, string>;
   serviceName?: string;
+  /**
+   * Opaque, stable per-instance identity exported as the OTel
+   * `service.instance.id` resource attribute. Omitted entirely when unset — the
+   * plugin never derives it from the hostname.
+   */
+  serviceInstanceId?: string;
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;

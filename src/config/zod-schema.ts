@@ -685,6 +685,7 @@ export const OpenClawSchema = z
             protocol: z.union([z.literal("http/protobuf"), z.literal("grpc")]).optional(),
             headers: z.record(z.string(), z.string()).optional(),
             serviceName: z.string().optional(),
+            serviceInstanceId: z.string().optional(),
             traces: z.boolean().optional(),
             metrics: z.boolean().optional(),
             logs: z.boolean().optional(),

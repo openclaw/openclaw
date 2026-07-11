@@ -168,8 +168,10 @@ vi.mock("@opentelemetry/resources", () => ({
 
 vi.mock("@opentelemetry/semantic-conventions", () => ({
   ATTR_SERVICE_NAME: "service.name",
+  ATTR_SERVICE_INSTANCE_ID: "service.instance.id",
 }));
 
+import { resourceFromAttributes } from "@opentelemetry/resources";
 import {
   createDiagnosticTraceContext,
   emitTrustedDiagnosticEvent,
@@ -255,6 +257,9 @@ type OtelContextFlags = {
   captureContent?: NonNullable<
     NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
   >["captureContent"];
+  serviceInstanceId?: NonNullable<
+    NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
+  >["serviceInstanceId"];
 };
 function createOtelContext(
   endpoint: string,
@@ -265,6 +270,7 @@ function createOtelContext(
     protocol = OTEL_TEST_PROTOCOL,
     logsExporter,
     captureContent,
+    serviceInstanceId,
   }: OtelContextFlags = {},
 ): OpenClawPluginServiceContext {
   return {
@@ -280,6 +286,7 @@ function createOtelContext(
           logs,
           ...(logsExporter !== undefined ? { logsExporter } : {}),
           ...(captureContent !== undefined ? { captureContent } : {}),
+          ...(serviceInstanceId !== undefined ? { serviceInstanceId } : {}),
         },
       },
     },
@@ -2375,6 +2382,90 @@ describe("diagnostics-otel service", () => {
     } finally {
       await service.stop?.(ctx);
     }
+  });
+
+  function lastResourceAttrs(): Record<string, unknown> | undefined {
+    return vi.mocked(resourceFromAttributes).mock.calls.at(-1)?.[0] as
+      | Record<string, unknown>
+      | undefined;
+  }
+
+  async function withEnv<T>(key: string, value: string | undefined, fn: () => Promise<T>) {
+    const original = process.env[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+    try {
+      return await fn();
+    } finally {
+      if (original === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = original;
+      }
+    }
+  }
+
+  test("omits service.instance.id from the resource when unset", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await withEnv("OTEL_SERVICE_INSTANCE_ID", undefined, async () => {
+      try {
+        await service.start(ctx);
+        const attrs = lastResourceAttrs();
+        expect(attrs?.["service.name"]).toBeDefined();
+        expect(attrs && "service.instance.id" in attrs).toBe(false);
+      } finally {
+        await service.stop?.(ctx);
+      }
+    });
+  });
+
+  test("sets service.instance.id from the serviceInstanceId config field", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      metrics: true,
+      serviceInstanceId: "pod-config-1",
+    });
+    await withEnv("OTEL_SERVICE_INSTANCE_ID", undefined, async () => {
+      try {
+        await service.start(ctx);
+        expect(lastResourceAttrs()?.["service.instance.id"]).toBe("pod-config-1");
+      } finally {
+        await service.stop?.(ctx);
+      }
+    });
+  });
+
+  test("sets service.instance.id from OTEL_SERVICE_INSTANCE_ID when config is unset", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await withEnv("OTEL_SERVICE_INSTANCE_ID", "pod-env-2", async () => {
+      try {
+        await service.start(ctx);
+        expect(lastResourceAttrs()?.["service.instance.id"]).toBe("pod-env-2");
+      } finally {
+        await service.stop?.(ctx);
+      }
+    });
+  });
+
+  test("prefers the serviceInstanceId config field over OTEL_SERVICE_INSTANCE_ID", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      metrics: true,
+      serviceInstanceId: "pod-config-wins",
+    });
+    await withEnv("OTEL_SERVICE_INSTANCE_ID", "pod-env-loses", async () => {
+      try {
+        await service.start(ctx);
+        expect(lastResourceAttrs()?.["service.instance.id"]).toBe("pod-config-wins");
+      } finally {
+        await service.stop?.(ctx);
+      }
+    });
   });
 
   test("bounds agent identifiers on model usage metric attributes", async () => {
