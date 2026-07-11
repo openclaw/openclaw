@@ -2,6 +2,7 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.gateway.GatewayRequestDefinitiveFailure
+import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.parseChatSendAck
@@ -193,21 +194,25 @@ class ChatController internal constructor(
   private val _outboxItems = MutableStateFlow<List<ChatOutboxItem>>(emptyList())
   val outboxItems: StateFlow<List<ChatOutboxItem>> = _outboxItems.asStateFlow()
 
+  // Flush requests are level-triggered: the owner clears one per pass and rechecks after release.
   private val outboxFlushInFlight = AtomicBoolean(false)
+  private val outboxFlushRequested = AtomicBoolean(false)
+  private val outboxRecoveryMutex = Mutex()
+  private var outboxRecoveryComplete = false
 
-  init {
-    if (commandOutbox != null) {
+  private val outboxRecoveryJob =
+    commandOutbox?.let { outbox ->
       scope.launch {
-        // Crash safety: a process killed mid-flush leaves rows in 'sending'; requeue them so
-        // they are retried instead of being stuck invisible to the flush loop forever.
-        runCatching { commandOutbox.requeueSendingAfterRestart() }
-        currentCacheScope()?.let { outboxScope ->
-          runCatching { commandOutbox.expireStale(outboxScope.gatewayId, System.currentTimeMillis()) }
+        // A killed process can lose the local delete after the gateway accepted a command.
+        // Keep that delivery ambiguous and user-visible instead of replaying it automatically.
+        if (recoverInterruptedOutboxSends(outbox)) {
+          currentCacheScope()?.let { outboxScope ->
+            runCatching { outbox.expireStale(outboxScope.gatewayId, System.currentTimeMillis()) }
+          }
         }
         publishOutbox()
       }
     }
-  }
 
   /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
@@ -1384,7 +1389,7 @@ class ChatController internal constructor(
     val wasOk = _healthOk.value
     _healthOk.value = true
     if (!wasOk && commandOutbox != null) {
-      scope.launch { flushOutbox() }
+      requestOutboxFlush()
     }
   }
 
@@ -1442,11 +1447,13 @@ class ChatController internal constructor(
     val outbox = commandOutbox ?: return
     scope.launch {
       val outboxScope = currentCacheScope() ?: return@launch
-      // requeueForRetry (not a plain status flip) refreshes createdAt so retrying an expired
-      // row does not get re-expired by the flush sweep before it can send.
-      runCatching { outbox.requeueForRetry(gatewayId = outboxScope.gatewayId, id = id, nowMs = System.currentTimeMillis()) }
+      // requeueForRetry refreshes createdAt and requires this gateway's Failed state. The
+      // compare-and-set keeps stale gateway or double Retry taps from reviving an in-flight row.
+      val requeued =
+        runCatching { outbox.requeueForRetry(gatewayId = outboxScope.gatewayId, id = id, nowMs = System.currentTimeMillis()) }
+          .getOrDefault(0)
       publishOutbox()
-      if (_healthOk.value) flushOutbox()
+      if (requeued > 0 && _healthOk.value) requestOutboxFlush()
     }
   }
 
@@ -1478,9 +1485,35 @@ class ChatController internal constructor(
    * Sends queued outbox rows strictly createdAt-ordered. Single-flight: health events can fire
    * repeatedly while a flush is already draining the queue.
    */
-  private suspend fun flushOutbox() {
-    val outbox = commandOutbox ?: return
+  private fun requestOutboxFlush() {
+    if (commandOutbox == null) return
+    outboxFlushRequested.set(true)
+    scope.launch { drainOutboxFlushRequests() }
+  }
+
+  private suspend fun drainOutboxFlushRequests() {
     if (!outboxFlushInFlight.compareAndSet(false, true)) return
+    try {
+      while (outboxFlushRequested.getAndSet(false)) {
+        flushOutboxPass()
+      }
+    } finally {
+      outboxFlushInFlight.set(false)
+      // Close the release race: a requester that observed in-flight ownership leaves this bit set.
+      if (outboxFlushRequested.get()) requestOutboxFlush()
+    }
+  }
+
+  private suspend fun flushOutboxPass() {
+    val outbox = commandOutbox ?: return
+    // The unscoped recovery sweep must succeed before this process claims a row. A transient
+    // storage failure stays retryable, but never lets younger queued work bypass an ambiguous send.
+    outboxRecoveryJob?.join()
+    if (!recoverInterruptedOutboxSends(outbox)) {
+      _healthOk.value = false
+      publishOutbox()
+      return
+    }
     var flushedAny = false
     try {
       // The whole flush is bound to one gateway scope; a connection switch mid-flush stops it
@@ -1495,12 +1528,11 @@ class ChatController internal constructor(
             .firstOrNull { it.status == ChatOutboxStatus.Queued } ?: break
         when (sendOutboxItem(outbox, next, flushScope)) {
           OutboxSendOutcome.Sent -> flushedAny = true
-          OutboxSendOutcome.Failed, OutboxSendOutcome.Skipped -> {}
+          OutboxSendOutcome.Continue -> {}
           OutboxSendOutcome.Stop -> break
         }
       }
     } finally {
-      outboxFlushInFlight.set(false)
       publishOutbox()
       if (flushedAny) {
         // Durable history replaces the queued bubbles; reconciliation matches by idempotency key.
@@ -1509,23 +1541,39 @@ class ChatController internal constructor(
     }
   }
 
-  // Sent: acked and removed. Failed: parked as failed. Skipped: row vanished (user delete).
-  // Stop: flush must halt (offline or gateway scope changed); the row stays queued.
-  private enum class OutboxSendOutcome { Sent, Failed, Skipped, Stop }
+  // Sent: acked and removed. Continue: row vanished or failed after a gateway response.
+  // Stop: transport or persistence state cannot safely advance to younger work.
+  private enum class OutboxSendOutcome { Sent, Continue, Stop }
+
+  private enum class GatewayResponseState { Received, Unknown }
 
   private sealed interface OutboxSendResult {
     data object Accepted : OutboxSendResult
 
-    /** Gateway responded with a terminal failure ack; the message reached it but was rejected. */
-    data class Rejected(
+    /** The request never entered the socket queue, so reconnect may retry it automatically. */
+    data class NotDispatched(
       val error: String,
     ) : OutboxSendResult
 
-    /** Request never got an ack (socket drop, timeout); delivery state is unknown. */
-    data class TransportFailure(
-      val error: String,
+    /** Dispatch may have succeeded, so only explicit user intent may retry the command. */
+    data class DeliveryUnconfirmed(
+      val gatewayResponse: GatewayResponseState,
     ) : OutboxSendResult
   }
+
+  private suspend fun updateOutboxStatusOrNull(
+    outbox: ChatCommandOutbox,
+    item: ChatOutboxItem,
+    status: ChatOutboxStatus,
+    lastError: String?,
+  ): Int? =
+    try {
+      outbox.updateStatus(item.id, status, item.retryCount, lastError)
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      null
+    }
 
   private suspend fun sendOutboxItem(
     outbox: ChatCommandOutbox,
@@ -1533,69 +1581,77 @@ class ChatController internal constructor(
     flushScope: ChatCacheScope,
   ): OutboxSendOutcome {
     // Claim the row before sending: 0 updated rows means it was deleted since the load, and a
-    // deleted command must never be sent. Skipped (like Failed) lets the flush continue.
-    val claimed = runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Sending, item.retryCount, item.lastError) }.getOrDefault(0)
+    // deleted command must never be sent. Continue (like an acknowledged failure) lets the
+    // flush advance to younger rows without replaying this one.
+    val claimed = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Sending, item.lastError)
     publishOutbox()
-    if (claimed == 0) return OutboxSendOutcome.Skipped
-    var attempts = item.retryCount
-    while (true) {
-      val error =
-        when (val result = attemptOutboxSend(item, flushScope.gatewayId)) {
-          OutboxSendResult.Accepted -> {
-            // Ack received: delete the row so the flushed history copy is the only bubble left.
-            runCatching { outbox.delete(item.id) }
-            publishOutbox()
-            return OutboxSendOutcome.Sent
+    if (claimed == null) {
+      // Never bypass an older row when its claim could not be made durable.
+      _healthOk.value = false
+      return OutboxSendOutcome.Stop
+    }
+    if (claimed == 0) return OutboxSendOutcome.Continue
+    return when (val result = attemptOutboxSend(item, flushScope.gatewayId)) {
+      OutboxSendResult.Accepted -> {
+        // Ack received: delete the row so the flushed history copy is the only bubble left.
+        val deleted =
+          try {
+            outbox.delete(item.id)
+            true
+          } catch (err: CancellationException) {
+            throw err
+          } catch (_: Throwable) {
+            false
           }
-          is OutboxSendResult.TransportFailure -> {
-            // No ack means the gateway is effectively unreachable even if healthOk has not
-            // flipped yet. Keep the row queued without burning attempts and drop health so
-            // the next successful health poll/event re-triggers the flush.
-            runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Queued, attempts, result.error) }
-            publishOutbox()
-            _healthOk.value = false
-            return OutboxSendOutcome.Stop
-          }
-          is OutboxSendResult.Rejected -> result.error
+        if (!deleted) rearmOutboxRecovery()
+        publishOutbox()
+        if (deleted) {
+          OutboxSendOutcome.Sent
+        } else {
+          _healthOk.value = false
+          OutboxSendOutcome.Stop
         }
-      attempts += 1
-      if (attempts >= OUTBOX_MAX_SEND_ATTEMPTS) {
-        runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Failed, attempts, error) }
+      }
+      is OutboxSendResult.NotDispatched -> {
+        // This frame never entered the socket queue, so reconnect may retry it safely.
+        val requeued = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Queued, result.error)
+        if (requeued == null) rearmOutboxRecovery()
         publishOutbox()
-        return OutboxSendOutcome.Failed
+        _healthOk.value = false
+        OutboxSendOutcome.Stop
       }
-      // The row stays 'sending' through the backoff: Sending rows expose no Delete/Retry
-      // actions, so the user cannot delete a row this loop is about to resend.
-      runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Sending, attempts, error) }
-      publishOutbox()
-      // Losing health or the gateway scope mid-flush means this item must not retry now:
-      // requeue it for the next reconnect under the right scope. Without the scope check,
-      // a pairing switch during backoff could replay the captured text into the new gateway.
-      if (!_healthOk.value || currentCacheScope() != flushScope) {
-        return requeueAndStop(outbox, item.id, attempts, error)
-      }
-      delay(OUTBOX_RETRY_BACKOFF_MS * attempts)
-      if (!_healthOk.value || currentCacheScope() != flushScope) {
-        return requeueAndStop(outbox, item.id, attempts, error)
-      }
-      // Re-claim after the delay: a row deleted through any non-UI path must not be resent.
-      val reclaimed = runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Sending, attempts, error) }.getOrDefault(0)
-      if (reclaimed == 0) {
+      is OutboxSendResult.DeliveryUnconfirmed -> {
+        // Every transmitted failure is ambiguous: gateway error responses can be cached after
+        // agent dispatch, and gateway dedupe is process-local and time-bounded.
+        val persisted =
+          updateOutboxStatusOrNull(
+            outbox,
+            item,
+            ChatOutboxStatus.Failed,
+            OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
+          )
+        if (persisted == null) rearmOutboxRecovery()
         publishOutbox()
-        return OutboxSendOutcome.Skipped
+        when {
+          persisted == null -> {
+            // The ambiguous row is still Sending. Stop before younger work; the re-armed
+            // recovery sweep will park it after storage becomes available again.
+            _healthOk.value = false
+            OutboxSendOutcome.Stop
+          }
+          result.gatewayResponse == GatewayResponseState.Unknown -> {
+            _healthOk.value = false
+            OutboxSendOutcome.Stop
+          }
+          else -> {
+            // Sending is controller-owned and Retry only transitions Failed. A zero update can
+            // only mean a concurrent delete removed the claimed row; a received response makes
+            // either zero or a durable Failed transition safe to advance past.
+            OutboxSendOutcome.Continue
+          }
+        }
       }
     }
-  }
-
-  private suspend fun requeueAndStop(
-    outbox: ChatCommandOutbox,
-    id: String,
-    attempts: Int,
-    error: String,
-  ): OutboxSendOutcome {
-    runCatching { outbox.updateStatus(id, ChatOutboxStatus.Queued, attempts, error) }
-    publishOutbox()
-    return OutboxSendOutcome.Stop
   }
 
   private suspend fun attemptOutboxSend(
@@ -1627,18 +1683,48 @@ class ChatController internal constructor(
           put("idempotencyKey", JsonPrimitive(item.id))
         }
       val ack = parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params.toString()))
-      if (ack.isTerminalFailure) {
-        OutboxSendResult.Rejected("Chat failed before the run started")
-      } else {
-        OutboxSendResult.Accepted
+      when (ack.normalizedStatus) {
+        "ok", "started", "in_flight" ->
+          if (ack.runId.isNullOrBlank()) {
+            OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+          } else {
+            OutboxSendResult.Accepted
+          }
+        "timeout", "error" -> OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+        else -> OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
       }
     } catch (err: CancellationException) {
       // Teardown must not be recorded as a send failure; the row stays 'sending' and the
-      // next startup recovery requeues it.
+      // next startup recovery parks it as delivery-unconfirmed.
       throw err
-    } catch (err: Throwable) {
-      OutboxSendResult.TransportFailure(err.message ?: "send failed")
+    } catch (err: GatewayRequestNotEnqueued) {
+      OutboxSendResult.NotDispatched(err.message ?: "send failed")
+    } catch (_: GatewayRequestDefinitiveFailure) {
+      // An ok:false response proves transmission, not that this idempotency key was never run.
+      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+    } catch (_: GatewayRequestOutcomeUnknown) {
+      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Unknown)
+    } catch (_: Throwable) {
+      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Unknown)
     }
+
+  private suspend fun recoverInterruptedOutboxSends(outbox: ChatCommandOutbox): Boolean =
+    outboxRecoveryMutex.withLock {
+      if (outboxRecoveryComplete) return@withLock true
+      try {
+        outbox.failSendingAfterRestart()
+        outboxRecoveryComplete = true
+        true
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        false
+      }
+    }
+
+  private suspend fun rearmOutboxRecovery() {
+    outboxRecoveryMutex.withLock { outboxRecoveryComplete = false }
+  }
 
   private fun handleChatEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
