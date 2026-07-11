@@ -32,4 +32,28 @@ describe("getSecretTargetRegistry metadata reuse", () => {
       expect(call.allowWorkspaceScopedCurrent).not.toBe(true);
     }
   });
+
+  it("registers secret targets for installed-origin plugins (#104320)", async () => {
+    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "exa",
+          origin: "global",
+          channels: [],
+          contracts: { webSearchProviders: ["exa"] },
+          configUiHints: { "webSearch.apiKey": { sensitive: true } },
+          configContracts: {
+            secretInputs: { paths: [{ path: "webSearch.apiKey" }] },
+          },
+        },
+      ],
+    } as never);
+    const { getSecretTargetRegistry } = await import("./target-registry-data.js");
+    const { isKnownSecretTargetId } = await import("./target-registry-query.js");
+
+    const ids = getSecretTargetRegistry().map((entry) => entry.id);
+
+    expect(ids).toContain("plugins.entries.exa.config.webSearch.apiKey");
+    expect(isKnownSecretTargetId("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
+  });
 });

@@ -49,11 +49,11 @@ function hasWebProviderContract(
   return (plugin.contracts?.[contract]?.length ?? 0) > 0;
 }
 
-function listBundledWebProviderSecretTargetRegistryEntries(
-  bundledPlugins: readonly PluginManifestRecord[],
+function listPluginWebProviderSecretTargetRegistryEntries(
+  plugins: readonly PluginManifestRecord[],
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
-  for (const record of bundledPlugins) {
+  for (const record of plugins) {
     for (const config of WEB_PROVIDER_SECRET_CONFIGS) {
       if (
         hasWebProviderContract(record, config.contract) &&
@@ -66,12 +66,12 @@ function listBundledWebProviderSecretTargetRegistryEntries(
   return entries.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-function listBundledPluginConfigSecretTargetRegistryEntries(
-  bundledPlugins: readonly Pick<PluginManifestRecord, "id" | "configContracts">[],
+function listPluginConfigSecretTargetRegistryEntries(
+  plugins: readonly Pick<PluginManifestRecord, "id" | "configContracts">[],
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
   const seen = new Set<string>();
-  for (const record of bundledPlugins) {
+  for (const record of plugins) {
     const secretInputs = record.configContracts?.secretInputs?.paths ?? [];
     for (const secretInput of secretInputs) {
       const entry = createPluginOpenClawConfigSecretTargetEntry(record.id, secretInput.path);
@@ -505,13 +505,12 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
     env: params.env,
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   }).plugins;
-  const bundledPlugins = plugins.filter((record) => record.origin === "bundled");
   const channelPlugins = plugins.filter((record) => record.channels.length > 0);
   return [
     ...CORE_SECRET_TARGET_REGISTRY,
-    ...listBundledWebProviderSecretTargetRegistryEntries(bundledPlugins),
-    ...listBundledPluginConfigSecretTargetRegistryEntries([
-      ...bundledPlugins,
+    ...listPluginWebProviderSecretTargetRegistryEntries(plugins),
+    ...listPluginConfigSecretTargetRegistryEntries([
+      ...plugins,
       ...listSourceBundledPluginConfigContractRecords(),
     ]),
     ...listChannelSecretTargetRegistryEntries(channelPlugins),
