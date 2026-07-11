@@ -496,18 +496,19 @@ cover CLI and Gateway-backed install or update paths.
 - `cron_reconciled`: rebuild a full external cron projection after startup or scheduler reload. It includes `reason` and the effective `enabled` state, including `enabled: false`, while `ctx.getCron?.()` returns the exact reconciled scheduler.
 - `cron_changed`: observe gateway-owned cron lifecycle changes. `scheduled` and `removed` events are post-commit reconciliation hints, not an ordered delta log. A scheduled event's `event.nextRunAtMs` is absent when the job has no next wake; a removed event still carries the deleted job snapshot.
 
-External wake schedulers should debounce or coalesce `cron_changed` events by
-`jobId`, then reconcile the full durable view:
-
-```typescript
-const jobs = await ctx.getCron?.()?.list({ includeDisabled: true });
-```
+External wake schedulers should debounce or coalesce `cron_changed` events,
+then reread the full durable view from the scheduler last captured by
+`cron_reconciled`. Do not adopt the scheduler from a `cron_changed` context: a
+detached hint from an older scheduler can overlap a later reload.
 
 Use `cron_reconciled` as the full-snapshot trigger for durable state loaded at
 Gateway startup or scheduler replacement. It is not replayed for a plugin-only
 hot reload. Observation handlers run in parallel, and fire-and-forget
 dispatches can overlap, so consumers must not depend on event completion order.
 Keep OpenClaw as the source of truth for due checks and execution.
+
+For a single-flight adapter with durable replacement, retry/backoff, and clean
+shutdown, see [Safe external cron projection](/plugins/hooks#safe-external-cron-projection).
 
 ### API object fields
 

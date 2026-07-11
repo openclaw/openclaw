@@ -5583,6 +5583,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Message hooks
   - H2: Install hooks
   - H2: Gateway lifecycle
+  - H3: Safe external cron projection
   - H2: Upcoming deprecations
   - H2: Related
 

@@ -300,6 +300,9 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // Spends utility-model tokens on cache misses when the opt-in is enabled, so
   // it needs write scope despite being a read-shaped lookup.
   { name: "chat.toolTitles", scope: "operator.write" },
+  // Session checkout diff reads the session's own git worktree, matching the
+  // sessions.files.* trusted-operator read domain.
+  { name: "sessions.diff", scope: "operator.read" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
