@@ -11,11 +11,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const EXACT_TARGET_REF = "1".repeat(40);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runHelper(script: string, ...args: Array<string | Record<string, string>>) {
   const maybeEnv = args.at(-1);
@@ -494,27 +496,23 @@ describe("Docker E2E helper CLIs", () => {
   });
 
   it("rejects non-boolean unreleased changelog intent from summary artifacts", () => {
-    const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-rerun-inputs-`);
-    try {
-      const file = path.join(root, "summary.json");
-      writeFileSync(
-        file,
-        `${JSON.stringify({
-          allowUnreleasedChangelog: "true",
-          failures: [{ name: "install-e2e", status: 1 }],
-          github: { selectedSha: EXACT_TARGET_REF },
-          status: "failed",
-        })}\n`,
-        "utf8",
-      );
+    const root = tempDirs.make("openclaw-docker-e2e-rerun-inputs-");
+    const file = path.join(root, "summary.json");
+    writeFileSync(
+      file,
+      `${JSON.stringify({
+        allowUnreleasedChangelog: "true",
+        failures: [{ name: "install-e2e", status: 1 }],
+        github: { selectedSha: EXACT_TARGET_REF },
+        status: "failed",
+      })}\n`,
+      "utf8",
+    );
 
-      const result = runHelper("scripts/docker-e2e-rerun.mjs", file);
+    const result = runHelper("scripts/docker-e2e-rerun.mjs", file);
 
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).not.toContain("allow_unreleased_changelog");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("allow_unreleased_changelog");
   });
 
   it("groups combined reruns by recovered workflow inputs", () => {
