@@ -25,6 +25,10 @@ import {
   waitForCredsSaveQueue,
   type CredsQueueWaitResult,
 } from "./creds-persistence.js";
+import {
+  createCompletedPhoneCodeCreds,
+  createPartialPhoneCodeCreds,
+} from "./phone-code.test-helpers.js";
 
 const hoisted = vi.hoisted(() => ({
   waitForCredsSaveQueueWithTimeout: vi.fn<() => Promise<CredsQueueWaitResult>>(),
@@ -157,19 +161,42 @@ describe("auth-store", () => {
     });
   });
 
-  it("does not treat partial phone-code pairing creds as linked", async () => {
-    writeAuthFiles({ "creds.json": JSON.stringify({
-      registered: false,
-      pairingCode: "12345678",
-      me: { id: "15551234567@s.whatsapp.net" },
-    }) });
-    expect(hasWebCredsSync(authDir)).toBe(true);
-    await expect(webAuthExists(authDir)).resolves.toBe(false);
-    await expect(readWebAuthState(authDir)).resolves.toBe("not-linked");
-    await expect(clearStalePhoneCodePairingAuthIfNeeded({
-      authDir, isLegacyAuthDir: false, runtime: createRuntimeSpies(),
-    })).resolves.toBe("cleared");
-    expect(fsSync.existsSync(authDir)).toBe(false);
+  it.each([
+    ["requestPairingCode", false],
+    ["companion_finish", true],
+  ] as const)("does not treat %s credentials as linked", async (stage, registered) => {
+      fsSync.writeFileSync(
+        path.join(authDir, "creds.json"),
+        JSON.stringify(createPartialPhoneCodeCreds({ registered })),
+        "utf-8",
+      );
+      const runtime = createRuntimeSpies();
+
+      expect(hasWebCredsSync(authDir)).toBe(true);
+      await expect(webAuthExists(authDir)).resolves.toBe(false);
+      await expect(readWebAuthState(authDir)).resolves.toBe("not-linked");
+      const guardError = new Error("setup authority changed");
+      const beforeCredentialPersistence = vi.fn(async () => {
+        throw guardError;
+      });
+      await expect(
+        clearStalePhoneCodePairingAuthIfNeeded({
+          authDir,
+          isLegacyAuthDir: false,
+          runtime,
+          beforeCredentialPersistence,
+        }),
+      ).rejects.toBe(guardError);
+      expect(beforeCredentialPersistence).toHaveBeenCalledOnce();
+      expect(fsSync.existsSync(authDir)).toBe(true);
+      await expect(
+        clearStalePhoneCodePairingAuthIfNeeded({
+          authDir,
+          isLegacyAuthDir: false,
+          runtime,
+        }),
+      ).resolves.toBe("cleared");
+      expect(fsSync.existsSync(authDir)).toBe(false);
   });
 
   it("reports partial phone-code creds that cannot be cleared from a custom auth dir", async () => {
@@ -177,11 +204,7 @@ describe("auth-store", () => {
     const credsPath = path.join(authDir, "creds.json");
     fsSync.writeFileSync(
       credsPath,
-      JSON.stringify({
-        registered: false,
-        pairingCode: "12345678",
-        me: { id: "15551234567@s.whatsapp.net" },
-      }),
+      JSON.stringify(createPartialPhoneCodeCreds({ registered: true })),
       "utf-8",
     );
 
@@ -195,47 +218,43 @@ describe("auth-store", () => {
   });
 
   it("treats completed phone-code pairing creds as linked", async () => {
-    writeAuthFiles({ "creds.json": JSON.stringify({
-      registered: false, pairingCode: "12345678", me: { id: "15551234567@s.whatsapp.net" },
-      account: {}, signalIdentities: [{ identifier: { name: "15551234567", deviceId: 0 } }],
-    }) });
+    const authDir = tempDirs.make("openclaw-wa-auth-phone-code-linked");
+    fsSync.writeFileSync(
+      path.join(authDir, "creds.json"),
+      JSON.stringify(createCompletedPhoneCodeCreds({ registered: true })),
+      "utf-8",
+    );
+
     await expect(webAuthExists(authDir)).resolves.toBe(true);
     await expect(readWebAuthState(authDir)).resolves.toBe("linked");
   });
 
   it("preserves completed phone-code creds saved before stale cleanup reads", async () => {
-    const creds = { registered: false, pairingCode: "12345678", me: { id: "15551234567@s.whatsapp.net" } };
-    writeAuthFiles({ "creds.json": JSON.stringify(creds) });
-    hoisted.waitForCredsSaveQueueWithTimeout.mockImplementationOnce(async () => {
-      writeAuthFiles({ "creds.json": JSON.stringify({ ...creds, account: {},
-        signalIdentities: [{ identifier: { name: "15551234567", deviceId: 0 } }],
-      }) });
-      return "drained";
-    });
-    await expect(clearStalePhoneCodePairingAuthIfNeeded({ authDir, isLegacyAuthDir: false })).resolves.toBe("not-needed");
-    expect(fsSync.existsSync(credsPath)).toBe(true);
-    await expect(webAuthExists(authDir)).resolves.toBe(true);
+      const credsPath = path.join(authDir, "creds.json");
+      fsSync.writeFileSync(credsPath, JSON.stringify(createPartialPhoneCodeCreds()), "utf-8");
+      hoisted.waitForCredsSaveQueueWithTimeout.mockImplementationOnce(async () => {
+        fsSync.writeFileSync(
+          credsPath,
+          JSON.stringify(createCompletedPhoneCodeCreds({ registered: true })),
+          "utf-8",
+        );
+        return "drained";
+      });
+
+      await expect(
+        clearStalePhoneCodePairingAuthIfNeeded({
+          authDir,
+          isLegacyAuthDir: false,
+        }),
+      ).resolves.toBe("not-needed");
+      expect(fsSync.existsSync(credsPath)).toBe(true);
+      await expect(webAuthExists(authDir)).resolves.toBe(true);
   });
 
   it("preserves completed phone-code creds queued while stale cleanup deletes", async () => {
-    await withOwnedOAuthAuthDir("openclaw-wa-auth-phone-code-delete-race", async (authDir) => {
       const credsPath = path.join(authDir, "creds.json");
-      fsSync.writeFileSync(
-        credsPath,
-        JSON.stringify({
-          registered: false,
-          pairingCode: "12345678",
-          me: { id: "15551234567@s.whatsapp.net" },
-        }),
-        "utf-8",
-      );
-      const completedCreds = JSON.stringify({
-        registered: false,
-        pairingCode: "12345678",
-        me: { id: "15551234567@s.whatsapp.net" },
-        account: {},
-        signalIdentities: [{ identifier: { name: "15551234567", deviceId: 0 } }],
-      });
+      fsSync.writeFileSync(credsPath, JSON.stringify(createPartialPhoneCodeCreds()), "utf-8");
+      const completedCreds = JSON.stringify(createCompletedPhoneCodeCreds({ registered: true }));
       const { rm: originalRm } =
         await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
       const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
@@ -267,14 +286,20 @@ describe("auth-store", () => {
       } finally {
         rmSpy.mockRestore();
       }
-    });
   });
 
   it("reports unstable cleanup when the credential save queue does not settle", async () => {
-    writeAuthFiles({ "creds.json": JSON.stringify({ registered: false, pairingCode: "12345678", me: { id: "15551234567@s.whatsapp.net" } }) });
-    hoisted.waitForCredsSaveQueueWithTimeout.mockResolvedValueOnce("timed_out");
-    await expect(clearStalePhoneCodePairingAuthIfNeeded({ authDir, isLegacyAuthDir: false })).resolves.toBe("unstable");
-    expect(fsSync.existsSync(credsPath)).toBe(true);
+      const credsPath = path.join(authDir, "creds.json");
+      fsSync.writeFileSync(credsPath, JSON.stringify(createPartialPhoneCodeCreds()), "utf-8");
+      hoisted.waitForCredsSaveQueueWithTimeout.mockResolvedValueOnce("timed_out");
+
+      await expect(
+        clearStalePhoneCodePairingAuthIfNeeded({
+          authDir,
+          isLegacyAuthDir: false,
+        }),
+      ).resolves.toBe("unstable");
+      expect(fsSync.existsSync(credsPath)).toBe(true);
   });
 
   it.runIf(supportsSymlinks).each(["file", "directory"])(

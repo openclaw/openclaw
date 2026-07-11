@@ -1,4 +1,4 @@
-import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
+import { parsePhoneNumberFromString } from "libphonenumber-js/min";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { logInfo } from "openclaw/plugin-sdk/logging-core";
@@ -10,7 +10,6 @@ import {
   isLinkedWebCredsPayload,
   restoreCredsFromBackupIfNeeded,
   WhatsAppAuthUnstableError,
-  type WhatsAppWebCredsPayload,
 } from "./auth-store.js";
 import { closeWaSocket, waitForWhatsAppLoginResult } from "./connection-controller.js";
 import { resolveComparableIdentity } from "./identity.js";
@@ -20,28 +19,37 @@ import { resolveWhatsAppSocketTiming } from "./socket-timing.js";
 
 const QR_LINK_INSTRUCTION = "Open the WhatsApp app, go to Linked Devices, then scan this QR:";
 const CLEAR_TERMINAL = "\x1b[2J\x1b[H";
-const MIN_PAIRING_PHONE_DIGITS = 6;
 const MAX_PAIRING_PHONE_DIGITS = 15;
-const PHONE_CODE_PAIRING_WINDOW_MS = 5 * 60_000;
+const PAIRING_PHONE_INPUT_PATTERN = /^\+?[\d\s().-]+$/;
+const PHONE_CODE_PAIRING_READY_TIMEOUT_MS = 5 * 60_000;
 const STALE_PHONE_CODE_AUTH_NOT_CLEARED_MESSAGE =
   "Previous WhatsApp phone-code login left partial credentials in this auth directory, but OpenClaw could not safely clear them. Run `openclaw channels logout --channel whatsapp` for managed accounts, or remove the custom auth directory's WhatsApp credentials manually, then retry login.";
 
 type LoginSocket = Awaited<ReturnType<typeof createWaSocket>>;
 
 export function normalizeWhatsAppPairingPhoneNumber(phoneNumber: string): string {
-  if (/\(\s*0\s*\)/.test(phoneNumber)) {
+  const input = phoneNumber.trim();
+  const internationalInput = input.startsWith("+") ? input : `+${input}`;
+  const parsed = PAIRING_PHONE_INPUT_PATTERN.test(input)
+    ? parsePhoneNumberFromString(internationalInput, { extract: false })
+    : undefined;
+  const suppliedDigits = input.replace(/\D/g, "");
+  const canonicalDigits = parsed?.number.slice(1) ?? "";
+  // Baileys targets these exact digits, so reject parser "repairs" that remove
+  // a national trunk prefix or fold an extension into a different destination.
+  const preservesSuppliedDigits = suppliedDigits === canonicalDigits;
+  const isCanonicalPairingNumber =
+    parsed !== undefined &&
+    !parsed.ext &&
+    parsed.isPossible() &&
+    preservesSuppliedDigits &&
+    canonicalDigits.length <= MAX_PAIRING_PHONE_DIGITS;
+  if (!isCanonicalPairingNumber) {
     throw new Error(
-      "WhatsApp phone-code login phone number must omit optional trunk prefixes like (0).",
+      "WhatsApp phone-code login requires an international phone number with country code and no extension or national trunk prefix.",
     );
   }
-  const normalized = normalizeE164(phoneNumber);
-  const digits = normalized?.replace(/\D/g, "") ?? "";
-  if (digits.length < MIN_PAIRING_PHONE_DIGITS || digits.length > MAX_PAIRING_PHONE_DIGITS) {
-    throw new Error(
-      "WhatsApp phone-code login requires a phone number with country code and 6-15 digits.",
-    );
-  }
-  return digits;
+  return canonicalDigits;
 }
 
 function formatPairingCode(code: string): string {
@@ -49,15 +57,8 @@ function formatPairingCode(code: string): string {
   return trimmed.length === 8 ? `${trimmed.slice(0, 4)} ${trimmed.slice(4)}` : trimmed;
 }
 
-function getLoginSocketCredsPayload(sock: LoginSocket): WhatsAppWebCredsPayload | null {
-  const candidate = sock as unknown as { authState?: { creds?: unknown } };
-  const creds = candidate.authState?.creds;
-  return creds && typeof creds === "object" ? (creds as WhatsAppWebCredsPayload) : null;
-}
-
 function isLinkedLoginSocket(sock: LoginSocket): boolean {
-  const creds = getLoginSocketCredsPayload(sock);
-  return Boolean(creds && isLinkedWebCredsPayload(creds));
+  return isLinkedWebCredsPayload(sock.authState.creds);
 }
 
 function assertLinkedLoginSocketMatchesPairingPhoneNumber(
@@ -65,7 +66,7 @@ function assertLinkedLoginSocketMatchesPairingPhoneNumber(
   pairingPhoneNumber: string,
   authDir: string,
 ): void {
-  const creds = getLoginSocketCredsPayload(sock);
+  const creds = sock.authState.creds;
   const identity = resolveComparableIdentity(
     {
       jid: typeof creds?.me?.id === "string" ? creds.me.id : null,
@@ -141,19 +142,13 @@ function createWhatsAppPairingCodeReadySignal(timeoutMs: number): {
   };
 }
 
-function waitForWhatsAppPairingCodeReady(
-  signal: ReturnType<typeof createWhatsAppPairingCodeReadySignal>,
-  sock: LoginSocket,
-): Promise<void> {
-  return signal.wait(sock);
-}
-
 type CredentialPersistenceFailure = { error: unknown };
 
 async function clearStalePhoneCodePairingAuthForLogin(params: {
   authDir: string;
   isLegacyAuthDir: boolean;
   runtime: RuntimeEnv;
+  beforeCredentialPersistence?: () => Promise<void>;
 }): Promise<void> {
   const result = await clearStalePhoneCodePairingAuthIfNeeded(params);
   if (result === "unstable") {
@@ -164,18 +159,33 @@ async function clearStalePhoneCodePairingAuthForLogin(params: {
   }
 }
 
-export async function loginWeb(
+type WebLoginMode =
+  | {
+      kind: "qr";
+      beforeCredentialPersistence?: () => Promise<void>;
+    }
+  | {
+      kind: "phone-code";
+      pairingPhoneNumber: string;
+    };
+
+type LoginWaitParams = Parameters<typeof waitForWhatsAppLoginResult>[0];
+
+async function runWebLogin(
+  mode: WebLoginMode,
   verbose: boolean,
-  waitForConnection?: typeof waitForWaConnection,
-  runtime: RuntimeEnv = defaultRuntime,
-  accountId?: string,
-  options?: { beforeCredentialPersistence?: () => Promise<void> },
-) {
+  waitForConnection: typeof waitForWaConnection | undefined,
+  runtime: RuntimeEnv,
+  accountId: string | undefined,
+): Promise<void> {
+  const qrMode = mode.kind === "qr" ? mode : null;
+  const phoneMode = mode.kind === "phone-code" ? mode : null;
+  const beforeCredentialPersistence = qrMode?.beforeCredentialPersistence;
   const cfg = await captureRuntimeConfigAsyncReader()();
   const account = resolveWhatsAppAccount({ cfg, accountId });
   const socketTiming = resolveWhatsAppSocketTiming();
   const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir, {
-    beforeCredentialPersistence: options?.beforeCredentialPersistence,
+    beforeCredentialPersistence,
   });
   const credentialPersistenceState: { failure: CredentialPersistenceFailure | null } = {
     failure: null,
@@ -205,11 +215,11 @@ export async function loginWeb(
       await Promise.allSettled(credentialPersistenceTasks);
     }
   };
-  const credentialPersistenceOptions = options?.beforeCredentialPersistence
+  const credentialPersistenceOptions = beforeCredentialPersistence
     ? {
         beforeCredentialPersistence: async () => {
           try {
-            await options.beforeCredentialPersistence?.();
+            await beforeCredentialPersistence();
           } catch (error) {
             onCredentialPersistenceError(error);
             throw error;
@@ -219,32 +229,85 @@ export async function loginWeb(
         onCredentialPersistenceTask,
       }
     : {};
+
+  const phoneReadySignal = phoneMode
+    ? createWhatsAppPairingCodeReadySignal(
+        Math.max(socketTiming.connectTimeoutMs ?? 0, PHONE_CODE_PAIRING_READY_TIMEOUT_MS),
+      )
+    : null;
   let qrVersion = 0;
-  const onQr = (qr: string) => {
-    const currentQrVersion = ++qrVersion;
-    void renderQrTerminal(qr, { small: true })
-      .then((output) => {
-        if (currentQrVersion !== qrVersion) {
-          return;
+  const onQr =
+    phoneReadySignal?.onQr ??
+    ((qr: string) => {
+      const currentQrVersion = ++qrVersion;
+      void renderQrTerminal(qr, { small: true })
+        .then((output) => {
+          if (currentQrVersion !== qrVersion) {
+            return;
+          }
+          const refreshPrefix = currentQrVersion > 1 && process.stdout.isTTY ? CLEAR_TERMINAL : "";
+          const renderedQr = output.endsWith("\n") ? output.slice(0, -1) : output;
+          runtime.log(`${refreshPrefix}${QR_LINK_INSTRUCTION}\n${renderedQr}`);
+        })
+        .catch((err: unknown) => {
+          if (currentQrVersion !== qrVersion) {
+            return;
+          }
+          runtime.error(`failed rendering WhatsApp QR: ${String(err)}`);
+        });
+    });
+
+  const phoneLoginHooks: Partial<
+    Pick<LoginWaitParams, "beforeCreateLoginSocket" | "prepareLoginSocket">
+  > = {};
+  if (phoneMode && phoneReadySignal) {
+    phoneLoginHooks.beforeCreateLoginSocket = async (context) => {
+      // The 515 restart completes the same pairing attempt and must reuse its saved creds.
+      if (context.reason === "post-pairing") {
+        return;
+      }
+      phoneReadySignal.reset();
+      if (context.reason === "timeout") {
+        await clearStalePhoneCodePairingAuthForLogin({
+          authDir: account.authDir,
+          isLegacyAuthDir: account.isLegacyAuthDir,
+          runtime,
+        });
+      }
+    };
+    phoneLoginHooks.prepareLoginSocket = async (loginSock, context) => {
+      if (context.reason === "post-pairing") {
+        return;
+      }
+      if (isLinkedLoginSocket(loginSock)) {
+        assertLinkedLoginSocketMatchesPairingPhoneNumber(
+          loginSock,
+          phoneMode.pairingPhoneNumber,
+          account.authDir,
+        );
+        if (context.reason === "initial") {
+          logInfo("Existing WhatsApp credentials found; waiting for connection...", runtime);
         }
-        const refreshPrefix = currentQrVersion > 1 && process.stdout.isTTY ? CLEAR_TERMINAL : "";
-        const renderedQr = output.endsWith("\n") ? output.slice(0, -1) : output;
-        runtime.log(`${refreshPrefix}${QR_LINK_INSTRUCTION}\n${renderedQr}`);
-      })
-      .catch((err: unknown) => {
-        if (currentQrVersion !== qrVersion) {
-          return;
-        }
-        runtime.error(`failed rendering WhatsApp QR: ${String(err)}`);
-      });
-  };
+        return;
+      }
+      await phoneReadySignal.wait(loginSock);
+      const code = await loginSock.requestPairingCode(phoneMode.pairingPhoneNumber);
+      runtime.log(success(`WhatsApp pairing code: ${formatPairingCode(code)}`));
+      runtime.log(
+        "On your phone, open WhatsApp > Linked Devices > Link with phone number, then enter this code.",
+      );
+    };
+  }
+
   let sock = await createWaSocket(false, verbose, {
     authDir: account.authDir,
     ...socketTiming,
     onQr,
     ...credentialPersistenceOptions,
   });
-  logInfo("Waiting for WhatsApp connection...", runtime);
+  if (qrMode) {
+    logInfo("Waiting for WhatsApp connection...", runtime);
+  }
   try {
     const result = await waitForWhatsAppLoginResult({
       sock,
@@ -255,8 +318,9 @@ export async function loginWeb(
       waitForConnection,
       socketTiming,
       onQr,
+      ...phoneLoginHooks,
       ...credentialPersistenceOptions,
-      ...(options?.beforeCredentialPersistence
+      ...(beforeCredentialPersistence
         ? {
             credentialPersistenceFailure: credentialPersistenceFailure.promise,
             getCredentialPersistenceFailure: () => credentialPersistenceState.failure,
@@ -267,26 +331,32 @@ export async function loginWeb(
         sock = replacementSock;
       },
     });
-    if (credentialPersistenceState.failure) {
+    if (qrMode && credentialPersistenceState.failure) {
       throw credentialPersistenceState.failure.error;
     }
     if (result.outcome === "connected") {
+      const linkedMessage = phoneMode
+        ? "✅ Linked with phone code! Credentials saved for future sends."
+        : "✅ Linked! Credentials saved for future sends.";
       runtime.log(
         success(
           result.restarted
             ? "✅ Linked after restart; web session ready."
             : restoredFromBackup
               ? "✅ Recovered from creds.json.bak; web session ready."
-              : "✅ Linked! Credentials saved for future sends.",
+              : linkedMessage,
         ),
       );
       return;
     }
 
     if (result.outcome === "logged-out") {
+      const relinkInstruction = phoneMode
+        ? `${formatCliCommand("openclaw channels login --channel whatsapp")}, choose phone-number linking, and link again.`
+        : `${formatCliCommand("openclaw channels login")} and scan the QR again.`;
       runtime.error(
         danger(
-          `WhatsApp reported the session is logged out. Cleared cached web session; please rerun ${formatCliCommand("openclaw channels login")} and scan the QR again.`,
+          `WhatsApp reported the session is logged out. Cleared cached web session; please rerun ${relinkInstruction}`,
         ),
       );
       throw new Error("Session logged out; cache cleared. Re-run login.", {
@@ -295,122 +365,12 @@ export async function loginWeb(
     }
 
     runtime.error(danger(`WhatsApp Web connection ended before fully opening. ${result.message}`));
-    throw new Error(result.message, { cause: result.error });
-  } finally {
-    // Let Baileys flush any final events before closing the socket.
-    setTimeout(closeWaSocket, 500, sock);
-  }
-}
-
-export async function loginWebWithPhoneCode(
-  verbose: boolean,
-  phoneNumber: string,
-  waitForConnection?: typeof waitForWaConnection,
-  runtime: RuntimeEnv = defaultRuntime,
-  accountId?: string,
-) {
-  const pairingPhoneNumber = normalizeWhatsAppPairingPhoneNumber(phoneNumber);
-  const cfg = await captureRuntimeConfigAsyncReader()();
-  const account = resolveWhatsAppAccount({ cfg, accountId });
-  const socketTiming = resolveWhatsAppSocketTiming();
-  await clearStalePhoneCodePairingAuthForLogin({
-    authDir: account.authDir,
-    isLegacyAuthDir: account.isLegacyAuthDir,
-    runtime,
-  });
-  const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir);
-  const pairingReadyTimeoutMs = Math.max(
-    socketTiming.connectTimeoutMs ?? 0,
-    PHONE_CODE_PAIRING_WINDOW_MS,
-  );
-  const readySignal = createWhatsAppPairingCodeReadySignal(pairingReadyTimeoutMs);
-  readySignal.reset();
-  let sock = await createWaSocket(false, verbose, {
-    authDir: account.authDir,
-    ...socketTiming,
-    onQr: readySignal.onQr,
-  });
-  try {
-    const result = await waitForWhatsAppLoginResult({
-      sock,
-      authDir: account.authDir,
-      isLegacyAuthDir: account.isLegacyAuthDir,
-      verbose,
-      runtime,
-      waitForConnection,
-      socketTiming,
-      onQr: readySignal.onQr,
-      beforeCreateLoginSocket: async (context) => {
-        // The 515 restart completes the same pairing attempt and must reuse its saved creds.
-        if (context.reason === "post-pairing") {
-          return;
-        }
-        readySignal.reset();
-        if (context.reason === "timeout") {
-          await clearStalePhoneCodePairingAuthForLogin({
-            authDir: account.authDir,
-            isLegacyAuthDir: account.isLegacyAuthDir,
-            runtime,
-          });
-        }
-      },
-      prepareLoginSocket: async (loginSock, context) => {
-        if (context.reason === "post-pairing") {
-          return;
-        }
-        if (isLinkedLoginSocket(loginSock)) {
-          assertLinkedLoginSocketMatchesPairingPhoneNumber(
-            loginSock,
-            pairingPhoneNumber,
-            account.authDir,
-          );
-          if (context.reason === "initial") {
-            logInfo("Existing WhatsApp credentials found; waiting for connection...", runtime);
-          }
-          return;
-        }
-        await waitForWhatsAppPairingCodeReady(readySignal, loginSock);
-        const code = await loginSock.requestPairingCode(pairingPhoneNumber);
-        runtime.log(success(`WhatsApp pairing code: ${formatPairingCode(code)}`));
-        runtime.log(
-          "On your phone, open WhatsApp > Linked Devices > Link with phone number, then enter this code.",
-        );
-      },
-      onSocketReplaced: (replacementSock) => {
-        sock = replacementSock;
-      },
-    });
-    if (result.outcome === "connected") {
-      runtime.log(
-        success(
-          result.restarted
-            ? "✅ Linked after restart; web session ready."
-            : restoredFromBackup
-              ? "✅ Recovered from creds.json.bak; web session ready."
-              : "✅ Linked with phone code! Credentials saved for future sends.",
-        ),
-      );
-      return;
-    }
-
-    if (result.outcome === "logged-out") {
-      runtime.error(
-        danger(
-          `WhatsApp reported the session is logged out. Cleared cached web session; please rerun ${formatCliCommand("openclaw channels login --channel whatsapp")}, choose phone-number linking, and link again.`,
-        ),
-      );
-      throw new Error("Session logged out; cache cleared. Re-run login.", {
-        cause: result.error,
-      });
-    }
-
-    runtime.error(danger(`WhatsApp Web connection ended before fully opening. ${result.message}`));
-    if (result.error instanceof WhatsAppAuthUnstableError) {
+    if (phoneMode && result.error instanceof WhatsAppAuthUnstableError) {
       throw result.error;
     }
     throw new Error(result.message, { cause: result.error });
   } catch (error) {
-    if (!(error instanceof WhatsAppAuthUnstableError)) {
+    if (phoneMode && !(error instanceof WhatsAppAuthUnstableError)) {
       await clearStalePhoneCodePairingAuthIfNeeded({
         authDir: account.authDir,
         isLegacyAuthDir: account.isLegacyAuthDir,
@@ -419,6 +379,45 @@ export async function loginWebWithPhoneCode(
     }
     throw error;
   } finally {
+    // Let Baileys flush any final events before closing the socket.
     setTimeout(closeWaSocket, 500, sock);
   }
+}
+
+export async function loginWeb(
+  verbose: boolean,
+  waitForConnection?: typeof waitForWaConnection,
+  runtime: RuntimeEnv = defaultRuntime,
+  accountId?: string,
+  options?: { beforeCredentialPersistence?: () => Promise<void> },
+): Promise<void> {
+  await runWebLogin(
+    {
+      kind: "qr",
+      beforeCredentialPersistence: options?.beforeCredentialPersistence,
+    },
+    verbose,
+    waitForConnection,
+    runtime,
+    accountId,
+  );
+}
+
+export async function loginWebWithPhoneCode(
+  verbose: boolean,
+  phoneNumber: string,
+  waitForConnection?: typeof waitForWaConnection,
+  runtime: RuntimeEnv = defaultRuntime,
+  accountId?: string,
+): Promise<void> {
+  await runWebLogin(
+    {
+      kind: "phone-code",
+      pairingPhoneNumber: normalizeWhatsAppPairingPhoneNumber(phoneNumber),
+    },
+    verbose,
+    waitForConnection,
+    runtime,
+    accountId,
+  );
 }

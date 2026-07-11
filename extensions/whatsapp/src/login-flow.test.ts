@@ -1,6 +1,8 @@
 // Whatsapp tests cover interactive login method selection.
-import { createQueuedWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  createNonExitingRuntimeEnv,
+  createQueuedWizardPrompter,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runWhatsAppLogin } from "./login-flow.js";
 
@@ -18,13 +20,6 @@ vi.mock("./login.js", async () => {
   };
 });
 
-const createRuntime = (): RuntimeEnv =>
-  ({
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  }) as unknown as RuntimeEnv;
-
 describe("WhatsApp login flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -32,7 +27,7 @@ describe("WhatsApp login flow", () => {
 
   it("runs QR linking when selected", async () => {
     const harness = createQueuedWizardPrompter({ selectValues: ["qr"] });
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     await runWhatsAppLogin({
       accountId: "work",
@@ -58,7 +53,7 @@ describe("WhatsApp login flow", () => {
       selectValues: ["phone-number"],
       textValues: ["+1 555 123 4567"],
     });
-    const runtime = createRuntime();
+    const runtime = createNonExitingRuntimeEnv();
 
     await runWhatsAppLogin({
       accountId: "default",
