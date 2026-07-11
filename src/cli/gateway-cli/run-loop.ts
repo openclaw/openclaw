@@ -640,13 +640,14 @@ export async function runGatewayLoop(params: {
                     let tasksDrain: { drained: boolean } = { drained: true };
                     let runsDrain: { drained: boolean } = { drained: true };
                     try {
+                      const activeWorkDrainTimeoutMs = resolveRemainingRestartDrainTimeoutMs();
                       const tasksDrainPromise =
                         activeTasks > 0
-                          ? waitForActiveTasks(restartDrainTimeoutMs)
+                          ? waitForActiveTasks(activeWorkDrainTimeoutMs)
                           : Promise.resolve({ drained: true });
                       runsDrain =
                         activeRuns > 0
-                          ? await waitForActiveEmbeddedRuns(restartDrainTimeoutMs)
+                          ? await waitForActiveEmbeddedRuns(activeWorkDrainTimeoutMs)
                           : { drained: true };
                       if (!runsDrain.drained && activeRuns > 0) {
                         gatewayLog.warn(
