@@ -2627,6 +2627,35 @@ describe("Codex supervision actions", () => {
     expect(createSessionEntry).not.toHaveBeenCalled();
   });
 
+  it("marks not-loaded local interactive sessions as actionable", async () => {
+    const { runtime } = createRuntime();
+    const { api, getProvider } = createGatewayApi(runtime);
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control: createEligibleControl({
+        listPage: vi.fn(async () => ({
+          sessions: [
+            {
+              threadId: "thread-1",
+              status: "notLoaded",
+              source: "cli",
+              archived: false,
+            },
+          ],
+        })),
+      }),
+      getRuntimeConfig: () => config,
+    });
+
+    await expect(getProvider()?.list({})).resolves.toMatchObject([
+      {
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        sessions: [{ threadId: "thread-1", canContinue: true, canArchive: true }],
+      },
+    ]);
+  });
+
   it("reads local transcript turns one bounded App Server page at a time", async () => {
     const listTurnPage = vi.fn(async () => ({
       data: [

@@ -2741,6 +2741,36 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
     }
 }
 
+public struct SessionsCatalogListParams: Codable, Sendable {
+    public let catalogid: String?
+    public let search: String?
+    public let limitperhost: Int?
+    public let hostids: [String]?
+    public let cursors: [String: AnyCodable]?
+
+    public init(
+        catalogid: String? = nil,
+        search: String? = nil,
+        limitperhost: Int? = nil,
+        hostids: [String]? = nil,
+        cursors: [String: AnyCodable]? = nil)
+    {
+        self.catalogid = catalogid
+        self.search = search
+        self.limitperhost = limitperhost
+        self.hostids = hostids
+        self.cursors = cursors
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case catalogid = "catalogId"
+        case search
+        case limitperhost = "limitPerHost"
+        case hostids = "hostIds"
+        case cursors
+    }
+}
+
 public struct SessionsCatalogListResult: Codable, Sendable {
     public let catalogs: [SessionCatalog]
 

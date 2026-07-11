@@ -328,8 +328,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
     startup: true,
     controlPlaneWrite: true,
   },
-  { name: "sessions.catalog.list", scope: "operator.write" },
-  { name: "sessions.catalog.read", scope: "operator.write" },
+  { name: "sessions.catalog.list", scope: "operator.read" },
+  { name: "sessions.catalog.read", scope: "operator.read" },
   { name: "sessions.catalog.continue", scope: "operator.write" },
   { name: "sessions.catalog.archive", scope: "operator.write" },
 ] as const;

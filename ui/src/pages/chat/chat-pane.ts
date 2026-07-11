@@ -144,6 +144,9 @@ type ChatPaneConnectionScope = {
   sessions: ChatPageContext["sessions"];
 };
 
+const CATALOG_SESSION_LOOKUP_PAGE_LIMIT = 100;
+const CATALOG_SESSION_LOOKUP_MAX_PAGES = 100;
+
 const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
@@ -698,18 +701,34 @@ class ChatPane extends OpenClawLightDomElement {
     }
     try {
       if (!older) {
-        const listed = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
-          catalogId: key.catalogId,
-          hostIds: [key.hostId],
-          limitPerHost: 100,
-        });
-        if (!isCurrent()) {
-          return;
+        let cursor: string | undefined;
+        const seenCursors = new Set<string>();
+        // A sidebar row can come from any loaded page. Follow that host's cursor
+        // so continuation metadata is not lost when the selected row is past page one.
+        for (let pageIndex = 0; pageIndex < CATALOG_SESSION_LOOKUP_MAX_PAGES; pageIndex += 1) {
+          const listed = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+            catalogId: key.catalogId,
+            hostIds: [key.hostId],
+            limitPerHost: CATALOG_SESSION_LOOKUP_PAGE_LIMIT,
+            ...(cursor ? { cursors: { [key.hostId]: cursor } } : {}),
+          });
+          if (!isCurrent()) {
+            return;
+          }
+          const catalog = listed.catalogs.find((candidate) => candidate.id === key.catalogId);
+          this.catalogHost = catalog?.hosts.find((host) => host.hostId === key.hostId) ?? null;
+          this.catalogSession =
+            this.catalogHost?.sessions.find((session) => session.threadId === key.threadId) ?? null;
+          if (this.catalogSession) {
+            break;
+          }
+          const nextCursor = this.catalogHost?.nextCursor;
+          if (!nextCursor || seenCursors.has(nextCursor)) {
+            break;
+          }
+          seenCursors.add(nextCursor);
+          cursor = nextCursor;
         }
-        const catalog = listed.catalogs.find((candidate) => candidate.id === key.catalogId);
-        this.catalogHost = catalog?.hosts.find((host) => host.hostId === key.hostId) ?? null;
-        this.catalogSession =
-          this.catalogHost?.sessions.find((session) => session.threadId === key.threadId) ?? null;
       }
       const page = await client.request<SessionsCatalogReadResult>("sessions.catalog.read", {
         catalogId: key.catalogId,

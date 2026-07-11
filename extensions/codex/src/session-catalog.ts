@@ -1758,8 +1758,8 @@ function toGenericCatalogHost(host: CodexSessionCatalogHost): SessionCatalogHost
     connected: host.connected,
     ...(host.nodeId ? { nodeId: host.nodeId } : {}),
     sessions: host.sessions.map((session) => {
-      const actionable =
-        local && session.status === "idle" && isInteractiveThreadSource(session.source);
+      const continuableStatus = session.status === "idle" || session.status === "notLoaded";
+      const actionable = local && continuableStatus && isInteractiveThreadSource(session.source);
       return {
         threadId: session.threadId,
         ...(session.name != null ? { name: session.name } : {}),
