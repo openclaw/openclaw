@@ -2756,7 +2756,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         runtimeContext?: Record<string, unknown>;
       }) => {
         const directParams = {
-          ...(compactParams.runtimeContext ?? {}),
+          ...compactParams.runtimeContext,
           sessionId: compactParams.sessionId,
           sessionKey: compactParams.sessionKey,
           sessionFile: compactParams.sessionFile,

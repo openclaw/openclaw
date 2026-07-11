@@ -2497,7 +2497,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       version: 1 as const,
       profiles: {
         "openai:personal": {
-          type: "oauth",
+          type: "oauth" as const,
           provider: "openai",
           access: "access",
           refresh: "refresh",

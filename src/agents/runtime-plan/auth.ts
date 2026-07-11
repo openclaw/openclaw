@@ -69,12 +69,12 @@ export function buildAgentRuntimeAuthPlan(params: {
     ? resolveProviderIdForAuth(harnessAuthProvider, aliasLookupParams)
     : undefined;
   const harnessCanForwardProfile =
-    harnessProviderForAuth && harnessProviderForAuth === authProfileProviderForAuth;
+    params.allowHarnessAuthProfileForwarding !== false &&
+    harnessProviderForAuth &&
+    harnessProviderForAuth === authProfileProviderForAuth;
   const providerCanForwardProfile =
     !harnessProviderForAuth && providerForAuth === authProfileProviderForAuth;
-  const canForwardProfile =
-    params.allowHarnessAuthProfileForwarding !== false &&
-    (providerCanForwardProfile || harnessCanForwardProfile);
+  const canForwardProfile = providerCanForwardProfile || harnessCanForwardProfile;
   const forwardedAuthProfileId = canForwardProfile ? params.sessionAuthProfileId : undefined;
 
   // Forward only when the selected provider/harness resolves to the same auth
