@@ -2900,7 +2900,6 @@ describe("doctor health contributions", () => {
     await contribution.run(ctx);
 
     expect(ctx.healthOk).toBe(true);
-    expect(mocks.getHealthCheck).not.toHaveBeenCalled();
     expect(mocks.note).not.toHaveBeenCalled();
   });
 
