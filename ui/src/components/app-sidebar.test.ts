@@ -2,7 +2,7 @@
 
 import { ContextProvider } from "@lit/context";
 import { LitElement } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -13,6 +13,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import type { SessionCapability, SessionState } from "../lib/sessions/index.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-sidebar.ts";
 
 const PROVIDER_ELEMENT_NAME = "test-app-sidebar-context-provider";
@@ -32,16 +33,25 @@ if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
 }
 
 type SidebarLifecycleState = HTMLElement & {
+  connected: boolean;
   sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
   sessionCreatedOrder: Map<string, number>;
   sessionsAgentId: string | null;
   sessionsResult: SessionsListResult | null;
   updateComplete: Promise<boolean>;
+  updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
+  updateRunning: boolean;
+  onUpdate: () => void;
   variant: "panel" | "drawer";
 };
 
 type LobsterPetElement = HTMLElement & {
   runOutcome: "ok" | "error" | "aborted";
+};
+
+type TestSessionMenu = HTMLElement & {
+  forkDisabled: boolean;
+  readonly updateComplete: Promise<boolean>;
 };
 
 function createGatewayHarness(client: GatewayBrowserClient) {
@@ -148,6 +158,16 @@ function createSessions(agentId: string, keys: string[]): SessionCapability {
   return createSessionsHarness(agentId, keys).sessions;
 }
 
+let originalLocalStorage: PropertyDescriptor | undefined;
+
+beforeEach(() => {
+  originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: createStorageMock(),
+  });
+});
+
 function createContext(
   gateway: ApplicationGateway,
   sessions: SessionCapability,
@@ -186,6 +206,32 @@ async function mountSidebar(
 
 afterEach(() => {
   document.body.replaceChildren();
+  if (originalLocalStorage) {
+    Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
+  } else {
+    Reflect.deleteProperty(globalThis, "localStorage");
+  }
+});
+
+describe("AppSidebar update card wiring", () => {
+  it("renders the update card first in the footer and forwards its action", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const onUpdate = vi.fn();
+    sidebar.updateAvailable = {
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    };
+    sidebar.onUpdate = onUpdate;
+    await sidebar.updateComplete;
+
+    const footer = sidebar.querySelector(".sidebar-shell__footer");
+    const card = footer?.firstElementChild;
+    expect(card?.localName).toBe("openclaw-sidebar-update-card");
+    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(onUpdate).toHaveBeenCalledOnce();
+  });
 });
 
 describe("AppSidebar lobster outcome wiring", () => {
@@ -233,6 +279,38 @@ describe("AppSidebar lobster outcome wiring", () => {
 });
 
 describe("AppSidebar session source lifecycle", () => {
+  it("disables Fork session for model-selection-locked rows", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", ["agent:main:locked"]);
+    const lockedState = createSessionState("main", ["agent:main:locked"]);
+    const lockedRow = lockedState.result?.sessions[0];
+    if (!lockedRow) {
+      throw new Error("Expected locked session row");
+    }
+    lockedRow.modelSelectionLocked = true;
+    sessions.publishList({ result: lockedState.result, agentId: lockedState.agentId });
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    const menuButton = sidebar.querySelector<HTMLButtonElement>(
+      '[data-session-key="agent:main:locked"] [data-session-menu="true"]',
+    );
+    if (!menuButton) {
+      throw new Error("Expected sidebar session menu button");
+    }
+    menuButton.click();
+    await sidebar.updateComplete;
+
+    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    if (!menu) {
+      throw new Error("Expected sidebar session menu");
+    }
+    await menu.updateComplete;
+    expect(menu.forkDisabled).toBe(true);
+    expect(menu.querySelector<HTMLButtonElement>('[data-shortcut="f"]')?.disabled).toBe(true);
+  });
+
   it("resets cached rows and creation order when the sessions source changes", async () => {
     const client = {} as GatewayBrowserClient;
     const gateway = createGateway(client);

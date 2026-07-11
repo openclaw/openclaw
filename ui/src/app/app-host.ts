@@ -12,6 +12,7 @@ import "../components/github-link-hovercard.ts";
 import "../components/login-gate.ts";
 import "../components/browser/browser-panel.ts";
 import "../components/resizable-divider.ts";
+import "../components/sidebar-update-card.ts";
 import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
@@ -23,7 +24,6 @@ import {
   type CommandPaletteTargetDetail,
 } from "../components/command-palette.ts";
 import { icons } from "../components/icons.ts";
-import "../components/new-session-dialog.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
@@ -136,6 +136,32 @@ function isBrowserPanelAvailable(snapshot: ApplicationContext["gateway"]["snapsh
 
 function isMobileNavLayout(): boolean {
   return globalThis.matchMedia?.("(max-width: 1100px)").matches ?? false;
+}
+
+export function navigationSurfaceIsHidden(params: {
+  navCollapsed: boolean;
+  navDrawerOpen: boolean;
+  mobileNavLayout: boolean;
+}): boolean {
+  return params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed;
+}
+
+export function renderFloatingUpdateCard(params: {
+  navigationSurfaceHidden: boolean;
+  onboarding: boolean;
+  updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
+  updateRunning: boolean;
+  onUpdate: () => void;
+}) {
+  if (!params.navigationSurfaceHidden || params.onboarding) {
+    return nothing;
+  }
+  return html`<openclaw-sidebar-update-card
+    class="sidebar-update-card--floating"
+    .updateAvailable=${params.updateAvailable}
+    .updateRunning=${params.updateRunning}
+    .onUpdate=${params.onUpdate}
+  ></openclaw-sidebar-update-card>`;
 }
 
 class OpenClawApp extends OpenClawLightDomElement {
@@ -377,7 +403,6 @@ class OpenClawShell extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
 
   @state() private navDrawerOpen = false;
-  @state() private newSessionDraft: { agentId: string } | null = null;
   @state() private activeSessionKey = "";
   @state() private settingsSearchQuery = "";
   @state() private routeState: ShellRouteState = {};
@@ -748,6 +773,14 @@ class OpenClawShell extends OpenClawLightDomElement {
       : ROUTE_IDS_WITHOUT_WORKBOARD;
   }
 
+  /** Sidebar draft-row hint while the new-session page is open, keyed off its ?agent param. */
+  private draftSessionAgentId(): string {
+    if (this.routeState.routeId !== "new-session") {
+      return "";
+    }
+    return new URLSearchParams(this.routeState.location?.search ?? "").get("agent")?.trim() ?? "";
+  }
+
   private ensureAgentsList(
     snapshot: { client: GatewayBrowserClient | null; connected: boolean },
     agents = this.context?.agents,
@@ -830,6 +863,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     // stays persisted for when the viewport returns to the desktop layout.
     // The settings sidebar has a fixed width, so the collapse state pauses too.
     const navCollapsed = navigationSnapshot.navCollapsed && !navDrawerOpen && !settingsTakeover;
+    const navigationSurfaceHidden = navigationSurfaceIsHidden({
+      navCollapsed,
+      navDrawerOpen,
+      mobileNavLayout: isMobileNavLayout(),
+    });
     const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
     // One storage read per render; theme.refresh() re-renders on pref changes.
     const uiSettings = loadSettings();
@@ -842,18 +880,6 @@ class OpenClawShell extends OpenClawLightDomElement {
         }}
         .onSlashCommand=${this.handleCommandPaletteSlashCommand}
       ></openclaw-command-palette>
-      <openclaw-new-session-dialog
-        .open=${this.newSessionDraft !== null}
-        .initialAgentId=${this.newSessionDraft?.agentId ?? ""}
-        .onClose=${() => {
-          this.newSessionDraft = null;
-        }}
-        .onCreated=${(sessionKey: string) => {
-          this.newSessionDraft = null;
-          context.gateway.setSessionKey(sessionKey);
-          this.navigate("chat", { search: searchForSession(sessionKey) });
-        }}
-      ></openclaw-new-session-dialog>
       <div
         class="shell ${activeRoute === "chat" ? "shell--chat" : ""} ${navCollapsed
           ? "shell--nav-collapsed"
@@ -903,6 +929,9 @@ class OpenClawShell extends OpenClawLightDomElement {
                   context.config.current.serverVersion ??
                   gatewaySnapshot.hello?.server?.version ??
                   "",
+                updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
+                updateRunning: overlaySnapshot.updateRunning,
+                onUpdate: () => void context.overlays.runUpdate(),
                 searchQuery: this.settingsSearchQuery,
                 onExit: () => this.exitSettings(),
                 onNavigate: (routeId) => this.navigate(routeId),
@@ -929,12 +958,18 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .gatewayVersion=${context.config.current.serverVersion ??
                 gatewaySnapshot.hello?.server?.version ??
                 null}
+                .devGitBranch=${context.config.current.devGitBranch}
+                .updateAvailable=${navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable}
+                .updateRunning=${overlaySnapshot.updateRunning}
+                .onUpdate=${() => void context.overlays.runUpdate()}
                 .onOpenPalette=${this.openPalette}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onOpenNewSession=${(agentId: string) => {
-                  this.newSessionDraft = { agentId };
+                  this.navigate("new-session", {
+                    search: agentId ? `?agent=${encodeURIComponent(agentId)}` : "",
+                  });
                 }}
-                .draftSessionAgentId=${this.newSessionDraft?.agentId ?? ""}
+                .draftSessionAgentId=${this.draftSessionAgentId()}
                 .onToggleMore=${() =>
                   context.navigation.update({
                     sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,
@@ -980,13 +1015,15 @@ class OpenClawShell extends OpenClawLightDomElement {
           <openclaw-update-banner
             .props=${{
               statusBanner: overlaySnapshot.updateStatusBanner,
-              updateAvailable: overlaySnapshot.updateAvailable,
-              updateRunning: overlaySnapshot.updateRunning,
-              connected: gatewaySnapshot.connected,
-              onUpdate: () => context.overlays.runUpdate(),
-              onDismiss: () => context.overlays.dismissUpdate(),
             }}
           ></openclaw-update-banner>
+          ${renderFloatingUpdateCard({
+            navigationSurfaceHidden,
+            onboarding: this.onboarding,
+            updateAvailable: overlaySnapshot.updateAvailable,
+            updateRunning: overlaySnapshot.updateRunning,
+            onUpdate: () => void context.overlays.runUpdate(),
+          })}
           <openclaw-router-outlet
             .router=${runtime.router}
             .retryContext=${context}

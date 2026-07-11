@@ -1,6 +1,6 @@
 // Discord plugin module implements pluralkit behavior.
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
@@ -35,30 +35,6 @@ export type PluralKitMessageInfo = {
   member?: PluralKitMemberInfo | null;
 };
 
-function createPluralKitLookupSignal(params: { signal?: AbortSignal; timeoutMs?: number }): {
-  signal: AbortSignal;
-  release: () => void;
-} {
-  const controller = new AbortController();
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, PLURALKIT_LOOKUP_TIMEOUT_MS, 1);
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  const abortFromCaller = () => controller.abort(params.signal?.reason);
-
-  if (params.signal?.aborted) {
-    abortFromCaller();
-  } else {
-    params.signal?.addEventListener("abort", abortFromCaller, { once: true });
-  }
-
-  return {
-    signal: controller.signal,
-    release: () => {
-      clearTimeout(timeoutId);
-      params.signal?.removeEventListener("abort", abortFromCaller);
-    },
-  };
-}
-
 export async function fetchPluralKitMessageInfo(params: {
   messageId: string;
   config?: DiscordPluralKitConfig;
@@ -77,9 +53,11 @@ export async function fetchPluralKitMessageInfo(params: {
   if (params.config.token?.trim()) {
     headers.Authorization = params.config.token.trim();
   }
-  const timeout = createPluralKitLookupSignal({
+  const timeout = buildTimeoutAbortSignal({
     signal: params.signal,
-    timeoutMs: params.timeoutMs,
+    timeoutMs: params.timeoutMs ?? PLURALKIT_LOOKUP_TIMEOUT_MS,
+    operation: "discord.pluralkit.lookup",
+    url: `${PLURALKIT_API_BASE}/messages/${params.messageId}`,
   });
   try {
     const res = await fetchImpl(`${PLURALKIT_API_BASE}/messages/${params.messageId}`, {
@@ -98,6 +76,6 @@ export async function fetchPluralKitMessageInfo(params: {
     }
     return await readProviderJsonResponse<PluralKitMessageInfo>(res, "PluralKit message");
   } finally {
-    timeout.release();
+    timeout.cleanup();
   }
 }
