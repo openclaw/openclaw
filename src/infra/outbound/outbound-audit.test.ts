@@ -279,6 +279,14 @@ describe("outbound audit projection", () => {
         session: { key: "agent:main:matrix:default:direct:room:123" },
       }),
     ).toBe("unknown");
+    // Nested provider+kind prefixes normalize in layers: discord:dm:123 -> 123.
+    expect(
+      conversationKindFor({
+        channel: "discord",
+        to: "discord:dm:123",
+        session: { key: "agent:main:discord:dm:123" },
+      }),
+    ).toBe("direct");
   });
 
   it("does not classify by a policy session that names another conversation", () => {

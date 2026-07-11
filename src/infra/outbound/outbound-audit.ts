@@ -238,16 +238,15 @@ function routeNamesDestination(
   if (!route || route.channel !== context.channel.toLowerCase()) {
     return false;
   }
-  const prefix = TARGET_PREFIX_RE.exec(context.to)?.[1]?.toLowerCase();
+  // Targets can nest a provider prefix around a kind prefix ("discord:dm:123"),
+  // so strip the provider layer first and evaluate the kind on what remains.
+  const withoutProvider = stripTargetProviderPrefix(context.to, context.channel);
+  const prefix = TARGET_PREFIX_RE.exec(withoutProvider)?.[1]?.toLowerCase();
   const allowedRouteKinds = prefix ? TARGET_KIND_TO_ROUTE_KINDS[prefix] : undefined;
   if (allowedRouteKinds && !allowedRouteKinds.includes(route.peerKind)) {
     return false;
   }
-  const candidates = [
-    context.to,
-    stripTargetKindPrefix(context.to),
-    stripTargetProviderPrefix(context.to, context.channel),
-  ];
+  const candidates = [context.to, withoutProvider, stripTargetKindPrefix(withoutProvider)];
   return candidates.some((candidate) => {
     const normalized = normalizeSessionPeerId({
       channel: route.channel,
