@@ -723,7 +723,9 @@ export function renderChatThread(props: ChatThreadProps) {
     rowKind && rowKind !== "unknown" ? rowKind : classifySessionKind(props.sessionKey);
   // Only agent-solo kinds qualify: "global" aggregates every inbound context
   // under session.scope="global" (including group/channel senders), so it
-  // keeps avatars like "group" and "unknown" do.
+  // keeps avatars like "group" and "unknown" do. Known limitation: global
+  // aliases (agent:<id>:main under scope=global) need host context to detect
+  // (resolveUiGlobalAliasAgentId) and classify as direct here; follow-up.
   const isDirectThread =
     sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child";
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
