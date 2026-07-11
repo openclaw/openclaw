@@ -650,6 +650,21 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
     }
   }
 
+  /** Real page reload: re-navigate to the current URL, then re-capture. A bare
+   * screenshot refresh would leave the remote document untouched. */
+  private reloadPage(): void {
+    const url = this.view?.metrics?.url || this.view?.url || this.urlDraft;
+    const normalized = normalizeUrlDraft(url);
+    if (!this.activeTargetId) {
+      return;
+    }
+    if (!normalized) {
+      void this.refreshView(this.activeTargetId);
+      return;
+    }
+    void this.openUrl(normalized, { newTab: false });
+  }
+
   private goHistory(delta: -1 | 1): void {
     const targetId = this.activeTargetId;
     if (!targetId) {
@@ -1161,7 +1176,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
           title=${t("browser.reload")}
           aria-label=${t("browser.reload")}
           ?disabled=${!this.activeTargetId}
-          @click=${() => this.activeTargetId && void this.refreshView(this.activeTargetId)}
+          @click=${() => this.reloadPage()}
         >
           ${RELOAD_GLYPH}
         </button>
