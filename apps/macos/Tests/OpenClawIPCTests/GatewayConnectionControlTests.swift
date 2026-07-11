@@ -688,23 +688,23 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
             let identity = DeviceIdentityStore.loadOrCreate()
             let unscopedToken = "legacy-unscoped-token"
             let routeAToken = "route-a-device-token"
-            _ = DeviceAuthStore.storeToken(
+            #expect(DeviceAuthStore.storeTokenPersisted(
                 deviceId: identity.deviceId,
                 role: "operator",
-                token: unscopedToken)
-            _ = DeviceAuthStore.storeToken(
+                token: unscopedToken))
+            #expect(DeviceAuthStore.storeTokenPersisted(
                 deviceId: identity.deviceId,
                 role: "operator",
                 token: routeAToken,
-                gatewayID: routeA.owner)
-
-            let routeBAuth = try await self.connectAuth(route: routeB)
-            #expect(routeBAuth?["token"] == nil)
-            #expect(routeBAuth?["deviceToken"] == nil)
+                gatewayID: routeA.owner))
 
             let routeAAuth = try await self.connectAuth(route: routeA)
             #expect(routeAAuth?["token"] as? String == routeAToken)
             #expect(routeAAuth?["token"] as? String != unscopedToken)
+
+            let routeBAuth = try await self.connectAuth(route: routeB)
+            #expect(routeBAuth?["token"] == nil)
+            #expect(routeBAuth?["deviceToken"] == nil)
         }
     }
 

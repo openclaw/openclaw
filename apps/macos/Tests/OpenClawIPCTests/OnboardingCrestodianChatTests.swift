@@ -88,6 +88,16 @@ private func crestodianRequestMethod(from message: URLSessionWebSocketTask.Messa
     return object["method"] as? String
 }
 
+private func respondToCrestodianHealth(
+    task: GatewayTestWebSocketTask,
+    id: String,
+    method: String?) -> Bool
+{
+    guard method == "health" else { return false }
+    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+    return true
+}
+
 private func crestodianResponse(id: String, action: String = "none") -> Data {
     Data(
         """
@@ -167,6 +177,9 @@ struct OnboardingCrestodianChatTests {
     }
 
     @Test func `relaunch with pending inference resumes Crestodian`() async throws {
+        let suiteName = "OnboardingPendingInferenceResumeTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
         let methods = CrestodianMethodRecorder()
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
@@ -174,6 +187,7 @@ struct OnboardingCrestodianChatTests {
                       let id = GatewayWebSocketTestSupport.requestID(from: message)
                 else { return }
                 let method = crestodianRequestMethod(from: message)
+                if respondToCrestodianHealth(task: task, id: id, method: method) { return }
                 if let method {
                     await methods.record(method)
                 }
@@ -195,7 +209,11 @@ struct OnboardingCrestodianChatTests {
         appState.connectionMode = .remote
         appState.remoteTransport = .direct
         appState.remoteUrl = "ws://example.invalid"
-        let view = OnboardingView(state: appState, aiSetupGateway: gateway)
+        let view = OnboardingView(
+            state: appState,
+            aiSetupGateway: gateway,
+            crestodianDefaults: defaults,
+            aiSetupRouteIdentityProvider: { "remote:direct:example.invalid" })
         view.crestodianState.chat = CrestodianOnboardingChatModel(gateway: gateway)
 
         let task = view.resumePendingCrestodian(modelRef: "openai/gpt-5.5")
@@ -223,6 +241,7 @@ struct OnboardingCrestodianChatTests {
                       let id = GatewayWebSocketTestSupport.requestID(from: message),
                       let method = crestodianRequestMethod(from: message)
                 else { return }
+                if respondToCrestodianHealth(task: task, id: id, method: method) { return }
                 await methods.record(method)
                 switch method {
                 case "crestodian.setup.verify":
@@ -252,7 +271,8 @@ struct OnboardingCrestodianChatTests {
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
-            crestodianDefaults: defaults)
+            crestodianDefaults: defaults,
+            aiSetupRouteIdentityProvider: { "local" })
         view.crestodianState.chat = CrestodianOnboardingChatModel(gateway: gateway)
 
         await view.resumePendingCrestodian(modelRef: "openai/gpt-5.5").value
@@ -296,6 +316,9 @@ struct OnboardingCrestodianChatTests {
     }
 
     @Test func `superseded resume cannot present a replacement route chat`() async throws {
+        let suiteName = "OnboardingSupersededResumeTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
         let gate = CrestodianRequestGate()
         let methods = CrestodianMethodRecorder()
         let session = GatewayTestWebSocketSession(taskFactory: {
@@ -304,6 +327,7 @@ struct OnboardingCrestodianChatTests {
                       let id = GatewayWebSocketTestSupport.requestID(from: message),
                       let method = crestodianRequestMethod(from: message)
                 else { return }
+                if respondToCrestodianHealth(task: task, id: id, method: method) { return }
                 await methods.record(method)
                 guard method == "crestodian.setup.verify" else { return }
                 _ = await gate.waitIfFirst()
@@ -318,7 +342,11 @@ struct OnboardingCrestodianChatTests {
         appState.connectionMode = .remote
         appState.remoteTransport = .direct
         appState.remoteUrl = "ws://example.invalid"
-        let view = OnboardingView(state: appState, aiSetupGateway: gateway)
+        let view = OnboardingView(
+            state: appState,
+            aiSetupGateway: gateway,
+            crestodianDefaults: defaults,
+            aiSetupRouteIdentityProvider: { "remote:direct:example.invalid" })
         view.crestodianState.chat = CrestodianOnboardingChatModel(gateway: gateway)
 
         let staleResume = view.resumePendingCrestodian(modelRef: "openai/gpt-5.5")
@@ -353,6 +381,7 @@ struct OnboardingCrestodianChatTests {
                       let id = GatewayWebSocketTestSupport.requestID(from: message),
                       let method = crestodianRequestMethod(from: message)
                 else { return }
+                if respondToCrestodianHealth(task: task, id: id, method: method) { return }
                 await methods.record(method)
                 switch method {
                 case "agents.list":
@@ -388,7 +417,8 @@ struct OnboardingCrestodianChatTests {
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
-            crestodianDefaults: defaults)
+            crestodianDefaults: defaults,
+            aiSetupRouteIdentityProvider: { routeIdentity })
         view.crestodianState.chat = CrestodianOnboardingChatModel(gateway: gateway)
         let aiSetup = view.aiSetup
         let crestodianState = view.crestodianState

@@ -1090,6 +1090,9 @@ struct OnboardingAISetupTests {
     }
 
     @Test func `pending verification revalidates route after shared task completes`() async throws {
+        let suiteName = "OnboardingPendingRouteRevalidationTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
                 guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
@@ -1105,6 +1108,7 @@ struct OnboardingAISetupTests {
         let routeIdentity = AISetupRouteIdentity("remote:id:gateway-a")
         let model = OnboardingAISetupModel(
             gateway: gateway,
+            defaults: defaults,
             routeIdentityProvider: { routeIdentity.snapshot() })
         model.onConnected = { routeIdentity.set("remote:id:gateway-b") }
 
