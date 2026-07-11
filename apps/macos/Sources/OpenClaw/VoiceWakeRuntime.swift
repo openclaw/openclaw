@@ -121,9 +121,7 @@ actor VoiceWakeRuntime {
 
         let config = snapshot.1
 
-        if self.isStarting {
-            return
-        }
+        if self.isStarting { return }
 
         if self.scheduledRestartTask != nil, config == self.currentConfig, self.recognitionTask == nil {
             return
@@ -143,9 +141,7 @@ actor VoiceWakeRuntime {
     }
 
     private func start(with config: RuntimeConfig) async {
-        if self.isStarting {
-            return
-        }
+        if self.isStarting { return }
         self.isStarting = true
         defer { self.isStarting = false }
         do {

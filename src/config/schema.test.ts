@@ -120,6 +120,7 @@ describe("config schema", () => {
     expect(groupPolicyLabel).toBeTypeOf("string");
     expect(groupPolicyLabel?.trim().length).toBeGreaterThan(0);
     expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
+    expect(res.uiHints["mcp.servers.*.env.*"]?.sensitive).toBe(true);
     expect(res.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["models.providers.*.baseUrl"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["proxy.tls.caFile"]?.tags).toEqual(
@@ -264,6 +265,41 @@ describe("config schema", () => {
         }),
       ).toThrow();
     }
+  });
+
+  it("accepts MCP OAuth auth profile bindings for refreshable bearer projection", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            ducktape: {
+              url: "https://agents.ducktape.xyz/mcp",
+              transport: "streamable-http",
+              auth: "oauth",
+              oauth: {
+                authProfileId: "ducktape:mcp",
+              },
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            ducktape: {
+              url: "https://agents.ducktape.xyz/mcp",
+              transport: "streamable-http",
+              auth: "oauth",
+              oauth: {
+                authProfileId: "  ",
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow();
   });
 
   it("accepts stdio transport for command-bearing MCP servers", () => {

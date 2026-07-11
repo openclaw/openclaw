@@ -192,6 +192,19 @@ function repairLegacyTaskAgentAttribution(db: DatabaseSync): void {
   `);
 }
 
+function repairLegacyTaskDeliveryStatuses(db: DatabaseSync): void {
+  if (!tableExists(db, "task_runs") || !tableHasColumn(db, "task_runs", "delivery_status")) {
+    return;
+  }
+  // Successful sidecar imports archive their source, so database open must
+  // also canonicalize rows already copied by released migrations.
+  db.exec(`
+    UPDATE task_runs
+    SET delivery_status = 'not_applicable'
+    WHERE delivery_status = 'not-requested';
+  `);
+}
+
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
   if (!tableExists(db, "agent_databases")) {
     return true;
@@ -754,10 +767,11 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
 }
 
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
-  ensureColumn(db, "node_pairing_pending", "client_id TEXT");
-  ensureColumn(db, "node_pairing_pending", "client_mode TEXT");
-  ensureColumn(db, "node_pairing_paired", "client_id TEXT");
-  ensureColumn(db, "node_pairing_paired", "client_mode TEXT");
+  ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");
+  ensureColumn(db, "device_pairing_paired", "approved_via TEXT");
+  ensureColumn(db, "device_pairing_paired", "operator_label TEXT");
+  ensureColumn(db, "device_pairing_paired", "node_surface_json TEXT");
+  ensureColumn(db, "device_pairing_paired", "pending_node_surface_json TEXT");
   ensureColumn(db, "cron_run_logs", "status TEXT");
   ensureColumn(db, "cron_run_logs", "error TEXT");
   ensureColumn(db, "cron_run_logs", "summary TEXT");
@@ -925,6 +939,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
     if (addedTaskRequesterAgentId) {
       repairLegacyTaskAgentAttribution(db);
     }
+    repairLegacyTaskDeliveryStatuses(db);
   });
   ensureColumn(db, "subagent_runs", "task_name TEXT");
 }
@@ -934,6 +949,10 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
   ensureAdditiveStateColumns(db);
   assertCanonicalStateSchemaShape(db, pathname);
   db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+  // Retired node_pairing_* tables were created by earlier schema revisions but
+  // never had a shipped writer (the node surface lives on device_pairing_paired
+  // records), so dropping the always-empty tables is safe, not destructive.
+  db.exec("DROP TABLE IF EXISTS node_pairing_pending; DROP TABLE IF EXISTS node_pairing_paired;");
   ensureAdditiveStateColumns(db);
   db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
   const now = Date.now();

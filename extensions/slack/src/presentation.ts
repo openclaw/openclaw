@@ -15,6 +15,8 @@ export const SLACK_PRESENTATION_CAPABILITIES = {
   selects: true,
   context: true,
   divider: true,
+  charts: true,
+  tables: true,
   limits: {
     actions: {
       maxActionsPerRow: SLACK_ACTION_BLOCK_ELEMENTS_MAX,

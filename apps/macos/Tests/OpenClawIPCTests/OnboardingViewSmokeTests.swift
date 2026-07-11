@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import OpenClawDiscovery
 import OpenClawIPC
@@ -17,6 +18,19 @@ struct OnboardingViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `onboarding window resizes vertically and gives the page the extra height`() {
+        #expect(OnboardingController.windowStyleMask.contains(.resizable))
+
+        let baseline = OnboardingView.contentHeight(
+            for: OnboardingView.windowHeight,
+            usesCompactHero: false)
+        let taller = OnboardingView.contentHeight(
+            for: OnboardingView.windowHeight + 200,
+            usesCompactHero: false)
+
+        #expect(taller - baseline == 200)
+    }
+
     @Test func `page order omits workspace and identity steps`() {
         let order = OnboardingView.pageOrder(
             for: .local,
@@ -34,7 +48,7 @@ struct OnboardingViewSmokeTests {
         #expect(!order.contains(8))
     }
 
-    @Test func `fresh local setup installs CLI before the Crestodian chat`() {
+    @Test func `fresh local setup installs CLI before inference setup`() {
         let order = OnboardingView.pageOrder(
             for: .local,
             showOnboardingChat: false,
@@ -51,6 +65,15 @@ struct OnboardingViewSmokeTests {
             requiresCLIInstall: false)
 
         #expect(!order.contains(2))
+    }
+
+    @Test func `only full page chat uses compact hero`() {
+        #expect(!OnboardingView.shouldUseCompactHero(
+            activePageIndex: 3,
+            onboardingChatPageIndex: 8))
+        #expect(OnboardingView.shouldUseCompactHero(
+            activePageIndex: 8,
+            onboardingChatPageIndex: 8))
     }
 
     @Test func `fresh onboarding defaults to this Mac`() {
@@ -92,6 +115,7 @@ struct OnboardingViewSmokeTests {
             isLocal: true,
             visible: true,
             statusKnown: false,
+            executableReady: false,
             installed: false,
             installing: false))
         #expect(OnboardingView.shouldAutoInstallCLI(
@@ -99,6 +123,7 @@ struct OnboardingViewSmokeTests {
             isLocal: true,
             visible: true,
             statusKnown: true,
+            executableReady: false,
             installed: false,
             installing: false))
         #expect(!OnboardingView.shouldAutoInstallCLI(
@@ -106,8 +131,71 @@ struct OnboardingViewSmokeTests {
             isLocal: true,
             visible: false,
             statusKnown: true,
+            executableReady: false,
             installed: false,
             installing: false))
+        #expect(!OnboardingView.shouldAutoInstallCLI(
+            onCLIPage: true,
+            isLocal: true,
+            visible: true,
+            statusKnown: true,
+            executableReady: true,
+            installed: false,
+            installing: false))
+    }
+
+    @Test func `detected CLI starts its gateway after this Mac is selected`() {
+        #expect(!OnboardingView.shouldStartExistingCLIActivation(
+            isLocal: false,
+            executableReady: true,
+            installing: false))
+        #expect(OnboardingView.shouldStartExistingCLIActivation(
+            isLocal: true,
+            executableReady: true,
+            installing: false))
+        #expect(!OnboardingView.shouldStartExistingCLIActivation(
+            isLocal: true,
+            executableReady: true,
+            installing: true))
+    }
+
+    @Test func `connection mode change restarts full page monitoring`() {
+        let state = AppState(preview: true)
+        let view = OnboardingView(state: state)
+        var monitoredPage: Int?
+        let previousCrestodianChat = view.crestodianState.chat
+        view.aiSetup.manualKey = "route-bound"
+        view.crestodianState.isPresented = true
+
+        view.handleConnectionModeChange { pageIndex in
+            monitoredPage = pageIndex
+        }
+
+        #expect(view.aiSetup.manualKey.isEmpty)
+        #expect(!view.crestodianState.isPresented)
+        #expect(view.crestodianState.chat !== previousCrestodianChat)
+        #expect(monitoredPage == view.activePageIndex)
+    }
+
+    @Test func `gateway route reset returns later pages to inference setup`() throws {
+        let order = OnboardingView.pageOrder(
+            for: .remote,
+            showOnboardingChat: false,
+            requiresCLIInstall: false)
+        let permissionsCursor = try #require(order.firstIndex(of: 5))
+        let aiCursor = try #require(order.firstIndex(of: 3))
+        let resetCursor = OnboardingView.pageCursorAfterGatewayReset(
+            currentPage: permissionsCursor,
+            pageOrder: order,
+            aiPageIndex: 3)
+
+        #expect(resetCursor == aiCursor)
+        #expect(OnboardingView.shouldBlockAISetup(
+            currentPage: resetCursor,
+            pageOrder: order,
+            aiPageIndex: 3,
+            connectionMode: .remote,
+            connected: false))
     }
 
     @Test func `select remote gateway clears stale ssh target when endpoint unresolved`() async {

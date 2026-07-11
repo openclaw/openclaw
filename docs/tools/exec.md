@@ -90,6 +90,8 @@ Notes:
 | `tools.exec.security`                | `deny` for sandbox, `full` for gateway/node when unset |                                                                                                                                                         |
 | `tools.exec.ask`                     | `off`                                                  |                                                                                                                                                         |
 | `tools.exec.mode`                    | unset                                                  | Normalized policy knob. See [Modes](#modes) below. Cannot be combined with `tools.exec.security`/`tools.exec.ask`.                                      |
+| `tools.exec.reviewer.model`          | configured agent primary                               | Optional provider/model override for `mode=auto` review.                                                                                                |
+| `tools.exec.reviewer.timeoutMs`      | `30000`                                                | Per-stage timeout for reviewer model preparation and completion before human fallback.                                                                  |
 | `tools.exec.node`                    | unset                                                  |                                                                                                                                                         |
 | `tools.exec.notifyOnExit`            | `true`                                                 | When true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.                                                           |
 | `tools.exec.approvalRunningNoticeMs` | `10000`                                                | Emit a single "running" notice when an approval-gated exec runs longer than this (`0` disables).                                                        |
@@ -127,6 +129,10 @@ Example:
 | `full`      | `full`      | `off`     | No approval gate.                                                                                                              |
 
 `ask`/`ask=always` still asks a human every time regardless of mode.
+
+Auto-review approval is single-use. On the gateway, OpenClaw supplies the resolved executable path to the reviewer and pins execution to that same path. Commands that cannot be reduced to one enforceable execution plan—such as heredocs, shell expansions, or unsupported wrapper quoting—fall back to human approval even if the model would otherwise allow them.
+
+Codex app-server command approvals that are not already decided by explicit runtime or native policy use the human approval route. OpenClaw does not run its configured exec reviewer for these requests because Codex does not expose an enforceable resolved executable that can bind the review decision to the command Codex runs.
 
 ### Inline eval (`strictInlineEval`)
 

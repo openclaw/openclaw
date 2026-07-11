@@ -187,6 +187,14 @@ guidance remain available to non-Codex prompt surfaces for compatibility.
 | `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands          |
 | `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`             |
 
+Memory prompt supplement builders receive optional `agentId`,
+`agentSessionKey`, and `sandboxed` context. Memory corpus supplement `search`
+and `get` calls receive optional `agentId` and `sandboxed` context. Plugins with
+agent-owned storage should resolve that storage for each call instead of
+capturing one global path during registration. If an agent id is required but
+missing in a multi-agent operation, fail closed rather than choosing an
+arbitrary agent.
+
 Telegram interactive handlers can return `{ submitText }` to route text through
 Telegram's normal inbound agent path after the handler succeeds. OpenClaw keeps
 the callback button when inbound policy skips the text or processing fails, so
@@ -484,8 +492,23 @@ cover CLI and Gateway-backed install or update paths.
 - `message_sending`: returning `{ cancel: false }` is treated as no decision (same as omitting `cancel`), not as an override.
 - `message_received`: use the typed `threadId` field when you need inbound thread/topic routing. Keep `metadata` for channel-specific extras.
 - `message_sending`: use typed `replyToId` / `threadId` routing fields before falling back to channel-specific `metadata`.
-- `gateway_start`: use `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for gateway-owned startup state instead of relying on internal `gateway:startup` hooks.
-- `cron_changed`: observe gateway-owned cron lifecycle changes. Use `event.job?.state?.nextRunAtMs` and `ctx.getCron?.()` when syncing external wake schedulers, and keep OpenClaw as the source of truth for due checks and execution.
+- `gateway_start`: use `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for gateway-owned startup state instead of relying on internal `gateway:startup` hooks. Cron may still be loading at this point.
+- `cron_reconciled`: rebuild a full external cron projection after startup or scheduler reload. It includes `reason` and the effective `enabled` state, including `enabled: false`, while `ctx.getCron?.()` returns the exact reconciled scheduler.
+- `cron_changed`: observe gateway-owned cron lifecycle changes. `scheduled` and `removed` events are post-commit reconciliation hints, not an ordered delta log. A scheduled event's `event.nextRunAtMs` is absent when the job has no next wake; a removed event still carries the deleted job snapshot.
+
+External wake schedulers should debounce or coalesce `cron_changed` events,
+then reread the full durable view from the scheduler last captured by
+`cron_reconciled`. Do not adopt the scheduler from a `cron_changed` context: a
+detached hint from an older scheduler can overlap a later reload.
+
+Use `cron_reconciled` as the full-snapshot trigger for durable state loaded at
+Gateway startup or scheduler replacement. It is not replayed for a plugin-only
+hot reload. Observation handlers run in parallel, and fire-and-forget
+dispatches can overlap, so consumers must not depend on event completion order.
+Keep OpenClaw as the source of truth for due checks and execution.
+
+For a single-flight adapter with durable replacement, retry/backoff, and clean
+shutdown, see [Safe external cron projection](/plugins/hooks#safe-external-cron-projection).
 
 ### API object fields
 
