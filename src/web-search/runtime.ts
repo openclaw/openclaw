@@ -4,6 +4,12 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  hasWebProviderEntryCredential,
+  providerRequiresCredential,
+  readWebProviderEnvValue,
+  resolveWebProviderConfig,
+} from "../../packages/web-content-core/src/provider-runtime-shared.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import {
@@ -22,12 +28,6 @@ import {
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
-import {
-  hasWebProviderEntryCredential,
-  providerRequiresCredential,
-  readWebProviderEnvValue,
-  resolveWebProviderConfig,
-} from "../../packages/web-content-core/src/provider-runtime-shared.js";
 import type {
   ResolveWebSearchDefinitionParams,
   RunWebSearchParams,
@@ -472,6 +472,7 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
   let sawUnavailableProvider = false;
 
   for (const candidate of candidates) {
+    params.signal?.throwIfAborted();
     try {
       const definition = candidate.createTool({
         config,
@@ -499,7 +500,7 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
       };
     } catch (error) {
       lastError = error;
-      if (!allowFallback) {
+      if (params.signal?.aborted || !allowFallback) {
         throw error;
       }
     }
