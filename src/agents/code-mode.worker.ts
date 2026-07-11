@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { EvalFlags, Intrinsics, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
+import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 const require = createRequire(import.meta.url);
 const QUICKJS_WASM_PATH = require.resolve("quickjs-wasi/quickjs.wasm");
 let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
@@ -44,12 +45,6 @@ type CodeModeNamespaceDescriptor = {
   globalName: string;
   description?: string;
   scope: SerializedCodeModeNamespaceValue;
-};
-
-type CodeModeApiVirtualFile = {
-  path: string;
-  description?: string;
-  content: string;
 };
 
 type CodeModeWorkerInput =
@@ -459,11 +454,7 @@ async function createVm(params: {
   } finally {
     namespacesHandle.dispose();
   }
-  const apiFiles = params.apiFiles.map((file) => ({
-    ...file,
-    bytes: Buffer.byteLength(file.content, "utf8"),
-  }));
-  const apiFilesHandle = vm.hostToHandle(apiFiles);
+  const apiFilesHandle = vm.hostToHandle(params.apiFiles);
   try {
     vm.setProp(vm.global, "__openclawApiFiles", apiFilesHandle);
   } finally {

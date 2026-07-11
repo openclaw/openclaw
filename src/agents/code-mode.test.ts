@@ -886,7 +886,7 @@ describe("Code Mode", () => {
         type: "object",
         properties: {
           owner: { type: "string" },
-          repo: { type: "string", description: "Repository name" },
+          repo: { type: "string", description: "Repository 名称" },
           title: { type: "string", description: "Issue title\nShown in tracker" },
           body: { type: "string", default: "" },
         },
@@ -939,6 +939,9 @@ describe("Code Mode", () => {
         return {
           apiHeader: api.header,
           apiFilePaths: apiFiles.files.map((file) => file.path),
+          listedServerFileBytes: apiFiles.files.find((file) => file.path === "mcp/github.d.ts").bytes,
+          serverFileBytes: serverFile.bytes,
+          serverFileContent: serverFile.content,
           rootFileHasReference: rootFile.content.includes('./github.d.ts'),
           serverFileHasCreateIssue: serverFile.content.includes('function createIssue('),
           serverFileHasTitleDoc: serverFile.content.includes('@param title Issue title Shown in tracker'),
@@ -987,65 +990,27 @@ describe("Code Mode", () => {
       apiSchemaTitle: "object",
       apiHeader: expect.stringContaining("function createIssue("),
       apiFilePaths: ["mcp/index.d.ts", "mcp/github.d.ts"],
+      listedServerFileBytes: expect.any(Number),
+      serverFileBytes: expect.any(Number),
+      serverFileContent: expect.stringContaining("Repository 名称"),
       rootFileHasReference: true,
       serverFileHasCreateIssue: true,
       serverFileHasTitleDoc: true,
       rootServers: [{ identifier: "github", serverName: "github", toolCount: 1 }],
     });
-    const value = details.value as { apiHeader: string };
+    const value = details.value as {
+      apiHeader: string;
+      listedServerFileBytes: number;
+      serverFileBytes: number;
+      serverFileContent: string;
+    };
+    expect(value.listedServerFileBytes).toBe(value.serverFileBytes);
+    expect(value.serverFileBytes).toBe(Buffer.byteLength(value.serverFileContent, "utf8"));
+    expect(value.serverFileBytes).toBeGreaterThan(value.serverFileContent.length);
     expect(value.apiHeader).toContain("@param title Issue title Shown in tracker");
     expect(value.apiHeader).not.toContain("@param title Issue title\n");
     expect(value.apiHeader).toContain("title: string;");
     expect(githubCreate.execute).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports UTF-8 byte counts for MCP API files", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    const githubCreate = mcpTool({
-      name: "github__create_issue",
-      serverName: "github",
-      toolName: "create_issue",
-      parameters: {
-        type: "object",
-        properties: {
-          repo: { type: "string", description: "仓库名称" },
-        },
-      },
-    });
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, githubCreate],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
-      code: `
-        const listed = (await API.list("mcp")).files.find((file) => file.path === "mcp/github.d.ts");
-        const read = await API.read("mcp/github.d.ts");
-        return {
-          listedBytes: listed.bytes,
-          readBytes: read.bytes,
-          content: read.content,
-          chars: read.content.length,
-        };
-      `,
-    });
-
-    expect(details.status).toBe("completed");
-    const value = details.value as {
-      listedBytes: number;
-      readBytes: number;
-      content: string;
-      chars: number;
-    };
-    expect(value.listedBytes).toBe(value.readBytes);
-    expect(value.readBytes).toBe(Buffer.byteLength(value.content, "utf8"));
-    expect(value.readBytes).toBeGreaterThan(value.chars);
   });
 
   it("lets agents inspect MCP declaration files before calling MCP tools", async () => {
