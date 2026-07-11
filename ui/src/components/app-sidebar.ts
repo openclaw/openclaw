@@ -228,7 +228,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
-  @state() private codexSidebarReady = false;
+  @state() private nativeSessionSidebarReady = false;
 
   private readonly subscriptions = new SubscriptionsController(this);
   private customizeMenuTrigger: HTMLElement | null = null;
@@ -244,7 +244,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private reconnectListRevision: number | null = null;
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
-  private codexSidebarLoadStarted = false;
+  private nativeSessionSidebarLoadStarted = false;
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -290,14 +290,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   override updated() {
     const advertised = this.pluginTabs().some(
-      (tab) => tab.pluginId === "codex" && tab.id === "sessions",
+      (tab) => tab.id === "sessions" && (tab.pluginId === "codex" || tab.pluginId === "anthropic"),
     );
-    if (!advertised || this.codexSidebarReady || this.codexSidebarLoadStarted) {
+    if (!advertised || this.nativeSessionSidebarReady || this.nativeSessionSidebarLoadStarted) {
       return;
     }
-    this.codexSidebarLoadStarted = true;
+    this.nativeSessionSidebarLoadStarted = true;
     void import("../pages/plugin/codex-sidebar.ts").then(() => {
-      this.codexSidebarReady = true;
+      this.nativeSessionSidebarReady = true;
     });
   }
 
@@ -2045,38 +2045,44 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               })}
         </div>
       </section>
-      ${this.renderCodexSidebar()}
+      ${this.renderNativeSessionSidebars()}
     `;
   }
 
-  private renderCodexSidebar() {
-    if (!this.codexSidebarReady) {
+  private renderNativeSessionSidebars() {
+    if (!this.nativeSessionSidebarReady) {
       return nothing;
     }
-    const tab = this.pluginTabs().find(
-      (candidate) => candidate.pluginId === "codex" && candidate.id === "sessions",
+    const tabs = this.pluginTabs().filter(
+      (candidate) =>
+        candidate.id === "sessions" &&
+        (candidate.pluginId === "codex" || candidate.pluginId === "anthropic"),
     );
-    if (!tab) {
+    if (tabs.length === 0) {
       return nothing;
     }
-    const open = (hostId?: string, threadId?: string) => {
+    const open = (pluginId: string, hostId?: string, threadId?: string) => {
       this.onNavigate?.("plugin", {
         search: pluginTabSearch({
-          pluginId: "codex",
+          pluginId,
           id: "sessions",
           ...(hostId && threadId ? { hostId, threadId } : {}),
         }),
       });
     };
-    return html`<openclaw-codex-sidebar
-      .client=${this.context?.gateway.snapshot.client ?? null}
-      .connected=${this.connected}
-      .basePath=${this.basePath}
-      .selectedHostId=${this.activePluginHostId}
-      .selectedThreadId=${this.activePluginThreadId}
-      .onOpenSession=${(hostId: string, threadId: string) => open(hostId, threadId)}
-      .onViewAll=${() => open()}
-    ></openclaw-codex-sidebar>`;
+    return tabs.map((tab) => {
+      const active = this.activePluginTabId === pluginTabKey(tab);
+      return html`<openclaw-codex-sidebar
+        .catalogKind=${tab.pluginId === "anthropic" ? "claude" : "codex"}
+        .client=${this.context?.gateway.snapshot.client ?? null}
+        .connected=${this.connected}
+        .basePath=${this.basePath}
+        .selectedHostId=${active ? this.activePluginHostId : ""}
+        .selectedThreadId=${active ? this.activePluginThreadId : ""}
+        .onOpenSession=${(hostId: string, threadId: string) => open(tab.pluginId, hostId, threadId)}
+        .onViewAll=${() => open(tab.pluginId)}
+      ></openclaw-codex-sidebar>`;
+    });
   }
 
   private renderMoreSection() {

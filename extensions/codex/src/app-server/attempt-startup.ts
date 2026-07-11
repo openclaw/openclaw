@@ -21,13 +21,14 @@ import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagno
 import { withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
+import { startCodexComputerUseHealthMonitor } from "./computer-use-health.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
   resolveCodexPluginsPolicy,
   withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
-  type CodexComputerUseConfig,
+  type ResolvedCodexComputerUseConfig,
 } from "./config.js";
 import {
   disableCodexPluginThreadConfig,
@@ -104,7 +105,7 @@ export async function startCodexAttemptThread(params: {
   bindingStore: CodexAppServerBindingStore;
   appServer: CodexAppServerRuntimeOptions;
   pluginConfig: CodexPluginConfig;
-  computerUseConfig: CodexComputerUseConfig;
+  computerUseConfig: ResolvedCodexComputerUseConfig;
   startupAuthProfileId: string | null | undefined;
   startupAuthAccountCacheKey: string | undefined;
   startupEnvApiKeyCacheKey: string | undefined;
@@ -434,6 +435,10 @@ export async function startCodexAttemptThread(params: {
                 throw new Error("codex app-server startup did not reserve its thread route");
               }
               startupSandboxEnvironmentAcquired = false;
+              startCodexComputerUseHealthMonitor({
+                client: activeStartupClient,
+                config: params.computerUseConfig,
+              });
               startupAttemptSucceeded = true;
               return {
                 client: activeStartupClient,

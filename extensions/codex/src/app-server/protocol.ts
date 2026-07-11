@@ -554,8 +554,16 @@ export type CodexPluginReadResponse = {
   plugin: CodexPluginDetail;
 };
 
+export type CodexPluginListMarketplaceKind =
+  | "local"
+  | "vertical"
+  | "workspace-directory"
+  | "shared-with-me"
+  | "created-by-me-remote";
+
 export type CodexPluginListParams = {
   cwds: string[];
+  marketplaceKinds?: CodexPluginListMarketplaceKind[];
 };
 
 export type CodexPluginReadParams = {

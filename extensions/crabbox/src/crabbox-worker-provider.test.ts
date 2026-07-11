@@ -12,6 +12,8 @@ import {
 const LEASE_ID = "cbx_012345abcdef";
 const FALLBACK_LEASE_ID = "cbx_20260711123456123456";
 const TESTBOX_LEASE_ID = "tbx_Test-123";
+const HOST_KEY_ERROR =
+  "Crabbox inspect does not expose the SSH host key required by the worker provider contract";
 const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
 const SIBLING_BINARY = path.resolve(OPENCLAW_ROOT, "../crabbox/bin/crabbox");
 const PROFILE = {
@@ -61,7 +63,7 @@ function providerWithRunner(runCommand: CrabboxCommandRunner) {
 }
 
 describe("Crabbox worker provider", () => {
-  it("provisions, inspects, and returns an SSH lease without invoking a real binary", async () => {
+  it("stops a newly provisioned lease when inspect cannot supply a host key", async () => {
     const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
     const runCommand: CrabboxCommandRunner = async (argv, options) => {
       calls.push({ argv, options });
@@ -79,22 +81,11 @@ describe("Crabbox worker provider", () => {
     };
     const provider = providerWithRunner(runCommand);
 
-    const lease = await provider.provision(PROFILE, "provision:operation-123");
-
-    expect(lease).toStrictEqual({
-      leaseId: LEASE_ID,
-      ssh: {
-        host: "worker.example.test",
-        port: 2222,
-        user: "openclaw",
-        keyRef: {
-          source: "file",
-          provider: "crabbox",
-          id: "/~1tmp~1crabbox-worker-key",
-        },
-      },
+    await expect(provider.provision(PROFILE, "provision:operation-123")).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: HOST_KEY_ERROR,
     });
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(4);
     expect(calls[0]?.argv).toEqual([
       SIBLING_BINARY,
       "inspect",
@@ -133,22 +124,10 @@ describe("Crabbox worker provider", () => {
       LEASE_ID,
       "--json",
     ]);
-
-    await expect(provider.inspect(lifecycleLease(lease.leaseId))).resolves.toStrictEqual({
-      status: "active",
-    });
-    expect(calls.at(-1)?.argv).toEqual([
-      SIBLING_BINARY,
-      "inspect",
-      "--provider",
-      "aws",
-      "--id",
-      LEASE_ID,
-      "--json",
-    ]);
+    expect(calls[3]?.argv).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
   });
 
-  it("adopts a lease from the deterministic operation slug on provision replay", async () => {
+  it("stops an adopted operation lease when inspect cannot supply a host key", async () => {
     const calls: string[][] = [];
     const runCommand: CrabboxCommandRunner = async (argv) => {
       calls.push(argv);
@@ -156,10 +135,11 @@ describe("Crabbox worker provider", () => {
     };
     const provider = providerWithRunner(runCommand);
 
-    await expect(provider.provision(PROFILE, "provision:operation-replay")).resolves.toMatchObject({
-      leaseId: LEASE_ID,
+    await expect(provider.provision(PROFILE, "provision:operation-replay")).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: HOST_KEY_ERROR,
     });
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
     expect(calls[0]).toEqual([
       SIBLING_BINARY,
       "inspect",
@@ -169,10 +149,13 @@ describe("Crabbox worker provider", () => {
       expect.stringMatching(/^openclaw-[a-f0-9]{32}$/u),
       "--json",
     ]);
+    expect(calls[1]).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
   });
 
-  it("accepts Crabbox's timestamp fallback lease id", async () => {
+  it("stops Crabbox's timestamp fallback lease id when its host key is unavailable", async () => {
+    const calls: string[][] = [];
     const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
       if (argv[1] === "warmup") {
         return commandResult({ stdout: `leased ${FALLBACK_LEASE_ID} slug=test\n` });
       }
@@ -185,9 +168,18 @@ describe("Crabbox worker provider", () => {
       });
     });
 
-    await expect(provider.provision(PROFILE, "provision:fallback-id")).resolves.toMatchObject({
-      leaseId: FALLBACK_LEASE_ID,
+    await expect(provider.provision(PROFILE, "provision:fallback-id")).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: HOST_KEY_ERROR,
     });
+    expect(calls.at(-1)).toEqual([
+      SIBLING_BINARY,
+      "stop",
+      "--provider",
+      "aws",
+      "--id",
+      FALLBACK_LEASE_ID,
+    ]);
   });
 
   it("stops a lease whose Crabbox backend returns an unsupported id", async () => {
@@ -233,13 +225,18 @@ describe("Crabbox worker provider", () => {
         commandResult({ code: 5, stderr: `coder workspace "${id}" not found` }),
     },
   ])(
-    "provisions with $provider after its authoritative slug miss",
+    "cleans $provider after its authoritative slug miss cannot yield a host key",
     async ({ provider, missing }) => {
       let warmed = false;
+      let stopped = false;
       const runCommand: CrabboxCommandRunner = async (argv) => {
         if (argv[1] === "warmup") {
           warmed = true;
           return commandResult({ stdout: `leased ${LEASE_ID} slug=test\n` });
+        }
+        if (argv[1] === "stop") {
+          stopped = true;
+          return commandResult();
         }
         if (argv.includes(LEASE_ID)) {
           return commandResult({ stdout: inspectJson() });
@@ -250,10 +247,12 @@ describe("Crabbox worker provider", () => {
 
       await expect(
         crabboxProvider.provision({ ...PROFILE, provider }, `provision:${provider}`),
-      ).resolves.toMatchObject({
-        leaseId: LEASE_ID,
+      ).rejects.toMatchObject({
+        code: "invalid_profile",
+        message: HOST_KEY_ERROR,
       });
       expect(warmed).toBe(true);
+      expect(stopped).toBe(true);
     },
   );
 
@@ -275,10 +274,11 @@ describe("Crabbox worker provider", () => {
     };
     const provider = providerWithRunner(runCommand);
 
-    await expect(provider.provision(PROFILE, "provision:replace-terminal")).resolves.toMatchObject({
-      leaseId: LEASE_ID,
+    await expect(provider.provision(PROFILE, "provision:replace-terminal")).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: HOST_KEY_ERROR,
     });
-    expect(calls.map((argv) => argv[1])).toEqual(["inspect", "stop", "warmup", "inspect"]);
+    expect(calls.map((argv) => argv[1])).toEqual(["inspect", "stop", "warmup", "inspect", "stop"]);
   });
 
   it("stops a delegated Testbox lease that cannot expose an SSH endpoint", async () => {
@@ -549,22 +549,6 @@ describe("Crabbox worker provider", () => {
     );
 
     await expect(provider.inspect(lifecycleLease())).rejects.toThrow("invalid sshPort");
-  });
-
-  it("encodes a Windows SSH key path as a canonical file SecretRef id", async () => {
-    const provider = providerWithRunner(async () =>
-      commandResult({
-        stdout: inspectJson({ sshKey: String.raw`C:\Users\worker\.ssh\id_ed25519` }),
-      }),
-    );
-
-    await expect(provider.provision(PROFILE, "provision:windows-key")).resolves.toMatchObject({
-      ssh: {
-        keyRef: {
-          id: String.raw`/C:\Users\worker\.ssh\id_ed25519`,
-        },
-      },
-    });
   });
 
   it("bounds and redacts CLI failure details", async () => {

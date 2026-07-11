@@ -598,6 +598,31 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("routes UI production changes to UI prod and core test lanes", () => {
+    const result = detectChangedLanes(["ui/src/app.ts"]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+
+    expectLanes(result.lanes, {
+      coreTests: true,
+      ui: true,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:ui");
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core:test");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:core");
+  });
+
+  it("routes the UI production config to UI prod and core test lanes", () => {
+    const result = detectChangedLanes(["tsconfig.ui.json"]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+
+    expectLanes(result.lanes, {
+      coreTests: true,
+      ui: true,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:ui");
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core:test");
+  });
+
   it.each([
     "scripts/control-ui-i18n.ts",
     "scripts/lib/example.ts",
@@ -1851,6 +1876,7 @@ describe("scripts/changed-lanes", () => {
     expect(result.lanes).toEqual({
       core: false,
       coreTests: false,
+      ui: false,
       extensions: false,
       extensionTests: false,
       scripts: false,

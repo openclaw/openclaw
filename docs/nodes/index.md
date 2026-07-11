@@ -218,6 +218,32 @@ row's live activity remains unknown. Active rows cannot branch or archive.
 See [Supervise Codex sessions](/plugins/codex-supervision) for setup,
 pagination, local continuation, and the metadata security boundary.
 
+### Claude sessions and transcripts
+
+The bundled `anthropic` plugin discovers non-archived Claude CLI and Claude
+Desktop sessions on the Gateway and paired nodes. Unlike Codex supervision,
+this needs no separate opt-in: a remote macOS app node advertises
+`anthropic.claude.sessions.list.v1` and `anthropic.claude.sessions.read.v1`
+when the Anthropic plugin is enabled and `~/.claude/projects/` exists. Approve
+the node pairing upgrade when those commands first appear.
+
+The catalog combines valid Claude CLI project-index records with a bounded
+metadata prefix from current `sdk-cli` JSONL files. Claude Desktop's local
+metadata supplies Desktop titles and archive state. Desktop metadata wins when
+both sources refer to the same Claude Code session ID; CLI-only transcripts
+remain visible because the CLI has no archive flag. Transcript reads use opaque
+byte-offset cursors and bounded backward file reads, so selecting a large
+session or loading an older page does not read the whole JSONL history into one
+Gateway response.
+
+Both node commands are read-only. They expose catalog metadata and transcript
+content only to an authenticated operator connection with `operator.write`,
+which is required by the shared `node.invoke` transport. OpenClaw does not
+modify Claude's files or start a Claude runner on the paired computer.
+
+See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
+for the Control UI behavior and storage sources.
+
 ## Invoking commands
 
 Low-level (raw RPC):
