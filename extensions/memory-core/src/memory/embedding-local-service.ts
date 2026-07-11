@@ -7,15 +7,3 @@ export type MemoryCoreAcquireLocalService = (
   },
   signal?: AbortSignal | null,
 ) => Promise<{ release: () => void } | undefined>;
-
-let acquireLocalService: MemoryCoreAcquireLocalService | undefined;
-
-export function configureMemoryCoreEmbeddingLocalService(
-  acquire: MemoryCoreAcquireLocalService | undefined,
-): void {
-  acquireLocalService = acquire;
-}
-
-export function getMemoryCoreEmbeddingLocalService(): MemoryCoreAcquireLocalService | undefined {
-  return acquireLocalService;
-}

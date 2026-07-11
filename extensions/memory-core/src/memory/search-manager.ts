@@ -25,6 +25,7 @@ import {
   type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 
 const MEMORY_SEARCH_MANAGER_CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
 type Maybe<T> = T | null;
@@ -125,6 +126,12 @@ export type MemorySearchManagerResult = {
 };
 
 export type MemorySearchManagerPurpose = "default" | "status" | "cli";
+type MemorySearchManagerParams = {
+  cfg: OpenClawConfig;
+  agentId: string;
+  purpose?: MemorySearchManagerPurpose;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
+};
 
 function getActiveQmdManagerOpenFailure(
   scopeKey: string,
@@ -182,11 +189,9 @@ function applyManagerDebug(
   };
 }
 
-export async function getMemorySearchManager(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  purpose?: MemorySearchManagerPurpose;
-}): Promise<MemorySearchManagerResult> {
+export async function getMemorySearchManager(
+  params: MemorySearchManagerParams,
+): Promise<MemorySearchManagerResult> {
   const acquireStartedAt = Date.now();
   const purpose = params.purpose ?? "default";
   const finish = (
@@ -414,11 +419,7 @@ export async function getMemorySearchManager(params: {
 }
 
 async function getBuiltinMemorySearchManagerAfterQmdFailure(
-  params: {
-    cfg: OpenClawConfig;
-    agentId: string;
-    purpose?: MemorySearchManagerPurpose;
-  },
+  params: MemorySearchManagerParams,
   qmdFailureReason: string | undefined,
 ): Promise<MemorySearchManagerResult> {
   const fallback = await getBuiltinMemorySearchManager(params);
@@ -434,11 +435,9 @@ async function getBuiltinMemorySearchManagerAfterQmdFailure(
   };
 }
 
-async function getBuiltinMemorySearchManager(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  purpose?: MemorySearchManagerPurpose;
-}): Promise<MemorySearchManagerResult> {
+async function getBuiltinMemorySearchManager(
+  params: MemorySearchManagerParams,
+): Promise<MemorySearchManagerResult> {
   try {
     const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);
