@@ -7,6 +7,7 @@ import {
   removeOAuthTestTempRoot,
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
+import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
@@ -275,7 +276,21 @@ describe("activateSetupInference", () => {
   }) {
     const initialConfig = params.initialConfig ?? params.sourceConfig;
     let persistedConfig = structuredClone(params.currentConfig);
-    const applySetup = vi.fn(async () => ({ configPath: "/tmp/openclaw.json", lines: ["ok"] }));
+    const applySetup = vi.fn(
+      async (input: {
+        configPatch?: unknown;
+        finalizeConfig?: (config: OpenClawConfig, sourceConfig: OpenClawConfig) => OpenClawConfig;
+      }) => {
+        const patched =
+          input.configPatch === undefined
+            ? persistedConfig
+            : (applyMergePatch(persistedConfig, input.configPatch) as OpenClawConfig);
+        persistedConfig = input.finalizeConfig
+          ? input.finalizeConfig(patched, params.sourceConfig)
+          : patched;
+        return { configPath: "/tmp/openclaw.json", lines: ["ok"] };
+      },
+    );
     const refreshPluginRegistry = vi.fn(async () => {});
     const transformConfig = vi.fn(
       async (input: {
@@ -1648,10 +1663,22 @@ describe("activateSetupInference", () => {
         },
       },
     } satisfies OpenClawConfig;
-    const applySetup = vi.fn(async () => {
-      events.push("persist-setup");
-      return { configPath: "/tmp/openclaw.json", lines: ["ok"] };
-    });
+    const applySetup = vi.fn(
+      async (input: {
+        configPatch?: unknown;
+        finalizeConfig?: (config: OpenClawConfig, sourceConfig: OpenClawConfig) => OpenClawConfig;
+      }) => {
+        events.push("persist-setup");
+        const patched =
+          input.configPatch === undefined
+            ? persistedConfig
+            : (applyMergePatch(persistedConfig, input.configPatch) as OpenClawConfig);
+        persistedConfig = input.finalizeConfig
+          ? input.finalizeConfig(patched, persistedConfig)
+          : patched;
+        return { configPath: "/tmp/openclaw.json", lines: ["ok"] };
+      },
+    );
     const ensureCodex = vi.fn(async (params: { cfg: OpenClawConfig }) => {
       events.push("install-plugin");
       return {
@@ -1829,10 +1856,13 @@ describe("activateSetupInference", () => {
           expect.objectContaining({
             id: "ops",
             model: {
-              primary: "anthropic/claude-opus-4-8",
+              primary: "openai/gpt-5.6-sol",
               fallbacks: ["google/gemini-3.1-pro-preview"],
             },
-            models: { "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } } },
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+              "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            },
           }),
         ],
       },
@@ -1932,7 +1962,16 @@ describe("activateSetupInference", () => {
               }),
             ]),
           }),
-          plugins: { entries: { codex: { enabled: true } } },
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              codex: expect.objectContaining({
+                enabled: true,
+                config: expect.objectContaining({
+                  supervision: { enabled: true },
+                }),
+              }),
+            }),
+          }),
         }),
       }),
     );
@@ -2295,7 +2334,7 @@ describe("activateSetupInference", () => {
       enabled: true,
       config: { supervision: { enabled: true } },
     });
-    expect(transformConfig).toHaveBeenCalledOnce();
+    expect(transformConfig).not.toHaveBeenCalled();
     expect(applySetup).toHaveBeenCalledOnce();
   });
 
@@ -2362,7 +2401,7 @@ describe("activateSetupInference", () => {
       error: expect.stringContaining("blocked by denylist"),
     });
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
-    expect(applySetup).not.toHaveBeenCalled();
+    expect(applySetup).toHaveBeenCalledOnce();
   });
 });
 

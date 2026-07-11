@@ -328,7 +328,7 @@ export async function detectSetupInference(
   }).filter((choice) => enablePluginInConfig(cfg, choice.pluginId).enabled);
   return {
     candidates,
-    codexAppServerDetected: raw.some((candidate) => candidate.kind === "codex-cli"),
+    codexAppServerDetected: candidates.some((candidate) => candidate.kind === "codex-cli"),
     manualProviders: listSetupInferenceManualProviders(authChoices),
     workspace,
     ...(configuredModel ? { configuredModel } : {}),
@@ -985,14 +985,18 @@ async function activateSetupInferenceUnredacted(
         const stagedCodexConfig = stripPendingPluginInstallRecords(enabledCodex.config);
         codexPluginPatch = createMergePatch(currentCodexConfig, stagedCodexConfig);
         if (codexPluginActivation === "selected") {
+          const codexSourceConfig = codexSnapshot.exists
+            ? (codexSnapshot.sourceConfig ?? codexSnapshot.config)
+            : {};
           testPlan = {
             ...testPlan,
             // Probe the policy that will actually persist. Codex rejects deny and
             // allowlist exec modes during initialization; masking that here would
             // pass onboarding and fail the user's first normal run.
-            config: applyMergePatch(stagedCodexConfig, {
-              tools: { exec: { mode: "full" } },
-            }) as OpenClawConfig,
+            config: applyMergePatch(
+              enableCodexSupervisionForGuidedSetup(stagedCodexConfig, codexSourceConfig),
+              { tools: { exec: { mode: "full" } } },
+            ) as OpenClawConfig,
             agentId: resolveDefaultAgentId(stagedCodexConfig),
           };
         }
@@ -1037,7 +1041,7 @@ async function activateSetupInferenceUnredacted(
       throw new Error(postProbeTargetError);
     }
 
-    if (codexPluginPatch !== undefined) {
+    if (codexPluginActivation === "detected" && codexPluginPatch !== undefined) {
       // Persist success-gated enablement and the model-scoped runtime pin. The managed
       // install record was committed before the live probe.
       const { stripPendingPluginInstallRecords } =
@@ -1124,7 +1128,17 @@ async function activateSetupInferenceUnredacted(
         ...(expectedAgentDir ? { expectedAgentDir } : {}),
         ...(params.kind === "existing-model" ? { expectedModelRef: plan.modelRef } : {}),
         expectedConfigHash: probedConfigHash,
-        ...(plan.manualAuth ? { configPatch: plan.manualAuth.configPatch } : {}),
+        ...(plan.manualAuth
+          ? { configPatch: plan.manualAuth.configPatch }
+          : codexPluginActivation === "selected" && codexPluginPatch !== undefined
+            ? { configPatch: codexPluginPatch }
+            : {}),
+        ...(codexPluginActivation === "selected" && codexPluginPatch !== undefined
+          ? {
+              finalizeConfig: (config: OpenClawConfig, currentSourceConfig: OpenClawConfig) =>
+                enableCodexSupervisionForGuidedSetup(config, currentSourceConfig),
+            }
+          : {}),
         ...(plan.manualAuth?.pluginId
           ? { enablePluginId: plan.manualAuth.pluginId }
           : params.kind === "codex-cli"
@@ -1144,6 +1158,9 @@ async function activateSetupInferenceUnredacted(
             "Setup failed and OpenClaw could not roll back the temporary auth profile update.",
           );
         }
+      }
+      if (error instanceof CodexPluginPolicyBlockedError) {
+        return codexPluginPolicyError(error.reason);
       }
       throw error;
     }
