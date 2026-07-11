@@ -691,7 +691,7 @@ describe("plugin runtime session creation", () => {
         sessionId: "claude-source",
         forceReuse: true,
         forkNextResume: true,
-      };
+      } as const;
       const existing = {
         sessionId: "foreign-initializer",
         updatedAt: Date.now(),
