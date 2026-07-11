@@ -14,6 +14,7 @@ import {
   normalizeSessionPeerId,
   parseSessionDeliveryRoute,
 } from "../../sessions/session-key-utils.js";
+import { stripTargetKindPrefix, stripTargetProviderPrefix } from "./channel-target-prefix.js";
 import {
   countPhysicalOutboundSends,
   type OutboundDeliveryResult,
@@ -210,19 +211,24 @@ export function uniformOutboundAuditTerminals(
   return Array.from({ length: payloadCount }, (_, payloadIndex) => ({ payloadIndex, terminal }));
 }
 
-// Delivery targets may carry a kind prefix ("channel:C123", "user:U123") or a
-// channel-name prefix ("telegram:999") that session-key peer ids do not retain.
-const TARGET_KIND_PREFIX_RE = /^(channel|group|direct|dm|user):/i;
-
-function targetKindMatchesRouteKind(
-  targetKind: string,
-  routeKind: "channel" | "direct" | "dm" | "group",
-): boolean {
-  if (targetKind === "channel" || targetKind === "group") {
-    return routeKind === targetKind;
-  }
-  return routeKind === "direct" || routeKind === "dm";
-}
+// Canonical target-kind prefixes (see channel-target-prefix.ts) mapped to the
+// session-route kinds they may prove. An explicit target kind is a destination
+// fact: "group:123" must never validate a direct:123 route, or direct mode
+// over-collects. Provider/channel prefixes carry no kind information.
+const TARGET_KIND_TO_ROUTE_KINDS: Record<
+  string,
+  readonly ("channel" | "direct" | "dm" | "group")[]
+> = {
+  channel: ["channel"],
+  conversation: ["channel"],
+  thread: ["channel"],
+  group: ["group"],
+  room: ["group"],
+  direct: ["direct", "dm"],
+  dm: ["direct", "dm"],
+  user: ["direct", "dm"],
+};
+const TARGET_PREFIX_RE = /^\s*([a-z][a-z0-9_-]*):/i;
 
 /** True when a parsed session route provably names this delivery's destination. */
 function routeNamesDestination(
@@ -232,19 +238,15 @@ function routeNamesDestination(
   if (!route || route.channel !== context.channel.toLowerCase()) {
     return false;
   }
-  // An explicit target kind is a destination fact itself: "group:123" must
-  // never validate a direct:123 route, or direct mode over-collects.
-  const targetKind = TARGET_KIND_PREFIX_RE.exec(context.to)?.[1]?.toLowerCase();
-  if (targetKind && !targetKindMatchesRouteKind(targetKind, route.peerKind)) {
+  const prefix = TARGET_PREFIX_RE.exec(context.to)?.[1]?.toLowerCase();
+  const allowedRouteKinds = prefix ? TARGET_KIND_TO_ROUTE_KINDS[prefix] : undefined;
+  if (allowedRouteKinds && !allowedRouteKinds.includes(route.peerKind)) {
     return false;
   }
-  const channelPrefix = `${context.channel.toLowerCase()}:`;
   const candidates = [
     context.to,
-    context.to.replace(TARGET_KIND_PREFIX_RE, ""),
-    ...(context.to.toLowerCase().startsWith(channelPrefix)
-      ? [context.to.slice(channelPrefix.length)]
-      : []),
+    stripTargetKindPrefix(context.to),
+    stripTargetProviderPrefix(context.to, context.channel),
   ];
   return candidates.some((candidate) => {
     const normalized = normalizeSessionPeerId({

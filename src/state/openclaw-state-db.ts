@@ -426,10 +426,14 @@ function hasCanonicalAuditEventsSchema(db: DatabaseSync): boolean {
 }
 
 function canRepairLegacyAuditEventsSchema(db: DatabaseSync): boolean {
-  // A leftover audit_events_migration_new table cannot survive our own doctor
-  // transaction; repair drops any foreign leftover before the swap, matching
-  // the agent_databases repair.
-  if (!tableExists(db, "audit_events") || tableHasColumn(db, "audit_events", "schema_version")) {
+  // Our own transactional repair cannot leave audit_events_migration_new
+  // behind, so an existing one is foreign data; fail closed rather than let
+  // repair silently drop it.
+  if (
+    !tableExists(db, "audit_events") ||
+    tableExists(db, "audit_events_migration_new") ||
+    tableHasColumn(db, "audit_events", "schema_version")
+  ) {
     return false;
   }
   const identityTableIsSafe =
@@ -487,8 +491,9 @@ function repairAuditEventsSchema(db: DatabaseSync): boolean {
   const sequenceHighWater = readAuditEventSequenceHighWater(db);
   // This is the only shipped legacy shape. The surrounding doctor transaction
   // rolls back the table swap and sequence restore together on any bad row.
+  // canRepairLegacyAuditEventsSchema refuses foreign audit_events_migration_new
+  // tables, so this CREATE never clobbers existing data.
   db.exec(`
-    DROP TABLE IF EXISTS audit_events_migration_new;
     CREATE TABLE audit_events_migration_new (
       sequence INTEGER PRIMARY KEY AUTOINCREMENT,
       event_id TEXT NOT NULL UNIQUE,

@@ -270,6 +270,15 @@ describe("outbound audit projection", () => {
         session: { key: "agent:main:slack:default:direct:123" },
       }),
     ).toBe("unknown");
+    // The full canonical prefix grammar applies: room: is a group fact even
+    // when the direct route's peer id literally contains the prefix.
+    expect(
+      conversationKindFor({
+        channel: "matrix",
+        to: "room:123",
+        session: { key: "agent:main:matrix:default:direct:room:123" },
+      }),
+    ).toBe("unknown");
   });
 
   it("does not classify by a policy session that names another conversation", () => {
