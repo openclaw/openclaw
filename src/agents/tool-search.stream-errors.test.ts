@@ -128,5 +128,6 @@ describe("tool-search code-mode stream errors", () => {
     expect(caught?.message).not.toMatch(
       /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
     );
+    expect(caught?.message.endsWith("a".repeat(499))).toBe(true);
   });
 });
