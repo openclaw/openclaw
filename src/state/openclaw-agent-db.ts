@@ -778,10 +778,10 @@ export function openOpenClawAgentDatabase(
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
-  enableIncrementalAutoVacuumForFreshDatabase(db);
   const walMaintenance = (() => {
     let maintenance: SqliteWalMaintenance | undefined;
     try {
+      enableIncrementalAutoVacuumForFreshDatabase(db);
       maintenance = configureSqliteConnectionPragmas(db, {
         busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
         databaseLabel: `openclaw-agent:${agentId}`,
