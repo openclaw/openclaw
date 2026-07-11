@@ -1868,9 +1868,13 @@
 
 .chat-workbench--tasks-dock-bottom .chat-tasks-rail {
   grid-column: 1 / -1;
-  grid-row: -1; /* Bottom-most row */
+  grid-row: 2;
   border-left: none;
   border-top: 1px solid var(--border);
+}
+
+.chat-workbench--dock-bottom.chat-workbench--tasks-dock-bottom .chat-tasks-rail {
+  grid-row: 3;
 }
 
 /* Background-tasks rail becomes a horizontal scrolling strip */
