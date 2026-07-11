@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 // and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import {
   getActiveEmbeddedRunCount,
   resolveActiveEmbeddedRunSessionId,
@@ -57,6 +58,7 @@ import {
   pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
 import { getTotalQueueSize, isGatewayDraining } from "../process/command-queue.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
@@ -651,6 +653,8 @@ export async function startGatewayServer(
       getTotalPendingReplies() +
       getActiveEmbeddedRunCount() +
       getActiveCronJobCount() +
+      getActiveBackgroundExecSessionCount() +
+      getActiveGatewayRootWorkCount() +
       getActiveTaskCount(),
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
