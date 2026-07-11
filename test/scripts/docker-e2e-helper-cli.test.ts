@@ -493,6 +493,30 @@ describe("Docker E2E helper CLIs", () => {
     }
   });
 
+  it("rejects non-boolean unreleased changelog intent from summary artifacts", () => {
+    const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-rerun-inputs-`);
+    try {
+      const file = path.join(root, "summary.json");
+      writeFileSync(
+        file,
+        `${JSON.stringify({
+          allowUnreleasedChangelog: "true",
+          failures: [{ name: "install-e2e", status: 1 }],
+          github: { selectedSha: EXACT_TARGET_REF },
+          status: "failed",
+        })}\n`,
+        "utf8",
+      );
+
+      const result = runHelper("scripts/docker-e2e-rerun.mjs", file);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("allow_unreleased_changelog");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("groups combined reruns by recovered workflow inputs", () => {
     const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-rerun-groups-`);
     try {
