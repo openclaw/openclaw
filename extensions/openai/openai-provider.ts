@@ -50,6 +50,7 @@ const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CHAT_LATEST_MODEL_ID = "chat-latest";
+const OPENAI_GPT_56_MODEL_ID = "gpt-5.6";
 const OPENAI_GPT_56_SOL_MODEL_ID = "gpt-5.6-sol";
 const OPENAI_GPT_56_TERRA_MODEL_ID = "gpt-5.6-terra";
 const OPENAI_GPT_56_LUNA_MODEL_ID = "gpt-5.6-luna";
@@ -70,6 +71,12 @@ const OPENAI_GPT_54_MINI_CONTEXT_TOKENS = 400_000;
 const OPENAI_GPT_54_NANO_CONTEXT_TOKENS = 400_000;
 const OPENAI_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_CHAT_LATEST_COST = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 } as const;
+const OPENAI_GPT_56_COST = {
+  input: 5,
+  output: 30,
+  cacheRead: 0.5,
+  cacheWrite: 6.25,
+} as const;
 const OPENAI_GPT_56_SOL_COST = {
   input: 5,
   output: 30,
@@ -127,6 +134,7 @@ const OPENAI_GPT_56_THINKING_LEVEL_MAP = {
 } as const;
 const OPENAI_MODERN_MODEL_IDS = [
   OPENAI_CHAT_LATEST_MODEL_ID,
+  OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_SOL_MODEL_ID,
   OPENAI_GPT_56_TERRA_MODEL_ID,
   OPENAI_GPT_56_LUNA_MODEL_ID,
@@ -390,6 +398,18 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
   };
 }
 
+function buildOpenAICodexFallbackModel(modelId: string): ModelDefinitionConfig | undefined {
+  const fallback = resolveCodexModelFallback(modelId);
+  if (!fallback) {
+    return undefined;
+  }
+  return {
+    ...fallback,
+    api: "openai-chatgpt-responses",
+    baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+  };
+}
+
 export async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
@@ -423,6 +443,22 @@ export async function buildOpenAICodexLiveProviderConfig(params: {
       .map(buildOpenAICodexModelFromLiveRow)
       .filter((model): model is ModelDefinitionConfig => Boolean(model));
     if (models.length > 0) {
+      const present = new Set(models.map((model) => normalizeLowercaseStringOrEmpty(model.id)));
+      for (const modelId of [
+        OPENAI_GPT_56_MODEL_ID,
+        OPENAI_GPT_55_MODEL_ID,
+        OPENAI_GPT_53_CODEX_SPARK_MODEL_ID,
+      ] as const) {
+        if (present.has(modelId)) {
+          continue;
+        }
+        const fallback = buildOpenAICodexFallbackModel(modelId);
+        if (!fallback) {
+          continue;
+        }
+        models.push(fallback);
+        present.add(modelId);
+      }
       return {
         baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
         api: "openai-chatgpt-responses",
@@ -593,17 +629,20 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
       maxTokens: OPENAI_GPT_54_MAX_TOKENS,
     };
   } else if (
+    lower === OPENAI_GPT_56_MODEL_ID ||
     lower === OPENAI_GPT_56_SOL_MODEL_ID ||
     lower === OPENAI_GPT_56_TERRA_MODEL_ID ||
     lower === OPENAI_GPT_56_LUNA_MODEL_ID
   ) {
     templateIds = OPENAI_GPT_56_TEMPLATE_MODEL_IDS;
     const cost =
-      lower === OPENAI_GPT_56_SOL_MODEL_ID
-        ? OPENAI_GPT_56_SOL_COST
-        : lower === OPENAI_GPT_56_TERRA_MODEL_ID
-          ? OPENAI_GPT_56_TERRA_COST
-          : OPENAI_GPT_56_LUNA_COST;
+      lower === OPENAI_GPT_56_MODEL_ID
+        ? OPENAI_GPT_56_COST
+        : lower === OPENAI_GPT_56_SOL_MODEL_ID
+          ? OPENAI_GPT_56_SOL_COST
+          : lower === OPENAI_GPT_56_TERRA_MODEL_ID
+            ? OPENAI_GPT_56_TERRA_COST
+            : OPENAI_GPT_56_LUNA_COST;
     patch = {
       api: "openai-responses",
       provider: PROVIDER_ID,

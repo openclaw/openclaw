@@ -103,6 +103,20 @@
             "cost": { "input": 30, "output": 180, "cacheRead": 0, "cacheWrite": 0 }
           },
           {
+            "id": "gpt-5.6",
+            "name": "GPT-5.6",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 372000,
+            "maxTokens": 128000,
+            "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 6.25 },
+            "thinkingLevelMap": { "off": null, "xhigh": "xhigh", "max": "max" },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"]
+            }
+          },
+          {
             "id": "gpt-5.6-sol",
             "name": "GPT-5.6 Sol",
             "reasoning": true,

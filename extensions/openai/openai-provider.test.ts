@@ -196,6 +196,7 @@ describe("buildOpenAIProvider", () => {
       throw new Error("expected OpenAI static provider catalog");
     }
     const gpt55 = result.providers.openai?.models.find((model) => model.id === "gpt-5.5");
+    const gpt56 = result.providers.openai?.models.find((model) => model.id === "gpt-5.6");
     const gpt56Models = result.providers.openai?.models.filter((model) =>
       model.id.startsWith("gpt-5.6-"),
     );
@@ -207,6 +208,7 @@ describe("buildOpenAIProvider", () => {
       "gpt-5.6-terra",
       "gpt-5.6-luna",
     ]);
+    expect(gpt56?.thinkingLevelMap?.off).toBeNull();
     expect(gpt56Models?.map((model) => model.thinkingLevelMap?.off)).toEqual([null, null, null]);
     expect(OPENAI_DEFAULT_MODEL).toBe("openai/gpt-5.5");
   });
@@ -525,7 +527,10 @@ describe("buildOpenAIProvider", () => {
       });
       expect(result.providers.openai?.api).toBe("openai-chatgpt-responses");
       expect(result.providers.openai?.auth).toBe("oauth");
-      expect(result.providers.openai?.models.map((model) => model.id)).toEqual(["gpt-5.5"]);
+      expect(result.providers.openai?.models.map((model) => model.id)).toEqual([
+        "gpt-5.5",
+        "gpt-5.6",
+      ]);
       expect(fetchSpy).toHaveBeenCalledOnce();
     } finally {
       fetchSpy.mockRestore();
@@ -573,7 +578,7 @@ describe("buildOpenAIProvider", () => {
 
     expect(provider?.api).toBe("openai-chatgpt-responses");
     expect(provider?.auth).toBe("oauth");
-    expect(provider?.models.map((model) => model.id)).toEqual(["gpt-5.4"]);
+    expect(provider?.models.map((model) => model.id)).toEqual(["gpt-5.4", "gpt-5.6", "gpt-5.5"]);
     expect(provider?.models[0]).toMatchObject({
       baseUrl: "https://chatgpt.com/backend-api/codex",
       input: ["text", "image"],
@@ -619,6 +624,45 @@ describe("buildOpenAIProvider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("supplements sparse Codex model discovery with supported OpenAI OAuth fallbacks", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+      response: Response.json({
+        models: [
+          {
+            slug: "gpt-5.4",
+            display_name: "GPT-5.4",
+            visibility: "list",
+            supported_reasoning_levels: [
+              { effort: "medium", description: "medium" },
+              { effort: "high", description: "high" },
+            ],
+            context_window: 272_000,
+            max_context_window: 1_050_000,
+            max_output_tokens: 128_000,
+          },
+        ],
+      }),
+      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+      release,
+    }));
+
+    const provider = await buildOpenAICodexLiveProviderConfig({
+      discoveryApiKey: "oauth-token",
+      accountId: "acct-openai-workspace",
+      fetchGuard,
+    });
+
+    expect(provider.models.map((model) => model.id)).toEqual(["gpt-5.4", "gpt-5.6", "gpt-5.5"]);
+    expect(provider.models.find((model) => model.id === "gpt-5.6")).toMatchObject({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      input: ["text", "image"],
+      reasoning: true,
+    });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("keeps the deprecated Codex provider builder on the public API barrel", async () => {
     const { buildOpenAICodexProviderPlugin } = await import("./api.js");
     const provider = buildOpenAICodexProviderPlugin();
@@ -627,7 +671,7 @@ describe("buildOpenAIProvider", () => {
     expect(provider.hookAliases).toEqual(["azure-openai", "azure-openai-responses"]);
   });
 
-  it.each(["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
+  it.each(["gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
     "prefers auth-aware Codex runtime metadata for %s over static OpenAI catalog rows",
     (modelId) => {
       const provider = buildOpenAIProvider();
@@ -1029,6 +1073,11 @@ describe("buildOpenAIProvider", () => {
   });
 
   it.each([
+    {
+      id: "gpt-5.6",
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+      thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+    },
     {
       id: "gpt-5.6-sol",
       cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
