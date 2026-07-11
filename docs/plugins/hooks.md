@@ -164,6 +164,7 @@ observation-only.
 | -------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `gateway_start` / `gateway_stop` | Start or stop plugin-owned services with the Gateway                                                 |
 | `deactivate`                     | Deprecated compatibility alias for `gateway_stop`; use `gateway_stop` in new plugins                 |
+| `cron_reconciled`                | Reconcile against the complete Gateway cron state after startup or reload                            |
 | `cron_changed`                   | Observe Gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled) |
 | **`before_install`**             | Inspect staged skill or plugin install material from a loaded plugin runtime                         |
 
@@ -573,13 +574,28 @@ failures block the install fail-closed.
 
 ## Gateway lifecycle
 
-Use `gateway_start` for plugin services that need Gateway-owned state. The
-context exposes `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for
-cron inspection and updates. Use `gateway_stop` to clean up long-running
-resources.
+Use `gateway_start` to start general plugin services and `gateway_stop` to
+clean up long-running resources. The cron scheduler can still be loading when
+`gateway_start` runs, so do not use it as the baseline signal for an external
+cron projection.
 
 Do not rely on the internal `gateway:startup` hook for plugin-owned runtime
 services.
+
+`cron_reconciled` fires after the Gateway cron scheduler and its on-exit
+watchers have reconciled their durable state. It fires for both initial
+startup and scheduler replacement during config reload. The event reports
+`reason` (`startup` or `reload`) and the effective `enabled` state. Disabled
+cron still emits with `enabled: false`, allowing an external projection to
+clear stale wakes. Use `ctx.getCron?.()` for the exact scheduler instance that
+completed reconciliation; a later reload does not retarget that callback.
+This is a scheduler lifecycle signal, not a plugin-activation signal: a
+plugin-only hot reload does not replay it. A newly enabled consumer receives
+its first baseline on the next scheduler replacement or Gateway start.
+
+Like other observation hooks, `gateway_start` and `cron_reconciled` callbacks
+can overlap. If both handlers share plugin initialization, coordinate them
+with a plugin-local readiness promise rather than depending on callback order.
 
 `cron_changed` fires for Gateway-owned cron lifecycle events with a typed
 event payload covering `added`, `updated`, `removed`, `started`, `finished`,
@@ -595,9 +611,8 @@ write changes an existing job's effective `nextRunAtMs`, excluding that job's
 explicit `added`, `updated`, or `removed` lifecycle event. The top-level
 `event.nextRunAtMs` is the committed next wake; when it is absent, the job has
 no next wake. Treat these events as reconciliation hints, not an ordered delta
-log. Use `ctx.getCron?.()` and `ctx.config` from the runtime context when
-syncing external wake schedulers, and keep OpenClaw as the source of truth for
-due checks and execution.
+log. Use these events as coalescible hints between `cron_reconciled` snapshots,
+and keep OpenClaw as the source of truth for due checks and execution.
 
 ## Upcoming deprecations
 
