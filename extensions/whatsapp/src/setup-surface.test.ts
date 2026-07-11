@@ -33,7 +33,6 @@ import {
 } from "./setup-test-helpers.js";
 
 const hoisted = vi.hoisted(() => ({
-  hasWebCredsSync: vi.fn(() => false),
   loginModuleState: { loaded: false },
   loginWeb: vi.fn(async () => {}),
   readWebAuthState: vi.fn<(authDir: string) => Promise<"linked" | "not-linked" | "unstable">>(
@@ -49,14 +48,6 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("./login.js", () => {
   hoisted.loginModuleState.loaded = true;
   return { loginWeb: hoisted.loginWeb };
-});
-
-vi.mock("./creds-files.js", async () => {
-  const actual = await vi.importActual<typeof import("./creds-files.js")>("./creds-files.js");
-  return {
-    ...actual,
-    hasWebCredsSync: hoisted.hasWebCredsSync,
-  };
 });
 
 vi.mock("./accounts.js", async () => {
@@ -116,7 +107,6 @@ function workConfig(
 
 describe("whatsapp setup wizard", () => {
   beforeEach(() => {
-    hoisted.hasWebCredsSync.mockReset().mockReturnValue(false);
     hoisted.loginWeb.mockReset().mockImplementation(async (...args: unknown[]) => {
       const loginOptions = args[4] as
         | { beforeCredentialPersistence?: () => Promise<void> }
@@ -291,7 +281,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it.each([true, false])("shows login followup only when unlinked (linked: %s)", async (linked) => {
-    hoisted.hasWebCredsSync.mockReturnValue(linked);
+    hoisted.readWebAuthState.mockResolvedValue(linked ? "linked" : "not-linked");
     const harness = createSeparatePhoneHarness(["separate", "disabled"]);
 
     await runFinalizeWithHarness({ harness });
@@ -304,7 +294,7 @@ describe("whatsapp setup wizard", () => {
     }
   });
   it("skips interactive linking when the client defers device linking", async () => {
-    hoisted.hasWebCredsSync.mockReturnValue(true);
+    hoisted.readWebAuthState.mockResolvedValue("linked");
     const harness = createQueuedWizardPrompter({
       confirmValues: [false],
       selectValues: ["separate", "disabled"],
@@ -321,7 +311,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("normalizes allowFrom entries when list mode is selected", async () => {
-    hoisted.hasWebCredsSync.mockReturnValue(true);
+    hoisted.readWebAuthState.mockResolvedValue("linked");
     const harness = createQueuedWizardPrompter({
       confirmValues: [false],
       ...createWhatsAppAllowlistModeInput(),
@@ -335,7 +325,7 @@ describe("whatsapp setup wizard", () => {
     [["separate", "allowlist", "list"], "Invalid WhatsApp allowFrom list"],
     [["personal"], "Invalid WhatsApp owner number"],
   ] as const)("rejects undefined input for %j", async (selectValues, error) => {
-    hoisted.hasWebCredsSync.mockReturnValue(selectValues[0] === "personal");
+    hoisted.readWebAuthState.mockResolvedValue(selectValues[0] === "personal" ? "linked" : "not-linked");
     const harness = createSeparatePhoneHarness([...selectValues]);
     harness.text.mockResolvedValueOnce(undefined as never);
     await expect(runFinalizeWithHarness({ harness })).rejects.toThrow(error);
@@ -374,7 +364,7 @@ describe("whatsapp setup wizard", () => {
   it.each(["default", "Default"])(
     "writes scoped DM policy to %s without duplicate keys",
     async (key) => {
-      hoisted.hasWebCredsSync.mockReturnValue(true);
+      hoisted.readWebAuthState.mockResolvedValue("linked");
       const harness = createSeparatePhoneHarness(["separate", "open"]);
       const authDir = "/tmp/default-auth";
       const result = await runFinalizeWithHarness({
@@ -431,5 +421,13 @@ describe("whatsapp setup wizard", () => {
       default: { enabled: true, authDir: "/synthetic/default" },
     });
     expect(next.channels?.whatsapp?.allowFrom).toEqual(["+15550001111"]);
+  });
+
+  it("does not report unstable auth as linked during setup finalization", async () => {
+    hoisted.readWebAuthState.mockResolvedValue("unstable");
+    const harness = createSeparatePhoneHarness(["separate", "disabled"]);
+    await runFinalizeWithHarness({ harness });
+    expectWhatsAppLoginFollowup(harness);
+    expect(harness.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: true }));
   });
 });

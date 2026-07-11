@@ -13,7 +13,7 @@ import {
   resolveWhatsAppAccount,
   resolveWhatsAppAuthDir,
 } from "./accounts.js";
-import { hasWebCredsSync } from "./creds-files.js";
+import { readWebAuthState } from "./auth-store.js";
 import {
   normalizeWhatsAppAllowFromEntries,
   normalizeWhatsAppAllowFromEntry,
@@ -136,7 +136,7 @@ export async function finalizeWhatsAppSetup(params: {
         });
 
   const { authDir } = resolveWhatsAppAuthDir({ cfg: next, accountId: selectedAccountId });
-  const linked = hasWebCredsSync(authDir);
+  const linked = (await readWebAuthState(authDir)) === "linked";
 
   // Gateway clients render their own pairing QR; only terminal setup runs login here.
   if (!params.options?.deferDeviceLinkToClient) {

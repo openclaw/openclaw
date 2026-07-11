@@ -213,6 +213,13 @@ describe("auth-store", () => {
     await expect(webAuthExists(authDir)).resolves.toBe(true);
   });
 
+  it("reports unstable cleanup when the credential save queue does not settle", async () => {
+    writeAuthFiles({ "creds.json": JSON.stringify({ registered: false, pairingCode: "12345678", me: { id: "15551234567@s.whatsapp.net" } }) });
+    hoisted.waitForCredsSaveQueueWithTimeout.mockResolvedValueOnce("timed_out");
+    await expect(clearStalePhoneCodePairingAuthIfNeeded({ authDir, isLegacyAuthDir: false })).resolves.toBe("unstable");
+    expect(fsSync.existsSync(credsPath)).toBe(true);
+  });
+
   it.runIf(supportsSymlinks).each(["file", "directory"])(
     "treats symlinked %s credentials as missing",
     async (kind) => {

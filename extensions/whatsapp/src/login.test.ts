@@ -194,6 +194,27 @@ describe("web login", () => {
     expect(waiter).not.toHaveBeenCalled();
   });
 
+  it("fails before socket creation when stale auth cleanup is unstable", async () => {
+    vi.mocked(clearStalePhoneCodePairingAuthIfNeeded).mockResolvedValueOnce("unstable");
+    const waiter: typeof waitForWaConnection = vi.fn().mockResolvedValue(undefined);
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    const error = await loginWebWithPhoneCode(
+      false,
+      "+1 (555) 123-4567",
+      waiter,
+      runtime as never,
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: "whatsapp-auth-unstable" });
+    expect(createWaSocket).not.toHaveBeenCalled();
+    expect(waiter).not.toHaveBeenCalled();
+  });
+
   it("connects completed phone-code creds without waiting for a fresh QR", async () => {
     const sock = createPhoneCodeSocket("12345678", {
       registered: false,
@@ -302,6 +323,35 @@ describe("web login", () => {
     expect(runtime.log).toHaveBeenCalledWith(success("WhatsApp pairing code: 1111 2222"));
     expect(runtime.log).toHaveBeenCalledWith(success("WhatsApp pairing code: 3333 4444"));
     expect(waiter).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not create a timeout replacement socket while auth cleanup is unstable", async () => {
+    const firstSock = createPhoneCodeSocket("11112222");
+    vi.mocked(createWaSocket).mockImplementationOnce(resolveSocketAfterImmediateQr(firstSock));
+    vi.mocked(clearStalePhoneCodePairingAuthIfNeeded)
+      .mockResolvedValueOnce("not-needed")
+      .mockResolvedValueOnce("unstable");
+    const timeoutError = Object.assign(new Error("timeout"), {
+      output: { statusCode: 408 },
+    });
+    const waiter: typeof waitForWaConnection = vi.fn().mockRejectedValueOnce(timeoutError);
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    const error = await loginWebWithPhoneCode(
+      false,
+      "+15551234567",
+      waiter,
+      runtime as never,
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: "whatsapp-auth-unstable" });
+    expect(createWaSocket).toHaveBeenCalledOnce();
+    expect(firstSock.requestPairingCode).toHaveBeenCalledOnce();
+    expect(clearStalePhoneCodePairingAuthIfNeeded).toHaveBeenCalledTimes(2);
   });
 
   it("preserves phone-code credentials across the post-pairing restart", async () => {
