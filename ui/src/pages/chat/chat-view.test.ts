@@ -741,13 +741,11 @@ describe("direct thread avatar mode", () => {
     ).toBe(true);
   });
 
-  it("falls back to sender-label history when session metadata is missing", () => {
+  it("falls back to session-key shape when session metadata is missing", () => {
+    // Labeled DM rows must not flip the mode: sanitization labels 1:1 DMs too.
     const direct = renderChatView({
-      sessionKey: "fallback-direct",
-      messages: [
-        { role: "user", content: "hi", timestamp: 1 },
-        { role: "assistant", content: "hello", timestamp: 2 },
-      ],
+      sessionKey: "agent:main:telegram:direct:2",
+      messages: labeledHistory,
     });
     expect(
       requireElement(direct, ".chat-thread", "chat thread").classList.contains(
@@ -756,8 +754,8 @@ describe("direct thread avatar mode", () => {
     ).toBe(true);
 
     const group = renderChatView({
-      sessionKey: "fallback-group",
-      messages: labeledHistory,
+      sessionKey: "agent:main:telegram:group:42",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
     });
     expect(
       requireElement(group, ".chat-thread", "chat thread").classList.contains(

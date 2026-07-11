@@ -4,14 +4,15 @@ import { html, nothing, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import type { SessionsListResult } from "../../../api/types.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import {
   handleMarkdownCodeBlockCopy,
   markdownFileLinkFromEvent,
 } from "../../../components/markdown.ts";
-import "../../../components/tooltip.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "../../../lib/chat/chat-types.ts";
 import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
@@ -713,21 +714,14 @@ export function renderChatThread(props: ChatThreadProps) {
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
   // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
-  // as the always-visible identity marker. The canonical session kind decides:
-  // channel DMs also carry senderLabel on user rows (gateway sanitization), so
-  // message labels alone would misclassify them. Only when session metadata is
-  // missing do we fall back to scanning the full raw history for labeled
-  // senders — chatItems would be wrong here, its render window is truncated.
-  const sessionKind = activeSession?.kind;
-  const isDirectThread =
-    sessionKind === "group"
-      ? false
-      : sessionKind && sessionKind !== "unknown"
-        ? true
-        : !props.messages.some((message) => {
-            const label = (message as { senderLabel?: unknown } | null)?.senderLabel;
-            return typeof label === "string" && label.trim() !== "";
-          });
+  // as the always-visible identity marker. The canonical session kind decides;
+  // the sessions list is capped, so absent/unknown rows classify by key shape
+  // via the same core helper the gateway uses. Message senderLabels are not a
+  // signal here: gateway sanitization labels 1:1 channel DM rows too.
+  const rowKind = activeSession?.kind;
+  const sessionKind =
+    rowKind && rowKind !== "unknown" ? rowKind : classifySessionKind(props.sessionKey);
+  const isDirectThread = sessionKind !== "group";
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
