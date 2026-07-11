@@ -3,6 +3,7 @@ import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js"
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { list, run } from "./service/ops.js";
 import { createCronServiceState, type CronEvent, type CronServiceState } from "./service/state.js";
+import { ensureLoaded } from "./service/store.js";
 import { onTimer, runMissedJobs } from "./service/timer.js";
 import * as cronStoreModule from "./store.js";
 import { loadCronStore, saveCronStore } from "./store.js";
@@ -179,6 +180,53 @@ describe.each(removalPaths)("cron one-shot removal via %s", (path) => {
       expect(durableJob?.id).toBe(job.id);
       expect(state.durableNextRunAtMsByJobId).toEqual(
         new Map([[job.id, durableJob?.state.nextRunAtMs]]),
+      );
+    } finally {
+      clearStateTimer(state);
+    }
+  });
+
+  it("suppresses removal when quarantine prevents the durable write", async () => {
+    const { storePath } = await makeStorePath();
+    const nowMs = Date.parse("2026-07-10T12:00:00.000Z");
+    const job = createDueOneShot(`quarantine-${path.replaceAll(" ", "-")}`, nowMs);
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const durableBefore = await loadCronStore(storePath);
+
+    const events: CronEvent[] = [];
+    const state = createState({
+      storePath,
+      nowMs,
+      onEvent: (event) => events.push(structuredClone(event)),
+    });
+    await ensureLoaded(state, { skipRecompute: true });
+    state.pendingQuarantineConfigJobs = [
+      { sourceIndex: 0, reason: "invalid-schedule", job: { id: "quarantined-job" } },
+    ];
+    vi.spyOn(cronStoreModule, "saveCronQuarantineFile").mockRejectedValue(
+      new Error("quarantine unavailable"),
+    );
+    const saveStore = vi.spyOn(cronStoreModule, "saveCronJobsStore");
+
+    try {
+      await expect(executeRemovalPath(path, state, job.id)).rejects.toThrow(
+        "cron: durable store write did not complete",
+      );
+
+      expect(saveStore).not.toHaveBeenCalled();
+      expect(events.some((event) => event.action === "removed")).toBe(false);
+      const durableStore = await loadCronStore(storePath);
+      expect(durableStore).toEqual(durableBefore);
+      expect(state.store?.jobs).toEqual([
+        expect.objectContaining({
+          id: job.id,
+          state: expect.objectContaining({
+            nextRunAtMs: durableBefore.jobs[0]?.state.nextRunAtMs,
+          }),
+        }),
+      ]);
+      expect(state.durableNextRunAtMsByJobId).toEqual(
+        new Map([[job.id, durableBefore.jobs[0]?.state.nextRunAtMs]]),
       );
     } finally {
       clearStateTimer(state);
