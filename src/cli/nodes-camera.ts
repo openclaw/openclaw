@@ -1,7 +1,7 @@
+// Camera payload validation and artifact writers for node media commands.
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-// Camera payload validation and artifact writers for node media commands.
-import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { toErrorObject } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
@@ -203,12 +203,6 @@ export async function writeUrlToFile(
   return { path: filePath, bytes };
 }
 
-function estimateDecodedBase64Bytes(base64: string): number {
-  const normalized = base64.replace(/\s+/g, "");
-  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
-  return Math.floor((normalized.length * 3) / 4) - padding;
-}
-
 /** Decode a base64 media payload to disk with preflight and post-decode size checks. */
 export async function writeBase64ToFile(
   filePath: string,
@@ -216,7 +210,7 @@ export async function writeBase64ToFile(
   opts: { maxBytes?: number } = {},
 ) {
   const maxBytes = opts.maxBytes ?? MAX_CAMERA_BASE64_BYTES;
-  if (estimateDecodedBase64Bytes(base64) > maxBytes) {
+  if (estimateBase64DecodedBytes(base64) > maxBytes) {
     throw new Error(`writeBase64ToFile: decoded payload exceeds max ${maxBytes}`);
   }
   const canonicalBase64 = canonicalizeBase64(base64);
