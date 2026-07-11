@@ -214,6 +214,55 @@ describe("chat side result gateway events", () => {
     expect(state.chatSideResultTerminalRuns?.has("btw-main-global")).toBe(false);
   });
 
+  it("clears the pending side question when its result arrives", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "what changed?", ts: 1, runId: "btw-run-1" };
+
+    handleChatSideResultGatewayEvent(state, {
+      kind: "btw",
+      runId: "btw-run-1",
+      sessionKey: "main",
+      question: "what changed?",
+      text: "Answer.",
+      ts: 123,
+    });
+
+    expect(state.chatSideResultPending).toBeNull();
+    expect(state.chatSideResult).not.toBeNull();
+  });
+
+  it("drops the pending side question when its run terminates without a side result", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "what changed?", ts: 1, runId: "btw-run-3" };
+
+    handleChatGatewayEvent(state, {
+      runId: "btw-run-3",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "⚠️ /btw requires an active session with existing context." },
+        ],
+      },
+    });
+
+    expect(state.chatSideResultPending).toBeNull();
+  });
+
+  it("keeps the pending side question when an unrelated run terminates", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "what changed?", ts: 1, runId: "btw-run-4" };
+
+    handleChatGatewayEvent(state, {
+      runId: "main-run-9",
+      sessionKey: "main",
+      state: "final",
+    });
+
+    expect(state.chatSideResultPending).toMatchObject({ runId: "btw-run-4" });
+  });
+
   it("ignores tracked BTW terminal events without touching the active run", () => {
     const state = createState({
       chatRunId: "main-run-1",

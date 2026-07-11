@@ -4,6 +4,9 @@ import { normalizeOptionalString } from "../string-coerce.ts";
 export type ChatSideResultPending = {
   question: string;
   ts: number;
+  /** Detached send run id, set once the send is acked; used to drop the card
+   * when the run terminates without ever emitting a chat.side_result. */
+  runId?: string;
 };
 
 export type ChatSideResult = {

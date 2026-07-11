@@ -280,6 +280,17 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
 }
 
 export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {
+  // A BTW run that fails before seeding context terminates with a plain chat
+  // event and never emits chat.side_result; drop the pending card so
+  // "Thinking…" cannot outlive its run. Successful runs clear pending via the
+  // side_result handler before their terminal chat event arrives.
+  if (
+    isTerminalChatState(payload?.state) &&
+    typeof payload?.runId === "string" &&
+    state.chatSideResultPending?.runId === payload.runId
+  ) {
+    state.chatSideResultPending = null;
+  }
   if (
     isTerminalChatState(payload?.state) &&
     typeof payload?.runId === "string" &&

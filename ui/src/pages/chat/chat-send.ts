@@ -1325,7 +1325,7 @@ async function sendDetachedCommandMessage(
     );
     releaseChatAttachmentPayloads(excludeComposerAttachments(host, opts?.attachments));
   }
-  return ok;
+  return ack;
 }
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string) {
@@ -2180,22 +2180,31 @@ export async function handleSendChat(
           recordNonTranscriptInputHistory(host, message);
         }
         // BTW runs detached and delivers via chat.side_result only; show a
-        // pending card immediately so the send has visible feedback.
+        // pending card immediately so the send has visible feedback. A new
+        // question also supersedes any still-displayed previous answer —
+        // renderSideResult prefers results, so a stale one would hide the card.
         const isBtw = isBtwCommand(message);
         if (isBtw) {
+          host.chatSideResult = null;
           host.chatSideResultPending = {
             question: extractSideQuestionDisplayText(message),
             ts: Date.now(),
           };
           host.requestUpdate?.();
         }
-        const ok = await sendDetachedCommandMessage(host, message, {
+        const ack = await sendDetachedCommandMessage(host, message, {
           previousDraft: cleared.previousDraft,
           attachments: hasAttachments ? attachmentsToSend : undefined,
           previousAttachments: cleared.previousAttachments,
         });
-        if (isBtw && !ok) {
-          host.chatSideResultPending = null;
+        if (isBtw) {
+          if (!isAcceptedChatSendAck(ack)) {
+            host.chatSideResultPending = null;
+          } else if (host.chatSideResultPending) {
+            // The side_result may already have landed and cleared pending;
+            // only tag the run id while the card is still waiting.
+            host.chatSideResultPending = { ...host.chatSideResultPending, runId: ack.runId };
+          }
           host.requestUpdate?.();
         }
       });
