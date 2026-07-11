@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Cached built-in chat channel metadata accessors.
  *
@@ -27,6 +26,7 @@ export function listChatChannels(): ChatChannelMeta[] {
 /**
  * Returns metadata for one built-in chat channel id.
  */
-export function getChatChannelMeta(id: ChatChannelId): ChatChannelMeta {
-  return expectDefined(getChatChannelMetaById()[id], "get chat channel meta by id() entry at id");
+export function getChatChannelMeta(id: ChatChannelId): ChatChannelMeta | undefined {
+  // Undefined is a real state: callers tolerate bundled channel id metadata drift.
+  return getChatChannelMetaById()[id];
 }

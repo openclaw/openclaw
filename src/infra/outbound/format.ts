@@ -32,7 +32,7 @@ const resolveChannelLabel = (channel: string) => {
   // Some legacy chat channels are not plugins; keep their human labels for CLI output.
   const normalized = normalizeChatChannelId(channel);
   if (normalized) {
-    return getChatChannelMeta(normalized).label;
+    return getChatChannelMeta(normalized)?.label ?? channel;
   }
   return channel;
 };
