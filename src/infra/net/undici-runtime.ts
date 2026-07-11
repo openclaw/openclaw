@@ -122,17 +122,18 @@ function createIpSafeProxyClientFactory(): UndiciProxyClientFactory {
     const clientOptions = isObjectRecord(options)
       ? { ...options, connect: stripIpServernameFromConnect(options.connect) }
       : options;
-    // Apply a default per-origin connection cap. Undici leaves Pool connections
-    // unbounded by default; a cap prevents a misbehaving proxy upstream from
-    // opening unlimited TCP connections. Callers override by passing `connections`
-    // in their client factory options.
-    const poolOptions = isObjectRecord(clientOptions)
-      ? {
-          ...clientOptions,
-          connections:
-            (clientOptions as Record<string, unknown>).connections ?? DEFAULT_POOL_CONNECTIONS,
-        }
-      : clientOptions;
+    // Apply a default per-origin connection cap when none is configured.
+    // Undici leaves Pool connections unbounded by default; a cap prevents a
+    // misbehaving proxy upstream from opening unlimited TCP connections.
+    // Undici supports explicit `connections: null` for unlimited — preserve
+    // that sentinel. Only default when the property is absent or undefined.
+    let poolOptions = clientOptions;
+    if (isObjectRecord(clientOptions)) {
+      const opts = clientOptions as Record<string, unknown>;
+      if (!("connections" in opts && opts.connections !== undefined)) {
+        poolOptions = { ...clientOptions, connections: DEFAULT_POOL_CONNECTIONS };
+      }
+    }
     return new Pool(origin, poolOptions as ConstructorParameters<typeof import("undici").Pool>[1]);
   };
 }

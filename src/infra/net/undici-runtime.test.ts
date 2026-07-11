@@ -89,12 +89,15 @@ function requireClientOptions(): Record<string, unknown> {
   return expectOptionsRecord(call[1], "expected Pool options object");
 }
 
-function invokeProxyClientFactory(options: Record<string, unknown>): void {
+function invokeProxyClientFactory(
+  options: Record<string, unknown>,
+  poolOptions?: Record<string, unknown>,
+): void {
   const clientFactory = options.clientFactory;
   if (typeof clientFactory !== "function") {
     throw new Error("expected ProxyAgent clientFactory");
   }
-  clientFactory(new URL("https://127.0.0.1:8443"), { connect: proxyConnect });
+  clientFactory(new URL("https://127.0.0.1:8443"), poolOptions ?? { connect: proxyConnect });
 }
 
 function invokeClientConnect(options: Record<string, unknown>, servername: string): void {
@@ -180,6 +183,19 @@ describe("createHttp1ProxyAgent", () => {
 
     const clientOpts = requireClientOptions();
     expect(clientOpts.connections).toBe(256);
+  });
+
+  it("preserves explicit connections: null as unlimited (Undici sentinel)", () => {
+    installUndiciRuntimeDeps();
+
+    createHttp1ProxyAgent({ uri: "https://proxy.test:8443" });
+    invokeProxyClientFactory(requireProxyAgentOptions(), {
+      connect: proxyConnect,
+      connections: null,
+    });
+
+    const clientOpts = requireClientOptions();
+    expect(clientOpts.connections).toBeNull();
   });
 });
 
