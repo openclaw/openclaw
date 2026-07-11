@@ -376,11 +376,13 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return
         }
         // Eligibility is cached at window setup, but update.channel or launchd
-        // ownership can change while the dashboard stays open. Revalidate here;
-        // dropping the bridge makes the Control UI's next click fall back to
-        // the direct gateway update flow.
+        // ownership can change while the dashboard stays open. Revalidate here.
         guard DashboardManager.updateBridgeEnabled(mode: AppStateStore.shared.connectionMode) else {
             self.setUpdateBridgeEnabled(false)
+            // JS treated its posted message as handled; return this click to
+            // the gateway updater after withdrawing the native bridge.
+            self.webView.evaluateJavaScript(
+                "window.dispatchEvent(new CustomEvent('openclaw:native-update-declined'))")
             return
         }
         updater.checkForUpdates(nil)
