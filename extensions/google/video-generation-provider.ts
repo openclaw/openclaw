@@ -56,18 +56,31 @@ function resolveGoogleVideoRestBaseUrl(configuredBaseUrl?: string): string {
   return `${configuredBaseUrl ?? "https://generativelanguage.googleapis.com"}/v1beta`;
 }
 
-function resolveGoogleVideoRestModelPath(model: string): string {
+function normalizeGoogleVideoModel(model: string | undefined): string {
   const trimmed = normalizeOptionalString(model) || DEFAULT_GOOGLE_VIDEO_MODEL;
   if (trimmed.startsWith("google/models/")) {
+    return trimmed.slice("google/models/".length);
+  }
+  if (trimmed.startsWith("google/")) {
     return trimmed.slice("google/".length);
   }
   if (trimmed.startsWith("models/")) {
-    return trimmed;
+    return trimmed.slice("models/".length);
   }
-  if (trimmed.startsWith("google/")) {
-    return `models/${trimmed.slice("google/".length)}`;
-  }
-  return `models/${trimmed}`;
+  return trimmed;
+}
+
+function resolveGoogleVideoRestModelPath(model: string): string {
+  return `models/${normalizeGoogleVideoModel(model)}`;
+}
+
+// Veo models must use the REST predictLongRunning endpoint. The GenAI SDK's
+// generateVideos method hits the same endpoint in theory, but in practice
+// newer Veo previews (3.1+) return API_KEY_INVALID / 400 errors through the
+// SDK while the direct REST call succeeds with the same key and schema.
+function isGoogleVeoModel(model: string | undefined): boolean {
+  const normalized = normalizeGoogleVideoModel(model);
+  return normalized.startsWith("veo-");
 }
 
 function parseVideoSize(size: string | undefined): { width: number; height: number } | undefined {
@@ -476,7 +489,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         }),
       };
       const durationSeconds = resolveDurationSeconds(req.durationSeconds);
-      const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_VIDEO_MODEL;
+      const model = normalizeGoogleVideoModel(req.model);
       const aspectRatio = resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size });
       const resolution = resolveResolution({ resolution: req.resolution, size: req.size });
       const hasReferenceInputs =
@@ -497,6 +510,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       });
       let usedRestFallback = false;
       let operation;
+      const canUseRestFallback = !hasReferenceInputs;
       try {
         operation = await client.models.generateVideos({
           model,
@@ -510,7 +524,15 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           },
         });
       } catch (error) {
-        if (hasReferenceInputs || extractGoogleApiErrorCode(error) !== 404) {
+        // Veo models are known to fail through the GenAI SDK with
+        // API_KEY_INVALID even though the direct REST predictLongRunning call
+        // succeeds with the same key and schema. Fall back to REST for any Veo
+        // SDK failure, not just 404s.
+        const shouldFallbackForVeo = isGoogleVeoModel(model) && canUseRestFallback;
+        if (
+          !canUseRestFallback ||
+          (!shouldFallbackForVeo && extractGoogleApiErrorCode(error) !== 404)
+        ) {
           throw error;
         }
         usedRestFallback = true;

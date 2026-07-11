@@ -211,6 +211,40 @@ describe("google video generation provider", () => {
     expect(httpOptions).not.toHaveProperty("apiVersion");
   });
 
+  it("normalizes google-prefixed Veo model ids before calling the SDK", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              videoBytes: Buffer.from("mp4-bytes").toString("base64"),
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+
+    const provider = buildGoogleVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "google",
+      model: "google/veo-3.1-fast-generate-preview",
+      prompt: "A tiny robot watering a windowsill garden",
+      cfg: {},
+      durationSeconds: 3,
+    });
+
+    expect(generateVideosMock).toHaveBeenCalledTimes(1);
+    const request = firstObjectArg(generateVideosMock);
+    expect(request.model).toBe("veo-3.1-fast-generate-preview");
+  });
+
   it("rejects inline video bytes that exceed the configured media cap", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",
@@ -457,6 +491,68 @@ describe("google video generation provider", () => {
     expect(downloadMock).not.toHaveBeenCalled();
   });
 
+  it("falls back to REST predictLongRunning when google-prefixed SDK video generation returns 404", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            done: true,
+            name: "operations/rest-123",
+            response: {
+              generateVideoResponse: {
+                generatedSamples: [
+                  {
+                    video: {
+                      uri: "https://generativelanguage.googleapis.com/v1beta/files/rest-video:download?alt=media",
+                      mimeType: "video/mp4",
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response("rest-video", {
+          status: 200,
+          statusText: "OK",
+          headers: { "content-type": "video/mp4" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildGoogleVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "google",
+      model: "google/veo-3.1-fast-generate-preview",
+      prompt: "A tiny robot watering a windowsill garden",
+      cfg: {},
+      durationSeconds: 3,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchInputUrl(fetchMock, 0)).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning",
+    );
+    expect(parseFetchJsonBody(fetchMock, 0)).toEqual({
+      instances: [{ prompt: "A tiny robot watering a windowsill garden" }],
+      parameters: { durationSeconds: 4 },
+    });
+    expect(fetchInputUrl(fetchMock, 1)).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/files/rest-video:download?alt=media&key=google-key",
+    );
+    expect(downloadMock).not.toHaveBeenCalled();
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("rest-video"));
+  });
+
   it("falls back to REST predictLongRunning when text-only SDK video generation returns 404", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",
@@ -516,6 +612,62 @@ describe("google video generation provider", () => {
       "https://generativelanguage.googleapis.com/v1beta/files/rest-video:download?alt=media&key=google-key",
     );
     expect(downloadMock).not.toHaveBeenCalled();
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("rest-video"));
+  });
+
+  it("falls back to REST predictLongRunning when Veo SDK generation fails with API_KEY_INVALID", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockRejectedValue(
+      Object.assign(new Error("API_KEY_INVALID"), { status: 400 }),
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            done: true,
+            name: "operations/rest-123",
+            response: {
+              generateVideoResponse: {
+                generatedSamples: [
+                  {
+                    video: {
+                      uri: "https://generativelanguage.googleapis.com/v1beta/files/rest-video:download?alt=media",
+                      mimeType: "video/mp4",
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response("rest-video", {
+          status: 200,
+          statusText: "OK",
+          headers: { "content-type": "video/mp4" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildGoogleVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "google",
+      model: "google/veo-3.1-fast-generate-preview",
+      prompt: "A tiny robot watering a windowsill garden",
+      cfg: {},
+      durationSeconds: 3,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchInputUrl(fetchMock, 0)).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning",
+    );
     expect(result.videos[0]?.buffer).toEqual(Buffer.from("rest-video"));
   });
 
