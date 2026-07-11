@@ -103,7 +103,6 @@ TRACKED_TOKEN_CREDENTIAL_STEMS = {
     "cache",
     "credentials",
     "credential",
-    "default",
     "device",
     "id",
     "prod",
@@ -346,6 +345,7 @@ def run(
     input_text: str | None = None,
     check: bool = True,
     env: dict[str, str] | None = None,
+    text_errors: str = SUBPROCESS_TEXT_ERRORS,
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         args,
@@ -353,7 +353,7 @@ def run(
         input=input_text,
         text=True,
         encoding=SUBPROCESS_TEXT_ENCODING,
-        errors=SUBPROCESS_TEXT_ERRORS,
+        errors=text_errors,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,
@@ -680,7 +680,10 @@ def safe_engine_env(
     ):
         value = env.get(key)
         if value and not safe_proxy_url(value):
-            env.pop(key)
+            raise SystemExit(
+                f"unsafe credentialed or malformed proxy URL in {key}; "
+                "configure a credential-free proxy URL before running autoreview"
+            )
     env["PATH"] = safe_engine_path(repo, extra_paths)
     for key in ("HOME", "USERPROFILE"):
         value = os.environ.get(key)
@@ -716,6 +719,8 @@ def safe_engine_env(
             env["XDG_DATA_HOME"] = xdg_data_home
     env.update(codex_tool_git_env())
     env.update(extra or {})
+    if engine == "claude":
+        env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
     return env
 
 
@@ -1013,12 +1018,19 @@ def run_with_stream(
 
 
 def git(repo: Path, *args: str, check: bool = True) -> str:
-    return run(
-        [resolve_command("git", repo), "--no-optional-locks", *SAFE_GIT_CONFIG_ARGS, *args],
-        repo,
-        check=check,
-        env=safe_git_env(repo),
-    ).stdout
+    try:
+        return run(
+            [resolve_command("git", repo), "--no-optional-locks", *SAFE_GIT_CONFIG_ARGS, *args],
+            repo,
+            check=check,
+            env=safe_git_env(repo),
+            text_errors="strict",
+        ).stdout
+    except UnicodeDecodeError as exc:
+        raise SystemExit(
+            "refusing non-UTF-8 Git output because paths and diff content "
+            "cannot be validated without loss"
+        ) from exc
 
 
 def git_path_list(repo: Path, *args: str, check: bool = True) -> list[str]:
@@ -1031,15 +1043,18 @@ def repo_root() -> Path:
     git_bin = find_command("git", unsafe_root)
     if not git_bin:
         raise SystemExit("git executable not found. Install Git or add it to PATH.")
-    result = subprocess.run(
-        [git_bin, "--no-optional-locks", *SAFE_GIT_CONFIG_ARGS, "rev-parse", "--show-toplevel"],
-        text=True,
-        encoding=SUBPROCESS_TEXT_ENCODING,
-        errors=SUBPROCESS_TEXT_ERRORS,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=safe_git_env(unsafe_root),
-    )
+    try:
+        result = subprocess.run(
+            [git_bin, "--no-optional-locks", *SAFE_GIT_CONFIG_ARGS, "rev-parse", "--show-toplevel"],
+            text=True,
+            encoding=SUBPROCESS_TEXT_ENCODING,
+            errors="strict",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=safe_git_env(unsafe_root),
+        )
+    except UnicodeDecodeError as exc:
+        raise SystemExit("repository root is not valid UTF-8") from exc
     if result.returncode != 0:
         raise SystemExit("autoreview must run inside a git repository")
     return Path(result.stdout.strip()).resolve()
@@ -1195,7 +1210,7 @@ def read_text_with_status(path: Path, limit: int = MAX_BUNDLE_TEXT_BYTES) -> tup
     try:
         data, truncated = read_prefix(path, limit)
     except SystemExit as exc:
-        return f"[unreadable: {exc}]", False
+        return f"[unreadable: {exc}]", True
     if b"\0" in data:
         return "[binary file omitted]", True
     text = data.decode("utf-8", errors="replace")
@@ -1415,6 +1430,23 @@ def validate_review_patch(
     return patch
 
 
+def require_no_binary_diff(label: str, numstat: str) -> None:
+    binary_paths: list[str] = []
+    for record in numstat.split("\0"):
+        if not record:
+            continue
+        fields = record.split("\t", 2)
+        if len(fields) == 3 and fields[0] == "-" and fields[1] == "-":
+            binary_paths.append(fields[2])
+    if binary_paths:
+        details = "\n".join(f"- {path}" for path in binary_paths[:20])
+        more = f"\n... {len(binary_paths) - 20} more" if len(binary_paths) > 20 else ""
+        raise SystemExit(
+            f"refusing binary changes in {label} because their contents cannot be reviewed:\n"
+            f"{details}{more}"
+        )
+
+
 def file_bundle_risk(
     repo: Path,
     path: Path,
@@ -1490,6 +1522,14 @@ def local_status(repo: Path, untracked: list[str]) -> str:
 def local_bundle(repo: Path) -> tuple[str, bool]:
     staged_patch = git(repo, "diff", *SAFE_DIFF_FLAGS, "--cached", "--patch")
     unstaged_patch = git(repo, "diff", *SAFE_DIFF_FLAGS, "--patch")
+    require_no_binary_diff(
+        "local staged diff",
+        git(repo, "diff", *SAFE_DIFF_FLAGS, "--cached", "--numstat", "-z"),
+    )
+    require_no_binary_diff(
+        "local unstaged diff",
+        git(repo, "diff", *SAFE_DIFF_FLAGS, "--numstat", "-z"),
+    )
     staged_paths = git_path_list(
         repo,
         "diff",
@@ -1551,6 +1591,18 @@ def branch_bundle(repo: Path, base_ref: str) -> tuple[str, bool]:
         "--end-of-options",
         diff_range,
     )
+    require_no_binary_diff(
+        "branch diff",
+        git(
+            repo,
+            "diff",
+            *SAFE_DIFF_FLAGS,
+            "--numstat",
+            "-z",
+            "--end-of-options",
+            diff_range,
+        ),
+    )
     branch_patch = validate_review_patch("branch diff", branch_paths, branch_patch)
     return "\n\n".join(
         [
@@ -1595,6 +1647,19 @@ def commit_bundle(repo: Path, commit_ref: str) -> tuple[str, bool]:
         "-z",
         "--end-of-options",
         commit_ref,
+    )
+    require_no_binary_diff(
+        "commit diff",
+        git(
+            repo,
+            "show",
+            *SAFE_DIFF_FLAGS,
+            "--numstat",
+            "--format=",
+            "-z",
+            "--end-of-options",
+            commit_ref,
+        ),
     )
     commit_patch = validate_review_patch("commit diff", commit_paths, commit_patch)
     return "\n\n".join(
@@ -1725,6 +1790,9 @@ def review_scope_policy() -> str:
 def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, extra_prompt: str, datasets: str) -> str:
     target_line = f"{target} {target_ref}" if target_ref else target
     branch = current_branch(repo)
+    require_no_secret_values("current branch", branch)
+    if target_ref:
+        require_no_secret_values("review target ref", target_ref)
     scope_policy = review_scope_policy()
     prompt = textwrap.dedent(
         f"""
@@ -2256,19 +2324,24 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         cmd.extend(["--fallback-model", args.fallback_model])
     if args.thinking:
         cmd.extend(["--effort", args.thinking])
-    result = run_with_heartbeat(
-        cmd,
-        repo,
-        input_text=prompt,
-        label="claude",
-        stream_output=args.stream_engine_output,
-        stream_display=ClaudeStreamDisplay() if args.stream_engine_output else None,
-        env=safe_engine_env(
-            repo,
-            [Path(cmd[0]).parent],
-            engine="claude",
-        ),
-    )
+    with tempfile.TemporaryDirectory(
+        prefix="autoreview-claude-workspace.",
+        dir=safe_temp_root(repo),
+    ) as tempdir:
+        result = run_with_heartbeat(
+            cmd,
+            Path(tempdir),
+            input_text=prompt,
+            label="claude",
+            stream_output=args.stream_engine_output,
+            stream_display=ClaudeStreamDisplay() if args.stream_engine_output else None,
+            env=safe_engine_env(
+                repo,
+                [Path(cmd[0]).parent],
+                engine="claude",
+            ),
+            resolve_root=repo,
+        )
     if result.returncode != 0:
         raise SystemExit(f"claude engine failed ({result.returncode})\n{result.stderr or result.stdout}")
     return result.stdout
@@ -2277,14 +2350,14 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
 def run_droid(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     raise SystemExit(
         "droid engine is unavailable: the current Droid CLI cannot disable project instructions and all tools; "
-        "use codex, claude, pi, or opencode"
+        "use codex, claude, or pi"
     )
 
 
 def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     raise SystemExit(
         "copilot engine is unavailable: its file tools cannot be confined to the reviewed bundle "
-        "without exposing ignored repository secrets; use codex, claude, pi, or opencode"
+        "without exposing ignored repository secrets; use codex, claude, or pi"
     )
 
 
@@ -3015,7 +3088,12 @@ if "--help" in args or "-h" in args:
     print("--safe-mode\n--setting-sources\n--strict-mcp-config\n--disallowedTools\n--tools\n--print\n--json-schema")
     raise SystemExit(0)
 record = os.environ["AUTOREVIEW_FAKE_RECORD"]
-Path(record).write_text(json.dumps({"argv": args, "cwd": os.getcwd(), "stdin": sys.stdin.read()}))
+Path(record).write_text(json.dumps({
+    "argv": args,
+    "cwd": os.getcwd(),
+    "stdin": sys.stdin.read(),
+    "auto_memory_disabled": os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY"),
+}))
 report = {
     "findings": [],
     "overall_correctness": "patch is correct",
@@ -3262,8 +3340,11 @@ def self_test_engine_isolation() -> int:
             allowed_index = claude_argv.index("--allowedTools")
             if claude_argv[allowed_index + 1] != allowed_tools:
                 raise SystemExit("claude isolation self-test failed: scoped allowed tools lost")
-            if Path(claude_record["cwd"]).resolve() != repo.resolve():
-                raise SystemExit("claude isolation self-test failed: wrong cwd")
+            claude_cwd = Path(claude_record["cwd"]).resolve()
+            if claude_cwd == repo.resolve() or is_within(claude_cwd, repo.resolve()):
+                raise SystemExit("claude isolation self-test failed: review ran inside hostile repo")
+            if claude_record["auto_memory_disabled"] != "1":
+                raise SystemExit("claude isolation self-test failed: auto-memory not disabled")
 
             run_pi(args, repo, f"review hostile patch\nRepository: {repo}")
             pi_record = json.loads(record_path.read_text())
