@@ -732,6 +732,52 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 
 ---
 
+## Cloud worker environments
+
+Cloud workers are opt-in. If `cloudWorkers` is absent, or `profiles` is empty, OpenClaw accepts no new worker creation. Durable records created earlier still reconcile and remain visible; the existing gateway/node projection is unchanged.
+
+```json5
+{
+  cloudWorkers: {
+    profiles: {
+      development: {
+        provider: "static-ssh",
+        settings: {
+          host: "worker.example.test",
+          port: 22,
+          user: "openclaw",
+          keyRef: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_WORKER_SSH_KEY",
+          },
+        },
+        lifetime: {
+          idleTimeoutMinutes: 60,
+          maxLifetimeMinutes: 1440,
+        },
+      },
+    },
+  },
+}
+```
+
+- `profiles`: named worker profiles with non-empty, whitespace-trimmed ids. Each profile selects a provider registered by a plugin.
+- `provider`: non-empty worker provider id. The example uses the `static-ssh` provider from the QA Lab plugin.
+- Bundled provider plugins are enabled automatically when selected. External provider plugins must be installed and explicitly enabled (and included in `plugins.allow` when that allowlist is set).
+- `settings`: provider-owned bounded JSON. The selected plugin defines and validates its keys; use [SecretRef objects](/gateway/secrets) for secret-bearing values. The static SSH provider requires `host`, `user`, and `keyRef`; `port` defaults to `22`.
+- `lifetime.idleTimeoutMinutes`: positive integer minutes stored for later idle-reclamation policy.
+- `lifetime.maxLifetimeMinutes`: positive integer minutes stored for later lifecycle policy.
+
+Lifetime values are data only in the first cloud-worker release; automatic enforcement lands with later lifecycle work. Profile changes require a gateway restart.
+
+<Warning>
+  The `static-ssh` provider is a source-tree QA Lab development harness and is excluded from packaged distributions. A worker running on its shared host can read unrelated host data, so do not use this provider as a production isolation boundary.
+  Destroying its lease only releases OpenClaw's logical record; it does not stop or clean the host.
+</Warning>
+
+---
+
 ## Hooks
 
 ```json5

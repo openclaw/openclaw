@@ -3245,6 +3245,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Multi-instance isolation
   - H3: gateway.tls
   - H3: gateway.reload
+  - H2: Cloud worker environments
   - H2: Hooks
   - H3: Gmail integration
   - H2: Canvas plugin host
@@ -4851,6 +4852,32 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /perplexity
 - Headings:
   - H2: Related
+
+## plan/cloud-workers.md
+
+- Route: /plan/cloud-workers
+- Headings:
+  - H2: Status
+  - H2: Problem
+  - H2: Goals
+  - H2: Non-goals (v1)
+  - H2: Prior art (what we copy, what we invert)
+  - H2: Architecture decision: loop on the worker, inference through the gateway
+  - H2: Components
+  - H3: 1. Environment state machine + provider contract
+  - H3: 2. Worker bootstrap: install OpenClaw on the box
+  - H3: 3. Transport: everything over one SSH connection
+  - H3: 4. Worker protocol (dedicated; not the node protocol)
+  - H3: 5. Session backend RPCs
+  - H3: 6. Workspace sync
+  - H3: 7. Placement state machine, sessions, and UI
+  - H2: Dispatch and handoff
+  - H2: Security model
+  - H2: Capacity
+  - H2: Lifecycle
+  - H2: Configuration surface
+  - H2: Milestones
+  - H2: Open questions
 
 ## plan/ui-channels.md
 

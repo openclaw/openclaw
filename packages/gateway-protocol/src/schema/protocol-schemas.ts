@@ -193,11 +193,17 @@ import {
 } from "./devices.js";
 import {
   EnvironmentSummarySchema,
+  EnvironmentsCreateParamsSchema,
+  EnvironmentsCreateResultSchema,
+  EnvironmentsDestroyParamsSchema,
+  EnvironmentsDestroyResultSchema,
   EnvironmentsListParamsSchema,
   EnvironmentsListResultSchema,
   EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResultSchema,
   EnvironmentStatusSchema,
+  WorkerEnvironmentMetadataSchema,
+  WorkerEnvironmentStateSchema,
 } from "./environments.js";
 import {
   ExecApprovalsGetParamsSchema,
@@ -456,7 +462,13 @@ export const ProtocolSchemas = {
 
   // Environment and agent-facing control RPC payloads.
   EnvironmentStatus: EnvironmentStatusSchema,
+  WorkerEnvironmentState: WorkerEnvironmentStateSchema,
+  WorkerEnvironmentMetadata: WorkerEnvironmentMetadataSchema,
   EnvironmentSummary: EnvironmentSummarySchema,
+  EnvironmentsCreateParams: EnvironmentsCreateParamsSchema,
+  EnvironmentsCreateResult: EnvironmentsCreateResultSchema,
+  EnvironmentsDestroyParams: EnvironmentsDestroyParamsSchema,
+  EnvironmentsDestroyResult: EnvironmentsDestroyResultSchema,
   EnvironmentsListParams: EnvironmentsListParamsSchema,
   EnvironmentsListResult: EnvironmentsListResultSchema,
   EnvironmentsStatusParams: EnvironmentsStatusParamsSchema,

@@ -43,6 +43,7 @@ export type GatewayRequestContextParams = {
   disconnectDeviceTransports?: (deviceId: string, opts?: { role?: string }) => void;
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
+  workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
   terminalSessions?: GatewayRequestContext["terminalSessions"];
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"];
@@ -199,6 +200,9 @@ export function createGatewayRequestContext(
     enforceSharedGatewayAuthGenerationForConfigWrite:
       params.enforceSharedGatewayAuthGenerationForConfigWrite,
     nodeRegistry: params.nodeRegistry,
+    ...(params.workerEnvironmentService
+      ? { workerEnvironmentService: params.workerEnvironmentService }
+      : {}),
     terminalSessions: params.terminalSessions,
     agentRunSeq: params.agentRunSeq,
     chatAbortControllers: params.chatAbortControllers,
