@@ -2256,6 +2256,18 @@ describe("install.sh duplicate OpenClaw install detection", () => {
 describe("install.sh doctor cancellation and dashboard guard", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
+  it("preserves dashboard stdin for direct interactive installs", () => {
+    expect(script).toContain(
+      'if needs_stdin_isolation; then\n        "$claw" dashboard < /dev/null || true\n    else\n        "$claw" dashboard || true\n    fi',
+    );
+  });
+
+  it("preserves plugin update stdin for direct interactive upgrades", () => {
+    expect(script).toContain(
+      'if needs_stdin_isolation; then\n                    OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all < /dev/null || true\n                else\n                    OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all || true\n                fi',
+    );
+  });
+
   it("guards every run_doctor caller against failure", () => {
     // A failed or cancelled doctor must not launch the dashboard.
     expect(script).toContain("if run_doctor; then");

@@ -2945,7 +2945,11 @@ maybe_open_dashboard() {
     if ! "$claw" dashboard --help >/dev/null 2>&1; then
         return 0
     fi
-    "$claw" dashboard < /dev/null || true
+    if needs_stdin_isolation; then
+        "$claw" dashboard < /dev/null || true
+    else
+        "$claw" dashboard || true
+    fi
 }
 
 has_openclaw_config() {
@@ -3396,7 +3400,11 @@ main() {
             if (( doctor_ok )); then
                 should_open_dashboard=true
                 ui_info "Updating plugins"
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all < /dev/null || true
+                if needs_stdin_isolation; then
+                    OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all < /dev/null || true
+                else
+                    OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all || true
+                fi
             else
                 ui_warn "Doctor failed; skipping plugin updates"
             fi
