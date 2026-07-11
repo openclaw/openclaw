@@ -3,7 +3,9 @@ import SwiftUI
 
 extension OnboardingView {
     /// The inference-first flow has no full-page chat; Crestodian opens in its own sheet.
-    var usesCompactHero: Bool { false }
+    var usesCompactHero: Bool {
+        false
+    }
 
     var body: some View {
         GeometryReader { windowGeometry in
