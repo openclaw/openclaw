@@ -145,6 +145,49 @@ describe("buildFeishuPostMessagePayload", () => {
     });
   });
 
+  it.each([
+    ["without outer pipes", "Column | Value\n--- | ---\nA | B"],
+    ["with leading outer pipes", "| Column | Value\n| --- | ---\n| A | B"],
+    ["with trailing outer pipes", "Column | Value |\n--- | --- |\nA | B |"],
+    ["with both outer pipes", "| Column | Value |\n| --- | --- |\n| A | B |"],
+  ])("preserves raw markdown table rows %s", (_name, rawTable) => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: rawTable,
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: rawTable,
+            },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("materializes pipe-separated prose that lacks a table delimiter", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Column | Value\nnot a delimiter\nA | B",
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: "Column | Value\n\nnot a delimiter\n\nA | B",
+            },
+          ],
+        ],
+      },
+    });
+  });
+
   it("preserves single newlines inside markdown code fences", () => {
     const payload = buildFeishuPostMessagePayload({
       messageText: "Before\n```ts\nconst a = 1;\nconst b = 2;\n```\nAfter",
