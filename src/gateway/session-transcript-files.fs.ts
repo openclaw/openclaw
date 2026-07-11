@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   formatSessionArchiveTimestamp,
@@ -16,6 +17,7 @@ import {
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 type ArchiveFileReason = SessionArchiveReason;
@@ -492,6 +494,76 @@ export type SessionArchiveCleanupRule = {
   olderThanMs: number;
 };
 
+// A genuine trajectory header would sit within the first line (runtime) or the
+// whole small body (pointer), so this bounded prefix is enough to identify one
+// without ever loading a huge/binary look-alike into memory. Matches the 64 KiB
+// bound trajectory/cleanup.ts already uses for the same ownership question.
+const TRAJECTORY_ARCHIVE_OWNERSHIP_PROOF_MAX_BYTES = 64 * 1024;
+
+function jsonRecordTraceSchemaEquals(text: string, expected: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return isRecord(parsed) && parsed.traceSchema === expected;
+  } catch {
+    return false;
+  }
+}
+
+// Ownership proof for deleting a suffix-matched archive that resolves OUTSIDE
+// the session store dir. The retention sweep follows trajectory tombstones into
+// an OPENCLAW_TRAJECTORY_DIR override (store-maintenance-operations.ts), and that
+// directory is the operator's: a pre-existing foreign file whose name merely
+// matches `.{reason}.{timestamp}` must never be reaped by suffix alone. Require
+// the trajectory header the recorder wrote (src/trajectory/runtime.ts) — the
+// runtime sidecar's first JSONL line, or the pointer's whole body. Reads at most
+// a bounded prefix and fails closed (kept) on anything unreadable, foreign, or
+// empty, so we never delete what we cannot prove is ours.
+function archivedFileIsOwnedTrajectoryArtifact(filePath: string): boolean {
+  let fd: number | null = null;
+  let prefix: string;
+  try {
+    const lst = fs.lstatSync(filePath);
+    if (!lst.isFile() || lst.isSymbolicLink()) {
+      return false;
+    }
+    fd = fs.openSync(filePath, "r");
+    const buffer = Buffer.alloc(TRAJECTORY_ARCHIVE_OWNERSHIP_PROOF_MAX_BYTES);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    if (bytesRead <= 0) {
+      return false;
+    }
+    prefix = buffer.subarray(0, bytesRead).toString("utf8");
+  } catch {
+    return false;
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Best-effort close of the read-only probe handle.
+      }
+    }
+  }
+  for (const line of prefix.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    // Only the first non-empty line can be the runtime sidecar header; if it is
+    // not, the file may still be a pointer, whose (pretty-printed) body is one
+    // JSON object spanning the whole bounded prefix.
+    return (
+      jsonRecordTraceSchemaEquals(trimmed, "openclaw-trajectory") ||
+      jsonRecordTraceSchemaEquals(prefix, "openclaw-trajectory-pointer")
+    );
+  }
+  return false;
+}
+
+function directoryIsWithinStoreDir(canonicalDir: string, canonicalStoreDir: string): boolean {
+  return canonicalDir === canonicalStoreDir || isPathInside(canonicalStoreDir, canonicalDir);
+}
+
 // Store maintenance runs this on every session-store save. All retention rules
 // share one directory listing: a listing per reason would multiply READDIR
 // load on the per-save hot path, which is expensive on networked filesystems.
@@ -501,11 +573,14 @@ export type SessionArchiveCleanupRule = {
 // `X.trajectory-path.json.deleted.<ts>`) age out under the exact same rules
 // and cadence as transcript tombstones for free, as long as they land in one
 // of `directories` — which they do by default, since the trajectory pair is
-// renamed beside its transcript (see trajectory/cleanup.ts).
+// renamed beside its transcript (see trajectory/cleanup.ts). A tombstone that
+// landed OUTSIDE the store dir (an OPENCLAW_TRAJECTORY_DIR override) ages by the
+// same rules but only after trajectory-ownership proof — see the storeDir guard.
 export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
   rules: SessionArchiveCleanupRule[];
   nowMs?: number;
+  storeDir?: string;
 }): Promise<{ removed: number; scanned: number }> {
   const rules = opts.rules.filter(
     (rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0,
@@ -515,10 +590,20 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   }
   const now = opts.nowMs ?? Date.now();
   const directories = uniqueStrings(opts.directories.map((dir) => path.resolve(dir)));
+  // The store dir is ours: suffix aging is safe for everything in it, so the hot
+  // common path takes no per-file header read. A directory outside it belongs to
+  // the operator (an OPENCLAW_TRAJECTORY_DIR override the tombstone sweep followed
+  // into), where only files carrying our trajectory header may be deleted.
+  // storeDir omitted = callers that only ever pass store-owned dirs → unchanged
+  // suffix aging everywhere.
+  const canonicalStoreDir = opts.storeDir ? canonicalizePathForComparison(opts.storeDir) : null;
   let removed = 0;
   let scanned = 0;
 
   for (const dir of directories) {
+    const externalDir =
+      canonicalStoreDir != null &&
+      !directoryIsWithinStoreDir(canonicalizePathForComparison(dir), canonicalStoreDir);
     const entries = await fs.promises.readdir(dir).catch(() => []);
     for (const entry of entries) {
       for (const rule of rules) {
@@ -530,7 +615,12 @@ export async function cleanupArchivedSessionTranscripts(opts: {
         if (now - timestamp > rule.olderThanMs) {
           const fullPath = path.join(dir, entry);
           const stat = await fs.promises.stat(fullPath).catch(() => null);
-          if (stat?.isFile()) {
+          // Outside the store dir, prove the aged file is ours before unlinking
+          // — never reap an operator's suffix look-alike by name alone.
+          const mayRemove =
+            stat?.isFile() === true &&
+            (!externalDir || archivedFileIsOwnedTrajectoryArtifact(fullPath));
+          if (mayRemove) {
             await fs.promises.rm(fullPath).catch(() => undefined);
             removed += 1;
           }

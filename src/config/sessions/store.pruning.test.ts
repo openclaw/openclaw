@@ -260,6 +260,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       ],
     ]);
     let sweptDirectories: string[] | undefined;
+    let sweptStoreDir: string | undefined;
 
     await applyFileBackedSessionStoreMaintenance({
       storePath: "/tmp/openclaw-sessions/sessions.json",
@@ -280,6 +281,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
           new Set(["/tmp/openclaw-sessions", "/mnt/external-trajectory-dir"]),
         cleanupArchivedSessionTranscripts: async (params) => {
           sweptDirectories = params.directories;
+          sweptStoreDir = params.storeDir;
         },
       },
     });
@@ -288,6 +290,9 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       expect.arrayContaining(["/tmp/openclaw-sessions", "/mnt/external-trajectory-dir"]),
     );
     expect(sweptDirectories).toHaveLength(2);
+    // The store dir is threaded through so the sweep can require ownership proof
+    // before deleting suffix look-alikes in the external trajectory dir.
+    expect(sweptStoreDir).toBe("/tmp/openclaw-sessions");
   });
 
   it("forced cleanup prunes stale model-run probes before the cap evicts real sessions", async () => {

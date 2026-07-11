@@ -52,6 +52,9 @@ type RemovedSessionArtifactCleanup = {
   }) => Promise<Set<string>>;
   cleanupArchivedSessionTranscripts: (params: {
     directories: string[];
+    // The session store dir; entries outside it (an OPENCLAW_TRAJECTORY_DIR
+    // override) require trajectory-ownership proof before the sweep deletes them.
+    storeDir: string;
     rules: Array<{ reason: "deleted" | "reset"; olderThanMs: number }>;
   }) => Promise<void>;
 };
@@ -187,15 +190,17 @@ async function cleanupRemovedSessionArtifacts(params: {
   ) {
     return;
   }
+  const storeDir = path.dirname(path.resolve(params.operation.storePath));
   const targetDirs =
     archivedDirs.size > 0 || trajectoryTombstoneDirs.size > 0
       ? [...new Set([...archivedDirs, ...trajectoryTombstoneDirs])]
-      : [path.dirname(path.resolve(params.operation.storePath))];
+      : [storeDir];
   // Both retention reasons ride one cleanup call so each save enumerates the
   // sessions dir at most once; reset retention defaults on, so a listing per
   // reason would scan twice per save.
   await params.operation.artifacts.cleanupArchivedSessionTranscripts({
     directories: targetDirs,
+    storeDir,
     rules:
       params.maintenance.resetArchiveRetentionMs != null
         ? [
