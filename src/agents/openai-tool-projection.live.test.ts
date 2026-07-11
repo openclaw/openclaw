@@ -88,7 +88,7 @@ describeLive("OpenAI tool projection live", () => {
     });
   }, 45_000);
 
-  it("calls a GPT-5.5 Chat Completions function without incompatible reasoning effort", async () => {
+  it("calls a GPT-5.6 Chat Completions function with reasoning disabled", async () => {
     const model = {
       id: modelId,
       name: modelId,
@@ -115,7 +115,7 @@ describeLive("OpenAI tool projection live", () => {
         },
       },
     });
-    expect(params).not.toHaveProperty("reasoning_effort");
+    expect(params.reasoning_effort).toBe("none");
     const { stream_options: _streamOptions, ...nonStreamingParams } = params;
 
     const response = await client.chat.completions.create({
