@@ -64,7 +64,15 @@ describe("setup-registry runtime fallback", () => {
     });
     expect(resolvePluginSetupCliBackendRuntime({ backend: "local-cli" })).toBeUndefined();
     expect(resolvePluginSetupCliBackendRuntime({ backend: "disabled-cli" })).toBeUndefined();
-    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(3);
+    // Bundled CLI backends are memoized process-wide (fixed for the process
+    // lifetime, not user/workspace scoped) - one snapshot load must serve
+    // every resolvePluginSetupCliBackendRuntime() call, not one per call.
+    // Re-deriving on every call used to call loadPluginMetadataSnapshot with
+    // an empty config object, which never matched the real gateway
+    // snapshot's policy hash and forced a full synchronous plugin manifest
+    // rescan on every isCliProvider() check (e.g. once per session row in
+    // sessions.list) - see mctl-openclaw#34.
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
       config: {},
       env: process.env,

@@ -48,6 +48,7 @@ export function createProviderApiKeyResolver(
   env: NodeJS.ProcessEnv,
   authStoreInput: AuthProfileStoreInput,
   config?: OpenClawConfig,
+  workspaceDir?: string,
 ): ProviderApiKeyResolver {
   return (provider: string): { apiKey: string | undefined; discoveryApiKey?: string } => {
     const authProvider = resolveProviderIdForAuth(provider, { config, env });
@@ -61,6 +62,7 @@ export function createProviderApiKeyResolver(
     const fromConfig = resolveConfigBackedProviderAuth({
       provider: authProvider,
       config,
+      workspaceDir,
     });
     if (fromConfig?.apiKey) {
       return {
@@ -86,6 +88,7 @@ export function createProviderAuthResolver(
   env: NodeJS.ProcessEnv,
   authStoreInput: AuthProfileStoreInput,
   config?: OpenClawConfig,
+  workspaceDir?: string,
 ): ProviderAuthResolver {
   return (provider: string, options?: { oauthMarker?: string }) => {
     const authProvider = resolveProviderIdForAuth(provider, { config, env });
@@ -145,6 +148,7 @@ export function createProviderAuthResolver(
     const fromConfig = resolveConfigBackedProviderAuth({
       provider: authProvider,
       config,
+      workspaceDir,
     });
     if (fromConfig) {
       return {
@@ -163,7 +167,11 @@ export function createProviderAuthResolver(
   };
 }
 
-function resolveConfigBackedProviderAuth(params: { provider: string; config?: OpenClawConfig }):
+function resolveConfigBackedProviderAuth(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+}):
   | {
       apiKey: string;
       discoveryApiKey?: string;
@@ -175,6 +183,7 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
   const synthetic = resolveProviderSyntheticAuthWithPlugin({
     provider: authProvider,
     config: params.config,
+    workspaceDir: params.workspaceDir,
     context: {
       config: params.config,
       provider: authProvider,
