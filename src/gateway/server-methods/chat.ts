@@ -217,7 +217,7 @@ import {
   resolveSessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
+import { setGatewayDedupeEntry } from "./agent-job.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 import {

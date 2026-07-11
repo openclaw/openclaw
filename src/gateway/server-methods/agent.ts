@@ -192,13 +192,7 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { waitForAgentJob } from "./agent-job.js";
-import {
-  readTerminalSnapshotFromGatewayDedupe,
-  setGatewayDedupeEntry,
-  type AgentWaitTerminalSnapshot,
-  waitForTerminalGatewayDedupe,
-} from "./agent-wait-dedupe.js";
+import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
@@ -4036,89 +4030,11 @@ export const agentHandlers: GatewayRequestHandlers = {
     const activeChatEntry = context.chatAbortControllers.get(runId);
     const hasActiveChatRun = activeChatEntry !== undefined && activeChatEntry.kind !== "agent";
 
-    const cachedGatewaySnapshot = readTerminalSnapshotFromGatewayDedupe({
-      dedupe: context.dedupe,
-      runId,
-      ignoreAgentTerminalSnapshot: hasActiveChatRun,
-    });
-    if (cachedGatewaySnapshot) {
-      respond(true, {
-        runId,
-        status: cachedGatewaySnapshot.status,
-        startedAt: cachedGatewaySnapshot.startedAt,
-        endedAt: cachedGatewaySnapshot.endedAt,
-        error: cachedGatewaySnapshot.error,
-        stopReason: cachedGatewaySnapshot.stopReason,
-        livenessState: cachedGatewaySnapshot.livenessState,
-        yielded: cachedGatewaySnapshot.yielded,
-        pendingError: cachedGatewaySnapshot.pendingError,
-        timeoutPhase: cachedGatewaySnapshot.timeoutPhase,
-        providerStarted: cachedGatewaySnapshot.providerStarted,
-      });
-      return;
-    }
-
-    const lifecycleAbortController = new AbortController();
-    const dedupeAbortController = new AbortController();
-    const dedupePromise = waitForTerminalGatewayDedupe({
-      dedupe: context.dedupe,
+    const snapshot = await waitForAgentJob({
       runId,
       timeoutMs,
-      signal: dedupeAbortController.signal,
-      ignoreAgentTerminalSnapshot: hasActiveChatRun,
+      ...(hasActiveChatRun ? { source: "chat" } : {}),
     });
-
-    if (hasActiveChatRun) {
-      const snapshot = await dedupePromise;
-      dedupeAbortController.abort();
-      if (!snapshot) {
-        respond(true, {
-          runId,
-          status: "timeout",
-          timeoutPhase: "gateway_draining",
-        });
-        return;
-      }
-      respond(true, {
-        runId,
-        status: snapshot.status,
-        startedAt: snapshot.startedAt,
-        endedAt: snapshot.endedAt,
-        error: snapshot.error,
-        stopReason: snapshot.stopReason,
-        livenessState: snapshot.livenessState,
-        yielded: snapshot.yielded,
-        pendingError: snapshot.pendingError,
-        timeoutPhase: snapshot.timeoutPhase,
-        providerStarted: snapshot.providerStarted,
-      });
-      return;
-    }
-
-    const lifecyclePromise = waitForAgentJob({
-      runId,
-      timeoutMs,
-      signal: lifecycleAbortController.signal,
-    });
-
-    const first = await Promise.race([
-      lifecyclePromise.then((snapshot) => ({ source: "lifecycle" as const, snapshot })),
-      dedupePromise.then((snapshot) => ({ source: "dedupe" as const, snapshot })),
-    ]);
-
-    let snapshot: AgentWaitTerminalSnapshot | Awaited<ReturnType<typeof waitForAgentJob>> =
-      first.snapshot;
-    if (snapshot) {
-      if (first.source === "lifecycle") {
-        dedupeAbortController.abort();
-      } else {
-        lifecycleAbortController.abort();
-      }
-    } else {
-      snapshot = first.source === "lifecycle" ? await dedupePromise : await lifecyclePromise;
-      lifecycleAbortController.abort();
-      dedupeAbortController.abort();
-    }
 
     if (!snapshot) {
       const activeRunRegistered = activeChatEntry !== undefined;
