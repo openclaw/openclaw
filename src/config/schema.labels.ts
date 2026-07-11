@@ -174,6 +174,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.auth.password": "Gateway Password",
   browser: "Browser",
   "browser.enabled": "Browser Enabled",
+  "browser.allowSystemProfileImport": "Allow System Profile Import",
   "browser.cdpUrl": "Browser CDP URL",
   "browser.actionTimeoutMs": "Browser Action Timeout (ms)",
   "browser.localLaunchTimeoutMs": "Browser Local Launch Timeout (ms)",
