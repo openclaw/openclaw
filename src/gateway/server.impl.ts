@@ -40,6 +40,7 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -73,6 +74,7 @@ import { recordRemoteNodeInfo, removeRemoteNodeInfo } from "../skills/runtime/re
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
+import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
@@ -1391,6 +1393,30 @@ export async function startGatewayServer(
     );
     Object.assign(runtimeState, runtimeServices);
 
+    const { createOperatorApprovalSessionEventRuntime } =
+      await import("./operator-approval-session-events.js");
+    // Managers publish through this runtime, while replay routes durable
+    // expiry back through the owning manager to release its parked waiter once.
+    let approvalManagersForReplay:
+      | {
+          exec: ExecApprovalManager;
+          plugin: ExecApprovalManager<PluginApprovalRequestPayload>;
+        }
+      | undefined;
+    const approvalSessionEvents = createOperatorApprovalSessionEventRuntime({
+      clients,
+      sessionMessageSubscribers,
+      broadcastToConnIds,
+      controlUiBasePath,
+      reconcileTerminal: (record) => {
+        const manager =
+          record.kind === "exec"
+            ? approvalManagersForReplay?.exec
+            : approvalManagersForReplay?.plugin;
+        return manager?.reconcileDurableTerminal(record) ?? false;
+      },
+    });
+
     const {
       execApprovalManager,
       forwardPluginApprovalRequest,
@@ -1411,10 +1437,12 @@ export async function startGatewayServer(
           stopChannel,
           getChannelAutostartSuppression: channelManager.getAutostartSuppression,
           logChannels,
+          onApprovalLifecycle: approvalSessionEvents.publish,
         }),
         coreGatewayHandlers: coreGatewayHandlersLocal,
       };
     });
+    approvalManagersForReplay = { exec: execApprovalManager, plugin: pluginApprovalManager };
     const attachedGatewayExtraHandlers: GatewayRequestHandlers = {
       ...pluginRegistry.gatewayHandlers,
       ...extraHandlers,
@@ -1652,6 +1680,7 @@ export async function startGatewayServer(
           execApprovalManager,
           forwardPluginApprovalRequest,
           pluginApprovalManager,
+          listSessionPendingApprovals: approvalSessionEvents.replay,
           loadGatewayModelCatalog,
           loadGatewayModelCatalogSnapshot,
           getHealthCache,

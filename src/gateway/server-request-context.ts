@@ -21,6 +21,7 @@ export type GatewayRequestContextParams = {
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
+  listSessionPendingApprovals: GatewayRequestContext["listSessionPendingApprovals"];
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
   loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"];
   getHealthCache: GatewayRequestContext["getHealthCache"];
@@ -107,6 +108,7 @@ export function createGatewayRequestContext(
     execApprovalManager: params.execApprovalManager,
     forwardPluginApprovalRequest: params.forwardPluginApprovalRequest,
     pluginApprovalManager: params.pluginApprovalManager,
+    listSessionPendingApprovals: params.listSessionPendingApprovals,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
     getHealthCache: params.getHealthCache,
