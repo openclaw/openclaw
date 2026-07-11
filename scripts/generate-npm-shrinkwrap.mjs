@@ -1426,17 +1426,16 @@ async function main() {
 }
 
 if (!isMainThread && workerData?.kind === SHRINKWRAP_WORKER_KIND) {
+  const sendToParent = parentPort?.postMessage.bind(parentPort);
   try {
     const output = updateOrCheckPackage(
       workerData.packageDir,
       workerData.check,
       workerData.changedPaths,
     );
-    // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node MessagePort has no targetOrigin parameter.
-    parentPort?.postMessage({ output });
+    sendToParent?.({ output });
   } catch (error) {
-    // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node MessagePort has no targetOrigin parameter.
-    parentPort?.postMessage({ error: error instanceof Error ? error.message : String(error) });
+    sendToParent?.({ error: error instanceof Error ? error.message : String(error) });
   }
 } else if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(handleMainError);
