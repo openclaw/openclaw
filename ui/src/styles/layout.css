@@ -106,19 +106,15 @@ html.openclaw-native-macos .shell-nav-expand {
 }
 
 /* Newer Mac apps host a native sidebar toggle in the titlebar next to
-   back/forward and add openclaw-native-nav; visually retire the floating
-   duplicate but keep it focusable: collapse focus restoration targets it
-   (app-host.ts) and keyboard/screen-reader users still need an in-page
-   expand control, so it reveals itself on keyboard focus like a skip link.
-   Older apps only add openclaw-native-macos and keep it visible. */
-html.openclaw-native-nav .shell-nav-expand {
-  opacity: 0;
-  pointer-events: none;
-}
-
-html.openclaw-native-nav .shell-nav-expand:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
+   back/forward and add openclaw-native-nav; the in-page toggles (desktop
+   collapse/expand plus the drawer hamburger below 1100px) would duplicate
+   it, so they disappear entirely (⌘B and the accessible titlebar button
+   cover keyboard/screen-reader use). Older apps only add
+   openclaw-native-macos and keep the web controls visible. */
+html.openclaw-native-nav .shell-nav-expand,
+html.openclaw-native-nav .sidebar-brand__collapse,
+html.openclaw-native-nav .topbar .topbar-nav-toggle {
+  display: none;
 }
 
 .shell--onboarding {
@@ -2019,6 +2015,12 @@ openclaw-session-menu[popover] {
   transition:
     margin-bottom 0.16s ease,
     margin-right 0.16s ease;
+}
+
+/* Programmatic focus anchor (tabindex="-1") used when collapsing the sidebar
+   with no visible in-page expand control; skip-link-style, so no ring. */
+.content:focus {
+  outline: none;
 }
 
 .content > * + * {
