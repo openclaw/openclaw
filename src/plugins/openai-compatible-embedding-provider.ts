@@ -29,6 +29,7 @@ const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
 
 /** Normalized OpenAI-compatible embedding client configuration. */
 export type OpenAICompatibleEmbeddingClient = {
+  providerId: string;
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
@@ -392,6 +393,10 @@ async function createOpenAICompatibleEmbeddingClient(
 ): Promise<OpenAICompatibleEmbeddingClient> {
   const resolvedProvider = resolveConfiguredProvider(options);
   const configuredProvider = resolvedProvider?.config;
+  const providerId =
+    resolvedProvider?.providerId ??
+    options.provider?.trim() ??
+    OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID;
   const remoteBaseUrl = normalizeOptionalString(options.remote?.baseUrl);
   const baseUrl = normalizeBaseUrl(remoteBaseUrl ?? configuredProvider?.baseUrl);
   const model = normalizeModel(options.model, options.provider);
@@ -412,6 +417,7 @@ async function createOpenAICompatibleEmbeddingClient(
   });
   const localServiceOptions = options as LocalServiceAwareEmbeddingOptions;
   return {
+    providerId,
     baseUrl,
     headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
@@ -419,10 +425,7 @@ async function createOpenAICompatibleEmbeddingClient(
     ...(configuredProvider?.localService && !remoteBaseUrl
       ? {
           localServiceTarget: {
-            providerId:
-              resolvedProvider?.providerId ??
-              options.provider?.trim() ??
-              OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+            providerId,
             baseUrl,
             headers,
           },
@@ -488,7 +491,7 @@ export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter 
         id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
         inlineBatchTimeoutMs: 10 * 60_000,
         cacheKeyData: {
-          provider: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+          provider: client.providerId,
           baseUrl: client.baseUrl,
           model: client.model,
           ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),

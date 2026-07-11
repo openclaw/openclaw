@@ -330,9 +330,18 @@ describe("openai-compatible generic embedding provider", () => {
     };
     options.acquireLocalService = acquireLocalService;
 
-    const { provider } = await createOpenAICompatibleEmbeddingProvider(options);
+    const result = await openAICompatibleEmbeddingProviderAdapter.create(options);
+    const provider = result.provider;
+    if (!provider) {
+      throw new Error("expected openai-compatible provider");
+    }
     await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
 
+    expect(result.runtime?.cacheKeyData).toMatchObject({
+      provider: "gpu-spark",
+      baseUrl: server.baseUrl,
+      model: "nomic-embed-text",
+    });
     expect(acquireLocalService).toHaveBeenCalledWith(
       {
         providerId: "gpu-spark",
