@@ -13,6 +13,8 @@ const WINDOWS_DEFAULT_ROUTE_COMMAND =
   "Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | " +
   "Select-Object -Property InterfaceAlias,InterfaceIndex,NextHop,RouteMetric,InterfaceMetric,DestinationPrefix | " +
   "ConvertTo-Json -Compress";
+const INVALID_WINDOWS_ROUTE_METRIC = Number.MAX_SAFE_INTEGER;
+const VALID_WINDOWS_ROUTE_METRIC_TEXT = /^(?:0|[1-9]\d*)$/;
 
 export type AdvertisedLanHostCandidate = {
   interfaceName: string;
@@ -61,14 +63,22 @@ function normalizeInterfaceName(name: unknown): string {
 }
 
 function normalizeMetric(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
+  if (value == null) {
+    return 0;
   }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? parsed : 0;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return 0;
+    }
+    if (!VALID_WINDOWS_ROUTE_METRIC_TEXT.test(trimmed)) {
+      return INVALID_WINDOWS_ROUTE_METRIC;
+    }
+    value = Number(trimmed);
   }
-  return 0;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : INVALID_WINDOWS_ROUTE_METRIC;
 }
 
 export function listAdvertisedLanHostCandidates(

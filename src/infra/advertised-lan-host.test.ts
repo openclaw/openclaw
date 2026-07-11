@@ -89,6 +89,17 @@ describe("advertised LAN host", () => {
     ).toEqual([{ interfaceName: "ethernet 2" }, { interfaceName: "ethernet" }]);
   });
 
+  it("sorts invalid Windows route metric strings after valid route metrics", () => {
+    expect(
+      parseWindowsDefaultRouteHints(
+        JSON.stringify([
+          { InterfaceAlias: "Wi-Fi", RouteMetric: "1abc", InterfaceMetric: 0 },
+          { InterfaceAlias: "Ethernet", RouteMetric: "20", InterfaceMetric: 0 },
+        ]),
+      ),
+    ).toEqual([{ interfaceName: "ethernet" }, { interfaceName: "wi-fi" }]);
+  });
+
   it("parses macOS and Linux default route interfaces", () => {
     expect(parseMacOsDefaultRouteHints("   route to: default\ninterface: en9\n")).toEqual([
       { interfaceName: "en9" },
@@ -127,6 +138,27 @@ describe("advertised LAN host", () => {
       ],
       { timeoutMs: 3_000, maxOutputBytes: 16 * 1024 },
     );
+  });
+
+  it("does not prefer a Windows route with an invalid metric prefix", async () => {
+    const runner = createRouteRunner(
+      JSON.stringify([
+        { InterfaceAlias: "Wi-Fi", RouteMetric: "1abc", InterfaceMetric: 0 },
+        { InterfaceAlias: "Ethernet", RouteMetric: "20", InterfaceMetric: 0 },
+      ]),
+    );
+
+    await expect(
+      resolveAdvertisedLanHost({
+        platform: "win32",
+        runCommandWithTimeout: runner,
+        networkInterfaces: () =>
+          ({
+            "Wi-Fi": [ipv4("192.168.1.20")],
+            Ethernet: [ipv4("10.0.0.5")],
+          }) as NetworkInterfacesSnapshot,
+      }),
+    ).resolves.toBe("10.0.0.5");
   });
 
   it("fails open to first private IPv4 when route probing times out", async () => {
