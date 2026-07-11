@@ -888,12 +888,21 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(first.aggregatePressureEngaged).toBe(true);
 
     const freshOutput = "OC99241_HARD_CAP_SENTINEL_".padEnd(4_000, "f");
+    const runtimeContextMessage = buildRuntimeContextCustomMessage("hard-cap runtime context");
+    if (!runtimeContextMessage) {
+      throw new Error("expected runtime context message");
+    }
+    const providerMessages = convertToLlm([
+      ...history,
+      makeToolResult(freshOutput, "fresh_hard_cap"),
+      runtimeContextMessage,
+    ] as AgentMessage[]) as AgentMessage[];
+    expect(
+      (providerMessages.at(-1) as { runtimeContextCarrier?: boolean } | undefined)
+        ?.runtimeContextCarrier,
+    ).toBe(true);
     const second = truncateOversizedToolResultsInMessages(
-      [
-        ...history,
-        makeToolResult(freshOutput, "fresh_hard_cap"),
-        makeUserMessage("queued steering"),
-      ],
+      providerMessages,
       1_000_000,
       8_000,
       100,
