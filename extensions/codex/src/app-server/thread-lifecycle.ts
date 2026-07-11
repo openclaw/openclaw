@@ -1456,12 +1456,12 @@ async function materializePendingSupervisionBranch(
           { cause },
         );
       }
-      // oxlint-disable-next-line eslint/preserve-caught-error -- AggregateError members and cause preserve both caught failures.
-      throw new AggregateError(
+      const aggregateError = new AggregateError(
         [error, cleanupStateError],
         "Codex supervised branch cleanup state could not be recorded",
-        { cause },
+        { cause: error },
       );
+      throw aggregateError;
     }
     if (cleanup.remaining.length > 0) {
       throw new CodexAppServerUnsafeSubscriptionError(

@@ -396,7 +396,7 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
         let output = outputPipe.fileHandleForReading
         let (stream, continuation) = AsyncStream<Data>.makeStream()
         output.readabilityHandler = { handle in
-            let data = handle.availableData
+            let data = handle.readSafely(upToCount: 64 * 1024)
             if data.isEmpty {
                 handle.readabilityHandler = nil
                 continuation.finish()
