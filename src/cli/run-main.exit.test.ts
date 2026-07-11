@@ -8,6 +8,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { loggingState } from "../logging/state.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import type { DeferredActivationResult } from "./gateway-cli/deferred-activation.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 import { runCli, shouldStartProxyForCli } from "./run-main.js";
@@ -40,7 +41,7 @@ const pinRuntimePathsMock = vi.hoisted(() => vi.fn());
 const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
 const waitForDeferredGatewayActivationMock = vi.hoisted(() =>
-  vi.fn(async () => ({ mode: "disabled" as const })),
+  vi.fn<() => Promise<DeferredActivationResult>>(async () => ({ mode: "disabled" as const })),
 );
 const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));

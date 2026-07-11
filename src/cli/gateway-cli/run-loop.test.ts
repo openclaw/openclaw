@@ -421,15 +421,8 @@ describe("runGatewayLoop", () => {
       const { runtime } = createRuntimeWithExitSignal();
       const beginBoot = vi.fn();
       const completeBoot = vi.fn();
-      let acquiredLock:
-        | {
-            release: ReturnType<typeof vi.fn>;
-          }
-        | undefined;
-      acquireGatewayLock.mockImplementationOnce(async (_opts?: { port?: number }) => {
-        acquiredLock = { release: vi.fn(async () => {}) };
-        return acquiredLock;
-      });
+      const releaseGatewayLock = vi.fn(async () => {});
+      acquireGatewayLock.mockResolvedValueOnce({ release: releaseGatewayLock });
       const start = vi.fn(async (_params?: { startupStartedAt?: number }) => {
         throw startupFailure;
       });
@@ -455,7 +448,7 @@ describe("runGatewayLoop", () => {
         reason: "b".repeat(500),
       });
       expect(acquireGatewayLock).toHaveBeenCalledTimes(1);
-      expect(acquiredLock?.release).toHaveBeenCalledTimes(1);
+      expect(releaseGatewayLock).toHaveBeenCalledTimes(1);
     });
   });
 
