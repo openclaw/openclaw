@@ -32,6 +32,7 @@ import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
+import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
 
 /**
  * Shared gateway request types used by every server-method module.
@@ -108,6 +109,8 @@ export type GatewayRequestContext = {
   disconnectClientsUsingSharedGatewayAuth?: () => void;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: NodeRegistry;
+  /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
+  workerEnvironmentService?: WorkerEnvironmentServiceContract;
   // Operator terminal session store. Absent in local/in-process contexts where
   // no PTY surface is served.
   terminalSessions?: TerminalSessionManager;

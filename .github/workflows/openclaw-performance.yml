@@ -171,6 +171,7 @@ jobs:
       MATRIX_REPEAT: ${{ matrix.repeat }}
       MATRIX_DEEP_PROFILE: ${{ matrix.deep_profile }}
       MATRIX_LIVE: ${{ matrix.live }}
+      OPENCLAW_OCM_RUNTIME_BUILD_PROFILE: ${{ (inputs.profile || 'diagnostic') == 'diagnostic' && 'sourcePerformance' || '' }}
     steps:
       - name: Decide lane
         id: lane
