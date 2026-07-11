@@ -58,7 +58,14 @@ function createHangingFetch(): ReturnType<typeof vi.fn> {
           reject(new Error("Expected fetch AbortSignal"));
           return;
         }
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        signal.addEventListener(
+          "abort",
+          () =>
+            reject(
+              signal.reason instanceof Error ? signal.reason : new Error("fetch request aborted"),
+            ),
+          { once: true },
+        );
       }),
   );
 }

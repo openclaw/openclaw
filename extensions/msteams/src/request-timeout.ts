@@ -39,3 +39,40 @@ export async function withMSTeamsRequestDeadline<T>(params: {
   const timeoutMs = resolveMSTeamsRequestTimeoutMs(params.deadline);
   return await withTimeout(params.work(), timeoutMs, params.label);
 }
+
+function createMSTeamsRequestTimeoutError(label: string): Error {
+  const error = new Error(`${label} timed out after ${MSTEAMS_REQUEST_TIMEOUT_MS}ms`);
+  error.name = "TimeoutError";
+  return error;
+}
+
+export async function withMSTeamsAbortableRequestTimeout<T>(params: {
+  label: string;
+  work: (signal: AbortSignal) => Promise<T>;
+}): Promise<T> {
+  const controller = new AbortController();
+  let timeoutError: Error | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      timeoutError = createMSTeamsRequestTimeoutError(params.label);
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, MSTEAMS_REQUEST_TIMEOUT_MS);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  const workPromise = params.work(controller.signal);
+
+  try {
+    return await Promise.race([workPromise, timeoutPromise]);
+  } catch (error) {
+    if (controller.signal.aborted && timeoutError) {
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
