@@ -19,7 +19,7 @@ import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-ty
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import {
   buildMoreDetailsSideCommand,
-  buildSideChatComposerDraft,
+  combineSideChatComposerDraft,
 } from "../../../lib/chat/side-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import {
@@ -49,7 +49,7 @@ import {
   renderStreamGroup,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
-import { handleChatSelectionPointerUp } from "./chat-selection-popup.ts";
+import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
@@ -124,6 +124,8 @@ type ChatThreadProps = {
   onScrollToBottom?: () => void;
   onChatScroll?: (event: Event) => void;
   onDraftChange: (next: string) => void;
+  /** Current composer draft; the selection popup preserves it when prefilling. */
+  getDraft?: () => string;
   onSend: () => void;
   onSetReply?: (target: ReplyTarget) => void;
   onFocusComposer?: () => void;
@@ -203,6 +205,9 @@ function getPinnedMessageSummary(message: unknown): string {
 
 export function resetChatThreadPresentationState(paneId?: string) {
   removeReplyContextMenu(paneId);
+  // The selection popup is body-portaled; pane teardown/route changes must
+  // drop it so it cannot outlive the render that owns its callbacks.
+  removeChatSelectionPopup();
   const states = paneId
     ? ([threadStates.get(paneId)].filter(Boolean) as ChatThreadState[])
     : [...threadStates.values()];
@@ -578,7 +583,7 @@ function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThre
       }
     },
     onAskSideChat: (selection) => {
-      const draft = buildSideChatComposerDraft(selection);
+      const draft = combineSideChatComposerDraft(selection, props.getDraft?.());
       if (draft) {
         props.onDraftChange(draft);
         props.onRequestUpdate?.();
