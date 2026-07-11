@@ -464,8 +464,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         ...closeMeta,
       };
       if (!client) {
-        const isExpectedStartupRetryClose =
-          closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE && code === GATEWAY_STARTUP_CLOSE_CODE;
+        const isExpectedStartupRetryClose = closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE;
         const logFn =
           isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) ||
           isExpectedStartupRetryClose ||
