@@ -1161,7 +1161,7 @@ function resolvePendingFinalDeliveryPayloads(params: {
         const metadata = getReplyPayloadMetadata(reply);
         return (
           metadata?.pendingFinalDeliveryIntentId === params.intentId &&
-          metadata.pendingFinalDeliveryRetryText !== undefined
+          metadata?.pendingFinalDeliveryRetryText !== undefined
         );
       })
     : [];
