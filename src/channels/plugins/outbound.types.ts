@@ -142,6 +142,7 @@ export type ChannelOutboundTargetRef = {
   threadId?: string | number | null;
 };
 
+/** Context for channel-native formatting sends that can observe delivery cancellation. */
 export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
   abortSignal?: AbortSignal;
 };
