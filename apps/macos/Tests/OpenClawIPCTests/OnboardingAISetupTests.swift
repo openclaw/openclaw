@@ -1369,7 +1369,7 @@ struct OnboardingAISetupTests {
         })
         let url = try #require(URL(string: "ws://example.invalid"))
         let gateway = GatewayConnection(
-            configProvider: { (url: url, token: "gateway-token", password: nil) },
+            configProvider: { (url: url, token: "completed-route", password: nil) },
             sessionBox: WebSocketSessionBox(session: session)
         )
         let route = try #require(await gateway.captureRoute())
@@ -1428,25 +1428,25 @@ struct OnboardingAISetupTests {
         let firstURL = try #require(URL(string: "ws://127.0.0.1:49152"))
         let reboundURL = try #require(URL(string: "ws://127.0.0.1:53241"))
         let first = GatewayConnection(
-            configProvider: { (url: firstURL, token: "route-token", password: "placeholder") },
+            configProvider: { (url: firstURL, token: "route-token", password: "route-password") },
             sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
                 GatewayTestWebSocketTask()
             }))
         )
         let rebound = GatewayConnection(
-            configProvider: { (url: reboundURL, token: "route-token", password: "placeholder") },
+            configProvider: { (url: reboundURL, token: "route-token", password: "route-password") },
             sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
                 GatewayTestWebSocketTask()
             }))
         )
         let changedPassword = GatewayConnection(
-            configProvider: { (url: reboundURL, token: "route-token", password: "redacted") },
+            configProvider: { (url: reboundURL, token: "route-token", password: "replacement-password") },
             sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
                 GatewayTestWebSocketTask()
             }))
         )
         let changedToken = GatewayConnection(
-            configProvider: { (url: reboundURL, token: "test-token-placeholder", password: "placeholder") },
+            configProvider: { (url: reboundURL, token: "replacement-token", password: "route-password") },
             sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
                 GatewayTestWebSocketTask()
             }))
@@ -1459,7 +1459,7 @@ struct OnboardingAISetupTests {
         let reboundFingerprint = try #require(reboundRoute.activationOwnershipFingerprint)
         let changedPasswordFingerprint = try #require(changedPasswordRoute.activationOwnershipFingerprint)
         let changedTokenFingerprint = try #require(changedTokenRoute.activationOwnershipFingerprint)
-        let legacyValues = [firstURL.absoluteString, "route-token", "placeholder"]
+        let legacyValues = [firstURL.absoluteString, "route-token", "route-password"]
         let legacyFrame = legacyValues.map { "\($0.utf8.count):\($0)" }.joined(separator: "|")
         let legacyVerifier = SHA256.hash(data: Data(legacyFrame.utf8))
             .map { String(format: "%02x", $0) }
@@ -1469,7 +1469,7 @@ struct OnboardingAISetupTests {
         #expect(firstFingerprint == reboundFingerprint)
         #expect(firstFingerprint != changedPasswordFingerprint)
         #expect(firstFingerprint != changedTokenFingerprint)
-        #expect(!firstFingerprint.contains("placeholder"))
+        #expect(!firstFingerprint.contains("route-password"))
     }
 
     @Test func `unsafe v3 credential fingerprint record is scrubbed`() throws {
