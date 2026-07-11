@@ -450,7 +450,7 @@ function resolvePinnedClientMetadata(params: {
     if (clientId === GATEWAY_CLIENT_IDS.ANDROID_APP && /^android(?:\s|$)/.test(value)) {
       return "android";
     }
-    if (clientId === GATEWAY_CLIENT_IDS.MACOS_APP && /^macos(?:\s|$)/.test(value)) {
+    if (clientId === GATEWAY_CLIENT_IDS.MACOS_APP && /^macos \d+(?:\.\d+){0,2}$/.test(value)) {
       return "macos";
     }
     return value;
