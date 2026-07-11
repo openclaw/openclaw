@@ -37,7 +37,7 @@ import {
   quarantineBlockedNavigationTarget,
   refLocator,
   restoreRoleRefsForTarget,
-  wasBrowserNavigationRequestBlockedBeforeDispatch,
+  wasBrowserNavigationSourcePreservedAfterPolicyDenial,
   withPageNavigationRequestGuard,
 } from "./pw-session.js";
 import {
@@ -591,7 +591,7 @@ async function awaitNavigationGuardedInteraction<T>(
   }).catch(async (err: unknown) => {
     if (
       isPolicyDenyNavigationError(err) &&
-      !wasBrowserNavigationRequestBlockedBeforeDispatch(err)
+      !wasBrowserNavigationSourcePreservedAfterPolicyDenial(err)
     ) {
       await quarantineUnsafeSource();
     }
@@ -2024,7 +2024,7 @@ export async function executeActViaPlaywright(
     }
     if (
       isPolicyDenyNavigationError(failure) &&
-      !wasBrowserNavigationRequestBlockedBeforeDispatch(failure)
+      !wasBrowserNavigationSourcePreservedAfterPolicyDenial(failure)
     ) {
       await quarantineBlockedNavigationTarget({
         cdpUrl: opts.cdpUrl,

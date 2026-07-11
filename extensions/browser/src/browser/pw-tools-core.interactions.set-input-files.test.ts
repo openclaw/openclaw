@@ -34,7 +34,7 @@ vi.mock("./pw-session.js", () => {
     markObservedDialogsHandledRemotelyForPage,
     refLocator,
     restoreRoleRefsForTarget,
-    wasBrowserNavigationRequestBlockedBeforeDispatch: vi.fn(() => false),
+    wasBrowserNavigationSourcePreservedAfterPolicyDenial: vi.fn(() => false),
     withPageNavigationRequestGuard: vi.fn(
       async ({
         action,

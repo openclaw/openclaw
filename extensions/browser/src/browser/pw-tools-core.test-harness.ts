@@ -93,7 +93,7 @@ const sessionMocks = vi.hoisted(() => ({
     return currentRefLocator;
   }),
   rememberRoleRefsForTarget: vi.fn(() => {}),
-  wasBrowserNavigationRequestBlockedBeforeDispatch: vi.fn(() => false),
+  wasBrowserNavigationSourcePreservedAfterPolicyDenial: vi.fn(() => false),
   withPageNavigationRequestGuard: vi.fn(
     async ({
       action,

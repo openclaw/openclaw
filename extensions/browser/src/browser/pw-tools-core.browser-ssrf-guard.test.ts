@@ -30,7 +30,7 @@ const sessionMocks = vi.hoisted(() => ({
   }),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   storeRoleRefsForTarget: vi.fn(() => {}),
-  wasBrowserNavigationRequestBlockedBeforeDispatch: vi.fn((_err: unknown) => false),
+  wasBrowserNavigationSourcePreservedAfterPolicyDenial: vi.fn((_err: unknown) => false),
   withPageNavigationRequestGuard: vi.fn(
     async ({
       action,
@@ -411,7 +411,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     sessionMocks.isPolicyDenyNavigationError.mockImplementationOnce(
       (err: unknown) => err === blocked,
     );
-    sessionMocks.wasBrowserNavigationRequestBlockedBeforeDispatch.mockReturnValueOnce(true);
+    sessionMocks.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockReturnValueOnce(true);
     sessionMocks.withPageNavigationRequestGuard.mockImplementationOnce(
       async ({
         action,
@@ -486,7 +486,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     pageState.page = { url: vi.fn(() => "about:blank") };
     pageState.locator = { hover: vi.fn(() => pendingHover) };
     sessionMocks.isPolicyDenyNavigationError.mockImplementation((err: unknown) => err === blocked);
-    sessionMocks.wasBrowserNavigationRequestBlockedBeforeDispatch.mockImplementation(
+    sessionMocks.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockImplementation(
       (err: unknown) => err === blocked,
     );
     sessionMocks.withPageNavigationRequestGuard.mockImplementationOnce(
@@ -543,7 +543,9 @@ describe("pw-tools-core browser SSRF guards", () => {
     releaseHover();
     await expect(task).rejects.toBe(blocked);
     sessionMocks.isPolicyDenyNavigationError.mockImplementation(() => false);
-    sessionMocks.wasBrowserNavigationRequestBlockedBeforeDispatch.mockImplementation(() => false);
+    sessionMocks.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockImplementation(
+      () => false,
+    );
   });
 
   it("returns abort once an in-flight policy decision allows the request", async () => {
@@ -622,7 +624,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     pageState.page = { url: vi.fn(() => "about:blank") };
     pageState.locator = { hover: vi.fn(() => pendingHover) };
     sessionMocks.isPolicyDenyNavigationError.mockImplementation((err: unknown) => err === blocked);
-    sessionMocks.wasBrowserNavigationRequestBlockedBeforeDispatch.mockImplementation(
+    sessionMocks.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockImplementation(
       (err: unknown) => err === blocked,
     );
     sessionMocks.withPageNavigationRequestGuard.mockImplementationOnce(
@@ -671,7 +673,9 @@ describe("pw-tools-core browser SSRF guards", () => {
     releaseHover();
     await expect(task).rejects.toBe(blocked);
     sessionMocks.isPolicyDenyNavigationError.mockImplementation(() => false);
-    sessionMocks.wasBrowserNavigationRequestBlockedBeforeDispatch.mockImplementation(() => false);
+    sessionMocks.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockImplementation(
+      () => false,
+    );
   });
 
   it("keeps the request guard for the full grace after an early safe post-check", async () => {

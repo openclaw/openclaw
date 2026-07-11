@@ -28,7 +28,7 @@ const refLocator = vi.fn(() => {
   return locator;
 });
 const restoreRoleRefsForTarget = vi.fn(() => {});
-const wasBrowserNavigationRequestBlockedBeforeDispatch = vi.fn(() => false);
+const wasBrowserNavigationSourcePreservedAfterPolicyDenial = vi.fn(() => false);
 const withPageNavigationRequestGuard = vi.fn(
   async ({
     action,
@@ -51,7 +51,7 @@ vi.mock("./pw-session.js", () => ({
   markObservedDialogsHandledRemotelyForPage,
   refLocator,
   restoreRoleRefsForTarget,
-  wasBrowserNavigationRequestBlockedBeforeDispatch,
+  wasBrowserNavigationSourcePreservedAfterPolicyDenial,
   withPageNavigationRequestGuard,
 }));
 

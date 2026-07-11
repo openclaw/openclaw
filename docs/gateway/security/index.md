@@ -481,8 +481,8 @@ Private/internal destinations stay blocked unless you explicitly opt in.
 - Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` unset, so private/internal/special-use destinations stay blocked. Legacy alias `allowPrivateNetwork` still accepted.
 - Opt-in: set `dangerouslyAllowPrivateNetwork: true` to allow those destinations.
 - In strict mode, use `hostnameAllowlist` (patterns like `*.example.com`) and `allowedHostnames` (exact host exceptions, including otherwise-blocked names like `localhost`) for explicit exceptions.
-- Direct navigation and document requests triggered by guarded Playwright hover, drag, and scroll actions are checked before dispatch, then best-effort re-checked on the final `http(s)` URL.
-- Page routing cannot prevent every browser egress path: redirect hops, a popup's first request, and Service Worker traffic can bypass Playwright interception. Final-URL checks remain detection/quarantine defense for those cases; complete prevention requires owner-side egress isolation or a filtering proxy.
+- Direct navigation requests are preflight checked. Guarded Playwright hover, drag, and scroll actions intercept policy-denied top-level and subframe document loads before HTTP request bytes, then best-effort re-check the final `http(s)` URL.
+- Managed Chrome profiles disable network prediction so Chromium does not speculatively resolve or preconnect for those denied loads. Page routing remains request-level interception, not a network firewall: redirect hops, a popup's first request, Service Worker traffic, and some background/subresource paths can bypass it, and other browser backends may not share the managed-profile hardening. Final-URL checks remain detection/quarantine defense; complete prevention requires owner-side egress isolation or a policy-enforcing proxy.
 
 ```json5
 {

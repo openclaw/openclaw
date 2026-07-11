@@ -16,7 +16,7 @@ import {
   getPageForTargetId,
   gotoPageWithNavigationGuard,
   listPagesViaPlaywright,
-  wasBrowserNavigationRequestBlockedBeforeDispatch,
+  wasBrowserNavigationSourcePreservedAfterPolicyDenial,
   withPageNavigationRequestGuard,
 } from "./pw-session.js";
 
@@ -801,7 +801,7 @@ describe("pw-session selected-page interaction request guard", () => {
     expect(pageUnroute).not.toHaveBeenCalled();
   });
 
-  it("fails closed before dispatch when strict policy uses an explicit browser proxy", async () => {
+  it("fails closed before request handling when strict policy uses an explicit browser proxy", async () => {
     const { getRouteHandler, mainFrame, page } = installBrowserMocks();
     const documentRoute = createMockRoute();
 
@@ -923,7 +923,7 @@ describe("pw-session selected-page interaction request guard", () => {
     { name: "top-level", frame: undefined },
     { name: "subframe", frame: {} },
   ])(
-    "answers a denied $name document before dispatch and preserves the source",
+    "answers a denied $name document through interception and preserves the source",
     async ({ frame }) => {
       const { getRouteHandler, mainFrame, page } = installBrowserMocks();
       const route = createMockRoute();
@@ -952,7 +952,7 @@ describe("pw-session selected-page interaction request guard", () => {
       expect(route.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
       expect(route.abort).not.toHaveBeenCalled();
       expect(route.fallback).not.toHaveBeenCalled();
-      expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(true);
+      expect(wasBrowserNavigationSourcePreservedAfterPolicyDenial(caught)).toBe(true);
       expect(page.url()).toBe("about:blank");
     },
   );
@@ -984,7 +984,7 @@ describe("pw-session selected-page interaction request guard", () => {
 
     expect(caught).toBeInstanceOf(SsrFBlockedError);
     expect(route.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
-    expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(false);
+    expect(wasBrowserNavigationSourcePreservedAfterPolicyDenial(caught)).toBe(false);
   });
 
   it("reports policy detection before a pending fulfillment settles", async () => {
@@ -1154,7 +1154,7 @@ describe("pw-session selected-page interaction request guard", () => {
 
     expect(caught).toBeInstanceOf(SsrFBlockedError);
     expect(route.abort).toHaveBeenCalledTimes(1);
-    expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(false);
+    expect(wasBrowserNavigationSourcePreservedAfterPolicyDenial(caught)).toBe(false);
   });
 
   it("prefers a later policy denial over an earlier route failure", async () => {
@@ -1193,7 +1193,7 @@ describe("pw-session selected-page interaction request guard", () => {
     expect(caught).toBeInstanceOf(SsrFBlockedError);
     expect(allowedRoute.abort).toHaveBeenCalledTimes(1);
     expect(deniedRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
-    expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(false);
+    expect(wasBrowserNavigationSourcePreservedAfterPolicyDenial(caught)).toBe(false);
   });
 
   it("removes its exact route when the action fails before a request", async () => {

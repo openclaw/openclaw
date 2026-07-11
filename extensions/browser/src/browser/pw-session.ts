@@ -1363,7 +1363,7 @@ async function fallbackRouteSafely(route: Route): Promise<void> {
   }
 }
 
-const blockedBeforeDispatchErrors = new WeakSet<object>();
+const sourcePreservedPolicyDenials = new WeakSet<object>();
 
 async function removePageNavigationRequestGuard(
   page: Page,
@@ -1386,9 +1386,9 @@ async function removePageNavigationRequestGuard(
   return undefined;
 }
 
-/** Return true when Playwright answered the denied request before dispatch. */
-export function wasBrowserNavigationRequestBlockedBeforeDispatch(err: unknown): boolean {
-  return typeof err === "object" && err !== null && blockedBeforeDispatchErrors.has(err);
+/** Return true when policy denial left the selected page on its source document. */
+export function wasBrowserNavigationSourcePreservedAfterPolicyDenial(err: unknown): boolean {
+  return typeof err === "object" && err !== null && sourcePreservedPolicyDenials.has(err);
 }
 
 /** Run one selected-page action while guarding document requests. */
@@ -1458,13 +1458,13 @@ export async function withPageNavigationRequestGuard<T>(
       sourcePreserved = true;
     }
     if (sourcePreserved === undefined) {
-      blockedBeforeDispatchErrors.delete(firstGuardError);
+      sourcePreservedPolicyDenials.delete(firstGuardError);
       return;
     }
     if (sourcePreserved) {
-      blockedBeforeDispatchErrors.add(firstGuardError);
+      sourcePreservedPolicyDenials.add(firstGuardError);
     } else {
-      blockedBeforeDispatchErrors.delete(firstGuardError);
+      sourcePreservedPolicyDenials.delete(firstGuardError);
     }
     if (policyDeniedDetected && sourcePreserved !== lastNotifiedSourcePreserved) {
       lastNotifiedSourcePreserved = sourcePreserved;
@@ -1487,8 +1487,8 @@ export async function withPageNavigationRequestGuard<T>(
       deniedDocumentCount += 1;
       pendingDeniedDocumentCount += 1;
       try {
-        // A 204 navigation response prevents the request while Chromium keeps
-        // the selected page's current document. route.abort() commits an error page.
+        // A synthetic 204 stops the document load while Chromium keeps the
+        // selected page's current document. route.abort() commits an error page.
         await route.fulfill({ status: 204, body: "" });
         fulfilledDeniedDocumentCount += 1;
         pendingDeniedDocumentCount -= 1;
@@ -1496,7 +1496,7 @@ export async function withPageNavigationRequestGuard<T>(
         return;
       } catch {
         pendingDeniedDocumentCount -= 1;
-        // Abort still prevents dispatch, but the source may no longer be usable.
+        // Abort still stops the document load, but the source may no longer be usable.
       }
     }
     if (preserveDocument) {
@@ -1593,7 +1593,7 @@ export async function withPageNavigationRequestGuard<T>(
   }
 
   // Request-policy denial wins over locator/action/cleanup errors. Only 204
-  // responses prove that every denied document was blocked and source-preserved.
+  // responses prove that every denied document was intercepted and source-preserved.
   if (hasGuardError) {
     const sourcePreserved =
       isPolicyDenyNavigationError(firstGuardError) &&
@@ -1605,9 +1605,9 @@ export async function withPageNavigationRequestGuard<T>(
       firstGuardError !== null;
     if (typeof firstGuardError === "object" && firstGuardError !== null) {
       if (sourcePreserved) {
-        blockedBeforeDispatchErrors.add(firstGuardError);
+        sourcePreservedPolicyDenials.add(firstGuardError);
       } else {
-        blockedBeforeDispatchErrors.delete(firstGuardError);
+        sourcePreservedPolicyDenials.delete(firstGuardError);
       }
     }
     throw toLintErrorObject(firstGuardError, "Non-Error thrown");

@@ -290,8 +290,8 @@ main model can read the screenshot directly.
 
 <Accordion title="SSRF policy">
 
-- Browser navigation, open-tab, and document requests triggered by guarded Playwright hover, drag, and scroll actions are SSRF-guarded before dispatch and best-effort re-checked on the final `http(s)` URL afterwards.
-- Playwright page routing does not intercept redirect hops, a popup's first request, or Service Worker traffic. Those paths retain best-effort post-navigation detection; do not treat the browser SSRF policy as complete browser egress isolation.
+- Browser navigation and open-tab requests are preflight checked. Guarded Playwright hover, drag, and scroll actions intercept policy-denied top-level and subframe document loads before HTTP request bytes, then best-effort re-check the final `http(s)` URL.
+- OpenClaw-managed Chrome profiles disable network prediction so Chromium does not speculatively resolve or preconnect for those denied loads. Playwright routing is still not a network firewall: it does not intercept redirect hops, a popup's first request, Service Worker traffic, or every background/subresource path. Other browser backends may also lack the managed-profile hardening. Complete egress isolation requires owner-side isolation or a policy-enforcing proxy.
 - In strict SSRF mode, remote CDP endpoint discovery and `/json/version` probes (`cdpUrl`) are checked too.
 - Gateway/provider `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables do not automatically proxy the OpenClaw-managed browser. Managed Chrome launches direct by default so provider proxy settings do not weaken browser SSRF checks.
 - OpenClaw-managed local CDP readiness probes and DevTools WebSocket connections bypass the managed network proxy for the exact launched loopback endpoint, so `openclaw browser start` still works when an operator proxy blocks loopback egress.

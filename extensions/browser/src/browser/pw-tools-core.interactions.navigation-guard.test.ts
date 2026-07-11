@@ -1381,7 +1381,7 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
   });
 
-  it("does not quarantine a source page when a denied request was answered before dispatch", async () => {
+  it("does not quarantine a source page preserved after policy denial", async () => {
     const page = { url: vi.fn(() => "about:blank") };
     const blocked = new Error("browser navigation blocked by policy");
     blocked.name = "SsrFBlockedError";
@@ -1389,7 +1389,7 @@ describe("pw-tools-core interaction navigation guard", () => {
     setPwToolsCoreCurrentRefLocator({ hover: vi.fn(async () => {}) });
     getPwToolsCoreSessionMocks().withPageNavigationRequestGuard.mockRejectedValueOnce(blocked);
     getPwToolsCoreSessionMocks()
-      .wasBrowserNavigationRequestBlockedBeforeDispatch.mockReturnValueOnce(true)
+      .wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockReturnValueOnce(true)
       .mockReturnValueOnce(true);
 
     await expect(
