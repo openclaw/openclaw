@@ -3239,8 +3239,10 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.deleteCurrentMessage).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).not.toHaveBeenCalled();
     expect(draftStream.update).toHaveBeenLastCalledWith("🛠️ Exec");
+    // The tool update creates a fresh draft after the commentary draft was
+    // deleted; with no final reply, cleanup removes that unfinished message.
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
   it("does not update Discord commentary progress after final answer delivery starts", async () => {
