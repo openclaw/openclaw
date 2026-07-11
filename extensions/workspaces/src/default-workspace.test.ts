@@ -31,6 +31,17 @@ describe("default Workspaces document", () => {
     expect(activity?.grid).toMatchObject({ x: 0, w: 12 });
   });
 
+  it("scopes the Today cards to one calendar day", () => {
+    const widgets = DEFAULT_WORKSPACE.tabs[0].widgets;
+    for (const id of ["cost-today", "tokens-today"]) {
+      expect(widgets.find((widget) => widget.id === id)?.bindings?.value).toEqual({
+        source: "rpc",
+        method: "usage.cost",
+        params: { days: 1 },
+      });
+    }
+  });
+
   it("binds only allowlisted rpc methods", () => {
     for (const tab of DEFAULT_WORKSPACE.tabs) {
       for (const widget of tab.widgets) {

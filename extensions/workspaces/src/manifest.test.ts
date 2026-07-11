@@ -198,6 +198,28 @@ describe("loadWidgetManifest", () => {
     });
   });
 
+  it("refuses to approve a hardlink to a file outside the widget directory", async () => {
+    await withWidget(async ({ stateDir, widgetDir }) => {
+      const outsideFile = path.join(stateDir, "outside-secret.txt");
+      await fs.writeFile(outsideFile, "top secret");
+      await fs.link(outsideFile, path.join(widgetDir, "leak.txt"));
+
+      await expect(snapshotApprovedWidget("demo", { stateDir })).rejects.toThrow(
+        "widget file is unsafe: leak.txt",
+      );
+    });
+  });
+
+  it("refuses to approve a symlink substituted for the widget directory", async () => {
+    await withWidget(async ({ stateDir, widgetDir }) => {
+      const outsideDir = path.join(stateDir, "outside-widget");
+      await fs.rename(widgetDir, outsideDir);
+      await fs.symlink(outsideDir, widgetDir, "dir");
+
+      await expect(snapshotApprovedWidget("demo", { stateDir })).rejects.toThrow();
+    });
+  });
+
   it("refuses a widget with no manifest at all", async () => {
     await withWidget(async ({ stateDir, widgetDir }) => {
       await fs.rm(path.join(widgetDir, "widget.json"));

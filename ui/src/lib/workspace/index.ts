@@ -6,6 +6,7 @@
 // pure render fns and the page/controller is thin lifecycle glue.
 
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import { buildSessionUsageDateParams } from "../sessions/usage.ts";
 import {
   WORKSPACE_GRID_COLUMNS,
   workspaceAgentProvenance,
@@ -707,7 +708,11 @@ export async function resolveBinding(
       if (!binding.method) {
         return { error: "Binding is missing an rpc method." };
       }
-      const value = await client.request(binding.method, binding.params ?? {});
+      const params =
+        binding.method === "usage.cost" && binding.params?.mode === undefined
+          ? { ...binding.params, ...buildSessionUsageDateParams("local") }
+          : (binding.params ?? {});
+      const value = await client.request(binding.method, params);
       return { value: applyPointer(value, binding.pointer) };
     }
     // file: `workspaces.data.read` accepts ONLY a `binding` param (its readParams

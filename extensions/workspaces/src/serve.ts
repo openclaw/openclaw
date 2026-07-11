@@ -5,13 +5,13 @@
 // Every rejection returns 404
 // (never 403) so the route never leaks whether a widget or file exists.
 //
-// The path jail copies the canvas idiom verbatim (`extensions/canvas/src/
-// documents.ts:79,107,180-184`): charset-checked name, logical-path normalization,
-// then a resolve-based containment check against the widget's own directory.
+// The path jail combines strict logical-path normalization with the shared
+// race-safe rooted reader, which rejects symlinks, hardlinks, and escapes.
 
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   CUSTOM_WIDGET_NAME_PATTERN,
@@ -217,43 +217,46 @@ export async function serveWidgetAsset(
     return notFound(res);
   }
 
-  const stateDir = deps.stateDir ?? resolveStateDir();
+  const stateDir = path.resolve(deps.stateDir ?? resolveStateDir());
   let widgetDir: string;
   try {
     widgetDir = resolveWidgetDir(parsed.name, stateDir);
   } catch {
     return notFound(res);
   }
-  const candidate = path.resolve(widgetDir, parsed.logicalPath);
-  // Containment check (canvas documents.ts:180-184): the resolved file must live
-  // inside the widget's own directory. This is the last line of defense against a
-  // symlink or normalization edge that escapes the jail.
-  if (candidate !== widgetDir && !candidate.startsWith(`${widgetDir}${path.sep}`)) {
-    return notFound(res);
-  }
-
   let data: Buffer;
   try {
-    // realpath resolves symlinks; re-check containment against the widget dir's
-    // OWN real path so a symlink INSIDE the widget dir pointing OUT cannot be
-    // served. Resolving both sides also makes the check correct on platforms
-    // where the state dir itself is a symlink (e.g. macOS /tmp → /private/tmp).
-    const realDir = await fs.realpath(widgetDir);
-    const real = await fs.realpath(candidate);
-    if (real !== realDir && !real.startsWith(`${realDir}${path.sep}`)) {
+    // Widget files stay writable after approval. Pin and validate the opened file
+    // so post-approval symlink, hardlink, and oversized swaps all fail closed.
+    const widgetRoot = await fsRoot(stateDir, {
+      hardlinks: "reject",
+      maxBytes: MAX_WIDGET_FILE_BYTES,
+      nonBlockingRead: true,
+      symlinks: "reject",
+    });
+    const widgetStat = await fs.lstat(widgetDir);
+    const widgetReal = await fs.realpath(widgetDir);
+    const expectedWidgetReal = path.join(widgetRoot.rootReal, "workspaces", "widgets", parsed.name);
+    if (
+      widgetStat.isSymbolicLink() ||
+      !widgetStat.isDirectory() ||
+      widgetReal !== expectedWidgetReal
+    ) {
       return notFound(res);
     }
-    const stat = await fs.stat(real);
-    if (!stat.isFile()) {
+    const read = await widgetRoot.read(
+      path.posix.join("workspaces", "widgets", parsed.name, parsed.logicalPath),
+      {
+        hardlinks: "reject",
+        maxBytes: MAX_WIDGET_FILE_BYTES,
+        nonBlockingRead: true,
+        symlinks: "reject",
+      },
+    );
+    if (read.realPath !== widgetReal && !read.realPath.startsWith(`${widgetReal}${path.sep}`)) {
       return notFound(res);
     }
-    // Widget files stay writable after approval, and this route is unauthenticated.
-    // Refuse an oversized file before reading it: a swapped-in giant asset would
-    // otherwise be buffered in full only to fail the digest check below.
-    if (stat.size > MAX_WIDGET_FILE_BYTES) {
-      return notFound(res);
-    }
-    data = await fs.readFile(real);
+    data = read.buffer;
   } catch {
     return notFound(res);
   }

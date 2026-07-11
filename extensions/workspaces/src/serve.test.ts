@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { snapshotApprovedWidget } from "./manifest.js";
 import {
@@ -11,6 +13,8 @@ import {
   WIDGETS_ROUTE_PREFIX,
 } from "./serve.js";
 import { WorkspaceStore } from "./store.js";
+
+const execFileAsync = promisify(execFile);
 
 type CapturedResponse = {
   statusCode: number;
@@ -270,6 +274,59 @@ describe("serveWidgetAsset security jail", () => {
       expect(captured.statusCode).toBe(404);
     });
   });
+
+  it("404s a post-approval hardlink even when its bytes match the approved file", async () => {
+    await withApprovedWidget(async ({ store, stateDir, widgetDir }) => {
+      const appPath = path.join(widgetDir, "app.js");
+      const approvedBytes = await fs.readFile(appPath);
+      const outsideFile = path.join(stateDir, "outside-app.js");
+      await fs.writeFile(outsideFile, approvedBytes);
+      await fs.rm(appPath);
+      await fs.link(outsideFile, appPath);
+
+      const { res, captured } = fakeResponse();
+      await serveWidgetAsset({ method: "GET", pathname: urlFor("revenue-chart", "app.js") }, res, {
+        store,
+        stateDir,
+      });
+      expect(captured.statusCode).toBe(404);
+    });
+  });
+
+  it("404s a symlink substituted for the approved widget directory", async () => {
+    await withApprovedWidget(async ({ store, stateDir, widgetDir }) => {
+      const outsideDir = path.join(stateDir, "outside-widget");
+      await fs.rename(widgetDir, outsideDir);
+      await fs.symlink(outsideDir, widgetDir, "dir");
+
+      const { res, captured } = fakeResponse();
+      await serveWidgetAsset(
+        { method: "GET", pathname: urlFor("revenue-chart", "index.html") },
+        res,
+        { store, stateDir },
+      );
+      expect(captured.statusCode).toBe(404);
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "404s a post-approval named pipe without blocking",
+    async () => {
+      await withApprovedWidget(async ({ store, stateDir, widgetDir }) => {
+        const appPath = path.join(widgetDir, "app.js");
+        await fs.rm(appPath);
+        await execFileAsync("mkfifo", [appPath]);
+
+        const { res, captured } = fakeResponse();
+        await serveWidgetAsset(
+          { method: "GET", pathname: urlFor("revenue-chart", "app.js") },
+          res,
+          { store, stateDir },
+        );
+        expect(captured.statusCode).toBe(404);
+      });
+    },
+  );
 
   it("404s on a non-GET method", async () => {
     await withApprovedWidget(async ({ store, stateDir }) => {

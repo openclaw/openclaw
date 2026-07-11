@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeWorkspaceDataLogicalPath } from "./binding-contract.js";
 
@@ -37,6 +38,7 @@ export const WIDGET_CONTENT_TYPES: Record<string, string> = {
 
 /** Max servable files one widget may have; keeps the approval digest bounded. */
 const MAX_WIDGET_FILES = 64;
+const MAX_WIDGET_TREE_ENTRIES = 256;
 /**
  * Byte caps on the assets approval hashes. Pending widget files are agent-authored
  * and untrusted: without a cap, dropping one huge file into the scaffold directory
@@ -57,6 +59,34 @@ export type ApprovedWidgetSnapshot = {
   manifest: WidgetManifest;
 };
 
+type WidgetRoot = Awaited<ReturnType<typeof fsRoot>>;
+
+async function listServableWidgetFiles(
+  stateRoot: WidgetRoot,
+  widgetRelativeDir: string,
+): Promise<string[]> {
+  const files: string[] = [];
+  let entriesSeen = 0;
+  async function visit(relativeDir: string, logicalDir: string): Promise<void> {
+    const entries = await stateRoot.list(relativeDir, { withFileTypes: true });
+    for (const entry of entries) {
+      entriesSeen += 1;
+      if (entriesSeen > MAX_WIDGET_TREE_ENTRIES) {
+        throw new Error(`widget has more than ${MAX_WIDGET_TREE_ENTRIES} filesystem entries`);
+      }
+      const relative = path.posix.join(relativeDir, entry.name);
+      const logical = path.posix.join(logicalDir, entry.name);
+      if (entry.isDirectory) {
+        await visit(relative, logical);
+      } else if (entry.isFile && path.extname(logical).toLowerCase() in WIDGET_CONTENT_TYPES) {
+        files.push(logical);
+      }
+    }
+  }
+  await visit(widgetRelativeDir, "");
+  return files;
+}
+
 /**
  * Reads a widget's directory once and returns both the digests of every servable
  * file and the manifest parsed from the very bytes that were hashed.
@@ -73,12 +103,35 @@ export async function snapshotApprovedWidget(
   name: string,
   options: { stateDir?: string } = {},
 ): Promise<ApprovedWidgetSnapshot> {
-  const widgetDir = resolveWidgetDir(name, options.stateDir);
-  let entries;
+  const stateDir = path.resolve(options.stateDir ?? resolveStateDir());
+  const widgetDir = resolveWidgetDir(name, stateDir);
+  const widgetRelativeDir = path.posix.join("workspaces", "widgets", name);
+  let widgetRoot: WidgetRoot;
+  let widgetReal: string;
+  let logicalFiles: string[];
   try {
-    entries = await fs.readdir(widgetDir, { recursive: true, withFileTypes: true });
+    widgetRoot = await fsRoot(stateDir, {
+      hardlinks: "reject",
+      maxBytes: MAX_WIDGET_FILE_BYTES,
+      nonBlockingRead: true,
+      symlinks: "reject",
+    });
+    const widgetStat = await fs.lstat(widgetDir);
+    widgetReal = await fs.realpath(widgetDir);
+    const expectedWidgetReal = path.join(widgetRoot.rootReal, "workspaces", "widgets", name);
+    if (
+      widgetStat.isSymbolicLink() ||
+      !widgetStat.isDirectory() ||
+      widgetReal !== expectedWidgetReal
+    ) {
+      throw new Error("widget directory is unsafe");
+    }
+    logicalFiles = await listServableWidgetFiles(widgetRoot, widgetRelativeDir);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (
+      (error as NodeJS.ErrnoException).code === "ENOENT" ||
+      (error instanceof FsSafeError && error.code === "not-found")
+    ) {
       throw new Error(`workspace widget not found: ${name}`, { cause: error });
     }
     throw error;
@@ -86,28 +139,36 @@ export async function snapshotApprovedWidget(
   const files: Record<string, string> = {};
   let manifestBytes: Buffer | undefined;
   let totalBytes = 0;
-  for (const entry of entries) {
-    if (!entry.isFile()) {
-      continue;
-    }
-    const absolute = path.join(entry.parentPath, entry.name);
-    const logical = path.relative(widgetDir, absolute).split(path.sep).join("/");
-    if (!(path.extname(logical).toLowerCase() in WIDGET_CONTENT_TYPES)) {
-      continue;
-    }
+  for (const logical of logicalFiles) {
     if (Object.keys(files).length >= MAX_WIDGET_FILES) {
       throw new Error(`widget has more than ${MAX_WIDGET_FILES} servable files`);
     }
-    // Check the size before reading: the bytes are untrusted until approved.
-    const size = (await fs.stat(absolute)).size;
-    if (size > MAX_WIDGET_FILE_BYTES) {
-      throw new Error(`widget file is too large: ${logical}`);
+    let bytes: Buffer;
+    try {
+      // Pin and validate the opened file before reading. A same-user agent can
+      // create hardlinks, so path containment alone cannot define approval.
+      const read = await widgetRoot.read(path.posix.join(widgetRelativeDir, logical), {
+        hardlinks: "reject",
+        maxBytes: MAX_WIDGET_FILE_BYTES,
+        nonBlockingRead: true,
+        symlinks: "reject",
+      });
+      // The state-root reader blocks escapes, while this identity check also
+      // blocks a widget-directory swap to another location inside stateDir.
+      if (read.realPath !== widgetReal && !read.realPath.startsWith(`${widgetReal}${path.sep}`)) {
+        throw new Error("widget directory changed during approval");
+      }
+      bytes = read.buffer;
+    } catch (error) {
+      if (error instanceof FsSafeError && error.code === "too-large") {
+        throw new Error(`widget file is too large: ${logical}`, { cause: error });
+      }
+      throw new Error(`widget file is unsafe: ${logical}`, { cause: error });
     }
-    totalBytes += size;
+    totalBytes += bytes.byteLength;
     if (totalBytes > MAX_WIDGET_TOTAL_BYTES) {
       throw new Error("widget assets exceed the approval size limit");
     }
-    const bytes = await fs.readFile(absolute);
     files[logical] = hashBytes(bytes);
     if (logical === "widget.json") {
       manifestBytes = bytes;

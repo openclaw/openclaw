@@ -332,9 +332,8 @@ describe("binding resolution", () => {
   });
 
   it("resolves rpc bindings on the client and applies the pointer", async () => {
-    const client = mockClient({
-      request: vi.fn(async () => ({ revenue: 1000 })) as never,
-    });
+    const request = vi.fn(async () => ({ revenue: 1000 }));
+    const client = mockClient({ request: request as never });
     const result = await resolveBinding(client, {
       source: "rpc",
       method: "workspaces.stats",
@@ -342,7 +341,38 @@ describe("binding resolution", () => {
       pointer: "/revenue",
     });
     expect(result).toEqual({ value: 1000 });
-    expect(client.request).toHaveBeenCalledWith("workspaces.stats", { scope: "month" });
+    expect(request).toHaveBeenCalledWith("workspaces.stats", { scope: "month" });
+  });
+
+  it("resolves usage.cost bindings in the browser's local calendar day", async () => {
+    const request = vi.fn(async () => ({ totals: { totalCost: 1 } }));
+    const client = mockClient({ request: request as never });
+
+    await resolveBinding(client, {
+      source: "rpc",
+      method: "usage.cost",
+      params: { days: 1 },
+    });
+
+    expect(request).toHaveBeenCalledWith("usage.cost", {
+      days: 1,
+      mode: "specific",
+      timeZone: expect.any(String),
+      utcOffset: expect.stringMatching(/^UTC[+-]/),
+    });
+  });
+
+  it("preserves an explicit usage.cost timezone mode", async () => {
+    const request = vi.fn(async () => ({}));
+    const client = mockClient({ request: request as never });
+
+    await resolveBinding(client, {
+      source: "rpc",
+      method: "usage.cost",
+      params: { days: 1, mode: "utc" },
+    });
+
+    expect(request).toHaveBeenCalledWith("usage.cost", { days: 1, mode: "utc" });
   });
 
   it("resolves file bindings via workspaces.data.read matching the real gateway contract", async () => {
