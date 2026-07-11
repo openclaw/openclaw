@@ -252,7 +252,7 @@ describe("trajectory cleanup", () => {
     });
   });
 
-  it("continues best-effort cleanup when one artifact cannot be archived", async () => {
+  it("commits the runtime archive even when the pointer archive fails best-effort", async () => {
     await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
       const sessionId = "session-4";
       const storePath = path.join(dir, "sessions.json");
@@ -261,8 +261,19 @@ describe("trajectory cleanup", () => {
       const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
       await fs.writeFile(runtimeFile, runtimeEvent(sessionId), "utf8");
       await fs.writeFile(pointerPath, pointerFile(sessionId, runtimeFile), "utf8");
-      const archiveFailure = Object.assign(new Error("busy"), { code: "EBUSY" });
-      const renameSpy = vi.spyOn(nodeFs.promises, "rename").mockRejectedValueOnce(archiveFailure);
+
+      // Fail ONLY the pointer's archive rename. The runtime archive (the
+      // disposal commit point) still succeeds, so the pointer is the sole
+      // best-effort casualty — the runtime is not held hostage to it.
+      const originalRename = nodeFs.promises.rename.bind(nodeFs.promises);
+      const renameSpy = vi
+        .spyOn(nodeFs.promises, "rename")
+        .mockImplementation(async (src: nodeFs.PathLike, dest: nodeFs.PathLike) => {
+          if (String(src) === pointerPath) {
+            throw Object.assign(new Error("busy"), { code: "EBUSY" });
+          }
+          return originalRename(src, dest);
+        });
 
       try {
         const removed = await removeSessionTrajectoryArtifacts({
@@ -273,11 +284,88 @@ describe("trajectory cleanup", () => {
           disposal: { mode: "tombstone", reason: "deleted" },
         });
 
-        const pointerTombstone = await expectTombstoned(pointerPath, "deleted");
-        expect(removed).toEqual([{ kind: "pointer", path: pointerTombstone }]);
-        // The runtime rename was the one made to fail — it stays exactly where
+        const runtimeTombstone = await expectTombstoned(runtimeFile, "deleted");
+        expect(removed).toEqual([{ kind: "runtime", path: runtimeTombstone }]);
+        // The pointer rename was the one made to fail — it stays exactly where
         // it was, not tombstoned, matching the best-effort contract.
+        expect((await fs.stat(pointerPath)).isFile()).toBe(true);
+      } finally {
+        renameSpy.mockRestore();
+      }
+    });
+  });
+
+  it("leaves the trajectory pair fully live when the runtime archive fails, then disposes on retry", async () => {
+    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+      const sessionId = "session-9";
+      const storePath = path.join(dir, "sessions.json");
+      const sessionFile = path.join(dir, `${sessionId}.jsonl`);
+      const runtimeFile = resolveTrajectoryFilePath({ env: {}, sessionFile, sessionId });
+      const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
+      await fs.writeFile(runtimeFile, runtimeEvent(sessionId), "utf8");
+      await fs.writeFile(pointerPath, pointerFile(sessionId, runtimeFile), "utf8");
+
+      // A live writer owns the canonical path. Its lease incarnation must
+      // survive a failed disposal unchanged so it can still flush afterwards —
+      // the rollback restores the prior entry verbatim, it does not re-claim.
+      const canonicalPath = canonicalizeTrajectoryPath(runtimeFile);
+      const lease = await acquireTrajectoryWriterLease({ sessionId, candidatePath: runtimeFile });
+      const liveIncarnation = lease.incarnation;
+
+      // Fail ONLY the runtime file's archive rename (the commit point);
+      // everything else, including the retry below, renames normally.
+      const originalRename = nodeFs.promises.rename.bind(nodeFs.promises);
+      let failRuntimeRename = true;
+      const renameSpy = vi
+        .spyOn(nodeFs.promises, "rename")
+        .mockImplementation(async (src: nodeFs.PathLike, dest: nodeFs.PathLike) => {
+          if (failRuntimeRename && String(src) === runtimeFile) {
+            throw Object.assign(new Error("busy"), { code: "EBUSY" });
+          }
+          return originalRename(src, dest);
+        });
+
+      try {
+        const removedOnFailure = await removeSessionTrajectoryArtifacts({
+          sessionId,
+          sessionFile,
+          storePath,
+          restrictToStoreDir: true,
+          disposal: { mode: "tombstone", reason: "deleted" },
+        });
+
+        // Nothing disposed, nothing thrown: both artifacts stay at their live
+        // paths with no tombstone, and the registry entry stays live and owned
+        // at its ORIGINAL incarnation (a verbatim rollback, not a fresh claim),
+        // so the live writer's lease still validates and the pair is retryable.
+        expect(removedOnFailure).toEqual([]);
         expect((await fs.stat(runtimeFile)).isFile()).toBe(true);
+        expect((await fs.stat(pointerPath)).isFile()).toBe(true);
+        expect(await findTombstone(runtimeFile, "deleted")).toBeUndefined();
+        expect(await findTombstone(pointerPath, "deleted")).toBeUndefined();
+        const afterFailure = await withTrajectoryPathLock(canonicalPath, (ctx) => ctx);
+        expect(afterFailure.retired).toBe(false);
+        expect(afterFailure.currentIncarnation).toBe(liveIncarnation);
+
+        // Retry once the rename recovers: the pair now tombstones normally.
+        failRuntimeRename = false;
+        const removedOnRetry = await removeSessionTrajectoryArtifacts({
+          sessionId,
+          sessionFile,
+          storePath,
+          restrictToStoreDir: true,
+          disposal: { mode: "tombstone", reason: "deleted" },
+        });
+
+        const runtimeTombstone = await expectTombstoned(runtimeFile, "deleted");
+        const pointerTombstone = await expectTombstoned(pointerPath, "deleted");
+        expect(removedOnRetry.map((entry) => entry.kind).toSorted()).toEqual([
+          "pointer",
+          "runtime",
+        ]);
+        expect(removedOnRetry.map((entry) => entry.path).toSorted()).toEqual(
+          [runtimeTombstone, pointerTombstone].toSorted(),
+        );
       } finally {
         renameSpy.mockRestore();
       }
