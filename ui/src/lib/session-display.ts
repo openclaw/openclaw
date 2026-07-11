@@ -82,8 +82,6 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   return checkout ?? node;
 }
 
-const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
-
 /** Parsed type / context extracted from a session key. */
 type SessionKeyInfo = {
   /** Prefix for typed sessions (Subagent:/Cron:). Empty for others. */
@@ -139,13 +137,6 @@ function parseSessionKey(key: string): SessionKeyInfo {
     const channel = groupMatch[1];
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
     return { prefix: "", fallbackName: `${channelLabel} Group` };
-  }
-
-  // Channel-prefixed legacy keys, for example "imessage:g-...".
-  for (const ch of KNOWN_CHANNEL_KEYS) {
-    if (key === ch || key.startsWith(`${ch}:`)) {
-      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
-    }
   }
 
   // Dashboard sessions get generated titles asynchronously; the opaque uuid key
