@@ -183,7 +183,9 @@ function resolvePluginIdsForConfiguredSpeechProvider(
   registry: PluginManifestRegistry,
 ): string[] {
   const normalizedProviderId = normalizeOptionalLowercaseString(providerId);
-  if (!normalizedProviderId) return [];
+  if (!normalizedProviderId) {
+    return [];
+  }
   return registry.plugins
     .filter((plugin) =>
       (plugin.contracts?.speechProviders ?? []).some(

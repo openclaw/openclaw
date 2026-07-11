@@ -455,7 +455,9 @@ describe("worker environment service", () => {
     const destroyed: string[] = [];
     const provider = createProvider({
       provision: async () => {
-        if (provisionFails) throw new Error("provision outcome unknown");
+        if (provisionFails) {
+          throw new Error("provision outcome unknown");
+        }
         return { leaseId: "lease-retried", ssh: SSH_ENDPOINT };
       },
       destroy: async (leaseId) => void destroyed.push(leaseId),
@@ -516,8 +518,8 @@ describe("worker environment service", () => {
     vi.useFakeTimers();
     const workerService = createService(createProvider());
 
-    await workerService.start();
-    await workerService.start();
+    workerService.start();
+    workerService.start();
     expect(vi.getTimerCount()).toBe(1);
     await workerService.stop();
 
@@ -536,7 +538,7 @@ describe("worker environment service", () => {
     });
     const workerService = createService(createProvider({ inspect }));
 
-    await workerService.start();
+    workerService.start();
     await vi.waitFor(() => expect(inspect).toHaveBeenCalledTimes(1));
     let stopped = false;
     const stopping = workerService.stop().then(() => {

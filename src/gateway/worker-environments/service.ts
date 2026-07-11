@@ -59,15 +59,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function requireWorkerProfile(value: unknown): WorkerProfile {
   const error = validateCloudWorkerProfileSettings(value);
-  if (error) throw serviceError("invalid_profile", error);
+  if (error) {
+    throw serviceError("invalid_profile", error);
+  }
   return value as WorkerProfile;
 }
 
 function inspectionStatus(value: unknown): WorkerLeaseStatus["status"] {
-  if (!isRecord(value)) throw new Error("Worker provider returned an invalid inspection result");
+  if (!isRecord(value)) {
+    throw new Error("Worker provider returned an invalid inspection result");
+  }
   const status = value.status;
-  if (status !== "active" && status !== "destroyed" && status !== "unknown")
+  if (status !== "active" && status !== "destroyed" && status !== "unknown") {
     throw new Error("Worker provider returned an invalid inspection status");
+  }
   return status;
 }
 
@@ -130,7 +135,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const providerFor = (providerId: string): WorkerProvider => {
     const provider = options.resolveProvider(providerId);
-    if (provider) return provider;
+    if (provider) {
+      return provider;
+    }
     throw serviceError("provider_not_found", `Worker provider is unavailable: ${providerId}`);
   };
 
@@ -169,13 +176,19 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     const draining = inState(record, "bootstrapping", "ready", "attached", "idle")
       ? move(record, "draining")
       : record;
-    if (draining.state === "draining") return move(draining, "destroying");
-    if (draining.state === "destroying") return draining;
+    if (draining.state === "draining") {
+      return move(draining, "destroying");
+    }
+    if (draining.state === "destroying") {
+      return draining;
+    }
     throw serviceError("invalid_state", `Cannot destroy worker in state: ${record.state}`);
   };
 
   const finishDestroy = async (r: WorkerEnvironmentRecord, provider: WorkerProvider) => {
-    if (!r.leaseId) throw serviceError("invalid_state", "Worker environment has no lease");
+    if (!r.leaseId) {
+      throw serviceError("invalid_state", "Worker environment has no lease");
+    }
     const leaseId = r.leaseId;
     const destroying = beginDestroy(r);
     try {
@@ -188,8 +201,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const reconcileRecord = async (record: WorkerEnvironmentRecord): Promise<void> => {
-    if (record.state === "requested" && record.destroyRequestedAtMs !== null)
+    if (record.state === "requested" && record.destroyRequestedAtMs !== null) {
       return void cancelRequested(record);
+    }
     let provider: WorkerProvider;
     try {
       provider = providerFor(record.providerId);
@@ -200,17 +214,20 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     const leaseId = record.leaseId;
     if (!leaseId) {
       const provisioned = await resumeProvision(record, provider).catch(() => undefined);
-      if (provisioned?.state === "bootstrapping")
+      if (provisioned?.state === "bootstrapping") {
         await finishDestroy(provisioned, provider).catch(() => undefined);
+      }
       return;
     }
     const status = await callProvider(() => provider.inspect(leaseId))
       .then(inspectionStatus)
-      .catch((error) => {
+      .catch((error: unknown) => {
         saveError(record, error);
         return undefined;
       });
-    if (!status) return;
+    if (!status) {
+      return;
+    }
     const teardownExpected =
       record.destroyRequestedAtMs !== null || inState(record, "draining", "destroying");
     if (status === "destroyed" || (status === "unknown" && teardownExpected)) {
@@ -225,33 +242,39 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       await finishDestroy(record, provider).catch(() => undefined);
       return;
     }
-    if (record.state === "bootstrapping") return void move(record, "ready");
+    if (record.state === "bootstrapping") {
+      return void move(record, "ready");
+    }
     if (inState(record, "draining", "destroying")) {
       await finishDestroy(record, provider).catch(() => undefined);
-      return;
     }
   };
 
   const create = async (profileId: string, idempotencyKey: string) => {
     const normalizedProfileId = profileId.trim();
-    if (!normalizedProfileId || normalizedProfileId !== profileId)
+    if (!normalizedProfileId || normalizedProfileId !== profileId) {
       throw serviceError("invalid_profile", "Worker profile id must be non-empty and trimmed");
+    }
     const digest = createHash("sha256").update(idempotencyKey).digest("hex");
     const environmentId = `worker:${digest.slice(0, 32)}`;
     return withLock(environmentId, async () => {
       const existing = store.get(environmentId);
       if (existing) {
-        if (existing.profileId !== normalizedProfileId)
+        if (existing.profileId !== normalizedProfileId) {
           throw serviceError("invalid_profile", "Idempotency key belongs to another profile");
-        if (existing.destroyRequestedAtMs !== null) return existing;
+        }
+        if (existing.destroyRequestedAtMs !== null) {
+          return existing;
+        }
         if (!existing.leaseId && inState(existing, "requested", "provisioning")) {
           return resumeProvision(existing);
         }
         return existing;
       }
       const profiles = options.getConfig().cloudWorkers?.profiles;
-      if (!profiles || !Object.hasOwn(profiles, normalizedProfileId))
+      if (!profiles || !Object.hasOwn(profiles, normalizedProfileId)) {
         throw serviceError("profile_not_found", `Unknown worker profile: ${normalizedProfileId}`);
+      }
       const profile = profiles[normalizedProfileId];
       const provider = providerFor(profile.provider);
       const settings = requireWorkerProfile(profile.settings ?? {});
@@ -272,14 +295,23 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const destroy = async (environmentId: string) =>
     withLock(environmentId, async () => {
       let record = store.get(environmentId);
-      if (!record)
+      if (!record) {
         throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
-      if (inState(record, "destroyed", "failed", "orphaned")) return record;
+      }
+      if (inState(record, "destroyed", "failed", "orphaned")) {
+        return record;
+      }
       record = store.requestDestroy({ environmentId, state: record.state });
-      if (record.state === "requested") return cancelRequested(record);
-      if (record.leaseId) record = beginDestroy(record);
+      if (record.state === "requested") {
+        return cancelRequested(record);
+      }
+      if (record.leaseId) {
+        record = beginDestroy(record);
+      }
       const provider = providerFor(record.providerId);
-      if (!record.leaseId) record = await resumeProvision(record, provider);
+      if (!record.leaseId) {
+        record = await resumeProvision(record, provider);
+      }
       return finishDestroy(record, provider);
     });
 
@@ -288,7 +320,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       (candidate) => () =>
         withLock(candidate.environmentId, async () => {
           const current = store.get(candidate.environmentId);
-          if (!current || inState(current, "destroyed", "failed")) return;
+          if (!current || inState(current, "destroyed", "failed")) {
+            return;
+          }
           await reconcileRecord(current).catch(() =>
             warn(
               `Worker environment reconcile failed (${current.environmentId}, ${current.providerId})`,
@@ -305,7 +339,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }));
 
   const start = () => {
-    if (interval) return;
+    if (interval) {
+      return;
+    }
     interval = setInterval(
       () => void reconcileOnce().catch(() => warn("Worker environment reconcile sweep failed")),
       options.reconcileIntervalMs ?? 60_000,
@@ -318,7 +354,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     clearInterval(interval);
     interval = undefined;
     await reconcileInFlight;
-    await Promise.allSettled([...activeOperations]);
+    await Promise.allSettled(activeOperations);
   };
 
   return {

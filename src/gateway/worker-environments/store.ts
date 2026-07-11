@@ -63,8 +63,9 @@ type TransitionInput = {
 };
 const TERMINAL_STATES: WorkerEnvironmentState[] = ["destroyed", "failed", "orphaned"];
 function required(value: unknown, field: string): string {
-  if (typeof value !== "string" || !value.trim())
+  if (typeof value !== "string" || !value.trim()) {
     throw new Error(`Worker environment ${field} must be a non-empty string`);
+  }
   return value.trim();
 }
 export function normalizeWorkerSshEndpoint(value: Ssh): Ssh {
@@ -73,13 +74,16 @@ export function normalizeWorkerSshEndpoint(value: Ssh): Ssh {
   if (!Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65_535) {
     throw new Error("Worker environment SSH port must be an integer from 1 through 65535");
   }
-  if (!isValidSecretRef(value.keyRef))
+  if (!isValidSecretRef(value.keyRef)) {
     throw new Error("Worker environment SSH key must be a canonical SecretRef");
+  }
   return { host, port: value.port, user, keyRef: { ...value.keyRef } };
 }
 function endpointFrom(row: Row): Ssh | null {
   const { ssh_host: host, ssh_port: port, ssh_user: user, ssh_key_ref_json: encoded } = row;
-  if (host === null || port === null || user === null || encoded === null) return null;
+  if (host === null || port === null || user === null || encoded === null) {
+    return null;
+  }
   return normalizeWorkerSshEndpoint({
     host,
     port,
@@ -94,14 +98,18 @@ function assertShape(
   attachedSessionIds: readonly string[],
 ): void {
   if (workerEnvironmentStateRequiresLease(state)) {
-    if (!leaseId) throw new Error(`Worker environment state ${state} requires a provider lease`);
-    if (!sshEndpoint)
+    if (!leaseId) {
+      throw new Error(`Worker environment state ${state} requires a provider lease`);
+    }
+    if (!sshEndpoint) {
       throw new Error("Worker environment provider lease requires an SSH endpoint reference");
+    }
   } else if (leaseId || sshEndpoint) {
     throw new Error(`Worker environment state ${state} cannot retain a provider lease`);
   }
-  if (state === "attached" && attachedSessionIds.length === 0)
+  if (state === "attached" && attachedSessionIds.length === 0) {
     throw new Error("Attached worker environment requires at least one session id");
+  }
 }
 function fromRow(row: Row): WorkerEnvironmentRecord {
   const record = {
@@ -140,7 +148,9 @@ function find(db: DatabaseSync, environmentId: string) {
 }
 function getRequired(db: DatabaseSync, environmentId: string) {
   const record = find(db, environmentId);
-  if (!record) throw new Error(`Unknown worker environment: ${environmentId}`);
+  if (!record) {
+    throw new Error(`Unknown worker environment: ${environmentId}`);
+  }
   return record;
 }
 function update(db: DatabaseSync, id: string, state: WorkerEnvironmentState, values: RowUpdate) {
@@ -152,8 +162,9 @@ function update(db: DatabaseSync, id: string, state: WorkerEnvironmentState, val
       .where("environment_id", "=", id)
       .where("state", "=", state),
   );
-  if (result.numAffectedRows !== 1n)
+  if (result.numAffectedRows !== 1n) {
     throw new Error(`Worker environment ${id} changed during update`);
+  }
   return getRequired(db, id);
 }
 function listRows(db: DatabaseSync, reconcile: boolean): WorkerEnvironmentRecord[] {
@@ -216,9 +227,12 @@ export function createWorkerEnvironmentStore(
       const environmentId = required(input.environmentId, "id");
       return write((db) => {
         const current = getRequired(db, environmentId);
-        if (current.state !== input.state)
+        if (current.state !== input.state) {
           throw new Error(`Worker environment ${environmentId} changed before destroy request`);
-        if (current.destroyRequestedAtMs !== null) return current;
+        }
+        if (current.destroyRequestedAtMs !== null) {
+          return current;
+        }
         const requestedAtMs = now();
         return update(db, environmentId, input.state, {
           updated_at_ms: requestedAtMs,
@@ -228,8 +242,9 @@ export function createWorkerEnvironmentStore(
     },
     transition(input: TransitionInput): WorkerEnvironmentRecord {
       const { from, to, patch = {} } = input;
-      if (!canTransitionWorkerEnvironment(from, to))
+      if (!canTransitionWorkerEnvironment(from, to)) {
         throw new Error(`Illegal worker environment transition: ${from} -> ${to}`);
+      }
       const environmentId = required(input.environmentId, "id");
       const updatedAtMs = now();
       return write((db) => {
@@ -241,8 +256,9 @@ export function createWorkerEnvironmentStore(
         }
         const leaseId =
           patch.leaseId === undefined ? current.leaseId : required(patch.leaseId, "lease id");
-        if (current.leaseId && leaseId !== current.leaseId)
+        if (current.leaseId && leaseId !== current.leaseId) {
           throw new Error("Worker environment provider lease id is immutable once persisted");
+        }
         const sshEndpoint =
           patch.sshEndpoint === undefined
             ? current.sshEndpoint

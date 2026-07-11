@@ -43,7 +43,9 @@ export function createStaticSshWorkerProvider(): WorkerProvider {
   return {
     id: STATIC_SSH_WORKER_PROVIDER_ID,
     async provision(profile, opId) {
-      if (!opId.trim()) throw new Error("static-ssh provision operation id must be non-empty");
+      if (!opId.trim()) {
+        throw new Error("static-ssh provision operation id must be non-empty");
+      }
       return {
         leaseId: `${STATIC_SSH_LEASE_PREFIX}${opId}`,
         ssh: parseStaticSshWorkerSettings(profile),

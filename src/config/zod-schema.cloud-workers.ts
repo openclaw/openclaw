@@ -31,8 +31,12 @@ export function validateCloudWorkerProfileSettings(value: unknown): string | und
     return "Worker profile settings must be bounded finite JSON";
   }
   const visit = (entry: unknown): string | undefined => {
-    if (Array.isArray(entry)) return entry.map(visit).find((error) => error !== undefined);
-    if (typeof entry !== "object" || entry === null) return undefined;
+    if (Array.isArray(entry)) {
+      return entry.map(visit).find((error) => error !== undefined);
+    }
+    if (typeof entry !== "object" || entry === null) {
+      return undefined;
+    }
     for (const [key, child] of Object.entries(entry)) {
       const baseKey = key.replace(/ref$/i, "");
       const isSensitive =
@@ -46,7 +50,9 @@ export function validateCloudWorkerProfileSettings(value: unknown): string | und
         continue;
       }
       const error = visit(child);
-      if (error) return error;
+      if (error) {
+        return error;
+      }
     }
     return undefined;
   };
@@ -55,7 +61,9 @@ export function validateCloudWorkerProfileSettings(value: unknown): string | und
 
 const CloudWorkerSettingsSchema = z.record(z.string(), z.unknown()).superRefine((value, ctx) => {
   const message = validateCloudWorkerProfileSettings(value);
-  if (message) ctx.addIssue({ code: "custom", message });
+  if (message) {
+    ctx.addIssue({ code: "custom", message });
+  }
 });
 
 const CloudWorkerProfileShape = {

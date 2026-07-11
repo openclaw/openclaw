@@ -1829,7 +1829,9 @@ export async function startGatewayServer(
             ...(workerEnvironmentService
               ? {
                   startWorkerEnvironmentRuntime: () => {
-                    if (closePreludeStarted) return null;
+                    if (closePreludeStarted) {
+                      return null;
+                    }
                     const sidecar = { stop: () => workerEnvironmentService.stop() };
                     // Close must see the drain handle before reconciliation can yield.
                     runtimeState.gatewayLifetimeSidecars.push(sidecar);
