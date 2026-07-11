@@ -71,7 +71,9 @@ final class CLIInstallPrompter {
         let channels = [suggested] + CLIInstaller.Channel.allCases.filter { $0 != suggested }
         let alert = NSAlert()
         alert.messageText = "Choose OpenClaw CLI channel"
-        alert.informativeText = "This is an unreleased OpenClaw build. Local mode can use Stable, Beta, or Dev from Git main."
+        alert.informativeText =
+            "This is an unreleased OpenClaw build. " +
+            "Local mode can use Stable, Beta, or Dev from Git main."
         for channel in channels {
             alert.addButton(withTitle: channel.label)
         }

@@ -15123,7 +15123,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 105,
+      "line": 107,
       "path": "apps/macos/Sources/OpenClaw/CLIInstallPrompter.swift",
       "source": "CLI install failed",
       "surface": "apple",
@@ -15131,7 +15131,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 105,
+      "line": 107,
       "path": "apps/macos/Sources/OpenClaw/CLIInstallPrompter.swift",
       "source": "CLI install finished",
       "surface": "apple",
