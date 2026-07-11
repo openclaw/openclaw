@@ -903,9 +903,7 @@
   border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--card) 94%, black 6%);
-  box-shadow:
-    0 10px 28px rgba(0, 0, 0, 0.24),
-    0 0 0 1px rgba(255, 255, 255, 0.04);
+  box-shadow: var(--shadow-md);
   color: var(--text);
   font-size: 12px; /* was 11px */
   font-weight: 500;
@@ -952,9 +950,7 @@
   border: 1px solid color-mix(in srgb, var(--border-strong) 88%, transparent);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--card) 96%, var(--bg) 4%);
-  box-shadow:
-    0 22px 54px rgba(0, 0, 0, 0.34),
-    0 0 0 1px rgba(255, 255, 255, 0.035);
+  box-shadow: var(--shadow-lg);
   color: var(--text);
   font-family: var(--font-body);
   pointer-events: none;
@@ -2175,6 +2171,21 @@
   background: linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.03));
   color: var(--text);
   animation: fade-in 0.2s var(--ease-out);
+}
+
+.chat-side-result--pending .chat-side-result__meta {
+  animation: chat-side-result-pending-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes chat-side-result-pending-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.45;
+  }
 }
 
 .chat-side-result--error {

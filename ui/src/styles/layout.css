@@ -805,6 +805,138 @@ html.openclaw-native-macos .shell-nav-expand {
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
+.sidebar-update-card {
+  position: relative;
+  margin: 0 8px 10px;
+}
+
+.sidebar-update-card--floating .sidebar-update-card {
+  width: min(360px, calc(100% - 32px));
+  margin: 12px 16px 0;
+}
+
+@media (min-width: 1101px) {
+  /* Keep the card beside the collapsed-nav control so their hit targets stay distinct. */
+  .sidebar-update-card--floating .sidebar-update-card {
+    width: min(360px, calc(100% - 48px));
+    margin-left: 32px;
+  }
+
+  /* Native dashboard actions must also clear AppKit's drag strip. */
+  html.openclaw-native-macos .sidebar-update-card--floating .sidebar-update-card {
+    margin-top: calc(var(--openclaw-native-titlebar-height, 50px) + 2px);
+  }
+}
+
+.sidebar-update-card__action {
+  width: 100%;
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 34px 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent-subtle) 48%, var(--bg-elevated));
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.sidebar-update-card__action:hover:not(:disabled),
+.sidebar-update-card__action:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-elevated));
+}
+
+.sidebar-update-card__action:focus-visible,
+.sidebar-update-card__dismiss:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-update-card__action:disabled {
+  cursor: wait;
+  opacity: 0.66;
+}
+
+.sidebar-update-card__icon,
+.sidebar-update-card__arrow,
+.sidebar-update-card__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-update-card__icon {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.sidebar-update-card__copy {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-update-card__title {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.sidebar-update-card__subtitle {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.sidebar-update-card__arrow {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.sidebar-update-card__dismiss {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sidebar-update-card__dismiss:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-update-card__icon svg,
+.sidebar-update-card__arrow svg,
+.sidebar-update-card__dismiss svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .sidebar-nav {
   /* Nav stays pinned above the session list; the cap keeps sessions reachable
      when an expanded More section outgrows a short window (nav then scrolls). */
@@ -825,59 +957,6 @@ html.openclaw-native-macos .shell-nav-expand {
   min-height: 0;
   padding: 0 8px;
   margin-top: 10px;
-}
-
-.sidebar-new-session {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  width: 100%;
-  min-height: 34px;
-  box-sizing: border-box;
-  padding: 0 9px;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.2;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.sidebar-new-session:hover:not(:disabled) {
-  background: var(--accent-subtle);
-  color: var(--accent-hover);
-}
-
-.sidebar-new-session:disabled {
-  cursor: not-allowed;
-  opacity: 0.52;
-}
-
-.sidebar-new-session__icon,
-.sidebar-new-session__icon svg {
-  width: 15px;
-  height: 15px;
-}
-
-.sidebar-new-session__icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: currentColor;
-}
-
-.sidebar-new-session__icon svg {
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.8px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* min-height: 0 down this chain lets the recent list shrink and scroll instead
@@ -1621,6 +1700,45 @@ openclaw-session-menu[popover] {
   flex: 1 1 auto;
 }
 
+/* Dev-checkout branch strip: only rendered when the gateway runs from a git
+   checkout off main. Sits on its own row above the icon bar so the full branch
+   name stays readable without crowding the footer controls. */
+.sidebar-footer-branch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 10px 2px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--danger);
+}
+
+.sidebar-footer-branch__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.sidebar-footer-branch__icon svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-footer-branch__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Footer icons mix in-app anchors, buttons, and one external docs link: the
    chrome gets the default arrow; only the external (target=_blank) anchor is
    a real hyperlink and keeps the pointer. */
@@ -2227,167 +2345,4 @@ openclaw-session-menu[popover] {
 .sidebar-recent-session--draft .sidebar-recent-session__name {
   color: var(--text-strong);
   font-style: italic;
-}
-
-/* New-session draft dialog. */
-.new-session-dialog__backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 12vh 16px 16px;
-  background: color-mix(in srgb, var(--bg) 55%, transparent);
-  backdrop-filter: blur(2px);
-}
-
-.new-session-dialog {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: min(640px, 100%);
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--panel);
-  box-shadow: 0 18px 48px color-mix(in srgb, var(--bg) 55%, transparent);
-}
-
-.new-session-dialog__head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-}
-
-.new-session-dialog__title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-strong);
-}
-
-.new-session-dialog__hint {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.new-session-dialog__close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.new-session-dialog__close:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
-.new-session-dialog__targets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.new-session-dialog__target {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
-  font-size: 12px;
-  color: var(--text);
-}
-
-.new-session-dialog__target select,
-.new-session-dialog__target input[type="text"] {
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  outline: none;
-}
-
-.new-session-dialog__target--folder {
-  flex: 1 1 220px;
-  min-width: 0;
-}
-
-.new-session-dialog__target--folder input {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.new-session-dialog__target-icon {
-  display: inline-flex;
-  color: var(--muted);
-}
-
-.new-session-dialog__target-icon svg {
-  width: 14px;
-  height: 14px;
-}
-
-.new-session-dialog__branch {
-  width: 140px;
-}
-
-.new-session-dialog__error {
-  font-size: 12px;
-  color: var(--danger);
-}
-
-.new-session-dialog__message {
-  width: 100%;
-  resize: vertical;
-  min-height: 88px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-}
-
-.new-session-dialog__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.new-session-dialog__cancel,
-.new-session-dialog__start {
-  padding: 6px 14px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.new-session-dialog__start {
-  border-color: transparent;
-  background: var(--accent);
-  color: var(--accent-contrast, #fff);
-  font-weight: 600;
-}
-
-.new-session-dialog__start:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
