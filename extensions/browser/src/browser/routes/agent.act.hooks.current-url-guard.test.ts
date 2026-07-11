@@ -8,18 +8,6 @@ const chromeMcpMocks = vi.hoisted(() => ({
   uploadChromeMcpFile: vi.fn(async () => {}),
 }));
 
-const navigationGuardMocks = vi.hoisted(() => ({
-  assertBrowserNavigationResultAllowed: vi.fn(async (_opts?: { url: string }) => {}),
-  withBrowserNavigationPolicy: vi.fn(
-    (ssrfPolicy?: unknown, opts?: { browserProxyMode?: string }) => ({
-      ...(ssrfPolicy ? { ssrfPolicy } : {}),
-      ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
-        ? { browserProxyMode: opts.browserProxyMode }
-        : {}),
-    }),
-  ),
-}));
-
 const pathMocks = vi.hoisted(() => ({
   resolveExistingUploadPaths: vi.fn(async ({ requestedPaths }: { requestedPaths: string[] }) => ({
     ok: true,
@@ -38,8 +26,6 @@ vi.mock("../chrome-mcp.js", () => ({
   evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
   uploadChromeMcpFile: chromeMcpMocks.uploadChromeMcpFile,
 }));
-
-vi.mock("../navigation-guard.js", () => navigationGuardMocks);
 
 vi.mock("../paths.js", () => pathMocks);
 
@@ -103,13 +89,26 @@ async function callHook(params: {
   return response;
 }
 
-function rejectCurrentTabUrl() {
-  navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(async () => {
-    const error = new Error("blocked current tab");
-    error.name = "InvalidBrowserNavigationUrlError";
-    throw error;
-  });
-}
+const blockedHookCases = [
+  {
+    label: "file chooser",
+    path: "/hooks/file-chooser" as const,
+    body: { paths: ["/tmp/upload.txt"], ref: "upload-button" },
+    sideEffects: [
+      pathMocks.resolveExistingUploadPaths,
+      chromeMcpMocks.uploadChromeMcpFile,
+      pwMocks.armFileUploadViaPlaywright,
+      pwMocks.clickViaPlaywright,
+      pwMocks.setInputFilesViaPlaywright,
+    ],
+  },
+  {
+    label: "dialog",
+    path: "/hooks/dialog" as const,
+    body: { accept: true },
+    sideEffects: [chromeMcpMocks.evaluateChromeMcpScript, pwMocks.armDialogViaPlaywright],
+  },
+];
 
 describe("agent act hook current URL guard", () => {
   beforeEach(() => {
@@ -122,52 +121,25 @@ describe("agent act hook current URL guard", () => {
     for (const fn of Object.values(pwMocks)) {
       fn.mockClear();
     }
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockReset();
-    navigationGuardMocks.withBrowserNavigationPolicy.mockClear();
   });
 
-  it("blocks file chooser hooks before page side effects on a disallowed current tab", async () => {
-    rejectCurrentTabUrl();
-    const profileCtx = createProfileContext();
+  it.each(blockedHookCases)(
+    "blocks $label hooks before page side effects on a disallowed current tab",
+    async ({ path, body, sideEffects }) => {
+      const profileCtx = createProfileContext();
 
-    const response = await callHook({
-      path: "/hooks/file-chooser",
-      body: { paths: ["/tmp/upload.txt"], ref: "upload-button" },
-      profileCtx,
-    });
+      const response = await callHook({
+        path,
+        body,
+        profileCtx,
+      });
 
-    expect(response.statusCode).toBe(400);
-    expect(response.body).toEqual({ error: "blocked current tab" });
-    expect(profileCtx.ensureTabAvailable).toHaveBeenCalledOnce();
-    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
-      url: "http://127.0.0.1:8080/admin",
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-    });
-    expect(pathMocks.resolveExistingUploadPaths).not.toHaveBeenCalled();
-    expect(chromeMcpMocks.uploadChromeMcpFile).not.toHaveBeenCalled();
-    expect(pwMocks.armFileUploadViaPlaywright).not.toHaveBeenCalled();
-    expect(pwMocks.clickViaPlaywright).not.toHaveBeenCalled();
-    expect(pwMocks.setInputFilesViaPlaywright).not.toHaveBeenCalled();
-  });
-
-  it("blocks dialog hooks before page side effects on a disallowed current tab", async () => {
-    rejectCurrentTabUrl();
-    const profileCtx = createProfileContext();
-
-    const response = await callHook({
-      path: "/hooks/dialog",
-      body: { accept: true },
-      profileCtx,
-    });
-
-    expect(response.statusCode).toBe(400);
-    expect(response.body).toEqual({ error: "blocked current tab" });
-    expect(profileCtx.ensureTabAvailable).toHaveBeenCalledOnce();
-    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
-      url: "http://127.0.0.1:8080/admin",
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-    });
-    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
-    expect(pwMocks.armDialogViaPlaywright).not.toHaveBeenCalled();
-  });
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toEqual({ error: expect.stringMatching(/blocked|private/i) });
+      expect(profileCtx.ensureTabAvailable).toHaveBeenCalledOnce();
+      for (const sideEffect of sideEffects) {
+        expect(sideEffect).not.toHaveBeenCalled();
+      }
+    },
+  );
 });
