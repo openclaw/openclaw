@@ -156,10 +156,26 @@ enum ExecApprovalAuthorization: Sendable {
 struct ExecApprovalExecutionCommit: Sendable {
     let agentId: String?
     let command: String
-    let executionCommand: [String] = []
-    let denylistBinding: ExecHostDenylistAuthorizationSnapshot? = nil
+    let executionCommand: [String]
+    let denylistBinding: ExecHostDenylistAuthorizationSnapshot?
     let authorization: ExecApprovalAuthorization
     let uses: [ExecAllowlistUse]
+
+    init(
+        agentId: String?,
+        command: String,
+        executionCommand: [String] = [],
+        denylistBinding: ExecHostDenylistAuthorizationSnapshot? = nil,
+        authorization: ExecApprovalAuthorization,
+        uses: [ExecAllowlistUse])
+    {
+        self.agentId = agentId
+        self.command = command
+        self.executionCommand = executionCommand
+        self.denylistBinding = denylistBinding
+        self.authorization = authorization
+        self.uses = uses
+    }
 
     static func build(
         context: ExecApprovalEvaluation,
