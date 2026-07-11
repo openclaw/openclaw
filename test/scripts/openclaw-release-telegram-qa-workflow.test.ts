@@ -491,15 +491,17 @@ describe("release Telegram QA workflow", () => {
     expect(runStep?.run).toContain("trap terminate_sut_uid_on_exit EXIT");
     expect(runStep?.run).toContain('"$OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND" --terminate-uid');
     expect(runStep?.run).toContain("run_qa_attempt preflight --scenario channel-canary");
-    expect(runStep?.run).toContain("Telegram channel canary failed; skipping the remaining scenarios.");
+    expect(runStep?.run).toContain(
+      "Telegram channel canary failed; skipping the remaining scenarios.",
+    );
     expect(runStep?.run).toContain("--list-scenarios");
     expect(runStep?.run).toContain('"$scenario_id" != "channel-canary"');
     expect(runStep?.run).toContain(
       'run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"',
     );
-    expect(runStep?.run?.indexOf("run_qa_attempt preflight --scenario channel-canary")).toBeLessThan(
-      runStep?.run?.indexOf("for attempt in 1 2") ?? -1,
-    );
+    expect(
+      runStep?.run?.indexOf("run_qa_attempt preflight --scenario channel-canary"),
+    ).toBeLessThan(runStep?.run?.indexOf("for attempt in 1 2") ?? -1);
   });
 
   it("serializes stderr behind the workflow-command pause", () => {
