@@ -1,11 +1,11 @@
 {
   "fallbackKeys": [],
-  "generatedAt": "2026-07-11T00:45:08.263Z",
+  "generatedAt": "2026-07-11T04:04:37.547Z",
   "locale": "fr",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "5c832858a0672e494899a7f18c83d337a684af3d44ffa697d5504670baf61880",
-  "totalKeys": 2004,
-  "translatedKeys": 2004,
+  "sourceHash": "05240e98e3e1c00aec023151dd8c5b104764e9a339987c52b94fcc78ec64173f",
+  "totalKeys": 2067,
+  "translatedKeys": 2067,
   "workflow": 1
 }

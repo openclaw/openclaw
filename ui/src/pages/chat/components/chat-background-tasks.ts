@@ -18,7 +18,6 @@ import {
   sortTasks,
   taskDetail,
   taskRuntimeLabel,
-  taskStatusChipClass,
   taskStatusLabel,
   taskTimestampMs,
   taskTitle,
@@ -337,6 +336,17 @@ export function renderBackgroundTasksToggle(
   `;
 }
 
+// Status tone drives the meta line's colored word and the running pulse dot;
+// pill chips read too heavy at rail width, so tone is typographic only.
+const STATUS_TONES = {
+  queued: "warn",
+  running: "warn",
+  completed: "ok",
+  failed: "danger",
+  cancelled: "muted",
+  timed_out: "danger",
+} as const satisfies Record<TaskSummary["status"], string>;
+
 function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): TemplateResult {
   const active = isActiveTask(task);
   const title = taskTitle(task);
@@ -346,9 +356,13 @@ function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): Template
   );
   const transcriptSessionKey = task.childSessionKey ?? task.sessionKey;
   const cancelling = props.cancellingTaskIds.has(task.id);
+  const tone = STATUS_TONES[task.status];
   return html`
     <div class="chat-tasks-rail__task" role="listitem" data-task-id=${task.id}>
       <div class="chat-tasks-rail__task-head">
+        ${task.status === "running"
+          ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
+          : nothing}
         <openclaw-tooltip .content=${title}>
           <span class="chat-tasks-rail__task-title">${title}</span>
         </openclaw-tooltip>
@@ -369,28 +383,28 @@ function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): Template
           : nothing}
       </div>
       <div class="chat-tasks-rail__task-meta">
-        <span class="chip ${taskStatusChipClass(task.status)}"
+        <span class="chat-tasks-rail__task-status chat-tasks-rail__task-status--${tone}"
           >${taskStatusLabel(task.status)}</span
         >
-        <span class="chip">${taskRuntimeLabel(task)}</span>
+        <span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+        <span>${taskRuntimeLabel(task)}</span>
         ${timestamp > 0
-          ? html`<span class="chat-tasks-rail__task-time" title=${formatMs(timestamp)}
-              >${formatRelativeTimestamp(timestamp)}</span
-            >`
+          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+              <span title=${formatMs(timestamp)}>${formatRelativeTimestamp(timestamp)}</span>`
+          : nothing}
+        ${transcriptSessionKey
+          ? html`
+              <button
+                class="chat-tasks-rail__task-transcript"
+                type="button"
+                @click=${() => props.onOpenSession(transcriptSessionKey)}
+              >
+                ${t("chat.backgroundTasks.viewTranscript")}
+              </button>
+            `
           : nothing}
       </div>
       ${detail ? html`<div class="chat-tasks-rail__task-detail">${detail}</div>` : nothing}
-      ${transcriptSessionKey
-        ? html`
-            <button
-              class="chat-tasks-rail__task-transcript"
-              type="button"
-              @click=${() => props.onOpenSession(transcriptSessionKey)}
-            >
-              ${t("chat.backgroundTasks.viewTranscript")}
-            </button>
-          `
-        : nothing}
     </div>
   `;
 }

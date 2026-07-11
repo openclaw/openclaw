@@ -4,18 +4,26 @@ import { html, nothing, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import type { SessionsListResult } from "../../../api/types.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import {
   handleMarkdownCodeBlockCopy,
   markdownFileLinkFromEvent,
 } from "../../../components/markdown.ts";
-import "../../../components/tooltip.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "../../../lib/chat/chat-types.ts";
 import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import {
+  areUiSessionKeysEquivalent,
+  isUiGlobalScopeConfigured,
+  parseAgentSessionKey,
+  resolveUiGlobalAliasAgentId,
+  type UiSessionDefaultsHost,
+} from "../../../lib/sessions/session-key.ts";
 import {
   buildCachedChatItems,
   coalesceStreamRuns,
@@ -29,6 +37,7 @@ import { DeletedMessages } from "../deleted-messages.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
+import { getToolTitlesVersion } from "../tool-titles.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
@@ -85,6 +94,8 @@ type ChatThreadProps = {
   /** True while the session has an abortable live run (marks running tool rows). */
   runActive?: boolean;
   sessions: SessionsListResult | null;
+  /** Host context resolving global-alias session keys (scope=global fleets). */
+  sessionHost?: Pick<UiSessionDefaultsHost, "agentsList" | "hello"> | null;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
@@ -676,7 +687,21 @@ export function renderChatThread(props: ChatThreadProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   ensureRelativeTimeRefresh(state, requestUpdate);
   const displayStream = props.stream ?? null;
-  const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
+  const sessionHost = props.sessionHost ?? null;
+  // Equivalence, not exact match: the default session travels under alias
+  // keys ("main" vs "agent:main:main") depending on the caller.
+  const activeSession = props.sessions?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, props.sessionKey),
+  );
+  // Global-alias detection needs no session row: under configured global
+  // scope, agent:<id>:global and configured-main aliases route to the global
+  // stream even when the capped sessions list omits the canonical row (or it
+  // does not exist yet). The scope gate keeps per-sender main threads direct.
+  const isGlobalAliasKey =
+    parseAgentSessionKey(props.sessionKey)?.rest === "global" ||
+    (sessionHost !== null &&
+      isUiGlobalScopeConfigured(sessionHost) &&
+      resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
@@ -706,6 +731,24 @@ export function renderChatThread(props: ChatThreadProps) {
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
+  // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
+  // as the always-visible identity marker. The canonical session kind decides;
+  // the sessions list is capped, so absent/unknown rows classify by key:
+  // global aliases first, then the same core key-shape helper the gateway
+  // uses. Message senderLabels are not a signal here: gateway sanitization
+  // labels 1:1 channel DM rows too.
+  const rowKind = activeSession?.kind;
+  const sessionKind =
+    rowKind && rowKind !== "unknown"
+      ? rowKind
+      : isGlobalAliasKey
+        ? "global"
+        : classifySessionKind(props.sessionKey);
+  // Only agent-solo kinds qualify: "global" aggregates every inbound context
+  // under session.scope="global" (including group/channel senders), so it
+  // keeps avatars like "group" and "unknown" do.
+  const isDirectThread =
+    sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child";
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
@@ -716,7 +759,7 @@ export function renderChatThread(props: ChatThreadProps) {
 
   return html`
     <div
-      class="chat-thread"
+      class="chat-thread ${isDirectThread ? "chat-thread--direct" : ""}"
       role="log"
       aria-live="polite"
       ${ref((element) => {
@@ -751,6 +794,7 @@ export function renderChatThread(props: ChatThreadProps) {
             stableBooleanMapSignature(expandedToolCards),
             getAssistantAttachmentAvailabilityRenderVersion(),
             state.relativeTimeVersion,
+            getToolTitlesVersion(),
             props.sessionKey,
             props.fullMessageAgentId,
             showReasoning,

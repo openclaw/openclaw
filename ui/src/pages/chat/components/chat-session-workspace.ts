@@ -32,6 +32,9 @@ export type SessionWorkspaceProps = {
   error: string | null;
   activeId: string | null;
   dock: ChatWorkspaceDock;
+  /** Pane too narrow for a side rail: presentation forces the bottom dock
+   * (the persisted dock preference still applies once the pane widens). */
+  narrowLayout: boolean;
   dockDragging: boolean;
   dockDragZone: ChatWorkspaceDock | null;
   onToggleCollapsed: () => void;
@@ -44,6 +47,7 @@ export type SessionWorkspaceProps = {
   onSearch: (search: string) => void;
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
+  onToggleBrowser?: () => void;
 };
 
 type SessionWorkspaceState = {
@@ -80,6 +84,7 @@ export type SessionWorkspaceHost = {
   connected: boolean;
   hello: GatewayHelloOk | null;
   terminalAvailable?: boolean;
+  browserPanelAvailable?: boolean;
   assistantAgentId?: string | null;
   agentsList?: SessionScopeHost["agentsList"];
   settings?: UiSettings;
@@ -556,7 +561,10 @@ function openArtifact(
   );
 }
 
-export function createSessionWorkspaceProps(state: SessionWorkspaceHost): SessionWorkspaceProps {
+export function createSessionWorkspaceProps(
+  state: SessionWorkspaceHost,
+  options?: { narrowLayout?: boolean },
+): SessionWorkspaceProps {
   const workspace = getWorkspaceState(state);
   if (
     !workspace.collapsed &&
@@ -576,6 +584,7 @@ export function createSessionWorkspaceProps(state: SessionWorkspaceHost): Sessio
     error: workspace.error,
     activeId: workspace.activeId,
     dock: workspace.dock,
+    narrowLayout: options?.narrowLayout === true,
     dockDragging: workspace.dockDragging,
     dockDragZone: workspace.dockDragZone,
     onToggleCollapsed: () => toggleSessionWorkspace(state),
@@ -616,6 +625,11 @@ export function createSessionWorkspaceProps(state: SessionWorkspaceHost): Sessio
               detail: { dock: "right", open: true },
             }),
           );
+        }
+      : undefined,
+    onToggleBrowser: state.browserPanelAvailable
+      ? () => {
+          window.dispatchEvent(new CustomEvent("openclaw:browser-toggle", {}));
         }
       : undefined,
   };
@@ -706,7 +720,9 @@ export function renderSessionWorkspaceRail(
   if (!sessionWorkspace || sessionWorkspace.collapsed) {
     return nothing;
   }
-  const dock = sessionWorkspace.dock;
+  // Narrow panes always present the rail as a bottom strip; a side column
+  // would crush the thread below its readable minimum.
+  const dock = sessionWorkspace.narrowLayout ? "bottom" : sessionWorkspace.dock;
   const terminalButton = sessionWorkspace.onToggleTerminal
     ? html`
         <openclaw-tooltip .content=${t("terminal.toggle")}>
@@ -717,6 +733,20 @@ export function renderSessionWorkspaceRail(
             @click=${sessionWorkspace.onToggleTerminal}
           >
             ${icons.terminal}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const browserButton = sessionWorkspace.onToggleBrowser
+    ? html`
+        <openclaw-tooltip .content=${t("browser.toggle")}>
+          <button
+            type="button"
+            class="chat-workspace-rail__terminal"
+            aria-label=${t("browser.toggle")}
+            @click=${sessionWorkspace.onToggleBrowser}
+          >
+            ${icons.globe}
           </button>
         </openclaw-tooltip>
       `
@@ -1000,31 +1030,38 @@ export function renderSessionWorkspaceRail(
         <!-- Grip: drag the rail onto the pane's right/bottom band to re-dock
              it (chat-view renders the drop zones while dragging). -->
         <div
-          class="chat-workspace-rail__title chat-workspace-rail__grip"
-          title=${t("chat.workspaceFiles.dragToDock")}
-          @pointerdown=${sessionWorkspace.onDockDragStart}
+          class="chat-workspace-rail__title ${sessionWorkspace.narrowLayout
+            ? ""
+            : "chat-workspace-rail__grip"}"
+          title=${sessionWorkspace.narrowLayout ? nothing : t("chat.workspaceFiles.dragToDock")}
+          @pointerdown=${sessionWorkspace.narrowLayout ? nothing : sessionWorkspace.onDockDragStart}
         >
           <span class="chat-workspace-rail__eyebrow">${t("chat.workspaceFiles.workspace")}</span>
           <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
-          ${terminalButton}
-          <openclaw-tooltip
-            .content=${dock === "bottom"
-              ? t("chat.workspaceFiles.dockRight")
-              : t("chat.workspaceFiles.dockBottom")}
-          >
-            <button
-              class="btn btn--ghost btn--sm chat-workspace-rail__dock"
-              type="button"
-              aria-label=${dock === "bottom"
-                ? t("chat.workspaceFiles.dockRight")
-                : t("chat.workspaceFiles.dockBottom")}
-              @click=${() => sessionWorkspace.onSetDock(dock === "bottom" ? "right" : "bottom")}
-            >
-              ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
-            </button>
-          </openclaw-tooltip>
+          ${terminalButton} ${browserButton}
+          ${sessionWorkspace.narrowLayout
+            ? nothing
+            : html`
+                <openclaw-tooltip
+                  .content=${dock === "bottom"
+                    ? t("chat.workspaceFiles.dockRight")
+                    : t("chat.workspaceFiles.dockBottom")}
+                >
+                  <button
+                    class="btn btn--ghost btn--sm chat-workspace-rail__dock"
+                    type="button"
+                    aria-label=${dock === "bottom"
+                      ? t("chat.workspaceFiles.dockRight")
+                      : t("chat.workspaceFiles.dockBottom")}
+                    @click=${() =>
+                      sessionWorkspace.onSetDock(dock === "bottom" ? "right" : "bottom")}
+                  >
+                    ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
+                  </button>
+                </openclaw-tooltip>
+              `}
           <openclaw-tooltip .content=${t("chat.workspaceFiles.refresh")}>
             <button
               class="btn btn--ghost btn--sm chat-workspace-rail__refresh"

@@ -17,6 +17,7 @@ import type {
 import type { ChatSideResult } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
+import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import {
   renderBackgroundTasksRail,
   renderBackgroundTasksToggle,
@@ -88,6 +89,8 @@ export type ChatProps = {
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
+  /** Host context resolving global-alias session keys (scope=global fleets). */
+  sessionHost?: Pick<UiSessionDefaultsHost, "agentsList" | "hello"> | null;
   providerUsage?: ProviderUsageDisplayProps;
   focusMode?: boolean;
   onLoadSidebarFullMessage?: (
@@ -95,6 +98,9 @@ export type ChatProps = {
   ) => Promise<DetailFullMessageResult | null | undefined>;
   sidebarOpen?: boolean;
   sidebarContent?: SidebarContent | null;
+  /** Pane too narrow for side-by-side chat + detail panel: stack them
+   * vertically instead (the divider flips to a horizontal handle). */
+  sidebarStacked?: boolean;
   splitRatio?: number;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
@@ -181,6 +187,11 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const sidebarStacked = props.sidebarStacked === true;
+  const workspaceDockBottom = Boolean(
+    props.sessionWorkspace &&
+    (props.sessionWorkspace.dock === "bottom" || props.sessionWorkspace.narrowLayout),
+  );
   const canCompose = props.canSend;
   let chatSection: HTMLElement | null = null;
 
@@ -198,6 +209,7 @@ export function renderChat(props: ChatProps) {
     showToolCalls: props.showToolCalls,
     runActive: Boolean(props.canAbort),
     sessions: props.sessions,
+    sessionHost: props.sessionHost,
     assistantName: props.assistantName,
     assistantAvatar: props.assistantAvatar,
     assistantAvatarUrl: props.assistantAvatarUrl,
@@ -363,9 +375,10 @@ export function renderChat(props: ChatProps) {
       <div
         class="chat-workbench ${props.sessionWorkspace?.collapsed
           ? "chat-workbench--workspace-collapsed"
-          : ""} ${props.sessionWorkspace?.dock === "bottom"
-          ? "chat-workbench--dock-bottom"
-          : ""} ${props.backgroundTasks?.collapsed === false ? "chat-workbench--tasks-open" : ""}"
+          : ""} ${workspaceDockBottom ? "chat-workbench--dock-bottom" : ""} ${props.backgroundTasks
+          ?.collapsed === false
+          ? "chat-workbench--tasks-open"
+          : ""}"
       >
         ${renderSessionWorkspaceRail(props.sessionWorkspace)}
         ${renderBackgroundTasksRail(props.backgroundTasks)}
@@ -398,7 +411,11 @@ export function renderChat(props: ChatProps) {
           ${props.backgroundTasks?.collapsed && !props.paneHeaderActive
             ? renderBackgroundTasksToggle(props.backgroundTasks, "floating")
             : nothing}
-          <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
+          <div
+            class="chat-split-container ${sidebarOpen
+              ? "chat-split-container--open"
+              : ""} ${sidebarOpen && sidebarStacked ? "chat-split-container--stacked" : ""}"
+          >
             <div
               class="chat-main"
               style="flex: ${sidebarOpen ? `0 1 ${splitRatio * 100}%` : "1 1 100%"}"
@@ -427,6 +444,7 @@ export function renderChat(props: ChatProps) {
                   <resizable-divider
                     .splitRatio=${splitRatio}
                     .label=${t("nav.resize")}
+                    .orientation=${sidebarStacked ? "horizontal" : "vertical"}
                     @resize=${(event: CustomEvent) =>
                       props.onSplitRatioChange?.(event.detail.splitRatio)}
                   ></resizable-divider>

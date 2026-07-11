@@ -271,6 +271,7 @@ describe("release validation no-push transport", () => {
     const dockerAssets = job(full, "docker_runtime_assets_preflight");
     expect(step(dockerAssets, "Checkout target SHA").with?.["persist-credentials"]).toBe(false);
     expect(evidenceReuse.if).toContain("github.ref == 'refs/heads/main'");
+    expect(evidenceReuse.if).toContain("startsWith(github.ref, 'refs/heads/release-ci/')");
     expect(
       evidenceReuse.steps?.find(
         (candidate) => candidate.name === "Require trusted main workflow ref",
@@ -344,6 +345,7 @@ describe("release validation no-push transport", () => {
       shared_image_artifact_namespace: "release-live",
       shared_image_policy: "no-push-artifact",
     });
+    expect(live.with).not.toHaveProperty("allow_unreleased_changelog");
     expect(docker.with).toMatchObject({
       package_artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
       package_artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
@@ -358,6 +360,7 @@ describe("release validation no-push transport", () => {
       shared_image_artifact_namespace: "release-docker",
       shared_image_policy: "no-push-artifact",
     });
+    expect(docker.with).not.toHaveProperty("allow_unreleased_changelog");
     expect(acceptance.with).toMatchObject({
       artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
       artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
@@ -398,6 +401,8 @@ describe("release validation no-push transport", () => {
       package_source_sha: "${{ needs.resolve_package.outputs.package_source_sha }}",
       package_version: "${{ needs.resolve_package.outputs.package_version }}",
     });
+    expect(standardAcceptance.with).not.toHaveProperty("allow_unreleased_changelog");
+    expect(registryAcceptance.with).not.toHaveProperty("allow_unreleased_changelog");
     expect(standardAcceptance.if).toContain("shared_image_policy == 'no-push-artifact'");
     expectReadOnlyPackagePermission(standardAcceptance);
     expect(registryAcceptance.if).toContain("shared_image_policy == 'existing-only'");
@@ -831,6 +836,7 @@ describe("release validation no-push transport", () => {
     expect(permissionAt(scheduled.permissions, "packages", "none")).toBe("read");
     expectReadOnlyPackagePermission(scheduledValidation);
     expect(scheduledValidation.with).toMatchObject({
+      allow_unreleased_changelog: true,
       shared_image_artifact_namespace: "scheduled-live",
       shared_image_policy: "no-push-artifact",
     });

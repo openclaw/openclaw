@@ -1098,8 +1098,12 @@ html.openclaw-native-macos .shell-nav-expand {
   opacity: 0.85;
 }
 
+/* Flex, not grid: WebKit does not re-run a grid flex-item's intrinsic sizing
+   when rows stream in or grow a second subtitle line after first layout, so a
+   grid list keeps a stale height and the next section paints over its rows. */
 .sidebar-recent-sessions__list {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 2px;
   min-height: 12px;
 }
@@ -1318,7 +1322,7 @@ html.openclaw-native-macos .shell-nav-expand {
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+  box-shadow: var(--shadow-lg);
 }
 
 .sidebar-customize-menu__title {
@@ -1390,10 +1394,11 @@ html.openclaw-native-macos .shell-nav-expand {
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+  box-shadow: var(--shadow-lg);
 }
 
-openclaw-native-link-menu[popover] {
+openclaw-native-link-menu[popover],
+openclaw-session-menu[popover] {
   width: 0;
   height: 0;
   margin: 0;
@@ -1412,7 +1417,7 @@ openclaw-native-link-menu[popover] {
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+  box-shadow: var(--shadow-lg);
 }
 
 .sidebar-session-sort-menu__title {
@@ -1773,11 +1778,13 @@ openclaw-native-link-menu[popover] {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  /* Reserve space for the docked operator terminal so it reshapes the content
-     area (shrinks it) instead of overlaying the chat. The terminal panel sets
-     these vars; they are 0 when it is closed. */
-  margin-bottom: var(--oc-terminal-reserve-bottom, 0);
-  margin-right: var(--oc-terminal-reserve-right, 0);
+  /* Reserve space for the docked operator terminal and browser panels so they
+     reshape the content area (shrink it) instead of overlaying the chat. The
+     panels set these vars; they are 0 when closed. */
+  margin-bottom: calc(
+    var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px)
+  );
+  margin-right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
   transition:
     margin-bottom 0.16s ease,
     margin-right 0.16s ease;
