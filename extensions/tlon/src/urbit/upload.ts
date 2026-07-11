@@ -5,6 +5,7 @@ import { MAX_IMAGE_BYTES, readRemoteMediaBuffer } from "openclaw/plugin-sdk/medi
 import { uploadFile } from "../tlon-api.js";
 
 const TLON_UPLOAD_IMAGE_IDLE_TIMEOUT_MS = 30_000;
+const TLON_UPLOAD_IMAGE_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
 
 /**
  * Fetch an image from a URL and upload it to Tlon storage.
@@ -24,6 +25,7 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
     const fetched = await readRemoteMediaBuffer({
       url: imageUrl,
       maxBytes: MAX_IMAGE_BYTES,
+      responseHeaderTimeoutMs: TLON_UPLOAD_IMAGE_RESPONSE_HEADER_TIMEOUT_MS,
       readIdleTimeoutMs: TLON_UPLOAD_IMAGE_IDLE_TIMEOUT_MS,
       ssrfPolicy: undefined,
       requestInit: { method: "GET" },
