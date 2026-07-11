@@ -5,41 +5,21 @@
 // This suite pins artifact exports to the runtime plugin's conversationBindings
 // so the fast path cannot drift from loaded-plugin behavior.
 import { beforeAll, describe, expect, it } from "vitest";
-import { loadBundledPluginPublicSurface } from "../../../test-utils/bundled-plugin-public-surface.js";
 import {
   getBundledChannelPluginAsync,
+  getBundledChannelThreadBindingArtifactAsync,
   listBundledChannelPluginIds,
 } from "./test-helpers/bundled-channel-plugin-loader.js";
 
 // Bundled channels expected to ship a top-level thread-binding artifact.
 const THREAD_BINDING_ARTIFACT_PLUGIN_IDS = ["discord", "matrix"] as const;
 
-const MISSING_PUBLIC_SURFACE_PREFIX = "Unable to resolve bundled plugin public surface ";
-
-type ThreadBindingArtifactModule = { defaultTopLevelPlacement?: unknown };
-
-async function loadThreadBindingArtifact(
-  pluginId: string,
-): Promise<ThreadBindingArtifactModule | null> {
-  try {
-    return await loadBundledPluginPublicSurface<ThreadBindingArtifactModule>({
-      pluginId,
-      artifactBasename: "thread-binding-api.js",
-    });
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith(MISSING_PUBLIC_SURFACE_PREFIX)) {
-      return null;
-    }
-    throw error;
-  }
-}
-
 describe("bundled channel thread-binding artifact parity", () => {
   const artifactPlacements = new Map<string, unknown>();
 
   beforeAll(async () => {
     for (const id of listBundledChannelPluginIds()) {
-      const artifact = await loadThreadBindingArtifact(id);
+      const artifact = await getBundledChannelThreadBindingArtifactAsync(id);
       if (artifact) {
         artifactPlacements.set(id, artifact.defaultTopLevelPlacement);
       }
