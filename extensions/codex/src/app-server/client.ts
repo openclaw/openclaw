@@ -4,7 +4,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
-import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
@@ -27,7 +27,10 @@ import {
   closeCodexAppServerTransportAndWait,
   type CodexAppServerTransport,
 } from "./transport.js";
-import { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
+import {
+  MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION,
+  MIN_CODEX_APP_SERVER_VERSION,
+} from "./version.js";
 
 /** Minimum supported Codex app-server version exported for callers/tests. */
 export { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -297,7 +300,7 @@ export class CodexAppServerClient {
       clientInfo: {
         name: "openclaw",
         title: "OpenClaw",
-        version: OPENCLAW_VERSION,
+        version: MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION,
       },
       capabilities: {
         experimentalApi: true,

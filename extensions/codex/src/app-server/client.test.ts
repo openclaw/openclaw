@@ -1,7 +1,7 @@
 // Codex tests cover client plugin behavior.
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing,
@@ -13,6 +13,7 @@ import {
 } from "./client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
+import { MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION } from "./version.js";
 
 describe("CodexAppServerClient", () => {
   const clients: CodexAppServerClient[] = [];
@@ -227,7 +228,7 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
-  it("initializes with the required client version", async () => {
+  it("initializes with the managed Codex compatibility version", async () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
@@ -242,7 +243,7 @@ describe("CodexAppServerClient", () => {
         clientInfo: {
           name: "openclaw",
           title: "OpenClaw",
-          version: OPENCLAW_VERSION,
+          version: MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION,
         },
         capabilities: {
           experimentalApi: true,
@@ -250,6 +251,10 @@ describe("CodexAppServerClient", () => {
       },
     });
     expect(outbound.params?.clientInfo?.version).not.toBe("");
+    expect(harness.client.getRuntimeIdentity()).toMatchObject({
+      serverVersion: "0.143.0",
+      userAgent: "openclaw/0.143.0 (macOS; test)",
+    });
     expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({ method: "initialized" });
   });
 

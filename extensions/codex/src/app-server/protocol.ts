@@ -51,8 +51,8 @@ export type RpcMessage = RpcRequest | RpcResponse;
 export type CodexInitializeParams = {
   clientInfo: {
     name: string;
-    title?: string;
-    version?: string;
+    title?: string | null;
+    version: string;
   };
   capabilities?: JsonObject;
 };
