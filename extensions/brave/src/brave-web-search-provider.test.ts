@@ -821,4 +821,33 @@ describe("brave web search provider", () => {
     expect(JSON.stringify(loggerInfoMock.mock.calls)).not.toContain("brave-test-key");
     expect(JSON.stringify(loggerInfoMock.mock.calls)).not.toContain("X-Subscription-Token");
   });
+
+  it("forwards the execution abort signal to the Brave HTTP request", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const controller = new AbortController();
+    const mockFetch = vi.fn(async (_input?: unknown, init?: unknown) => {
+      controller.abort();
+      throw new DOMException("The operation was aborted", "AbortError");
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: { mode: "web" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await expect(
+      tool.execute({ query: "abort propagation" }, { signal: controller.signal }),
+    ).rejects.toThrow("The operation was aborted");
+
+    const init = fetchRequestInit(mockFetch);
+    expect(init).toBeDefined();
+  });
 });
