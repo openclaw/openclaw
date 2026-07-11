@@ -126,4 +126,25 @@ describe("resolveSessionModelRef", () => {
       resolveSessionModelRef(cfg, { modelSelectionLocked: true, subagentRole: "leaf" }, "main"),
     ).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
   });
+
+  test("resolves configured subagent aliases with static normalization", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+          models: {
+            "openai/gpt-5.6-luna": { alias: "luna" },
+          },
+          subagents: { model: "luna" },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSessionModelRef(cfg, { subagentRole: "leaf" }, "main", {
+        allowPluginNormalization: false,
+      }),
+    ).toEqual({ provider: "openai", model: "gpt-5.6-luna" });
+  });
 });

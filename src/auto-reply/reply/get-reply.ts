@@ -561,8 +561,12 @@ export async function getReplyFromConfig(
       defaultModel = subagentDefault.model;
       provider = subagentDefault.provider;
       model = subagentDefault.model;
-      // Later bare overrides must resolve under the selected subagent provider.
-      aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
+      // Later bare overrides use the selected provider without cold-loading plugin normalization.
+      aliasIndex = buildModelAliasIndex({
+        cfg,
+        defaultProvider,
+        allowPluginNormalization: false,
+      });
     }
   }
   // Utility-model narration is turn-local decoration. Initialize the durable

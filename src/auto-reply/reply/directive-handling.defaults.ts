@@ -60,12 +60,14 @@ export function resolveSubagentSessionDefaultModel(params: {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    allowPluginNormalization: false,
   });
   const resolved = resolveModelRefFromString({
     cfg: params.cfg,
     raw: configured,
     defaultProvider: params.defaultProvider,
     aliasIndex,
+    allowPluginNormalization: false,
   });
   return resolved ? { provider: resolved.ref.provider, model: resolved.ref.model } : null;
 }

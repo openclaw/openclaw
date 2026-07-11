@@ -83,12 +83,17 @@ export function resolveSessionModelRef(
     const configured = resolveSubagentConfiguredModelSelection({ cfg, agentId });
     if (configured) {
       const defaultProvider = resolved.provider || DEFAULT_PROVIDER;
-      const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
+      const aliasIndex = buildModelAliasIndex({
+        cfg,
+        defaultProvider,
+        allowPluginNormalization: options?.allowPluginNormalization,
+      });
       const subagentRef = resolveModelRefFromString({
         cfg,
         raw: configured,
         defaultProvider,
         aliasIndex,
+        allowPluginNormalization: options?.allowPluginNormalization,
       });
       if (subagentRef) {
         return subagentRef.ref;
