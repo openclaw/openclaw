@@ -10,6 +10,11 @@ import {
   type EmbeddedRunAttemptParams,
   type resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  computeBackoff,
+  sleepWithAbort,
+  type BackoffPolicy,
+} from "openclaw/plugin-sdk/runtime-env";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -75,7 +80,40 @@ import {
 } from "./turn-router.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
-const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
+const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 5;
+
+/**
+ * Bounded backoff between startup connection-close retries. The replacement
+ * app-server process needs a short warm-up window to bind and become ready
+ * before the next startup attempt re-acquires the shared client; retrying
+ * immediately re-enters the same failing window and exhausts the budget
+ * before the server is viable. See issue #83959.
+ */
+const CODEX_APP_SERVER_STARTUP_RETRY_BACKOFF: BackoffPolicy = {
+  initialMs: 500,
+  maxMs: 4_000,
+  factor: 2,
+  jitter: 0.2,
+};
+
+/**
+ * Terminal error raised when the Codex app-server connection keeps closing
+ * throughout the bounded startup retry window. Carries the original
+ * connection-closed error as `cause` so callers can distinguish a startup
+ * lifecycle exhaustion from a mid-turn client close. See issue #83959.
+ */
+export class CodexAppServerStartupExhaustedError extends Error {
+  constructor(
+    public readonly attempts: number,
+    cause: unknown,
+  ) {
+    super(
+      `codex app-server startup exhausted after ${attempts} connection-close retries`,
+      cause !== undefined ? { cause } : undefined,
+    );
+    this.name = "CodexAppServerStartupExhaustedError";
+  }
+}
 
 type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 
@@ -509,18 +547,25 @@ export async function startCodexAttemptThread(params: {
                   error: formatErrorMessage(error),
                 },
               );
-              throw error;
+              throw new CodexAppServerStartupExhaustedError(attempt, error);
             }
+            const backoffMs = computeBackoff(CODEX_APP_SERVER_STARTUP_RETRY_BACKOFF, attempt);
             embeddedAgentLog.warn(
               "codex app-server connection closed during startup; restarting app-server and retrying",
               {
                 attempt,
                 nextAttempt: attempt + 1,
                 maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
+                backoffMs,
                 clearedSharedClient,
                 error: formatErrorMessage(error),
               },
             );
+            // Give the replacement app-server process a bounded warm-up window
+            // before re-acquiring the shared client, so the next attempt does
+            // not re-enter the same failing window. Abortable so a cancelled
+            // run does not stall on the backoff. See issue #83959.
+            await sleepWithAbort(backoffMs, params.signal);
           }
         }
         throw new Error("codex app-server startup retry loop exited unexpectedly");
