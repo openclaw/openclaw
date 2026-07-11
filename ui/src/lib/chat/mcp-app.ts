@@ -53,6 +53,9 @@ export function extractMcpAppPreview(
     : undefined;
   const result = isRecord(mcpApp.result) ? mcpApp.result : undefined;
   const toolName = typeof mcpApp.toolName === "string" ? mcpApp.toolName : undefined;
+  // Details carry the authoritative input: transcripts split tool calls and
+  // results into separate messages, so call-site args may be unavailable.
+  const resolvedToolInput = mcpApp.toolInput !== undefined ? mcpApp.toolInput : toolInput;
   return {
     kind: "mcp-app",
     ...(toolName ? { title: toolName } : {}),
@@ -63,7 +66,7 @@ export function extractMcpAppPreview(
       ? { permissions: normalizeStringList(resource?.permissions) }
       : {}),
     ...(resource?.prefersBorder === true ? { prefersBorder: true } : {}),
-    ...(toolInput !== undefined ? { toolInput } : {}),
+    ...(resolvedToolInput !== undefined ? { toolInput: resolvedToolInput } : {}),
     ...(result
       ? {
           toolResult: {
@@ -71,6 +74,7 @@ export function extractMcpAppPreview(
             ...(result.structuredContent !== undefined
               ? { structuredContent: result.structuredContent }
               : {}),
+            ...(isRecord(result._meta) ? { _meta: result._meta } : {}),
           },
         }
       : {}),

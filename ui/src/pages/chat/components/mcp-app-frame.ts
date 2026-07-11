@@ -71,6 +71,7 @@ function sendToolLifecycle(frame: HTMLIFrameElement, state: McpAppHostState) {
       ...(toolResult?.structuredContent !== undefined
         ? { structuredContent: toolResult.structuredContent }
         : {}),
+      ...(toolResult?._meta !== undefined ? { _meta: toolResult._meta } : {}),
     },
   });
 }
@@ -156,11 +157,21 @@ function installAppHostListener() {
   });
 }
 
+// CSP source expressions accepted from app metadata: scheme://host[:port]
+// with an optional single leading wildcard label. Anything else (spaces,
+// semicolons, quotes) could smuggle extra directives into the policy string.
+const CSP_ORIGIN_PATTERN =
+  /^(https?|wss?):\/\/(\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(:\d{1,5})?$/i;
+
+function sanitizeCspOrigins(origins: string[] | undefined): string {
+  return (origins ?? []).filter((origin) => CSP_ORIGIN_PATTERN.test(origin)).join(" ");
+}
+
 function buildCspContent(preview: McpAppToolPreview): string {
-  const resourceOrigins = preview.csp?.resourceDomains?.join(" ") ?? "";
-  const connectOrigins = preview.csp?.connectDomains?.join(" ") ?? "";
-  const frameOrigins = preview.csp?.frameDomains?.join(" ") ?? "";
-  const baseUriOrigins = preview.csp?.baseUriDomains?.join(" ") ?? "";
+  const resourceOrigins = sanitizeCspOrigins(preview.csp?.resourceDomains);
+  const connectOrigins = sanitizeCspOrigins(preview.csp?.connectDomains);
+  const frameOrigins = sanitizeCspOrigins(preview.csp?.frameDomains);
+  const baseUriOrigins = sanitizeCspOrigins(preview.csp?.baseUriDomains);
   // Spec mapping (deny-by-default): resourceDomains feed static asset
   // directives, connectDomains feed connect-src. Inline scripts/styles and
   // data/blob URLs stay allowed — the document itself is already the trust

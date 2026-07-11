@@ -14,9 +14,11 @@ const appDetails = {
       permissions: ["clipboardWrite"],
       prefersBorder: true,
     },
+    toolInput: { elements: "[persisted]" },
     result: {
       content: [{ type: "text", text: "rendered" }],
       structuredContent: { elements: [] },
+      _meta: { source: "server" },
     },
   },
 };
@@ -31,13 +33,24 @@ describe("extractMcpAppPreview", () => {
       csp: { connectDomains: ["https://esm.sh"] },
       permissions: ["clipboardWrite"],
       prefersBorder: true,
-      toolInput: { elements: "[]" },
+      // Persisted details input wins over call-site args so history reloads
+      // (where call and result are separate messages) keep the app input.
+      toolInput: { elements: "[persisted]" },
       toolResult: {
         content: [{ type: "text", text: "rendered" }],
         structuredContent: { elements: [] },
+        _meta: { source: "server" },
       },
     });
     expect(preview?.html).toContain("app");
+  });
+
+  it("falls back to call-site args when details carry no input", () => {
+    const details = structuredClone(appDetails) as { mcpApp: Record<string, unknown> };
+    delete details.mcpApp.toolInput;
+    expect(extractMcpAppPreview(details, { elements: "[caller]" })?.toolInput).toEqual({
+      elements: "[caller]",
+    });
   });
 
   it("returns undefined without an html document", () => {

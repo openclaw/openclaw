@@ -190,7 +190,7 @@ export type McpAppToolPreview = {
   /** Original tool-call arguments for ui/notifications/tool-input. */
   toolInput?: unknown;
   /** Raw MCP tool result for ui/notifications/tool-result. */
-  toolResult?: { content?: unknown[]; structuredContent?: unknown };
+  toolResult?: { content?: unknown[]; structuredContent?: unknown; _meta?: unknown };
 };
 
 export type ToolCardOutcome = "running" | "succeeded" | "failed" | "unknown";

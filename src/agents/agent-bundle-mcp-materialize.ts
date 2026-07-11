@@ -83,6 +83,7 @@ function toAgentToolResult(params: {
 async function resolveMcpAppDetails(params: {
   runtime: SessionMcpRuntime;
   tool: McpCatalogTool;
+  input: unknown;
   result: CallToolResult;
 }): Promise<McpAppToolDetails | undefined> {
   const resourceUri = params.tool.ui?.resourceUri;
@@ -100,11 +101,13 @@ async function resolveMcpAppDetails(params: {
       serverName: params.tool.serverName,
       toolName: params.tool.toolName,
       resource: { ...resource, uri: resource.uri || resourceUri },
+      ...(params.input !== undefined ? { toolInput: params.input } : {}),
       result: {
         ...(Array.isArray(params.result.content) ? { content: params.result.content } : {}),
         ...(params.result.structuredContent !== undefined
           ? { structuredContent: params.result.structuredContent }
           : {}),
+        ...(isRecord(params.result._meta) ? { _meta: params.result._meta } : {}),
       },
     };
   } catch (error) {
@@ -405,7 +408,7 @@ export async function materializeBundleMcpToolsForRun(params: {
         toolName: tool.toolName,
         result,
       });
-      const mcpApp = await resolveMcpAppDetails({ runtime: params.runtime, tool, result });
+      const mcpApp = await resolveMcpAppDetails({ runtime: params.runtime, tool, input, result });
       if (mcpApp) {
         const baseDetails = isRecord(agentResult.details) ? agentResult.details : {};
         agentResult.details = { ...baseDetails, mcpApp };

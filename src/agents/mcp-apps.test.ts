@@ -40,6 +40,11 @@ describe("parseMcpToolUiMeta", () => {
     });
   });
 
+  it("preserves an explicitly empty visibility list", () => {
+    expect(parseMcpToolUiMeta({ ui: { visibility: [] } })).toEqual({ visibility: [] });
+    expect(parseMcpToolUiMeta({ ui: { visibility: ["wat"] } })).toEqual({ visibility: [] });
+  });
+
   it("returns undefined for tools without ui metadata", () => {
     expect(parseMcpToolUiMeta(undefined)).toBe(undefined);
     expect(parseMcpToolUiMeta({})).toBe(undefined);
@@ -50,6 +55,8 @@ describe("parseMcpToolUiMeta", () => {
 describe("isAppOnlyMcpTool", () => {
   it("flags tools whose visibility excludes the model", () => {
     expect(isAppOnlyMcpTool({ ui: { visibility: ["app"] } })).toBe(true);
+    expect(isAppOnlyMcpTool({ ui: { visibility: [] } })).toBe(true);
+    expect(isAppOnlyMcpTool({ ui: { visibility: ["wat"] } })).toBe(true);
   });
 
   it("keeps model-visible and undeclared tools", () => {

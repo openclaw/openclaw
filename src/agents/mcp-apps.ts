@@ -49,10 +49,17 @@ export type McpAppToolDetails = {
   serverName: string;
   toolName: string;
   resource: McpAppResource;
+  /**
+   * Original tool-call arguments mirrored for ui/notifications/tool-input.
+   * Persisted here because durable transcripts split the tool call and its
+   * result into separate messages, losing call-site args on reload.
+   */
+  toolInput?: unknown;
   /** Raw MCP tool result mirrored for the app's ui/notifications/tool-result. */
   result: {
     content?: unknown[];
     structuredContent?: unknown;
+    _meta?: unknown;
   };
 };
 
@@ -67,10 +74,13 @@ function normalizeStringList(raw: unknown): string[] | undefined {
 }
 
 function normalizeVisibility(raw: unknown): McpToolUiVisibility[] | undefined {
-  const values = normalizeStringList(raw)?.filter(
-    (entry): entry is McpToolUiVisibility => entry === "model" || entry === "app",
-  );
-  return values && values.length > 0 ? values : undefined;
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  // An explicitly present list is preserved even when empty (or when every
+  // entry is unknown): a declared visibility that omits "model" must keep the
+  // tool hidden from the agent rather than silently exposing it.
+  return raw.filter((entry): entry is McpToolUiVisibility => entry === "model" || entry === "app");
 }
 
 /**
@@ -89,12 +99,12 @@ export function parseMcpToolUiMeta(meta: unknown): McpToolUiMeta | undefined {
   // Only ui:// URIs are valid app resource bindings; anything else is ignored.
   const resourceUri = rawUri.startsWith("ui://") ? rawUri : "";
   const visibility = normalizeVisibility(ui?.visibility);
-  if (!resourceUri && !visibility) {
+  if (!resourceUri && visibility === undefined) {
     return undefined;
   }
   return {
     ...(resourceUri ? { resourceUri } : {}),
-    ...(visibility ? { visibility } : {}),
+    ...(visibility !== undefined ? { visibility } : {}),
   };
 }
 
