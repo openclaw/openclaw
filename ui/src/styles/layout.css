@@ -810,6 +810,24 @@ html.openclaw-native-macos .shell-nav-expand {
   margin: 0 8px 10px;
 }
 
+.sidebar-update-card--floating .sidebar-update-card {
+  width: min(360px, calc(100% - 32px));
+  margin: 12px 16px 0;
+}
+
+@media (min-width: 1101px) {
+  /* Keep the card beside the collapsed-nav control so their hit targets stay distinct. */
+  .sidebar-update-card--floating .sidebar-update-card {
+    width: min(360px, calc(100% - 48px));
+    margin-left: 32px;
+  }
+
+  /* Native dashboard actions must also clear AppKit's drag strip. */
+  html.openclaw-native-macos .sidebar-update-card--floating .sidebar-update-card {
+    margin-top: calc(var(--openclaw-native-titlebar-height, 50px) + 2px);
+  }
+}
+
 .sidebar-update-card__action {
   width: 100%;
   min-height: 62px;
@@ -2356,4 +2374,3 @@ openclaw-session-menu[popover] {
   color: var(--text-strong);
   font-style: italic;
 }
-
