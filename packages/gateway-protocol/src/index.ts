@@ -14,6 +14,20 @@ export { formatValidationErrors, type ValidationError } from "./validation-error
 import {
   type AgentEvent,
   AgentEventSchema,
+  type AuditActivityAgentRunV1,
+  AuditActivityAgentRunV1Schema,
+  type AuditActivityEventV1,
+  AuditActivityEventV1Schema,
+  type AuditActivityInboundMessageV1,
+  AuditActivityInboundMessageV1Schema,
+  type AuditActivityListParams,
+  AuditActivityListParamsSchema,
+  type AuditActivityListResult,
+  AuditActivityListResultSchema,
+  type AuditActivityOutboundMessageV1,
+  AuditActivityOutboundMessageV1Schema,
+  type AuditActivityToolActionV1,
+  AuditActivityToolActionV1Schema,
   type AuditEvent,
   AuditEventSchema,
   type AuditListParams,
@@ -815,6 +829,9 @@ export const validateMessageActionParams =
 export const validateSendParams = lazyCompile(SendParamsSchema);
 export const validatePollParams = lazyCompile<PollParams>(PollParamsSchema);
 export const validateAgentParams = lazyCompile(AgentParamsSchema);
+export const validateAuditActivityListParams = lazyCompile<AuditActivityListParams>(
+  AuditActivityListParamsSchema,
+);
 export const validateAuditListParams = lazyCompile<AuditListParams>(AuditListParamsSchema);
 export const validateAgentIdentityParams =
   lazyCompile<AgentIdentityParams>(AgentIdentityParamsSchema);
@@ -1420,6 +1437,13 @@ export {
   ArtifactsListParamsSchema,
   ArtifactsGetParamsSchema,
   ArtifactsDownloadParamsSchema,
+  AuditActivityAgentRunV1Schema,
+  AuditActivityEventV1Schema,
+  AuditActivityInboundMessageV1Schema,
+  AuditActivityListParamsSchema,
+  AuditActivityListResultSchema,
+  AuditActivityOutboundMessageV1Schema,
+  AuditActivityToolActionV1Schema,
   AuditEventSchema,
   AuditListParamsSchema,
   AuditListResultSchema,
@@ -1886,6 +1910,13 @@ export type {
   SessionsDeleteParams,
   SessionsCompactParams,
   SessionsUsageParams,
+  AuditActivityAgentRunV1,
+  AuditActivityEventV1,
+  AuditActivityInboundMessageV1,
+  AuditActivityListParams,
+  AuditActivityListResult,
+  AuditActivityOutboundMessageV1,
+  AuditActivityToolActionV1,
   AuditEvent,
   AuditListParams,
   AuditListResult,
