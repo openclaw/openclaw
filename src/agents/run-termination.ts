@@ -139,11 +139,16 @@ export function resolveCliToolTerminalReason(params: {
     return abortFields.stopReason === "timeout" ? "timed_out" : "cancelled";
   }
   const { error } = params;
-  if (isTimeoutError(error) || (isFailoverError(error) && error.reason === "timeout")) {
-    return "timed_out";
-  }
-  if (error instanceof Error && error.name === "AbortError") {
-    return "cancelled";
+  try {
+    if (isTimeoutError(error) || (isFailoverError(error) && error.reason === "timeout")) {
+      return "timed_out";
+    }
+    if (error instanceof Error && error.name === "AbortError") {
+      return "cancelled";
+    }
+  } catch {
+    // Run errors may expose hostile getters. Classification must not replace
+    // the original failure or suppress its terminal event.
   }
   return "failed";
 }

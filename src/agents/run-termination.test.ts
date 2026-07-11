@@ -100,6 +100,18 @@ describe("resolveCliToolTerminalReason", () => {
       },
       expected: "cancelled",
     },
+    {
+      name: "hostile name getter classifies failed instead of throwing",
+      setup: () => {
+        const error = Object.defineProperty(new Error("boom"), "name", {
+          get() {
+            throw new Error("hostile getter");
+          },
+        });
+        return { error };
+      },
+      expected: "failed",
+    },
   ] as const)("$name", ({ setup, expected }) => {
     expect(resolveCliToolTerminalReason(setup())).toBe(expected);
   });
