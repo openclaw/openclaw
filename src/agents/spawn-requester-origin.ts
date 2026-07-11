@@ -6,7 +6,11 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveFirstBoundAccountId } from "../routing/bound-account-read.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import {
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 // Delivery targets often carry a transport wrapper (e.g. Matrix `room:<id>` or
 // LINE `line:group:<id>`), while route bindings commonly store raw peer ids on
@@ -135,4 +139,23 @@ export function resolveRequesterOriginForChild(params: {
     to: params.requesterTo,
     threadId: params.requesterThreadId,
   });
+}
+
+export function preferParentExternalOriginWhenLiveOriginIsInternal(params: {
+  liveOrigin?: DeliveryContext;
+  parentDeliveryContext?: DeliveryContext;
+}) {
+  const liveOrigin = normalizeDeliveryContext(params.liveOrigin);
+  const parentDeliveryContext = normalizeDeliveryContext(params.parentDeliveryContext);
+  const liveChannel = liveOrigin?.channel?.toLowerCase();
+  const parentChannel = parentDeliveryContext?.channel?.toLowerCase();
+  if (
+    liveChannel === "webchat" &&
+    parentChannel &&
+    parentChannel !== "webchat" &&
+    parentDeliveryContext?.to
+  ) {
+    return mergeDeliveryContext(parentDeliveryContext, liveOrigin);
+  }
+  return liveOrigin;
 }
