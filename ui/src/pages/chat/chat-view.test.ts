@@ -692,10 +692,10 @@ describe("chat conversation width", () => {
       chatMessageMaxWidth: "82%",
       messages: [{ role: "assistant", content: "hello", timestamp: 1 }],
     });
-    const chat = requireElement(container, ".chat", "chat");
+    const chat = container.querySelector<HTMLElement>(".chat");
 
-    expect(chat.style.getPropertyValue("--chat-thread-max-width")).toBe("82%");
-    expect(chat.style.getPropertyValue("--chat-message-max-width")).toBe("100%");
+    expect(chat?.style.getPropertyValue("--chat-thread-max-width")).toBe("82%");
+    expect(chat?.style.getPropertyValue("--chat-message-max-width")).toBe("100%");
   });
 });
 
