@@ -181,19 +181,18 @@ function resolvePluginPublicSurfaceLocation(params: {
   return null;
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
-export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
+export function loadPluginPublicArtifactModuleSync(params: {
   rootDir: string;
   source?: string;
   artifactBasename: string;
-}): T {
+}): Record<string, unknown> {
   const location = resolvePluginPublicSurfaceLocation(params);
   if (!location) {
     throw new Error(`Unable to resolve plugin public surface ${params.artifactBasename}`);
   }
   const cached = publicSurfaceModuleCache.get(location.modulePath);
   if (cached) {
-    return cached as T;
+    return cached as Record<string, unknown>;
   }
 
   const opened = openRootFileSync({
@@ -216,11 +215,11 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
     throw new Error(`Plugin public surface changed after validation: ${params.artifactBasename}`);
   }
 
-  const sentinel = {} as T;
+  const sentinel: Record<string, unknown> = {};
   publicSurfaceModuleCache.set(location.modulePath, sentinel);
   publicSurfaceModuleCache.set(validatedPath, sentinel);
   try {
-    const loaded = loadPublicSurfaceModule(validatedPath) as T;
+    const loaded = loadPublicSurfaceModule(validatedPath) as Record<string, unknown>;
     Object.assign(sentinel, loaded);
     return sentinel;
   } catch (error) {
@@ -233,15 +232,14 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
 }
 
 /** Loads the first resolvable plugin public artifact from an ordered candidate list. */
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
-export function loadPluginPublicArtifactModuleFromCandidatesSync<T extends object>(params: {
+export function loadPluginPublicArtifactModuleFromCandidatesSync(params: {
   rootDir: string;
   source?: string;
   artifactCandidates: readonly string[];
-}): T | null {
+}): Record<string, unknown> | null {
   for (const artifactBasename of params.artifactCandidates) {
     try {
-      return loadPluginPublicArtifactModuleSync<T>({
+      return loadPluginPublicArtifactModuleSync({
         rootDir: params.rootDir,
         ...(params.source ? { source: params.source } : {}),
         artifactBasename,

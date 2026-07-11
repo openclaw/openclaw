@@ -161,7 +161,7 @@ function loadProviderEntriesFromManifestRecord<TProvider extends object>(params:
       isProvider: params.isProvider,
     });
   }
-  const mod = loadPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
+  const mod = loadPluginPublicArtifactModuleFromCandidatesSync({
     rootDir: params.record.rootDir,
     source: params.record.source,
     artifactCandidates: params.artifactCandidates,

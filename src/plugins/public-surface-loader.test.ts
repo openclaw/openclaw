@@ -228,7 +228,7 @@ describe("bundled plugin public surface loader", () => {
     fs.writeFileSync(modulePath, 'export const marker = "source";\n', "utf8");
 
     expect(
-      publicSurfaceLoader.loadPluginPublicArtifactModuleFromCandidatesSync<{ marker: string }>({
+      publicSurfaceLoader.loadPluginPublicArtifactModuleFromCandidatesSync({
         rootDir: pluginRoot,
         source: path.join(sourceDir, "index.js"),
         artifactCandidates: ["missing-contract-api.js", "web-search-contract-api.js"],
@@ -260,7 +260,7 @@ describe("bundled plugin public surface loader", () => {
     fs.writeFileSync(modulePath, 'export const marker = "inside";\n', "utf8");
 
     expect(
-      publicSurfaceLoader.loadPluginPublicArtifactModuleFromCandidatesSync<{ marker: string }>({
+      publicSurfaceLoader.loadPluginPublicArtifactModuleFromCandidatesSync({
         rootDir: pluginRoot,
         source: path.join(outsideRoot, "index.js"),
         artifactCandidates: ["outside-contract-api.js", "web-search-contract-api.js"],
@@ -298,7 +298,7 @@ describe("bundled plugin public surface loader", () => {
     );
 
     expect(
-      publicSurfaceLoader.loadPluginPublicArtifactModuleFromCandidatesSync<{ marker: string }>({
+      publicSurfaceLoader.loadPluginPublicArtifactModuleFromCandidatesSync({
         rootDir: pluginRoot,
         artifactCandidates: ["bad-contract-api.js", "web-search-contract-api.js"],
       })?.marker,
