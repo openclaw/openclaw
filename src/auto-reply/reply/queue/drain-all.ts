@@ -4,7 +4,7 @@ import { FOLLOWUP_QUEUES } from "./state.js";
 function getPendingFollowupCount(): number {
   let pending = 0;
   for (const queue of FOLLOWUP_QUEUES.values()) {
-    pending += queue.items.length + (queue.draining ? 1 : 0);
+    pending += queue.items.length + queue.droppedCount + (queue.draining ? 1 : 0);
   }
   return pending;
 }

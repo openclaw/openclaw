@@ -54,6 +54,18 @@ const getInspectableActiveTaskRestartBlockers = vi.fn(
 );
 const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
+const flushAllInboundDebouncers = vi.fn(async () => 0);
+const waitForChannelRunQueueDrain = vi.fn(async (_timeoutMs?: number) => ({
+  drained: true,
+  remaining: 0,
+}));
+const waitForFollowupQueueDrain = vi.fn(async (_timeoutMs?: number) => ({
+  drained: true,
+  remaining: 0,
+}));
+const runWithGatewayRestartDrainContinuation = vi.fn(
+  async <T>(run: () => Promise<T>): Promise<T> => await run(),
+);
 const resetAllLanes = vi.fn();
 const advanceCronActiveJobGeneration = vi.fn();
 const resetCronActiveJobs = vi.fn();
@@ -165,6 +177,23 @@ vi.mock("../../process/command-queue.js", () => ({
   markGatewayDraining: () => markGatewayDraining(),
   waitForActiveTasks: (timeoutMs?: number) => waitForActiveTasks(timeoutMs),
   resetAllLanes: () => resetAllLanes(),
+}));
+
+vi.mock("../../process/gateway-work-admission.js", () => ({
+  runWithGatewayRestartDrainContinuation: <T>(run: () => Promise<T>) =>
+    runWithGatewayRestartDrainContinuation(run),
+}));
+
+vi.mock("../../auto-reply/inbound-debounce.js", () => ({
+  flushAllInboundDebouncers: () => flushAllInboundDebouncers(),
+}));
+
+vi.mock("../../auto-reply/reply/queue/drain-all.js", () => ({
+  waitForFollowupQueueDrain: (timeoutMs?: number) => waitForFollowupQueueDrain(timeoutMs),
+}));
+
+vi.mock("../../channels/run-queue-registry.js", () => ({
+  waitForChannelRunQueueDrain: (timeoutMs?: number) => waitForChannelRunQueueDrain(timeoutMs),
 }));
 
 vi.mock("../../cron/active-jobs.js", () => ({
@@ -512,6 +541,46 @@ describe("runGatewayLoop", () => {
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
+    });
+  });
+
+  it("flushes inbound buffers and drains both queue layers behind closed admission", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({});
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+      const sigint = captureSignal("SIGINT");
+
+      sigterm();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(runWithGatewayRestartDrainContinuation).toHaveBeenCalledOnce();
+      expect(flushAllInboundDebouncers).toHaveBeenCalledOnce();
+      expect(waitForChannelRunQueueDrain).toHaveBeenCalledOnce();
+      expect(waitForFollowupQueueDrain).toHaveBeenCalledOnce();
+      expect(markGatewayDraining.mock.invocationCallOrder[0]).toBeLessThan(
+        flushAllInboundDebouncers.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(flushAllInboundDebouncers.mock.invocationCallOrder[0]).toBeLessThan(
+        waitForChannelRunQueueDrain.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(waitForChannelRunQueueDrain.mock.invocationCallOrder[0]).toBeLessThan(
+        waitForFollowupQueueDrain.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(waitForFollowupQueueDrain.mock.invocationCallOrder[0]).toBeLessThan(
+        close.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(start).toHaveBeenCalledTimes(2);
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
     });
   });
 

@@ -2,6 +2,7 @@
  * Tests channel lifecycle queue ordering and failure handling.
  */
 import { describe, expect, it, vi } from "vitest";
+import { waitForChannelRunQueueDrain } from "../channels/run-queue-registry.js";
 import { createChannelRunQueue } from "./channel-lifecycle.core.js";
 
 function createDeferred() {
@@ -117,5 +118,27 @@ describe("createChannelRunQueue", () => {
     await flushAsyncWork();
 
     expect(task).not.toHaveBeenCalled();
+  });
+
+  it("tracks queued and active work until it settles", async () => {
+    const first = createDeferred();
+    const queue = createChannelRunQueue({});
+
+    queue.enqueue("key", async () => {
+      await first.promise;
+    });
+    queue.enqueue("key", async () => {});
+    await flushAsyncWork();
+
+    await expect(waitForChannelRunQueueDrain(0)).resolves.toEqual({
+      drained: false,
+      remaining: 2,
+    });
+    first.resolve?.();
+    await expect(waitForChannelRunQueueDrain(1_000)).resolves.toEqual({
+      drained: true,
+      remaining: 0,
+    });
+    queue.deactivate();
   });
 });

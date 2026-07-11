@@ -3,6 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  runWithGatewayRestartDrainContinuation,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "./gateway-work-admission.js";
@@ -844,6 +845,19 @@ describe("command queue", () => {
 
   it("rejects new enqueues with GatewayDrainingError after markGatewayDraining", async () => {
     markGatewayDraining();
+    await expect(
+      enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
+    ).rejects.toBeInstanceOf(GatewayDrainingError);
+  });
+
+  it("admits command work only inside the core restart drain continuation", async () => {
+    markGatewayDraining();
+
+    await expect(
+      runWithGatewayRestartDrainContinuation(
+        async () => await enqueueCommandInLane(CommandLane.Main, async () => "drained"),
+      ),
+    ).resolves.toBe("drained");
     await expect(
       enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
     ).rejects.toBeInstanceOf(GatewayDrainingError);

@@ -7,7 +7,7 @@ import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createInboundDebouncer } from "./inbound-debounce.js";
+import { createInboundDebouncer, flushAllInboundDebouncers } from "./inbound-debounce.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
@@ -485,6 +485,39 @@ describe("inbound dedupe", () => {
 });
 
 describe("createInboundDebouncer", () => {
+  it("flushes all registered buffers exactly once", async () => {
+    vi.useFakeTimers();
+    const calls: string[][] = [];
+    try {
+      const first = createInboundDebouncer<{ key: string; id: string }>({
+        debounceMs: 10_000,
+        buildKey: (item) => item.key,
+        onFlush: async (items) => {
+          calls.push(items.map((item) => item.id));
+        },
+      });
+      const second = createInboundDebouncer<{ key: string; id: string }>({
+        debounceMs: 10_000,
+        buildKey: (item) => item.key,
+        onFlush: async (items) => {
+          calls.push(items.map((item) => item.id));
+        },
+      });
+
+      await first.enqueue({ key: "a", id: "1" });
+      await first.enqueue({ key: "a", id: "2" });
+      await second.enqueue({ key: "b", id: "3" });
+
+      await expect(flushAllInboundDebouncers()).resolves.toBe(2);
+      await expect(flushAllInboundDebouncers()).resolves.toBe(0);
+      expect(calls).toEqual([["1", "2"], ["3"]]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("debounces and combines items", async () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];
