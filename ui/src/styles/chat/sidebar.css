@@ -64,7 +64,8 @@
 
 .chat-workspace-open,
 .chat-tasks-open,
-.chat-diff-open {
+.chat-diff-open,
+.chat-open-split-view {
   /* Match the 28px pane-header/split-view openers; .btn--icon's
      min-width/height of 36px would win otherwise. */
   width: 28px;

@@ -21,6 +21,7 @@ import {
 } from "../../app/settings.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
@@ -556,7 +557,6 @@ export function resetChatStateForRouteSession(
   state.chatSending = false;
   state.chatSendingScopeKey = null;
   state.chatSideResult = null;
-  state.chatSideResultPending = null;
   state.lastError = null;
   state.chatError = null;
   state.chatAvatarUrl = null;
@@ -592,6 +592,10 @@ export function resetChatStateForRouteSession(
     // here would persist the hydrated target through the previous owner.
     requestUpdate: false,
   });
+  // After the suppression-set wipe above: retire (not just drop) a pending
+  // BTW run so its late resultless terminal event cannot be adopted into the
+  // old session's cached transcript.
+  retirePendingChatSideQuestion(state);
   state.resetChatScroll();
   // Deliberately no saveRouteSessionSettings here: this runs for every split
   // pane, and only the active pane may write the global sessionKey /
