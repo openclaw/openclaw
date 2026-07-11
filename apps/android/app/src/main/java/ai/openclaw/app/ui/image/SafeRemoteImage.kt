@@ -184,9 +184,6 @@ internal class SafeRemoteImageStore(
   }
 }
 
-private val safeRemoteImageFetcher = SafeRemoteImageFetcher()
-internal val safeRemoteImageStore = SafeRemoteImageStore(fetcher = safeRemoteImageFetcher::fetch)
-
 internal fun decodeRemoteImageBitmap(
   bytes: ByteArray,
   maxDimension: Int = REMOTE_IMAGE_MAX_DIMENSION,
@@ -355,6 +352,11 @@ internal val safePublicHttpClient: OkHttpClient =
     // Pin the validated DNS answer to the connection and reject rebinding into private ranges.
     .dns(PublicOnlyDns())
     .build()
+
+// Build the shared stores only after their public-only client; top-level initialization can
+// otherwise re-enter the client field and expose a null default to preview/avatar callers.
+private val safeRemoteImageFetcher = SafeRemoteImageFetcher()
+internal val safeRemoteImageStore = SafeRemoteImageStore(fetcher = safeRemoteImageFetcher::fetch)
 
 private suspend fun Call.executeCancellable(): Response? =
   suspendCancellableCoroutine { continuation ->
