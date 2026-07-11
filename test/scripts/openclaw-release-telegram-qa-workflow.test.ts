@@ -547,9 +547,7 @@ describe("release Telegram QA workflow", () => {
       workflowJob("run_telegram"),
       "Create isolated Telegram SUT identity and launcher",
     );
-    const preloadSource = createSutStep.run?.match(
-      /<<'PRELOAD'\n([\s\S]*?)\nPRELOAD/u,
-    )?.[1];
+    const preloadSource = createSutStep.run?.match(/<<'PRELOAD'\n([\s\S]*?)\nPRELOAD/u)?.[1];
     expect(preloadSource).toBeTruthy();
 
     const workdir = tempDirs.make("openclaw-telegram-preload-");
