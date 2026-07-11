@@ -2219,9 +2219,28 @@ export async function persistSessionResetLifecycle(params: {
   storePath: string;
 }): Promise<{ replayedMessages: number }> {
   let persistError: Error | undefined;
+  // Captured INSIDE the same locked turn as the store swap below (the
+  // mutator runs inside updateSessionStore's own runExclusiveSessionStoreWrite
+  // hold), not via a later, unlocked re-read. A concurrent writer — e.g. a
+  // still-finishing post-turn hook (self-improvement, memory-reflection)
+  // that captured the pre-reset session identity before this swap landed —
+  // can freely acquire the store lock and persist its own row referencing
+  // the previous sessionId in the window between this function's own swap
+  // and a later read, making the previous session look "still referenced"
+  // when it genuinely was not at reset time. Snapshotting here, matching
+  // resetSessionEntryLifecycle's own pattern in store.ts (which computes
+  // this from the same locked store object it just mutated), closes that
+  // race: the fleet-observed silent skip on every typed /reset whose hook
+  // cascade raced this exact window.
+  let referencedSessionIdsAtSwap = new Set<string>();
   try {
     await updateSessionStore(params.storePath, (store) => {
       store[params.sessionKey] = params.nextEntry;
+      referencedSessionIdsAtSwap = new Set(
+        Object.values(store)
+          .map((entry) => entry?.sessionId)
+          .filter((sessionId): sessionId is string => Boolean(sessionId)),
+      );
     });
   } catch (err) {
     persistError = err instanceof Error ? err : new Error(String(err));
@@ -2259,14 +2278,10 @@ export async function persistSessionResetLifecycle(params: {
       // is never the previous session's own transcript path here — this is
       // always the "genuinely abandoned" case, never a reused-path handoff.
       // Tombstone the previous session's trajectory pair unless another
-      // store row still references it (same referenced-sessions guard shape
-      // resetSessionEntryLifecycle and deleteSessionEntryLifecycle use).
-      const store = loadSessionStore(params.storePath, { skipCache: true, clone: false });
-      const referencedSessionIds = new Set(
-        Object.values(store)
-          .map((entry) => entry?.sessionId)
-          .filter((sessionId): sessionId is string => Boolean(sessionId)),
-      );
+      // store row already referenced it at swap time (same referenced-
+      // sessions guard shape resetSessionEntryLifecycle and
+      // deleteSessionEntryLifecycle use).
+      const referencedSessionIds = referencedSessionIdsAtSwap;
       if (!referencedSessionIds.has(previousSessionId)) {
         const { removeRemovedSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
         await removeRemovedSessionTrajectoryArtifacts({
