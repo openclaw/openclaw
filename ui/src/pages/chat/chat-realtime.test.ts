@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { loadSettings } from "../../app/settings.ts";
 import {
   attachChatRealtimeActions,
@@ -57,10 +57,14 @@ const vadThresholdCases: Array<[string, string, number | undefined]> = [
 ];
 
 describe("chat realtime actions", () => {
+  // Capture the spy instead of re-reading it off the prototype so assertions do
+  // not reference an unbound method (typescript/unbound-method).
+  let startSpy: MockInstance<RealtimeTalkSession["start"]>;
+
   beforeEach(() => {
     vi.stubGlobal("localStorage", window.localStorage);
     localStorage.clear();
-    vi.spyOn(RealtimeTalkSession.prototype, "start").mockResolvedValue(undefined);
+    startSpy = vi.spyOn(RealtimeTalkSession.prototype, "start").mockResolvedValue(undefined);
     vi.spyOn(RealtimeTalkSession.prototype, "stop").mockImplementation(() => undefined);
   });
 
@@ -94,7 +98,7 @@ describe("chat realtime actions", () => {
     expect(firstPane.realtimeTalkInputDeviceId).toBe("usb-mic");
     expect(secondPane.realtimeTalkInputDeviceId).toBe("usb-mic");
     expect(inspectSession(secondPane).localOptions.inputDeviceId).toBe("usb-mic");
-    expect(RealtimeTalkSession.prototype.start).toHaveBeenCalledOnce();
+    expect(startSpy).toHaveBeenCalledOnce();
   });
 
   it("propagates normalized microphone levels and resets them on error", async () => {
@@ -116,7 +120,7 @@ describe("chat realtime actions", () => {
 
   it("ignores a stopped session that rejects after its replacement starts", async () => {
     let rejectFirstStart: (error: Error) => void = () => undefined;
-    vi.mocked(RealtimeTalkSession.prototype.start).mockImplementationOnce(
+    startSpy.mockImplementationOnce(
       () =>
         new Promise<undefined>((_resolve, reject) => {
           rejectFirstStart = reject;
