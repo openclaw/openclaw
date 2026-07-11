@@ -314,11 +314,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (element !== this.sessionsScrollElement) {
       this.sessionsScrollResizeObserver?.disconnect();
       this.sessionsScrollElement = element;
-      this.sessionsScrollResizeObserver =
-        element && typeof ResizeObserver === "function"
-          ? new ResizeObserver(() => this.updateSessionsScrollState(element))
-          : null;
-      this.sessionsScrollResizeObserver?.observe(element);
+      this.sessionsScrollResizeObserver = null;
+      if (element && typeof ResizeObserver === "function") {
+        this.sessionsScrollResizeObserver = new ResizeObserver(() =>
+          this.updateSessionsScrollState(element),
+        );
+        this.sessionsScrollResizeObserver.observe(element);
+      }
     }
     if (element) {
       this.updateSessionsScrollState(element);
