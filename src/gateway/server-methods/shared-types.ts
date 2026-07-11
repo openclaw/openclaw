@@ -4,6 +4,7 @@ import type { SessionApprovalReplay } from "../../../packages/gateway-protocol/s
 import type {
   ConnectParams,
   ErrorShape,
+  GatewayPrincipal,
   RequestFrame,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
@@ -47,6 +48,7 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 /** Per-connection client metadata captured after the gateway handshake. */
 export type GatewayClient = {
   connect: ConnectParams;
+  principal?: GatewayPrincipal;
   connId?: string;
   clientIp?: string;
   pluginSurfaceUrls?: Record<string, string>;

@@ -2,6 +2,7 @@
 import {
   GATEWAY_SERVER_CAPS,
   PROTOCOL_VERSION,
+  type HelloOk,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   redeemDeviceBootstrapTokenProfile,
@@ -56,6 +57,7 @@ export async function sendGatewayHello(
     hasTokenAuth,
     hasPasswordAuth,
     bootstrapTokenCandidate,
+    authResult,
     authMethod,
     issuedBootstrapProfile,
     handoffBootstrapProfile,
@@ -72,7 +74,7 @@ export async function sendGatewayHello(
   }
   const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
   const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes);
-  const helloOk = {
+  const helloOk: HelloOk = {
     type: "hello-ok",
     protocol: PROTOCOL_VERSION,
     server: {
@@ -93,6 +95,7 @@ export async function sendGatewayHello(
     auth: {
       role,
       scopes: helloOkAuthScopes,
+      ...(authResult.principal ? { principal: authResult.principal } : {}),
       ...(deviceToken
         ? {
             deviceToken: deviceToken.token,

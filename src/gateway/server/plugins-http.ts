@@ -51,10 +51,12 @@ function resolvePluginRoutePathContextForRequest(
 function createPluginRouteRuntimeClient(
   scopes: readonly string[],
   clientIp: string | undefined,
+  principal: AuthorizedGatewayHttpRequest["principal"],
 ): GatewayRequestOptions["client"] {
   return {
     connId: `plugin-http:${clientIp ?? "unknown"}`,
     ...(clientIp ? { clientIp } : {}),
+    ...(principal ? { principal } : {}),
     connect: {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -125,6 +127,7 @@ function createPluginRouteRuntimeScope(params: {
   const runtimeClient = createPluginRouteRuntimeClient(
     runtimeScopes,
     params.gatewayRequestClientIp,
+    params.route.auth === "gateway" ? params.gatewayRequestAuth?.principal : undefined,
   );
   return {
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),

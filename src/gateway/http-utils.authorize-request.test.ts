@@ -66,10 +66,15 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
   });
 
   it("keeps trusted-proxy requests eligible for declared HTTP scopes", async () => {
+    const principal = {
+      issuer: "trusted-proxy",
+      subject: "operator",
+      kind: "human" as const,
+    };
     vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
       ok: true,
       method: "trusted-proxy",
-      user: "operator",
+      principal,
     });
 
     await expect(
@@ -85,6 +90,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       }),
     ).resolves.toEqual({
       authMethod: "trusted-proxy",
+      principal,
       trustDeclaredOperatorScopes: true,
     });
   });
@@ -93,7 +99,11 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
     vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
       ok: true,
       method: "trusted-proxy",
-      user: "operator",
+      principal: {
+        issuer: "trusted-proxy",
+        subject: "operator",
+        kind: "human",
+      },
     });
 
     await authorizeGatewayHttpRequestOrReply({

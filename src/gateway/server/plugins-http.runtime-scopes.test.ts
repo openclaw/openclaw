@@ -249,6 +249,81 @@ describe("plugin HTTP route runtime scopes", () => {
     });
   });
 
+  it("threads the authenticated HTTP principal into plugin runtime scope", async () => {
+    const principal = {
+      issuer: "trusted-proxy",
+      subject: "alice@example.com",
+      kind: "human" as const,
+    };
+    let observedPrincipal: AuthorizedGatewayHttpRequest["principal"];
+    const handler = createPluginRequestHandler({
+      routes: [
+        createRoute({
+          path: SECURE_HOOK_PATH,
+          auth: "gateway",
+          handler: async () => {
+            observedPrincipal = getPluginRuntimeGatewayRequestScope()?.client?.principal;
+            return true;
+          },
+        }),
+      ],
+    });
+
+    const { handled, res } = await dispatchPluginRequest(handler, {
+      path: SECURE_HOOK_PATH,
+      authContext: {
+        gatewayAuthSatisfied: true,
+        gatewayRequestAuth: {
+          authMethod: "trusted-proxy",
+          principal,
+          trustDeclaredOperatorScopes: true,
+        },
+        gatewayRequestOperatorScopes: ["operator.read"],
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(observedPrincipal).toEqual(principal);
+  });
+
+  it("does not expose an ambient gateway principal to plugin-auth routes", async () => {
+    let observedPrincipal: unknown;
+    const handler = createPluginRequestHandler({
+      routes: [
+        createRoute({
+          path: "/plugin-hook",
+          auth: "plugin",
+          handler: async () => {
+            observedPrincipal = getPluginRuntimeGatewayRequestScope()?.client?.principal;
+            return true;
+          },
+        }),
+      ],
+    });
+
+    const { handled, res } = await dispatchPluginRequest(handler, {
+      path: "/plugin-hook",
+      authContext: {
+        gatewayAuthSatisfied: true,
+        gatewayRequestAuth: {
+          authMethod: "trusted-proxy",
+          principal: {
+            issuer: "trusted-proxy",
+            subject: "alice@example.com",
+            kind: "human",
+          },
+          trustDeclaredOperatorScopes: true,
+        },
+        gatewayRequestOperatorScopes: ["operator.read"],
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(observedPrincipal).toBeUndefined();
+  });
+
   it("threads resolved HTTP client IP into the shared control-plane rate identity", async () => {
     const observed: Array<{ clientIp?: string; connId?: string; rateLimitKey: string }> = [];
     const handler = createPluginRequestHandler({
