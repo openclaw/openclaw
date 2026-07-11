@@ -45,7 +45,12 @@ function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
 
-function runCiManifestFixture(options: { bundledPlanner: boolean }) {
+function runCiManifestFixture(options: {
+  bundledPlanner: boolean;
+  eventName?: "pull_request" | "workflow_dispatch";
+  historicalCompatibility?: boolean;
+  iosCapabilities?: boolean;
+}) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-manifest-"));
   try {
     const scriptsDir = path.join(root, "scripts", "lib");
@@ -80,7 +85,37 @@ function runCiManifestFixture(options: { bundledPlanner: boolean }) {
         `,
       "utf8",
     );
-    writeFileSync(path.join(root, "package.json"), '{"scripts":{}}\n', "utf8");
+    const iosCapabilities = options.iosCapabilities ?? options.bundledPlanner;
+    const packageScripts = options.bundledPlanner
+      ? {
+          "android:i18n:check": "true",
+          "apple:i18n:check": "true",
+          ...(iosCapabilities ? { "ios:build": "true" } : {}),
+          "native:i18n:check": "true",
+        }
+      : {};
+    writeFileSync(
+      path.join(root, "package.json"),
+      `${JSON.stringify({ scripts: packageScripts })}\n`,
+    );
+    if (options.bundledPlanner) {
+      writeFileSync(
+        path.join(scriptsDir, "channel-contract-test-plan.mjs"),
+        `export const createChannelContractTestShards = () => [{ checkName: "channel-contracts" }];\n`,
+      );
+      writeFileSync(
+        path.join(scriptsDir, "plugin-contract-test-plan.mjs"),
+        `export const createPluginContractTestShards = () => [{ checkName: "plugin-contracts" }];\n`,
+      );
+      const smokePlan = path.join(root, "extensions", "qa-lab", "src", "ci-smoke-plan.ts");
+      mkdirSync(path.dirname(smokePlan), { recursive: true });
+      writeFileSync(smokePlan, "export {};\n");
+    }
+    if (iosCapabilities) {
+      for (const name of ["install-swift-tools.sh", "lint-swift.sh", "format-swift.sh"]) {
+        writeFileSync(path.join(root, "scripts", name), "#!/bin/sh\n");
+      }
+    }
     const outputPath = path.join(root, "manifest.out");
     writeFileSync(outputPath, "", "utf8");
     const manifestStep = readCiWorkflow().jobs.preflight.steps.find(
@@ -95,7 +130,12 @@ function runCiManifestFixture(options: { bundledPlanner: boolean }) {
         OPENCLAW_CI_CHECKOUT_REVISION: "a".repeat(40),
         OPENCLAW_CI_DOCS_CHANGED: "true",
         OPENCLAW_CI_DOCS_ONLY: "false",
-        OPENCLAW_CI_EVENT_NAME: "workflow_dispatch",
+        OPENCLAW_CI_EVENT_NAME: options.eventName ?? "workflow_dispatch",
+        OPENCLAW_CI_HISTORICAL_TARGET:
+          (options.historicalCompatibility ?? true) &&
+          (options.eventName ?? "workflow_dispatch") === "workflow_dispatch"
+            ? "true"
+            : "false",
         OPENCLAW_CI_REPOSITORY: "openclaw/openclaw",
         OPENCLAW_CI_RUN_ANDROID: "true",
         OPENCLAW_CI_RUN_CONTROL_UI_I18N: "true",
@@ -108,6 +148,7 @@ function runCiManifestFixture(options: { bundledPlanner: boolean }) {
         OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: "false",
         OPENCLAW_CI_RUN_SKILLS_PYTHON: "true",
         OPENCLAW_CI_RUN_WINDOWS: "true",
+        OPENCLAW_CI_WORKFLOW_REVISION: "b".repeat(40),
       },
     });
     const outputs = Object.fromEntries(
@@ -1544,22 +1585,19 @@ describe("ci workflow guards", () => {
     ).run;
 
     expect(coverageStep.run).toBe("node scripts/check-protocol-event-coverage.mjs");
-    expect(coverageStep.if).toContain("steps.manifest.outputs.run_node == 'true'");
-    expect(coverageStep.if).toContain("steps.manifest.outputs.run_ios_build == 'true'");
-    expect(coverageStep.if).toContain("steps.manifest.outputs.run_android_job == 'true'");
-    expect(coverageStep.if).toContain(
-      "hashFiles('scripts/check-protocol-event-coverage.mjs') != ''",
-    );
+    expect(coverageStep.if).toBe("steps.manifest.outputs.run_protocol_event_coverage == 'true'");
     expect(checkShardRun).not.toContain("check:protocol-coverage");
   });
 
   it("uses target-owned CI plans and capabilities for older release checkouts", () => {
     const legacy = runCiManifestFixture({ bundledPlanner: false });
     expect(legacy.status, legacy.output).toBe(0);
+    expect(legacy.outputs.historical_target).toBe("true");
     expect(legacy.outputs.run_ios_build).toBe("false");
     expect(legacy.outputs.run_native_i18n).toBe("false");
     expect(legacy.outputs.run_qa_smoke_ci).toBe("false");
     expect(legacy.outputs.run_channel_contracts_shards).toBe("false");
+    expect(legacy.outputs.run_protocol_event_coverage).toBe("false");
     expect(JSON.parse(legacy.outputs.checks_node_core_nondist_matrix).include).toContainEqual(
       expect.objectContaining({
         check_name: "legacy-node-plan",
@@ -1569,6 +1607,10 @@ describe("ci workflow guards", () => {
 
     const current = runCiManifestFixture({ bundledPlanner: true });
     expect(current.status, current.output).toBe(0);
+    expect(current.outputs.run_ios_build).toBe("true");
+    expect(current.outputs.run_native_i18n).toBe("true");
+    expect(current.outputs.run_qa_smoke_ci).toBe("true");
+    expect(current.outputs.run_channel_contracts_shards).toBe("true");
     expect(JSON.parse(current.outputs.checks_node_core_nondist_matrix).include).toContainEqual(
       expect.objectContaining({
         check_name: "bundled-node-plan",
@@ -1576,7 +1618,40 @@ describe("ci workflow guards", () => {
       }),
     );
 
+    const currentMissingIos = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      iosCapabilities: false,
+    });
+    expect(currentMissingIos.status, currentMissingIos.output).toBe(0);
+    expect(currentMissingIos.outputs.historical_target).toBe("false");
+    expect(currentMissingIos.outputs.run_ios_build).toBe("true");
+
+    const currentMissingPlanner = runCiManifestFixture({
+      bundledPlanner: false,
+      eventName: "pull_request",
+    });
+    expect(currentMissingPlanner.status).not.toBe(0);
+    expect(currentMissingPlanner.output).toContain(
+      "CI target does not export a supported Node test shard planner",
+    );
+
+    const alternateMissingPlanner = runCiManifestFixture({
+      bundledPlanner: false,
+      historicalCompatibility: false,
+    });
+    expect(alternateMissingPlanner.status).not.toBe(0);
+    expect(alternateMissingPlanner.output).toContain(
+      "CI target does not export a supported Node test shard planner",
+    );
+
     const workflow = readCiWorkflow();
+    const historicalTargetStep = workflow.jobs.preflight.steps.find(
+      (step: { name?: string }) => step.name === "Validate historical release target",
+    );
+    expect(historicalTargetStep.if).toBe("inputs.historical_target_tag != ''");
+    expect(historicalTargetStep.run).toContain('git ls-remote --tags "$remote"');
+    expect(historicalTargetStep.run).toContain('[[ "$tag_sha" != "$EXPECTED_SHA" ]]');
     expect(workflow.jobs["qa-smoke-ci-profile"].if).toBe(
       "needs.preflight.outputs.run_qa_smoke_ci == 'true'",
     );
@@ -1590,7 +1665,21 @@ describe("ci workflow guards", () => {
       (step: { name?: string }) => step.name === "Swift lint",
     );
     expect(swiftInstall.run).toContain("brew install xcodegen swiftlint swiftformat");
+    expect(workflow.jobs["macos-swift"].env.HISTORICAL_TARGET).toBe(
+      "${{ needs.preflight.outputs.historical_target }}",
+    );
+    expect(swiftInstall.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
     expect(swiftLint.run).toContain("swiftlint lint --config config/swiftlint.yml");
+    expect(swiftLint.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
+
+    const checkShard = workflow.jobs["check-shard"].steps.find(
+      (step: { name?: string }) => step.name === "Run check shard",
+    );
+    expect(checkShard.env.HISTORICAL_TARGET).toBe(
+      "${{ needs.preflight.outputs.historical_target }}",
+    );
+    expect(checkShard.run).toContain("pnpm tsgo:scripts");
+    expect(checkShard.run).toContain('elif [[ "$HISTORICAL_TARGET" != "true" ]]');
   });
 
   it("does not rebuild Control UI after build:ci-artifacts", () => {

@@ -327,6 +327,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       required: false,
       type: "boolean",
     });
+    expect(workflow.on.workflow_dispatch.inputs.historical_target_tag).toEqual({
+      default: "",
+      description: "Semver release tag authorizing compatibility fallbacks for its exact commit",
+      required: false,
+      type: "string",
+    });
     expect(manifestEnv).toEqual({
       OPENCLAW_CI_CHECKOUT_REVISION: "${{ steps.checkout_ref.outputs.sha }}",
       OPENCLAW_CI_DOCS_CHANGED:
@@ -334,6 +340,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       OPENCLAW_CI_DOCS_ONLY:
         "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.docs_scope.outputs.docs_only }}",
       OPENCLAW_CI_EVENT_NAME: "${{ github.event_name }}",
+      OPENCLAW_CI_HISTORICAL_TARGET: "${{ steps.historical_target.outputs.eligible || 'false' }}",
       OPENCLAW_CI_REPOSITORY: "${{ github.repository }}",
       OPENCLAW_CI_RUN_ANDROID:
         "${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
@@ -359,6 +366,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}",
       OPENCLAW_CI_RUN_WINDOWS:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}",
+      OPENCLAW_CI_WORKFLOW_REVISION: "${{ github.sha }}",
     });
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
     expect(manifestScript).toContain("includeReleaseOnlyPluginShards: false");
@@ -375,9 +383,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(
       workflow.jobs["check-shard"].steps.find((step) => step.name === "Run check shard").run,
     ).toContain("pnpm deadcode:ci");
-    expect(normalCiScript).toContain(
-      'dispatch_and_wait ci.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f include_android=true -f dispatch_id="$dispatch_id"',
-    );
+    expect(normalCiScript).toContain('args+=(-f historical_target_tag="$TARGET_REF")');
+    expect(normalCiScript).toContain('dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"');
     expect(normalCiScript).not.toContain("full_release_validation=true");
     expect(pluginPrereleaseScript).toContain(
       'dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id"',

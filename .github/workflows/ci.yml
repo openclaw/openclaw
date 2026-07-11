@@ -23,6 +23,11 @@ on:
         required: false
         default: ""
         type: string
+      historical_target_tag:
+        description: Semver release tag authorizing compatibility fallbacks for its exact commit
+        required: false
+        default: ""
+        type: string
   push:
     branches: [main]
     paths-ignore:
@@ -88,6 +93,7 @@ jobs:
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
       run_checks_fast_core: ${{ steps.manifest.outputs.run_checks_fast_core }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
+      historical_target: ${{ steps.manifest.outputs.historical_target }}
       run_qa_smoke_ci: ${{ steps.manifest.outputs.run_qa_smoke_ci }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
       run_plugin_contracts_shards: ${{ steps.manifest.outputs.run_plugin_contracts_shards }}
@@ -111,6 +117,7 @@ jobs:
       run_macos_swift: ${{ steps.manifest.outputs.run_macos_swift }}
       run_ios_build: ${{ steps.manifest.outputs.run_ios_build }}
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
+      run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
       - name: Validate release-gate dispatch
@@ -207,6 +214,30 @@ jobs:
         id: checkout_ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Validate historical release target
+        id: historical_target
+        if: inputs.historical_target_tag != ''
+        env:
+          EXPECTED_SHA: ${{ steps.checkout_ref.outputs.sha }}
+          HISTORICAL_TARGET_TAG: ${{ inputs.historical_target_tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$HISTORICAL_TARGET_TAG" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
+            echo "historical_target_tag must be a canonical OpenClaw release tag." >&2
+            exit 1
+          fi
+          tag_ref="refs/tags/${HISTORICAL_TARGET_TAG}"
+          remote="$(git remote get-url origin)"
+          tag_sha="$(git ls-remote --tags "$remote" "${tag_ref}^{}" | awk 'NR == 1 { print $1 }')"
+          if [[ -z "$tag_sha" ]]; then
+            tag_sha="$(git ls-remote --tags "$remote" "$tag_ref" | awk 'NR == 1 { print $1 }')"
+          fi
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Historical release tag ${HISTORICAL_TARGET_TAG} does not resolve to ${EXPECTED_SHA}." >&2
+            exit 1
+          fi
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+
       - name: Ensure preflight base commit
         if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
@@ -252,29 +283,46 @@ jobs:
           OPENCLAW_CI_RUN_UI_TESTS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}
           OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
+          OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
+          OPENCLAW_CI_WORKFLOW_REVISION: ${{ github.sha }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
+          const eventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
+          const checkoutRevision = process.env.OPENCLAW_CI_CHECKOUT_REVISION ?? "";
+          const workflowRevision = process.env.OPENCLAW_CI_WORKFLOW_REVISION ?? "";
+          const historicalTargetApproved = process.env.OPENCLAW_CI_HISTORICAL_TARGET === "true";
+          const historicalTarget =
+            eventName === "workflow_dispatch" &&
+            historicalTargetApproved &&
+            checkoutRevision !== workflowRevision;
+
           const nodeTestPlan = await import("./scripts/lib/ci-node-test-plan.mjs");
           const createNodeTestPlan =
             typeof nodeTestPlan.createNodeTestShardBundles === "function"
               ? nodeTestPlan.createNodeTestShardBundles
-              : nodeTestPlan.createNodeTestShards;
+              : historicalTarget
+                ? nodeTestPlan.createNodeTestShards
+                : undefined;
           if (typeof createNodeTestPlan !== "function") {
             throw new Error("CI target does not export a supported Node test shard planner");
           }
 
-          const channelContractPlan = await import(
-            "./scripts/lib/channel-contract-test-plan.mjs"
-          ).catch((error) => {
-            if (error?.code !== "ERR_MODULE_NOT_FOUND") {
-              throw error;
+          const importTargetPlan = async (path) => {
+            if (existsSync(path)) {
+              return import(path);
+            }
+            if (!historicalTarget) {
+              throw new Error(`Current CI target does not provide ${path}`);
             }
             return {};
-          });
+          };
+          const channelContractPlan = await importTargetPlan(
+            "./scripts/lib/channel-contract-test-plan.mjs",
+          );
           const createChannelContractTestShards =
             typeof channelContractPlan.createChannelContractTestShards === "function"
               ? channelContractPlan.createChannelContractTestShards
@@ -288,14 +336,9 @@ jobs:
             return fallback;
           };
 
-          const pluginContractPlan = await import(
-            "./scripts/lib/plugin-contract-test-plan.mjs"
-          ).catch((error) => {
-            if (error?.code !== "ERR_MODULE_NOT_FOUND") {
-              throw error;
-            }
-            return {};
-          });
+          const pluginContractPlan = await importTargetPlan(
+            "./scripts/lib/plugin-contract-test-plan.mjs",
+          );
           const createPluginContractTestShards =
             typeof pluginContractPlan.createPluginContractTestShards === "function"
               ? pluginContractPlan.createPluginContractTestShards
@@ -314,7 +357,6 @@ jobs:
           const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
-          const eventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
           const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
           const runNodeFastOnly =
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
@@ -335,7 +377,7 @@ jobs:
             parseBoolean(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
             !docsOnly &&
             isCanonicalRepository &&
-            supportsCurrentIosCi;
+            (!historicalTarget || supportsCurrentIosCi);
           const runAndroid =
             parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !docsOnly && isCanonicalRepository;
           const runWindows =
@@ -354,7 +396,7 @@ jobs:
           const runNativeI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
             !docsOnly &&
-            supportsNativeI18n;
+            (!historicalTarget || supportsNativeI18n);
           const checksFastCoreTasks = [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
@@ -373,7 +415,8 @@ jobs:
 
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
           const runQaSmokeCi =
-            runNodeFull && existsSync("extensions/qa-lab/src/ci-smoke-plan.ts");
+            runNodeFull &&
+            (!historicalTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
           const nodeTestShards = runNodeFull
             ? createNodeTestPlan({
                 includeReleaseOnlyPluginShards: false,
@@ -398,6 +441,10 @@ jobs:
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
           const channelContractShards = runNodeFull ? createChannelContractTestShards() : [];
+          const protocolCoverageRequested = runNode || runIosBuild || runAndroid;
+          const runProtocolEventCoverage =
+            protocolCoverageRequested &&
+            (!historicalTarget || existsSync("scripts/check-protocol-event-coverage.mjs"));
 
           const manifest = {
             docs_only: docsOnly,
@@ -410,6 +457,7 @@ jobs:
             run_build_artifacts: runNodeFull,
             run_checks_fast_core: checksFastCoreTasks.length > 0,
             run_checks_fast: runNodeFull,
+            historical_target: historicalTarget,
             run_qa_smoke_ci: runQaSmokeCi,
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
             run_plugin_contracts_shards: runPluginContractShards,
@@ -449,6 +497,7 @@ jobs:
             run_macos_swift: runMacos,
             run_ios_build: runIosBuild,
             run_android_job: runAndroid,
+            run_protocol_event_coverage: runProtocolEventCoverage,
             android_matrix: createMatrix(
               runAndroid
                 ? [
@@ -471,7 +520,7 @@ jobs:
           EOF
 
       - name: Check mobile protocol event coverage
-        if: ${{ hashFiles('scripts/check-protocol-event-coverage.mjs') != '' && (steps.manifest.outputs.run_node == 'true' || steps.manifest.outputs.run_ios_build == 'true' || steps.manifest.outputs.run_android_job == 'true') }}
+        if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
         run: node scripts/check-protocol-event-coverage.mjs
 
   # Run dependency-free security checks in parallel with scope detection so the
@@ -1370,6 +1419,7 @@ jobs:
 
       - name: Run check shard
         env:
+          HISTORICAL_TARGET: ${{ needs.preflight.outputs.historical_target }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
@@ -1416,7 +1466,12 @@ jobs:
               ;;
             test-types)
               pnpm check:test-types
-              pnpm tsgo:scripts
+              if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:scripts$'; then
+                pnpm tsgo:scripts
+              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                echo "Current CI targets must provide the tsgo:scripts package script." >&2
+                exit 1
+              fi
               ;;
             *)
               echo "Unsupported check task: $TASK" >&2
@@ -1917,6 +1972,8 @@ jobs:
     if: needs.preflight.outputs.run_macos_swift == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 20
+    env:
+      HISTORICAL_TARGET: ${{ needs.preflight.outputs.historical_target }}
     steps:
       - *platform_checkout_step
 
@@ -1930,9 +1987,12 @@ jobs:
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
-          else
+          elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets before the pinned installer used Homebrew directly.
             brew install xcodegen swiftlint swiftformat
+          else
+            echo "Current CI targets must provide scripts/install-swift-tools.sh." >&2
+            exit 1
           fi
 
       - name: Detect Swift toolchain cache key
@@ -1999,10 +2059,13 @@ jobs:
           if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
             ./scripts/lint-swift.sh macos
             ./scripts/format-swift.sh macos
-          else
+          elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets before the shared wrappers used these commands directly.
             swiftlint lint --config config/swiftlint.yml
             swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
+          else
+            echo "Current CI targets must provide the Swift lint and format wrappers." >&2
+            exit 1
           fi
 
       - name: Swift build (release)
