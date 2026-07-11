@@ -8,7 +8,6 @@ import {
   isThinkingLevelSupported,
   normalizeThinkLevel,
   normalizeVerboseLevel,
-  resolveSupportedThinkingLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
@@ -65,6 +64,7 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../tasks/task-status-access.js";
+import { removeSessionTrajectoryArtifacts } from "../trajectory/cleanup.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -120,7 +120,12 @@ import { resolveFastModeState } from "./fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
-import { prepareInternalSessionEffectsTranscript } from "./internal-session-effects.js";
+import {
+  isInternalSessionEffectsTranscriptPath,
+  prepareInternalSessionEffectsTranscript,
+  removeInternalSessionEffectsTranscript,
+  resolveInternalSessionEffectsTranscriptPath,
+} from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
@@ -151,7 +156,9 @@ import {
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
 } from "./run-termination.js";
+import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
+import { resolveCandidateThinkingLevel, resolveEffectiveAgentRuntime } from "./thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { hasNonzeroUsage } from "./usage.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -826,11 +833,20 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     workspaceDir,
     ...modelManifestContext,
   });
+  const configuredThinkingRuntime = resolveEffectiveAgentRuntime({
+    cfg,
+    provider: configuredModel.provider,
+    modelId: configuredModel.model,
+    agentId: sessionAgentId,
+    sessionKey,
+    sessionEntry: sessionEntryRaw,
+  });
   const thinkingLevelsHint = formatThinkingLevels(
     configuredModel.provider,
     configuredModel.model,
     ", ",
     configuredThinkingCatalog.length > 0 ? configuredThinkingCatalog : undefined,
+    configuredThinkingRuntime,
   );
   const thinkOverride = normalizeThinkLevel(opts.thinking);
   const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
@@ -956,6 +972,24 @@ async function agentCommandInternal(
   let currentRunDeliveryContext: DeliveryContext | undefined;
   const preparedSessionId = sessionEntry?.sessionId;
   const sessionStoreRuntime = storePath && sessionKey ? await loadSessionStoreRuntime() : undefined;
+  const internalModelRunArtifacts =
+    initialOpts.modelRun === true && suppressVisibleSessionEffects
+      ? new Map<string, { sessionFile: string; sessionId: string }>()
+      : undefined;
+  const trackInternalModelRunArtifact = (
+    sessionFile: string | undefined,
+    artifactSessionId: string,
+  ) => {
+    if (!internalModelRunArtifacts || !isInternalSessionEffectsTranscriptPath(sessionFile)) {
+      return;
+    }
+    internalModelRunArtifacts.set(`${artifactSessionId}\n${sessionFile}`, {
+      sessionFile,
+      sessionId: artifactSessionId,
+    });
+  };
+  // Precompute the owned path so even a partially failed prepare can be cleaned.
+  trackInternalModelRunArtifact(resolveInternalSessionEffectsTranscriptPath(runId), sessionId);
 
   // Reset marks its mutation before interrupting work. An aborted run must not
   // queue behind that mutation or reset would wait on the run holding the queue.
@@ -1215,17 +1249,6 @@ async function agentCommandInternal(
                 runId,
               })
             : undefined;
-          const transcriptSessionEntry: SessionEntry | undefined = internalSessionFile
-            ? {
-                ...(sessionEntry ?? {
-                  sessionId,
-                  updatedAt: Date.now(),
-                  sessionStartedAt: Date.now(),
-                }),
-                sessionId,
-                sessionFile: internalSessionFile,
-              }
-            : sessionEntry;
           const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
             body,
             transcriptBody,
@@ -1241,7 +1264,8 @@ async function agentCommandInternal(
             finalText: finalTextRaw,
             sessionId,
             sessionKey,
-            sessionEntry: transcriptSessionEntry,
+            sessionFile: internalSessionFile,
+            sessionEntry,
             sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
             storePath: suppressVisibleSessionEffects ? undefined : storePath,
             sessionAgentId,
@@ -1308,7 +1332,7 @@ async function agentCommandInternal(
         });
       }
 
-      let resolvedThinkLevel = thinkOnce ?? thinkOverride ?? persistedThinking;
+      const requestedThinkLevel = thinkOnce ?? thinkOverride ?? persistedThinking;
       const resolvedVerboseLevel =
         verboseOverride ??
         persistedVerbose ??
@@ -1383,8 +1407,9 @@ async function agentCommandInternal(
         sessionEntry = persisted ?? sessionEntry;
       }
 
-      // Persist explicit /command overrides to the session store when we have a key.
-      const hasInitialSessionOverrides = Boolean(thinkOverride || verboseOverride);
+      // Persist non-model-dependent command state before provider/model resolution.
+      // Thinking is written only after the selected runtime validates it below.
+      const hasInitialSessionOverrides = Boolean(verboseOverride);
       const shouldPersistInitialSessionTouch =
         opts.skipInitialSessionTouch !== true || hasInitialSessionOverrides;
       if (
@@ -1403,9 +1428,6 @@ async function agentCommandInternal(
           sessionStartedAt: entry.sessionStartedAt ?? now,
           lastInteractionAt: now,
         };
-        if (thinkOverride) {
-          next.thinkingLevel = thinkOverride;
-        }
         applyVerboseOverride(next, verboseOverride);
         const persisted = await persistSessionEntry({
           sessionStore,
@@ -1687,6 +1709,11 @@ async function agentCommandInternal(
         modelId: model,
         agentId: sessionAgentId,
         sessionKey,
+        agentHarnessRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
+          provider,
+          entry: sessionEntry,
+          cfg,
+        }),
         workspaceDir,
       });
 
@@ -1767,22 +1794,37 @@ async function agentCommandInternal(
             ? modelCatalog
             : configuredThinkingCatalog;
       const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
-      if (!resolvedThinkLevel) {
-        resolvedThinkLevel =
-          normalizeThinkLevel(resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault) ??
-          resolveThinkingDefault({
-            cfg,
-            provider,
-            model,
-            catalog: thinkingCatalog,
-          });
-      }
+      const thinkingRuntime = resolveEffectiveAgentRuntime({
+        cfg,
+        provider,
+        modelId: model,
+        agentId: sessionAgentId,
+        sessionKey,
+        sessionEntry: sessionEntryForAttempt,
+      });
+      const configuredThinkLevel = normalizeThinkLevel(
+        resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault,
+      );
+      // User/session/config choices remain stable across candidates. A model's
+      // own default is resolved again for every fallback or live switch.
+      const immutableThinkLevel = requestedThinkLevel ?? configuredThinkLevel;
+      const primaryThinkLevel =
+        immutableThinkLevel ??
+        resolveThinkingDefault({
+          cfg,
+          provider,
+          model,
+          catalog: thinkingCatalog,
+          agentRuntime: thinkingRuntime,
+        });
+      let effectiveTurnThinkLevel = primaryThinkLevel;
       if (
         !isThinkingLevelSupported({
           provider,
           model,
-          level: resolvedThinkLevel,
+          level: primaryThinkLevel,
           catalog: thinkingCatalog,
+          agentRuntime: thinkingRuntime,
         })
       ) {
         const explicitThink = Boolean(thinkOnce || thinkOverride);
@@ -1792,20 +1834,36 @@ async function agentCommandInternal(
         // Clamp like the embedded runner; interactive --thinking keeps the throw.
         if (explicitThink && !isSubagentSpawnRun) {
           throw new Error(
-            `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog)}.`,
+            `Thinking level "${primaryThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog, thinkingRuntime)}.`,
           );
         }
-        const fallbackThinkLevel = resolveSupportedThinkingLevel({
-          provider,
-          model,
-          level: resolvedThinkLevel,
-          catalog: thinkingCatalog,
+        // Candidate resolution below owns the turn-local clamp. Keep the
+        // requested value immutable so a later fallback can restore it.
+      }
+      if (thinkOverride && sessionStore && sessionKey && !suppressVisibleSessionEffects) {
+        const now = Date.now();
+        const entry = sessionStore[sessionKey] ??
+          sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
+        const next: SessionEntry = {
+          ...entry,
+          sessionId,
+          updatedAt: now,
+          sessionStartedAt: entry.sessionStartedAt ?? now,
+          lastInteractionAt: now,
+          thinkingLevel: thinkOverride,
+        };
+        const persisted = await persistSessionEntry({
+          sessionStore,
+          sessionKey,
+          storePath,
+          initialEntry: entry,
+          entry: next,
         });
-        if (fallbackThinkLevel !== resolvedThinkLevel) {
-          // Execution fallbacks are turn-local; directive/model persistence owns
-          // durable thinking remaps so explicit session overrides survive runs.
-          resolvedThinkLevel = fallbackThinkLevel;
-        }
+        sessionEntry = persisted ?? sessionEntry;
+        sessionEntryForAttempt = {
+          ...(sessionEntryForAttempt ?? next),
+          thinkingLevel: thinkOverride,
+        };
       }
       const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
       let sessionFile: string | undefined;
@@ -1837,6 +1895,7 @@ async function agentCommandInternal(
       const attemptSessionFile = suppressVisibleSessionEffects
         ? await prepareInternalSessionEffectsTranscript({ sessionFile, runId })
         : sessionFile;
+      trackInternalModelRunArtifact(attemptSessionFile, sessionId);
 
       const startedAt = Date.now();
       const attemptLifecycleState: AgentAttemptLifecycleState = {
@@ -2013,7 +2072,7 @@ async function agentCommandInternal(
         runId,
         sessionId,
         sessionKey,
-        sessionFile,
+        sessionFile: attemptSessionFile,
         provider,
         modelId: model,
         workspaceDir,
@@ -2055,6 +2114,12 @@ async function agentCommandInternal(
             agentId: sessionAgentId,
             sessionId,
             sessionKey: sessionKey ?? sessionId,
+            resolveAgentHarnessRuntimeOverride: (candidateProvider) =>
+              resolveSessionRuntimeOverrideForProvider({
+                provider: candidateProvider,
+                entry: sessionEntryForAttempt,
+                cfg,
+              }),
             prepareAgentHarnessRuntime: async ({
               provider: providerValue,
               model: modelValue,
@@ -2128,6 +2193,41 @@ async function agentCommandInternal(
                 sessionEntry,
               });
               const fastMode = opts.fastMode ?? fastModeState.mode;
+              const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+                provider: providerOverride,
+                entry: attemptSessionEntry,
+                cfg,
+              });
+              const candidateRuntime = resolveEffectiveAgentRuntime({
+                cfg,
+                provider: providerOverride,
+                modelId: modelOverride,
+                agentId: sessionAgentId,
+                sessionKey,
+                sessionEntry: attemptSessionEntry,
+              });
+              const candidateRequestedThinkLevel =
+                immutableThinkLevel ??
+                resolveThinkingDefault({
+                  cfg,
+                  provider: providerOverride,
+                  model: modelOverride,
+                  catalog: thinkingCatalog,
+                  agentRuntime: candidateRuntime,
+                });
+              const candidateThinkLevel =
+                resolveCandidateThinkingLevel({
+                  cfg,
+                  provider: providerOverride,
+                  modelId: modelOverride,
+                  level: candidateRequestedThinkLevel,
+                  catalog: thinkingCatalog,
+                  agentId: sessionAgentId,
+                  sessionKey,
+                  sessionEntry: attemptSessionEntry,
+                  agentRuntime: candidateRuntime,
+                }) ?? candidateRequestedThinkLevel;
+              effectiveTurnThinkLevel = candidateThinkLevel;
               return attemptExecutionRuntime.runAgentAttempt({
                 providerOverride,
                 modelOverride,
@@ -2135,6 +2235,7 @@ async function agentCommandInternal(
                 originalProvider: provider,
                 cfg,
                 sessionEntry: attemptSessionEntry,
+                agentHarnessRuntimeOverride,
                 sessionId,
                 sessionKey,
                 sessionAgentId,
@@ -2144,7 +2245,9 @@ async function agentCommandInternal(
                 body,
                 transcriptBody,
                 isFallbackRetry,
-                resolvedThinkLevel,
+                // Fallback selection is turn-local. Revalidate the stored or
+                // requested level without rewriting the durable preference.
+                resolvedThinkLevel: candidateThinkLevel,
                 fastMode,
                 fastModeStartedAtMs,
                 fastModeAutoOnSeconds:
@@ -2204,31 +2307,12 @@ async function agentCommandInternal(
             sessionKey &&
             !suppressVisibleSessionEffects &&
             !preserveUserFacingSessionModelState &&
-            entryMatchesAutoFallbackPrimaryProbe(sessionEntry, autoFallbackPrimaryProbe)
+            entryMatchesAutoFallbackPrimaryProbe(sessionEntry, autoFallbackPrimaryProbe) &&
+            fallbackProvider === autoFallbackPrimaryProbe.provider &&
+            fallbackModel === autoFallbackPrimaryProbe.model
           ) {
             const nextSessionEntry = { ...sessionEntry };
-            if (
-              fallbackProvider === autoFallbackPrimaryProbe.provider &&
-              fallbackModel === autoFallbackPrimaryProbe.model
-            ) {
-              clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
-            } else {
-              nextSessionEntry.providerOverride = fallbackProvider;
-              nextSessionEntry.modelOverride = fallbackModel;
-              nextSessionEntry.modelOverrideSource = "auto";
-              nextSessionEntry.modelOverrideFallbackOriginProvider =
-                autoFallbackPrimaryProbe.provider;
-              nextSessionEntry.modelOverrideFallbackOriginModel = autoFallbackPrimaryProbe.model;
-              if (
-                nextSessionEntry.authProfileOverrideSource === "auto" &&
-                fallbackProvider !== autoFallbackPrimaryProbe.fallbackProvider
-              ) {
-                delete nextSessionEntry.authProfileOverride;
-                delete nextSessionEntry.authProfileOverrideSource;
-                delete nextSessionEntry.authProfileOverrideCompactionCount;
-              }
-              nextSessionEntry.updatedAt = Date.now();
-            }
+            clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
             const persistedEntry = await persistSessionEntry({
               sessionStore,
               sessionKey,
@@ -2334,11 +2418,19 @@ async function agentCommandInternal(
             providerForAuthProfileValidation = err.provider;
             if (sessionEntry) {
               sessionEntry = { ...sessionEntry };
+              if (err.agentRuntimeOverride) {
+                sessionEntry.agentRuntimeOverride = err.agentRuntimeOverride;
+              } else {
+                delete sessionEntry.agentRuntimeOverride;
+              }
               sessionEntry.authProfileOverride = err.authProfileId;
               sessionEntry.authProfileOverrideSource = err.authProfileId
                 ? err.authProfileIdSource
                 : undefined;
               sessionEntry.authProfileOverrideCompactionCount = undefined;
+              // The live switch supersedes any transient auto-fallback probe
+              // snapshot. Retry from the same atomic model/runtime winner.
+              sessionEntryForAttempt = sessionEntry;
             }
             if (
               storedModelOverride ||
@@ -2383,6 +2475,7 @@ async function agentCommandInternal(
           ? (result.meta.agentMeta?.sessionId ?? sessionId)
           : sessionId;
         const effectiveSessionFile = rotatedSessionFile ?? attemptSessionFile;
+        trackInternalModelRunArtifact(effectiveSessionFile, effectiveSessionId);
 
         // Update token+model fields in the session store.
         if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
@@ -2425,24 +2518,14 @@ async function agentCommandInternal(
         ) {
           let persistedCliTurnTranscript = false;
           try {
-            const transcriptSessionEntry: SessionEntry | undefined = suppressVisibleSessionEffects
-              ? {
-                  ...(sessionEntry ?? {
-                    sessionId: effectiveSessionId,
-                    updatedAt: Date.now(),
-                    sessionStartedAt: Date.now(),
-                  }),
-                  sessionId: effectiveSessionId,
-                  sessionFile: effectiveSessionFile,
-                }
-              : sessionEntry;
             const transcriptResult = await attemptExecutionRuntime.persistCliTurnTranscript({
               body,
               transcriptBody,
               result,
               sessionId: effectiveSessionId,
               sessionKey: sessionKey ?? effectiveSessionId,
-              sessionEntry: transcriptSessionEntry,
+              sessionFile: suppressVisibleSessionEffects ? effectiveSessionFile : undefined,
+              sessionEntry,
               sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
               storePath: suppressVisibleSessionEffects ? undefined : storePath,
               sessionAgentId,
@@ -2486,7 +2569,7 @@ async function agentCommandInternal(
               messageChannel,
               agentAccountId: runContext.accountId,
               senderIsOwner: opts.senderIsOwner,
-              thinkLevel: resolvedThinkLevel,
+              thinkLevel: effectiveTurnThinkLevel,
               extraSystemPrompt: opts.extraSystemPrompt,
             });
           }
@@ -2617,6 +2700,30 @@ async function agentCommandInternal(
     });
   } finally {
     sessionWorkAdmission.release();
+    if (internalModelRunArtifacts) {
+      // Compaction may rotate a private transcript. Clean every owned identity
+      // only after delivery, then remove each transcript after its sidecars.
+      for (const artifact of internalModelRunArtifacts.values()) {
+        try {
+          await removeSessionTrajectoryArtifacts({
+            sessionId: artifact.sessionId,
+            sessionFile: artifact.sessionFile,
+            storePath: artifact.sessionFile,
+          });
+        } catch (error) {
+          log.warn(
+            `failed to remove model-run trajectory artifacts: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+      for (const sessionFile of new Set(
+        Array.from(internalModelRunArtifacts.values(), (artifact) => artifact.sessionFile),
+      )) {
+        await removeInternalSessionEffectsTranscript(sessionFile);
+      }
+    }
     if (
       !sessionReboundDuringRun &&
       trackedRestartRecoveryDeliveryContext &&

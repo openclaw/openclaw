@@ -176,6 +176,10 @@
     "target": "Codex Computer Use"
   },
   {
+    "source": "Computer use",
+    "target": "计算机使用"
+  },
+  {
     "source": "Diagnostics export",
     "target": "诊断导出"
   },
@@ -1222,6 +1226,18 @@
   {
     "source": "cohere",
     "target": "cohere"
+  },
+  {
+    "source": "Meta",
+    "target": "Meta"
+  },
+  {
+    "source": "Meta plugin",
+    "target": "Meta 插件"
+  },
+  {
+    "source": "meta",
+    "target": "meta"
   },
   {
     "source": "Zalo ClawBot",

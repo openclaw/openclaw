@@ -20,7 +20,7 @@ import {
   resolveLocalUserAvatarUrl,
 } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
-import { getLobsterdex } from "../../components/lobster-dex.ts";
+import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import {
   LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
@@ -98,6 +98,8 @@ export type QuickSettingsProps = {
   setTextScale: (value: number) => void;
   lobsterPetVisits: boolean;
   setLobsterPetVisits: (enabled: boolean) => void;
+  lobsterPetSounds: boolean;
+  setLobsterPetSounds: (enabled: boolean) => void;
   userAvatar?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
 
@@ -798,6 +800,23 @@ function renderAppearanceCard(props: QuickSettingsProps) {
             </span>
           </label>
         </div>
+        <div class="qs-row">
+          <span class="qs-row__label">${t("quickSettings.appearance.lobsterSounds")}</span>
+          <label class="qs-toggle">
+            <input
+              type="checkbox"
+              .checked=${props.lobsterPetSounds}
+              @change=${(event: Event) =>
+                props.setLobsterPetSounds((event.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class="qs-toggle__track"></span>
+            <span class="qs-toggle__hint muted">
+              ${props.lobsterPetSounds
+                ? t("quickSettings.appearance.lobsterSoundsOn")
+                : t("quickSettings.appearance.lobsterSoundsOff")}
+            </span>
+          </label>
+        </div>
         <div class="qs-row qs-row--stacked">
           <span class="qs-row__label">
             ${t("quickSettings.appearance.lobsterdex")}
@@ -810,14 +829,23 @@ function renderAppearanceCard(props: QuickSettingsProps) {
           </span>
           <div class="lobsterdex">
             ${LOBSTER_PET_PALETTES.map((palette) => {
-              const seen = getLobsterdex().has(palette.id);
+              const entry = getLobsterdexEntries().get(palette.id);
+              const seen = entry !== undefined;
+              const title = !seen
+                ? "?"
+                : entry.firstSeenAt !== null
+                  ? t("quickSettings.appearance.lobsterdexFirstVisited", {
+                      name: entry.name ?? palette.id,
+                      date: new Date(entry.firstSeenAt).toLocaleDateString(),
+                    })
+                  : (entry.name ?? palette.id);
               return html`
                 <span
                   class="lobsterdex__mini lobster-pet--palette-${palette.id} ${seen
                     ? ""
                     : "lobsterdex__mini--unseen"}"
                   style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
-                  title=${seen ? palette.id : "?"}
+                  title=${title}
                 >
                   ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
                 </span>
@@ -852,14 +880,14 @@ function renderPersonalCard(props: QuickSettingsProps) {
     assistantAvatarRendered,
     Boolean(assistantAvatarOverride),
   );
-  const assistantAvatarSourceLabel = assistantAvatarOverride ? "UI override" : "IDENTITY.md";
+  const assistantAvatarSourceLabel = assistantAvatarOverride ? "UI override" : "Configured avatar";
   const canOverrideAssistantAvatar = Boolean(props.onAssistantAvatarOverrideChange);
   const assistantAvatarSubtitle = assistantAvatarOverride
     ? "Override from settings"
     : assistantAvatarIssue
       ? "Fallback avatar"
       : assistantAvatarRendered
-        ? "From IDENTITY.md"
+        ? "Configured avatar"
         : "Fallback logo";
   return html`
     <div class="qs-card qs-card--personal">
@@ -968,7 +996,7 @@ function renderPersonalCard(props: QuickSettingsProps) {
                           : nothing}
                       </div>
                       <div class="muted">
-                        Stores a Control UI override. Clear it to return to IDENTITY.md.
+                        Stores a Control UI override. Clear it to return to the configured avatar.
                       </div>
                     </div>
                   `

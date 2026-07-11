@@ -22,11 +22,6 @@ openclaw-lobster-pet {
   pointer-events: none;
 }
 
-/* The collapsed rail has no room for a pet. */
-.sidebar--collapsed openclaw-lobster-pet {
-  display: none;
-}
-
 /* Bar anchor: the pet stands inside the footer bar's free stretch, between
    the status dot and the settings icons. */
 openclaw-lobster-pet[data-spot="bar"] {
@@ -59,7 +54,6 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   height: calc(14px * var(--lob-scale, 2) * var(--lob-h, 1));
   transform: translateX(-50%);
   pointer-events: auto;
-  cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -179,12 +173,12 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
 
 /* Exclude the nap act: a running blink animation would out-cascade the nap
    opacity rules below and keep the eyes open mid-nap. */
-.lobster-pet:not(.lobster-pet--act-nap) .lob-eye-open {
+.lobster-pet:not(.lobster-pet--act-nap, .lobster-pet--act-pet) .lob-eye-open {
   animation: lobster-pet-blink-open 5.2s linear infinite;
   animation-delay: var(--lob-blink-delay, 0s);
 }
 
-.lobster-pet:not(.lobster-pet--act-nap) .lob-eye-closed {
+.lobster-pet:not(.lobster-pet--act-nap, .lobster-pet--act-pet) .lob-eye-closed {
   animation: lobster-pet-blink-closed 5.2s linear infinite;
   animation-delay: var(--lob-blink-delay, 0s);
 }
@@ -246,6 +240,70 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
 .lobster-pet--act-cheer .lob-claw {
   animation: lobster-pet-cheer-claws 1.3s ease-in-out;
   animation-delay: var(--lob-act-delay, 0s);
+}
+
+/* Petting: content closed eyes and a floating heart. */
+.lobster-pet--act-pet .lob-eye-open {
+  opacity: 0;
+}
+
+.lobster-pet--act-pet .lob-eye-closed {
+  opacity: 1;
+}
+
+.lobster-pet__heart {
+  position: absolute;
+  left: 46%;
+  bottom: 78%;
+  color: #ff5c8a;
+  font-size: calc(5px * var(--lob-scale, 2));
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lobster-pet--act-pet .lobster-pet__heart {
+  animation: lobster-pet-heart 1.4s ease-out;
+}
+
+/* Sweep: after the droop, a quick tidy-up of the ledge with a broom. */
+.lobster-pet--act-sweep .lobster-pet__body {
+  animation: lobster-pet-sweep-body 1.8s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
+}
+
+.lobster-pet__broom {
+  position: absolute;
+  left: 74%;
+  bottom: 4%;
+  width: calc(4.4px * var(--lob-scale, 2));
+  height: calc(7.4px * var(--lob-scale, 2));
+  opacity: 0;
+  pointer-events: none;
+  transform-origin: 50% 92%;
+}
+
+.lobster-pet--act-sweep .lobster-pet__broom {
+  animation: lobster-pet-broom 1.8s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
+}
+
+/* Droop: a failed run earns sagging antennae and a slow, sad head shake. */
+.lobster-pet--act-droop .lobster-pet__body {
+  animation: lobster-pet-droop 1.6s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
+}
+
+.lobster-pet--act-droop .lob-antennae {
+  animation: lobster-pet-droop-antennae 1.6s ease-in-out;
+  transform-box: view-box;
+  transform-origin: 60px 14px;
+}
+
+/* Vigil: long runs earn a settled, patient waiting pose. Acts pause, so a
+   plain transform cannot fight the act animations. */
+.lobster-pet--vigil .lobster-pet__body {
+  transform: translateY(6%) scaleY(0.94);
 }
 
 /* Molt: shiver, squash, pop. */
@@ -475,6 +533,93 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   }
 }
 
+@keyframes lobster-pet-heart {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.6);
+  }
+  25% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(4px, -18px) scale(1.15);
+  }
+}
+
+@keyframes lobster-pet-sweep-body {
+  0%,
+  100% {
+    transform: translateX(0) rotate(0deg);
+  }
+  20% {
+    transform: translateX(-4%) rotate(-3deg);
+  }
+  40% {
+    transform: translateX(3%) rotate(3deg);
+  }
+  60% {
+    transform: translateX(-3%) rotate(-3deg);
+  }
+  80% {
+    transform: translateX(2%) rotate(2deg);
+  }
+}
+
+@keyframes lobster-pet-broom {
+  0%,
+  100% {
+    opacity: 0;
+    transform: rotate(0deg);
+  }
+  10%,
+  90% {
+    opacity: 1;
+  }
+  25% {
+    transform: rotate(-24deg);
+  }
+  45% {
+    transform: rotate(18deg);
+  }
+  65% {
+    transform: rotate(-20deg);
+  }
+  85% {
+    transform: rotate(12deg);
+  }
+}
+
+@keyframes lobster-pet-droop {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  20% {
+    transform: translateY(4%) rotate(-2.5deg);
+  }
+  45% {
+    transform: translateY(4%) rotate(2.5deg);
+  }
+  70% {
+    transform: translateY(4%) rotate(-1.5deg);
+  }
+  90% {
+    transform: translateY(2%) rotate(0deg);
+  }
+}
+
+@keyframes lobster-pet-droop-antennae {
+  0%,
+  100% {
+    transform: translateY(0) scaleY(1);
+  }
+  30%,
+  75% {
+    transform: translateY(3px) scaleY(0.72);
+  }
+}
+
 @keyframes lobster-pet-molt {
   0%,
   100% {
@@ -571,6 +716,62 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   openclaw-lobster-pet .lobster-pet * {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+/* ---- Pass-through visitors ---- */
+
+/* Passers cross the whole ledge once; left/right position comes from the
+   crossing keyframes, not the perch variable. */
+.lobster-pet--passer {
+  pointer-events: none;
+  cursor: default;
+  bottom: 0;
+}
+
+.lobster-pet--passer .lobster-pet__body {
+  animation: lobster-pet-waddle 0.32s ease-in-out infinite;
+}
+
+.lobster-pet--passer-ltr {
+  animation: lobster-pet-cross-ltr 11s linear forwards;
+}
+
+.lobster-pet--passer-rtl {
+  animation: lobster-pet-cross-rtl 11s linear forwards;
+}
+
+/* The crab walks sideways by definition: it crosses while facing you and
+   feels no need to explain itself. */
+.lobster-pet--crab .lobster-pet__body {
+  animation: lobster-pet-crab-scuttle 0.24s ease-in-out infinite;
+}
+
+@keyframes lobster-pet-cross-ltr {
+  from {
+    left: -6%;
+  }
+  to {
+    left: 106%;
+  }
+}
+
+@keyframes lobster-pet-cross-rtl {
+  from {
+    left: 106%;
+  }
+  to {
+    left: -6%;
+  }
+}
+
+@keyframes lobster-pet-crab-scuttle {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8%);
   }
 }
 

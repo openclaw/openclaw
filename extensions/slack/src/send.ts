@@ -36,11 +36,12 @@ import {
   withSlackDnsRequestRetry,
 } from "./client-delivery.js";
 import { createSlackTokenCacheKey, createSlackWebClient, getSlackWriteClient } from "./client.js";
+import { appendSlackDataVisualizationFallbackText } from "./data-visualization.js";
 import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
-import { parseSlackTarget } from "./targets.js";
+import { canonicalizeSlackApiTargetId, parseSlackTarget } from "./target-parsing.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 import { resolveSlackBotToken } from "./token.js";
 import { truncateSlackText } from "./truncate.js";
@@ -80,11 +81,13 @@ type SlackEnterpriseEventScope = Readonly<{
   teamId: string;
   isEnterpriseInstall: true;
   client: WebClient;
+  uploadCompletionClient?: WebClient;
 }>;
 
 type SlackEnterpriseDelivery = Readonly<{
   client: WebClient;
   teamId: string;
+  uploadCompletionClient?: WebClient;
 }>;
 
 const slackDefaultSendIdentities = new Map<string, SlackSendIdentity>();
@@ -115,7 +118,7 @@ type SlackSendOpts = {
   metadata?: MessageMetadata;
   /** Opaque durable intent id used to reconcile ambiguous platform outcomes. */
   deliveryQueueId?: string;
-  /** Refresh durable timing after the per-target queue and before Slack API work. */
+  /** Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: SlackSendResult) => Promise<void> | void;
@@ -322,7 +325,10 @@ function parseRecipient(raw: string): SlackRecipient {
   if (!target) {
     throw new Error("Recipient is required for Slack sends");
   }
-  return { kind: target.kind, id: target.id };
+  return {
+    kind: target.kind,
+    id: canonicalizeSlackApiTargetId(target.kind, target.id, raw),
+  };
 }
 
 function parseEnterpriseEventRecipient(raw: string): SlackRecipient {
@@ -330,7 +336,7 @@ function parseEnterpriseEventRecipient(raw: string): SlackRecipient {
   if (!match?.[1]) {
     throw new Error("unsupported_enterprise_slack_delivery_target");
   }
-  return { kind: "channel", id: match[1] };
+  return { kind: "channel", id: canonicalizeSlackApiTargetId("channel", match[1]) };
 }
 
 function resolveEnterpriseEventScope(params: {
@@ -392,8 +398,7 @@ function createSlackSendQueueKey(params: {
   threadTs?: string;
   teamId?: string;
 }): string {
-  const isUserId = params.recipient.kind === "user" || /^U[A-Z0-9]+$/i.test(params.recipient.id);
-  const recipientKey = `${isUserId ? "user" : params.recipient.kind}:${params.recipient.id}`;
+  const recipientKey = `${params.recipient.kind}:${params.recipient.id}`;
   const workspaceScope = params.teamId ? `:${params.teamId}` : "";
   return `${params.accountId}:${createSlackTokenCacheKey(params.token)}${workspaceScope}:${recipientKey}:${
     params.threadTs ?? ""
@@ -427,7 +432,7 @@ function setSlackDmChannelCache(key: string, channelId: string): void {
 }
 
 function isSlackUserRecipient(recipient: SlackRecipient): boolean {
-  return recipient.kind === "user" || /^U[A-Z0-9]+$/i.test(recipient.id);
+  return recipient.kind === "user";
 }
 
 function resolveDirectUserPostChannelId(params: {
@@ -453,11 +458,10 @@ async function resolveChannelId(
   recipient: SlackRecipient,
   params: { accountId?: string; token: string },
 ): Promise<{ channelId: string; isDm?: boolean; cacheHit?: boolean }> {
-  // Bare Slack user IDs (U-prefix) may arrive with kind="channel" when the
-  // target string had no explicit prefix (parseSlackTarget defaults bare IDs
-  // to "channel"). chat.postMessage tolerates user IDs directly, but
+  // Bare Slack user IDs are classified as user recipients by target parsing.
+  // chat.postMessage tolerates user IDs directly, but
   // files.uploadV2 → completeUploadExternal validates channel_id against
-  // ^[CGDZ][A-Z0-9]{8,}$ and rejects U-prefixed IDs. Resolve user IDs via
+  // ^[CGDZ][A-Z0-9]{8,}$ and rejects user IDs. Resolve them via
   // conversations.open only for paths that require the concrete DM channel ID.
   if (!isSlackUserRecipient(recipient)) {
     return { channelId: recipient.id };
@@ -937,6 +941,9 @@ export async function sendMessageSlack(
     ? Object.freeze({
         client: enterpriseEventScope.client,
         teamId: enterpriseEventScope.teamId,
+        ...(enterpriseEventScope.uploadCompletionClient
+          ? { uploadCompletionClient: enterpriseEventScope.uploadCompletionClient }
+          : {}),
       })
     : undefined;
   if (isSilentReplyText(trimmedMessage) && !opts.mediaUrl && !opts.blocks) {
@@ -1064,7 +1071,10 @@ async function sendMessageSlackQueuedInner(params: {
       throw new Error("Slack send does not support blocks with mediaUrl");
     }
     const fallbackText = truncateSlackText(
-      trimmedMessage || buildSlackBlocksFallbackText(blocks),
+      appendSlackDataVisualizationFallbackText(
+        trimmedMessage || buildSlackBlocksFallbackText(blocks),
+        blocks,
+      ),
       SLACK_TEXT_LIMIT,
     );
     await opts.onPlatformSendDispatch?.();
@@ -1120,9 +1130,15 @@ async function sendMessageSlackQueuedInner(params: {
   let canonicalDeliveredThreadTs: string | undefined;
   let chunksToPost: string[];
   if (opts.mediaUrl) {
+    if (enterpriseDelivery && !enterpriseDelivery.uploadCompletionClient) {
+      throw new Error("missing_enterprise_slack_upload_completion_client");
+    }
     const [firstChunk, ...rest] = resolvedChunks;
     lastMessageId = await uploadSlackFile({
       client,
+      ...(enterpriseDelivery?.uploadCompletionClient
+        ? { completionClient: enterpriseDelivery.uploadCompletionClient }
+        : {}),
       channelId,
       mediaUrl: opts.mediaUrl,
       mediaAccess: opts.mediaAccess,

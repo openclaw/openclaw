@@ -2,7 +2,7 @@
 
 import { ContextProvider } from "@lit/context";
 import { LitElement } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -37,6 +37,11 @@ type SidebarLifecycleState = HTMLElement & {
   sessionsAgentId: string | null;
   sessionsResult: SessionsListResult | null;
   updateComplete: Promise<boolean>;
+  variant: "panel" | "drawer";
+};
+
+type LobsterPetElement = HTMLElement & {
+  runOutcome: "ok" | "error" | "aborted";
 };
 
 function createGatewayHarness(client: GatewayBrowserClient) {
@@ -94,6 +99,7 @@ function createSessionState(agentId: string, keys: string[]): SessionState {
     loading: false,
     error: null,
     deletedSessions: [],
+    groups: [],
   };
 }
 
@@ -101,6 +107,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
+  const groupsPut = vi.fn(() => Promise.resolve());
   const sessions = {
     get state() {
       return state;
@@ -113,6 +120,8 @@ function createSessionsHarness(agentId: string, keys: string[]) {
       return () => listeners.delete(listener);
     },
     subscribeCreated: () => () => undefined,
+    groupsLoad: () => Promise.resolve(),
+    groupsPut,
   } as unknown as SessionCapability;
   const publish = (patch: Partial<SessionState>) => {
     state = { ...state, ...patch };
@@ -122,6 +131,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
   };
   return {
     sessions,
+    groupsPut,
     publish,
     publishList(patch: Partial<SessionState>) {
       canonicalListRevision += 1;
@@ -157,11 +167,16 @@ function createContext(
   } as unknown as ApplicationContext<RouteId>;
 }
 
-async function mountSidebar(gateway: ApplicationGateway, sessions: SessionCapability) {
+async function mountSidebar(
+  gateway: ApplicationGateway,
+  sessions: SessionCapability,
+  variant: SidebarLifecycleState["variant"] = "panel",
+) {
   const provider = document.createElement(PROVIDER_ELEMENT_NAME) as AppSidebarContextProvider;
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
+  sidebar.variant = variant;
   provider.setContext(createContext(gateway, sessions));
   provider.append(sidebar);
   document.body.append(provider);
@@ -171,6 +186,50 @@ async function mountSidebar(gateway: ApplicationGateway, sessions: SessionCapabi
 
 afterEach(() => {
   document.body.replaceChildren();
+});
+
+describe("AppSidebar lobster outcome wiring", () => {
+  it.each([
+    ["panel", "failed", "error"],
+    ["panel", "killed", "aborted"],
+    ["drawer", "failed", "error"],
+    ["drawer", "killed", "aborted"],
+  ] as const)(
+    "passes the %s variant's latest %s session outcome",
+    async (variant, status, expectedOutcome) => {
+      const client = {} as GatewayBrowserClient;
+      const gateway = createGateway(client);
+      const sessions = createSessionsHarness("main", ["agent:main:main"]);
+      const { sidebar } = await mountSidebar(gateway, sessions.sessions, variant);
+      const terminalState = createSessionState("main", ["agent:main:main"]);
+      const result = terminalState.result;
+      if (!result) {
+        throw new Error("expected terminal session result");
+      }
+      const row = result.sessions[0];
+      if (!row) {
+        throw new Error("expected terminal session row");
+      }
+
+      sessions.publishList({
+        result: {
+          ...result,
+          sessions: [
+            {
+              ...row,
+              status,
+              endedAt: 100,
+            },
+          ],
+        },
+        agentId: terminalState.agentId,
+      });
+      await sidebar.updateComplete;
+
+      const pet = sidebar.querySelector<LobsterPetElement>("openclaw-lobster-pet");
+      expect(pet?.runOutcome).toBe(expectedOutcome);
+    },
+  );
 });
 
 describe("AppSidebar session source lifecycle", () => {
@@ -270,5 +329,71 @@ describe("AppSidebar session source lifecycle", () => {
     expect(sidebar.sessionsAgentId).toBeNull();
     expect(sidebar.sessionRowsByAgent).toEqual({});
     expect(sidebar.sessionCreatedOrder.size).toBe(0);
+  });
+});
+
+function createDataTransferStub() {
+  const data = new Map<string, string>();
+  return {
+    get types() {
+      return [...data.keys()];
+    },
+    setData: (type: string, value: string) => void data.set(type, value),
+    getData: (type: string) => data.get(type) ?? "",
+    effectAllowed: "none",
+    dropEffect: "none",
+  };
+}
+
+function dispatchDragEvent(
+  target: Element,
+  type: "dragstart" | "dragover" | "drop",
+  dataTransfer: ReturnType<typeof createDataTransferStub>,
+) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+  target.dispatchEvent(event);
+}
+
+describe("AppSidebar custom group reordering", () => {
+  async function mountWithGroups(groups: string[]) {
+    const client = {} as GatewayBrowserClient;
+    const gateway = createGateway(client);
+    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    harness.publish({ groups });
+    await sidebar.updateComplete;
+    return { sidebar, harness };
+  }
+
+  function groupHeader(sidebar: SidebarLifecycleState, sectionId: string) {
+    const header = sidebar.querySelector(
+      `[data-session-section="${sectionId}"] .sidebar-recent-sessions__head`,
+    );
+    if (!header) {
+      throw new Error(`expected header for section ${sectionId}`);
+    }
+    return header;
+  }
+
+  it("marks custom group headers draggable but keeps smart sections static", async () => {
+    const { sidebar } = await mountWithGroups(["Alpha", "Beta"]);
+
+    expect(groupHeader(sidebar, "category:Alpha").getAttribute("draggable")).toBe("true");
+    expect(groupHeader(sidebar, "ungrouped").getAttribute("draggable")).toBe("false");
+  });
+
+  it("persists the new catalog order when a group header drops onto another group", async () => {
+    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta", "Gamma"]);
+    const dataTransfer = createDataTransferStub();
+
+    dispatchDragEvent(groupHeader(sidebar, "category:Gamma"), "dragstart", dataTransfer);
+    const alphaSection = sidebar.querySelector('[data-session-section="category:Alpha"]');
+    if (!alphaSection) {
+      throw new Error("expected Alpha section");
+    }
+    dispatchDragEvent(alphaSection, "drop", dataTransfer);
+
+    expect(harness.groupsPut).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]);
   });
 });

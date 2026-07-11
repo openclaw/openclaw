@@ -258,6 +258,10 @@ import {
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
 import {
+  invalidateComputerFrameIfMissing,
+  type ComputerContextEpoch,
+} from "../../tools/computer-tool.js";
+import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
 } from "../../tools/cron-tool.js";
@@ -357,7 +361,7 @@ import {
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
 import { splitSdkTools } from "../tool-split.js";
-import { mapThinkingLevel } from "../utils.js";
+import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
@@ -856,6 +860,11 @@ export async function runEmbeddedAttempt(
 ): Promise<EmbeddedRunAttemptResult> {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const runAbortController = new AbortController();
+  // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
+  // prompt/status surfaces, then lower only at agent-core and provider boundaries.
+  const agentCoreThinkingLevel = mapThinkingLevel(params.thinkLevel);
+  const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel);
+  const proactiveSubagentOrchestration = params.thinkLevel === "ultra";
   configureEmbeddedAttemptHttpRuntime({ timeoutMs: params.timeoutMs });
 
   log.debug(
@@ -1265,6 +1274,9 @@ export async function runEmbeddedAttempt(
       toolConstructionPlan.constructTools ||
       toolSearchControlsEnabledForRun ||
       codeModeControlsEnabledForRun;
+    // Compaction summaries omit screenshot image blocks. Frames are bound to this
+    // generation so retained tool-result text cannot authorize stale coordinates.
+    const computerContextEpoch: ComputerContextEpoch = { value: 0 };
     let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
     toolSearchCatalogRef =
       toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun
@@ -1419,6 +1431,7 @@ export async function runEmbeddedAttempt(
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             modelHasVision: params.model.input?.includes("image") ?? false,
+            computerContextEpoch,
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -1635,6 +1648,7 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           workspaceDir: effectiveWorkspace,
+          agentDir,
           cfg: params.config,
         })
       : undefined;
@@ -2091,6 +2105,7 @@ export async function runEmbeddedAttempt(
         promptMode: effectivePromptMode,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
         silentReplyPromptMode: params.silentReplyPromptMode,
+        proactiveSubagentOrchestration,
         acpEnabled: isAcpRuntimeSpawnAvailable({
           config: params.config,
           sandboxed: sandboxInfo?.enabled === true,
@@ -2561,7 +2576,7 @@ export async function runEmbeddedAttempt(
           authStorage: params.authStorage,
           modelRegistry: params.modelRegistry,
           model: params.model,
-          thinkingLevel: mapThinkingLevel(params.thinkLevel),
+          thinkingLevel: agentCoreThinkingLevel,
           tools: sessionToolAllowlist,
           customTools: allCustomTools,
           sessionManager,
@@ -2815,7 +2830,21 @@ export async function runEmbeddedAttempt(
       const removeHistoryImagePruneContextTransform = installHistoryImagePruneContextTransform(
         activeSession.agent,
       );
+      const previousComputerFrameTransform = activeSession.agent.transformContext;
+      activeSession.agent.transformContext = async (messages, signal) => {
+        const transformed = previousComputerFrameTransform
+          ? await previousComputerFrameTransform.call(activeSession.agent, messages, signal)
+          : messages;
+        const modelContext = Array.isArray(transformed) ? transformed : messages;
+        invalidateComputerFrameIfMissing({
+          contextEpoch: computerContextEpoch,
+          messages: modelContext,
+          imagesBlocked: settingsManager.getBlockImages(),
+        });
+        return modelContext;
+      };
       removeToolResultContextGuard = () => {
+        activeSession.agent.transformContext = previousComputerFrameTransform;
         removeHistoryImagePruneContextTransform();
         removeLoopContextGuard?.();
       };
@@ -2906,7 +2935,7 @@ export async function runEmbeddedAttempt(
       };
       const preparedRuntimeExtraParams = params.runtimePlan?.transport.resolveExtraParams({
         extraParamsOverride: streamExtraParamsOverride,
-        thinkingLevel: params.thinkLevel,
+        thinkingLevel: providerThinkingLevel,
         agentId: sessionAgentId,
         workspaceDir: effectiveWorkspace,
         model: params.model,
@@ -2925,7 +2954,7 @@ export async function runEmbeddedAttempt(
           provider: params.provider,
           modelId: params.modelId,
           extraParamsOverride: streamExtraParamsOverride,
-          thinkingLevel: params.thinkLevel,
+          thinkingLevel: providerThinkingLevel,
           agentId: sessionAgentId,
           agentDir,
           workspaceDir: effectiveWorkspace,
@@ -2990,7 +3019,7 @@ export async function runEmbeddedAttempt(
         params.provider,
         params.modelId,
         streamExtraParamsOverride,
-        params.thinkLevel,
+        providerThinkingLevel,
         sessionAgentId,
         effectiveWorkspace,
         params.model,
@@ -5766,6 +5795,16 @@ export async function runEmbeddedAttempt(
       const replayMetadata = replayMetadataFromState(
         observeReplayMetadata(getReplayState(), observedReplayMetadata),
       );
+      // Keep current-attempt effects separate from cumulative replay state so
+      // a later clean provider failure remains retryable.
+      const currentAttemptReplayMetadata = buildAttemptReplayMetadata({
+        toolMetas: toolMetasNormalized,
+        didSendViaMessagingTool: didSendViaMessagingTool(),
+        messagingToolSentTexts: getMessagingToolSentTexts(),
+        messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+        acceptedSessionSpawns,
+        successfulCronAdds: getSuccessfulCronAdds(),
+      });
       const completedClientToolCalls = clientToolCallSlots.flatMap((slot) =>
         slot.completed && slot.params
           ? [
@@ -5942,6 +5981,7 @@ export async function runEmbeddedAttempt(
 
       return {
         replayMetadata,
+        currentAttemptReplayMetadata,
         itemLifecycle: getItemLifecycle(),
         setTerminalLifecycleMeta,
         aborted,

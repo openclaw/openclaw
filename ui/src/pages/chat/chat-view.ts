@@ -3,6 +3,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
+import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
@@ -17,20 +18,27 @@ import type { ChatSideResult } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import {
+  renderBackgroundTasksRail,
+  renderBackgroundTasksToggle,
+  type BackgroundTasksProps,
+} from "./components/chat-background-tasks.ts";
+import {
   handleChatAttachmentDrop,
   renderChatComposer,
   resetChatComposerState,
 } from "./components/chat-composer.ts";
+import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import {
   renderSessionWorkspaceRail,
+  renderSessionWorkspaceToggle,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
+import "./components/chat-sidebar.ts";
 import type {
   DetailFullMessageResult,
   SidebarContent,
   SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
-import "./components/chat-sidebar.ts";
 import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
 import {
   isChatThreadSearchOpen,
@@ -87,6 +95,9 @@ export type ChatProps = {
   ) => Promise<DetailFullMessageResult | null | undefined>;
   sidebarOpen?: boolean;
   sidebarContent?: SidebarContent | null;
+  /** Pane too narrow for side-by-side chat + detail panel: stack them
+   * vertically instead (the divider flips to a horizontal handle). */
+  sidebarStacked?: boolean;
   splitRatio?: number;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
@@ -147,12 +158,21 @@ export type ChatProps = {
   onClearReply?: () => void;
   onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
   sessionWorkspace?: SessionWorkspaceProps;
+  backgroundTasks?: BackgroundTasksProps;
+  /** True when a split pane header hosts the workspace toggle; suppresses the
+   * single-pane floating opener so only one affordance renders. */
+  paneHeaderActive?: boolean;
   taskSuggestions?: TaskSuggestion[];
   taskSuggestionBusyIds?: ReadonlySet<string>;
   canAcceptTaskSuggestions?: boolean;
   canDismissTaskSuggestions?: boolean;
   onAcceptTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
+  pullRequests?: ControlUiSessionPullRequest[];
+  pullRequestsRateLimited?: boolean;
+  pullRequestsExpanded?: boolean;
+  onExpandPullRequests?: () => void;
+  onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
 };
 
 export function resetChatViewState(paneId?: string) {
@@ -164,7 +184,12 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
-  const canCompose = props.connected && props.canSend;
+  const sidebarStacked = props.sidebarStacked === true;
+  const workspaceDockBottom = Boolean(
+    props.sessionWorkspace &&
+    (props.sessionWorkspace.dock === "bottom" || props.sessionWorkspace.narrowLayout),
+  );
+  const canCompose = props.canSend;
   let chatSection: HTMLElement | null = null;
 
   const thread = renderChatThread({
@@ -179,6 +204,7 @@ export function renderChat(props: ChatProps) {
     queue: props.queue,
     showThinking: props.showThinking,
     showToolCalls: props.showToolCalls,
+    runActive: Boolean(props.canAbort),
     sessions: props.sessions,
     assistantName: props.assistantName,
     assistantAvatar: props.assistantAvatar,
@@ -345,11 +371,47 @@ export function renderChat(props: ChatProps) {
       <div
         class="chat-workbench ${props.sessionWorkspace?.collapsed
           ? "chat-workbench--workspace-collapsed"
+          : ""} ${workspaceDockBottom ? "chat-workbench--dock-bottom" : ""} ${props.backgroundTasks
+          ?.collapsed === false
+          ? "chat-workbench--tasks-open"
           : ""}"
       >
         ${renderSessionWorkspaceRail(props.sessionWorkspace)}
+        ${renderBackgroundTasksRail(props.backgroundTasks)}
+        ${props.sessionWorkspace?.dockDragging
+          ? html`
+              <div class="chat-workbench__dock-zones" aria-hidden="true">
+                <div
+                  class="chat-workbench__dock-zone chat-workbench__dock-zone--right ${props
+                    .sessionWorkspace.dockDragZone === "right"
+                    ? "chat-workbench__dock-zone--active"
+                    : ""}"
+                >
+                  <span>${t("chat.workspaceFiles.dockRight")}</span>
+                </div>
+                <div
+                  class="chat-workbench__dock-zone chat-workbench__dock-zone--bottom ${props
+                    .sessionWorkspace.dockDragZone === "bottom"
+                    ? "chat-workbench__dock-zone--active"
+                    : ""}"
+                >
+                  <span>${t("chat.workspaceFiles.dockBottom")}</span>
+                </div>
+              </div>
+            `
+          : nothing}
         <div class="chat-workbench__main">
-          <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
+          ${props.sessionWorkspace?.collapsed && !props.paneHeaderActive
+            ? renderSessionWorkspaceToggle(props.sessionWorkspace, "floating")
+            : nothing}
+          ${props.backgroundTasks?.collapsed && !props.paneHeaderActive
+            ? renderBackgroundTasksToggle(props.backgroundTasks, "floating")
+            : nothing}
+          <div
+            class="chat-split-container ${sidebarOpen
+              ? "chat-split-container--open"
+              : ""} ${sidebarOpen && sidebarStacked ? "chat-split-container--stacked" : ""}"
+          >
             <div
               class="chat-main"
               style="flex: ${sidebarOpen ? `0 1 ${splitRatio * 100}%` : "1 1 100%"}"
@@ -363,6 +425,13 @@ export function renderChat(props: ChatProps) {
                 onAccept: (suggestion) => props.onAcceptTaskSuggestion?.(suggestion),
                 onDismiss: (suggestion) => props.onDismissTaskSuggestion?.(suggestion),
               })}
+              ${renderChatPullRequests({
+                pullRequests: props.pullRequests ?? [],
+                rateLimited: props.pullRequestsRateLimited === true,
+                expanded: props.pullRequestsExpanded === true,
+                onExpand: () => props.onExpandPullRequests?.(),
+                onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
+              })}
               ${chatColumnFooter}
             </div>
 
@@ -371,6 +440,7 @@ export function renderChat(props: ChatProps) {
                   <resizable-divider
                     .splitRatio=${splitRatio}
                     .label=${t("nav.resize")}
+                    .orientation=${sidebarStacked ? "horizontal" : "vertical"}
                     @resize=${(event: CustomEvent) =>
                       props.onSplitRatioChange?.(event.detail.splitRatio)}
                   ></resizable-divider>

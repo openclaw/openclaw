@@ -1,4 +1,5 @@
 // Slack tests cover prepare plugin behavior.
+import fs from "node:fs/promises";
 import type { App } from "@slack/bolt";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -32,10 +33,23 @@ import {
 } from "./prepare.test-helpers.js";
 import { clearSlackSubteamMentionCacheForTest } from "./subteam-mentions.js";
 
-const { enqueueSystemEventMock, logVerboseMock, shouldLogVerboseMock } = vi.hoisted(() => ({
+const {
+  enqueueSystemEventMock,
+  logVerboseMock,
+  sendDurableMessageBatchMock,
+  shouldLogVerboseMock,
+  transcribeFirstAudioMock,
+} = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   logVerboseMock: vi.fn(),
+  sendDurableMessageBatchMock: vi.fn(),
   shouldLogVerboseMock: vi.fn(() => false),
+  transcribeFirstAudioMock: vi.fn(),
+}));
+
+vi.mock("./preflight-audio.runtime.js", () => ({
+  sendDurableMessageBatch: sendDurableMessageBatchMock,
+  transcribeFirstAudio: transcribeFirstAudioMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
@@ -69,8 +83,11 @@ describe("slack prepareSlackMessage inbound contract", () => {
     clearSlackSubteamMentionCacheForTest();
     enqueueSystemEventMock.mockClear();
     logVerboseMock.mockClear();
+    sendDurableMessageBatchMock.mockReset();
+    sendDurableMessageBatchMock.mockResolvedValue({ status: "sent", messageIds: ["1"] });
     shouldLogVerboseMock.mockReset();
     shouldLogVerboseMock.mockReturnValue(false);
+    transcribeFirstAudioMock.mockReset();
   });
 
   afterAll(() => {
@@ -160,6 +177,32 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     slackCtx.allowFrom = ["UOWNER"];
     return { slackCtx, members };
+  }
+
+  function createMissingChannelInfoBotCtx(params?: { groupDmEnabled?: boolean; ownerId?: string }) {
+    const conversationsInfo = vi.fn().mockRejectedValue(new Error("missing_scope"));
+    const members = vi.fn().mockResolvedValue({
+      members: params?.ownerId ? [params.ownerId] : [],
+      response_metadata: { next_cursor: "" },
+    });
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, allowBots: true, replyToMode: "all" } },
+      } as OpenClawConfig,
+      appClient: {
+        conversations: { info: conversationsInfo, members },
+      } as unknown as App["client"],
+      defaultRequireMention: false,
+      replyToMode: "all",
+      groupDmEnabled: params?.groupDmEnabled,
+    });
+    ctx.allowFrom = params?.ownerId ? [params.ownerId] : ctx.allowFrom;
+    ctx.resolveUserName = async () => ({ name: "Alice" });
+    return {
+      account: createSlackAccount({ allowBots: true, replyToMode: "all" }),
+      conversationsInfo,
+      ctx,
+    };
   }
 
   async function prepareMessageWith(
@@ -634,6 +677,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     channel: string;
     channelType: SlackMessageEvent["channel_type"];
     user: string;
+    historyUser?: string;
     userName: string;
     starterText: string;
     followUpText: string;
@@ -653,16 +697,17 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
   async function prepareThreadContextAllowlistCase(params: ThreadContextAllowlistCaseParams) {
     const { storePath } = storeFixture.makeTmpStorePath();
+    const historyUser = params.historyUser ?? params.user;
     const replies = vi
       .fn()
       .mockResolvedValueOnce({
-        messages: [{ text: params.starterText, user: params.user, ts: params.startTs }],
+        messages: [{ text: params.starterText, user: historyUser, ts: params.startTs }],
       })
       .mockResolvedValueOnce({
         messages: [
-          { text: params.starterText, user: params.user, ts: params.startTs },
+          { text: params.starterText, user: historyUser, ts: params.startTs },
           { text: "assistant reply", bot_id: "B1", ts: params.replyTs },
-          { text: params.followUpText, user: params.user, ts: params.followUpTs },
+          { text: params.followUpText, user: historyUser, ts: params.followUpTs },
           { text: "current message", user: params.user, ts: params.currentTs },
         ],
         response_metadata: { next_cursor: "" },
@@ -1869,6 +1914,134 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.From).toBe("slack:group:G123");
   });
 
+  it("blocks MPIM messages from senders outside the configured allowFrom", async () => {
+    const ctx = createReplyToAllSlackCtx();
+    ctx.allowFrom = ["U_OWNER"];
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        channel: "G123",
+        channel_type: "mpim",
+        user: "U_ATTACKER",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
+  it("allows MPIM messages from senders in the configured allowFrom", async () => {
+    const ctx = createReplyToAllSlackCtx();
+    ctx.allowFrom = ["U_OWNER"];
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        channel: "G123",
+        channel_type: "mpim",
+        user: "U_OWNER",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.ChatType).toBe("group");
+  });
+
+  it("keeps one mpDM classification when a later event omits channel_type (#102676)", async () => {
+    const { account, conversationsInfo, ctx } = createMissingChannelInfoBotCtx();
+    // The real message ingress boundary records this before preparation starts.
+    ctx.rememberSlackChannelType("C0MPDM42", "mpim");
+
+    const humanPrepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "C0MPDM42",
+        channel_type: "mpim",
+        user: "U1",
+        text: "hello from a human",
+      }),
+    );
+    assertPrepared(humanPrepared);
+    expect(humanPrepared.ctxPayload.ChatType).toBe("group");
+    expect(humanPrepared.ctxPayload.From).toBe("slack:group:C0MPDM42");
+
+    const typelessPrepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "C0MPDM42",
+        channel_type: undefined,
+        user: undefined,
+        bot_id: "B_OTHER",
+        subtype: "bot_message",
+        username: "other-agent",
+        text: "same room, bot ingress without channel_type",
+        ts: "2.000",
+      }),
+    );
+    assertPrepared(typelessPrepared);
+    expect(typelessPrepared.ctxPayload.ChatType).toBe("group");
+    expect(typelessPrepared.ctxPayload.From).toBe("slack:group:C0MPDM42");
+    expect(typelessPrepared.ctxPayload.SessionKey).toBe(humanPrepared.ctxPayload.SessionKey);
+    expect(conversationsInfo).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a typeless cached mpDM behind the group-DM policy gate (#102676)", async () => {
+    const { account, ctx } = createMissingChannelInfoBotCtx({ groupDmEnabled: false });
+    ctx.rememberSlackChannelType("C0MPDM42", "mpim");
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "C0MPDM42",
+        channel_type: undefined,
+        user: undefined,
+        bot_id: "B_OTHER",
+        subtype: "bot_message",
+        username: "other-agent",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
+  it("keeps unresolved G-prefix private-channel bot ingress on channel sessions (#102676)", async () => {
+    const { account, ctx } = createMissingChannelInfoBotCtx({ ownerId: "UOWNER" });
+
+    const humanPrepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "G0PRIVATE1",
+        channel_type: "group",
+        user: "U1",
+        text: "human in private channel",
+      }),
+    );
+    const botPrepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "G0PRIVATE1",
+        channel_type: undefined,
+        user: undefined,
+        bot_id: "B_OTHER",
+        subtype: "bot_message",
+        username: "other-agent",
+        text: "bot in same private channel",
+        ts: "2.000",
+      }),
+    );
+
+    assertPrepared(humanPrepared);
+    assertPrepared(botPrepared);
+    expect(humanPrepared.ctxPayload.From).toBe("slack:channel:G0PRIVATE1");
+    expect(botPrepared.ctxPayload.From).toBe(humanPrepared.ctxPayload.From);
+    expect(botPrepared.ctxPayload.ChatType).toBe("channel");
+  });
+
   it.each([
     {
       peer: { kind: "group", id: "channel:C0AJUGWG5L6" },
@@ -2232,6 +2405,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       channel: "G400",
       channelType: "mpim",
       user: "U4",
+      historyUser: "U5",
       userName: "Evan",
       starterText: "starter from mpim",
       followUpText: "mpim follow-up",
@@ -2239,6 +2413,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       replyTs: "400.500",
       followUpTs: "400.800",
       currentTs: "401.000",
+      allowFrom: ["U4"],
     });
 
     expectThreadContextAllowsHumanHistory(prepared, replies, "starter from mpim", "mpim follow-up");
@@ -3499,6 +3674,255 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       team_id: "T1",
     });
     expect(prepared).toBeNull();
+  });
+
+  function createCaptionlessSlackAudioMessage(
+    overrides: Partial<SlackMessageEvent> = {},
+  ): SlackMessageEvent {
+    return createSlackMessage({
+      channel: "C0AHZFCAS1K",
+      channel_type: "channel",
+      user: "U_BEK",
+      text: "",
+      ts: "1777244692.409919",
+      files: [
+        {
+          id: "FPDF",
+          name: "report.pdf",
+          mimetype: "application/pdf",
+          url_private_download: "https://files.slack.com/files-pri/T1-FPDF/report.pdf",
+        },
+        {
+          id: "FVOICE",
+          name: "voice.mp4",
+          mimetype: "video/mp4",
+          subtype: "slack_audio",
+          url_private_download: "https://files.slack.com/files-pri/T1-FVOICE/voice.mp4",
+        },
+      ],
+      ...overrides,
+    });
+  }
+
+  function resolveFetchInputUrl(input: string | URL | Request): string {
+    return input instanceof Request ? input.url : String(input);
+  }
+
+  function createAudioMentionSlackCtx(params: {
+    storePath?: string;
+    appClient?: App["client"];
+    channelUsers?: string[];
+    audioEnabled?: boolean;
+  }) {
+    const cfg = {
+      ...(params.storePath ? { session: { store: params.storePath } } : {}),
+      messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
+      tools: { media: { audio: { enabled: params.audioEnabled ?? true } } },
+      channels: {
+        slack: {
+          enabled: true,
+          replyToMode: "all",
+          groupPolicy: "open",
+        },
+      },
+    } as OpenClawConfig;
+    const slackCtx = createInboundSlackCtx({
+      cfg,
+      ...(params.appClient ? { appClient: params.appClient } : {}),
+      channelsConfig: {
+        C0AHZFCAS1K: {
+          requireMention: true,
+          ...(params.channelUsers ? { users: params.channelUsers } : {}),
+        },
+      },
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+    return slackCtx;
+  }
+
+  it("admits a spoken-name audio root once and keeps its follow-up on the seeded thread session", async () => {
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn(
+      async (_input: string | URL | Request) =>
+        new Response(Buffer.from("voice clip"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        }),
+    );
+    globalThis.fetch = mockFetch as typeof fetch;
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const rootTs = "1777244692.409919";
+    const expectedSessionKey = `agent:main:slack:channel:c0ahzfcas1k:thread:${rootTs}`;
+    const replies = vi.fn().mockResolvedValue({
+      messages: [{ text: "voice clip", user: "U_BEK", ts: rootTs }],
+      response_metadata: { next_cursor: "" },
+    });
+    const slackCtx = createAudioMentionSlackCtx({
+      storePath,
+      appClient: { conversations: { replies } } as unknown as App["client"],
+    });
+    let downloadedPath: string | undefined;
+    let downloadedPaths: string[] = [];
+    transcribeFirstAudioMock.mockImplementation(
+      async ({ ctx }: { ctx: { MediaPaths: string[] } }) => {
+        downloadedPath = ctx.MediaPaths[0];
+        return "Bill /new please review this";
+      },
+    );
+
+    try {
+      const root = await prepareSlackMessage({
+        ctx: slackCtx,
+        account: createSlackAccount({ replyToMode: "all" }),
+        message: createCaptionlessSlackAudioMessage(),
+        opts: { source: "message" },
+      });
+      recordSlackThreadParticipation("default", "C0AHZFCAS1K", rootTs);
+      const followUp = await prepareSlackMessage({
+        ctx: slackCtx,
+        account: createSlackAccount({ replyToMode: "all" }),
+        message: createSlackMessage({
+          channel: "C0AHZFCAS1K",
+          channel_type: "channel",
+          user: "U_BEK",
+          text: "and summarize the risks",
+          ts: "1777244714.000100",
+          thread_ts: rootTs,
+        }),
+        opts: { source: "message" },
+      });
+
+      assertPrepared(root, "captionless audio root");
+      assertPrepared(followUp, "audio-root follow-up");
+      downloadedPaths = root.ctxPayload.MediaPaths ?? [];
+      expect(root.ctxPayload.SessionKey).toBe(expectedSessionKey);
+      expect(followUp.ctxPayload.SessionKey).toBe(expectedSessionKey);
+      expect(root.ctxPayload.MessageThreadId).toBe(rootTs);
+      expect(root.ctxPayload.WasMentioned).toBe(true);
+      expect(root.ctxPayload.MentionSource).toBe("mention_pattern");
+      expect(root.ctxPayload.CommandBody).toBe("");
+      expect(root.ctxPayload.Transcript).toBe("Bill /new please review this");
+      expect(root.ctxPayload.MediaTranscribedIndexes).toEqual([1]);
+      expect(root.ctxPayload.RawBody).toContain("[Slack file: voice.mp4 (fileId: FVOICE)]");
+      expect(root.ctxPayload.BodyForAgent).toContain(
+        '[Audio transcript (machine-generated, untrusted)]: "Bill /new please review this"',
+      );
+      expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+      expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
+        ctx: expect.objectContaining({ SessionKey: expectedSessionKey }),
+        cfg: expect.any(Object),
+      });
+      const fetchedUrls = mockFetch.mock.calls.map(([input]) => resolveFetchInputUrl(input));
+      expect(fetchedUrls).toHaveLength(2);
+      expect(fetchedUrls.filter((url) => url.includes("FVOICE"))).toHaveLength(1);
+      expect(fetchedUrls.filter((url) => url.includes("FPDF"))).toHaveLength(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      const pathsToRemove = new Set([
+        ...downloadedPaths,
+        ...(downloadedPath ? [downloadedPath] : []),
+      ]);
+      for (const mediaPath of pathsToRemove) {
+        await fs.rm(mediaPath, { force: true });
+      }
+    }
+  });
+
+  it("does not download or transcribe denied senders' captionless audio", async () => {
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn(async () => {
+      throw new Error("denied audio must not be downloaded");
+    });
+    globalThis.fetch = mockFetch as typeof fetch;
+    const slackCtx = createAudioMentionSlackCtx({ channelUsers: ["U_OWNER"] });
+
+    try {
+      const prepared = await prepareMessageWith(
+        slackCtx,
+        createSlackAccount({ replyToMode: "all" }),
+        createCaptionlessSlackAudioMessage(),
+      );
+
+      expect(prepared).toBeNull();
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+      expect(slackCtx.channelHistories.size).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not download captionless audio when audio understanding is disabled", async () => {
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn(async () => {
+      throw new Error("disabled audio must not be downloaded");
+    });
+    globalThis.fetch = mockFetch as typeof fetch;
+    const slackCtx = createAudioMentionSlackCtx({ audioEnabled: false });
+
+    try {
+      const prepared = await prepareMessageWith(
+        slackCtx,
+        createSlackAccount({ replyToMode: "all" }),
+        createCaptionlessSlackAudioMessage(),
+      );
+
+      expect(prepared).toBeNull();
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("drops nonmatching audio transcripts, keeps only the file marker, and removes the download", async () => {
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn(
+      async (_input: string | URL | Request) =>
+        new Response(Buffer.from("voice clip"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        }),
+    );
+    globalThis.fetch = mockFetch as typeof fetch;
+    const slackCtx = createAudioMentionSlackCtx({});
+    slackCtx.historyLimit = 5;
+    let downloadedPath: string | undefined;
+    transcribeFirstAudioMock.mockImplementation(
+      async ({ ctx }: { ctx: { MediaPaths: string[] } }) => {
+        downloadedPath = ctx.MediaPaths[0];
+        return "please review this";
+      },
+    );
+
+    try {
+      const prepared = await prepareMessageWith(
+        slackCtx,
+        createSlackAccount({ replyToMode: "all" }),
+        createCaptionlessSlackAudioMessage({ ts: "1777244692.409920" }),
+      );
+
+      expect(prepared).toBeNull();
+      expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(
+        resolveFetchInputUrl(mockFetch.mock.calls[0]?.[0] as string | URL | Request),
+      ).toContain("FVOICE");
+      expect(downloadedPath).toEqual(expect.any(String));
+      await expect(fs.stat(downloadedPath as string)).rejects.toMatchObject({ code: "ENOENT" });
+      const entries = Array.from(slackCtx.channelHistories.values()).flat();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.body).toBe("[Slack file: report.pdf (fileId: FPDF)]");
+      expect(entries[0]?.media).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (downloadedPath) {
+        await fs.rm(downloadedPath, { force: true });
+      }
+    }
   });
 
   it("keeps a regex-mentioned Slack thread root and URL-only follow-up on one parent session", async () => {
