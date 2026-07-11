@@ -159,24 +159,24 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (!client) {
       return;
     }
-    const token = ++this.branchesRequestToken;
+    const requestId = ++this.branchesRequestToken;
     this.branchesLoading = true;
     void client
       .request<DraftBranches>("worktrees.branches", { repoRoot })
       .then((result) => {
-        if (token !== this.branchesRequestToken) {
+        if (requestId !== this.branchesRequestToken) {
           return;
         }
         this.branches = result ? { ...result, repoRoot } : null;
         this.baseRef = result?.defaultBranch ?? result?.headBranch ?? "";
       })
       .catch(() => {
-        if (token === this.branchesRequestToken) {
+        if (requestId === this.branchesRequestToken) {
           this.branches = null;
         }
       })
       .finally(() => {
-        if (token === this.branchesRequestToken) {
+        if (requestId === this.branchesRequestToken) {
           this.branchesLoading = false;
         }
       });
@@ -283,19 +283,19 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (!client) {
       return;
     }
-    const token = ++this.browserRequestToken;
+    const requestId = ++this.browserRequestToken;
     this.browserLoading = true;
     this.browserError = null;
     void client
       .request<FsListDirResult>("fs.listDir", path ? { path } : {})
       .then((result) => {
-        if (token !== this.browserRequestToken) {
+        if (requestId !== this.browserRequestToken) {
           return;
         }
         this.browserListing = result ?? null;
       })
       .catch(() => {
-        if (token !== this.browserRequestToken) {
+        if (requestId !== this.browserRequestToken) {
           return;
         }
         // A stale or mistyped folder should not strand the picker: fall back home.
@@ -306,7 +306,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         this.browserError = t("newSession.browserLoadFailed");
       })
       .finally(() => {
-        if (token === this.browserRequestToken) {
+        if (requestId === this.browserRequestToken) {
           this.browserLoading = false;
         }
       });
