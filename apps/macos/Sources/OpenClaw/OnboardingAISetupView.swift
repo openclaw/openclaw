@@ -640,7 +640,9 @@ struct OnboardingAISetupView: View {
 
     private var authContinueTitle: String {
         guard let step = model.authStep else { return "Continue" }
-        if parseWizardDeviceCode(step.devicecode) != nil { return "I've signed in" }
+        if parseWizardDeviceCode(step.devicecode) != nil {
+            return String(localized: "I've signed in")
+        }
         return wizardStepType(step) == "note" ? "Continue" : "Submit"
     }
 

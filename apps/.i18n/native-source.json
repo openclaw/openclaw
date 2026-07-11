@@ -19498,8 +19498,16 @@
       "id": "native.apple.675c1390266b5ccb"
     },
     {
-      "kind": "conditional-branch",
+      "kind": "ui-localized-call",
       "line": 644,
+      "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
+      "source": "I've signed in",
+      "surface": "apple",
+      "id": "native.apple.707648a54749ed5b"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 646,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
       "source": "Continue",
       "surface": "apple",
@@ -19507,7 +19515,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 644,
+      "line": 646,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
       "source": "Submit",
       "surface": "apple",
@@ -19515,7 +19523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 649,
+      "line": 651,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
       "source": "Connect with an API key or token",
       "surface": "apple",
@@ -19523,7 +19531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 652,
+      "line": 654,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
       "source": "Provider",
       "surface": "apple",
@@ -19531,7 +19539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 660,
+      "line": 662,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
       "source": "API key or token",
       "surface": "apple",
@@ -19539,7 +19547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 672,
+      "line": 674,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
       "source": "Connect",
       "surface": "apple",
@@ -19547,7 +19555,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 685,
+      "line": 687,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
       "source": "That key didn’t work",
       "surface": "apple",
@@ -19555,7 +19563,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 711,
+      "line": 713,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
       "source": "Crestodian — setup helper",
       "surface": "apple",
@@ -19563,7 +19571,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 714,
+      "line": 716,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
       "source": "Done",
       "surface": "apple",
@@ -19571,7 +19579,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 775,
+      "line": 777,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
       "source": "Open help…",
       "surface": "apple",
@@ -19579,7 +19587,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 814,
+      "line": 816,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
       "source": "Hide details",
       "surface": "apple",
@@ -19587,7 +19595,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 814,
+      "line": 816,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
       "source": "Show details",
       "surface": "apple",
@@ -19595,7 +19603,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 837,
+      "line": 839,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
       "source": "Copy error",
       "surface": "apple",
