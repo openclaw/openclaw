@@ -804,6 +804,7 @@ export async function runCodexAppServerAttempt(
         provider: "codex",
         modelId: effectiveRuntimeModelId,
         model: supervisedRuntimeModel,
+        thinkLevel: _outerThinkLevel,
         sessionKey: contextSessionKey,
       }
     : {

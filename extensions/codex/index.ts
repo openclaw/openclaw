@@ -4,7 +4,11 @@
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
-import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import {
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+  resolveLivePluginConfigObject,
+} from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerCodexCliMetadata } from "./cli-metadata.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
@@ -60,14 +64,28 @@ export default definePluginEntry({
   register(api) {
     const resolveCurrentConfig = () =>
       api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
-    const resolvePluginConfig = (resolveConfig: () => OpenClawConfig | undefined) =>
-      // Codex plugin config can change at runtime; resolve from live config for
-      // harness attempts and binding claims instead of keeping startup values.
-      resolveLivePluginConfigObject(
-        resolveConfig,
+    const resolvePluginConfig = (resolveConfig: () => OpenClawConfig | undefined) => {
+      const liveConfig = resolveConfig();
+      // Codex plugin config can change at runtime. A missing live entry is an
+      // explicit removal, while an unavailable runtime snapshot uses startup config.
+      if (!liveConfig) {
+        return api.pluginConfig;
+      }
+      const enabled = resolveEffectiveEnableState({
+        id: "codex",
+        origin: "bundled",
+        config: normalizePluginsConfig(liveConfig.plugins),
+        rootConfig: liveConfig,
+      }).enabled;
+      if (!enabled) {
+        return undefined;
+      }
+      return resolveLivePluginConfigObject(
+        () => liveConfig,
         "codex",
         api.pluginConfig as Record<string, unknown>,
-      ) ?? api.pluginConfig;
+      );
+    };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
     const bindingStore = createLazyCodexAppServerBindingStore(
       api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
@@ -96,6 +114,9 @@ export default definePluginEntry({
       }
       api.registerTool(
         (context) => {
+          if (context.senderIsOwner !== true) {
+            return [];
+          }
           const resolveToolRuntimeConfig = () =>
             context.getRuntimeConfig?.() ??
             context.runtimeConfig ??
@@ -104,6 +125,7 @@ export default definePluginEntry({
           return createCodexSupervisionTools({
             getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
             getRuntimeConfig: resolveToolRuntimeConfig,
+            senderIsOwner: context.senderIsOwner,
           });
         },
         { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] },

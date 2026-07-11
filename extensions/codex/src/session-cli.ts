@@ -258,7 +258,7 @@ async function archiveCodexSession(
   const threadId = readThreadId(threadIdValue);
   if (options.confirmNoOtherRunner !== true) {
     throw new Error(
-      "--confirm-no-other-runner is required because Codex Desktop and CLI activity is process-local",
+      "--confirm-no-other-runner is required because Codex client and runner activity is process-local",
     );
   }
   const raw = await callGatewayFromCli(
@@ -312,7 +312,7 @@ export function registerCodexSessionCli(program: Command): void {
       .description("Archive a stored or idle Gateway-local Codex thread")
       .option(
         "--confirm-no-other-runner",
-        "Confirm Codex Desktop and CLI are not using this thread",
+        "Confirm no other Codex client or OpenClaw runner is using this thread",
         false,
       )
       .option("--json", "Print the structured response", false),

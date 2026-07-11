@@ -84,7 +84,9 @@ describe("Codex app-server websocket transport", () => {
     httpServers.push(httpServer);
     const server = new WebSocketServer({ server: httpServer });
     servers.push(server);
-    server.on("connection", (socket) => {
+    const upgradeExtensions: Array<string | undefined> = [];
+    server.on("connection", (socket, request) => {
+      upgradeExtensions.push(request.headers["sec-websocket-extensions"]);
       socket.on("message", (data) => {
         const message = JSON.parse(rawDataToText(data)) as { id?: number; method?: string };
         if (message.method === "initialize") {
@@ -112,6 +114,7 @@ describe("Codex app-server websocket transport", () => {
 
     await expect(client.initialize()).resolves.toBeUndefined();
     await expect(client.request("thread/list", {})).resolves.toEqual({ data: [] });
+    expect(upgradeExtensions).toEqual([undefined]);
   });
 
   it("resolves the default control socket under CODEX_HOME", () => {

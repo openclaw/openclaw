@@ -199,8 +199,12 @@ export type CodexThreadListParams = JsonObject & {
   sortKey?: "created_at" | "updated_at" | "recency_at" | null;
   sortDirection?: "asc" | "desc" | null;
   archived?: boolean | null;
+  cwd?: string | string[] | null;
+  useStateDbOnly?: boolean;
   searchTerm?: string | null;
   sourceKinds?: CodexThreadSourceKind[] | null;
+  parentThreadId?: string | null;
+  ancestorThreadId?: string | null;
 };
 
 export type CodexThreadListResponse = {

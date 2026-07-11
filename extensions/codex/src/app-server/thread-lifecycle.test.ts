@@ -686,17 +686,16 @@ describe("Codex app-server native code mode config", () => {
   });
 
   it("does not overwrite native supervised turn settings", () => {
-    const request = buildTurnStartParams(
-      createAttemptParams({ provider: "anthropic", thinkLevel: "high" }),
-      {
-        threadId: "thread-supervised",
-        cwd: "/repo",
-        model: "native-model",
-        modelProvider: "native-provider",
-        appServer: createAppServerOptions() as never,
-        preserveNativeTurnSettings: true,
-      },
-    );
+    const params = createAttemptParams({ provider: "anthropic" });
+    params.thinkLevel = "high";
+    const request = buildTurnStartParams(params, {
+      threadId: "thread-supervised",
+      cwd: "/repo",
+      model: "native-model",
+      modelProvider: "native-provider",
+      appServer: createAppServerOptions() as never,
+      preserveNativeTurnSettings: true,
+    });
 
     expect(request).not.toHaveProperty("model");
     expect(request).not.toHaveProperty("effort");
@@ -2004,6 +2003,428 @@ describe("Codex app-server supervised branch lifecycle", () => {
     expect(persisted).toMatchObject({
       threadId: sourceThreadId,
       pendingSupervisionBranch: { sourceThreadId, lastTurnId },
+    });
+    expect(persisted?.pendingSupervisionBranch?.cleanupThreadIds).toBeUndefined();
+  });
+
+  it("archives both materialized ids when canonical cleanup tracking loses its CAS", async () => {
+    const sourceThreadId = "thread-source";
+    const probeThreadId = "thread-probe";
+    const finalThreadId = "thread-final";
+    const workspaceDir = path.join(tempDir, "workspace");
+    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const identity = await seedPendingSupervisionBinding({
+      attempt,
+      cwd: workspaceDir,
+      pending: { sourceThreadId },
+    });
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/read") {
+        return { thread: sourceThread({ threadId: sourceThreadId }) };
+      }
+      if (method === "thread/fork") {
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/start") {
+        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/archive") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method} ${JSON.stringify(requestParams)}`);
+    });
+    const bindingStore: CodexAppServerBindingStore = {
+      ...testCodexAppServerBindingStore,
+      mutate: vi.fn(async (storeIdentity, mutation) => {
+        if (
+          mutation.kind === "patch-pending-supervision-branch" &&
+          mutation.pending.cleanupThreadIds?.join(",") === `${probeThreadId},${finalThreadId}`
+        ) {
+          return false;
+        }
+        return await testCodexAppServerBindingStore.mutate(storeIdentity, mutation);
+      }),
+    };
+    const abandonClient = vi.fn(async () => undefined);
+
+    await expect(
+      startOrResumeThreadImpl({
+        client: { request } as never,
+        abandonClient,
+        bindingStore,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+      }),
+    ).rejects.toThrow("tracking supervised Codex branch cleanup");
+    const archivedThreadIds = request.mock.calls
+      .filter(([method]) => method === "thread/archive")
+      .map(([, requestParams]) => (requestParams as { threadId: string }).threadId);
+    expect(archivedThreadIds).toEqual([probeThreadId, finalThreadId]);
+    expect(abandonClient).not.toHaveBeenCalled();
+    const persisted = await testCodexAppServerBindingStore.read(identity);
+    expect(persisted).toMatchObject({
+      threadId: sourceThreadId,
+      pendingSupervisionBranch: {
+        sourceThreadId,
+        cleanupThreadIds: [probeThreadId],
+      },
+    });
+  });
+
+  it("does not clean the committed canonical thread when post-commit diagnostics fail", async () => {
+    const sourceThreadId = "thread-source";
+    const probeThreadId = "thread-probe";
+    const finalThreadId = "thread-final";
+    const workspaceDir = path.join(tempDir, "workspace");
+    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const identity = await seedPendingSupervisionBinding({
+      attempt,
+      cwd: workspaceDir,
+      pending: { sourceThreadId },
+    });
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "thread/read") {
+        return { thread: sourceThread({ threadId: sourceThreadId }) };
+      }
+      if (method === "thread/fork") {
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/start") {
+        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/archive") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const abandonClient = vi.fn(async () => undefined);
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        abandonClient,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        timing: {
+          enabled: true,
+          now: () => 0,
+          log: {
+            isEnabled: () => true,
+            trace: () => {
+              throw new Error("timing log failed");
+            },
+            warn: vi.fn(),
+          },
+        },
+      }),
+    ).rejects.toThrow("timing log failed");
+    expect(
+      request.mock.calls
+        .filter(([method]) => method === "thread/archive")
+        .map(([, requestParams]) => requestParams),
+    ).toEqual([{ threadId: probeThreadId }]);
+    expect(abandonClient).not.toHaveBeenCalled();
+    const committedBinding = await testCodexAppServerBindingStore.read(identity);
+    expect(committedBinding).toMatchObject({ threadId: finalThreadId });
+    expect(committedBinding).not.toHaveProperty("pendingSupervisionBranch");
+  });
+
+  it("confirms an applied canonical commit after the binding write reports failure", async () => {
+    const sourceThreadId = "thread-source";
+    const probeThreadId = "thread-probe";
+    const finalThreadId = "thread-final";
+    const workspaceDir = path.join(tempDir, "workspace");
+    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const identity = await seedPendingSupervisionBinding({
+      attempt,
+      cwd: workspaceDir,
+      pending: { sourceThreadId },
+    });
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "thread/read") {
+        return { thread: sourceThread({ threadId: sourceThreadId }) };
+      }
+      if (method === "thread/fork") {
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/start") {
+        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/archive") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const bindingStore: CodexAppServerBindingStore = {
+      ...testCodexAppServerBindingStore,
+      mutate: vi.fn(async (storeIdentity, mutation) => {
+        const result = await testCodexAppServerBindingStore.mutate(storeIdentity, mutation);
+        if (mutation.kind === "commit-pending-supervision-branch") {
+          throw new Error("binding write failed after commit");
+        }
+        return result;
+      }),
+    };
+
+    await expect(
+      startOrResumeThreadImpl({
+        client: { request } as never,
+        bindingStore,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+      }),
+    ).resolves.toMatchObject({
+      threadId: finalThreadId,
+      lifecycle: { action: "forked" },
+    });
+    expect(
+      request.mock.calls
+        .filter(([method]) => method === "thread/archive")
+        .map(([, requestParams]) => requestParams),
+    ).toEqual([{ threadId: probeThreadId }]);
+    const committedBinding = await testCodexAppServerBindingStore.read(identity);
+    expect(committedBinding).toMatchObject({ threadId: finalThreadId });
+    expect(committedBinding).not.toHaveProperty("pendingSupervisionBranch");
+  });
+
+  it("abandons without cleanup when a failed canonical commit cannot be verified", async () => {
+    const sourceThreadId = "thread-source";
+    const probeThreadId = "thread-probe";
+    const finalThreadId = "thread-final";
+    const workspaceDir = path.join(tempDir, "workspace");
+    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const identity = await seedPendingSupervisionBinding({
+      attempt,
+      cwd: workspaceDir,
+      pending: { sourceThreadId },
+    });
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "thread/read") {
+        return { thread: sourceThread({ threadId: sourceThreadId }) };
+      }
+      if (method === "thread/fork") {
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/start") {
+        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/archive") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    let commitFailed = false;
+    const bindingStore: CodexAppServerBindingStore = {
+      ...testCodexAppServerBindingStore,
+      read: vi.fn(async (storeIdentity) => {
+        if (commitFailed) {
+          throw new Error("binding verification read failed");
+        }
+        return await testCodexAppServerBindingStore.read(storeIdentity);
+      }),
+      mutate: vi.fn(async (storeIdentity, mutation) => {
+        if (mutation.kind === "commit-pending-supervision-branch") {
+          commitFailed = true;
+          throw new Error("binding commit failed");
+        }
+        return await testCodexAppServerBindingStore.mutate(storeIdentity, mutation);
+      }),
+    };
+    const abandonClient = vi.fn(async () => undefined);
+
+    await expect(
+      startOrResumeThreadImpl({
+        client: { request } as never,
+        abandonClient,
+        bindingStore,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+      }),
+    ).rejects.toThrow(`binding could not be verified: ${finalThreadId}`);
+    expect(
+      request.mock.calls
+        .filter(([method]) => method === "thread/archive")
+        .map(([, requestParams]) => requestParams),
+    ).toEqual([{ threadId: probeThreadId }]);
+    expect(abandonClient).toHaveBeenCalledOnce();
+    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      threadId: sourceThreadId,
+      pendingSupervisionBranch: {
+        sourceThreadId,
+        cleanupThreadIds: [finalThreadId],
+      },
+    });
+  });
+
+  it("abandons without cleanup when failed canonical commit verification sees changed state", async () => {
+    const sourceThreadId = "thread-source";
+    const probeThreadId = "thread-probe";
+    const finalThreadId = "thread-final";
+    const workspaceDir = path.join(tempDir, "workspace");
+    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const identity = await seedPendingSupervisionBinding({
+      attempt,
+      cwd: workspaceDir,
+      pending: { sourceThreadId },
+    });
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "thread/read") {
+        return { thread: sourceThread({ threadId: sourceThreadId }) };
+      }
+      if (method === "thread/fork") {
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/start") {
+        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/archive") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    let commitFailed = false;
+    const bindingStore: CodexAppServerBindingStore = {
+      ...testCodexAppServerBindingStore,
+      read: vi.fn(async (storeIdentity) => {
+        const current = await testCodexAppServerBindingStore.read(storeIdentity);
+        if (!commitFailed || !current?.pendingSupervisionBranch) {
+          return current;
+        }
+        return {
+          ...current,
+          pendingSupervisionBranch: { sourceThreadId },
+        };
+      }),
+      mutate: vi.fn(async (storeIdentity, mutation) => {
+        if (mutation.kind === "commit-pending-supervision-branch") {
+          commitFailed = true;
+          throw new Error("binding commit failed");
+        }
+        return await testCodexAppServerBindingStore.mutate(storeIdentity, mutation);
+      }),
+    };
+    const abandonClient = vi.fn(async () => undefined);
+
+    await expect(
+      startOrResumeThreadImpl({
+        client: { request } as never,
+        abandonClient,
+        bindingStore,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+      }),
+    ).rejects.toThrow(`binding changed while commit was uncertain: ${finalThreadId}`);
+    expect(
+      request.mock.calls
+        .filter(([method]) => method === "thread/archive")
+        .map(([, requestParams]) => requestParams),
+    ).toEqual([{ threadId: probeThreadId }]);
+    expect(abandonClient).toHaveBeenCalledOnce();
+    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      threadId: sourceThreadId,
+      pendingSupervisionBranch: {
+        sourceThreadId,
+        cleanupThreadIds: [finalThreadId],
+      },
+    });
+  });
+
+  it("abandons an untrackable probe response after known cleanup", async () => {
+    const sourceThreadId = "thread-source";
+    const workspaceDir = path.join(tempDir, "workspace");
+    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    await seedPendingSupervisionBinding({
+      attempt,
+      cwd: workspaceDir,
+      pending: { sourceThreadId },
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/read") {
+        return { thread: sourceThread({ threadId: sourceThreadId }) };
+      }
+      if (method === "thread/fork") {
+        return { thread: { id: "" } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const abandonClient = vi.fn(async () => undefined);
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        abandonClient,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+      }),
+    ).rejects.toThrow("model probe may have materialized without a safe thread id");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read", "thread/fork"]);
+    expect(abandonClient).toHaveBeenCalledOnce();
+  });
+
+  it("cleans the known probe before abandoning an untrackable canonical response", async () => {
+    const sourceThreadId = "thread-source";
+    const probeThreadId = "thread-probe";
+    const workspaceDir = path.join(tempDir, "workspace");
+    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const identity = await seedPendingSupervisionBinding({
+      attempt,
+      cwd: workspaceDir,
+      pending: { sourceThreadId },
+    });
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "thread/read") {
+        return { thread: sourceThread({ threadId: sourceThreadId }) };
+      }
+      if (method === "thread/fork") {
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/start") {
+        return { thread: { id: "" } };
+      }
+      if (method === "thread/archive") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const abandonClient = vi.fn(async () => undefined);
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        abandonClient,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+      }),
+    ).rejects.toThrow("canonical branch may have materialized without a safe thread id");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/fork",
+      "thread/start",
+      "thread/archive",
+    ]);
+    expect(request.mock.calls[3]?.[1]).toEqual({ threadId: probeThreadId });
+    expect(request.mock.invocationCallOrder[3]).toBeLessThan(
+      abandonClient.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(abandonClient).toHaveBeenCalledOnce();
+    const persisted = await testCodexAppServerBindingStore.read(identity);
+    expect(persisted).toMatchObject({
+      threadId: sourceThreadId,
+      pendingSupervisionBranch: { sourceThreadId },
     });
     expect(persisted?.pendingSupervisionBranch?.cleanupThreadIds).toBeUndefined();
   });

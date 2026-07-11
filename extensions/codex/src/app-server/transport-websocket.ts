@@ -26,13 +26,18 @@ export function createWebSocketTransport(
     ...options.headers,
     ...(options.authToken ? { Authorization: `Bearer ${options.authToken}` } : {}),
   };
+  const websocketOptions: WebSocket.ClientOptions = {
+    headers,
+    // Codex app-server closes Unix upgrade handshakes that offer compression.
+    perMessageDeflate: false,
+  };
   const unixSocketPath = resolveCodexAppServerUnixSocketPath(options);
   const socket = unixSocketPath
     ? new WebSocket("ws://localhost/", {
-        headers,
+        ...websocketOptions,
         createConnection: () => connectCodexAppServerUnixSocket(unixSocketPath),
       })
-    : new WebSocket(options.url, { headers });
+    : new WebSocket(options.url, websocketOptions);
   const pendingFrames: string[] = [];
   let killed = false;
 

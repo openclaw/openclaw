@@ -417,12 +417,12 @@
     },
     "supervision": {
       "label": "Codex Supervision",
-      "help": "Expose non-archived Codex Desktop and CLI sessions through OpenClaw.",
+      "help": "Expose non-archived Codex Desktop and CLI sessions through a separate supervision connection without changing the ordinary Codex harness.",
       "advanced": true
     },
     "supervision.enabled": {
       "label": "Enable Codex Supervision",
-      "help": "Use the native user Codex home and list its non-archived sessions in OpenClaw."
+      "help": "List non-archived native sessions through managed user-home stdio by default; explicit App Server connection settings are honored."
     },
     "supervision.endpoints": {
       "label": "Legacy Supervisor Endpoints",

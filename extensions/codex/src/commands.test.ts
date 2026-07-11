@@ -2274,8 +2274,8 @@ describe("codex command", () => {
     await handleCodexCommand(createContext("review"), { deps, pluginConfig });
 
     expect(codexControlRequest).toHaveBeenCalledTimes(2);
-    for (const call of codexControlRequest.mock.calls) {
-      expect(call[3]).toMatchObject({
+    for (let callIndex = 0; callIndex < codexControlRequest.mock.calls.length; callIndex += 1) {
+      expect(mockArg(codexControlRequest, callIndex, 3)).toMatchObject({
         authProfileId: null,
         startOptions: { homeScope: "user" },
       });

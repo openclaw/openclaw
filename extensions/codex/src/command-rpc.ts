@@ -32,6 +32,7 @@ export type CodexControlRequestOptions = {
   sessionId?: string;
   isolated?: boolean;
   startOptions?: CodexAppServerStartOptions;
+  timeoutMs?: number;
 };
 
 export function requestOptions(
@@ -72,7 +73,7 @@ export async function codexControlRequest(
   return await requestCodexAppServerJson({
     method,
     requestParams,
-    timeoutMs: runtime.requestTimeoutMs,
+    timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
     startOptions: options.startOptions ?? runtime.start,
     config: options.config,
     sessionKey: options.sessionKey,

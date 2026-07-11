@@ -47,6 +47,13 @@ function expectedFingerprint(message: MirroredAgentMessage): string {
   return createHash("sha256").update(payload).digest("hex").slice(0, 16);
 }
 
+function messageContent(message: AgentMessage | undefined) {
+  if (!message || !("content" in message)) {
+    throw new Error("expected transcript message content");
+  }
+  return message.content;
+}
+
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -422,7 +429,7 @@ describe("projectBoundedCodexThreadHistory", () => {
     });
 
     expect(projection).toMatchObject({ importedMessages: 4, omittedMessages: 0 });
-    expect(projection.transcriptMessages.map((message) => message.content)).toEqual([
+    expect(projection.transcriptMessages.map(messageContent)).toEqual([
       "First question",
       [{ type: "text", text: "First answer" }],
       "Second question",
@@ -486,7 +493,7 @@ describe("projectBoundedCodexThreadHistory", () => {
         throughTurnId: `turn-${status}`,
         importedAt: 1_800_000_000_000,
       });
-      expect(projection.transcriptMessages.at(-1)?.content).toEqual([
+      expect(messageContent(projection.transcriptMessages.at(-1))).toEqual([
         { type: "text", text: `${status} answer` },
       ]);
     }
@@ -514,9 +521,10 @@ describe("projectBoundedCodexThreadHistory", () => {
       throughTurnId: "turn-8",
       importedAt: 1_800_000_000_000,
     });
-    const texts = projection.transcriptMessages.map((message) =>
-      typeof message.content === "string" ? message.content : "",
-    );
+    const texts = projection.transcriptMessages.map((message) => {
+      const content = messageContent(message);
+      return typeof content === "string" ? content : "";
+    });
 
     expect(projection).toMatchObject({ importedMessages: 8, omittedMessages: 1 });
     expect(texts[0]).toMatch(/^1:prefix-/u);

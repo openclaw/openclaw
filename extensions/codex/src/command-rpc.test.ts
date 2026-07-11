@@ -63,4 +63,14 @@ describe("Codex command RPC helpers", () => {
       expect.objectContaining({ authProfileId: null }),
     );
   });
+
+  it("forwards an explicit per-request timeout budget", async () => {
+    requestCodexAppServerJsonMock.mockResolvedValue({ data: [] });
+
+    await codexControlRequest({}, "thread/list", { archived: false }, { timeoutMs: 321 });
+
+    expect(requestCodexAppServerJsonMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 321 }),
+    );
+  });
 });
