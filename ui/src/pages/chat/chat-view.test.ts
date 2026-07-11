@@ -3554,6 +3554,130 @@ describe("chat attachment picker", () => {
     });
   });
 
+  it("merges delayed large pastes into the current attachment state", async () => {
+    const readers: FileReader[] = [];
+    const readAsDataUrl = vi
+      .spyOn(FileReader.prototype, "readAsDataURL")
+      .mockImplementation(function (this: FileReader) {
+        readers.push(this);
+      });
+    let attachments: ChatAttachment[] = [];
+    const onAttachmentsChange = vi.fn((next: ChatAttachment[]) => {
+      attachments = next;
+    });
+    const container = renderChatView({
+      attachments,
+      getAttachments: () => attachments,
+      onAttachmentsChange,
+    });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    );
+    const paste = (text: string) => {
+      const event = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", {
+        value: {
+          items: { 0: { type: "text/plain" }, length: 1 },
+          getData: (type: string) => (type === "text/plain" ? text : ""),
+        },
+      });
+      textarea.dispatchEvent(event);
+    };
+    const firstText = `first ${"a".repeat(1100)}`;
+    const secondText = `second ${"b".repeat(1100)}`;
+
+    try {
+      paste(firstText);
+      paste(secondText);
+
+      expect(readers).toHaveLength(2);
+      Object.defineProperty(readers[0], "result", {
+        configurable: true,
+        value: `data:text/plain;base64,${btoa(firstText)}`,
+      });
+      readers[0].dispatchEvent(new ProgressEvent("load"));
+      await vi.waitFor(() => expect(attachments).toHaveLength(1));
+
+      Object.defineProperty(readers[1], "result", {
+        configurable: true,
+        value: `data:text/plain;base64,${btoa(secondText)}`,
+      });
+      readers[1].dispatchEvent(new ProgressEvent("load"));
+
+      await vi.waitFor(() => expect(attachments).toHaveLength(2));
+      expect(attachments.map((attachment) => getChatAttachmentDataUrl(attachment))).toEqual([
+        `data:text/plain;base64,${btoa(firstText)}`,
+        `data:text/plain;base64,${btoa(secondText)}`,
+      ]);
+    } finally {
+      readAsDataUrl.mockRestore();
+    }
+  });
+
+  it("preserves a large paste when a dropped file finishes later", async () => {
+    const readers: FileReader[] = [];
+    const readAsDataUrl = vi
+      .spyOn(FileReader.prototype, "readAsDataURL")
+      .mockImplementation(function (this: FileReader) {
+        readers.push(this);
+      });
+    let attachments: ChatAttachment[] = [];
+    const onAttachmentsChange = vi.fn((next: ChatAttachment[]) => {
+      attachments = next;
+    });
+    const container = renderChatView({
+      attachments,
+      getAttachments: () => attachments,
+      onAttachmentsChange,
+    });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    );
+    const chat = requireElement(container, "section.card.chat", "chat drop target");
+    const pastedText = `large paste ${"x".repeat(1100)}`;
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteEvent, "clipboardData", {
+      value: {
+        items: { 0: { type: "text/plain" }, length: 1 },
+        getData: (type: string) => (type === "text/plain" ? pastedText : ""),
+      },
+    });
+    const droppedFile = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
+    const dropEvent = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(dropEvent, "dataTransfer", { value: { files: [droppedFile] } });
+
+    try {
+      textarea.dispatchEvent(pasteEvent);
+      chat.dispatchEvent(dropEvent);
+
+      expect(readers).toHaveLength(2);
+      Object.defineProperty(readers[0], "result", {
+        configurable: true,
+        value: `data:text/plain;base64,${btoa(pastedText)}`,
+      });
+      readers[0].dispatchEvent(new ProgressEvent("load"));
+      await vi.waitFor(() => expect(attachments).toHaveLength(1));
+
+      Object.defineProperty(readers[1], "result", {
+        configurable: true,
+        value: `data:application/pdf;base64,${btoa("%PDF-1.4\n")}`,
+      });
+      readers[1].dispatchEvent(new ProgressEvent("load"));
+
+      await vi.waitFor(() => expect(attachments).toHaveLength(2));
+      expect(attachments.map((attachment) => attachment.fileName)).toEqual([
+        expect.stringMatching(/^pasted-text-\d+\.txt$/u),
+        "brief.pdf",
+      ]);
+    } finally {
+      readAsDataUrl.mockRestore();
+    }
+  });
+
   it("keeps the default composer placeholder for pasted text attachments", () => {
     const pastedTextAttachment: ChatAttachment = {
       id: "pasted-text",

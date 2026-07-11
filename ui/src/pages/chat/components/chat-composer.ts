@@ -101,6 +101,7 @@ type ChatComposerProps = {
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   attachments?: ChatAttachment[];
+  getAttachments?: () => ChatAttachment[];
   replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
@@ -943,12 +944,17 @@ function renderSlashMenu(
 
 type ChatAttachmentControlsProps = {
   attachments?: ChatAttachment[];
+  getAttachments?: () => ChatAttachment[];
   draft?: string;
   getDraft?: () => string;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onDraftChange?: (next: string) => void;
   onRequestUpdate?: () => void;
 };
+
+function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[] {
+  return props.getAttachments?.() ?? props.attachments ?? [];
+}
 
 type ChatQueueProps = {
   queue: ChatQueueItem[];
@@ -1156,7 +1162,7 @@ function readTextFromDataUrl(dataUrl: string): string | null {
 function compactPastedTextPreview(text: string): string {
   const normalized = text.replace(/\s+/gu, " ").trim();
   if (!normalized) {
-    return "Pasted text";
+    return t("chat.composer.pastedText");
   }
   if (normalized.length <= PASTED_TEXT_PREVIEW_MAX_LENGTH) {
     return normalized;
@@ -1167,7 +1173,7 @@ function compactPastedTextPreview(text: string): string {
 function pastedTextPreview(attachment: ChatAttachment): string {
   const dataUrl = getChatAttachmentDataUrl(attachment);
   const text = dataUrl ? readTextFromDataUrl(dataUrl) : null;
-  return text ? compactPastedTextPreview(text) : "Pasted text";
+  return text ? compactPastedTextPreview(text) : t("chat.composer.pastedText");
 }
 
 function appendPastedTextToDraft(draft: string, text: string): string {
@@ -1190,7 +1196,7 @@ function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsPr
     if (!attachment) {
       return;
     }
-    props.onAttachmentsChange?.([...(props.attachments ?? []), attachment]);
+    props.onAttachmentsChange?.([...currentAttachments(props), attachment]);
   });
   return true;
 }
@@ -1262,7 +1268,7 @@ function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentContr
     }
     e.preventDefault();
     props.onAttachmentsChange([
-      ...(props.attachments ?? []),
+      ...currentAttachments(props),
       chatAttachmentFromFile(pasted.file, pasted.dataUrl),
     ]);
     return;
@@ -1277,8 +1283,7 @@ function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentContr
     reader.addEventListener("load", () => {
       const dataUrl = reader.result as string;
       const newAttachment = chatAttachmentFromFile(file, dataUrl);
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
+      props.onAttachmentsChange?.([...currentAttachments(props), newAttachment]);
     });
     reader.readAsDataURL(file);
   }
@@ -1290,7 +1295,7 @@ function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentCont
   if (!text || !props.onDraftChange) {
     return;
   }
-  const nextAttachments = (props.attachments ?? []).filter(
+  const nextAttachments = currentAttachments(props).filter(
     (attachment) => attachment.id !== att.id,
   );
   releaseChatAttachmentPayload(att.id);
@@ -1304,7 +1309,6 @@ function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsP
   if (!input.files || !props.onAttachmentsChange) {
     return;
   }
-  const current = props.attachments ?? [];
   const additions: ChatAttachment[] = [];
   let pending = 0;
   for (const file of input.files) {
@@ -1317,7 +1321,7 @@ function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsP
       additions.push(chatAttachmentFromFile(file, reader.result as string));
       pending--;
       if (pending === 0) {
-        props.onAttachmentsChange?.([...current, ...additions]);
+        props.onAttachmentsChange?.([...currentAttachments(props), ...additions]);
       }
     });
     reader.readAsDataURL(file);
@@ -1331,7 +1335,6 @@ export function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentCont
   if (!files || !props.onAttachmentsChange) {
     return;
   }
-  const current = props.attachments ?? [];
   const additions: ChatAttachment[] = [];
   let pending = 0;
   for (const file of files) {
@@ -1344,7 +1347,7 @@ export function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentCont
       additions.push(chatAttachmentFromFile(file, reader.result as string));
       pending--;
       if (pending === 0) {
-        props.onAttachmentsChange?.([...current, ...additions]);
+        props.onAttachmentsChange?.([...currentAttachments(props), ...additions]);
       }
     });
     reader.readAsDataURL(file);
@@ -1380,10 +1383,10 @@ function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                         <button
                           class="chat-attachment-text-action"
                           type="button"
-                          aria-label="Show pasted text in text field"
+                          aria-label=${t("chat.composer.showPastedText")}
                           @click=${() => showPastedTextInComposer(att, props)}
                         >
-                          Show in text field
+                          ${t("chat.composer.showPastedText")}
                           <span aria-hidden="true">${icons.chevronRight}</span>
                         </button>
                       </span>
@@ -1405,7 +1408,7 @@ function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                 type="button"
                 aria-label=${t("chat.composer.removeAttachment")}
                 @click=${() => {
-                  const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
+                  const next = currentAttachments(props).filter((a) => a.id !== att.id);
                   releaseChatAttachmentPayload(att.id);
                   props.onAttachmentsChange?.(next);
                 }}

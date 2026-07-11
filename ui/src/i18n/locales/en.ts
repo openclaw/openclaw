@@ -3204,6 +3204,8 @@ export const en: TranslationMap = {
       cancelReply: "Cancel reply",
       compactRecommendedContext: "Compact recommended session context",
       removeAttachment: "Remove attachment",
+      pastedText: "Pasted text",
+      showPastedText: "Show in text field",
       addAttachment: "Add attachment",
       attachPhoto: "Photo",
       attachFile: "Attach file",
