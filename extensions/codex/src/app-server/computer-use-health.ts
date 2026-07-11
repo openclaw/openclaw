@@ -1,7 +1,11 @@
 // Codex plugin module implements periodic Computer Use health probes.
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
-import { runCodexComputerUseLiveTest, type CodexComputerUseRepairStatus } from "./computer-use.js";
+import {
+  killStaleComputerUseMcpChildren,
+  runCodexComputerUseLiveTest,
+  type CodexComputerUseRepairStatus,
+} from "./computer-use.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
 
 type ComputerUseHealthMonitor = {
@@ -38,6 +42,9 @@ export function startCodexComputerUseHealthMonitor(params: {
   if (!params.config.healthCheckEnabled) {
     return { started: false, reason: "health_disabled" };
   }
+  const repairComputerUseMcpChildren =
+    params.repairComputerUseMcpChildren ??
+    (() => killStaleComputerUseMcpChildren({ ancestorPid: params.client.getTransportPid() }));
   const intervalMs = params.config.healthCheckIntervalMinutes * 60_000;
   const state = getComputerUseHealthMonitorState();
   const existing = state.monitors.get(params.client);
@@ -52,7 +59,7 @@ export function startCodexComputerUseHealthMonitor(params: {
     intervalMs,
     timer: setInterval(() => {
       void runCodexComputerUseHealthProbe(params.client, params.config, monitor, {
-        repairComputerUseMcpChildren: params.repairComputerUseMcpChildren,
+        repairComputerUseMcpChildren,
       });
     }, intervalMs),
     disposeCloseHandler: () => undefined,
