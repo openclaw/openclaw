@@ -305,14 +305,6 @@ export const testing = {
   applyModelProviderToolPolicy,
 } as const;
 
-export type OpenClawCodingToolConstructionPlan = {
-  includeBaseCodingTools: boolean;
-  includeShellTools: boolean;
-  includeChannelTools: boolean;
-  includeOpenClawTools: boolean;
-  includePluginTools: boolean;
-};
-
 /**
  * Internal-only marker. Set by `createOpenClawCodingToolsRaw()` to request
  * that the returned tools NOT be wrapped with `wrapToolWithBeforeToolCallHook`,
