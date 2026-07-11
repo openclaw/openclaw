@@ -184,7 +184,10 @@ describe("attachWidgetBridge accept filter (identity, not origin)", () => {
   it("sends an approved prompt with a gateway idempotency key", async () => {
     const iframe = document.createElement("iframe");
     document.body.appendChild(iframe);
-    const request = vi.fn(async () => ({ runId: "run-1", status: "started" }));
+    const request = vi.fn(async (_method: string, _params: unknown) => ({
+      runId: "run-1",
+      status: "started",
+    }));
     const detach = attachWidgetBridge({
       iframe,
       widget: widget(),
