@@ -516,56 +516,66 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     logVerbose(`line: skipping group message (requireMention, not mentioned)`);
     const historyKey = groupId ?? roomId;
     const senderId = sourceInfo.userId ?? "unknown";
-    if (historyKey && context.groupHistories) {
-      createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
-        historyKey,
-        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-        entry: {
-          sender: `user:${senderId}`,
-          body: rawText || `<${message.type}>`,
-          timestamp: event.timestamp,
-        },
-      });
-    }
-    if (historyKey && context.pendingMediaQueues && isDownloadableLineMessageType(message.type)) {
-      // Guarded: writing the queue must not race with a concurrent handler
-      // that is reading/clearing it for the same group (see comment above
-      // `getPendingMediaLock`). See PR #103761 review.
-      await runPendingMediaGuarded(async () => {
-        const pendingMediaQueues = context.pendingMediaQueues;
-        if (!pendingMediaQueues) {
-          return;
-        }
-        const groupConfig = resolveLineGroupConfig({
-          config: account.config,
-          groupId,
-          roomId,
+    // Guarded: recording this skipped message into group history and (when
+    // applicable) queuing its media must be serialized with any other
+    // concurrent handler for this same group -- in particular the
+    // mentioned-turn flush below, which clears both the pending-media queue
+    // and group history once `processMessage` succeeds. Recording the
+    // history entry outside this lock let a just-recorded `<image>`
+    // placeholder be wiped by a concurrent flush's history clear while its
+    // media was still sitting in the (separately locked) pending-media
+    // queue, leaving media queued with no corresponding history entry.
+    // See PR #103761 review (confidence 0.97): "pending history and pending
+    // media queue not sharing the same per-group lock".
+    await runPendingMediaGuarded(async () => {
+      if (historyKey && context.groupHistories) {
+        createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
+          historyKey,
+          limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+          entry: {
+            sender: `user:${senderId}`,
+            body: rawText || `<${message.type}>`,
+            timestamp: event.timestamp,
+          },
         });
-        try {
-          const originalFilename =
-            message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
-          const media = await downloadLineMedia(
-            message.id,
-            account.channelAccessToken,
-            mediaMaxBytes,
-            { originalFilename },
-          );
-          pushBoundedPendingMedia({
-            queues: pendingMediaQueues,
-            key: historyKey,
-            media: { path: media.path, contentType: media.contentType },
-            limit: groupConfig?.pendingMediaLimit ?? DEFAULT_LINE_PENDING_MEDIA_LIMIT,
-          });
-        } catch (err) {
-          const errMsg = String(err);
-          if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
-            logVerbose(`line: pending media exceeds size limit for message ${message.id}`);
-          } else {
-            runtime.error?.(danger(`line: failed to download pending media: ${errMsg}`));
-          }
-        }
+      }
+      if (
+        !historyKey ||
+        !context.pendingMediaQueues ||
+        !isDownloadableLineMessageType(message.type)
+      ) {
+        return;
+      }
+      const pendingMediaQueues = context.pendingMediaQueues;
+      const groupConfig = resolveLineGroupConfig({
+        config: account.config,
+        groupId,
+        roomId,
       });
-    }
+      try {
+        const originalFilename =
+          message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
+        const media = await downloadLineMedia(
+          message.id,
+          account.channelAccessToken,
+          mediaMaxBytes,
+          { originalFilename },
+        );
+        pushBoundedPendingMedia({
+          queues: pendingMediaQueues,
+          key: historyKey,
+          media: { path: media.path, contentType: media.contentType },
+          limit: groupConfig?.pendingMediaLimit ?? DEFAULT_LINE_PENDING_MEDIA_LIMIT,
+        });
+      } catch (err) {
+        const errMsg = String(err);
+        if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
+          logVerbose(`line: pending media exceeds size limit for message ${message.id}`);
+        } else {
+          runtime.error?.(danger(`line: failed to download pending media: ${errMsg}`));
+        }
+      }
+    });
     return;
   }
 
@@ -653,17 +663,22 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     if (pendingMediaKeyToClear && context.pendingMediaQueues) {
       context.pendingMediaQueues.delete(pendingMediaKeyToClear);
     }
-  });
 
-  if (isGroup && context.groupHistories) {
-    const historyKey = groupId ?? roomId;
-    if (historyKey && context.groupHistories.has(historyKey)) {
-      createChannelHistoryWindow({ historyMap: context.groupHistories }).clear({
-        historyKey,
-        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-      });
+    // Clearing group history must happen inside the same guarded section as
+    // the pending-media queue clear above: both are shared per-group state,
+    // and clearing history outside this lock let it race with a concurrent
+    // skipped-message handler recording a new placeholder entry for the
+    // same group. See PR #103761 review (confidence 0.97).
+    if (isGroup && context.groupHistories) {
+      const historyKey = groupId ?? roomId;
+      if (historyKey && context.groupHistories.has(historyKey)) {
+        createChannelHistoryWindow({ historyMap: context.groupHistories }).clear({
+          historyKey,
+          limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+        });
+      }
     }
-  }
+  });
 }
 
 async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {

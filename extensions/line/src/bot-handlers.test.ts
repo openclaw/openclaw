@@ -1719,5 +1719,102 @@ describe("handleLineWebhookEvents", () => {
         { path: "/media/write-race.jpg", contentType: "image/jpeg" },
       ]);
     });
+
+    it("keeps group history and pending media queue consistent when a skipped media event races a mentioned turn's completion (PR #103761 review, confidence 0.97)", async () => {
+      // Pre-existing conversation history for this group, as if earlier
+      // skipped messages had already been recorded before this race begins.
+      const groupHistories = new Map<string, HistoryEntry[]>([
+        [
+          "group-history-race",
+          [{ sender: "user:someone-else", body: "earlier message", timestamp: Date.now() - 1000 }],
+        ],
+      ]);
+      const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+
+      let releaseMentioned: (() => void) | undefined;
+      const mentionedGate = new Promise<void>((resolve) => {
+        releaseMentioned = resolve;
+      });
+      const processMessage = vi.fn(async () => {
+        await mentionedGate;
+      });
+      downloadLineMediaMock.mockImplementation(async () => ({
+        path: "/media/history-race.jpg",
+        contentType: "image/jpeg",
+      }));
+      const context = createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+        requireMentionForNonText: true,
+        groupHistories,
+        pendingMediaQueues,
+      });
+
+      // A mentioned event acquires the group's lock first and blocks (inside
+      // processMessage) while holding it. Once processMessage resolves, the
+      // guarded section clears both the pending-media queue and the group
+      // history for this group as its final step.
+      const mentionedRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-history-race",
+            userId: "user-history-race",
+            messageId: "m-history-race-mentioned",
+            webhookEventId: "evt-history-race-mentioned",
+          }),
+        ],
+        context,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // While the lock is held, an unrelated skipped (non-mentioned) image in
+      // the same group tries to record a pending-history placeholder entry
+      // *and* enqueue its media. Both operations must be guarded by the same
+      // lock as the mentioned turn's history-clear + queue-clear, so neither
+      // can interleave with it.
+      const skippedRun = handleLineWebhookEvents(
+        [
+          createSkippedImageEvent({
+            groupId: "group-history-race",
+            userId: "user-history-race",
+            messageId: "m-history-race-skip",
+            webhookEventId: "evt-history-race-skip",
+          }),
+        ],
+        context,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Serialized: the skipped event's write must not have happened yet,
+      // and the pre-existing history must still be intact (not yet cleared
+      // by the still-in-flight mentioned turn).
+      expect(downloadLineMediaMock).not.toHaveBeenCalled();
+      expect(pendingMediaQueues.has("group-history-race")).toBe(false);
+      expect(groupHistories.get("group-history-race")).toEqual([
+        { sender: "user:someone-else", body: "earlier message", timestamp: expect.any(Number) },
+      ]);
+
+      releaseMentioned?.();
+      await Promise.all([mentionedRun, skippedRun]);
+
+      // After both complete: the mentioned turn's clear ran first (it held
+      // the lock first), then the skipped image's write ran strictly after,
+      // inside the same lock. So the final state must show the skipped
+      // image's own history placeholder *together with* its queued media --
+      // never one without the other, and never the pre-existing history
+      // surviving alongside a queue write that raced past it.
+      expect(downloadLineMediaMock).toHaveBeenCalledTimes(1);
+      const finalHistory = groupHistories.get("group-history-race");
+      const finalQueue = pendingMediaQueues.get("group-history-race");
+      expect(finalQueue).toEqual([{ path: "/media/history-race.jpg", contentType: "image/jpeg" }]);
+      expect(finalHistory).toBeDefined();
+      expect(finalHistory?.some((entry) => entry.body === "<image>")).toBe(true);
+      // The stale pre-race entry must be gone: it was cleared by the
+      // mentioned turn's completion before the skipped image's write ran.
+      expect(finalHistory?.some((entry) => entry.body === "earlier message")).toBe(false);
+    });
   });
 });
