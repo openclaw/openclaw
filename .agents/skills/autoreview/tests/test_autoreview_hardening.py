@@ -87,6 +87,38 @@ class AutoreviewHardeningTests(unittest.TestCase):
             self.assertIn("## image.bin\n[binary file omitted]", bundle)
             self.assertTrue(truncated)
 
+    def test_local_bundle_rejects_non_utf8_untracked_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            (repo / "latin.py").write_bytes(b"print('caf\xe9')\n")
+
+            with self.assertRaisesRegex(SystemExit, "non-UTF-8 file"):
+                self.helper["local_bundle"](repo)
+
+    def test_local_bundle_uses_validated_untracked_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            (repo / "notes.txt").write_text("review me\n", encoding="utf-8")
+            original_read_prefix = self.helper["read_prefix"]
+            reads = 0
+
+            def read_once(path: Path, limit: int) -> tuple[bytes, bool]:
+                nonlocal reads
+                reads += 1
+                if reads > 1:
+                    raise AssertionError("untracked file was reopened after validation")
+                return original_read_prefix(path, limit)
+
+            with mock.patch.dict(
+                self.helper["local_bundle"].__globals__,
+                {"read_prefix": read_once},
+            ):
+                bundle, truncated = self.helper["local_bundle"](repo)
+
+            self.assertIn("## notes.txt\nreview me", bundle)
+            self.assertFalse(truncated)
+            self.assertEqual(reads, 1)
+
     def test_tracked_binary_changes_are_blocked_in_all_modes(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
@@ -441,6 +473,8 @@ class AutoreviewHardeningTests(unittest.TestCase):
             "token = response.authentication.accessToken",
             "token = request.headers.authorization",
             "password = account.credentials.password",
+            "self.access_token = self.authentication.access_token",
+            "this.accessToken = this.authentication.accessToken",
             "api_key = client.settings.apiKey",
             'token = "$GITHUB_TOKEN"',
             'token = "$env:GITHUB_TOKEN"',
@@ -501,6 +535,15 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
     def test_secret_detector_handles_low_diversity_passwords(self) -> None:
         content = 'password="' + "letmeinletmein" + '"'
+
+        self.assertTrue(self.helper["secret_text_risk"](content))
+
+    def test_secret_detector_handles_aws_secret_access_keys(self) -> None:
+        content = (
+            "AWS_SECRET_ACCESS_"
+            + "KEY="
+            + "A7f9K2m4Q8v6N3x5R1p0T9z8B2c4D6e8F0h2"
+        )
 
         self.assertTrue(self.helper["secret_text_risk"](content))
 
@@ -1104,7 +1147,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
     def test_multi_provider_engines_preserve_provider_auth(self) -> None:
         old = os.environ.copy()
         with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
+            root = Path(tempdir).resolve()
             repo = init_repo(root)
             try:
                 os.environ["DEEPSEEK_API_KEY"] = "test-token-placeholder"
@@ -1209,6 +1252,39 @@ class AutoreviewHardeningTests(unittest.TestCase):
             finally:
                 os.environ.clear()
                 os.environ.update(old)
+
+    def test_provider_credential_paths_are_forwarded_as_absolute(self) -> None:
+        old_env = os.environ.copy()
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            try:
+                os.chdir(repo)
+                os.environ["AWS_CONFIG_FILE"] = "../shared/aws-config"
+                os.environ["SSL_CERT_DIR"] = os.pathsep.join(
+                    ("../tls/one", "../tls/two"),
+                )
+
+                env = self.helper["safe_engine_env"](repo, engine="pi")
+
+                self.assertEqual(
+                    env["AWS_CONFIG_FILE"],
+                    str((root / "shared" / "aws-config").resolve()),
+                )
+                self.assertEqual(
+                    env["SSL_CERT_DIR"],
+                    os.pathsep.join(
+                        (
+                            str((root / "tls" / "one").resolve()),
+                            str((root / "tls" / "two").resolve()),
+                        )
+                    ),
+                )
+            finally:
+                os.chdir(old_cwd)
+                os.environ.clear()
+                os.environ.update(old_env)
 
     def test_opencode_rejects_repo_local_xdg_auth_store(self) -> None:
         old = os.environ.copy()
@@ -1318,6 +1394,52 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 os.environ["PATH"] = old_path
 
             self.assertNotIn(str(repo.resolve()), env["PATH"].split(os.pathsep))
+
+    def test_find_command_rejects_explicit_repo_local_executables(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            (repo / "tools").mkdir()
+            (root / "trusted").mkdir()
+            repo_bin = self.helper["write_executable"](
+                repo / "tools" / "codex",
+                "#!/bin/sh\nexit 0\n",
+            )
+            external_bin = self.helper["write_executable"](
+                root / "trusted" / "codex",
+                "#!/bin/sh\nexit 0\n",
+            )
+
+            self.assertIsNone(
+                self.helper["find_command"]("tools/codex", repo),
+            )
+            self.assertIsNone(
+                self.helper["find_command"](str(repo_bin), repo),
+            )
+            self.assertEqual(
+                self.helper["find_command"](str(external_bin), repo),
+                str(Path(os.path.abspath(external_bin))),
+            )
+            self.assertEqual(
+                self.helper["find_command"]("../trusted/codex", repo),
+                str(Path(os.path.abspath(external_bin))),
+            )
+
+            external_link = root / "trusted" / "external-codex"
+            repo_link = repo / "tools" / "external-codex"
+            try:
+                external_link.symlink_to(repo_bin)
+                repo_link.symlink_to(external_bin)
+            except OSError as exc:
+                if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                    return
+                raise
+            self.assertIsNone(
+                self.helper["find_command"](str(external_link), repo),
+            )
+            self.assertIsNone(
+                self.helper["find_command"](str(repo_link), repo),
+            )
 
     def test_validate_report_normalizes_relative_finding_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
