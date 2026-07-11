@@ -142,12 +142,8 @@ export function isCjkDominant(text: string): boolean {
 const DEFAULT_CHINESE_EDGE_VOICE = "zh-CN-XiaoxiaoNeural";
 const DEFAULT_CHINESE_EDGE_LANG = "zh-CN";
 
-type MicrosoftVoiceListOptions = {
-  timeoutMs?: number;
-};
-
 export async function listMicrosoftVoices(
-  options: MicrosoftVoiceListOptions = {},
+  timeoutMs = DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS,
 ): Promise<SpeechVoiceOption[]> {
   const url =
     "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list" +
@@ -160,7 +156,7 @@ export async function listMicrosoftVoices(
     },
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname("https://speech.platform.bing.com"),
     auditContext: "microsoft.speech.voices",
-    timeoutMs: options.timeoutMs ?? DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS,
+    timeoutMs,
   });
   try {
     if (!isDebugProxyGlobalFetchPatchInstalled()) {
@@ -247,7 +243,10 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
         ? {}
         : { outputFormat: trimToUndefined(params.outputFormat) }),
     }),
-    listVoices: async () => await listMicrosoftVoices(),
+    listVoices: async (req) => {
+      const config = readMicrosoftProviderConfig(req.providerConfig ?? {});
+      return await listMicrosoftVoices(config.timeoutMs ?? req.timeoutMs);
+    },
     isConfigured: ({ providerConfig }) => readMicrosoftProviderConfig(providerConfig).enabled,
     synthesize: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig);
