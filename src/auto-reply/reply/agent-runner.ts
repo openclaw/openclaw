@@ -2702,6 +2702,7 @@ export async function runReplyAgent(params: {
           })()
         : pendingText;
       if (resolvedPendingText) {
+        const pendingFinalDeliveryIntentId = crypto.randomUUID();
         const pendingFinalDeliveryContext = resolveReplyRunDeliveryContext({
           cfg,
           sessionCtx,
@@ -2715,6 +2716,7 @@ export async function runReplyAgent(params: {
           () => ({
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: resolvedPendingText,
+            pendingFinalDeliveryIntentId,
             pendingFinalDeliveryContext,
             pendingFinalDeliveryCreatedAt: Date.now(),
             updatedAt: Date.now(),

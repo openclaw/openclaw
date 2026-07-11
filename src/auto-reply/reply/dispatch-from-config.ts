@@ -1089,6 +1089,53 @@ type SettledFinalDelivery = {
   payload: ReplyPayload;
 };
 
+type PendingFinalDeliveryIdentity = {
+  createdAt?: number;
+  intentId?: string;
+  present: boolean;
+  text?: string;
+};
+
+function capturePendingFinalDeliveryIdentity(params: {
+  storePath?: string;
+  sessionKey?: string;
+}): PendingFinalDeliveryIdentity | undefined {
+  if (!params.storePath || !params.sessionKey) {
+    return undefined;
+  }
+  try {
+    const entry = readSessionEntry(params.storePath, params.sessionKey);
+    return {
+      present: Boolean(entry?.pendingFinalDelivery || entry?.pendingFinalDeliveryText),
+      intentId: normalizeOptionalString(entry?.pendingFinalDeliveryIntentId),
+      createdAt:
+        typeof entry?.pendingFinalDeliveryCreatedAt === "number"
+          ? entry.pendingFinalDeliveryCreatedAt
+          : undefined,
+      text: normalizeOptionalString(entry?.pendingFinalDeliveryText),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function matchesPendingFinalDeliveryIdentity(
+  entry: SessionEntry,
+  expected: PendingFinalDeliveryIdentity,
+): boolean {
+  const currentPresent = Boolean(entry.pendingFinalDelivery || entry.pendingFinalDeliveryText);
+  if (currentPresent !== expected.present) {
+    return false;
+  }
+  if (expected.intentId) {
+    return normalizeOptionalString(entry.pendingFinalDeliveryIntentId) === expected.intentId;
+  }
+  return (
+    entry.pendingFinalDeliveryCreatedAt === expected.createdAt &&
+    normalizeOptionalString(entry.pendingFinalDeliveryText) === expected.text
+  );
+}
+
 function resolvePendingFinalDeliveryPayloads(params: {
   pendingText: string;
   replies: ReplyPayload[];
@@ -1107,11 +1154,12 @@ function resolvePendingFinalDeliveryPayloads(params: {
 
 async function reconcilePendingFinalDeliveryAfterSettlement(params: {
   deliveries: SettledFinalDelivery[];
+  identity?: PendingFinalDeliveryIdentity;
   replies: ReplyPayload[];
   storePath?: string;
   sessionKey?: string;
 }): Promise<void> {
-  if (!params.storePath || !params.sessionKey) {
+  if (!params.storePath || !params.sessionKey || !params.identity?.present) {
     return;
   }
   await updateSessionStoreEntry({
@@ -1120,6 +1168,9 @@ async function reconcilePendingFinalDeliveryAfterSettlement(params: {
     skipMaintenance: true,
     takeCacheOwnership: true,
     update: async (entry) => {
+      if (!matchesPendingFinalDeliveryIdentity(entry, params.identity)) {
+        return null;
+      }
       const pendingText = normalizeOptionalString(entry.pendingFinalDeliveryText);
       if (!entry.pendingFinalDelivery && !pendingText) {
         return null;
@@ -4321,6 +4372,8 @@ async function dispatchReplyFromConfigInner(
         storePath: sessionStoreEntry.storePath,
         sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
       };
+      const pendingFinalDeliveryIdentity =
+        capturePendingFinalDeliveryIdentity(pendingFinalDelivery);
       if (queuedFinal && allQueuedFinalsObserved) {
         // Delivery observers run from the queue itself, so direct low-level callers
         // reconcile too; the settle task only makes lifecycle owners await it.
@@ -4334,6 +4387,7 @@ async function dispatchReplyFromConfigInner(
             await reconcilePendingFinalDeliveryAfterSettlement({
               ...pendingFinalDelivery,
               deliveries,
+              identity: pendingFinalDeliveryIdentity,
               replies,
             });
           })

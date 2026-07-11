@@ -110,7 +110,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       () => sessionStoreMocks.currentEntry,
     );
     sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
-    sessionStoreMocks.readSessionEntry.mockReset().mockReturnValue(undefined);
+    sessionStoreMocks.readSessionEntry.mockReset().mockImplementation(
+      () => sessionStoreMocks.currentEntry,
+    );
     sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
     sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
     sessionStoreMocks.updateSessionStoreEntry.mockClear();
@@ -548,6 +550,59 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
       expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
       expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let an older settlement rewrite a newer pending-final intent", async () => {
+    vi.useFakeTimers();
+    try {
+      hookMocks.runner.hasHooks.mockReturnValue(false);
+      sessionStoreMocks.currentEntry = {
+        sessionKey: "agent:test:session",
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "older reply",
+        pendingFinalDeliveryCreatedAt: 1,
+        pendingFinalDeliveryIntentId: "older-intent",
+      };
+      sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+        existing: sessionStoreMocks.currentEntry,
+      });
+      const hookStarted = createDeferred<void>();
+      const dispatcher = createReplyDispatcher({
+        deliver: vi.fn().mockResolvedValue(undefined),
+        beforeDeliver: () => {
+          hookStarted.resolve();
+          return new Promise<never>(() => {});
+        },
+      });
+
+      const resultPromise = withReplyDispatcher({
+        dispatcher,
+        run: () =>
+          dispatchReplyFromConfig({
+            ctx: createHookCtx(),
+            cfg: emptyConfig,
+            dispatcher,
+            replyResolver: async () => ({ text: "older reply" }),
+          }),
+      });
+      await hookStarted.promise;
+      sessionStoreMocks.currentEntry = {
+        ...sessionStoreMocks.currentEntry,
+        pendingFinalDeliveryText: "newer reply",
+        pendingFinalDeliveryCreatedAt: 2,
+        pendingFinalDeliveryIntentId: "newer-intent",
+      };
+      await vi.advanceTimersByTimeAsync(15_000);
+      await resultPromise;
+
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("newer reply");
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(2);
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryIntentId).toBe("newer-intent");
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();

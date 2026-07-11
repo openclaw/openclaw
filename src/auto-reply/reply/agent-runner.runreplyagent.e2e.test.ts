@@ -753,6 +753,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     const stored = await readStoredMainSession(storePath);
     expect(stored.pendingFinalDelivery).toBe(true);
     expect(stored.pendingFinalDeliveryText).toBe("visible final");
+    expect(stored.pendingFinalDeliveryIntentId).toEqual(expect.any(String));
   });
 
   it("persists auto-reply delivery context for restart recovery", async () => {
