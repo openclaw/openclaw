@@ -1644,10 +1644,11 @@ function filterVisibleProjectedHistoryMessages(
       continue;
     }
     const currentRoleContent = asRoleContentMessage(current);
-    const next = expectDefined(messages[i + 1], "messages entry at i + 1");
+    const next = messages[i + 1];
     const nextRoleContent = next ? asRoleContentMessage(next) : null;
     if (
       currentRoleContent &&
+      next &&
       nextRoleContent &&
       isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT) &&
       isHeartbeatOkResponse(nextRoleContent) &&
