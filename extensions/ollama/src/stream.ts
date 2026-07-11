@@ -464,11 +464,15 @@ export function createConfiguredOllamaCompatStreamWrapper(
   const runtimeThinkValue = isNativeOllamaTransport
     ? resolveOllamaThinkValue(ctx.thinkingLevel)
     : undefined;
-  // "off" is also the implicit agent default. Preserve explicit native Ollama
-  // model config unless the active run requests a non-off thinking level.
+  // "off" from runtime resolution — some Ollama models (e.g. Qwen3.5) enter
+  // thinking mode even with think: false.  Omit the field entirely when no
+  // explicit native Ollama model config (params.think) is present so the
+  // model uses its own default behavior.
   const ollamaThinkValue =
-    runtimeThinkValue === false && configuredThinkValue !== undefined
-      ? undefined
+    runtimeThinkValue === false
+      ? configuredThinkValue !== undefined
+        ? configuredThinkValue
+        : undefined
       : runtimeThinkValue;
   if (ollamaThinkValue !== undefined && shouldForwardNativeOllamaThink(model, ollamaThinkValue)) {
     streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);

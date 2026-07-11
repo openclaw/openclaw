@@ -283,7 +283,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     expect(payload.options).toEqual({ num_ctx: 131072 });
   });
 
-  it("forwards think=false on native Ollama chat requests when thinking is off", async () => {
+  it("omits think field on native Ollama chat requests when thinking resolves to off", async () => {
     await withMockNdjsonFetch(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
@@ -329,7 +329,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
           think?: boolean;
           options?: { think?: boolean; num_ctx?: number };
         };
-        expect(requestBody.think).toBe(false);
+        expect(requestBody.think).toBeUndefined();
         expect(requestBody.options?.think).toBeUndefined();
         expect(requestBody.options?.num_ctx).toBeUndefined();
       },
