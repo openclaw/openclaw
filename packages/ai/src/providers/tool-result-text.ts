@@ -23,6 +23,47 @@ const MIME_KEY_CANDIDATES = [
 const TEXTUAL_MIME_PATTERN =
   /^(?:text\/|application\/(?:json|ld\+json|x-ndjson|xml|javascript|x-www-form-urlencoded)|[^/]+\/[^+]+\+(?:json|xml)$)/i;
 const OPAQUE_OR_BINARY_FIELD_RE = /^(?:blob|buffer|bytes|encrypted_content|encrypted_stdout)$/i;
+const MISSING_IMAGE_PAYLOAD_TEXT = "[image omitted: missing payload]";
+const MISSING_AUDIO_PAYLOAD_TEXT = "[audio omitted: missing payload]";
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/** True when a media-shaped content block carries recognizable payload data
+ *  in one of the canonical or provider wire shapes. Payload-less media blocks
+ *  are malformed husks that must not suppress tool-result text or be emitted
+ *  as native media parts (provider APIs reject empty payloads). */
+function hasMediaPayload(block: unknown): boolean {
+  if (!isRecord(block)) {
+    return false;
+  }
+  if (
+    isNonEmptyString(block.data) ||
+    isNonEmptyString(block.url) ||
+    isNonEmptyString(block.file_id) ||
+    isNonEmptyString(block.audio_url)
+  ) {
+    return true;
+  }
+  const imageUrl = block.image_url;
+  if (isNonEmptyString(imageUrl) || (isRecord(imageUrl) && isNonEmptyString(imageUrl.url))) {
+    return true;
+  }
+  const source = block.source;
+  if (isRecord(source) && (isNonEmptyString(source.data) || isNonEmptyString(source.url))) {
+    return true;
+  }
+  const inputAudio = block.input_audio;
+  if (isNonEmptyString(inputAudio) || (isRecord(inputAudio) && isNonEmptyString(inputAudio.data))) {
+    return true;
+  }
+  const audio = block.audio;
+  if (isNonEmptyString(audio) || (isRecord(audio) && isNonEmptyString(audio.data))) {
+    return true;
+  }
+  return false;
+}
 
 function readMimeType(value: unknown): string | undefined {
   if (!isRecord(value)) {
@@ -131,20 +172,23 @@ export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): 
     }
     const record = block as Record<string, unknown>;
     const type = typeof record.type === "string" ? record.type : undefined;
-    const mimeType = readMimeType(record);
-
-    if (
-      (type && IMAGE_TOOL_RESULT_TYPES.has(type)) ||
-      mimeType?.toLowerCase().startsWith("image/")
-    ) {
-      hasImage = true;
+    // A text block's own mime metadata describes its content (e.g. SVG source),
+    // not attached media; skip it to avoid false image detection.
+    const mimeType = type === "text" ? undefined : readMimeType(record)?.toLowerCase();
+    const looksImage =
+      (type ? IMAGE_TOOL_RESULT_TYPES.has(type) : false) || mimeType?.startsWith("image/") === true;
+    const looksAudio =
+      (type ? AUDIO_TOOL_RESULT_TYPES.has(type) : false) || mimeType?.startsWith("audio/") === true;
+    if (!looksImage && !looksAudio) {
+      continue;
     }
-    if (
-      (type && AUDIO_TOOL_RESULT_TYPES.has(type)) ||
-      mimeType?.toLowerCase().startsWith("audio/")
-    ) {
-      hasAudio = true;
+    // A media-shaped block with no payload is a malformed husk, not attached
+    // media; advertising it would point the model at media that was never sent.
+    if (!hasMediaPayload(record)) {
+      continue;
     }
+    hasImage ||= looksImage;
+    hasAudio ||= looksAudio;
   }
 
   if (hasImage && hasAudio) {
@@ -165,7 +209,17 @@ export function extractToolResultBlockText(block: unknown): string | undefined {
   }
   const record = block as Record<string, unknown>;
   if (typeof record.type === "string" && MEDIA_ONLY_TOOL_RESULT_TYPES.has(record.type)) {
-    return undefined;
+    if (hasMediaPayload(record)) {
+      // Genuine media replays through provider media paths, not as text.
+      return undefined;
+    }
+    // A media-labeled husk with no payload has nothing to render on the media
+    // path. Surface a fixed placeholder: dropping the block would make the tool
+    // output vanish for the model, and JSON-stringifying it can leak nested
+    // payload-shaped fields into provider text.
+    return AUDIO_TOOL_RESULT_TYPES.has(record.type)
+      ? MISSING_AUDIO_PAYLOAD_TEXT
+      : MISSING_IMAGE_PAYLOAD_TEXT;
   }
   if (record.type === "text") {
     const text = typeof record.text === "string" ? record.text : "";

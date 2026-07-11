@@ -90,6 +90,31 @@ describe("extractToolResultText", () => {
     expect(text).toContain("…(truncated)…");
     expect(text).not.toContain(tail);
   });
+
+  it("returns a fixed placeholder for payload-less image blocks instead of swallowing text", () => {
+    const text = extractToolResultText([
+      { type: "image", mimeType: "image/png" },
+      { type: "image_url" },
+    ]);
+
+    expect(text).toBe("[image omitted: missing payload]\n[image omitted: missing payload]");
+    expect(text).not.toBe("(see attached image)");
+  });
+
+  it("preserves text content when payload-less image blocks are present", () => {
+    const text = extractToolResultText([
+      { type: "text", text: "real tool output" },
+      { type: "image", mimeType: "image/png" },
+    ]);
+
+    expect(text).toBe("real tool output");
+  });
+
+  it("returns a fixed placeholder for payload-less audio blocks", () => {
+    const text = extractToolResultText([{ type: "audio", mimeType: "audio/mpeg" }]);
+
+    expect(text).toBe("[audio omitted: missing payload]");
+  });
 });
 
 describe("describeToolResultMediaPlaceholder", () => {
@@ -114,5 +139,23 @@ describe("describeToolResultMediaPlaceholder", () => {
         { type: "audio", mimeType: "audio/mpeg", data: "audio" },
       ]),
     ).toBe("(see attached media)");
+  });
+
+  it("does not advertise phantom media for payload-less image blocks", () => {
+    expect(
+      describeToolResultMediaPlaceholder([{ type: "image", mimeType: "image/png" }]),
+    ).toBeUndefined();
+  });
+
+  it("does not advertise phantom media for payload-less audio blocks", () => {
+    expect(
+      describeToolResultMediaPlaceholder([{ type: "audio", mimeType: "audio/mpeg" }]),
+    ).toBeUndefined();
+  });
+
+  it("does not detect images from text blocks with image-like mime metadata", () => {
+    expect(
+      describeToolResultMediaPlaceholder([{ type: "text", text: "hello", mimeType: "image/png" }]),
+    ).toBeUndefined();
   });
 });
