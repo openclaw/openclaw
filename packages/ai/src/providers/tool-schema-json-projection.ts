@@ -1,3 +1,5 @@
+import { types as utilTypes } from "node:util";
+
 /** JSON-safe schema value used when projecting runtime tool parameters. */
 export type RuntimeToolInputSchemaJson =
   | null
@@ -43,25 +45,10 @@ function isNonFiniteNumberValue(value: unknown): boolean {
   if (typeof value === "number") {
     return !Number.isFinite(value);
   }
-  if (value === null || typeof value !== "object") {
+  if (value === null || typeof value !== "object" || !utilTypes.isNumberObject(value)) {
     return false;
   }
-  let isNumberObject = value instanceof Number;
-  if (!isNumberObject) {
-    try {
-      isNumberObject = Object.prototype.toString.call(value) === "[object Number]";
-    } catch {
-      return false;
-    }
-  }
-  if (!isNumberObject) {
-    return false;
-  }
-  try {
-    return !Number.isFinite(Number.prototype.valueOf.call(value));
-  } catch {
-    return false;
-  }
+  return !Number.isFinite(Number.prototype.valueOf.call(value));
 }
 
 function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInputSchemaProjection {
