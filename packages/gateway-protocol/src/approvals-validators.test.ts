@@ -108,13 +108,8 @@ describe("unified approval protocol validators", () => {
         allowedDecisions: ["allow-always"],
       }),
     ).toBe(false);
-    expect(
-      validateApprovalResolveParams({ id: execRecord.id, kind: "exec", decision: "deny" }),
-    ).toBe(true);
-    expect(validateApprovalResolveParams({ id: execRecord.id, decision: "deny" })).toBe(false);
-    expect(
-      validateApprovalResolveParams({ id: execRecord.id, kind: "exec", decision: "accept" }),
-    ).toBe(false);
+    expect(validateApprovalResolveParams({ id: execRecord.id, decision: "deny" })).toBe(true);
+    expect(validateApprovalResolveParams({ id: execRecord.id, decision: "accept" })).toBe(false);
   });
 
   it("validates pending and every fail-closed terminal state", () => {
@@ -168,17 +163,12 @@ describe("unified approval protocol validators", () => {
     expect(validateApprovalGetParams({ id: pluginRecord.id })).toBe(true);
     expect(validateApprovalGetParams({ id: "" })).toBe(false);
     expect(validateApprovalGetParams({ id: pluginRecord.id, kind: "plugin" })).toBe(false);
-    expect(
-      validateApprovalResolveParams({
-        id: "plugin",
-        kind: "plugin",
-        decision: "deny",
-        prefix: true,
-      }),
-    ).toBe(false);
+    expect(validateApprovalResolveParams({ id: "plugin", decision: "deny", prefix: true })).toBe(
+      false,
+    );
     for (const id of ["\ud800", "\udc00", ".", ".."]) {
       expect(validateApprovalGetParams({ id })).toBe(false);
-      expect(validateApprovalResolveParams({ id, kind: "exec", decision: "deny" })).toBe(false);
+      expect(validateApprovalResolveParams({ id, decision: "deny" })).toBe(false);
     }
     expect(validateApprovalGetParams({ id: "approval:🦞/percent%" })).toBe(true);
 

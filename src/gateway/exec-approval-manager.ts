@@ -10,6 +10,7 @@ import type {
 } from "../infra/exec-approvals.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { resolveApprovalSessionAudience } from "./approval-session-audience.js";
 import {
   consumeOperatorApprovalAllowOnce,
   forceDenyOperatorApproval,
@@ -257,14 +258,14 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       const source = resolveApprovalSource(record.request);
       let audienceSessionKeys: string[] = [];
       if (source.sessionKey) {
-        audienceSessionKeys = [source.sessionKey];
-        if (this.options.resolveAudienceSessionKeys) {
-          try {
-            audienceSessionKeys = this.options.resolveAudienceSessionKeys(source.sessionKey);
-          } catch {
-            // Lineage is routing metadata, not an approval safety prerequisite.
-            // Preserve at least the source audience when session stores are unavailable.
-          }
+        try {
+          audienceSessionKeys = (
+            this.options.resolveAudienceSessionKeys ?? resolveApprovalSessionAudience
+          )(source.sessionKey);
+        } catch {
+          // Lineage is routing metadata, not an approval safety prerequisite.
+          // Preserve at least the source audience when session stores are unavailable.
+          audienceSessionKeys = [source.sessionKey];
         }
       }
       const inserted = insertOperatorApproval({

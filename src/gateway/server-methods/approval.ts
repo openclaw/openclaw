@@ -5,7 +5,6 @@ import {
   errorShape,
   isWellFormedApprovalId,
   type ApprovalDecision,
-  type ApprovalResolveParams,
   type ApprovalSnapshot,
   validateApprovalGetParams,
   validateApprovalResolveParams,
@@ -169,12 +168,7 @@ function loadVisibleApproval(params: {
     !canAccessOperatorApproval({
       client: params.client,
       allowApprovalRuntime: params.allowApprovalRuntime,
-      binding: {
-        requestedByConnId: liveRecord.requestedByConnId,
-        requestedByDeviceId: liveRecord.requestedByDeviceId,
-        requestedByClientId: liveRecord.requestedByClientId,
-        reviewerDeviceIds: liveRecord.approvalReviewerDeviceIds,
-      },
+      binding: { reviewerDeviceIds: liveRecord.approvalReviewerDeviceIds },
     })
   ) {
     return null;
@@ -196,11 +190,7 @@ function loadVisibleApproval(params: {
       !canAccessOperatorApproval({
         client: params.client,
         allowApprovalRuntime: params.allowApprovalRuntime,
-        binding: {
-          requestedByDeviceId: lookup.record.requester.deviceId,
-          requestedByClientId: lookup.record.requester.clientId,
-          reviewerDeviceIds: lookup.record.reviewerDeviceIds,
-        },
+        binding: { reviewerDeviceIds: lookup.record.reviewerDeviceIds },
       })
     ) {
       return null;
@@ -502,16 +492,14 @@ export function createApprovalHandlers(
       const resolver = resolveApprovalResolver(client);
       const localResolvedBy = resolveLegacyApprovalLabel(client);
       const validParams = validateApprovalResolveParams(rawParams);
-      const resolveParams = validParams ? (rawParams as ApprovalResolveParams) : null;
-      const requestedDecision = resolveParams?.decision ?? null;
+      const requestedDecision = validParams
+        ? (rawParams as { decision: ApprovalDecision }).decision
+        : null;
       const decisionAllowed =
         requestedDecision === "deny" ||
         (requestedDecision !== null &&
           record.presentation.allowedDecisions.includes(requestedDecision));
-      const kindMatches = resolveParams?.kind === record.presentation.kind;
-      // Ambiguous verdicts consume the first-answer slot as a denial. Leaving
-      // the approval retryable would let a later surface release authority.
-      const forceMalformedDeny = !validParams || !kindMatches || !decisionAllowed;
+      const forceMalformedDeny = !validParams || !decisionAllowed;
       let resolution:
         | ApplyApprovalDecisionResult<ExecApprovalRequestPayload>
         | ApplyApprovalDecisionResult<PluginApprovalRequestPayload>;

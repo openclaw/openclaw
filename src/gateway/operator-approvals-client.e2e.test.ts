@@ -14,7 +14,6 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import type { GatewayClient } from "./client.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, READ_SCOPE } from "./method-scopes.js";
 import { withOperatorApprovalsGatewayClient } from "./operator-approvals-client.js";
 import { startGatewayServer } from "./server.js";
@@ -37,9 +36,8 @@ const TEST_ENV_KEYS = [
 type Cleanup = () => Promise<void> | void;
 
 async function requestExecApproval(params: {
-  requester: Pick<GatewayClient, "request">;
+  requester: Awaited<ReturnType<typeof connectGatewayClient>>;
   id: string;
-  reviewerDeviceIds?: string[];
 }): Promise<void> {
   await expect(
     params.requester.request("exec.approval.request", {
@@ -49,7 +47,6 @@ async function requestExecApproval(params: {
       host: "local",
       ask: "always",
       twoPhase: true,
-      ...(params.reviewerDeviceIds ? { approvalReviewerDeviceIds: params.reviewerDeviceIds } : {}),
       // This suite drives the stable ID directly from another authenticated
       // device, so no legacy event delivery route is required.
       requireDeliveryRoute: false,
@@ -248,24 +245,7 @@ describe("operator approval gateway client e2e", () => {
     cleanup.push(() => disconnectGatewayClient(underscoped));
 
     const approvalId = "multi-surface-first-answer-wins";
-    const localConfig = {
-      gateway: {
-        port,
-        auth: { mode: "token", token },
-      },
-    } satisfies OpenClawConfig;
-    await withOperatorApprovalsGatewayClient(
-      {
-        config: localConfig,
-        clientDisplayName: "approval runtime requester",
-      },
-      async (client) =>
-        requestExecApproval({
-          requester: client,
-          id: approvalId,
-          reviewerDeviceIds: [requesterIdentity.deviceId, reviewerIdentity.deviceId],
-        }),
-    );
+    await requestExecApproval({ requester, id: approvalId });
 
     const pending = await reviewer.request<ApprovalGetResult>("approval.get", { id: approvalId });
     expect(validateApprovalGetResult(pending)).toBe(true);
@@ -279,7 +259,7 @@ describe("operator approval gateway client e2e", () => {
       "missing scope: operator.approvals",
     );
     await expect(
-      underscoped.request("approval.resolve", { id: approvalId, kind: "exec", decision: "deny" }),
+      underscoped.request("approval.resolve", { id: approvalId, decision: "deny" }),
     ).rejects.toThrow("missing scope: operator.approvals");
 
     const stillPending = await reviewer.request<ApprovalGetResult>("approval.get", {
@@ -291,12 +271,10 @@ describe("operator approval gateway client e2e", () => {
     const [allowResult, denyResult] = await Promise.all([
       requester.request<ApprovalResolveResult>("approval.resolve", {
         id: approvalId,
-        kind: "exec",
         decision: "allow-once",
       }),
       reviewer.request<ApprovalResolveResult>("approval.resolve", {
         id: approvalId,
-        kind: "exec",
         decision: "deny",
       }),
     ]);
@@ -314,7 +292,6 @@ describe("operator approval gateway client e2e", () => {
 
     const replay = await reviewer.request<ApprovalResolveResult>("approval.resolve", {
       id: approvalId,
-      kind: "exec",
       decision: winningDecision,
     });
     expect(validateApprovalResolveResult(replay)).toBe(true);

@@ -357,7 +357,7 @@ describe("unified approval handlers", () => {
           body:
             method === "approval.get"
               ? { id: pending.record.id }
-              : { id: pending.record.id, kind: "exec", decision: "deny" },
+              : { id: pending.record.id, decision: "deny" },
           client: createClient({ deviceId }),
         });
         expect(response).toMatchObject({
@@ -371,7 +371,7 @@ describe("unified approval handlers", () => {
     const winner = await invoke({
       handlers,
       method: "approval.resolve",
-      body: { id: pending.record.id, kind: "exec", decision: "deny" },
+      body: { id: pending.record.id, decision: "deny" },
       client: createClient({ deviceId: "reviewer-a" }),
     });
     expect(winner.result).toMatchObject({
@@ -400,7 +400,7 @@ describe("unified approval handlers", () => {
       pluginApprovalManager: managers.plugin,
       databaseOptions,
     });
-    const body = { id: pending.record.id, kind: "exec", decision: "deny" };
+    const body = { id: pending.record.id, decision: "deny" };
 
     const untrusted = await invoke({
       handlers,
@@ -445,7 +445,7 @@ describe("unified approval handlers", () => {
       method,
       body: {
         id,
-        ...(method === "approval.resolve" ? { kind: "exec", decision: "deny" } : {}),
+        ...(method === "approval.resolve" ? { decision: "deny" } : {}),
       },
       client: createClient({ deviceId: "reviewer" }),
     });
@@ -469,10 +469,7 @@ describe("unified approval handlers", () => {
       const response = await invoke({
         handlers,
         method,
-        body:
-          method === "approval.get"
-            ? { id: "lookup" }
-            : { id: "lookup", kind: "exec", decision: "deny" },
+        body: method === "approval.get" ? { id: "lookup" } : { id: "lookup", decision: "deny" },
         client: createClient({ deviceId: "reviewer" }),
         context,
       });
@@ -545,7 +542,7 @@ describe("unified approval handlers", () => {
     const response = await invoke({
       handlers,
       method: "approval.resolve",
-      body: { id, kind: "exec", decision: "deny" },
+      body: { id, decision: "deny" },
       client: createClient({ deviceId: "reviewer" }),
       context,
     });
@@ -722,7 +719,7 @@ describe("unified approval handlers", () => {
     const response = await invoke({
       handlers,
       method: "approval.resolve",
-      body: { id: pending.record.id, kind: "plugin", decision: "deny" },
+      body: { id: pending.record.id, decision: "deny" },
       client: createClient({ deviceId: "phone-device" }),
       context,
     });
@@ -813,7 +810,7 @@ describe("unified approval handlers", () => {
     const response = await invoke({
       handlers,
       method: "approval.resolve",
-      body: { id: pending.record.id, kind: "exec", decision: "deny" },
+      body: { id: pending.record.id, decision: "deny" },
       client: createClient({ deviceId: "reviewer-device" }),
       context,
     });
@@ -863,14 +860,14 @@ describe("unified approval handlers", () => {
       invoke({
         handlers,
         method: "approval.resolve",
-        body: { id: pending.record.id, kind: "exec", decision: "allow-once" },
+        body: { id: pending.record.id, decision: "allow-once" },
         client: createClient({ deviceId: "control-ui" }),
         context,
       }),
       invoke({
         handlers,
         method: "approval.resolve",
-        body: { id: pending.record.id, kind: "exec", decision: "deny" },
+        body: { id: pending.record.id, decision: "deny" },
         client: createClient({ deviceId: "telegram" }),
         context,
       }),
@@ -931,7 +928,7 @@ describe("unified approval handlers", () => {
       const response = await invoke({
         handlers,
         method: "approval.resolve",
-        body: { id: pending.record.id, kind: "exec", decision },
+        body: { id: pending.record.id, decision },
         client: createClient({ deviceId: "later-surface" }),
         context,
       });
@@ -948,7 +945,7 @@ describe("unified approval handlers", () => {
     },
   );
 
-  it("atomically denies malformed, mismatched-kind, and disallowed approving verdicts", async () => {
+  it("atomically denies malformed and disallowed approving verdicts", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
     const disallowed = registerExec(managers.exec, {
@@ -957,10 +954,6 @@ describe("unified approval handlers", () => {
     });
     const malformed = registerPlugin(managers.plugin, {
       id: "plugin:malformed",
-      request: { allowedDecisions: ["allow-once"] },
-    });
-    const mismatchedKind = registerPlugin(managers.plugin, {
-      id: "opaque-plugin-id",
       request: { allowedDecisions: ["allow-once"] },
     });
     const handlers = createApprovalHandlers({
@@ -973,7 +966,7 @@ describe("unified approval handlers", () => {
     const disallowedResponse = await invoke({
       handlers,
       method: "approval.resolve",
-      body: { id: disallowed.record.id, kind: "exec", decision: "allow-always" },
+      body: { id: disallowed.record.id, decision: "allow-always" },
       client,
     });
     expect(disallowedResponse.result).toMatchObject({
@@ -985,7 +978,7 @@ describe("unified approval handlers", () => {
     const malformedResponse = await invoke({
       handlers,
       method: "approval.resolve",
-      body: { id: malformed.record.id, kind: "plugin", decision: "ACCEPT" },
+      body: { id: malformed.record.id, decision: "ACCEPT" },
       client,
     });
     expect(malformedResponse.result).toMatchObject({
@@ -993,23 +986,6 @@ describe("unified approval handlers", () => {
       approval: { status: "denied", decision: "deny", reason: "malformed-verdict" },
     });
     await expect(malformed.decision).resolves.toBe("deny");
-
-    const mismatchedKindResponse = await invoke({
-      handlers,
-      method: "approval.resolve",
-      body: { id: mismatchedKind.record.id, kind: "exec", decision: "allow-once" },
-      client,
-    });
-    expect(mismatchedKindResponse.result).toMatchObject({
-      applied: true,
-      approval: {
-        status: "denied",
-        decision: "deny",
-        reason: "malformed-verdict",
-        presentation: { kind: "plugin" },
-      },
-    });
-    await expect(mismatchedKind.decision).resolves.toBe("deny");
   });
 
   it("lets the exact deadline beat a malformed verdict", async () => {
@@ -1033,7 +1009,7 @@ describe("unified approval handlers", () => {
     const response = await invoke({
       handlers,
       method: "approval.resolve",
-      body: { id: pending.record.id, kind: "exec", decision: "ACCEPT" },
+      body: { id: pending.record.id, decision: "ACCEPT" },
       client: createClient({ deviceId: "reviewer" }),
       context,
     });
