@@ -1,6 +1,7 @@
 // Plugin-provided node.invoke policy adapter.
 // Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
@@ -8,7 +9,6 @@ import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
 import type {
-  OpenClawPluginNodeInvokeApprovalDecision,
   OpenClawPluginNodeInvokePolicyContext,
   OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginNodeInvokeTransportResult,
@@ -42,16 +42,6 @@ function parsePayload(payloadJSON: string | null | undefined, payload: unknown):
   }
 }
 
-function readObject(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function normalizeRouteString(value: unknown): string | null {
-  return normalizeOptionalString(value) ?? null;
-}
-
 function normalizeRouteThreadId(value: unknown): string | number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -65,29 +55,12 @@ function resolveNodeInvokeTurnSourceFields(
   PluginApprovalRequestPayload,
   "turnSourceChannel" | "turnSourceTo" | "turnSourceAccountId" | "turnSourceThreadId"
 > {
-  const params = readObject(rawParams);
+  const params = asNullableRecord(rawParams);
   return {
-    turnSourceChannel: normalizeRouteString(params?.turnSourceChannel),
-    turnSourceTo: normalizeRouteString(params?.turnSourceTo),
-    turnSourceAccountId: normalizeRouteString(params?.turnSourceAccountId),
+    turnSourceChannel: normalizeOptionalString(params?.turnSourceChannel) ?? null,
+    turnSourceTo: normalizeOptionalString(params?.turnSourceTo) ?? null,
+    turnSourceAccountId: normalizeOptionalString(params?.turnSourceAccountId) ?? null,
     turnSourceThreadId: normalizeRouteThreadId(params?.turnSourceThreadId),
-  };
-}
-
-function readApprovalResponse(
-  recordId: string,
-  response: { ok: boolean; payload?: unknown } | null,
-): { id: string; decision: OpenClawPluginNodeInvokeApprovalDecision | null } {
-  if (!response?.ok || !response.payload || typeof response.payload !== "object") {
-    return { id: recordId, decision: null };
-  }
-  const payload = response.payload as {
-    id?: unknown;
-    decision?: OpenClawPluginNodeInvokeApprovalDecision | null;
-  };
-  return {
-    id: normalizeOptionalString(payload.id) ?? recordId,
-    decision: payload.decision ?? null,
   };
 }
 
@@ -136,10 +109,7 @@ function createApprovalRuntime(params: {
       };
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       bindApprovalRequesterMetadata({ record, client: params.client });
-      let response: { ok: boolean; payload?: unknown } | null = null;
-      const respond: RespondFn = (ok, payload) => {
-        response = { ok, payload };
-      };
+      const respond: RespondFn = () => {};
       const decisionPromise = registerPendingApprovalRecord({
         manager,
         record,
@@ -163,7 +133,7 @@ function createApprovalRuntime(params: {
         approvalKind: "plugin",
         deliverRequest: () => false,
       });
-      return readApprovalResponse(record.id, response);
+      return { id: record.id, decision: await decisionPromise };
     },
   };
 }
