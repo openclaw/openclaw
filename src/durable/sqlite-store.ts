@@ -662,6 +662,22 @@ function isTerminalStepStatus(status: DurableRuntimeStepStatus): boolean {
   );
 }
 
+function isTerminalRunRow(row: DurableRuntimeRunRow): boolean {
+  return (
+    isTerminalRunStatus(row.status) ||
+    row.recovery_state === "terminal" ||
+    row.completed_at !== null
+  );
+}
+
+function isTerminalStepRow(row: DurableRuntimeStepRow): boolean {
+  return (
+    isTerminalStepStatus(row.status) ||
+    row.recovery_state === "terminal" ||
+    row.completed_at !== null
+  );
+}
+
 function isSameSqlValue(left: SQLInputValue | null, right: SQLInputValue | null): boolean {
   return left === right;
 }
@@ -810,7 +826,7 @@ export function openDurableRuntimeSqliteStore(options?: {
           input.heartbeatAt === undefined ? current.heartbeat_at : input.heartbeatAt;
         const nextMetadataJson =
           input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata);
-        if (isTerminalRunStatus(current.status)) {
+        if (isTerminalRunRow(current)) {
           const isNoOp =
             nextStatus === current.status &&
             nextRecoveryState === current.recovery_state &&
@@ -1012,7 +1028,10 @@ export function openDurableRuntimeSqliteStore(options?: {
                   heartbeat_at = NULL,
                   updated_at = ?
             WHERE runtime_run_id = ?
-              AND claimed_by = ?`,
+              AND claimed_by = ?
+              AND status NOT IN ('succeeded', 'failed', 'cancelled', 'lost')
+              AND recovery_state != 'terminal'
+              AND completed_at IS NULL`,
         );
         const update = updateResult.run(now, input.runtimeRunId, input.workerId);
         if (Number(update.changes ?? 0) === 0) {
@@ -1135,7 +1154,7 @@ export function openDurableRuntimeSqliteStore(options?: {
               : input.completedAt;
         const nextMetadataJson =
           input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata);
-        if (isTerminalStepStatus(current.status)) {
+        if (isTerminalStepRow(current)) {
           if (expectedClaimedBy && current.claimed_by !== expectedClaimedBy) {
             return undefined;
           }
@@ -1280,7 +1299,10 @@ export function openDurableRuntimeSqliteStore(options?: {
                   updated_at = ?
             WHERE runtime_run_id = ?
               AND step_id = ?
-              AND claimed_by = ?`,
+              AND claimed_by = ?
+              AND status NOT IN ('succeeded', 'failed', 'cancelled', 'lost', 'skipped')
+              AND recovery_state != 'terminal'
+              AND completed_at IS NULL`,
         );
         const update = updateResult.run(now, input.runtimeRunId, input.stepId, input.workerId);
         if (Number(update.changes ?? 0) === 0) {

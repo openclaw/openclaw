@@ -408,6 +408,15 @@ describe("durable runtime sqlite store", () => {
       expect(
         store.updateRun({
           runtimeRunId: terminal.runtimeRunId,
+          status: "failed",
+          recoveryState: "terminal",
+          completedAt: 350,
+          now: 350,
+        }),
+      ).toBeUndefined();
+      expect(
+        store.updateRun({
+          runtimeRunId: terminal.runtimeRunId,
           metadata: { outcome: "changed" },
           now: 400,
         }),
@@ -418,6 +427,65 @@ describe("durable runtime sqlite store", () => {
         completedAt: 100,
         updatedAt: 100,
         metadata: { outcome: "ok" },
+      });
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not release terminal run claims back to runnable state", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const store = openDurableRuntimeSqliteStore({
+      path: path.join(dir, "openclaw.sqlite"),
+    });
+    try {
+      const run = store.createRun({
+        operationKind: "test.runtime",
+        status: "queued",
+        recoveryState: "runnable",
+        now: 100,
+      });
+      expect(
+        store.claimNextRunnableRun({
+          operationKind: "test.runtime",
+          workerId: "worker-terminal",
+          claimTtlMs: 1_000,
+          now: 110,
+        }),
+      ).toMatchObject({
+        runtimeRunId: run.runtimeRunId,
+        claimedBy: "worker-terminal",
+        recoveryState: "claimed",
+      });
+      expect(
+        store.updateRun({
+          runtimeRunId: run.runtimeRunId,
+          status: "lost",
+          recoveryState: "terminal",
+          completedAt: 120,
+          now: 120,
+        }),
+      ).toMatchObject({
+        status: "lost",
+        recoveryState: "terminal",
+        claimedBy: "worker-terminal",
+      });
+
+      expect(
+        store.releaseRunClaim({
+          runtimeRunId: run.runtimeRunId,
+          workerId: "worker-terminal",
+          now: 130,
+        }),
+      ).toBeUndefined();
+      expect(store.getRun(run.runtimeRunId)).toMatchObject({
+        status: "lost",
+        recoveryState: "terminal",
+        completedAt: 120,
+        claimedBy: "worker-terminal",
+        claimExpiresAt: 1_110,
+        updatedAt: 120,
       });
     } finally {
       store.close();
@@ -687,6 +755,17 @@ describe("durable runtime sqlite store", () => {
         store.updateStep({
           runtimeRunId: run.runtimeRunId,
           stepId: step.stepId,
+          status: "failed",
+          recoveryState: "terminal",
+          errorRef: "error-ref",
+          completedAt: 145,
+          now: 145,
+        }),
+      ).toBeUndefined();
+      expect(
+        store.updateStep({
+          runtimeRunId: run.runtimeRunId,
+          stepId: step.stepId,
           metadata: { phase: "changed" },
           now: 150,
         }),
@@ -700,6 +779,81 @@ describe("durable runtime sqlite store", () => {
           completedAt: 120,
           updatedAt: 120,
           metadata: { phase: "done" },
+        },
+      ]);
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not release terminal step claims back to runnable state", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const store = openDurableRuntimeSqliteStore({
+      path: path.join(dir, "openclaw.sqlite"),
+    });
+    try {
+      const run = store.createRun({
+        operationKind: "test.runtime",
+        status: "running",
+        recoveryState: "running",
+        now: 100,
+      });
+      const step = store.createStep({
+        runtimeRunId: run.runtimeRunId,
+        stepId: "tool_terminal_claim",
+        stepType: "tool",
+        status: "queued",
+        recoveryState: "runnable",
+        now: 110,
+      });
+      expect(
+        store.claimNextRunnableStep({
+          operationKind: "test.runtime",
+          workerId: "worker-terminal",
+          claimTtlMs: 1_000,
+          now: 120,
+        }),
+      ).toMatchObject({
+        stepId: step.stepId,
+        claimedBy: "worker-terminal",
+        recoveryState: "claimed",
+      });
+      expect(
+        store.updateStep({
+          runtimeRunId: run.runtimeRunId,
+          stepId: step.stepId,
+          expectedClaimedBy: "worker-terminal",
+          status: "failed",
+          recoveryState: "terminal",
+          errorRef: "error-ref",
+          completedAt: 130,
+          now: 130,
+        }),
+      ).toMatchObject({
+        status: "failed",
+        recoveryState: "terminal",
+        claimedBy: "worker-terminal",
+      });
+
+      expect(
+        store.releaseStepClaim({
+          runtimeRunId: run.runtimeRunId,
+          stepId: step.stepId,
+          workerId: "worker-terminal",
+          now: 140,
+        }),
+      ).toBeUndefined();
+      expect(store.listSteps(run.runtimeRunId)).toMatchObject([
+        {
+          stepId: step.stepId,
+          status: "failed",
+          recoveryState: "terminal",
+          errorRef: "error-ref",
+          completedAt: 130,
+          claimedBy: "worker-terminal",
+          claimExpiresAt: 1_120,
+          updatedAt: 130,
         },
       ]);
     } finally {
