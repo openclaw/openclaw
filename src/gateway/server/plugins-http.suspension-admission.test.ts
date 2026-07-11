@@ -1,5 +1,5 @@
 // Proves plugin HTTP and upgrade handlers participate in Gateway suspension admission.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayActiveWorkInspectors } from "../../infra/gateway-active-work.js";
