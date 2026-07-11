@@ -204,7 +204,8 @@ function createRuntime(
   let sessionSequence = 0;
   const createSessionEntry = vi.fn(async (createParams: CreateSessionEntryParams) => {
     const inputKey = createParams.key ?? "created";
-    const key = inputKey.startsWith("agent:") ? inputKey : `agent:main:${inputKey}`;
+    const agentId = createParams.agentId ?? "main";
+    const key = inputKey.startsWith("agent:") ? inputKey : `agent:${agentId}:${inputKey}`;
     const existing = entries.find((candidate) => candidate.sessionKey === key);
     let summary: SessionEntrySummary;
     if (existing) {
@@ -234,7 +235,7 @@ function createRuntime(
     }
     const entry = summary.entry;
     const sessionId = entry.sessionId;
-    const result = { key, agentId: "main", sessionId, entry };
+    const result = { key, agentId, sessionId, entry };
     try {
       const finalPatch = await createParams.afterCreate?.(result);
       if (existing && !finalPatch) {
@@ -283,7 +284,12 @@ function createRuntime(
     agent: {
       session: {
         createSessionEntry,
-        listSessionEntries: vi.fn(() => [...entries]),
+        listSessionEntries: vi.fn((params) => {
+          const agentPrefix = params?.agentId ? `agent:${params.agentId}:` : undefined;
+          return entries.filter(
+            ({ sessionKey }) => !agentPrefix || sessionKey.startsWith(agentPrefix),
+          );
+        }),
         patchSessionEntry,
       },
     },
@@ -1352,6 +1358,49 @@ describe("Codex supervision actions", () => {
     expect(control.readThread).toHaveBeenNthCalledWith(1, "thread-1", true);
     expect(control.readThread).toHaveBeenNthCalledWith(2, "thread-1", false);
     expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+  });
+
+  it("keeps adopted sessions discoverable when the configured default agent changes", async () => {
+    const originalConfig = {
+      agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] },
+    } as OpenClawConfig;
+    const changedConfig = {
+      agents: { list: [{ id: "alpha" }, { id: "beta", default: true }] },
+    } as OpenClawConfig;
+    const { runtime, createSessionEntry } = createRuntime();
+    const { api } = createGatewayApi(runtime);
+    const bindingStore = createCodexTestBindingStore();
+    const control = createEligibleControl();
+
+    const created = await continueLocalCodexSession({
+      api,
+      bindingStore,
+      config: originalConfig,
+      control,
+      threadId: "thread-1",
+    });
+    const reopened = await continueLocalCodexSession({
+      api,
+      bindingStore,
+      config: changedConfig,
+      control,
+      threadId: "thread-1",
+    });
+    const catalog = await listCodexSessionCatalog({
+      bindingStore,
+      config: changedConfig,
+      runtime,
+      control,
+    });
+
+    expect(created.sessionKey).toMatch(/^agent:alpha:harness:codex:supervision:/);
+    expect(reopened).toEqual({ sessionKey: created.sessionKey, disposition: "existing" });
+    expect(createSessionEntry).toHaveBeenCalledOnce();
+    expect(createSessionEntry).toHaveBeenCalledWith(expect.objectContaining({ agentId: "alpha" }));
+    expect(catalog.hosts[0]?.sessions[0]).toMatchObject({
+      threadId: "thread-1",
+      openClawSessionKey: created.sessionKey,
+    });
   });
 
   it("does not expose or reuse an initializing session while history import is paused", async () => {

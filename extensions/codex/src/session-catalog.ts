@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   ErrorCodes,
@@ -1067,13 +1068,20 @@ type AdoptedSessionEntry = {
   sessionId: string;
 };
 
+function listSupervisionAgentIds(config: OpenClawConfig): string[] {
+  const defaultAgentId = resolveDefaultAgentId(config);
+  return [defaultAgentId, ...listAgentIds(config).filter((agentId) => agentId !== defaultAgentId)];
+}
+
 async function listAdoptedSessionEntries(params: {
   bindingStore: CodexAppServerBindingStore;
   config?: OpenClawConfig;
   runtime: PluginRuntime;
 }): Promise<Map<string, AdoptedSessionEntry>> {
   const adopted = new Map<string, AdoptedSessionEntry>();
-  for (const { entry, sessionKey } of params.runtime.agent.session.listSessionEntries()) {
+  for (const { entry, sessionKey } of listSupervisionAgentIds(params.config ?? {}).flatMap(
+    (agentId) => params.runtime.agent.session.listSessionEntries({ agentId }),
+  )) {
     const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
     if (
       !sessionKeyRest.startsWith(CODEX_SUPERVISION_SESSION_KEY_PREFIX) ||
@@ -1310,6 +1318,7 @@ async function createOrReuseAdoptedSession(params: {
     const created = await params.api.runtime.agent.session.createSessionEntry({
       cfg: params.config,
       key: adoptionSessionKey(params.sourceThread.id),
+      agentId: resolveDefaultAgentId(params.config),
       recoverMatchingInitialEntry: true,
       ...(label ? { label } : {}),
       ...(spawnedCwd ? { spawnedCwd } : {}),
@@ -1530,8 +1539,8 @@ async function assertNoPendingSupervisionBranch(params: {
   runtime: PluginRuntime;
   threadId: string;
 }): Promise<void> {
-  const adoptedEntries = params.runtime.agent.session
-    .listSessionEntries()
+  const adoptedEntries = listSupervisionAgentIds(params.config)
+    .flatMap((agentId) => params.runtime.agent.session.listSessionEntries({ agentId }))
     .filter((candidate) => isAdoptionSessionKeyForThread(candidate.sessionKey, params.threadId));
   for (const adopted of adoptedEntries) {
     if (adopted.entry.initializationPending === true) {
