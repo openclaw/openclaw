@@ -103,30 +103,21 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
 });
 
 describe("extractFailoverSignalDetails", () => {
-  it("truncates long detail strings without splitting UTF-16 surrogate pairs", () => {
-    // Regression test for UTF-16 safe truncation. The failover classifier
-    // receives arbitrary provider error text that may contain emoji or other
-    // non-BMP characters; truncating at a fixed code-unit boundary can leave
-    // an unpaired surrogate and corrupt downstream string handling.
-    const emoji = "🎉"; // U+1F389, a UTF-16 surrogate pair (2 code units)
-    const message = "a".repeat(999) + emoji + "!";
-    expect(message).toHaveLength(1002);
+  it.each([
+    {
+      name: "backs off before a split surrogate pair",
+      input: `${"a".repeat(999)}🎉!`,
+      expected: "a".repeat(999),
+    },
+    {
+      name: "keeps the full ASCII budget",
+      input: "a".repeat(1001),
+      expected: "a".repeat(1000),
+    },
+  ])("$name in nested provider details", ({ input, expected }) => {
+    const details = extractFailoverSignalDetails({ error: { body: { detail: input } } });
 
-    const details = extractFailoverSignalDetails(new Error(message));
-    expect(details).toBeDefined();
-    expect(details).toHaveLength(1);
-
-    const detail = details![0];
-
-    // Raw .slice(0, 1000) would cut the surrogate pair, producing a lone high
-    // surrogate (0xD83C) at the end.
-    const rawSlice = message.slice(0, 1000);
-    expect(rawSlice).toHaveLength(1000);
-    expect(rawSlice.charCodeAt(rawSlice.length - 1)).toBe(0xd83c);
-
-    // truncateUtf16Safe backs up to the last complete code point.
-    expect(detail).toHaveLength(999);
-    expect(detail).toBe("a".repeat(999));
+    expect(details).toEqual([expected]);
   });
 });
 
