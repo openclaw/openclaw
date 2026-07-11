@@ -23,6 +23,10 @@ export type WizardStep = {
   sensitive?: boolean;
   executor?: "gateway" | "client";
   externalUrl?: string;
+  deviceCode?: {
+    code: string;
+    expiresInMinutes?: number;
+  };
 };
 
 type WizardSessionStatus = "running" | "done" | "cancelled" | "error";
@@ -70,6 +74,24 @@ class WizardSessionPrompter implements WizardPrompter {
 
   async note(message: string, title?: string): Promise<void> {
     await this.prompt({ type: "note", title, message, executor: "client" });
+  }
+
+  async deviceCode(params: {
+    title: string;
+    code: string;
+    expiresInMinutes?: number;
+    message?: string;
+  }): Promise<void> {
+    await this.prompt({
+      type: "note",
+      title: params.title,
+      message: params.message,
+      deviceCode: {
+        code: params.code,
+        ...(params.expiresInMinutes ? { expiresInMinutes: params.expiresInMinutes } : {}),
+      },
+      executor: "client",
+    });
   }
 
   async plain(message: string): Promise<void> {
