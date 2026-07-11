@@ -427,6 +427,7 @@ describe("state-backed gateway authorization", () => {
       principal: { issuer: "core", subject: "agent:main", kind: "service" },
     } as const;
     putAuthorizationPrincipal({ ...service, database });
+    putAuthorizationPrincipal({ ...owner, database });
 
     expect(() =>
       createIsolationDomain({
@@ -444,6 +445,7 @@ describe("state-backed gateway authorization", () => {
       principal: { issuer: "core", subject: "agent:main", kind: "service" },
     } as const;
     putAuthorizationPrincipal({ ...service, database });
+    putAuthorizationPrincipal({ ...owner, database });
     const { db } = openOpenClawStateDatabase(database);
     const now = Date.now();
     db.prepare(
@@ -455,10 +457,16 @@ describe("state-backed gateway authorization", () => {
        ) VALUES (?, ?, ?, ?, ?, ?)`,
     ).run("domain-1", service.id, "owner", service.id, "owner", now);
     db.prepare(
-      `INSERT INTO authorization_resources (
-         namespace, resource_type, resource_id, domain_id, owner_principal_id, created_at
+      `INSERT INTO authorization_domain_memberships (
+         domain_id, principal_id, role, added_by_principal_id, added_by_role, created_at
        ) VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(workspace.namespace, workspace.type, workspace.id, "domain-1", service.id, now);
+    ).run("domain-1", owner.id, "member", service.id, "owner", now);
+    db.prepare(
+      `INSERT INTO authorization_resources (
+         namespace, resource_type, resource_id, domain_id, owner_principal_id,
+         created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(workspace.namespace, workspace.type, workspace.id, "domain-1", owner.id, now, now);
 
     await expect(
       isolatedAuthorize(database)({

@@ -76,6 +76,7 @@ function authorizeFromState(
         "membership.role as membership_role",
         "grant.permission as granted_permission",
       ])
+      .where("resource.retired_at", "is", null)
       .where((eb) =>
         eb.or(
           resources.map((resource) =>

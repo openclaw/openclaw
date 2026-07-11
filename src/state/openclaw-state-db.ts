@@ -1518,6 +1518,11 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_signature_count INTEGER");
   ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_threshold INTEGER");
   ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_verified_at TEXT");
+  ensureColumn(db, "authorization_resources", "parent_namespace TEXT");
+  ensureColumn(db, "authorization_resources", "parent_resource_type TEXT");
+  ensureColumn(db, "authorization_resources", "parent_resource_id TEXT");
+  ensureColumn(db, "authorization_resources", "retired_at INTEGER");
+  ensureColumn(db, "authorization_resources", "updated_at INTEGER NOT NULL DEFAULT 0");
   const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
   if (addedTaskRequesterAgentId) {
     repairLegacyTaskAgentAttribution(db);
