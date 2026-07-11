@@ -97,8 +97,8 @@ export function claimTrajectoryPathIncarnation(
  * a sanitized-name collision against a different live/retired owner. Runs entirely
  * inside withTrajectoryPathLock so a claim can never interleave with a concurrent
  * delete/retire turn for the same canonical path (P1-A) — including the awaited
- * unlink inside that turn, since the whole turn (bump + unlink) shares one lock
- * admission and this claim queues behind it rather than racing it.
+ * archive rename inside that turn, since the whole turn (bump + rename) shares
+ * one lock admission and this claim queues behind it rather than racing it.
  *
  * onClaimed, when provided, runs INSIDE the same locked turn immediately after a
  * successful (non-collision) claim — before the lock releases. The runtime file

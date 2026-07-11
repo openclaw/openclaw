@@ -1,7 +1,13 @@
-// Trajectory cleanup helpers remove old trajectory files by retention policy.
+// Trajectory cleanup helpers retire old trajectory files. A session's own
+// trajectory pair is tombstoned by renaming it into a reset/deleted suffix —
+// the same archive contract session transcripts use — so a later retention
+// sweep (cleanupArchivedSessionTranscripts) reaps it; see
+// TrajectoryArtifactDisposal for the narrow exception (private scratch
+// artifacts that are unlinked outright).
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
@@ -20,8 +26,24 @@ import {
 
 type RemovedTrajectoryArtifact = {
   kind: "pointer" | "runtime";
+  // The archived (tombstoned) path, not the original — see archiveRegularFile.
   path: string;
 };
+
+export type TrajectoryTombstoneReason = "reset" | "deleted";
+
+// How a caller wants a trajectory artifact taken off its live canonical path.
+// "tombstone" renames it beside its (also-renamed) transcript, matching the
+// reset/deleted archive contract session transcripts use, for a session's own
+// user-visible trajectory pair (RESET, DELETE, and maintenance's removed-row
+// sweep). "delete" unlinks it outright, for artifact classes that are never
+// archived to begin with — the private/ephemeral internal-agent-run scratch
+// trajectory (agent-command.ts), whose own transcript is likewise unlinked
+// rather than archived for privacy/disk reasons; tombstoning only that half of
+// the pair would leak scratch data into a directory no retention sweep visits.
+export type TrajectoryArtifactDisposal =
+  | { mode: "tombstone"; reason: TrajectoryTombstoneReason; nowMs?: number }
+  | { mode: "delete" };
 
 type TrajectoryPointer = {
   runtimeFile: string;
@@ -123,21 +145,45 @@ function runtimeFileStartsWithSessionEvent(filePath: string, sessionId: string):
   }
 }
 
-async function removeRegularFile(
+function tombstoneSuffix(reason: TrajectoryTombstoneReason, nowMs?: number): string {
+  return `.${reason}.${formatSessionArchiveTimestamp(nowMs)}`;
+}
+
+async function disposeRegularFile(
   filePath: string,
+  disposal: TrajectoryArtifactDisposal,
   kind: RemovedTrajectoryArtifact["kind"],
 ): Promise<RemovedTrajectoryArtifact | null> {
   if (!isRegularNonSymlinkFile(filePath)) {
     return null;
   }
+  if (disposal.mode === "delete") {
+    try {
+      await fs.promises.rm(filePath, { force: true });
+    } catch {
+      // Best-effort: a transiently busy/locked artifact should not block
+      // removal of the remaining candidates (runtime file vs. pointer).
+      return null;
+    }
+    return { kind, path: path.resolve(filePath) };
+  }
+  const suffix = tombstoneSuffix(disposal.reason, disposal.nowMs);
+  const archivedPath = `${filePath}${suffix}`;
+  // suffix always carries a non-empty `.{reason}.{timestamp}` marker (see
+  // tombstoneSuffix), so this can only fire on a caller bug — guard so a
+  // blank suffix can never "archive" a live canonical path onto itself and
+  // desync the registry from what is actually on disk.
+  if (archivedPath === filePath) {
+    throw new Error(`trajectory tombstone suffix produced no rename for ${filePath}`);
+  }
   try {
-    await fs.promises.rm(filePath, { force: true });
+    await fs.promises.rename(filePath, archivedPath);
   } catch {
     // Best-effort: a transiently busy/locked artifact should not block
-    // removal of the remaining candidates (runtime file vs. pointer).
+    // archiving of the remaining candidates (runtime file vs. pointer).
     return null;
   }
-  return { kind, path: path.resolve(filePath) };
+  return { kind, path: archivedPath };
 }
 
 function resolveRemovedSessionFile(params: {
@@ -183,6 +229,7 @@ export async function removeSessionTrajectoryArtifacts(params: {
   sessionFile?: string;
   storePath: string;
   restrictToStoreDir?: boolean;
+  disposal: TrajectoryArtifactDisposal;
 }): Promise<RemovedTrajectoryArtifact[]> {
   const sessionFile = resolveRemovedSessionFile(params);
   if (!sessionFile) {
@@ -215,9 +262,9 @@ export async function removeSessionTrajectoryArtifacts(params: {
   const canRemovePointer = !restrictToStoreDir || isPathWithinDir(storeDir, pointerPath);
   // The runtime file and its pointer are one incarnation-owned artifact pair:
   // whichever canonical path this session actually owns is where BOTH must
-  // retire/remove in the SAME locked turn, so a racing acquisition on that
-  // exact path can never observe a half-deleted pair — a fresh pointer
-  // published after this turn releases, or this turn's removal clobbering a
+  // retire/archive in the SAME locked turn, so a racing acquisition on that
+  // exact path can never observe a half-tombstoned pair — a fresh pointer
+  // published after this turn releases, or this turn's archive clobbering a
   // pointer a racing claim just published (round 4 P1).
   const primaryCanonicalPath =
     registryOwnedPath ?? canonicalizePathForComparison(defaultRuntimePath);
@@ -250,18 +297,19 @@ export async function removeSessionTrajectoryArtifacts(params: {
       if (!mayTrajectoryPathBeRemovedBySession(canonicalRuntimePath, params.sessionId)) {
         return { runtime: null, pointer: null };
       }
-      // Retire before unlinking, in the same locked turn: a writer's flush
-      // turn queued behind this one must observe "retired" and no-op instead
-      // of recreating the file we are about to remove (F1/F2/F5). Acquisition
-      // shares this same lock (writer-lifecycle.ts), so no concurrent claim
-      // can slip in between the retire and the unlink either (P1-A).
+      // Retire before archiving (renaming into a tombstone), in the same
+      // locked turn: a writer's flush turn queued behind this one must
+      // observe "retired" and no-op instead of recreating the file we are
+      // about to archive away (F1/F2/F5). Acquisition shares this same lock
+      // (writer-lifecycle.ts), so no concurrent claim can slip in between the
+      // retire and the rename either (P1-A).
       claimTrajectoryPathIncarnation(canonicalRuntimePath, {
         ownerSessionId: params.sessionId,
         retired: true,
       });
-      const runtime = await removeRegularFile(runtimePath, "runtime");
+      const runtime = await disposeRegularFile(runtimePath, params.disposal, "runtime");
       const pointerRemoved = removePointerHere
-        ? await removeRegularFile(pointerPath, "pointer")
+        ? await disposeRegularFile(pointerPath, params.disposal, "pointer")
         : null;
       return { runtime, pointer: pointerRemoved };
     });
@@ -274,12 +322,12 @@ export async function removeSessionTrajectoryArtifacts(params: {
   }
 
   // Fallback: none of the runtime candidates landed on primaryCanonicalPath's
-  // own locked turn (e.g. mayRemoveRuntimeTarget rejected it) — still remove
+  // own locked turn (e.g. mayRemoveRuntimeTarget rejected it) — still archive
   // the pointer, locked on the same canonical path a racing claim would use,
   // rather than the old fully-unlocked step this replaces.
   if (canRemovePointer && !pointerHandledInPrimaryTurn) {
     const deletedPointer = await withTrajectoryPathLock(primaryCanonicalPath, () =>
-      removeRegularFile(pointerPath, "pointer"),
+      disposeRegularFile(pointerPath, params.disposal, "pointer"),
     );
     if (deletedPointer) {
       removed.push(deletedPointer);
@@ -327,6 +375,7 @@ export async function removeRemovedSessionTrajectoryArtifacts(params: {
   referencedSessionIds: ReadonlySet<string>;
   storePath: string;
   restrictToStoreDir?: boolean;
+  disposal: TrajectoryArtifactDisposal;
 }): Promise<RemovedTrajectoryArtifact[]> {
   const removed: RemovedTrajectoryArtifact[] = [];
   for (const [sessionId, sessionFile] of params.removedSessionFiles) {
@@ -339,6 +388,7 @@ export async function removeRemovedSessionTrajectoryArtifacts(params: {
         sessionFile,
         storePath: params.storePath,
         restrictToStoreDir: params.restrictToStoreDir,
+        disposal: params.disposal,
       })),
     );
   }
