@@ -4014,6 +4014,20 @@
     },
     {
       "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "connected"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "connected"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
@@ -4032,6 +4046,13 @@
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
       "text": "auto-paired"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Connected without pairing"
     },
     {
       "count": 1,
@@ -4116,6 +4137,13 @@
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
       "text": "Tokens"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "unpaired"
     },
     {
       "count": 1,
