@@ -15,6 +15,7 @@ export type ExecApprovalRequestPayload = {
     endIndex: number;
   }[];
   allowedDecisions?: readonly ExecApprovalDecision[];
+  unavailableReasons?: readonly ("no-reusable-pattern" | "prompt-only" | "runtime-payload" | "unplanned")[];
 };
 
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
@@ -137,6 +138,13 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
       commandSpans: parseCommandSpans(request.commandSpans, command.length),
       allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
+      unavailableReasons: Array.isArray(request.unavailableReasons)
+        ? request.unavailableReasons.filter(
+            (r): r is "no-reusable-pattern" | "prompt-only" | "runtime-payload" | "unplanned" =>
+              typeof r === "string" &&
+              ["no-reusable-pattern", "prompt-only", "runtime-payload", "unplanned"].includes(r),
+          )
+        : undefined,
     },
     createdAtMs,
     expiresAtMs,
