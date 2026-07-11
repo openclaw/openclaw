@@ -46,6 +46,19 @@ describe("tool allowlist guard", () => {
     ).toBeNull();
   });
 
+  it("skips the empty-allowlist guard for raw model-run shapes", () => {
+    // modelRun probes (e.g. `infer model run`, active-memory summary runs) zero out
+    // plugin tools by design, so an inherited allowlist must not abort them.
+    expect(
+      buildEmptyExplicitToolAllowlistError({
+        sources: [{ label: "runtime toolsAllow", entries: ["memory_search", "memory_get"] }],
+        callableToolNames: [],
+        toolsEnabled: true,
+        modelRun: true,
+      }),
+    ).toBeNull();
+  });
+
   it("fails closed when the selected model cannot use requested tools", () => {
     const error = buildEmptyExplicitToolAllowlistError({
       sources: [{ label: "agents.db.tools.allow", entries: ["query_db"] }],
