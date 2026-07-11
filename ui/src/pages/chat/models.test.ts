@@ -6,17 +6,23 @@ import { applyModelCatalogResult, loadModels } from "./models.ts";
 describe("loadModels", () => {
   it("requests the configured model list view", async () => {
     const request = vi.fn(async () => ({
+      catalogMode: "replace" as const,
       models: [
         { id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed", provider: "minimax" },
       ],
     }));
 
-    const models = await loadModels({ request } as unknown as GatewayBrowserClient);
+    const result = await loadModels({ request } as unknown as GatewayBrowserClient, {
+      includeMetadata: true,
+    });
 
     expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
-    expect(models).toEqual([
-      { id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed", provider: "minimax" },
-    ]);
+    expect(result).toEqual({
+      catalogMode: "replace",
+      models: [
+        { id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed", provider: "minimax" },
+      ],
+    });
   });
 
   it("reuses the configured model list while the cache is fresh", async () => {
@@ -30,6 +36,7 @@ describe("loadModels", () => {
 
     expect(request).toHaveBeenCalledTimes(1);
     expect(first).toBe(second);
+    expect(first).toEqual([{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }]);
   });
 
   it("keeps a late stale response from clobbering a fresher refresh result", async () => {

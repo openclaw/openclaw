@@ -154,6 +154,7 @@ function applyChatMetadataResult(
   const models = fields.models === false ? undefined : applyModelCatalogResult(result.models);
   if (models) {
     host.chatModelCatalog = models;
+    host.chatModelCatalogMode = result.catalogMode === "replace" ? "replace" : undefined;
   }
   const commandsApplied =
     fields.commands === false
@@ -176,9 +177,10 @@ function ownsChatMetadataRequest(request: ChatMetadataRequest): boolean {
 }
 
 async function refreshCompatibilityModelCatalog(request: ChatMetadataRequest) {
-  const models = await loadModels(request.client);
+  const result = await loadModels(request.client, { includeMetadata: true });
   if (ownsChatMetadataRequest(request)) {
-    request.host.chatModelCatalog = models;
+    request.host.chatModelCatalog = result.models;
+    request.host.chatModelCatalogMode = result.catalogMode;
   }
 }
 
@@ -214,9 +216,10 @@ async function refreshMissingChatMetadata(
       ? Promise.resolve()
       : canUseCompatibilityModelCatalog(request.host, request.agentId)
         ? refreshCompatibilityModelCatalog(request)
-        : Promise.resolve().then(() => {
+          : Promise.resolve().then(() => {
             if (ownsChatMetadataRequest(request)) {
               request.host.chatModelCatalog = [];
+              request.host.chatModelCatalogMode = undefined;
             }
           });
   await Promise.allSettled([commandsRefresh, modelsRefresh]);
@@ -230,6 +233,7 @@ export async function refreshChatMetadata(
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
     host.chatModelCatalog = [];
+    host.chatModelCatalogMode = undefined;
     return EMPTY_CHAT_METADATA_APPLY_RESULT;
   }
   if (host.chatMetadataRequestVersion !== requestVersion) {

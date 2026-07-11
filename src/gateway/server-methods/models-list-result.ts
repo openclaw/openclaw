@@ -67,6 +67,10 @@ type ApiKeyProviderCapabilities = {
   providers: ReadonlyMap<string, boolean>;
   resolveProvider(provider: string): string;
 };
+type ModelsListResult = {
+  models: ModelsListEntryWithCapabilities[];
+  catalogMode?: "replace";
+};
 type ModelsListAvailability = ModelAuthAvailability;
 type ModelsListEntryEvaluation = ModelAuthAvailabilityEvaluation;
 
@@ -481,7 +485,7 @@ type BuildModelsListResultParams = {
 
 export async function buildModelsListResult(
   params: BuildModelsListResultParams,
-): Promise<{ models: ModelsListEntryWithCapabilities[] }> {
+): Promise<ModelsListResult> {
   const initialConfig = params.context.getRuntimeConfig();
   const initialAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(initialConfig));
   const view = resolveModelsListView(params.params);
@@ -587,6 +591,7 @@ export async function buildModelsListResult(
   const capableProviders = includeProviderCapabilities
     ? apiKeyProviderCapabilities({ cfg, workspaceDir })
     : undefined;
+  const catalogMode = view !== "all" && cfg.models?.mode === "replace" ? "replace" : undefined;
   if (view === "provider-config") {
     const sourceConfig = getRuntimeConfigSourceSnapshot() ?? cfg;
     const authoredEntries = buildProviderConfigModelCatalogForBrowse({
@@ -612,6 +617,7 @@ export async function buildModelsListResult(
     });
     const inventory = await inventoryProjector.projectCatalog();
     return {
+      ...(catalogMode ? { catalogMode } : {}),
       models: await buildPublicModelsListEntries({
         catalog: inventory,
         cfg,
@@ -677,6 +683,7 @@ export async function buildModelsListResult(
     },
   });
   return {
+    ...(catalogMode ? { catalogMode } : {}),
     models: await buildPublicModelsListEntries({
       catalog: models,
       cfg,
