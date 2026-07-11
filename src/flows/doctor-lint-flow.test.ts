@@ -69,6 +69,27 @@ describe("runDoctorLintChecks", () => {
     });
   });
 
+  it("runs default-disabled checks when all checks are requested", async () => {
+    const defaultDisabled = normalizeHealthCheck({
+      ...check("targeted", async () => [
+        { checkId: "targeted", severity: "warning" as const, message: "warn" },
+      ]),
+      defaultEnabled: false,
+    });
+    const defaultEnabled = check("regular", async () => []);
+
+    const result = await runDoctorLintChecks(ctx, {
+      checks: [defaultDisabled, defaultEnabled],
+      includeAllChecks: true,
+    });
+
+    expect(result).toMatchObject({
+      checksRun: 2,
+      checksSkipped: 0,
+      findings: [expect.objectContaining({ checkId: "targeted" })],
+    });
+  });
+
   it("supports single-run checks in lint mode", async () => {
     const runnable: RunnableHealthCheck = {
       id: "run-check",
@@ -113,6 +134,19 @@ describe("runDoctorLintChecks", () => {
         message: "health check threw: nope",
       },
     ]);
+  });
+
+  it("keeps truncated thrown error messages UTF-16 safe", async () => {
+    const emoji = "\u{1F600}";
+    const result = await runDoctorLintChecks(ctx, {
+      checks: [
+        check("emoji-boom", async () => {
+          throw new Error(`${"A".repeat(252)}${emoji}${"B".repeat(10)}`);
+        }),
+      ],
+    });
+
+    expect(result.findings[0]?.message).toBe(`health check threw: ${"A".repeat(252)}...`);
   });
 });
 

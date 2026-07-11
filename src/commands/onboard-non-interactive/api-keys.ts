@@ -9,6 +9,7 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
+import { isMalformedApiKeyInput } from "../../agents/auth-profiles/credential-state.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -124,6 +125,11 @@ export async function resolveNonInteractiveApiKey(params: {
   }
 
   if (flagKey) {
+    if (isMalformedApiKeyInput(flagKey)) {
+      params.runtime.error("Paste the API key value, not an OpenClaw onboarding command.");
+      params.runtime.exit(1);
+      return null;
+    }
     return { key: flagKey, source: "flag" };
   }
 

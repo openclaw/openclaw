@@ -57,6 +57,10 @@ export type SessionListRow = {
   parentSessionKey?: string;
   deliveryContext?: SessionListDeliveryContext;
   updatedAt?: number | null;
+  archived?: boolean;
+  archivedAt?: number;
+  pinned?: boolean;
+  pinnedAt?: number;
   sessionId?: string;
   model?: string;
   contextTokens?: number | null;

@@ -1,6 +1,7 @@
 // Channel setup tests cover setup flow prompts and config output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   makeCatalogEntry,
   makeChannelSetupEntries,
@@ -46,39 +47,14 @@ function externalChatSetupEntries(overrides: Partial<ReturnType<ResolveChannelSe
 }
 
 function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegistry {
-  return {
-    plugins: [],
-    channels: [],
-    channelSetups: [],
-    providers: [],
-    authProviders: [],
-    authRequirements: [],
-    webSearchProviders: [],
-    webFetchProviders: [],
-    migrationProviders: [],
-    embeddingProviders: [],
-    mediaUnderstandingProviders: [],
-    imageGenerationProviders: [],
-    videoGenerationProviders: [],
-    musicGenerationProviders: [],
-    speechProviders: [],
-    realtimeTranscriptionProviders: [],
-    realtimeVoiceProviders: [],
-    cliBackends: [],
-    tools: [],
-    hooks: [],
-    typedHooks: [],
-    bundledExtensionDescriptors: [],
-    doctorChecks: [],
-    flowContributions: [],
-    flowContributionResolvers: [],
-    providerExtensions: [],
-    toolsets: [],
-    toolDisplayEntries: [],
-    textTransforms: [],
-    diagnostics: [],
-    ...overrides,
-  } as unknown as PluginRegistry;
+  const registry = createEmptyPluginRegistry();
+  for (const key of Object.keys(overrides) as Array<keyof PluginRegistry>) {
+    const value = overrides[key];
+    if (value !== undefined) {
+      Object.assign(registry, { [key]: value });
+    }
+  }
+  return registry;
 }
 
 function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, _type?: (value: T) => T): T {
@@ -340,6 +316,42 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(listChannelSetupPlugins).not.toHaveBeenCalled();
     expect(getChannelSetupPlugin).not.toHaveBeenCalled();
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+  });
+
+  it("puts skip first and selected by default in QuickStart channel selection", async () => {
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+    const select = vi.fn(async () => "__skip__");
+
+    await setupChannels(
+      {} as never,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => undefined),
+        select,
+      } as never,
+      {
+        deferStatusUntilSelection: true,
+        quickstartDefaults: true,
+        skipConfirm: true,
+      },
+    );
+
+    const prompt = callArg<{
+      message?: string;
+      options?: Array<{ value: string; label: string }>;
+      initialValue?: string;
+      searchable?: boolean;
+    }>(select);
+    expect(prompt.message).toBe("Select channel (QuickStart)");
+    expect(prompt.options?.[0]).toEqual(
+      expect.objectContaining({
+        value: "__skip__",
+        label: "Skip for now",
+      }),
+    );
+    expect(prompt.initialValue).toBe("__skip__");
+    expect(prompt.searchable).toBe(true);
   });
 
   it("keeps already-active setup plugins in the deferred picker without registry fallback", async () => {

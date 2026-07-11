@@ -35,6 +35,7 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { DedupeEntry } from "./server-shared.js";
 import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-request-handler.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
+import { runWithGatewayHttpWorkAdmission } from "./server/http-work-admission.js";
 import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import { shouldEnforceGatewayAuthForPluginPath } from "./server/plugins-http/route-auth.js";
 import { findMatchingPluginNodeCapabilityRoute } from "./server/plugins-http/route-capability.js";
@@ -100,6 +101,8 @@ export async function createGatewayRuntimeState(params: {
   logHooks: ReturnType<typeof createSubsystemLogger>;
   logPlugins: ReturnType<typeof createSubsystemLogger>;
   getReadiness?: ReadinessChecker;
+  isTerminalEnabled: () => boolean;
+  handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 }): Promise<{
   releasePluginRouteRegistry: () => void;
   httpServer: HttpServer;
@@ -124,6 +127,7 @@ export async function createGatewayRuntimeState(params: {
     sessionKey?: string,
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatQueuedTurns: Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
 }> {
   pinActivePluginHttpRouteRegistry(params.pluginRegistry);
@@ -150,20 +154,22 @@ export async function createGatewayRuntimeState(params: {
       if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
         return false;
       }
-      if (!loadedHooksRequestHandler) {
-        // Hooks are cold for most gateway starts; create the handler only after a request
-        // matches the configured base path so startup avoids importing hook runtime code.
-        const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
-        loadedHooksRequestHandler = createGatewayHooksRequestHandler({
-          deps: params.deps,
-          getHooksConfig: params.hooksConfig,
-          getClientIpConfig: params.getHookClientIpConfig,
-          bindHost: params.bindHost,
-          port: params.port,
-          logHooks: params.logHooks,
-        });
-      }
-      return await loadedHooksRequestHandler(req, res);
+      return await runWithGatewayHttpWorkAdmission(res, async () => {
+        if (!loadedHooksRequestHandler) {
+          // Hooks are cold for most gateway starts; create the handler only after a request
+          // matches the configured base path so startup avoids importing hook runtime code.
+          const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
+          loadedHooksRequestHandler = createGatewayHooksRequestHandler({
+            deps: params.deps,
+            getHooksConfig: params.hooksConfig,
+            getClientIpConfig: params.getHookClientIpConfig,
+            bindHost: params.bindHost,
+            port: params.port,
+            logHooks: params.logHooks,
+          });
+        }
+        return await loadedHooksRequestHandler(req, res);
+      });
     };
 
     let loadedPluginRequestHandler: GatewayPluginRequestHandler | null = null;
@@ -259,6 +265,7 @@ export async function createGatewayRuntimeState(params: {
         openResponsesEnabled: params.openResponsesEnabled,
         openResponsesConfig: params.openResponsesConfig,
         strictTransportSecurityHeader: params.strictTransportSecurityHeader,
+        handleWatchNodeRequest: params.handleWatchNodeRequest,
         handleHooksRequest,
         handlePluginRequest,
         shouldEnforcePluginGatewayAuth,
@@ -267,6 +274,7 @@ export async function createGatewayRuntimeState(params: {
         getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
         getReadiness: params.getReadiness,
+        isTerminalEnabled: params.isTerminalEnabled,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
       });
       // Attach upgrade handler BEFORE listening to prevent race condition
@@ -295,23 +303,38 @@ export async function createGatewayRuntimeState(params: {
         await startListeningPromise;
         return;
       }
-      // Listening is idempotent for callers racing startup; reset the promise only on failure so
-      // a transient bind error can be retried after the caller handles it.
+      // Listening is idempotent for callers racing startup. A failure is terminal for this runtime
+      // state; the startup owner tears down every partially bound HTTP/WS server before retrying.
       startListeningPromise = (async () => {
-        for (const [index, host] of bindHosts.entries()) {
+        const requiredAlias =
+          params.bindHost !== "127.0.0.1" && bindHosts.includes("127.0.0.1")
+            ? "127.0.0.1"
+            : undefined;
+        // Claim the trusted local endpoint before exposing the selected interface. This prevents
+        // another loopback listener from receiving credentials while startup is still resolving.
+        const listenOrder = requiredAlias
+          ? [requiredAlias, ...bindHosts.filter((host) => host !== requiredAlias)]
+          : bindHosts;
+        const boundHosts = new Set<string>();
+        for (const host of listenOrder) {
+          const index = bindHosts.indexOf(host);
           const server = httpServers[index];
           if (!server) {
             throw new Error(`Missing gateway HTTP server for bind host ${host}`);
           }
+          // Specific IPv4 modes rely on this canonical local endpoint for authenticated
+          // helpers. A collision must fail startup instead of sending credentials to it.
+          const requiredLoopbackAlias = host === requiredAlias;
           try {
             await listenGatewayHttpServer({
               httpServer: server,
               bindHost: host,
               port: params.port,
+              retryEaddrinuse: !requiredLoopbackAlias,
             });
-            httpBindHosts.push(host);
+            boundHosts.add(host);
           } catch (err) {
-            if (host === bindHosts[0]) {
+            if (host === bindHosts[0] || requiredLoopbackAlias) {
               throw err;
             }
             params.log.warn(
@@ -319,16 +342,12 @@ export async function createGatewayRuntimeState(params: {
             );
           }
         }
+        httpBindHosts.push(...bindHosts.filter((host) => boundHosts.has(host)));
         if (httpBindHosts.length === 0) {
           throw new Error("Gateway HTTP server failed to start");
         }
       })();
-      try {
-        await startListeningPromise;
-      } catch (err) {
-        startListeningPromise = null;
-        throw err;
-      }
+      await startListeningPromise;
     };
     const agentRunSeq = new Map<string, number>();
     const dedupe = new Map<string, DedupeEntry>();
@@ -340,6 +359,7 @@ export async function createGatewayRuntimeState(params: {
     const addChatRun = chatRunRegistry.add;
     const removeChatRun = chatRunRegistry.remove;
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const chatQueuedTurns = new Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>();
     const toolEventRecipients = createToolEventRecipientRegistry();
 
     return {
@@ -372,6 +392,7 @@ export async function createGatewayRuntimeState(params: {
       addChatRun,
       removeChatRun,
       chatAbortControllers,
+      chatQueuedTurns,
       toolEventRecipients,
     };
   } catch (err) {

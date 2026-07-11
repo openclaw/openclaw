@@ -27,6 +27,7 @@ import {
   resolveOutboundChannelPlugin,
 } from "./channel-resolution.js";
 import { resolveOutboundSessionRoute } from "./outbound-session.js";
+import { isReservedTargetLiteralError } from "./target-errors.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import {
   resolveOutboundTargetWithPlugin,
@@ -37,7 +38,7 @@ import {
 export type OutboundChannel = DeliverableMessageChannel;
 
 /** Heartbeat target channel id from agent/default heartbeat config. */
-export type HeartbeatTarget = OutboundChannel;
+type HeartbeatTarget = OutboundChannel;
 
 /** Resolved outbound delivery destination and routing hints. */
 export type OutboundTarget = {
@@ -361,6 +362,13 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   })();
   if (targetResolution?.ok) {
     routeResolvedTarget = targetResolution.target;
+  } else if (targetResolution && isReservedTargetLiteralError(targetResolution.error)) {
+    return buildNoHeartbeatDeliveryTarget({
+      reason: "no-target",
+      accountId: delivery.accountId,
+      lastChannel: delivery.lastChannel,
+      lastAccountId: delivery.lastAccountId,
+    });
   }
   if (routeResolvedTarget?.kind === "user" && heartbeat?.directPolicy === "block") {
     return buildNoHeartbeatDeliveryTarget({

@@ -10,9 +10,13 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { getRuntimeConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
-import { assertCdpEndpointAllowed } from "./cdp.helpers.js";
+import { assertCdpEndpointAllowed, redactCdpUrl } from "./cdp.helpers.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
-import { createBrowserProfileConfig, deleteBrowserProfileConfig } from "./config-mutations.js";
+import {
+  createBrowserProfileConfig,
+  deleteBrowserProfileConfig,
+  setDefaultBrowserProfile,
+} from "./config-mutations.js";
 import { parseHttpUrl, resolveProfile } from "./config.js";
 import {
   BrowserConflictError,
@@ -22,10 +26,24 @@ import {
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { isValidProfileName } from "./profiles.js";
 import type { BrowserRouteContext, ProfileStatus } from "./server-context.js";
+import {
+  recordSystemProfileImport,
+  readSystemProfileImportState,
+  resolveSuggestedImportTarget,
+} from "./system-profile-import-state.js";
+import {
+  importSystemProfileCookies,
+  listSystemProfiles as discoverSystemProfiles,
+  type ImportSystemProfileParams,
+  type ImportSystemProfileResult,
+  type SystemProfileInfo,
+} from "./system-profiles.js";
 import { movePathToTrash } from "./trash.js";
 
+export type { ImportSystemProfileParams, ImportSystemProfileResult, SystemProfileInfo };
+
 /** Input accepted when creating a browser profile. */
-export type CreateProfileParams = {
+type CreateProfileParams = {
   name: string;
   color?: string;
   cdpUrl?: string;
@@ -34,7 +52,7 @@ export type CreateProfileParams = {
 };
 
 /** Result returned after creating a browser profile. */
-export type CreateProfileResult = {
+type CreateProfileResult = {
   ok: true;
   profile: string;
   transport: "cdp" | "chrome-mcp";
@@ -46,7 +64,7 @@ export type CreateProfileResult = {
 };
 
 /** Result returned after deleting a browser profile. */
-export type DeleteProfileResult = {
+type DeleteProfileResult = {
   ok: true;
   profile: string;
   deleted: boolean;
@@ -134,10 +152,59 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       profile: name,
       transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
       cdpPort: capabilities.usesChromeMcp ? null : resolved.cdpPort,
-      cdpUrl: resolved.cdpUrl || null,
+      cdpUrl: resolved.cdpUrl ? (redactCdpUrl(resolved.cdpUrl) ?? null) : null,
       userDataDir: resolved.userDataDir ?? null,
       color: resolved.color,
       isRemote: !resolved.cdpIsLoopback,
+    };
+  };
+
+  const listSystemProfiles = async (browser?: string): Promise<SystemProfileInfo[]> => {
+    if (process.platform !== "darwin") {
+      return [];
+    }
+    return discoverSystemProfiles(browser);
+  };
+
+  const importSystemProfile = async (
+    params: ImportSystemProfileParams,
+  ): Promise<ImportSystemProfileResult> => {
+    const result = await importSystemProfileCookies(params, { ctx, createProfile });
+    if (result.cookies.imported === 0) {
+      if (params.makeDefault) {
+        throw new BrowserValidationError("no cookies could be imported from the selected profile");
+      }
+      return result;
+    }
+    if (params.makeDefault) {
+      await setDefaultBrowserProfile(result.into);
+      ctx.state().resolved.defaultProfile = result.into;
+    }
+    await recordSystemProfileImport({
+      browser: result.browser,
+      systemProfile: result.systemProfile,
+      targetProfile: result.into,
+    });
+    return result;
+  };
+
+  const getSystemProfileImportStatus = async () => {
+    const enabled =
+      process.platform === "darwin" &&
+      getRuntimeConfig().browser?.allowSystemProfileImport !== false;
+    const [systemProfiles, state, profiles] = await Promise.all([
+      enabled ? listSystemProfiles() : Promise.resolve([]),
+      readSystemProfileImportState(),
+      listProfiles(),
+    ]);
+    return {
+      enabled,
+      systemProfiles,
+      state: state ?? null,
+      suggestedTarget: resolveSuggestedImportTarget({
+        profileNames: profiles.map((profile) => profile.name),
+        state,
+      }),
     };
   };
 
@@ -191,7 +258,10 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
 
   return {
     listProfiles,
+    listSystemProfiles,
     createProfile,
+    importSystemProfile,
+    getSystemProfileImportStatus,
     deleteProfile,
   };
 }

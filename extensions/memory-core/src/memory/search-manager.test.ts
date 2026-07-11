@@ -326,6 +326,10 @@ describe("getMemorySearchManager caching", () => {
 
     expect(first.manager).toBe(second.manager);
     expect(createQmdManagerMock.mock.calls).toHaveLength(1);
+    expect(first.debug?.managerCacheState).toBe("cached-full-miss");
+    expect(second.debug?.managerCacheState).toBe("cached-full-hit");
+    expect(first.debug?.qmdIdentityHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(second.debug?.qmdIdentityHash).toBe(first.debug?.qmdIdentityHash);
   });
 
   it("keeps the cached QMD manager active when the caller cancels a search", async () => {
@@ -806,6 +810,10 @@ describe("getMemorySearchManager caching", () => {
     const fullManager = requireManager(full);
     const cliManager = requireManager(cli);
 
+    expect(cli.debug?.managerCacheState).toBe("transient-cli");
+    expect(full.debug?.managerCacheState).toBe("cached-full-miss");
+    expect(full.debug?.qmdIdentityHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(cli.debug?.qmdIdentityHash).toBe(full.debug?.qmdIdentityHash);
     expect(cliManager).toBe(cliPrimary);
     expect(cliManager).not.toBe(fullManager);
     const fullCreateParams = qmdCreateParams();

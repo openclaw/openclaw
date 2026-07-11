@@ -116,6 +116,24 @@ describe("exec approval reply helpers", () => {
     );
   });
 
+  it("distinguishes node approval-inbox access from policy inspection", () => {
+    const text = buildExecApprovalUnavailableReplyPayload({
+      reason: "no-approval-route",
+      host: "node",
+      nodeId: "mac-1",
+    }).text;
+
+    expect(text).toContain(
+      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
+    );
+    expect(text).toContain(
+      "Inspect the node's effective exec policy with `openclaw approvals get --node mac-1`.",
+    );
+    expect(text).not.toContain("`openclaw dashboard --no-open` or `openclaw approvals get");
+    expect(text).not.toContain("Open the approval inbox with");
+    expect(text).not.toContain("exec-approvals list");
+  });
+
   it("explains how to enable Matrix native approvals when Matrix is the initiating platform", () => {
     const text = buildExecApprovalUnavailableReplyPayload({
       reason: "initiating-platform-disabled",
@@ -316,7 +334,7 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).not.toContain("C:\\Users\\alice");
   });
 
-  it("omits allow-always actions when the effective policy requires approval every time", () => {
+  it("omits allow-always actions when allow-always is unavailable", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-ask-always",
       approvalSlug: "slug-always",
@@ -335,9 +353,7 @@ describe("exec approval reply helpers", () => {
     });
     expect(payload.text).toContain("```txt\n/approve slug-always allow-once\n```");
     expect(payload.text).not.toContain("allow-always");
-    expect(payload.text).toContain(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-    );
+    expect(payload.text).toContain("Allow Always is unavailable for this command.");
     expect(payload.presentation).toEqual({
       blocks: [
         {

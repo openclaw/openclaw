@@ -150,6 +150,9 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     if (!session) {
       return;
     }
+    if (session.activeRunId && session.activeRunId !== runId) {
+      runIdToSessionId.delete(session.activeRunId);
+    }
     session.activeRunId = runId;
     session.abortController = abortController;
     runIdToSessionId.set(runId, sessionId);

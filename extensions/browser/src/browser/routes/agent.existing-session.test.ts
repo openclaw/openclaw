@@ -143,6 +143,7 @@ function expectExistingSessionProfile(value: unknown) {
 
 describe("existing-session browser routes", () => {
   beforeEach(() => {
+    routeState.profileCtx.closeTab.mockClear();
     routeState.profileCtx.ensureTabAvailable.mockClear();
     routeState.profileCtx.listTabs.mockClear();
     chromeMcpMocks.clickChromeMcpCoords.mockClear();
@@ -163,7 +164,11 @@ describe("existing-session browser routes", () => {
   it("allows labeled AI snapshots for existing-session profiles", async () => {
     const handler = getSnapshotGetHandler();
     const response = createBrowserRouteResponse();
-    await handler?.({ params: {}, query: { format: "ai", labels: "1" } }, response.res);
+    const ctrl = new AbortController();
+    await handler?.(
+      { params: {}, query: { format: "ai", labels: "1" }, signal: ctrl.signal },
+      response.res,
+    );
 
     expect(response.statusCode).toBe(200);
     const body = requireRecord(response.body, "response body");
@@ -179,6 +184,16 @@ describe("existing-session browser routes", () => {
     expect(snapshotParams.profileName).toBe("chrome-live");
     expectExistingSessionProfile(snapshotParams.profile);
     expect(snapshotParams.targetId).toBe("7");
+    const renderParams = requireRecord(
+      callArg(chromeMcpMocks.evaluateChromeMcpScript, 0, 0, "label params"),
+      "label params",
+    );
+    const cleanupParams = requireRecord(
+      callArg(chromeMcpMocks.evaluateChromeMcpScript, 1, 0, "label cleanup params"),
+      "label cleanup params",
+    );
+    expect(renderParams.signal).toBe(ctrl.signal);
+    expect(cleanupParams.signal).toBeUndefined();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalled();
   });
@@ -227,6 +242,29 @@ describe("existing-session browser routes", () => {
       ssrfPolicy: { allowPrivateNetwork: false },
     });
     expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalled();
+  });
+
+  it("routes close through profile selection state with exact call options", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    const ctrl = new AbortController();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "close", targetId: "7", timeoutMs: 4321 },
+        signal: ctrl.signal,
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(routeState.profileCtx.closeTab).toHaveBeenCalledWith("7", {
+      exactTargetId: true,
+      signal: ctrl.signal,
+      timeoutMs: undefined,
+    });
   });
 
   it("allows existing-session snapshots under the default SSRF policy object", async () => {

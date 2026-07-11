@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenKeyedStoreOptions,
@@ -58,9 +59,6 @@ const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
 const SKIP_RUNTIME_PROBE_ENV = "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE";
 const ACPX_BACKEND_ID = "acpx";
 
-type AcpxRuntimeModule = typeof import("./runtime.js");
-let runtimeModulePromise: Promise<AcpxRuntimeModule> | null = null;
-
 type AcpxRuntimeFactoryParams = {
   pluginConfig: ResolvedAcpxPluginConfig;
   gatewayInstanceId: string;
@@ -76,10 +74,7 @@ type CreateAcpxRuntimeServiceParams = {
   processCleanupDeps?: AcpxProcessCleanupDeps;
 };
 
-function loadRuntimeModule(): Promise<AcpxRuntimeModule> {
-  runtimeModulePromise ??= import("./runtime.js");
-  return runtimeModulePromise;
-}
+const loadRuntimeModule = createLazyRuntimeModule(() => import("./runtime.js"));
 
 /** Convert ACPX timeout seconds into timer-safe milliseconds. */
 export function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
@@ -111,6 +106,7 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
         }),
         probeAgent: params.pluginConfig.probeAgent,
         mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
+        openclawToolsMcpBridgeEnabled: params.pluginConfig.openClawToolsMcpBridge,
         permissionMode: params.pluginConfig.permissionMode,
         nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
         timeoutMs: resolveAcpxTimerTimeoutMs(params.pluginConfig.timeoutSeconds),

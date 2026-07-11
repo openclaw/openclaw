@@ -207,7 +207,9 @@ func runCodexExecPrompt(ctx context.Context, req codexPromptRequest) (string, er
 	}
 	outputPath := outputFile.Name()
 	_ = outputFile.Close()
-	defer os.Remove(outputPath)
+	defer func() {
+		_ = os.Remove(outputPath)
+	}()
 
 	codexHomeBase, err := isolatedCodexHomeBase()
 	if err != nil {
@@ -217,7 +219,9 @@ func runCodexExecPrompt(ctx context.Context, req codexPromptRequest) (string, er
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(codexHome)
+	defer func() {
+		_ = os.RemoveAll(codexHome)
+	}()
 	if err := writeCodexAuthFile(codexHome); err != nil {
 		return "", err
 	}
@@ -345,7 +349,7 @@ func normalizeThinking(value string) string {
 	case "low", "medium", "high", "xhigh":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
-		return "high"
+		return "xhigh"
 	}
 }
 

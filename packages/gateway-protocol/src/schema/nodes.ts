@@ -50,26 +50,6 @@ export const NodeEventResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Pairing request metadata advertised by a node before trust is granted. */
-export const NodePairRequestParamsSchema = Type.Object(
-  {
-    nodeId: NonEmptyString,
-    displayName: Type.Optional(NonEmptyString),
-    platform: Type.Optional(NonEmptyString),
-    version: Type.Optional(NonEmptyString),
-    coreVersion: Type.Optional(NonEmptyString),
-    uiVersion: Type.Optional(NonEmptyString),
-    deviceFamily: Type.Optional(NonEmptyString),
-    modelIdentifier: Type.Optional(NonEmptyString),
-    caps: Type.Optional(Type.Array(NonEmptyString)),
-    commands: Type.Optional(Type.Array(NonEmptyString)),
-    permissions: Type.Optional(Type.Record(NonEmptyString, Type.Boolean())),
-    remoteIp: Type.Optional(NonEmptyString),
-    silent: Type.Optional(Type.Boolean()),
-  },
-  { additionalProperties: false },
-);
-
 /** Lists pending node-pairing requests. */
 export const NodePairListParamsSchema = Type.Object({}, { additionalProperties: false });
 
@@ -88,12 +68,6 @@ export const NodePairRejectParamsSchema = Type.Object(
 /** Removes an already paired node from the gateway trust set. */
 export const NodePairRemoveParamsSchema = Type.Object(
   { nodeId: NonEmptyString },
-  { additionalProperties: false },
-);
-
-/** Verifies node ownership with a short-lived pairing token. */
-export const NodePairVerifyParamsSchema = Type.Object(
-  { nodeId: NonEmptyString, token: NonEmptyString },
   { additionalProperties: false },
 );
 
@@ -128,6 +102,11 @@ export const NodeInvokeParamsSchema = Type.Object(
     params: Type.Optional(Type.Unknown()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     idempotencyKey: NonEmptyString,
+    // Gateway-only approval routing metadata. Node forwarding strips these fields.
+    turnSourceChannel: Type.Optional(Type.String()),
+    turnSourceTo: Type.Optional(Type.String()),
+    turnSourceAccountId: Type.Optional(Type.String()),
+    turnSourceThreadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
   },
   { additionalProperties: false },
 );

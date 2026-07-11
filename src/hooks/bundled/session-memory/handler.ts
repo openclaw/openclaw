@@ -21,6 +21,7 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../../routing/session-key.js";
+import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
@@ -233,7 +234,8 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       if (sessionContent && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
         // Use LLM to generate a descriptive slug
-        slug = await generateSlugViaLLM({ sessionContent, cfg });
+        const slugModel = typeof hookConfig?.model === "string" ? hookConfig.model : undefined;
+        slug = await generateSlugViaLLM({ sessionContent, cfg, model: slugModel });
         log.debug("Generated slug", { slug });
       }
     }
@@ -249,7 +251,7 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     const memoryFilePath = path.join(memoryDir, filename);
     log.debug("Memory file path resolved", {
       filename,
-      path: memoryFilePath.replace(os.homedir(), "~"),
+      path: shortenHomePath(memoryFilePath),
     });
 
     const timeStr = localTimestamp.time;
@@ -282,7 +284,7 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
-    const relPath = memoryFilePath.replace(os.homedir(), "~");
+    const relPath = shortenHomePath(memoryFilePath);
     log.info(`Session context saved to ${relPath}`);
   } catch (err) {
     if (err instanceof Error) {

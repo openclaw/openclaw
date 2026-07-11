@@ -72,6 +72,22 @@ describe("signal groups schema", () => {
     });
   });
 
+  it("accepts top-level and per-account aliases", () => {
+    expectValidSignalConfig({
+      aliases: {
+        me: "+15551234567",
+        ops: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+      },
+      accounts: {
+        work: {
+          aliases: {
+            jane: "uuid:123e4567-e89b-12d3-a456-426614174000",
+          },
+        },
+      },
+    });
+  });
+
   it("accepts channel apiMode", () => {
     for (const apiMode of ["auto", "native", "container"]) {
       expectValidSignalConfig({ apiMode });

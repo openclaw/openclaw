@@ -1,5 +1,6 @@
 // Duckduckgo plugin module implements ddg client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
@@ -34,6 +35,10 @@ type DuckDuckGoResult = {
   url: string;
   snippet: string;
 };
+
+function isDecodableCodePoint(cp: number): boolean {
+  return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff);
+}
 
 function decodeHtmlEntities(text: string): string {
   return text.replace(
@@ -71,10 +76,12 @@ function decodeHtmlEntities(text: string): string {
         return "&";
       }
       if (normalized.startsWith("&#x")) {
-        return String.fromCodePoint(Number.parseInt(normalized.slice(3, -1), 16));
+        const codePoint = Number.parseInt(normalized.slice(3, -1), 16);
+        return isDecodableCodePoint(codePoint) ? String.fromCodePoint(codePoint) : entity;
       }
       if (normalized.startsWith("&#")) {
-        return String.fromCodePoint(Number.parseInt(normalized.slice(2, -1), 10));
+        const codePoint = Number.parseInt(normalized.slice(2, -1), 10);
+        return isDecodableCodePoint(codePoint) ? String.fromCodePoint(codePoint) : entity;
       }
       return entity;
     },
@@ -111,6 +118,10 @@ function isBotChallenge(html: string): boolean {
     return false;
   }
   return /g-recaptcha|are you a human|id="challenge-form"|name="challenge"/i.test(html);
+}
+
+async function readDuckDuckGoHtmlResponse(response: Response): Promise<string> {
+  return await readProviderTextResponse(response, "DuckDuckGo search");
 }
 
 function parseDuckDuckGoHtml(html: string): DuckDuckGoResult[] {
@@ -202,7 +213,7 @@ export async function runDuckDuckGoSearch(params: {
         );
       }
 
-      const html = await response.text();
+      const html = await readDuckDuckGoHtmlResponse(response);
       if (isBotChallenge(html)) {
         throw new Error("DuckDuckGo returned a bot-detection challenge.");
       }
@@ -238,5 +249,6 @@ export const testing = {
   decodeHtmlEntities,
   isBotChallenge,
   parseDuckDuckGoHtml,
+  readDuckDuckGoHtmlResponse,
 };
 export { testing as __testing };

@@ -1,5 +1,6 @@
 // Memory Core plugin module implements tools.shared behavior.
 import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
@@ -10,8 +11,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
-
-type MemoryToolRuntime = typeof import("./tools.runtime.js");
 type MemorySearchManagerResult = Awaited<
   ReturnType<(typeof import("./memory/index.js"))["getMemorySearchManager"]>
 >;
@@ -20,15 +19,11 @@ type MemoryToolOptions = {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
   oneShotCliRun?: boolean;
 };
 
-let memoryToolRuntimePromise: Promise<MemoryToolRuntime> | null = null;
-
-export async function loadMemoryToolRuntime(): Promise<MemoryToolRuntime> {
-  memoryToolRuntimePromise ??= import("./tools.runtime.js");
-  return await memoryToolRuntimePromise;
-}
+export const loadMemoryToolRuntime = createLazyRuntimeModule(() => import("./tools.runtime.js"));
 
 export const MemorySearchSchema = Type.Object({
   query: Type.String(),
@@ -67,18 +62,28 @@ export async function getMemoryManagerContextWithPurpose(params: {
 }): Promise<
   | {
       manager: NonNullable<MemorySearchManagerResult["manager"]>;
+      debug?: NonNullable<MemorySearchManagerResult["debug"]>;
     }
   | {
       error: string | undefined;
     }
 > {
   const { getMemorySearchManager } = await loadMemoryToolRuntime();
-  const { manager, error } = await getMemorySearchManager({
+  const startedAt = Date.now();
+  const { manager, debug, error } = await getMemorySearchManager({
     cfg: params.cfg,
     agentId: params.agentId,
     purpose: params.purpose,
   });
-  return manager ? { manager } : { error };
+  return manager
+    ? {
+        manager,
+        debug: {
+          ...debug,
+          managerMs: debug?.managerMs ?? Math.max(0, Date.now() - startedAt),
+        },
+      }
+    : { error };
 }
 
 export function createMemoryTool(params: {
@@ -150,7 +155,9 @@ export function buildMemorySearchUnavailableResult(
 export async function searchMemoryCorpusSupplements(params: {
   query: string;
   maxResults?: number;
+  agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
   corpus?: "memory" | "wiki" | "all" | "sessions";
 }): Promise<MemoryCorpusSearchResult[]> {
   if (params.corpus === "memory" || params.corpus === "sessions") {
@@ -179,7 +186,9 @@ export async function getMemoryCorpusSupplementResult(params: {
   lookup: string;
   fromLine?: number;
   lineCount?: number;
+  agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
   corpus?: "memory" | "wiki" | "all" | "sessions";
 }) {
   if (params.corpus === "memory" || params.corpus === "sessions") {

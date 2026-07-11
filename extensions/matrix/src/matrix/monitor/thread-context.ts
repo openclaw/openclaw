@@ -1,4 +1,5 @@
 // Matrix plugin module implements thread context behavior.
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixClient } from "../sdk.js";
 import { summarizeMatrixMessageContextEvent, trimMatrixMaybeString } from "./context-summary.js";
 import type { MatrixRawEvent } from "./types.js";
@@ -17,7 +18,7 @@ function truncateThreadStarterBody(value: string): string {
   if (value.length <= MAX_THREAD_STARTER_BODY_LENGTH) {
     return value;
   }
-  return `${value.slice(0, MAX_THREAD_STARTER_BODY_LENGTH - 3)}...`;
+  return `${sliceUtf16Safe(value, 0, MAX_THREAD_STARTER_BODY_LENGTH - 3)}...`;
 }
 
 export function summarizeMatrixThreadStarterEvent(event: MatrixRawEvent): string | undefined {

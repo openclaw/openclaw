@@ -12,8 +12,10 @@ export function parseProcCmdline(raw: string): string[] {
 
 export function isGatewayArgv(args: string[], opts?: { allowGatewayBinary?: boolean }): boolean {
   const normalized = args.map(normalizeProcArg);
+  const exe = (normalized[0] ?? "").replace(/\.(bat|cmd|exe)$/i, "");
+  const isGatewayBinary = exe.endsWith("/openclaw-gateway") || exe === "openclaw-gateway";
   if (!normalized.includes("gateway")) {
-    return false;
+    return opts?.allowGatewayBinary === true && isGatewayBinary;
   }
 
   const entryCandidates = [
@@ -28,10 +30,9 @@ export function isGatewayArgv(args: string[], opts?: { allowGatewayBinary?: bool
     return true;
   }
 
-  const exe = (normalized[0] ?? "").replace(/\.(bat|cmd|exe)$/i, "");
   return (
     exe.endsWith("/openclaw") ||
     exe === "openclaw" ||
-    (opts?.allowGatewayBinary === true && exe.endsWith("/openclaw-gateway"))
+    (opts?.allowGatewayBinary === true && isGatewayBinary)
   );
 }

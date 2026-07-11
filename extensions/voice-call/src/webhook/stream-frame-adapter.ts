@@ -1,7 +1,7 @@
 // Provider-specific media stream frame parsing and serialization.
 
 /** Normalized inbound media stream frame. */
-export type StreamFrame =
+type StreamFrame =
   | { kind: "start"; streamId: string; providerCallId: string }
   | {
       kind: "media";

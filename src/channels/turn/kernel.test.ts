@@ -804,6 +804,108 @@ describe("channel turn kernel", () => {
     expect(logRecord?.trace?.traceId).toBe(traceId);
   });
 
+  it("logs a warning when a visible prepared dispatch queues no payloads", async () => {
+    const events: string[] = [];
+    const log = vi.fn();
+    const recordInboundSession = createRecordInboundSession(events);
+    const runDispatch = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    }));
+
+    const result = await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch,
+      log,
+      messageId: "msg-zero",
+      record: {
+        onRecordError: vi.fn(),
+      },
+    });
+
+    expect(result.dispatchResult?.queuedFinal).toBe(false);
+    expect(log.mock.calls).toContainEqual([
+      expect.objectContaining({
+        stage: "dispatch",
+        event: "warning",
+        messageId: "msg-zero",
+        reason: "zero-count-visible-dispatch",
+      }),
+    ]);
+  });
+
+  it("does not warn for observed-path deliveries with zero queued counts", async () => {
+    const events: string[] = [];
+    const log = vi.fn();
+    const recordInboundSession = createRecordInboundSession(events);
+    // Observed-delivery path: queuedFinal false and all counts zero, but the reply was
+    // delivered via observedReplyDelivery and must not trip the silent-drop sentinel.
+    const runDispatch = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      observedReplyDelivery: true,
+    }));
+
+    const result = await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch,
+      log,
+      messageId: "msg-observed",
+      record: {
+        onRecordError: vi.fn(),
+      },
+    });
+
+    expect(result.dispatchResult?.observedReplyDelivery).toBe(true);
+    expect(log.mock.calls).not.toContainEqual([
+      expect.objectContaining({ reason: "zero-count-visible-dispatch" }),
+    ]);
+  });
+
+  it("still warns when a visible turn has zero counts and no observed delivery", async () => {
+    const events: string[] = [];
+    const log = vi.fn();
+    const recordInboundSession = createRecordInboundSession(events);
+    // Guard against over-suppression: a genuinely empty visible dispatch must still warn.
+    const runDispatch = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      observedReplyDelivery: false,
+    }));
+
+    const result = await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch,
+      log,
+      messageId: "msg-empty",
+      record: {
+        onRecordError: vi.fn(),
+      },
+    });
+
+    expect(result.dispatchResult?.observedReplyDelivery).toBe(false);
+    expect(log.mock.calls).toContainEqual([
+      expect.objectContaining({
+        stage: "dispatch",
+        event: "warning",
+        messageId: "msg-empty",
+        reason: "zero-count-visible-dispatch",
+      }),
+    ]);
+  });
+
   it("drops direct prepared turns with bot-loop protection before record and dispatch", async () => {
     const events: string[] = [];
     const log = vi.fn();
@@ -983,6 +1085,49 @@ describe("channel turn kernel", () => {
     });
 
     expect(events).toEqual(["record", "afterRecord", "dispatch"]);
+  });
+
+  it("threads onTurnAdopted into assembled reply options and fires after recovery persist attempt", async () => {
+    const events: string[] = [];
+    const onTurnAdopted = vi.fn(async () => {
+      events.push("adopted");
+    });
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+      async (params: Parameters<DispatchReplyWithBufferedBlockDispatcher>[0]) => {
+        events.push("dispatch-start");
+        // Persist attempt completes before adoption (agent-runner contract).
+        events.push("recovery-persist");
+        await params.replyOptions?.onTurnAdopted?.();
+        events.push("settle");
+        return {
+          queuedFinal: true,
+          counts: { tool: 0, block: 0, final: 1 },
+        };
+      },
+    ) as DispatchReplyWithBufferedBlockDispatcher;
+
+    await dispatchAssembledChannelTurn({
+      cfg,
+      channel: "test",
+      agentId: "main",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession: createRecordInboundSession(events),
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: {
+        deliver: vi.fn(async () => undefined),
+      },
+      onTurnAdopted,
+    });
+
+    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(events).toEqual(["record", "dispatch-start", "recovery-persist", "adopted", "settle"]);
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({ onTurnAdopted }),
+      }),
+    );
   });
 
   it("does not run afterRecord when session recording fails", async () => {

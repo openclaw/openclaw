@@ -184,9 +184,9 @@ describe("buildTelegramThreadParams", () => {
     { input: { id: 0, scope: "dm" as const }, expected: undefined },
     { input: { id: -1, scope: "dm" as const }, expected: undefined },
     { input: { id: 1.9, scope: "dm" as const }, expected: { message_thread_id: 1 } },
-    // id=0 should be included for forum and none scopes (not falsy)
+    // id=0 should be included for forum scope (not falsy).
     { input: { id: 0, scope: "forum" as const }, expected: { message_thread_id: 0 } },
-    { input: { id: 0, scope: "none" as const }, expected: { message_thread_id: 0 } },
+    { input: { id: 42, scope: "none" as const }, expected: undefined },
   ])("builds thread params", ({ input, expected }) => {
     expect(buildTelegramThreadParams(input)).toEqual(expected);
   });
@@ -522,6 +522,75 @@ describe("describeReplyTarget", () => {
     } as any);
 
     expect(result?.body).toBe("[unsupported Telegram rich_message received]");
+    expect(result?.quoteSourceText).toBeUndefined();
+  });
+
+  it("describes rich-message-only reply targets with rich text", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: "Forwarded reply text",
+            },
+          ],
+        },
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as never);
+
+    expect(result?.body).toBe("Forwarded reply text");
+    expect(result?.quoteSourceText).toBeUndefined();
+  });
+
+  it("describes rich-message-only reply targets with canonical block text", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        rich_message: {
+          blocks: [
+            {
+              type: "details",
+              summary: "Run summary",
+              blocks: [
+                {
+                  type: "list",
+                  items: [
+                    {
+                      label: "1.",
+                      blocks: [{ type: "paragraph", text: "CI clean" }],
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              type: "mathematical_expression",
+              expression: "a^2+b^2=c^2",
+            },
+            {
+              type: "photo",
+              caption: { text: "Chart", credit: "OpenClaw" },
+            },
+          ],
+        },
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as never);
+
+    expect(result?.body).toBe("Run summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw");
     expect(result?.quoteSourceText).toBeUndefined();
   });
 

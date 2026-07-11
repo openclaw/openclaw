@@ -3,6 +3,7 @@ import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-a
 import type {
   ReadRecentSessionMessagesOptions,
   ReadSessionMessagesAsyncOptions,
+  SessionTranscriptUsageSnapshot,
 } from "./session-utils.fs.js";
 import {
   readFirstUserMessageFromTranscript as readFirstUserMessageFromTranscriptFile,
@@ -14,6 +15,7 @@ import {
   readRecentSessionMessagesWithStats as readRecentSessionMessagesWithStatsFile,
   readRecentSessionMessagesWithStatsAsync as readRecentSessionMessagesWithStatsAsyncFile,
   readRecentSessionTranscriptLines as readRecentSessionTranscriptLinesFile,
+  readSessionMessagesPageWithStatsAsync as readSessionMessagesPageWithStatsAsyncFile,
   readRecentSessionUsageFromTranscript as readRecentSessionUsageFromTranscriptFile,
   readRecentSessionUsageFromTranscriptAsync as readRecentSessionUsageFromTranscriptAsyncFile,
   readSessionMessageByIdAsync as readSessionMessageByIdAsyncFile,
@@ -55,18 +57,6 @@ type ReadSessionMessageByIdResult = {
   seq?: number;
   oversized: boolean;
   found: boolean;
-};
-
-type SessionTranscriptUsageSnapshot = {
-  modelProvider?: string;
-  model?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  totalTokens?: number;
-  totalTokensFresh?: boolean;
-  costUsd?: number;
 };
 
 type FileBackedReadScope = {
@@ -260,6 +250,21 @@ export async function readRecentSessionMessagesWithStatsAsync(
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveFileBackedReadScope(scope);
   return await readRecentSessionMessagesWithStatsAsyncFile(
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    opts,
+    target.agentId,
+  );
+}
+
+/** Reads one offset page with total-count metadata through the reader seam. */
+export async function readSessionMessagesPageWithStatsAsync(
+  scope: SessionTranscriptReadScope,
+  opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
+): Promise<ReadRecentSessionMessagesResult> {
+  const target = resolveFileBackedReadScope(scope);
+  return await readSessionMessagesPageWithStatsAsyncFile(
     target.sessionId,
     target.storePath,
     target.sessionFile,

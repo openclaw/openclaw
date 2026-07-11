@@ -13,6 +13,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { buildSessionEntryMock } = vi.hoisted(() => ({
   buildSessionEntryMock: vi.fn(),
 }));
+const originalSyncYieldStateDir = process.env.OPENCLAW_STATE_DIR;
+
+function setSyncYieldStateDir(): void {
+  Reflect.set(
+    process.env,
+    "OPENCLAW_STATE_DIR",
+    path.join(os.tmpdir(), "openclaw-session-sync-yield"),
+  );
+}
+
+function restoreSyncYieldStateDir(): void {
+  if (originalSyncYieldStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalSyncYieldStateDir);
+  }
+}
 
 vi.mock("undici", async () => {
   const actual = await vi.importActual<typeof import("undici")>("undici");
@@ -162,7 +179,7 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
 
 describe("session sync responsiveness", () => {
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(os.tmpdir(), "openclaw-session-sync-yield"));
+    setSyncYieldStateDir();
     buildSessionEntryMock.mockImplementation(async (absPath: string) => {
       const name = path.basename(absPath);
       return {
@@ -177,7 +194,7 @@ describe("session sync responsiveness", () => {
   });
 
   afterEach(() => {
-    vi.unstubAllEnvs();
+    restoreSyncYieldStateDir();
     vi.clearAllMocks();
   });
 

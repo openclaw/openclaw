@@ -8,7 +8,7 @@ import {
 } from "./cdp-reachability-policy.js";
 import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
-import { listChromeMcpTabs } from "./chrome-mcp.js";
+import { countChromeMcpTabs } from "./chrome-mcp.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
@@ -25,7 +25,6 @@ import { createProfileTabOps } from "./server-context.tab-ops.js";
 import type {
   BrowserServerState,
   BrowserRouteContext,
-  BrowserTab,
   ContextOptions,
   ProfileContext,
   ProfileRuntimeState,
@@ -189,10 +188,9 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         try {
           running = await profileCtx.isTransportAvailable(300);
           if (running) {
-            const tabs = await listChromeMcpTabs(profile.name, profile, {
+            tabCount = await countChromeMcpTabs(profile.name, profile, {
               ephemeral: true,
-            }).catch(() => [] as BrowserTab[]);
-            tabCount = tabs.filter((t) => t.type === "page").length;
+            }).catch(() => 0);
           }
         } catch {
           // Chrome MCP not available
@@ -231,7 +229,11 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
       result.push({
         name,
-        transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
+        transport: capabilities.usesChromeMcp
+          ? "chrome-mcp"
+          : capabilities.mode === "local-extension"
+            ? "extension"
+            : "cdp",
         cdpPort: capabilities.usesChromeMcp ? null : profile.cdpPort,
         cdpUrl: profile.cdpUrl ? (redactCdpUrl(profile.cdpUrl) ?? null) : null,
         color: profile.color,
@@ -273,8 +275,8 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     listTabs: () => getDefaultContext().listTabs(),
     openTab: (url, optsLocal) => getDefaultContext().openTab(url, optsLocal),
     labelTab: (targetId, label) => getDefaultContext().labelTab(targetId, label),
-    focusTab: (targetId) => getDefaultContext().focusTab(targetId),
-    closeTab: (targetId) => getDefaultContext().closeTab(targetId),
+    focusTab: (targetId, options) => getDefaultContext().focusTab(targetId, options),
+    closeTab: (targetId, options) => getDefaultContext().closeTab(targetId, options),
     stopRunningBrowser: () => getDefaultContext().stopRunningBrowser(),
     resetProfile: () => getDefaultContext().resetProfile(),
     mapTabError,

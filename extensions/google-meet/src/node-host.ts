@@ -107,32 +107,28 @@ function wake(session: NodeBridgeSession) {
 }
 
 function stopSession(session: NodeBridgeSession) {
-  const wasClosed = session.closed;
+  // Process and stream errors can arrive together during teardown. Close once
+  // so the same children do not get duplicate termination timers.
+  if (session.closed) {
+    return;
+  }
   session.closed = true;
-  session.closedAt ??= new Date().toISOString();
+  session.closedAt = new Date().toISOString();
   terminateChild(session.input);
   terminateChild(session.output);
-  if (!wasClosed) {
-    wake(session);
-  }
+  wake(session);
 }
 
 function attachOutputProcessHandlers(session: NodeBridgeSession, outputProcess: ChildProcess) {
-  outputProcess.on("exit", () => {
+  const stopIfCurrent = () => {
     if (session.output === outputProcess) {
       stopSession(session);
     }
-  });
-  outputProcess.on("error", () => {
-    if (session.output === outputProcess) {
-      stopSession(session);
-    }
-  });
-  outputProcess.stdin?.on?.("error", () => {
-    if (session.output === outputProcess) {
-      stopSession(session);
-    }
-  });
+  };
+  outputProcess.on("exit", stopIfCurrent);
+  outputProcess.on("error", stopIfCurrent);
+  outputProcess.stdin?.on("error", stopIfCurrent);
+  outputProcess.stderr?.on("error", stopIfCurrent);
 }
 
 function startOutputProcess(command: { command: string; args: string[] }) {
@@ -178,9 +174,12 @@ function startCommandPair(params: {
     }
     wake(session);
   });
-  inputProcess.on("exit", () => stopSession(session));
+  const stop = () => stopSession(session);
+  inputProcess.on("exit", stop);
+  inputProcess.on("error", stop);
+  inputProcess.stdout?.on("error", stop);
+  inputProcess.stderr?.on("error", stop);
   attachOutputProcessHandlers(session, outputProcess);
-  inputProcess.on("error", () => stopSession(session));
   sessions.set(session.id, session);
   return session;
 }
@@ -332,12 +331,11 @@ function startChrome(params: Record<string, unknown>) {
   }
 
   if (params.launch !== false) {
-    const argv = ["open", "-a", "Google Chrome"];
+    const argv = ["open", "-a", "Google Chrome", url];
     const browserProfile = readString(params.browserProfile);
     if (browserProfile) {
       argv.push("--args", `--profile-directory=${browserProfile}`);
     }
-    argv.push(url);
     const result = runCommandWithTimeout(argv, timeoutMs);
     if (result.code !== 0) {
       if (bridgeId) {
