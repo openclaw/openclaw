@@ -210,8 +210,8 @@ export function uniformOutboundAuditTerminals(
   return Array.from({ length: payloadCount }, (_, payloadIndex) => ({ payloadIndex, terminal }));
 }
 
-// Delivery targets may carry a kind prefix (e.g. "channel:C123", "user:U123")
-// that session-key peer ids do not retain.
+// Delivery targets may carry a kind prefix ("channel:C123", "user:U123") or a
+// channel-name prefix ("telegram:999") that session-key peer ids do not retain.
 const TARGET_KIND_PREFIX_RE = /^(?:channel|group|direct|dm|user):/i;
 
 /** True when a parsed session route provably names this delivery's destination. */
@@ -222,7 +222,14 @@ function routeNamesDestination(
   if (!route || route.channel !== context.channel.toLowerCase()) {
     return false;
   }
-  const candidates = [context.to, context.to.replace(TARGET_KIND_PREFIX_RE, "")];
+  const channelPrefix = `${context.channel.toLowerCase()}:`;
+  const candidates = [
+    context.to,
+    context.to.replace(TARGET_KIND_PREFIX_RE, ""),
+    ...(context.to.toLowerCase().startsWith(channelPrefix)
+      ? [context.to.slice(channelPrefix.length)]
+      : []),
+  ];
   return candidates.some((candidate) => {
     const normalized = normalizeSessionPeerId({
       channel: route.channel,

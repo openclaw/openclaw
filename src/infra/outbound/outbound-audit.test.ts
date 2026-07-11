@@ -254,6 +254,14 @@ describe("outbound audit projection", () => {
         session: { key: "agent:main:slack:channel:c0agent" },
       }),
     ).toBe("channel");
+    // Channel-name-prefixed targets (telegram:999) must match route peer 999.
+    expect(
+      conversationKindFor({
+        channel: "telegram",
+        to: "telegram:999",
+        session: { key: "agent:main:telegram:default:direct:999" },
+      }),
+    ).toBe("direct");
   });
 
   it("does not classify by a policy session that names another conversation", () => {
