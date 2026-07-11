@@ -395,15 +395,169 @@ CREATE TABLE IF NOT EXISTS authorization_resources (
   resource_id TEXT NOT NULL CHECK (length(trim(resource_id)) > 0),
   domain_id TEXT NOT NULL,
   owner_principal_id TEXT NOT NULL,
+  parent_namespace TEXT,
+  parent_resource_type TEXT,
+  parent_resource_id TEXT,
+  retired_at INTEGER,
   created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
   PRIMARY KEY (namespace, resource_type, resource_id),
   UNIQUE (domain_id, namespace, resource_type, resource_id),
+  CHECK (
+    (
+      parent_namespace IS NULL
+      AND parent_resource_type IS NULL
+      AND parent_resource_id IS NULL
+    )
+    OR (
+      parent_namespace IS NOT NULL
+      AND parent_resource_type IS NOT NULL
+      AND parent_resource_id IS NOT NULL
+      AND NOT (
+        namespace = parent_namespace
+        AND resource_type = parent_resource_type
+        AND resource_id = parent_resource_id
+      )
+    )
+  ),
   FOREIGN KEY (domain_id, owner_principal_id)
-    REFERENCES authorization_domain_memberships(domain_id, principal_id)
+    REFERENCES authorization_domain_memberships(domain_id, principal_id),
+  FOREIGN KEY (domain_id, parent_namespace, parent_resource_type, parent_resource_id)
+    REFERENCES authorization_resources(domain_id, namespace, resource_type, resource_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_authorization_resources_domain
   ON authorization_resources(domain_id, namespace, resource_type, resource_id);
+
+CREATE INDEX IF NOT EXISTS idx_authorization_resources_parent
+  ON authorization_resources(
+    domain_id,
+    parent_namespace,
+    parent_resource_type,
+    parent_resource_id,
+    retired_at
+  );
+
+CREATE INDEX IF NOT EXISTS idx_authorization_resources_active_list
+  ON authorization_resources(
+    domain_id,
+    namespace,
+    resource_type,
+    retired_at,
+    resource_id
+  );
+
+CREATE TRIGGER IF NOT EXISTS authorization_resources_insert_owner_guard
+BEFORE INSERT ON authorization_resources
+FOR EACH ROW
+WHEN NOT EXISTS (
+  SELECT 1
+  FROM authorization_domain_memberships AS membership
+  INNER JOIN authorization_principals AS principal
+    ON principal.principal_id = membership.principal_id
+  WHERE membership.domain_id = NEW.domain_id
+    AND membership.principal_id = NEW.owner_principal_id
+    AND principal.kind = 'human'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'authorization resource owner must be a human domain member');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_resources_update_owner_guard
+BEFORE UPDATE OF owner_principal_id ON authorization_resources
+FOR EACH ROW
+WHEN NOT EXISTS (
+  SELECT 1
+  FROM authorization_domain_memberships AS membership
+  INNER JOIN authorization_principals AS principal
+    ON principal.principal_id = membership.principal_id
+  WHERE membership.domain_id = NEW.domain_id
+    AND membership.principal_id = NEW.owner_principal_id
+    AND principal.kind = 'human'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'authorization resource owner must be a human domain member');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_resources_parent_guard
+BEFORE INSERT ON authorization_resources
+FOR EACH ROW
+WHEN
+  (
+    (NEW.parent_namespace IS NULL) <> (NEW.parent_resource_type IS NULL)
+    OR (NEW.parent_namespace IS NULL) <> (NEW.parent_resource_id IS NULL)
+  )
+  OR (
+    NEW.parent_namespace IS NOT NULL
+    AND (
+      (
+        NEW.namespace = NEW.parent_namespace
+        AND NEW.resource_type = NEW.parent_resource_type
+        AND NEW.resource_id = NEW.parent_resource_id
+      )
+      OR NOT EXISTS (
+        SELECT 1
+        FROM authorization_resources AS parent
+        WHERE parent.domain_id = NEW.domain_id
+          AND parent.namespace = NEW.parent_namespace
+          AND parent.resource_type = NEW.parent_resource_type
+          AND parent.resource_id = NEW.parent_resource_id
+          AND parent.retired_at IS NULL
+      )
+    )
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'authorization resource parent must be active in the same domain');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_resources_identity_immutable
+BEFORE UPDATE OF
+  namespace,
+  resource_type,
+  resource_id,
+  domain_id,
+  parent_namespace,
+  parent_resource_type,
+  parent_resource_id
+ON authorization_resources
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'authorization resource identity and parent are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_resources_delete_forbidden
+BEFORE DELETE ON authorization_resources
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'authorization resources cannot be deleted; retire them instead');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_resources_active_child_guard
+BEFORE UPDATE OF retired_at ON authorization_resources
+FOR EACH ROW
+WHEN
+  OLD.retired_at IS NULL
+  AND NEW.retired_at IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+    FROM authorization_resources AS child
+    WHERE child.domain_id = OLD.domain_id
+      AND child.parent_namespace = OLD.namespace
+      AND child.parent_resource_type = OLD.resource_type
+      AND child.parent_resource_id = OLD.resource_id
+      AND child.retired_at IS NULL
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'authorization resource has an active child resource');
+END;
+
+CREATE TRIGGER IF NOT EXISTS authorization_resources_retirement_monotonic
+BEFORE UPDATE OF retired_at ON authorization_resources
+FOR EACH ROW
+WHEN OLD.retired_at IS NOT NULL OR NEW.retired_at IS NULL
+BEGIN
+  SELECT RAISE(ABORT, 'retired authorization resources cannot be reactivated or retimestamped');
+END;
 
 CREATE TABLE IF NOT EXISTS authorization_grants (
   domain_id TEXT NOT NULL,

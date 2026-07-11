@@ -7,6 +7,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
@@ -54,12 +55,17 @@ function requireDomainOwner(db: DatabaseSync, domainId: string, principalId: str
   const membership = executeSqliteQueryTakeFirstSync(
     db,
     getAuthorizationKysely(db)
-      .selectFrom("authorization_domain_memberships")
-      .select("role")
-      .where("domain_id", "=", domainId)
-      .where("principal_id", "=", principalId),
+      .selectFrom("authorization_domain_memberships as membership")
+      .innerJoin(
+        "authorization_principals as principal",
+        "principal.principal_id",
+        "membership.principal_id",
+      )
+      .select(["membership.role", "principal.kind"])
+      .where("membership.domain_id", "=", domainId)
+      .where("membership.principal_id", "=", principalId),
   );
-  if (membership?.role !== "owner") {
+  if (membership?.role !== "owner" || membership.kind !== "human") {
     throw new Error(`principal ${principalId} is not the owner of isolation domain ${domainId}`);
   }
 }
@@ -92,6 +98,11 @@ function requireDomainOrResourceOwner(params: {
     params.db,
     getAuthorizationKysely(params.db)
       .selectFrom("authorization_domain_memberships as membership")
+      .innerJoin(
+        "authorization_principals as principal",
+        "principal.principal_id",
+        "membership.principal_id",
+      )
       .leftJoin("authorization_resources as resource", (join) =>
         join
           .onRef("resource.domain_id", "=", "membership.domain_id")
@@ -99,11 +110,14 @@ function requireDomainOrResourceOwner(params: {
           .on("resource.resource_type", "=", params.resource.type)
           .on("resource.resource_id", "=", params.resource.id),
       )
-      .select(["membership.role", "resource.owner_principal_id"])
+      .select(["membership.role", "principal.kind", "resource.owner_principal_id"])
       .where("membership.domain_id", "=", params.domainId)
       .where("membership.principal_id", "=", params.principalId),
   );
-  if (ownership?.role !== "owner" && ownership?.owner_principal_id !== params.principalId) {
+  if (
+    ownership?.kind !== "human" ||
+    (ownership.role !== "owner" && ownership.owner_principal_id !== params.principalId)
+  ) {
     throw new Error(`principal ${params.principalId} is not the owner of the domain or resource`);
   }
 }
@@ -253,11 +267,13 @@ export function bindAuthorizationResource(
   input: AuthorizationDatabaseInput & {
     domainId: string;
     resource: GatewayResourceRef;
+    parent?: GatewayResourceRef;
     ownerPrincipalId: string;
   },
 ): void {
   const domainId = requiredIdentifier(input.domainId, "isolation domain id");
   const resource = normalizeResource(input.resource);
+  const parent = input.parent ? normalizeResource(input.parent) : undefined;
   const ownerPrincipalId = requiredIdentifier(
     input.ownerPrincipalId,
     "resource owner principal id",
@@ -268,18 +284,52 @@ export function bindAuthorizationResource(
       db,
       kysely
         .selectFrom("authorization_resources")
-        .select(["domain_id", "owner_principal_id"])
+        .select([
+          "domain_id",
+          "owner_principal_id",
+          "parent_namespace",
+          "parent_resource_type",
+          "parent_resource_id",
+          "retired_at",
+        ])
         .where("namespace", "=", resource.namespace)
         .where("resource_type", "=", resource.type)
         .where("resource_id", "=", resource.id),
     );
     if (existing) {
-      if (existing.domain_id !== domainId || existing.owner_principal_id !== ownerPrincipalId) {
+      const sameParent = parent
+        ? existing.parent_namespace === parent.namespace &&
+          existing.parent_resource_type === parent.type &&
+          existing.parent_resource_id === parent.id
+        : existing.parent_namespace === null &&
+          existing.parent_resource_type === null &&
+          existing.parent_resource_id === null;
+      if (
+        existing.retired_at !== null ||
+        existing.domain_id !== domainId ||
+        existing.owner_principal_id !== ownerPrincipalId ||
+        !sameParent
+      ) {
         throw new Error("authorization resource is already bound differently");
       }
       return;
     }
     requireHumanDomainMember(db, domainId, ownerPrincipalId);
+    if (parent) {
+      const parentRow = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("authorization_resources")
+          .select(["domain_id", "retired_at"])
+          .where("namespace", "=", parent.namespace)
+          .where("resource_type", "=", parent.type)
+          .where("resource_id", "=", parent.id),
+      );
+      if (parentRow?.domain_id !== domainId || parentRow.retired_at !== null) {
+        throw new Error("authorization resource parent must be active in the same domain");
+      }
+    }
+    const now = Date.now();
     executeSqliteQuerySync(
       db,
       kysely.insertInto("authorization_resources").values({
@@ -288,7 +338,12 @@ export function bindAuthorizationResource(
         resource_id: resource.id,
         domain_id: domainId,
         owner_principal_id: ownerPrincipalId,
-        created_at: Date.now(),
+        parent_namespace: parent?.namespace ?? null,
+        parent_resource_type: parent?.type ?? null,
+        parent_resource_id: parent?.id ?? null,
+        retired_at: null,
+        created_at: now,
+        updated_at: now,
       }),
     );
   }, input.database);
@@ -346,4 +401,335 @@ export function grantAuthorizationPermission(
         ),
     );
   }, input.database);
+}
+
+export function revokeAuthorizationPermission(
+  input: AuthorizationDatabaseInput & {
+    domainId: string;
+    principalId: string;
+    resource: GatewayResourceRef;
+    permission: string;
+    revokedByPrincipalId: string;
+  },
+): void {
+  const domainId = requiredIdentifier(input.domainId, "isolation domain id");
+  const principalId = requiredIdentifier(input.principalId, "grantee principal id");
+  const resource = normalizeResource(input.resource);
+  const permission = requiredIdentifier(input.permission, "authorization permission");
+  const revokedByPrincipalId = requiredIdentifier(
+    input.revokedByPrincipalId,
+    "revoking principal id",
+  );
+  runOpenClawStateWriteTransaction(({ db }) => {
+    requireDomainOrResourceOwner({
+      db,
+      domainId,
+      principalId: revokedByPrincipalId,
+      resource,
+    });
+    executeSqliteQuerySync(
+      db,
+      getAuthorizationKysely(db)
+        .deleteFrom("authorization_grants")
+        .where("domain_id", "=", domainId)
+        .where("principal_id", "=", principalId)
+        .where("namespace", "=", resource.namespace)
+        .where("resource_type", "=", resource.type)
+        .where("resource_id", "=", resource.id)
+        .where("permission", "=", permission),
+    );
+  }, input.database);
+}
+
+export function retireAuthorizationResource(
+  input: AuthorizationDatabaseInput & {
+    domainId: string;
+    resource: GatewayResourceRef;
+    retiredByPrincipalId: string;
+  },
+): void {
+  const domainId = requiredIdentifier(input.domainId, "isolation domain id");
+  const resource = normalizeResource(input.resource);
+  const retiredByPrincipalId = requiredIdentifier(
+    input.retiredByPrincipalId,
+    "retiring principal id",
+  );
+  runOpenClawStateWriteTransaction(({ db }) => {
+    requireDomainOrResourceOwner({
+      db,
+      domainId,
+      principalId: retiredByPrincipalId,
+      resource,
+    });
+    const kysely = getAuthorizationKysely(db);
+    const existing = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("authorization_resources")
+        .select("retired_at")
+        .where("domain_id", "=", domainId)
+        .where("namespace", "=", resource.namespace)
+        .where("resource_type", "=", resource.type)
+        .where("resource_id", "=", resource.id),
+    );
+    if (!existing) {
+      throw new Error("unknown authorization resource");
+    }
+    if (existing.retired_at !== null) {
+      return;
+    }
+    const activeChild = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("authorization_resources")
+        .select("resource_id")
+        .where("domain_id", "=", domainId)
+        .where("parent_namespace", "=", resource.namespace)
+        .where("parent_resource_type", "=", resource.type)
+        .where("parent_resource_id", "=", resource.id)
+        .where("retired_at", "is", null)
+        .limit(1),
+    );
+    if (activeChild) {
+      throw new Error("authorization resource has an active child resource");
+    }
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .deleteFrom("authorization_grants")
+        .where("domain_id", "=", domainId)
+        .where("namespace", "=", resource.namespace)
+        .where("resource_type", "=", resource.type)
+        .where("resource_id", "=", resource.id),
+    );
+    const now = Date.now();
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .updateTable("authorization_resources")
+        .set({ retired_at: now, updated_at: now })
+        .where("domain_id", "=", domainId)
+        .where("namespace", "=", resource.namespace)
+        .where("resource_type", "=", resource.type)
+        .where("resource_id", "=", resource.id),
+    );
+  }, input.database);
+}
+
+export function transferAuthorizationResourceOwner(
+  input: AuthorizationDatabaseInput & {
+    domainId: string;
+    resource: GatewayResourceRef;
+    transferredByPrincipalId: string;
+    newOwnerPrincipalId: string;
+  },
+): void {
+  const domainId = requiredIdentifier(input.domainId, "isolation domain id");
+  const resource = normalizeResource(input.resource);
+  const transferredByPrincipalId = requiredIdentifier(
+    input.transferredByPrincipalId,
+    "transferring principal id",
+  );
+  const newOwnerPrincipalId = requiredIdentifier(
+    input.newOwnerPrincipalId,
+    "new resource owner principal id",
+  );
+  runOpenClawStateWriteTransaction(({ db }) => {
+    requireDomainOrResourceOwner({
+      db,
+      domainId,
+      principalId: transferredByPrincipalId,
+      resource,
+    });
+    requireHumanDomainMember(db, domainId, newOwnerPrincipalId);
+    const kysely = getAuthorizationKysely(db);
+    const existing = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("authorization_resources")
+        .select("retired_at")
+        .where("domain_id", "=", domainId)
+        .where("namespace", "=", resource.namespace)
+        .where("resource_type", "=", resource.type)
+        .where("resource_id", "=", resource.id),
+    );
+    if (!existing || existing.retired_at !== null) {
+      throw new Error("authorization resource must be active for owner transfer");
+    }
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .updateTable("authorization_resources")
+        .set({ owner_principal_id: newOwnerPrincipalId, updated_at: Date.now() })
+        .where("domain_id", "=", domainId)
+        .where("namespace", "=", resource.namespace)
+        .where("resource_type", "=", resource.type)
+        .where("resource_id", "=", resource.id),
+    );
+  }, input.database);
+}
+
+export function removeIsolationDomainMember(
+  input: AuthorizationDatabaseInput & {
+    domainId: string;
+    principalId: string;
+    removedByPrincipalId: string;
+  },
+): void {
+  const domainId = requiredIdentifier(input.domainId, "isolation domain id");
+  const principalId = requiredIdentifier(input.principalId, "member principal id");
+  const removedByPrincipalId = requiredIdentifier(
+    input.removedByPrincipalId,
+    "removing principal id",
+  );
+  runOpenClawStateWriteTransaction(({ db }) => {
+    requireDomainOwner(db, domainId, removedByPrincipalId);
+    const kysely = getAuthorizationKysely(db);
+    const membership = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("authorization_domain_memberships")
+        .select("role")
+        .where("domain_id", "=", domainId)
+        .where("principal_id", "=", principalId),
+    );
+    if (!membership) {
+      return;
+    }
+    if (membership.role === "owner") {
+      throw new Error("isolation domain owner cannot be removed");
+    }
+    const activeOwnedResource = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("authorization_resources")
+        .select("resource_id")
+        .where("domain_id", "=", domainId)
+        .where("owner_principal_id", "=", principalId)
+        .where("retired_at", "is", null)
+        .limit(1),
+    );
+    if (activeOwnedResource) {
+      throw new Error("member owns active resource; transfer or retire it before removal");
+    }
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .deleteFrom("authorization_grants")
+        .where("domain_id", "=", domainId)
+        .where((eb) =>
+          eb.or([
+            eb("principal_id", "=", principalId),
+            eb("granted_by_principal_id", "=", principalId),
+          ]),
+        ),
+    );
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .updateTable("authorization_resources")
+        .set({ owner_principal_id: removedByPrincipalId, updated_at: Date.now() })
+        .where("domain_id", "=", domainId)
+        .where("owner_principal_id", "=", principalId)
+        .where("retired_at", "is not", null),
+    );
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .deleteFrom("authorization_domain_memberships")
+        .where("domain_id", "=", domainId)
+        .where("principal_id", "=", principalId),
+    );
+  }, input.database);
+}
+
+export type AuthorizedResourcePage = Readonly<{
+  resources: readonly GatewayResourceRef[];
+  nextCursor?: string;
+}>;
+
+export function listAuthorizedResources(
+  input: AuthorizationDatabaseInput & {
+    domainId: string;
+    principalId: string;
+    namespace: string;
+    type: string;
+    permission: string;
+    cursor?: string;
+    limit: number;
+  },
+): AuthorizedResourcePage {
+  const domainId = requiredIdentifier(input.domainId, "isolation domain id");
+  const principalId = requiredIdentifier(input.principalId, "principal id");
+  const namespace = requiredIdentifier(input.namespace, "resource namespace");
+  const type = requiredIdentifier(input.type, "resource type");
+  const permission = requiredIdentifier(input.permission, "authorization permission");
+  const cursor = input.cursor
+    ? requiredIdentifier(input.cursor, "authorization list cursor")
+    : undefined;
+  if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
+    throw new Error("authorization resource list limit must be an integer from 1 to 100");
+  }
+  const { db } = openOpenClawStateDatabase(input.database);
+  const kysely = getAuthorizationKysely(db);
+  const membership = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("authorization_domain_memberships as membership")
+      .innerJoin(
+        "authorization_principals as principal",
+        "principal.principal_id",
+        "membership.principal_id",
+      )
+      .select(["membership.role", "principal.kind"])
+      .where("membership.domain_id", "=", domainId)
+      .where("membership.principal_id", "=", principalId),
+  );
+  if (!membership) {
+    return { resources: [] };
+  }
+  let query = kysely
+    .selectFrom("authorization_resources as resource")
+    .leftJoin("authorization_grants as grant", (join) =>
+      join
+        .onRef("grant.domain_id", "=", "resource.domain_id")
+        .onRef("grant.namespace", "=", "resource.namespace")
+        .onRef("grant.resource_type", "=", "resource.resource_type")
+        .onRef("grant.resource_id", "=", "resource.resource_id")
+        .on("grant.principal_id", "=", principalId)
+        .on("grant.permission", "=", permission),
+    )
+    .select(["resource.namespace", "resource.resource_type", "resource.resource_id"])
+    .where("resource.domain_id", "=", domainId)
+    .where("resource.namespace", "=", namespace)
+    .where("resource.resource_type", "=", type)
+    .where("resource.retired_at", "is", null);
+  if (cursor) {
+    query = query.where("resource.resource_id", ">", cursor);
+  }
+  if (membership.kind !== "human" || membership.role !== "owner") {
+    query = query.where((eb) =>
+      eb.or([
+        ...(membership.kind === "human"
+          ? [eb("resource.owner_principal_id", "=", principalId)]
+          : []),
+        eb("grant.permission", "is not", null),
+      ]),
+    );
+  }
+  const rows = executeSqliteQuerySync(
+    db,
+    query.orderBy("resource.resource_id", "asc").limit(input.limit + 1),
+  ).rows;
+  const hasMore = rows.length > input.limit;
+  const pageRows = hasMore ? rows.slice(0, input.limit) : rows;
+  const resources = pageRows.map((row) => ({
+    namespace: row.namespace,
+    type: row.resource_type,
+    id: row.resource_id,
+  }));
+  return {
+    resources,
+    ...(hasMore && resources.length > 0 ? { nextCursor: resources[resources.length - 1]?.id } : {}),
+  };
 }
