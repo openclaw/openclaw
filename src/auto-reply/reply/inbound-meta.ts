@@ -19,6 +19,7 @@ const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const MAX_ACTIVE_GOAL_OBJECTIVE_CHARS = 200;
 const MAX_SKILL_SUGGESTION_NAME_CHARS = 120;
+const MAX_SKILL_PROPOSAL_ID_CHARS = 160;
 const ACTIVE_GOAL_CONTEXT_PREFIX = "Active goal: ";
 const ACTIVE_GOAL_CONTEXT_SUFFIX = " — advance it or update its status (get_goal/update_goal).";
 const INBOUND_SOURCE_MODALITIES = new Set(["text", "voice", "audio", "image", "video", "document"]);
@@ -44,6 +45,25 @@ function formatPendingSkillSuggestionContext(sessionEntry?: SessionEntry): strin
   const normalizedSkillName = rawSkillName.replace(/\s+/gu, " ").replaceAll('"', "'");
   const skillName = truncateUtf16Safe(normalizedSkillName, MAX_SKILL_SUGGESTION_NAME_CHARS);
   return `A reusable workflow ("${skillName}") was detected last turn — offer to save it as a skill via skill_workshop if the user agrees.`;
+}
+
+function formatPendingSkillProposalNoticeContext(sessionEntry?: SessionEntry): string | undefined {
+  const rawProposalId = normalizeOptionalString(
+    sessionEntry?.pendingSkillProposalNotice?.proposalId,
+  );
+  const rawSkillName = normalizeOptionalString(sessionEntry?.pendingSkillProposalNotice?.skillName);
+  if (!rawProposalId || !rawSkillName) {
+    return undefined;
+  }
+  const proposalId = truncateUtf16Safe(
+    rawProposalId.replace(/\s+/gu, " ").replaceAll('"', "'"),
+    MAX_SKILL_PROPOSAL_ID_CHARS,
+  );
+  const skillName = truncateUtf16Safe(
+    rawSkillName.replace(/\s+/gu, " ").replaceAll('"', "'"),
+    MAX_SKILL_SUGGESTION_NAME_CHARS,
+  );
+  return `Skill Workshop created pending proposal "${proposalId}" for "${skillName}" last turn — tell the user it is pending review and can be applied, rejected, or quarantined through skill_workshop.`;
 }
 
 function isQueuedGoalOnlyBlock(block: string, injectedGoals: ReadonlySet<string>): boolean {
@@ -835,6 +855,11 @@ export function buildInboundUserContextPrefix(
   const pendingSkillSuggestionContext = formatPendingSkillSuggestionContext(sessionEntry);
   if (pendingSkillSuggestionContext) {
     blocks.push(pendingSkillSuggestionContext);
+  }
+
+  const pendingSkillProposalNoticeContext = formatPendingSkillProposalNoticeContext(sessionEntry);
+  if (pendingSkillProposalNoticeContext) {
+    blocks.push(pendingSkillProposalNoticeContext);
   }
 
   if (currentMessageContext) {

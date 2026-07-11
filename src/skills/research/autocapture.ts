@@ -4,6 +4,7 @@ import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   claimSessionSkillCaptureSignals,
   readSessionSkillCaptureSignalHashes,
+  recordSessionSkillProposalNotice,
   recordSessionSkillCaptureSignals,
   recordSessionSkillSuggestion,
   releaseSessionSkillCaptureSignals,
@@ -12,7 +13,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readWorkspaceSkillFile } from "../lifecycle/workspace-skill-write.js";
-import { resolveSkillWorkshopConfig } from "../workshop/config.js";
+import {
+  isAgentAllowedForAutonomousSkillEvolution,
+  resolveSkillWorkshopConfig,
+  type SkillWorkshopConfig,
+} from "../workshop/config.js";
 import { stripProposalFrontmatterForSkill } from "../workshop/frontmatter.js";
 import {
   inspectSkillProposal,
@@ -57,9 +62,15 @@ function buildAutoCaptureUpdateContent(existingSkill: string, capturedContent: s
   );
 }
 
-function isSkillResearchAutoCaptureEligible(ctx: SkillResearchAgentContext): boolean {
+function isSkillResearchAutoCaptureEligible(
+  ctx: SkillResearchAgentContext,
+  workshopConfig: SkillWorkshopConfig,
+): boolean {
   const trigger = ctx.trigger?.trim().toLowerCase();
   if (trigger && AUTO_CAPTURE_BLOCKED_TRIGGERS.has(trigger)) {
+    return false;
+  }
+  if (!isAgentAllowedForAutonomousSkillEvolution(ctx.agentId, workshopConfig)) {
     return false;
   }
 
@@ -215,7 +226,7 @@ export async function runSkillResearchAutoCapture(params: {
   if (!workspaceDir) {
     return;
   }
-  if (!isSkillResearchAutoCaptureEligible(params.ctx)) {
+  if (!isSkillResearchAutoCaptureEligible(params.ctx, workshopConfig)) {
     return;
   }
   const sessionKey = params.ctx.sessionKey?.trim();
@@ -418,6 +429,20 @@ export async function runSkillResearchAutoCapture(params: {
                 goal: proposal.goal,
                 evidence: proposal.evidence,
               });
+        try {
+          const recordedNotice = await recordSessionSkillProposalNotice({
+            ...sessionScope,
+            proposalId: result.record.id,
+            skillName: result.record.target.skillKey,
+          });
+          if (recordedNotice) {
+            log.info(
+              `skill research queued workshop proposal notice ${result.record.target.skillKey}`,
+            );
+          }
+        } catch (error) {
+          log.warn(`skill research proposal notice skipped: ${String(error)}`);
+        }
         log.info(
           `skill research auto-capture queued workshop proposal ${result.record.target.skillKey}`,
         );

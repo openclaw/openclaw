@@ -1510,6 +1510,13 @@ export const OpenClawSchema = z
             autonomous: z
               .object({
                 enabled: z.boolean().optional(),
+                agents: z
+                  .object({
+                    allow: z.array(z.string()).optional(),
+                    deny: z.array(z.string()).optional(),
+                  })
+                  .strict()
+                  .optional(),
               })
               .strict()
               .optional(),

@@ -4,7 +4,7 @@ import {
   patchSessionEntry,
   type SessionAccessScope,
 } from "./session-accessor.js";
-import type { PendingSkillSuggestion, SessionEntry } from "./types.js";
+import type { PendingSkillProposalNotice, PendingSkillSuggestion, SessionEntry } from "./types.js";
 
 const MAX_SKILL_CAPTURE_SIGNAL_HASHES = 32;
 
@@ -16,6 +16,11 @@ type SessionSkillSuggestionScope = Pick<
 type SessionSkillSuggestionConsumption = {
   entry: SessionEntry;
   suggestion?: PendingSkillSuggestion;
+};
+
+type SessionSkillProposalNoticeConsumption = {
+  entry: SessionEntry;
+  notice?: PendingSkillProposalNotice;
 };
 
 function normalizeSignalHashes(signalHashes: readonly string[]): string[] {
@@ -179,4 +184,65 @@ export async function consumeSessionSkillSuggestion(
   );
   const entry = result ?? currentEntry;
   return entry ? { entry, suggestion } : undefined;
+}
+
+/** Records one proposal review notice without replacing an earlier unconsumed notice. */
+export async function recordSessionSkillProposalNotice(
+  options: SessionSkillSuggestionScope & {
+    proposalId: string;
+    skillName: string;
+    detectedAt?: number;
+  },
+): Promise<boolean> {
+  const proposalId = options.proposalId.trim();
+  const skillName = options.skillName.trim();
+  if (!proposalId || !skillName) {
+    return false;
+  }
+  let recorded = false;
+  const result = await patchSessionEntry(
+    {
+      agentId: options.agentId,
+      env: options.env,
+      sessionKey: options.sessionKey,
+      storePath: options.storePath,
+    },
+    (entry) => {
+      if (entry.pendingSkillProposalNotice) {
+        return null;
+      }
+      recorded = true;
+      return {
+        pendingSkillProposalNotice: {
+          proposalId,
+          skillName,
+          detectedAt: options.detectedAt ?? Date.now(),
+        },
+      };
+    },
+    { preserveActivity: true },
+  );
+  return Boolean(result && recorded);
+}
+
+/** Atomically clears and returns the proposal review notice owned by this interactive turn. */
+export async function consumeSessionSkillProposalNotice(
+  options: SessionSkillSuggestionScope,
+): Promise<SessionSkillProposalNoticeConsumption | undefined> {
+  let currentEntry: SessionEntry | undefined;
+  let notice: PendingSkillProposalNotice | undefined;
+  const result = await patchSessionEntry(
+    options,
+    (entry) => {
+      currentEntry = entry;
+      if (!entry.pendingSkillProposalNotice) {
+        return null;
+      }
+      notice = { ...entry.pendingSkillProposalNotice };
+      return { pendingSkillProposalNotice: undefined };
+    },
+    { preserveActivity: true },
+  );
+  const entry = result ?? currentEntry;
+  return entry ? { entry, notice } : undefined;
 }

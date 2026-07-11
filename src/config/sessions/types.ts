@@ -223,6 +223,12 @@ export type PendingSkillSuggestion = {
   detectedAt: number;
 };
 
+export type PendingSkillProposalNotice = {
+  proposalId: string;
+  skillName: string;
+  detectedAt: number;
+};
+
 export type RestartRecoveryRun = {
   runId: string;
   lifecycleGeneration: string;
@@ -311,6 +317,8 @@ export type SessionEntry = {
   goal?: SessionGoal;
   /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
   pendingSkillSuggestion?: PendingSkillSuggestion;
+  /** Durable one-shot Skill Workshop proposal review notice for the next interactive turn. */
+  pendingSkillProposalNotice?: PendingSkillProposalNotice;
   /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
   skillCaptureSignalHashes?: string[];
   /** Timestamp (ms) when the current sessionId first became active. */

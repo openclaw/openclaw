@@ -62,6 +62,13 @@ export type SkillsWorkshopConfig = {
   autonomous?: {
     /** Allow agents to create pending proposals from durable conversation signals. */
     enabled?: boolean;
+    /** Optional per-agent policy for autonomous capture and suggestions. */
+    agents?: {
+      /** Agent IDs allowed to capture; empty or unset means all agents except denied ones. */
+      allow?: string[];
+      /** Agent IDs blocked from capture even when globally enabled. */
+      deny?: string[];
+    };
   };
   /** Allow Skill Workshop apply to write through trusted skill symlink targets. */
   allowSymlinkTargetWrites?: boolean;

@@ -235,6 +235,85 @@ describe("CORE_HEALTH_CHECKS", () => {
     ).resolves.toEqual([]);
   });
 
+  it("warns when the autonomous agent policy excludes every configured agent", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/skill-workshop-tool-policy",
+    );
+
+    const findings = await check.detect({
+      mode: "doctor",
+      runtime,
+      cfg: {
+        agents: { list: [{ id: "coder" }] },
+        skills: {
+          workshop: { autonomous: { enabled: true, agents: { deny: ["coder"] } } },
+        },
+        tools: { profile: "coding" },
+      },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/skill-workshop-tool-policy",
+        severity: "warning",
+        path: "skills.workshop.autonomous.agents",
+        message: expect.stringContaining("excludes every configured agent"),
+      }),
+    ]);
+  });
+
+  it("warns when the autonomous agent allow list names an unknown agent", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/skill-workshop-tool-policy",
+    );
+
+    const findings = await check.detect({
+      mode: "doctor",
+      runtime,
+      cfg: {
+        agents: { list: [{ id: "coder" }] },
+        skills: {
+          workshop: {
+            autonomous: { enabled: true, agents: { allow: ["analyzer", "coder"] } },
+          },
+        },
+        tools: { profile: "coding" },
+      },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/skill-workshop-tool-policy",
+        severity: "warning",
+        path: "skills.workshop.autonomous.agents.allow",
+        message: expect.stringContaining('"analyzer"'),
+      }),
+    ]);
+  });
+
+  it("does not warn when the autonomous agent policy admits a configured agent", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/skill-workshop-tool-policy",
+    );
+
+    await expect(
+      check.detect({
+        mode: "doctor",
+        runtime,
+        cfg: {
+          agents: { list: [{ id: "coder" }] },
+          skills: {
+            workshop: { autonomous: { enabled: true, agents: { allow: ["coder"] } } },
+          },
+          tools: { profile: "coding" },
+        },
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("threads deep mode into structured extra gateway service detection", async () => {
     const check = getCheck(
       createCoreHealthChecks(createDeps()),

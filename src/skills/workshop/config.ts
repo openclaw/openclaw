@@ -6,6 +6,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 export type SkillWorkshopConfig = {
   autonomous: {
     enabled: boolean;
+    agents: {
+      allow: string[];
+      deny: string[];
+    };
   };
   allowSymlinkTargetWrites: boolean;
   approvalPolicy: "pending" | "auto";
@@ -16,6 +20,10 @@ export type SkillWorkshopConfig = {
 const DEFAULT_CONFIG: SkillWorkshopConfig = {
   autonomous: {
     enabled: false,
+    agents: {
+      allow: [],
+      deny: [],
+    },
   },
   allowSymlinkTargetWrites: false,
   approvalPolicy: "pending",
@@ -37,12 +45,46 @@ function readApprovalPolicy(value: unknown, fallback: SkillWorkshopConfig["appro
   return value === "auto" ? "auto" : fallback;
 }
 
+function readStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [
+        ...new Set(
+          value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean),
+        ),
+      ]
+    : [];
+}
+
+/**
+ * Applies the autonomous agents policy: deny always wins, and an empty allow
+ * list admits every agent so unset config keeps the historical allow-all shape.
+ */
+export function isAgentAllowedForAutonomousSkillEvolution(
+  agentId: string | undefined,
+  workshopConfig: SkillWorkshopConfig,
+): boolean {
+  const id = agentId?.trim();
+  const policy = workshopConfig.autonomous.agents;
+  if (id && policy.deny.includes(id)) {
+    return false;
+  }
+  if (policy.allow.length === 0) {
+    return true;
+  }
+  return Boolean(id && policy.allow.includes(id));
+}
+
 export function resolveSkillWorkshopConfig(config?: OpenClawConfig): SkillWorkshopConfig {
   const raw = asNullableRecord(config?.skills?.workshop) ?? {};
   const autonomous = asNullableRecord(raw.autonomous) ?? {};
+  const autonomousAgents = asNullableRecord(autonomous.agents) ?? {};
   return {
     autonomous: {
       enabled: readBoolean(autonomous.enabled, DEFAULT_CONFIG.autonomous.enabled),
+      agents: {
+        allow: readStringList(autonomousAgents.allow),
+        deny: readStringList(autonomousAgents.deny),
+      },
     },
     allowSymlinkTargetWrites: readBoolean(
       raw.allowSymlinkTargetWrites,

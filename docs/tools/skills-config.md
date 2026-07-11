@@ -344,7 +344,20 @@ different visible skill set per agent.
 <ParamField path="skills.workshop.autonomous.enabled" type="boolean" default="false">
   When `true`, agents can create pending proposals from durable conversation
   signals after successful turns. User-prompted skill creation always goes
-  through Skill Workshop regardless of this setting.
+  through Skill Workshop regardless of this setting. Created or revised
+  proposals schedule a one-shot review notice for the next interactive turn.
+</ParamField>
+
+<ParamField path="skills.workshop.autonomous.agents.allow" type="string[]" default="[]">
+  Optional agent ID allowlist for runtime skill evolution. Empty means every
+  agent can participate unless it is listed in
+  `skills.workshop.autonomous.agents.deny`.
+</ParamField>
+
+<ParamField path="skills.workshop.autonomous.agents.deny" type="string[]" default="[]">
+  Optional agent ID denylist for runtime skill evolution. Denied agents do not
+  create pending proposals or skill-save suggestions from durable conversation
+  signals.
 </ParamField>
 
 <ParamField path="skills.workshop.approvalPolicy" type='"pending" | "auto"' default='"pending"'>

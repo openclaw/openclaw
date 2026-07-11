@@ -1,6 +1,10 @@
 // Doctor core checks collect environment, config, and runtime readiness diagnostics.
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue,
@@ -35,7 +39,10 @@ import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
-import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
+import {
+  isAgentAllowedForAutonomousSkillEvolution,
+  resolveSkillWorkshopConfig,
+} from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
 import { registerHealthCheck } from "./health-check-registry.js";
 import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
@@ -234,15 +241,14 @@ const skillWorkshopToolPolicyCheck: HealthCheck = {
   description: "Autonomous Skill Workshop capture has a callable review tool.",
   source: "doctor",
   async detect(ctx) {
+    const workshop = resolveSkillWorkshopConfig(ctx.cfg);
+    const findings: HealthFinding[] = [];
     const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
       config: ctx.cfg,
-      workshopEnabled: resolveSkillWorkshopConfig(ctx.cfg).autonomous.enabled,
+      workshopEnabled: workshop.autonomous.enabled,
     });
-    if (!diagnostic) {
-      return [];
-    }
-    return [
-      {
+    if (diagnostic) {
+      findings.push({
         checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
         severity: "warning",
         message: diagnostic.detail,
@@ -250,8 +256,45 @@ const skillWorkshopToolPolicyCheck: HealthCheck = {
         target: diagnostic.agentId,
         requirement: "Autonomous Skill Workshop review requires the skill_workshop tool.",
         fixHint: diagnostic.fix,
-      },
-    ];
+      });
+    }
+    if (workshop.autonomous.enabled) {
+      const configuredAgentIds = listAgentIds(ctx.cfg);
+      // Runtime matches allow/deny entries verbatim against normalized agent ids,
+      // so a non-matching allow entry silently never participates — flag it as a typo.
+      const unknownAllow = workshop.autonomous.agents.allow.filter(
+        (id) => !configuredAgentIds.includes(id),
+      );
+      if (unknownAllow.length > 0) {
+        findings.push({
+          checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
+          severity: "warning",
+          message: `skills.workshop.autonomous.agents.allow names unknown agent id(s): ${unknownAllow
+            .map((id) => JSON.stringify(id))
+            .join(", ")}.`,
+          path: "skills.workshop.autonomous.agents.allow",
+          requirement: "Autonomous agent allow entries must match configured agent ids.",
+          fixHint: "Use ids from agents.list (openclaw agents list); agent ids are lowercase.",
+        });
+      }
+      const participating = configuredAgentIds.filter((agentId) =>
+        isAgentAllowedForAutonomousSkillEvolution(agentId, workshop),
+      );
+      if (participating.length === 0) {
+        findings.push({
+          checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
+          severity: "warning",
+          message:
+            "skills.workshop.autonomous.agents excludes every configured agent, so autonomous capture never runs.",
+          path: "skills.workshop.autonomous.agents",
+          requirement:
+            "Autonomous Skill Workshop capture requires at least one participating agent.",
+          fixHint:
+            "Adjust skills.workshop.autonomous.agents.allow/deny or disable skills.workshop.autonomous.enabled.",
+        });
+      }
+    }
+    return findings;
   },
 };
 
