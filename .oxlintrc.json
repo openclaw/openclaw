@@ -228,6 +228,21 @@
     "**/node_modules/**"
   ],
   "overrides": [
+    // Keep these package globs aligned with the noUncheckedIndexedAccess ratchet lane.
+    {
+      "files": [
+        "packages/markdown-core/**/*.ts",
+        "packages/net-policy/**/*.ts",
+        "packages/media-understanding-common/**/*.ts",
+        "packages/terminal-core/**/*.ts",
+        "packages/normalization-core/**/*.ts",
+        "packages/model-catalog-core/**/*.ts",
+        "packages/web-content-core/**/*.ts"
+      ],
+      "rules": {
+        "typescript/no-non-null-assertion": "error"
+      }
+    },
     {
       "files": [
         "**/*.test.ts",
