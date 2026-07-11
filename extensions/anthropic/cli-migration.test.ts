@@ -376,9 +376,10 @@ describe("anthropic cli migration", () => {
         },
       });
 
-      const migrated = result.configPatch?.agents?.defaults?.models?.[convertedRef];
+      const models = result.configPatch?.agents?.defaults?.models ?? {};
+      const migrated = models[convertedRef];
       expect(migrated).toEqual({ alias: "Opus", agentRuntime: { id: "claude-cli" } });
-      expect(Object.hasOwn(result.configPatch?.agents?.defaults?.models, convertedRef)).toBe(true);
+      expect(Object.hasOwn(models, convertedRef)).toBe(true);
     } finally {
       if (priorDescriptor) {
         Reflect.defineProperty(Object.prototype, convertedRef, priorDescriptor);
@@ -411,9 +412,10 @@ describe("anthropic cli migration", () => {
         },
       });
 
-      const migrated = result.configPatch?.agents?.defaults?.models?.[convertedRef];
+      const models = result.configPatch?.agents?.defaults?.models ?? {};
+      const migrated = models[convertedRef];
       expect(migrated).toEqual({ alias: "Opus", agentRuntime: { id: "claude-cli" } });
-      expect(Object.hasOwn(result.configPatch?.agents?.defaults?.models, convertedRef)).toBe(true);
+      expect(Object.hasOwn(models, convertedRef)).toBe(true);
       expect(setterCalled).toBe(false);
     } finally {
       if (priorDescriptor) {
