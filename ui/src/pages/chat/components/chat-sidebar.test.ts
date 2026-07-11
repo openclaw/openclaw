@@ -3,7 +3,26 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { editorOpenUrl } from "../../../lib/editor-links.ts";
-import { computeFileSearchMatches, renderMarkdownSidebar } from "./chat-sidebar.ts";
+import {
+  computeFileSearchMatches,
+  hasUniformLineEndings,
+  renderMarkdownSidebar,
+} from "./chat-sidebar.ts";
+
+describe("hasUniformLineEndings", () => {
+  it("accepts uniform and no line endings", () => {
+    expect(hasUniformLineEndings("no endings")).toBe(true);
+    expect(hasUniformLineEndings("a\nb\nc\n")).toBe(true);
+    expect(hasUniformLineEndings("a\r\nb\r\nc\r\n")).toBe(true);
+    expect(hasUniformLineEndings("a\rb\rc")).toBe(true);
+  });
+
+  it("rejects mixed line endings regardless of order", () => {
+    expect(hasUniformLineEndings("a\r\nb\nc")).toBe(false);
+    expect(hasUniformLineEndings("a\nb\r\nc")).toBe(false);
+    expect(hasUniformLineEndings("a\rb\nc")).toBe(false);
+  });
+});
 
 describe("computeFileSearchMatches", () => {
   it("finds matching line numbers", () => {

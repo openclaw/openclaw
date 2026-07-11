@@ -186,6 +186,16 @@ export function buildRawSidebarContent(
   return null;
 }
 
+// Editing is only offered for uniform line endings: the editor serializes with
+// one configured separator, so a mixed-endings file would have its untouched
+// lines silently rewritten on save.
+export function hasUniformLineEndings(content: string): boolean {
+  const crlf = content.split("\r\n").length - 1;
+  const bareCr = (content.match(/\r(?!\n)/g) ?? []).length;
+  const bareLf = (content.match(/(?<!\r)\n/g) ?? []).length;
+  return [crlf, bareCr, bareLf].filter((count) => count > 0).length <= 1;
+}
+
 export function computeFileSearchMatches(content: string, query: string): number[] {
   const normalizedQuery = query.toLocaleLowerCase();
   if (!normalizedQuery) {

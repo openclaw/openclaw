@@ -29,7 +29,7 @@ import {
   normalizeAgentId,
 } from "../../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../../lib/string-coerce.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
 
 export type SessionWorkspaceProps = {
   collapsed: boolean;
@@ -418,6 +418,7 @@ function openFile(
       }
       const canEdit =
         typeof file.hash === "string" &&
+        hasUniformLineEndings(file.content) &&
         isGatewayMethodAdvertised(state, "sessions.files.set") !== false &&
         hasOperatorAdminAccess(state.hello?.auth ?? null);
       const edit = canEdit
