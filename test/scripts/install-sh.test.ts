@@ -2166,10 +2166,25 @@ describe("install.sh duplicate OpenClaw install detection", () => {
       NO_PROMPT=0
       needs_stdin_isolation() { return 0; }
       has_controlling_tty() { return 0; }
+      has_visible_prompt_output() { return 0; }
       resolve_subprocess_stdin_path
     `);
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("/dev/tty");
+  });
+
+  it("keeps piped subprocesses nonblocking when prompt output is redirected", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      NO_PROMPT=0
+      needs_stdin_isolation() { return 0; }
+      has_controlling_tty() { return 0; }
+      has_visible_prompt_output() { return 1; }
+      resolve_subprocess_stdin_path
+    `);
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("/dev/null");
   });
 
   it("routes non-promptable subprocesses through /dev/null", () => {

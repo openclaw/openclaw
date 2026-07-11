@@ -158,6 +158,10 @@ has_controlling_tty() {
     return 0
 }
 
+has_visible_prompt_output() {
+    [[ -t 1 ]]
+}
+
 resolve_subprocess_stdin_path() {
     if [[ "${NO_PROMPT:-0}" == "1" ]]; then
         echo "/dev/null"
@@ -166,7 +170,7 @@ resolve_subprocess_stdin_path() {
     if ! needs_stdin_isolation; then
         return 1
     fi
-    if has_controlling_tty; then
+    if has_controlling_tty && has_visible_prompt_output; then
         echo "/dev/tty"
     else
         echo "/dev/null"
