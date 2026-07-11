@@ -1283,18 +1283,24 @@ class ChatPane extends OpenClawLightDomElement {
     const sessionWorkspace = createSessionWorkspaceProps(state, {
       narrowLayout: this.paneWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
     });
-    const backgroundTasks = createBackgroundTasksProps(state, {
-      onOpenSession: (sessionKey) => {
-        this.onPaneSessionChange?.(this.paneId, sessionKey);
-      },
-    });
     const railSideDocked =
       !sessionWorkspace.collapsed &&
       !sessionWorkspace.narrowLayout &&
       sessionWorkspace.dock !== "bottom";
+    const backgroundTasks = createBackgroundTasksProps(state, {
+      narrowLayout:
+        this.paneWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH ||
+        (railSideDocked &&
+          this.paneWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH + WORKSPACE_RAIL_MAX_WIDTH),
+      onOpenSession: (sessionKey) => {
+        this.onPaneSessionChange?.(this.paneId, sessionKey);
+      },
+    });
     // Every open side rail (workspace and/or background tasks) narrows the
     // room left for the chat + detail split.
-    const sideRailCount = (railSideDocked ? 1 : 0) + (backgroundTasks.collapsed ? 0 : 1);
+    const sideRailCount =
+      (railSideDocked ? 1 : 0) +
+      (!backgroundTasks.collapsed && !backgroundTasks.narrowLayout ? 1 : 0);
     const detailSplitWidth = this.paneWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
     const props: ChatProps = {
       paneId: this.paneId,

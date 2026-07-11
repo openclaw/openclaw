@@ -163,4 +163,54 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
       await context.close();
     }
   });
+
+  it("adapts geometry to narrow window widths", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1000, height: 900 },
+    });
+    const page = await context.newPage();
+    try {
+      await installMockGateway(page, {
+        historyMessages: [
+          { content: [{ type: "text", text: "Ready." }], role: "assistant", timestamp: Date.now() },
+        ],
+        methodResponses: {
+          "tasks.list": { tasks: [runningSubagent, queuedCron, finishedCli] },
+          "workspace.list_mounts": { mounts: [] },
+        },
+      });
+
+      await page.goto(`${server.baseUrl}chat`);
+
+      // Open tasks rail
+      await page.getByRole("button", { name: "Show background tasks" }).click();
+      await page.locator(".chat-tasks-rail").waitFor({ state: "visible" });
+
+      // Assert bottom dock is active for tasks
+      const workbench = page.locator(".chat-workbench");
+      await expect(workbench).toHaveClass(/chat-workbench--tasks-dock-bottom/);
+
+      await page.screenshot({
+        path: path.join(artifactDir, "03-narrow-layout.png"),
+        fullPage: true,
+      });
+
+      // Open workspace rail too (to test dual rail)
+      const workspaceBtn = page.getByRole("button", { name: "Open workspace" });
+      if (await workspaceBtn.isVisible()) {
+        await workspaceBtn.click();
+        await page.locator(".chat-workspace-rail").waitFor({ state: "visible" });
+        await expect(workbench).toHaveClass(/chat-workbench--dock-bottom/);
+
+        await page.screenshot({
+          path: path.join(artifactDir, "04-dual-rail-narrow-layout.png"),
+          fullPage: true,
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
 });

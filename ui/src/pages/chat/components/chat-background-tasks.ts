@@ -28,6 +28,7 @@ import { paneSessionAgentId } from "./chat-session-workspace.ts";
 export type BackgroundTasksProps = {
   agentId: string;
   collapsed: boolean;
+  narrowLayout?: boolean;
   connected: boolean;
   canCancel: boolean;
   loading: boolean;
@@ -261,7 +262,7 @@ export function toggleBackgroundTasks(host: BackgroundTasksHost) {
 
 export function createBackgroundTasksProps(
   host: BackgroundTasksHost,
-  opts: { onOpenSession: (sessionKey: string) => void },
+  opts: { narrowLayout?: boolean; onOpenSession: (sessionKey: string) => void },
 ): BackgroundTasksProps {
   const state = getBackgroundTasksState(host);
   if (!host.connected) {
@@ -281,6 +282,7 @@ export function createBackgroundTasksProps(
   return {
     agentId: state.agentId,
     collapsed: state.collapsed,
+    narrowLayout: opts.narrowLayout,
     connected: host.connected,
     // tasks.cancel needs operator.write; read-only operators get no button.
     canCancel: host.connected && hasOperatorWriteAccess(host.hello?.auth ?? null),

@@ -199,6 +199,9 @@ export function renderChat(props: ChatProps) {
     props.sessionWorkspace &&
     (props.sessionWorkspace.dock === "bottom" || props.sessionWorkspace.narrowLayout),
   );
+  const tasksDockBottom = Boolean(
+    props.backgroundTasks && !props.backgroundTasks.collapsed && props.backgroundTasks.narrowLayout,
+  );
   const canCompose = props.canSend;
   let chatSection: HTMLElement | null = null;
 
@@ -391,10 +394,9 @@ export function renderChat(props: ChatProps) {
       <div
         class="chat-workbench ${props.sessionWorkspace?.collapsed
           ? "chat-workbench--workspace-collapsed"
-          : ""} ${workspaceDockBottom ? "chat-workbench--dock-bottom" : ""} ${props.backgroundTasks
-          ?.collapsed === false
-          ? "chat-workbench--tasks-open"
-          : ""}"
+          : ""} ${workspaceDockBottom ? "chat-workbench--dock-bottom" : ""} ${tasksDockBottom
+          ? "chat-workbench--tasks-dock-bottom"
+          : ""} ${props.backgroundTasks?.collapsed === false ? "chat-workbench--tasks-open" : ""}"
       >
         ${renderSessionWorkspaceRail(props.sessionWorkspace)}
         ${renderBackgroundTasksRail(props.backgroundTasks)}
