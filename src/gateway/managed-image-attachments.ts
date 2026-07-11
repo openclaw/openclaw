@@ -866,7 +866,12 @@ export async function createManagedOutgoingImageBlocks(params: {
     const fallbackAlt = `Generated image ${index + 1}`;
     const parsedDataUrl = parseImageDataUrl(mediaUrl, fallbackAlt, limits);
     const alt =
-      parsedDataUrl.kind === "image-data-url" ? fallbackAlt : deriveAltText(mediaUrl, index);
+      parsedDataUrl.kind === "image-data-url"
+        ? fallbackAlt
+        : deriveAltText(
+            resolveLocalMediaPath(mediaUrl) ?? mediaUrl,
+            index,
+          );
     if (parsedDataUrl.kind === "non-image-data-url") {
       continue;
     }
