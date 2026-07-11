@@ -178,13 +178,9 @@ async function sendCompleteActivationThenAbort(port: number, activationId: strin
   ].join("\r\n");
 
   await connected;
-  await new Promise<void>((resolve, reject) => {
-    socket.write(request, (error?: Error) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
+  await new Promise<void>((resolve) => {
+    socket.write(request, () => {
+      resolve();
     });
   });
   if (typeof socket.resetAndDestroy === "function") {
@@ -217,13 +213,9 @@ async function sendRawHttpRequest(
   });
 
   await connected;
-  await new Promise<void>((resolve, reject) => {
-    socket.end(request, (error?: Error) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
+  await new Promise<void>((resolve) => {
+    socket.end(request, () => {
+      resolve();
     });
   });
 
@@ -258,13 +250,9 @@ async function openRawHttpRequest(
   });
 
   await connected;
-  await new Promise<void>((resolve, reject) => {
-    socket.write(request, (error?: Error) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
+  await new Promise<void>((resolve) => {
+    socket.write(request, () => {
+      resolve();
     });
   });
 
@@ -617,6 +605,7 @@ describe("waitForDeferredGatewayActivation", () => {
     const writeHeadSpy = vi
       .spyOn(ServerResponse.prototype, "writeHead")
       .mockImplementation(function (
+        this: ServerResponse,
         ...args: Parameters<typeof ServerResponse.prototype.writeHead>
       ) {
         if (args[0] === 202) {
