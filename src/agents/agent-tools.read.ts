@@ -944,8 +944,15 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
       // The bridge writeFile accepts Buffer | string, so we keep the
       // existing file bytes as a Buffer and write the combined payload
       // without a lossy UTF-8 round-trip.
+      //
+      // Stat-then-read is a TOCTOU window between checking existence
+      // and reading; a delete-after-stat can make readFile throw.
+      // Catch that edge so the append creates the file instead of
+      // failing the entire tool call.
       const existing = (await params.bridge.stat({ filePath: absolutePath, cwd: params.root }))
-        ? await params.bridge.readFile({ filePath: absolutePath, cwd: params.root })
+        ? await params.bridge
+            .readFile({ filePath: absolutePath, cwd: params.root })
+            .catch(() => Buffer.alloc(0))
         : Buffer.alloc(0);
       await params.bridge.mkdirp({ filePath: path.dirname(absolutePath), cwd: params.root });
       await params.bridge.writeFile({

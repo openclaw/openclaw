@@ -410,9 +410,10 @@ async function recoverSuccessfulWrite(params: {
  * Byte-safe append recovery check.
  *
  * Avoids UTF-8 round-trips (toString/decode) that would mangle non-UTF-8
- * bytes and cause false recovery rejections for binary files. Uses file
- * sizes from before-stat and byte-level measurement of the readback buffer
- * so the path works for UTF-8 and arbitrary byte streams alike.
+ * bytes. When the readback is a Buffer the suffix bytes are compared
+ * directly against the appended content; when only a string is available
+ * we fall back to size comparison. Either way we also confirm the file
+ * size is exactly pre-append size + appended content size.
  */
 function isRecoveredAppendContent(
   readback: Buffer | string | undefined,
@@ -422,19 +423,32 @@ function isRecoveredAppendContent(
   if (!readback) {
     return false;
   }
+  const appendedBuf = Buffer.from(appendedContent, "utf-8");
+  const appendedSize = appendedBuf.byteLength;
   const afterSize = Buffer.isBuffer(readback)
     ? readback.byteLength
     : Buffer.byteLength(readback, "utf-8");
-  const appendedSize = Buffer.byteLength(appendedContent, "utf-8");
-  // File did not exist before; the readback size must match appended size.
+  // File did not exist before; verify sizes match and suffix bytes match.
   if (precheck.beforeStat === null) {
-    return afterSize === appendedSize;
+    if (afterSize !== appendedSize) {
+      return false;
+    }
+    return Buffer.isBuffer(readback) ? readback.equals(appendedBuf) : readback === appendedContent;
   }
   // File existed before; verify before size + appended == after size.
-  if (precheck.beforeStat?.type === "file") {
-    return afterSize === precheck.beforeStat.size + appendedSize;
+  if (precheck.beforeStat?.type !== "file") {
+    return false;
   }
-  return false;
+  if (afterSize !== precheck.beforeStat.size + appendedSize) {
+    return false;
+  }
+  // Verify the file actually ends with the appended content bytes.
+  if (Buffer.isBuffer(readback)) {
+    const suffix = readback.subarray(-appendedSize);
+    return suffix.equals(appendedBuf);
+  }
+  // String fallback: check suffix match via .endsWith().
+  return readback.endsWith(appendedContent);
 }
 
 export function createWriteToolDefinition(
