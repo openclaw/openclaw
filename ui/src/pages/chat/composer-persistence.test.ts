@@ -1162,6 +1162,9 @@ describe("chat composer persistence", () => {
         sendError: "RangeError: Maximum call stack size exceeded",
       },
     ]);
+    expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue[0]).not.toHaveProperty(
+      "composerPersistenceVersion",
+    );
   });
 
   it("drops identifiable legacy attachment stack-overflow failures during restore", () => {
