@@ -6,7 +6,7 @@ type MarkdownFence = {
 };
 
 function readOpeningMarkdownFence(line: string): MarkdownFence | undefined {
-  const match = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+  const match = /^ {0,3}(`{3,}|~{3,})/.exec(stripMarkdownBlockQuoteContainers(line));
   const fence = match?.[1];
   if (!fence) {
     return undefined;
@@ -18,7 +18,7 @@ function readOpeningMarkdownFence(line: string): MarkdownFence | undefined {
 }
 
 function isClosingMarkdownFence(line: string, activeFence: MarkdownFence): boolean {
-  const match = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+  const match = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(stripMarkdownBlockQuoteContainers(line));
   const fence = match?.[1];
   return Boolean(fence && fence[0] === activeFence.marker && fence.length >= activeFence.length);
 }

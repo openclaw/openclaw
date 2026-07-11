@@ -207,6 +207,26 @@ describe("buildFeishuPostMessagePayload", () => {
     });
   });
 
+  it("preserves single newlines inside blockquoted markdown code fences", () => {
+    const quotedFence = "> Before\n> ```ts\n> const a = 1;\n> const b = 2;\n> ```\n> After";
+    const payload = buildFeishuPostMessagePayload({
+      messageText: quotedFence,
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: quotedFence,
+            },
+          ],
+        ],
+      },
+    });
+  });
+
   it("preserves nested shorter fences inside longer markdown code fences", () => {
     const nestedFence = "````md\n```ts\nconst a = 1;\n```\n````\nAfter";
     const payload = buildFeishuPostMessagePayload({
@@ -589,6 +609,44 @@ describe("getMessageFeishu", () => {
     });
     expect(result.messageId).toBe("om_limited_1");
     expect(result.receipt.platformMessageIds).toEqual(["om_limited_1", "om_limited_2"]);
+  });
+
+  it("keeps direct blockquoted post markdown fences literal", async () => {
+    const quotedFence = "> Intro\n> ```ts\n> const a = 1;\n> const b = 2;\n> ```\n> After";
+    const create = vi.fn().mockResolvedValueOnce({
+      code: 0,
+      data: { message_id: "om_quoted_fence" },
+    });
+    mockResolveFeishuAccount.mockReturnValue({
+      accountId: "default",
+      configured: true,
+      config: { textChunkLimit: 4000 },
+    });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: quotedFence,
+    });
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(create.mock.calls[0][0].data.content)).toEqual({
+      zh_cn: {
+        content: [[{ tag: "md", text: quotedFence }]],
+      },
+    });
+    expect(result.receipt.platformMessageIds).toEqual(["om_quoted_fence"]);
   });
 
   it("keeps direct post markdown fences balanced across send-limit chunks", async () => {
