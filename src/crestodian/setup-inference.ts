@@ -147,6 +147,10 @@ export class SetupInferenceActivationIndeterminateError extends Error {
   override name = "SetupInferenceActivationIndeterminateError";
 }
 
+class SetupInferenceActivationUnavailableError extends Error {
+  override name = "SetupInferenceActivationUnavailableError";
+}
+
 export type VerifySetupInferenceResult =
   | { ok: true; modelRef: string; latencyMs: number }
   | { ok: false; status: SetupInferenceFailureStatus; error: string };
@@ -1118,6 +1122,9 @@ export async function activateSetupInference(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const redacted = await redactSetupInferenceError(message, params.apiKey);
+    if (error instanceof SetupInferenceActivationUnavailableError) {
+      return { ok: false, status: "unavailable", error: redacted };
+    }
     if (error instanceof SetupInferenceActivationIndeterminateError) {
       throw new SetupInferenceActivationIndeterminateError(redacted);
     }
@@ -1542,7 +1549,7 @@ async function activateSetupInferenceUnredacted(
             "codex",
           );
           if (!enabledCodex.enabled) {
-            throw new Error(
+            throw new SetupInferenceActivationUnavailableError(
               `Could not enable the Codex runtime plugin: ${enabledCodex.reason ?? "plugin disabled"}.`,
             );
           }

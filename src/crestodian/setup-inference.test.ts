@@ -484,16 +484,17 @@ async function runCodexSetupWithFinalConfig(params: {
     },
   );
   const readConfigFileSnapshot = vi.fn(async () => {
-    const config = committed ? persistedConfig : initialConfig;
+    const runtimeConfig = committed ? persistedConfig : initialConfig;
+    const sourceConfig = committed ? persistedConfig : params.sourceConfig;
     return {
       exists: true,
       valid: true,
       path: "/tmp/openclaw.json",
       hash: committed ? "after-setup" : "before-setup",
       issues: [],
-      config,
-      sourceConfig: config,
-      runtimeConfig: config,
+      config: runtimeConfig,
+      sourceConfig,
+      runtimeConfig,
     };
   });
   const result = await activateSetupInference({
