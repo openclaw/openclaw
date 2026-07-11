@@ -2521,6 +2521,376 @@ public struct SessionsListParams: Codable, Sendable {
     }
 }
 
+public struct SessionCatalogCapabilities: Codable, Sendable {
+    public let continuesession: Bool
+    public let archive: Bool
+
+    public init(
+        continuesession: Bool,
+        archive: Bool)
+    {
+        self.continuesession = continuesession
+        self.archive = archive
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case continuesession = "continueSession"
+        case archive
+    }
+}
+
+public struct SessionCatalogDescriptor: Codable, Sendable {
+    public let id: String
+    public let label: String
+    public let capabilities: SessionCatalogCapabilities
+
+    public init(
+        id: String,
+        label: String,
+        capabilities: SessionCatalogCapabilities)
+    {
+        self.id = id
+        self.label = label
+        self.capabilities = capabilities
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case capabilities
+    }
+}
+
+public struct SessionCatalogSession: Codable, Sendable {
+    public let threadid: String
+    public let name: String?
+    public let cwd: String?
+    public let status: String
+    public let createdat: Double?
+    public let updatedat: Double?
+    public let recencyat: Double?
+    public let source: String?
+    public let modelprovider: String?
+    public let cliversion: String?
+    public let gitbranch: String?
+    public let archived: Bool
+    public let openclawsessionkey: String?
+    public let cancontinue: Bool
+    public let canarchive: Bool
+
+    public init(
+        threadid: String,
+        name: String? = nil,
+        cwd: String? = nil,
+        status: String,
+        createdat: Double? = nil,
+        updatedat: Double? = nil,
+        recencyat: Double? = nil,
+        source: String? = nil,
+        modelprovider: String? = nil,
+        cliversion: String? = nil,
+        gitbranch: String? = nil,
+        archived: Bool,
+        openclawsessionkey: String? = nil,
+        cancontinue: Bool,
+        canarchive: Bool)
+    {
+        self.threadid = threadid
+        self.name = name
+        self.cwd = cwd
+        self.status = status
+        self.createdat = createdat
+        self.updatedat = updatedat
+        self.recencyat = recencyat
+        self.source = source
+        self.modelprovider = modelprovider
+        self.cliversion = cliversion
+        self.gitbranch = gitbranch
+        self.archived = archived
+        self.openclawsessionkey = openclawsessionkey
+        self.cancontinue = cancontinue
+        self.canarchive = canarchive
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case threadid = "threadId"
+        case name
+        case cwd
+        case status
+        case createdat = "createdAt"
+        case updatedat = "updatedAt"
+        case recencyat = "recencyAt"
+        case source
+        case modelprovider = "modelProvider"
+        case cliversion = "cliVersion"
+        case gitbranch = "gitBranch"
+        case archived
+        case openclawsessionkey = "openClawSessionKey"
+        case cancontinue = "canContinue"
+        case canarchive = "canArchive"
+    }
+}
+
+public struct SessionCatalogHost: Codable, Sendable {
+    public let hostid: String
+    public let label: String
+    public let kind: AnyCodable
+    public let connected: Bool
+    public let nodeid: String?
+    public let sessions: [SessionCatalogSession]
+    public let nextcursor: String?
+    public let error: [String: AnyCodable]?
+
+    public init(
+        hostid: String,
+        label: String,
+        kind: AnyCodable,
+        connected: Bool,
+        nodeid: String? = nil,
+        sessions: [SessionCatalogSession],
+        nextcursor: String? = nil,
+        error: [String: AnyCodable]? = nil)
+    {
+        self.hostid = hostid
+        self.label = label
+        self.kind = kind
+        self.connected = connected
+        self.nodeid = nodeid
+        self.sessions = sessions
+        self.nextcursor = nextcursor
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hostid = "hostId"
+        case label
+        case kind
+        case connected
+        case nodeid = "nodeId"
+        case sessions
+        case nextcursor = "nextCursor"
+        case error
+    }
+}
+
+public struct SessionCatalog: Codable, Sendable {
+    public let id: String
+    public let label: String
+    public let capabilities: SessionCatalogCapabilities
+    public let hosts: [SessionCatalogHost]
+    public let error: [String: AnyCodable]?
+
+    public init(
+        id: String,
+        label: String,
+        capabilities: SessionCatalogCapabilities,
+        hosts: [SessionCatalogHost],
+        error: [String: AnyCodable]? = nil)
+    {
+        self.id = id
+        self.label = label
+        self.capabilities = capabilities
+        self.hosts = hosts
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case capabilities
+        case hosts
+        case error
+    }
+}
+
+public struct SessionCatalogTranscriptItem: Codable, Sendable {
+    public let id: String?
+    public let type: AnyCodable
+    public let text: String?
+    public let timestamp: String?
+    public let model: String?
+    public let truncated: Bool?
+    public let raw: AnyCodable?
+
+    public init(
+        id: String? = nil,
+        type: AnyCodable,
+        text: String? = nil,
+        timestamp: String? = nil,
+        model: String? = nil,
+        truncated: Bool? = nil,
+        raw: AnyCodable? = nil)
+    {
+        self.id = id
+        self.type = type
+        self.text = text
+        self.timestamp = timestamp
+        self.model = model
+        self.truncated = truncated
+        self.raw = raw
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case text
+        case timestamp
+        case model
+        case truncated
+        case raw
+    }
+}
+
+public struct SessionsCatalogListResult: Codable, Sendable {
+    public let catalogs: [SessionCatalog]
+
+    public init(
+        catalogs: [SessionCatalog])
+    {
+        self.catalogs = catalogs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case catalogs
+    }
+}
+
+public struct SessionsCatalogReadParams: Codable, Sendable {
+    public let catalogid: String
+    public let hostid: String
+    public let threadid: String
+    public let limit: Int?
+    public let cursor: String?
+
+    public init(
+        catalogid: String,
+        hostid: String,
+        threadid: String,
+        limit: Int? = nil,
+        cursor: String? = nil)
+    {
+        self.catalogid = catalogid
+        self.hostid = hostid
+        self.threadid = threadid
+        self.limit = limit
+        self.cursor = cursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case catalogid = "catalogId"
+        case hostid = "hostId"
+        case threadid = "threadId"
+        case limit
+        case cursor
+    }
+}
+
+public struct SessionsCatalogReadResult: Codable, Sendable {
+    public let hostid: String
+    public let label: String?
+    public let threadid: String
+    public let items: [SessionCatalogTranscriptItem]
+    public let nextcursor: String?
+
+    public init(
+        hostid: String,
+        label: String? = nil,
+        threadid: String,
+        items: [SessionCatalogTranscriptItem],
+        nextcursor: String? = nil)
+    {
+        self.hostid = hostid
+        self.label = label
+        self.threadid = threadid
+        self.items = items
+        self.nextcursor = nextcursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hostid = "hostId"
+        case label
+        case threadid = "threadId"
+        case items
+        case nextcursor = "nextCursor"
+    }
+}
+
+public struct SessionsCatalogContinueParams: Codable, Sendable {
+    public let catalogid: String
+    public let hostid: String
+    public let threadid: String
+
+    public init(
+        catalogid: String,
+        hostid: String,
+        threadid: String)
+    {
+        self.catalogid = catalogid
+        self.hostid = hostid
+        self.threadid = threadid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case catalogid = "catalogId"
+        case hostid = "hostId"
+        case threadid = "threadId"
+    }
+}
+
+public struct SessionsCatalogContinueResult: Codable, Sendable {
+    public let sessionkey: String
+
+    public init(
+        sessionkey: String)
+    {
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct SessionsCatalogArchiveParams: Codable, Sendable {
+    public let catalogid: String
+    public let hostid: String
+    public let threadid: String
+    public let confirmnootherrunner: Bool
+
+    public init(
+        catalogid: String,
+        hostid: String,
+        threadid: String,
+        confirmnootherrunner: Bool)
+    {
+        self.catalogid = catalogid
+        self.hostid = hostid
+        self.threadid = threadid
+        self.confirmnootherrunner = confirmnootherrunner
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case catalogid = "catalogId"
+        case hostid = "hostId"
+        case threadid = "threadId"
+        case confirmnootherrunner = "confirmNoOtherRunner"
+    }
+}
+
+public struct SessionsCatalogArchiveResult: Codable, Sendable {
+    public let ok: Bool
+
+    public init(
+        ok: Bool)
+    {
+        self.ok = ok
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+    }
+}
+
 public struct SessionsCleanupParams: Codable, Sendable {
     public let agent: String?
     public let allagents: Bool?
