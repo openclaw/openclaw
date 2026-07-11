@@ -2618,10 +2618,10 @@ describe("package artifact reuse", () => {
     expect(telegramDispatch.run).toContain('--repo "$GITHUB_REPOSITORY"');
     expect(telegramDispatch.run).toContain("--ref main");
     expect(telegramDispatch.run).toContain(
-      '-f expected_trusted_workflow_sha="$EXPECTED_TRUSTED_WORKFLOW_SHA"',
+      '-f expected_trusted_workflow_sha="$expected_trusted_workflow_sha"',
     );
     expect(telegramDispatch.run).toContain(
-      '[[ "$child_head_sha" == "$EXPECTED_TRUSTED_WORKFLOW_SHA" ]]',
+      '[[ "$child_head_sha" == "$expected_trusted_workflow_sha" ]]',
     );
     expect(telegramCaller["continue-on-error"]).toBeUndefined();
     expect(telegramCaller["timeout-minutes"]).toBe(210);

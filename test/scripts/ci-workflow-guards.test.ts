@@ -1340,10 +1340,20 @@ describe("ci workflow guards", () => {
 
   it("resets SwiftPM state between macOS release build retries", () => {
     const workflow = readCiWorkflow();
+    const macosInstallStep = workflow.jobs["macos-swift"].steps.find(
+      (step) => step.name === "Install XcodeGen / SwiftLint / SwiftFormat",
+    );
+    const iosInstallStep = workflow.jobs["ios-build"].steps.find(
+      (step) => step.name === "Install iOS Swift tooling",
+    );
     const buildStep = workflow.jobs["macos-swift"].steps.find(
       (step) => step.name === "Swift build (release)",
     );
 
+    for (const installStep of [macosInstallStep, iosInstallStep]) {
+      expect(installStep.run).toContain("if [[ -x ./scripts/install-swift-tools.sh ]]; then");
+      expect(installStep.run).toContain("brew install xcodegen swiftlint swiftformat");
+    }
     expect(buildStep.run).toContain("for attempt in 1 2 3");
     expect(buildStep.run).toContain('if [[ "$attempt" -eq 3 ]]; then');
     expect(buildStep.run).toContain("swift package --package-path apps/macos reset");
@@ -2154,6 +2164,8 @@ describe("ci workflow guards", () => {
     ]);
     expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
+    expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
+    expect(smokeRunStep.run).toContain("No QA smoke runs assigned");
     expect(smokeRunStep.run).toContain("node openclaw.mjs qa run");
     expect(smokeRunStep.run).not.toContain("pnpm openclaw qa run");
     expect(smokeRunStep.run).toContain("--qa-profile smoke-ci");
