@@ -567,6 +567,7 @@ describe("scripts/changed-lanes", () => {
     expectLanes(result.lanes, {
       core: true,
       coreTests: true,
+      strictRatchet: true,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain(
       "check:database-first-legacy-stores",
@@ -596,6 +597,31 @@ describe("scripts/changed-lanes", () => {
         OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
       },
     });
+  });
+
+  it("routes UI production changes to UI prod and core test lanes", () => {
+    const result = detectChangedLanes(["ui/src/app.ts"]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+
+    expectLanes(result.lanes, {
+      coreTests: true,
+      ui: true,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:ui");
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core:test");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:core");
+  });
+
+  it("routes the UI production config to UI prod and core test lanes", () => {
+    const result = detectChangedLanes(["tsconfig.ui.json"]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+
+    expectLanes(result.lanes, {
+      coreTests: true,
+      ui: true,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:ui");
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core:test");
   });
 
   it.each([
@@ -945,6 +971,7 @@ describe("scripts/changed-lanes", () => {
 
     expectLanes(result.lanes, {
       coreTests: true,
+      strictRatchet: true,
     });
     expect(createChangedCheckPlan(result).commands.map((command) => command.args[0])).toContain(
       "tsgo:core:test",
@@ -1851,9 +1878,11 @@ describe("scripts/changed-lanes", () => {
     expect(result.lanes).toEqual({
       core: false,
       coreTests: false,
+      ui: false,
       extensions: false,
       extensionTests: false,
       scripts: false,
+      strictRatchet: false,
       testRoot: false,
       apps: false,
       docs: false,

@@ -1190,7 +1190,26 @@ function createCompactNodeTestShardBundles(options = {}) {
 
     const wholeGroups = sortedGroups.filter((candidate) => !candidate.includePatterns);
     const wholeJobCount = Math.ceil(wholeGroups.length / COMPACT_WHOLE_NODE_TEST_JOB_GROUPS);
-    const wholeGroupBatches = createStripedBatches(wholeGroups, wholeJobCount);
+    // A lone whole-config job serializes every fixed suite and owns PR wall time.
+    // Fold it into same-runner jobs when caps allow, retaining the whole-config timeout.
+    const canSpreadWholeGroups =
+      wholeJobCount === 1 &&
+      bins.length > 1 &&
+      bins.every(
+        (bin) =>
+          bin.groups.length + Math.ceil(wholeGroups.length / bins.length) <=
+          COMPACT_NODE_TEST_JOB_GROUPS,
+      );
+    const wholeGroupBatches = canSpreadWholeGroups
+      ? []
+      : createStripedBatches(wholeGroups, wholeJobCount);
+    if (canSpreadWholeGroups) {
+      for (const [index, group] of wholeGroups.entries()) {
+        const bin = bins[index % bins.length];
+        bin.groups.push(group);
+        bin.timeoutMinutes = COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES;
+      }
+    }
     for (const [index, groupBatch] of wholeGroupBatches.entries()) {
       const runnerClass = groupBatch[0].runner.includes("-8vcpu-") ? "large" : "small";
       const distSuffix = groupBatch[0].requiresDist ? "-dist" : "";
@@ -1213,6 +1232,7 @@ function createCompactNodeTestShardBundles(options = {}) {
         requiresDist: bin.groups[0].requiresDist,
         runner: bin.groups[0].runner,
         shardName: `compact-${runnerClass}-${index + 1}`,
+        ...(bin.timeoutMinutes ? { timeoutMinutes: bin.timeoutMinutes } : {}),
       });
     }
   }

@@ -16,6 +16,7 @@ import {
   collectPackageDistImportErrors,
   expandPackageDistImportClosure,
 } from "./lib/package-dist-imports.mjs";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mjs";
 
 function usage() {
   return "Usage: node scripts/check-openclaw-package-tarball.mjs [--require-bundled-workspace-deps] <openclaw.tgz>";
@@ -314,7 +315,7 @@ const normalizedEntryCounts = new Map();
 const errors = [];
 const warnings = [];
 const CONTENT_INVENTORY_COMPAT_PATH = "scripts/lib/content-inventory-compat.mjs";
-const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html"];
+const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html", ...WORKSPACE_TEMPLATE_PACK_PATHS];
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
 const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
 const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };

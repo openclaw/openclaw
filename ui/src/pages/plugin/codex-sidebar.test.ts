@@ -44,6 +44,58 @@ describe("Codex sidebar", () => {
     expect(open).toHaveBeenCalledWith("node:macbook", "remote-1");
   });
 
+  it("uses the Anthropic catalog for Claude sidebar rows", async () => {
+    const request = vi.fn(async () => ({
+      hosts: [
+        {
+          hostId: "gateway:local",
+          label: "Local Claude",
+          kind: "gateway",
+          connected: true,
+          sessions: [
+            {
+              threadId: "claude-1",
+              name: "Claude task",
+              status: "stored",
+              archived: false,
+            },
+          ],
+        },
+      ],
+    }));
+    const sidebar = new CodexSidebar();
+    sidebar.catalogKind = "claude";
+    sidebar.client = { request } as unknown as GatewayBrowserClient;
+    sidebar.connected = true;
+    document.body.append(sidebar);
+
+    await vi.waitFor(() => expect(sidebar.textContent).toContain("Claude task"));
+    expect(request).toHaveBeenCalledWith("anthropic.sessions.list", { limitPerHost: 40 });
+    expect(sidebar.querySelector("section")?.getAttribute("aria-label")).toBe("Claude sessions");
+  });
+
+  it("uses the Claude fallback title for unnamed Claude sessions", async () => {
+    const request = vi.fn(async () => ({
+      hosts: [
+        {
+          hostId: "gateway:local",
+          label: "Local Claude",
+          kind: "gateway",
+          connected: true,
+          sessions: [{ threadId: "claude-untitled", status: "stored", archived: false }],
+        },
+      ],
+    }));
+    const sidebar = new CodexSidebar();
+    sidebar.catalogKind = "claude";
+    sidebar.client = { request } as unknown as GatewayBrowserClient;
+    sidebar.connected = true;
+    document.body.append(sidebar);
+
+    await vi.waitFor(() => expect(sidebar.textContent).toContain("Untitled Claude session"));
+    expect(sidebar.textContent).not.toContain("Untitled Codex session");
+  });
+
   it("loads every bounded catalog page so all active sessions appear", async () => {
     const request = vi
       .fn()
@@ -88,6 +140,33 @@ describe("Codex sidebar", () => {
       hostIds: ["node:macbook"],
       cursors: { "node:macbook": "catalog-page-2" },
     });
+  });
+
+  it("keeps Claude sidebar hydration to the newest page", async () => {
+    const request = vi.fn(async () => ({
+      hosts: [
+        {
+          hostId: "node:macbook",
+          label: "MacBook",
+          kind: "node",
+          connected: true,
+          sessions: [{ threadId: "claude-recent", name: "Recent Claude task", archived: false }],
+          nextCursor: "older-claude-sessions",
+        },
+      ],
+    }));
+    const sidebar = new CodexSidebar();
+    sidebar.catalogKind = "claude";
+    sidebar.client = { request } as unknown as GatewayBrowserClient;
+    sidebar.connected = true;
+    document.body.append(sidebar);
+
+    await vi.waitFor(() => expect(sidebar.textContent).toContain("Recent Claude task"));
+    await new Promise((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(sidebar.textContent).toContain("More sessions are available in the full catalog.");
   });
 
   it("stops automatic catalog hydration at a fixed per-host budget", async () => {

@@ -39,6 +39,7 @@ function createFakeCodexClient(): CodexAppServerClient {
     addNotificationHandler: vi.fn(() => () => undefined),
     addRequestHandler: vi.fn(() => () => undefined),
     addCloseHandler: vi.fn(() => () => undefined),
+    setThreadSessionRequestGuard: vi.fn(),
     close: vi.fn(),
   } as unknown as CodexAppServerClient;
 }

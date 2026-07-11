@@ -6,6 +6,12 @@ import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import {
+  getClaudeSessionsState,
+  loadClaudeSessions,
+  loadMoreClaudeSessions,
+  stopClaudeSessionsPolling,
+} from "./claude-sessions-controller.ts";
+import {
   getCodexSessionsState,
   loadCodexSessions,
   loadMoreCodexSessions,
@@ -18,8 +24,11 @@ const SIDEBAR_REFRESH_INTERVAL_MS = 30_000;
 const MAX_CATALOG_PAGES_PER_HOST = 100;
 const MAX_CATALOG_SESSIONS_PER_HOST = 4_000;
 
-function sessionTitle(session: CodexSessionPayload): string {
-  return session.name?.trim() || t("codexSessions.untitled");
+function sessionTitle(session: CodexSessionPayload, catalogKind: "codex" | "claude"): string {
+  return (
+    session.name?.trim() ||
+    t(catalogKind === "claude" ? "claudeSessions.untitled" : "codexSessions.untitled")
+  );
 }
 
 function sessionTimestamp(session: CodexSessionPayload): string {
@@ -31,6 +40,7 @@ function sessionTimestamp(session: CodexSessionPayload): string {
 }
 
 export class CodexSidebar extends OpenClawLightDomContentsElement {
+  @property({ attribute: false }) catalogKind: "codex" | "claude" = "codex";
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) basePath = "";
@@ -49,12 +59,12 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
   override disconnectedCallback() {
     this.hydrationToken = null;
     this.clearRefreshTimer();
-    stopCodexSessionsPolling(this.controllerHost);
+    this.stopPolling();
     super.disconnectedCallback();
   }
 
   override willUpdate() {
-    const sessionsState = getCodexSessionsState(this.controllerHost);
+    const sessionsState = this.sessionsState();
     sessionsState.requestUpdate = () => {
       this.revision += 1;
     };
@@ -63,7 +73,7 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
         this.loadedClient = null;
         this.hydrationToken = null;
         this.clearRefreshTimer();
-        stopCodexSessionsPolling(this.controllerHost);
+        this.stopPolling();
       }
       return;
     }
@@ -71,13 +81,45 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
       if (this.loadedClient) {
         this.hydrationToken = null;
         this.clearRefreshTimer();
-        stopCodexSessionsPolling(this.controllerHost);
+        this.stopPolling();
         sessionsState.requestUpdate = () => {
           this.revision += 1;
         };
       }
       this.loadedClient = this.client;
       this.beginRefresh();
+    }
+  }
+
+  private sessionsState() {
+    return this.catalogKind === "claude"
+      ? getClaudeSessionsState(this.controllerHost)
+      : getCodexSessionsState(this.controllerHost);
+  }
+
+  private stopPolling(): void {
+    if (this.catalogKind === "claude") {
+      stopClaudeSessionsPolling(this.controllerHost);
+    } else {
+      stopCodexSessionsPolling(this.controllerHost);
+    }
+  }
+
+  private async loadSessions(): Promise<void> {
+    const catalogState = this.sessionsState();
+    if (this.catalogKind === "claude") {
+      await loadClaudeSessions(catalogState, this.client);
+    } else {
+      await loadCodexSessions(catalogState, this.client);
+    }
+  }
+
+  private async loadMoreSessions(hostId: string): Promise<void> {
+    const catalogState = this.sessionsState();
+    if (this.catalogKind === "claude") {
+      await loadMoreClaudeSessions(catalogState, this.client, hostId);
+    } else {
+      await loadMoreCodexSessions(catalogState, this.client, hostId);
     }
   }
 
@@ -105,10 +147,16 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
   }
 
   private async loadAllPages(token: object): Promise<void> {
-    const sessionsState = getCodexSessionsState(this.controllerHost);
+    const sessionsState = this.sessionsState();
     const seenCursors = new Set<string>();
     const pageCounts = new Map<string, number>();
-    await loadCodexSessions(sessionsState, this.client);
+    await this.loadSessions();
+    if (this.catalogKind === "claude") {
+      this.truncatedHostIds = new Set(
+        sessionsState.hosts.filter((host) => host.nextCursor).map((host) => host.hostId),
+      );
+      return;
+    }
     while (this.hydrationToken === token) {
       const hostIds = sessionsState.hosts
         .filter((host) => {
@@ -133,7 +181,7 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
       }
       await Promise.all(
         hostIds.map(async (hostId) => {
-          await loadMoreCodexSessions(sessionsState, this.client, hostId);
+          await this.loadMoreSessions(hostId);
           pageCounts.set(hostId, (pageCounts.get(hostId) ?? 1) + 1);
         }),
       );
@@ -141,27 +189,43 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
   }
 
   private sessionSearch(hostId: string, threadId: string): string {
-    return pluginTabSearch({ pluginId: "codex", id: "sessions", hostId, threadId });
+    return pluginTabSearch({
+      pluginId: this.catalogKind === "claude" ? "anthropic" : "codex",
+      id: "sessions",
+      hostId,
+      threadId,
+    });
   }
 
   override render() {
     void this.revision;
-    const sessionsState = getCodexSessionsState(this.controllerHost);
+    const sessionsState = this.sessionsState();
     const hosts = sessionsState.hosts.filter((host) => host.sessions.length > 0);
     if (!this.connected || (sessionsState.error && hosts.length === 0)) {
       return nothing;
     }
     return html`
-      <section class="sidebar-codex-sessions" aria-label=${t("codexSessions.sidebar.title")}>
+      <section
+        class="sidebar-codex-sessions"
+        aria-label=${this.catalogKind === "claude"
+          ? t("claudeSessions.sidebar.title")
+          : t("codexSessions.sidebar.title")}
+      >
         <div class="sidebar-recent-sessions__head sidebar-recent-sessions__head--root">
           <span class="sidebar-recent-sessions__label-text"
-            >${t("codexSessions.sidebar.title")}</span
+            >${this.catalogKind === "claude"
+              ? t("claudeSessions.sidebar.title")
+              : t("codexSessions.sidebar.title")}</span
           >
           <button
             type="button"
             class="sidebar-session-sort"
-            title=${t("codexSessions.sidebar.viewAll")}
-            aria-label=${t("codexSessions.sidebar.viewAll")}
+            title=${this.catalogKind === "claude"
+              ? t("claudeSessions.sidebar.viewAll")
+              : t("codexSessions.sidebar.viewAll")}
+            aria-label=${this.catalogKind === "claude"
+              ? t("claudeSessions.sidebar.viewAll")
+              : t("codexSessions.sidebar.viewAll")}
             @click=${() => this.onViewAll?.()}
           >
             ${icons.terminal}
@@ -176,7 +240,9 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
               </div>
               ${this.truncatedHostIds.has(host.hostId)
                 ? html`<div class="sidebar-codex-sessions__truncated">
-                    ${t("codexSessions.sidebar.truncated")}
+                    ${this.catalogKind === "claude"
+                      ? t("claudeSessions.sidebar.truncated")
+                      : t("codexSessions.sidebar.truncated")}
                   </div>`
                 : nothing}
               <div class="sidebar-recent-sessions__list">
@@ -192,7 +258,7 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
                         ? "sidebar-recent-session--active"
                         : ""}"
                       data-codex-thread-id=${session.threadId}
-                      title=${sessionTitle(session)}
+                      title=${sessionTitle(session, this.catalogKind)}
                       @click=${(event: MouseEvent) => {
                         if (
                           event.button !== 0 ||
@@ -207,7 +273,9 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
                       }}
                     >
                       <span class="sidebar-recent-session__body">
-                        <span class="sidebar-recent-session__name">${sessionTitle(session)}</span>
+                        <span class="sidebar-recent-session__name"
+                          >${sessionTitle(session, this.catalogKind)}</span
+                        >
                       </span>
                       <span class="session-row-trail">${sessionTimestamp(session)}</span>
                     </a>
