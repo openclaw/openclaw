@@ -18,7 +18,6 @@ import { materializeSessionArchiveForRead } from "../config/sessions/archive-com
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptActiveEntries,
-  selectSessionTranscriptTreePathNodes,
 } from "../config/sessions/transcript-tree.js";
 import { readFileWindowFully, readFileWindowFullySync } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
