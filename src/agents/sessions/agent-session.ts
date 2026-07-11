@@ -2672,7 +2672,10 @@ export class AgentSession {
       return false;
     }
 
-    const delayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
+    let delayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
+    if (message.retryAfterSeconds !== undefined) {
+      delayMs = Math.max(delayMs, message.retryAfterSeconds * 1000);
+    }
 
     this.emit({
       type: "auto_retry_start",

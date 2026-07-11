@@ -12,9 +12,13 @@ const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   guardedFetchMock: vi.fn(),
 }));
 
-vi.mock("./provider-transport-fetch.js", () => ({
-  buildGuardedModelFetch: buildGuardedModelFetchMock,
-}));
+vi.mock("./provider-transport-fetch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./provider-transport-fetch.js")>();
+  return {
+    ...actual,
+    buildGuardedModelFetch: buildGuardedModelFetchMock,
+  };
+});
 
 let createAnthropicMessagesTransportStreamFn: typeof import("./anthropic-transport-stream.js").createAnthropicMessagesTransportStreamFn;
 
@@ -1302,6 +1306,29 @@ describe("anthropic transport stream", () => {
       "Anthropic Messages transport requires a positive maxTokens value",
     );
     expect(guardedFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates HTTP 429 status and Retry-After header to the assistant message result", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response("Too Many Requests", {
+        status: 429,
+        headers: {
+          "Retry-After": "30",
+        },
+      }),
+    );
+
+    const stream = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(stream.stopReason).toBe("error");
+    expect((stream as any).status).toBe(429);
+    expect((stream as any).retryAfterSeconds).toBe(30);
   });
 
   it("classifies malformed Anthropic SSE data as a stable transport error", async () => {

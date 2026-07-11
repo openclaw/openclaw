@@ -30,6 +30,8 @@ type TransportOutputShape = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  status?: number;
+  retryAfterSeconds?: number;
 };
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -149,6 +151,8 @@ type TransportErrorDetails = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  status?: number;
+  retryAfterSeconds?: number;
 };
 
 function readStringLikeProperty(value: unknown, key: string): string | undefined {
@@ -162,6 +166,21 @@ function readStringLikeProperty(value: unknown, key: string): string | undefined
   }
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return String(raw);
+  }
+  return undefined;
+}
+
+function readNumberLikeProperty(value: unknown, key: string): number | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = (value as Record<string, unknown>)[key];
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;
 }
@@ -229,11 +248,19 @@ function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
     normalizeTransportErrorBody(readStringLikeProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(readObjectProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(nestedError);
+  const status =
+    readNumberLikeProperty(errorObject, "status") ??
+    readNumberLikeProperty(errorObject, "statusCode");
+  const retryAfterSeconds =
+    readNumberLikeProperty(errorObject, "retryAfterSeconds") ??
+    readNumberLikeProperty(nestedError, "retryAfterSeconds");
 
   return {
     ...(errorCode ? { errorCode } : {}),
     ...(errorType ? { errorType } : {}),
     ...(errorBody ? { errorBody } : {}),
+    ...(status !== undefined ? { status } : {}),
+    ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
   };
 }
 

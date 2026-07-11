@@ -71,8 +71,9 @@ import {
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
+import { ProviderHttpError } from "./provider-http-errors.js";
 import { unwrapModelHeaderSentinelsForProviderEgress } from "./provider-secret-egress.js";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { buildGuardedModelFetch, parseRetryAfterSeconds } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
@@ -837,8 +838,14 @@ function createAnthropicMessagesClient(params: {
         });
         if (!response.ok) {
           const detail = await readAnthropicMessagesErrorBodySnippet(response);
-          throw new Error(
+          const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
+          throw new ProviderHttpError(
             detail || `Anthropic Messages request failed with HTTP ${response.status}`,
+            {
+              status: response.status,
+              body: detail,
+              retryAfterSeconds,
+            },
           );
         }
         if (!response.body) {

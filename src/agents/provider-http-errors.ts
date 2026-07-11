@@ -128,6 +128,7 @@ type ProviderHttpErrorInfo = {
   type?: string;
   body?: string;
   requestId?: string;
+  retryAfterSeconds?: number;
 };
 
 /** Extracts normalized provider error metadata while keeping the raw body bounded and redacted. */
@@ -178,6 +179,7 @@ export class ProviderHttpError extends Error {
   readonly errorType?: string;
   readonly errorBody?: string;
   readonly requestId?: string;
+  readonly retryAfterSeconds?: number;
 
   constructor(
     message: string,
@@ -187,6 +189,7 @@ export class ProviderHttpError extends Error {
       type?: string;
       body?: string;
       requestId?: string;
+      retryAfterSeconds?: number;
     },
   ) {
     super(message);
@@ -198,6 +201,7 @@ export class ProviderHttpError extends Error {
     this.errorType = params.type;
     this.errorBody = params.body;
     this.requestId = params.requestId;
+    this.retryAfterSeconds = params.retryAfterSeconds;
   }
 }
 
@@ -221,7 +225,7 @@ export function formatProviderHttpErrorMessage(params: {
 export async function createProviderHttpError(
   response: Response,
   label: string,
-  options?: { statusPrefix?: string },
+  options?: { statusPrefix?: string; retryAfterSeconds?: number },
 ): Promise<Error> {
   const info = await extractProviderErrorInfo(response);
   return new ProviderHttpError(
@@ -238,6 +242,7 @@ export async function createProviderHttpError(
       type: info.type,
       body: info.body,
       requestId: info.requestId,
+      retryAfterSeconds: options?.retryAfterSeconds,
     },
   );
 }

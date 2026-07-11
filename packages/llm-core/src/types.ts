@@ -319,6 +319,8 @@ export interface AssistantMessage {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  status?: number; // HTTP status code for provider errors
+  retryAfterSeconds?: number; // Server-specified cooldown duration for 429s
   timestamp: number; // Unix timestamp in milliseconds
 }
 
