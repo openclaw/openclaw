@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type {
   SessionAccessScope,
@@ -35,6 +36,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 
 const noop = () => {};
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const waitForFast = <T>(callback: () => T | Promise<T>) =>
   vi.waitFor(callback, { timeout: 1_000, interval: 1 });
 
@@ -3812,6 +3814,158 @@ describe("subagent registry seam flow", () => {
         ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
       ),
     ).toBe(false);
+  });
+
+  it("defers superseded retirement when persist fails, then retries it on the next sweep", async () => {
+    const oldStartedAt = Date.parse("2026-03-24T11:50:00Z");
+    const oldEndedAt = Date.parse("2026-03-24T11:55:00Z");
+    const newStartedAt = Date.parse("2026-03-24T11:58:00Z");
+    const oldRunId = "run-superseded-persist-fail";
+    mocks.getAgentRunContext.mockImplementation((runId: string) =>
+      runId === "run-superseded-successor" ? ({} as never) : undefined,
+    );
+    // Fail exactly the persist that commits the durable removal. The single-use
+    // failure models recovery before the next sweep without leaking mock state.
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(
+      (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => {
+        expect(runs.has(oldRunId)).toBe(false);
+        throw new Error("disk full during superseded retirement");
+      },
+    );
+    const attachmentsRootDir = autoCleanupTempDirs.make("openclaw-persist-fail-attachments-");
+    const attachmentsDir = path.join(attachmentsRootDir, "child");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact");
+    const oldTranscriptFile = "/tmp/internal-agent-runs/run-superseded-persist-fail.jsonl";
+    // A superseded run that already completed normally (no kill reconciliation),
+    // so retirement runs through the generic superseded backstop, not the kill
+    // path. This is the path whose deferred retirement must still be retried.
+    mod.addSubagentRunForTests({
+      runId: oldRunId,
+      childSessionKey: "agent:main:subagent:reused-persist-fail",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old generation",
+      cleanup: "delete",
+      createdAt: oldStartedAt,
+      startedAt: oldStartedAt,
+      sessionStartedAt: oldStartedAt,
+      endedAt: oldEndedAt,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      outcome: { status: "ok", startedAt: oldStartedAt, endedAt: oldEndedAt },
+      attachmentsDir,
+      attachmentsRootDir,
+      execution: {
+        status: "terminal",
+        startedAt: oldStartedAt,
+        endedAt: oldEndedAt,
+        transcriptFile: oldTranscriptFile,
+      },
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-superseded-successor",
+      childSessionKey: "agent:main:subagent:reused-persist-fail",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "new generation",
+      cleanup: "keep",
+      createdAt: newStartedAt,
+      startedAt: newStartedAt,
+      sessionStartedAt: newStartedAt,
+    });
+
+    await mod.testing.sweepOnceForTests();
+
+    // Durable removal failed, so the run must stay in memory to match the
+    // surviving SQLite row instead of diverging into a ghost on restart, and
+    // the irreversible cleanup must not run until the removal commits.
+    expect(
+      mod.listSubagentRunsForRequester("agent:main:main").some((e) => e.runId === oldRunId),
+    ).toBe(true);
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledOnce();
+    expect(mocks.removeInternalSessionEffectsTranscript).not.toHaveBeenCalled();
+    await fs.access(attachmentsDir);
+
+    // The transient failure clears; the next sweep must retry and complete the
+    // retirement, removing the run and its transcript/attachments.
+    await mod.testing.sweepOnceForTests();
+
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(2);
+    expect(
+      mod.listSubagentRunsForRequester("agent:main:main").some((e) => e.runId === oldRunId),
+    ).toBe(false);
+    expect(mocks.removeInternalSessionEffectsTranscript).toHaveBeenCalledWith(oldTranscriptFile);
+    await expectPathMissing(attachmentsDir);
+  });
+
+  it("skips a run removed while an earlier sweep entry yields", async () => {
+    const now = Date.now();
+    let resolveDelete: (() => void) | undefined;
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method !== "sessions.delete") {
+        return {};
+      }
+      return await new Promise<Record<string, unknown>>((resolve) => {
+        resolveDelete = () => resolve({});
+      });
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-sweep-blocker",
+      childSessionKey: "agent:main:subagent:sweep-blocker",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "hold the sweep",
+      cleanup: "delete",
+      createdAt: now - 2,
+      endedAt: now - 1,
+      archiveAtMs: now,
+    });
+    const supersededRunId = "run-removed-during-sweep";
+    const reusedSessionKey = "agent:main:subagent:reused-during-sweep";
+    mod.addSubagentRunForTests({
+      runId: supersededRunId,
+      childSessionKey: reusedSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old generation",
+      cleanup: "delete",
+      generation: 1,
+      createdAt: now - 2,
+      endedAt: now - 1,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      outcome: { status: "ok" },
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-current-during-sweep",
+      childSessionKey: reusedSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "current generation",
+      cleanup: "keep",
+      generation: 2,
+      createdAt: now,
+      startedAt: now,
+    });
+
+    const sweep = mod.testing.sweepOnceForTests();
+    await waitForFast(() =>
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({ method: "sessions.delete" }),
+      ),
+    );
+    mod.releaseSubagentRun(supersededRunId);
+    if (!resolveDelete) {
+      throw new Error("expected sessions.delete to be pending");
+    }
+    resolveDelete();
+    await sweep;
+
+    expect(
+      mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .some((entry) => entry.runId === supersededRunId),
+    ).toBe(false);
+    expect(mocks.persistSubagentRunsToDiskOrThrow).not.toHaveBeenCalled();
   });
 
   it("checks the raw completion time before clamping an old run deadline", async () => {
