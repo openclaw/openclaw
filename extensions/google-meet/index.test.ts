@@ -3767,8 +3767,10 @@ describe("google-meet plugin", () => {
     expect(
       nodesInvoke.mock.calls.some(([rawCall]) => {
         const call = requireRecord(rawCall, "node invoke");
-        const path = requireRecord(call.params, "node invoke params").path;
-        return path === "/tabs/open" || path === "/navigate" || path === "/act";
+        const requestPath = requireRecord(call.params, "node invoke params").path;
+        return (
+          requestPath === "/tabs/open" || requestPath === "/navigate" || requestPath === "/act"
+        );
       }),
     ).toBe(false);
   });
@@ -4003,8 +4005,8 @@ describe("google-meet plugin", () => {
     expect(focusCall[3]).toEqual({ progress: false });
     expect(
       callGatewayFromCli.mock.calls.some((call) => {
-        const path = requireRecord(call[2], "browser request").path;
-        return path === "/navigate" || path === "/act";
+        const requestPath = requireRecord(call[2], "browser request").path;
+        return requestPath === "/navigate" || requestPath === "/act";
       }),
     ).toBe(false);
     expect(nodesInvoke).not.toHaveBeenCalled();
