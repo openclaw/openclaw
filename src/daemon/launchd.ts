@@ -1064,10 +1064,11 @@ export async function stopLaunchAgent({
 }
 
 // Bounded retention for the supervisor stderr sink: launchd appends to
-// gateway.err.log across relaunches and nothing else rotates it, so cap it to
-// a tail whenever OpenClaw (re)writes the plist — fresh installs, gateway
-// restarts, and update handoffs. Growth between operator actions is bounded
-// only by launchd's relaunch throttle until broader log retention lands.
+// gateway.err.log across relaunches and nothing else rotates it. Only call
+// this while the agent is booted out (between bootout and bootstrap):
+// truncating under an active non-append writer would leave a sparse file at
+// the writer's old offset. Growth between operator actions is bounded only by
+// launchd's relaunch throttle until broader log retention lands.
 const LAUNCH_AGENT_STDERR_CAP_BYTES = 2_000_000;
 const LAUNCH_AGENT_STDERR_KEEP_BYTES = 1_000_000;
 
@@ -1108,7 +1109,6 @@ async function writeLaunchAgentPlist({
     platform: "darwin",
   });
   await ensureSecureDirectory(logDir);
-  await capLaunchAgentStderrLogTail(stderrPath);
 
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
@@ -1176,6 +1176,11 @@ async function activateLaunchAgent(params: { env: GatewayServiceEnv; plistPath: 
 
   await execLaunchctl(["bootout", domain, params.plistPath]);
   await execLaunchctl(["unload", params.plistPath]);
+  // The agent is booted out here: nothing is appending to the stderr sink, so
+  // this is the one safe point in the install flow to compact it.
+  await capLaunchAgentStderrLogTail(
+    resolveGatewaySupervisorLogPaths(params.env, { platform: "darwin" }).stderrPath,
+  );
   // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.
   await bootstrapLaunchAgentOrThrow({
     domain,
@@ -1229,7 +1234,6 @@ async function rewriteLaunchAgentPlistForRestart({
     platform: "darwin",
   });
   await ensureSecureDirectory(logDir);
-  await capLaunchAgentStderrLogTail(stderrPath);
 
   const serviceDescription = resolveGatewayServiceDescription({
     env,
@@ -1346,6 +1350,10 @@ export async function restartLaunchAgent({
     if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
       throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
     }
+    // Booted out: safe to compact the stderr sink before the relaunch.
+    await capLaunchAgentStderrLogTail(
+      resolveGatewaySupervisorLogPaths(serviceEnv, { platform: "darwin" }).stderrPath,
+    );
     await bootstrapLaunchAgentOrThrow({
       domain,
       serviceTarget,

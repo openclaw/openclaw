@@ -13,6 +13,7 @@ import {
 } from "./launchd-plist.js";
 import {
   installLaunchAgent,
+  stageLaunchAgent,
   disableCurrentOpenClawUpdateLaunchdJob,
   disableOpenClawUpdateLaunchdJob,
   findStaleOpenClawUpdateLaunchdJobs,
@@ -345,9 +346,26 @@ vi.mock("node:fs/promises", async () => {
         return { mode: state.dirModes.get(key) ?? 0o777 };
       }
       if (state.files.has(key)) {
-        return { mode: state.fileModes.get(key) ?? 0o666 };
+        return {
+          mode: state.fileModes.get(key) ?? 0o666,
+          size: Buffer.byteLength(String(state.files.get(key) ?? "")),
+        };
       }
       throw new Error(`ENOENT: no such file or directory, stat '${key}'`);
+    }),
+    open: vi.fn(async (p: string) => {
+      const data = state.files.get(p);
+      if (data === undefined) {
+        throw new Error(`ENOENT: no such file or directory, open '${p}'`);
+      }
+      const source = Buffer.from(String(data));
+      return {
+        read: async (buffer: Buffer, offset: number, length: number, position: number) => {
+          const bytesRead = source.copy(buffer, offset, position, position + length);
+          return { bytesRead, buffer };
+        },
+        close: async () => {},
+      };
     }),
     chmod: vi.fn(async (p: string, mode: number) => {
       const key = p;
@@ -1167,6 +1185,32 @@ describe("launchd install", () => {
     expect(installKickstartIndex).toBe(-1);
   });
 
+  it("compacts an oversized stderr log only after the agent is booted out", async () => {
+    const env = createDefaultLaunchdEnv();
+    const stderrPath = "/Users/test/Library/Logs/openclaw/gateway.err.log";
+    const oversized = "x".repeat(2_000_001 - 25) + "newest stderr tail marker";
+    state.files.set(stderrPath, oversized);
+
+    // Staging only writes the plist while the previous agent may still be
+    // appending to the stderr sink: it must not be truncated here.
+    await stageLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+    });
+    expect(state.files.get(stderrPath)).toBe(oversized);
+
+    // Install boots the agent out before bootstrap; compaction runs there.
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+    });
+    const after = String(state.files.get(stderrPath));
+    expect(Buffer.byteLength(after)).toBe(1_000_000);
+    expect(after.endsWith("newest stderr tail marker")).toBe(true);
+  });
+
   it("writes LaunchAgent environment to an owner-only env file when provided", async () => {
     const env = createDefaultLaunchdEnv();
     const tmpDir = "/Users/test/.openclaw/tmp";
@@ -1461,9 +1505,7 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>StandardErrorPath</key>");
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.err.log</string>");
     // Regression #90711: stderr must not be silenced to /dev/null. Stdin is still /dev/null.
-    expect(plist).not.toMatch(
-      /<key>StandardErrorPath<\/key>\s*<string>\/dev\/null<\/string>/,
-    );
+    expect(plist).not.toMatch(/<key>StandardErrorPath<\/key>\s*<string>\/dev\/null<\/string>/);
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<string>node</string>");
     const rewriteIndex = state.fileWrites.findIndex((write) => write.path === plistPath);
