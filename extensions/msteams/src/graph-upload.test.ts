@@ -2,8 +2,15 @@
 import { withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
-import { requireMSTeamsSharePointSiteId, uploadToSharePoint } from "./graph-upload.js";
-import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
+import {
+  requireMSTeamsSharePointSiteId,
+  uploadAndShareSharePoint,
+  uploadToSharePoint,
+} from "./graph-upload.js";
+import {
+  MSTEAMS_REQUEST_TIMEOUT_MS,
+  MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS,
+} from "./request-timeout.js";
 
 type FetchCall = [string, { method?: string; headers?: Record<string, string> } | undefined];
 
@@ -40,8 +47,8 @@ async function waitForFetchCall(fetchFn: ReturnType<typeof vi.fn>): Promise<void
   expect(fetchFn).toHaveBeenCalled();
 }
 
-function fetchSignal(fetchFn: ReturnType<typeof vi.fn>): AbortSignal {
-  const [, init] = requireFetchCall(fetchFn);
+function fetchSignal(fetchFn: ReturnType<typeof vi.fn>, index = 0): AbortSignal {
+  const [, init] = requireFetchCall(fetchFn, index);
   const signal = (init as RequestInit | undefined)?.signal;
   if (!(signal instanceof AbortSignal)) {
     throw new Error("Expected fetch AbortSignal");
@@ -91,10 +98,10 @@ function createHangingBodyFetch(): ReturnType<typeof vi.fn> {
   });
 }
 
-function expectSharePointTimeout(promise: Promise<unknown>) {
+function expectMSTeamsTimeout(promise: Promise<unknown>, label: string, timeoutMs: number) {
   return expect(promise).rejects.toMatchObject({
     name: "TimeoutError",
-    message: `MS Teams SharePoint request timed out after ${MSTEAMS_REQUEST_TIMEOUT_MS}ms`,
+    message: `${label} timed out after ${timeoutMs}ms`,
   });
 }
 
@@ -211,9 +218,13 @@ describe("graph upload request timeouts", () => {
 
     const signal = fetchSignal(fetchFn);
     expect(signal.aborted).toBe(false);
-    const assertion = expectSharePointTimeout(upload);
+    const assertion = expectMSTeamsTimeout(
+      upload,
+      "MS Teams SharePoint upload",
+      MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS,
+    );
 
-    await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS);
 
     await assertion;
     expect(signal.aborted).toBe(true);
@@ -232,12 +243,114 @@ describe("graph upload request timeouts", () => {
     });
     await waitForFetchCall(fetchFn);
     const signal = fetchSignal(fetchFn);
-    const assertion = expectSharePointTimeout(upload);
+    const assertion = expectMSTeamsTimeout(
+      upload,
+      "MS Teams SharePoint upload",
+      MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS,
+    );
+
+    await vi.advanceTimersByTimeAsync(MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS);
+
+    await assertion;
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("allows SharePoint uploads that exceed the control-plane timeout but finish before the transfer timeout", async () => {
+    vi.useFakeTimers();
+    const uploadResponse = {
+      id: "item-slow",
+      webUrl: "https://example.com/slow",
+      name: "slow.txt",
+    };
+    const fetchFn = vi.fn(async (_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("Expected fetch AbortSignal");
+      }
+      return await new Promise<Response>((resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => reject(signal.reason ?? new Error("fetch request aborted")),
+          { once: true },
+        );
+        setTimeout(
+          () =>
+            resolve(
+              new Response(JSON.stringify(uploadResponse), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+            ),
+          MSTEAMS_REQUEST_TIMEOUT_MS + 1_000,
+        );
+      });
+    });
+
+    const upload = uploadToSharePoint({
+      buffer: Buffer.from("world"),
+      filename: "slow.txt",
+      siteId: "site-123",
+      tokenProvider,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    await waitForFetchCall(fetchFn);
+    const signal = fetchSignal(fetchFn);
+
+    await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
+    expect(signal.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(upload).resolves.toEqual(uploadResponse);
+    expect(signal.aborted).toBe(false);
+  });
+
+  it("keeps the short timeout for SharePoint control-plane requests", async () => {
+    vi.useFakeTimers();
+    const fetchFn = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/createLink")) {
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("Expected fetch AbortSignal");
+        }
+        return await new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(signal.reason ?? new Error("fetch request aborted")),
+            { once: true },
+          );
+        });
+      }
+
+      return new Response(
+        JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const upload = uploadAndShareSharePoint({
+      buffer: Buffer.from("world"),
+      filename: "a.txt",
+      siteId: "site-123",
+      tokenProvider,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForFetchCall(fetchFn);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    const createLinkSignal = fetchSignal(fetchFn, 1);
+    const assertion = expectMSTeamsTimeout(
+      upload,
+      "MS Teams SharePoint request",
+      MSTEAMS_REQUEST_TIMEOUT_MS,
+    );
 
     await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
 
     await assertion;
-    expect(signal.aborted).toBe(true);
+    expect(createLinkSignal.aborted).toBe(true);
   });
 });
 

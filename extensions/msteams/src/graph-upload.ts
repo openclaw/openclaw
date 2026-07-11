@@ -11,7 +11,10 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { createMSTeamsHttpError } from "./http-error.js";
-import { withMSTeamsAbortableRequestTimeout } from "./request-timeout.js";
+import {
+  MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS,
+  withMSTeamsAbortableRequestTimeout,
+} from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
@@ -39,6 +42,7 @@ interface SharingLinkResult {
 }
 
 const SHAREPOINT_REQUEST_TIMEOUT_LABEL = "MS Teams SharePoint request";
+const SHAREPOINT_UPLOAD_TIMEOUT_LABEL = "MS Teams SharePoint upload";
 
 // ============================================================================
 // SharePoint upload functions for group chats and channels
@@ -65,7 +69,8 @@ export async function uploadToSharePoint(params: {
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
 
   const data = await withMSTeamsAbortableRequestTimeout({
-    label: SHAREPOINT_REQUEST_TIMEOUT_LABEL,
+    label: SHAREPOINT_UPLOAD_TIMEOUT_LABEL,
+    timeoutMs: MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS,
     work: async (signal) => {
       const res = await fetchFn(
         `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
