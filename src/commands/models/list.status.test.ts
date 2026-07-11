@@ -644,6 +644,24 @@ describe("modelsStatusCommand auth overview", () => {
           expect.objectContaining({ provider: "mistral", model: "mistral-small" }),
         ]),
       );
+
+      // Aliases are valid utilityModel input; the report shows the canonical ref.
+      mocks.loadConfig.mockReturnValue({
+        ...baseConfig,
+        agents: {
+          defaults: {
+            ...baseConfig.agents.defaults,
+            models: { "anthropic/claude-opus-4-6": { alias: "Opus" } },
+            utilityModel: "Opus",
+          },
+        },
+      });
+      const aliasRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, aliasRuntime as never);
+      expect(parseFirstJsonLog(aliasRuntime).utilityModel).toEqual({
+        ref: "anthropic/claude-opus-4-6",
+        source: "config",
+      });
     } finally {
       if (originalLoadConfig) {
         mocks.loadConfig.mockImplementation(originalLoadConfig);

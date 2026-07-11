@@ -498,6 +498,12 @@ export async function modelsStatusCommand(
     // plain API path, so the ref gets full route analysis without inheriting
     // the primary's codex-runtime fallback.
     addProviderUse(utilityModelRef, false, "text");
+    // Display the canonical provider/model: utilityModel accepts aliases, and
+    // route issues/probes always report the resolved ref.
+    const resolvedUtilityRef = utilityModelRef ? resolveStatusModelRef(utilityModelRef) : undefined;
+    const utilityModelDisplayRef = resolvedUtilityRef
+      ? modelKey(normalizeProviderId(resolvedUtilityRef.provider), resolvedUtilityRef.model)
+      : (utilityModelRef ?? null);
 
     const providersFromEnv = new Set<string>();
     // Use the shared provider-env registry so `models status` stays aligned with
@@ -975,6 +981,18 @@ export async function modelsStatusCommand(
         },
       ];
     });
+    // Utility (or duplicate fallback) refs can repeat a configured model;
+    // identical diagnostics collapse while genuinely different evaluations
+    // for the same model (e.g. codex-fallback vs plain route) stay separate.
+    const seenRouteIssues = new Set<string>();
+    const dedupedModelRouteIssues = modelRouteIssues.filter((issue) => {
+      const key = JSON.stringify(issue);
+      if (seenRouteIssues.has(key)) {
+        return false;
+      }
+      seenRouteIssues.add(key);
+      return true;
+    });
     const missingProvidersInUse = Array.from(
       new Set(
         providerUses
@@ -1149,7 +1167,7 @@ export async function modelsStatusCommand(
       };
       const routeAuthHealth = new Set(providerUses.map(resolveRouteAuthHealth));
       const hasExpiredOrMissing =
-        modelRouteIssues.some(
+        dedupedModelRouteIssues.some(
           (issue) => issue.kind === "incompatible" || issue.kind === "indeterminate",
         ) ||
         routeAuthHealth.has("missing") ||
@@ -1175,7 +1193,7 @@ export async function modelsStatusCommand(
         fallbacks,
         imageModel: imageModel || null,
         imageFallbacks,
-        utilityModel: { ref: utilityModelRef ?? null, source: utilityModelSource },
+        utilityModel: { ref: utilityModelDisplayRef, source: utilityModelSource },
         ...(agentId
           ? {
               modelConfig: {
@@ -1194,7 +1212,7 @@ export async function modelsStatusCommand(
           },
           providersWithOAuth: providersWithOauth,
           missingProvidersInUse,
-          modelRouteIssues,
+          modelRouteIssues: dedupedModelRouteIssues,
           runtimeAuthRoutes,
           providers: providerAuth,
           unusableProfiles,
@@ -1256,9 +1274,9 @@ export async function modelsStatusCommand(
     runtime.log(
       `${label("Utility model")}${colorize(rich, theme.muted, ":")} ${colorize(
         rich,
-        utilityModelRef ? theme.success : theme.muted,
-        utilityModelRef
-          ? `${utilityModelRef}${utilityModelSource === "provider-default" ? " (provider default)" : ""}`
+        utilityModelDisplayRef ? theme.success : theme.muted,
+        utilityModelDisplayRef
+          ? `${utilityModelDisplayRef}${utilityModelSource === "provider-default" ? " (provider default)" : ""}`
           : utilityModelSource === "disabled"
             ? "off"
             : "-",
@@ -1409,10 +1427,10 @@ export async function modelsStatusCommand(
       }
     }
 
-    if (modelRouteIssues.length > 0) {
+    if (dedupedModelRouteIssues.length > 0) {
       runtime.log("");
       runtime.log(colorize(rich, theme.heading, "Model route issues"));
-      for (const issue of modelRouteIssues) {
+      for (const issue of dedupedModelRouteIssues) {
         const modelRef = `${issue.provider}/${issue.model}`;
         if (issue.kind === "incompatible") {
           runtime.log(`- ${theme.heading(modelRef)} [${issue.code}] ${issue.message}`);
@@ -1434,7 +1452,7 @@ export async function modelsStatusCommand(
       runtime.log("");
       runtime.log(colorize(rich, theme.heading, "Missing auth"));
       for (const provider of missingProvidersInUse) {
-        const requiresSubscription = modelRouteIssues.some(
+        const requiresSubscription = dedupedModelRouteIssues.some(
           (issue) =>
             issue.kind === "missing-auth" &&
             issue.provider === provider &&
