@@ -107,15 +107,23 @@ export function createConfiguredProviderLocalServiceAcquirer(
 }
 
 function normalizeProviderBaseUrl(value: string): string | undefined {
-  try {
-    const url = new URL(value);
-    url.search = "";
-    url.hash = "";
-    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-    return url.toString().replace(/\/$/u, "");
-  } catch {
-    return undefined;
+  const trimmed = value.trim();
+  const candidates = /^[a-z][a-z\d+.-]*:\/\//iu.test(trimmed) ? [trimmed] : [`http://${trimmed}`];
+  for (const candidate of candidates) {
+    try {
+      const url = new URL(candidate);
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        continue;
+      }
+      url.search = "";
+      url.hash = "";
+      url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
+      return url.toString().replace(/\/$/u, "");
+    } catch {
+      continue;
+    }
   }
+  return undefined;
 }
 
 function configuredProviderBaseUrlVariants(value: string): Set<string> {

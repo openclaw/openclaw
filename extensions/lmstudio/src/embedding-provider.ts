@@ -16,6 +16,7 @@ import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import {
   normalizeLmstudioConfiguredCatalogEntries,
   resolveLmstudioInferenceBase,
+  resolveLmstudioServerBase,
 } from "./models.js";
 import {
   buildLmstudioAuthHeaders,
@@ -126,6 +127,19 @@ function resolveConfiguredLmstudioProvider(options: MemoryEmbeddingProviderCreat
   return fallback ? { providerId: LMSTUDIO_PROVIDER_ID, config: fallback } : undefined;
 }
 
+function resolveLmstudioLocalServiceBaseUrl(
+  configuredBaseUrl: string | undefined,
+  inferenceBaseUrl: string,
+): string {
+  const configured = configuredBaseUrl?.trim();
+  if (!configured) {
+    return inferenceBaseUrl;
+  }
+  const configuredPath = configured.replace(/[?#].*$/u, "").replace(/\/+$/u, "");
+  const serverBaseUrl = resolveLmstudioServerBase(configured);
+  return /\/api\/v1$/iu.test(configuredPath) ? `${serverBaseUrl}/api/v1` : `${serverBaseUrl}/v1`;
+}
+
 /** Creates the LM Studio embedding provider client and preloads the target model before return. */
 export async function createLmstudioEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
@@ -191,7 +205,7 @@ export async function createLmstudioEmbeddingProvider(
     providerConfig?.localService && !baseUrlSource
       ? {
           providerId: resolvedProvider?.providerId ?? LMSTUDIO_PROVIDER_ID,
-          baseUrl,
+          baseUrl: resolveLmstudioLocalServiceBaseUrl(providerBaseUrl, baseUrl),
           headers,
         }
       : undefined;

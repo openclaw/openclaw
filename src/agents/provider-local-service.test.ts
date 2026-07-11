@@ -124,7 +124,7 @@ describe("provider local service", () => {
       models: {
         providers: {
           "gpu-spark": {
-            baseUrl: `http://127.0.0.1:${port}/v1`,
+            baseUrl: `127.0.0.1:${port}/v1`,
             models: [],
             localService: {
               command: process.execPath,
