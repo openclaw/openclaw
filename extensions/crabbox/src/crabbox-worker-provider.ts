@@ -522,11 +522,9 @@ function leaseFromInspect(inspect: ParsedInspect): WorkerLease {
       host: inspect.host,
       port: inspect.sshPort,
       user: inspect.sshUser,
-      // oxlint-disable-next-line eslint/no-warning-comments -- The tunnel milestone owns this missing contract.
-      // TODO(cloud-workers-pr4-key-ref): define resolution for a dynamic direct-file key path.
-      // oxlint-disable-next-line eslint/no-warning-comments -- The tunnel milestone owns this missing contract.
-      // TODO(cloud-workers-pr4-host-key): expose and persist Crabbox host-key material.
-      // Inspect currently exposes the private-key path but no host-key material.
+      // Inspect exposes the private-key path but no host-key material yet; the tunnel
+      // milestone (docs/plan/cloud-workers.md, PR 4) owns dynamic file-key resolution
+      // and host-key pinning for this SecretRef.
       keyRef: {
         source: "file",
         provider: CRABBOX_WORKER_PROVIDER_ID,
