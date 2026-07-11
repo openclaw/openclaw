@@ -31,6 +31,7 @@ import { formatBytes } from "../../lib/agents/display.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { GENERAL_SETTINGS_BLOCKS } from "./settings-search.ts";
 
 // ── Types ──
 
@@ -385,7 +386,7 @@ function renderModelCard(props: QuickSettingsProps) {
   const fastMode = formatFastModeValue(props.fastMode);
   const configBusy = isConfigBusy(props);
   return html`
-    <div class="qs-card qs-card--model">
+    <div id=${GENERAL_SETTINGS_BLOCKS.model.id} class="qs-card qs-card--model">
       ${renderCardHeader(icons.brain, t("quickSettings.model.title"))}
       <div class="qs-card__body">
         <div class="qs-row">
@@ -453,7 +454,7 @@ function renderChannelsCard(props: QuickSettingsProps) {
       : undefined;
 
   return html`
-    <div class="qs-card qs-card--channels">
+    <div id=${GENERAL_SETTINGS_BLOCKS.channels.id} class="qs-card qs-card--channels">
       ${renderCardHeader(icons.send, t("quickSettings.channels.title"), badge)}
       <div class="qs-card__body">
         ${props.channels.length === 0
@@ -487,7 +488,7 @@ function renderAutomationsCard(props: QuickSettingsProps) {
   const { cronJobCount, skillCount, mcpServerCount } = props.automation;
 
   return html`
-    <div class="qs-card qs-card--automations">
+    <div id=${GENERAL_SETTINGS_BLOCKS.automations.id} class="qs-card qs-card--automations">
       ${renderCardHeader(icons.zap, t("quickSettings.automation.title"))}
       <div class="qs-card__body">
         <div class="qs-row">
@@ -543,7 +544,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
   const configBusy = isConfigBusy(props);
 
   return html`
-    <div class="qs-card qs-card--security">
+    <div id=${GENERAL_SETTINGS_BLOCKS.security.id} class="qs-card qs-card--security">
       ${renderCardHeader(
         icons.eye,
         t("quickSettings.security.title"),
@@ -768,7 +769,7 @@ function renderSystemCard(props: QuickSettingsProps) {
   const stats = info ? buildSystemStats(info) : buildSystemStatsPlaceholder();
 
   return html`
-    <div class="qs-card qs-card--system">
+    <div id=${GENERAL_SETTINGS_BLOCKS.system.id} class="qs-card qs-card--system">
       ${renderCardHeader(
         icons.monitor,
         t("quickSettings.system.gatewayHost"),
@@ -813,7 +814,7 @@ function renderAppearanceCard(props: QuickSettingsProps) {
     { id: "custom", label: importedThemeName },
   ];
   return html`
-    <div class="qs-card qs-card--appearance">
+    <div id=${GENERAL_SETTINGS_BLOCKS.appearance.id} class="qs-card qs-card--appearance">
       ${renderCardHeader(icons.spark, t("quickSettings.appearance.title"))}
       <div class="qs-card__body qs-appearance">
         <div class="qs-row qs-row--stacked">
@@ -994,7 +995,7 @@ function renderPersonalCard(props: QuickSettingsProps) {
         ? t("quickSettings.personal.configuredAvatar")
         : t("quickSettings.personal.fallbackLogo");
   return html`
-    <div class="qs-card qs-card--personal">
+    <div id=${GENERAL_SETTINGS_BLOCKS.personal.id} class="qs-card qs-card--personal">
       ${renderCardHeader(icons.image, t("quickSettings.personal.title"))}
       <div class="qs-card__body">
         <div class="qs-identity-grid">

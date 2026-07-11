@@ -18,6 +18,90 @@ afterEach(() => {
 });
 
 describe("settings sidebar search", () => {
+  it("does not match the middle of a word for a short query", () => {
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "config",
+        connected: true,
+        version: "",
+        updateAvailable: null,
+        updateRunning: false,
+        onUpdate: vi.fn(),
+        searchQuery: "cp",
+        searchBlockMatches: [
+          {
+            routeId: "config",
+            label: "Gateway Host",
+            hash: "#settings-general-system",
+          },
+        ],
+        onExit: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+      }),
+      container,
+    );
+
+    const resultLabels = [
+      ...container.querySelectorAll(
+        ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
+      ),
+    ].map((item) => item.textContent?.trim());
+    expect(resultLabels).toEqual(["General", "Gateway Host"]);
+  });
+
+  it("ranks matching pages before matching blocks and navigates to the block", () => {
+    const onNavigate = vi.fn();
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "config",
+        connected: true,
+        version: "",
+        updateAvailable: null,
+        updateRunning: false,
+        onUpdate: vi.fn(),
+        searchQuery: "mcp",
+        searchBlockMatches: [
+          {
+            routeId: "config",
+            label: "Automations",
+            hash: "#settings-general-automations",
+          },
+          {
+            routeId: "mcp",
+            label: "MCP",
+            search: "?section=mcp",
+            hash: "#config-section-mcp",
+          },
+        ],
+        onExit: vi.fn(),
+        onNavigate,
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+      }),
+      container,
+    );
+
+    const resultLabels = [
+      ...container.querySelectorAll(
+        ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
+      ),
+    ].map((item) => item.textContent?.trim());
+    expect(resultLabels).toEqual(["MCP", "General", "Automations"]);
+    expect(container.querySelector(".settings-sidebar__item--active")).toBeNull();
+
+    const automations = container.querySelector<HTMLAnchorElement>(
+      '.settings-sidebar__subitem[href="/settings/general#settings-general-automations"]',
+    );
+    automations?.click();
+    expect(onNavigate).toHaveBeenCalledWith("config", {
+      hash: "#settings-general-automations",
+    });
+  });
+
   it("filters localized routes and groups while preserving navigation", () => {
     let searchQuery = "";
     const onNavigate = vi.fn();

@@ -34,6 +34,7 @@ import { searchForSession } from "../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "../pages/approval/approval-page.ts";
+import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
@@ -951,6 +952,13 @@ class OpenClawShell extends OpenClawLightDomElement {
         : null;
     const activePluginTabId = activePluginRef ? pluginTabKey(activePluginRef) : "";
     const settingsTakeover = isSettingsNavigationRoute(activeRoute);
+    const runtimeConfig = context.runtimeConfig.state;
+    const settingsSearchBlocks = findSettingsSearchBlocks({
+      query: this.settingsSearchQuery,
+      schema: runtimeConfig.configSchema,
+      value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
+      uiHints: runtimeConfig.configUiHints,
+    });
     const navDrawerOpen = this.navDrawerOpen && !this.onboarding;
     // Drawer navigation always opens expanded; the desktop collapse preference
     // stays persisted for when the viewport returns to the desktop layout.
@@ -1020,6 +1028,8 @@ class OpenClawShell extends OpenClawLightDomElement {
             ? renderSettingsSidebar({
                 basePath: context.basePath,
                 activeRouteId: activeRoute,
+                activeSearch: this.routeState.location?.search ?? "",
+                activeHash: this.routeState.location?.hash ?? "",
                 connected: gatewaySnapshot.connected,
                 version:
                   context.config.current.serverVersion ??
@@ -1029,11 +1039,17 @@ class OpenClawShell extends OpenClawLightDomElement {
                 updateRunning: overlaySnapshot.updateRunning,
                 onUpdate: () => void context.overlays.runUpdate(),
                 searchQuery: this.settingsSearchQuery,
+                searchBlockMatches: settingsSearchBlocks,
                 onExit: () => this.exitSettings(),
-                onNavigate: (routeId) => this.navigate(routeId),
+                onNavigate: (routeId, options) => this.navigate(routeId, options),
                 onPreload: (routeId) => context.preload(routeId),
                 onSearchQueryChange: (nextQuery) => {
                   this.settingsSearchQuery = nextQuery;
+                  if (nextQuery.trim()) {
+                    void context.runtimeConfig
+                      .ensureLoaded()
+                      .then(() => context.runtimeConfig.ensureSchemaLoaded());
+                  }
                 },
                 preloadTimers: this.settingsPreloadTimers,
               })

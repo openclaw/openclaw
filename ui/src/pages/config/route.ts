@@ -1,9 +1,16 @@
+import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { ConfigPageId } from "./config-page.ts";
+import type { ConfigPageId, ConfigRouteData } from "./config-page.ts";
 
-function loadConfigRoute(context: ApplicationContext) {
+function configRouteData(location: RouteLocation): ConfigRouteData {
+  const section = new URLSearchParams(location.search).get("section")?.trim() || null;
+  const targetBlockId = location.hash ? decodeURIComponent(location.hash.slice(1)) : null;
+  return { section, targetBlockId };
+}
+
+function loadConfigRoute(context: ApplicationContext, location: RouteLocation) {
   const primaryLoad = context.runtimeConfig.ensureLoaded();
   void primaryLoad.then(
     () => {
@@ -11,6 +18,7 @@ function loadConfigRoute(context: ApplicationContext) {
     },
     () => undefined,
   );
+  return configRouteData(location);
 }
 
 function configPage(id: ConfigPageId, path: string, aliases: readonly string[]) {
@@ -18,11 +26,15 @@ function configPage(id: ConfigPageId, path: string, aliases: readonly string[]) 
     id,
     path,
     aliases,
-    loader: (context: ApplicationContext) => loadConfigRoute(context),
+    loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
+      `${location.search}\u0000${location.hash}`,
+    loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location),
     component: () =>
       import("./config-page.ts").then(() => ({
         header: true,
-        render: () => html`<openclaw-config-page .pageId=${id}></openclaw-config-page>`,
+        render: (data: ConfigRouteData | undefined) => html`
+          <openclaw-config-page .pageId=${id} .routeData=${data ?? null}></openclaw-config-page>
+        `,
       })),
   });
 }

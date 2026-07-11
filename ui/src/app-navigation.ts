@@ -2,6 +2,7 @@
 import type { RouteId } from "./app-route-paths.ts";
 import type { IconName } from "./components/icons.ts";
 import { t } from "./i18n/index.ts";
+import { normalizeLowercaseStringOrEmpty } from "./lib/string-coerce.ts";
 
 export type NavigationRouteId = RouteId;
 
@@ -77,6 +78,25 @@ type SettingsNavigationGroup = {
   labelKey: string | null;
   routes: readonly NavigationRouteId[];
 };
+
+export type SettingsSearchBlock = {
+  routeId: RouteId;
+  label: string;
+  search?: string;
+  hash: string;
+};
+
+export function settingsSearchTextMatches(value: string, query: string): boolean {
+  const candidate = normalizeLowercaseStringOrEmpty(value);
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
+  if (!normalizedQuery) {
+    return false;
+  }
+  if (normalizedQuery.length > 2) {
+    return candidate.includes(normalizedQuery);
+  }
+  return candidate.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(normalizedQuery));
+}
 
 // Grouping feeds the full-page settings sidebar (settings-sidebar.ts).
 export const SETTINGS_NAVIGATION_GROUPS = [
