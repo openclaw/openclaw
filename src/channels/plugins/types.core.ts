@@ -490,6 +490,8 @@ export type ChannelThreadingToolContext = {
    * not forwarding/relaying a message from another conversation.
    */
   skipCrossContextDecoration?: boolean;
+  /** True when this turn is a heartbeat check, not a user-initiated message. */
+  isHeartbeat?: boolean;
 };
 
 /** Channel-owned messaging helpers for target parsing, routing, and payload shaping. */

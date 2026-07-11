@@ -117,8 +117,9 @@ export function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
   config: OpenClawConfig | undefined;
   hasRepliedRef: { value: boolean } | undefined;
+  isHeartbeat?: boolean;
 }): ChannelThreadingToolContext {
-  const { sessionCtx, config, hasRepliedRef } = params;
+  const { sessionCtx, config, hasRepliedRef, isHeartbeat } = params;
   const isRestartSentinelContinuation =
     sessionCtx.InputProvenance?.kind === "internal_system" &&
     sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
@@ -182,6 +183,7 @@ export function buildThreadingToolContext(params: {
     // Some providers expose only thread resources as reply targets; explicit
     // `undefined` means the adapter rejected the generic message-id fallback.
     currentMessageId: hasAdapterCurrentMessageId ? context.currentMessageId : currentMessageId,
+    ...(params.isHeartbeat ? { isHeartbeat: true } : {}),
   };
 }
 

@@ -78,7 +78,10 @@ export function normalizeMessageActionInput(params: {
     // no real delivery target exists. Injecting it as the message target would
     // leak heartbeat text (e.g. HEARTBEAT_OK) into the source DM or produce
     // channel lookup errors (e.g. @heartbeat on Telegram).
-    if (inferredTarget && inferredTarget !== HEARTBEAT_SENDER_SENTINEL) {
+    // Routed heartbeat sends (where a real DM target exists) must also be
+    // blocked: the heartbeat runner does not send user-facing messages, so any
+    // inferred target in a heartbeat context is an internal routing artifact.
+    if (inferredTarget && inferredTarget !== HEARTBEAT_SENDER_SENTINEL && !toolContext?.isHeartbeat) {
       normalizedArgs.target = inferredTarget;
     }
   }

@@ -261,6 +261,24 @@ describe("normalizeMessageActionInput", () => {
     ).toThrow(/requires a target/);
   });
 
+  it("does not inject routed heartbeat DM target when isHeartbeat is true", () => {
+    // When a heartbeat is routed to a real DM (e.g. @user on Telegram),
+    // isHeartbeat marks the context so the DM target is not injected as a
+    // deliverable message target — the heartbeat runner does not send
+    // user-facing messages.
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "send",
+        args: {},
+        toolContext: {
+          currentChannelId: "12345",
+          currentChannelProvider: "telegram",
+          isHeartbeat: true,
+        },
+      }),
+    ).toThrow(/requires a target/);
+  });
+
   it("rejects conflicting canonical and plugin delivery targets", () => {
     expect(() =>
       normalizeMessageActionInput({
