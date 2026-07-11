@@ -144,6 +144,26 @@ describe("release version planning", () => {
     });
   });
 
+  it("keeps repository versions at the base version for correction tags", () => {
+    const root = writeFixture();
+    const plan = planReleaseVersion({
+      rootDir: root,
+      version: "2026.7.2-3",
+    });
+    applyReleaseVersionPlan(plan);
+
+    expect(plan.version).toBe("2026.7.2-3");
+    expect(readJson(path.join(root, "package.json"))).toMatchObject({
+      version: "2026.7.2",
+    });
+    expect(
+      fs.readFileSync(
+        path.join(root, "apps", "macos", "Sources", "OpenClaw", "Resources", "Info.plist"),
+        "utf8",
+      ),
+    ).toContain("<string>2026.7.2</string>");
+  });
+
   it("keeps an existing Android build increment on the same release train", () => {
     const root = writeFixture();
     const plan = planReleaseVersion({

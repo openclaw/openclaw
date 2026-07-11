@@ -104,8 +104,12 @@ export function planReleaseVersion(params: {
     );
   }
 
+  const packageVersion =
+    parsedVersion.correctionNumber === undefined
+      ? parsedVersion.version
+      : parsedVersion.baseVersion;
   const changes = [
-    planPackageJson(rootDir, parsedVersion.version),
+    planPackageJson(rootDir, packageVersion),
     planMacosInfoPlist(rootDir, parsedVersion),
   ];
   if (params.android) {
