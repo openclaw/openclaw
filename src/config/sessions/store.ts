@@ -378,7 +378,9 @@ function snapshotLockedSessionEntries(
 ): ReadonlyMap<string, SessionEntry> {
   const lockedEntries = new Map<string, SessionEntry>();
   for (const [sessionKey, entry] of Object.entries(store)) {
-    if (entry.modelSelectionLocked === true) {
+    // Legacy model locks select a model only. Durable harness ownership opts
+    // into the stronger transcript identity fence enforced during writes.
+    if (isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
       lockedEntries.set(sessionKey, cloneSessionEntry(entry));
     }
   }

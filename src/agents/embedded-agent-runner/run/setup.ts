@@ -13,6 +13,7 @@ import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
+  isValidAgentHarnessSessionStoreEntry,
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../../sessions/agent-harness-session-key.js";
 import {
@@ -79,6 +80,9 @@ export function resolveAgentHarnessRunAdmissionError(params: {
   const durableEntryError = resolveAgentHarnessSessionStoreEntryError(sessionKey, entry);
   if (durableEntryError) {
     return durableEntryError;
+  }
+  if (!isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
+    return undefined;
   }
   const requestedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
   const durableHarnessId = normalizeOptionalAgentRuntimeId(entry.agentHarnessId);

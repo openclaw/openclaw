@@ -67,6 +67,20 @@ describe("agent harness run admission", () => {
     ).toBeUndefined();
   });
 
+  it("keeps a legacy model-selection lock on the ordinary runtime path", () => {
+    expect(
+      resolveAgentHarnessRunAdmissionError({
+        entry: {
+          modelSelectionLocked: true,
+          sessionId: "legacy-session",
+          updatedAt: 1,
+        },
+        sessionId: "legacy-session",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBeUndefined();
+  });
+
   it.each([
     ["a different session id", { sessionId: "other-session" }],
     ["an omitted runtime lock", { modelSelectionLocked: undefined }],

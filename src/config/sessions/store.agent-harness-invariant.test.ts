@@ -81,6 +81,28 @@ describe("agent harness session store invariant", () => {
     });
   });
 
+  it("allows an ordinary legacy model lock to adopt a transcript id", async () => {
+    const sessionKey = "agent:main:legacy-model-lock";
+    const entry: SessionEntry = {
+      modelSelectionLocked: true,
+      updatedAt: 1,
+    };
+    await saveSessionStore(storePath, { [sessionKey]: entry }, { skipMaintenance: true });
+
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        store[sessionKey] = { ...store[sessionKey], sessionId: "generated-session" };
+      },
+      { skipMaintenance: true },
+    );
+
+    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual({
+      ...entry,
+      sessionId: "generated-session",
+    });
+  });
+
   it("rejects an invalid reserved lifecycle upsert before persistence", async () => {
     await saveSessionStore(
       storePath,
