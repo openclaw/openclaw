@@ -91,6 +91,14 @@ export function resolveBundledPluginSources(params: {
   return bundled;
 }
 
+let processBundledPluginSources: ReadonlyMap<string, BundledPluginSource> | undefined;
+
+/** Bundled manifests are process-stable; installs and metadata changes require restart. */
+export function getProcessBundledPluginSources(): ReadonlyMap<string, BundledPluginSource> {
+  processBundledPluginSources ??= resolveBundledPluginSources({});
+  return processBundledPluginSources;
+}
+
 function pluginConfigSchemaHasRequiredFields(schema: unknown): boolean {
   if (!isRecord(schema)) {
     return false;
