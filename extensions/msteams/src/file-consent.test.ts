@@ -319,7 +319,9 @@ describe("uploadToConsentUrl", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(fetchFn).toHaveBeenCalledOnce();
       expect(observedSignal?.aborted).toBe(false);
-      const uploadRejection = expect(uploadPromise).rejects.toThrow("consent upload timed out");
+      const uploadRejection = expect(uploadPromise).rejects.toThrow(
+        "MS Teams file consent upload timed out after 25ms",
+      );
 
       await vi.advanceTimersByTimeAsync(25);
       await uploadRejection;

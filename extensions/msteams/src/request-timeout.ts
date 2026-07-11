@@ -1,4 +1,5 @@
 // Msteams plugin module implements request deadline behavior.
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   createProviderOperationDeadline,
   resolveProviderOperationTimeoutMs,
@@ -7,6 +8,7 @@ import {
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const MSTEAMS_REQUEST_TIMEOUT_MS = 30_000;
+export const MSTEAMS_SHAREPOINT_UPLOAD_TIMEOUT_MS = 5 * 60_000;
 
 // Cap optional enrichment before agent dispatch. The Teams SDK still holds the
 // webhook open for the agent turn, so this budget alone cannot prevent retries.
@@ -38,4 +40,43 @@ export async function withMSTeamsRequestDeadline<T>(params: {
 }): Promise<T> {
   const timeoutMs = resolveMSTeamsRequestTimeoutMs(params.deadline);
   return await withTimeout(params.work(), timeoutMs, params.label);
+}
+
+function createMSTeamsRequestTimeoutError(label: string, timeoutMs: number): Error {
+  const error = new Error(`${label} timed out after ${timeoutMs}ms`);
+  error.name = "TimeoutError";
+  return error;
+}
+
+export async function withMSTeamsAbortableRequestTimeout<T>(params: {
+  label: string;
+  timeoutMs?: number;
+  work: (signal: AbortSignal) => Promise<T>;
+}): Promise<T> {
+  const controller = new AbortController();
+  let timeoutError: Error | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, MSTEAMS_REQUEST_TIMEOUT_MS, 1);
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      timeoutError = createMSTeamsRequestTimeoutError(params.label, timeoutMs);
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  const workPromise = params.work(controller.signal);
+
+  try {
+    return await Promise.race([workPromise, timeoutPromise]);
+  } catch (error) {
+    if (controller.signal.aborted && timeoutError) {
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
