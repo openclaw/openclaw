@@ -211,9 +211,8 @@ describe("attachWidgetBridge accept filter (identity, not origin)", () => {
       deliver: false,
       idempotencyKey: expect.any(String),
     });
-    expect((request.mock.calls[0]?.[1] as { idempotencyKey?: string }).idempotencyKey).toMatch(
-      /^[0-9a-f-]{36}$/i,
-    );
+    const payload = request.mock.calls[0]?.[1] as { idempotencyKey?: string } | undefined;
+    expect(payload?.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/i);
     detach();
   });
 
