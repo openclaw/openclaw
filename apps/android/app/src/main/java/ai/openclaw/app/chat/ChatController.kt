@@ -14,6 +14,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -862,111 +863,118 @@ class ChatController internal constructor(
     pendingToolCallsById.clear()
     publishPendingToolCalls()
 
-    return try {
-      val params =
-        buildChatSendParams(
-          // Dispatch exactly what was journaled: the row's captured session key is the
-          // idempotent identity a replay after process death would use.
-          sessionKey = journaled?.sessionKey ?: sessionKey,
-          text = text,
-          thinking = thinking,
-          idempotencyKey = runId,
-          attachments = attachments,
-        )
-      val res = requestGatewayBound(sendGatewayId, "chat.send", params)
-      val ack = parseChatSendAck(json, res)
-      // Row transitions are durable state for the dispatching gateway and apply even when the
-      // UI scope moved on mid-request; only UI updates below are scope-guarded. A terminal
-      // failure ack proves transmission, not that this idempotency key never ran (a timeout ack
-      // can outlive a still-admitted run), so the row parks for review instead of deleting.
-      if (ack.isTerminalFailure) {
-        markJournaledSendUnconfirmed(journaled)
-      } else {
-        markJournaledSendAccepted(journaled)
-      }
-      if (sendCacheScope != currentCacheScope()) return true
-      val actualRunId = ack.runId ?: runId
-      if (actualRunId != runId) {
-        transferRunOwnership(runId, actualRunId, optimisticMessage)
-      }
-      if (ack.isTerminal) {
-        clearPendingRun(actualRunId)
-        removeOptimisticMessage(actualRunId)
-        pendingToolCallsById.clear()
-        publishPendingToolCalls()
-        _streamingAssistantText.value = null
-        if (ack.isTerminalSuccess) {
-          unresolvedRepliesByRunId.remove(actualRunId)
-          refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(actualRunId))
+    // Dispatch ownership lives in the controller scope: cancelling the calling UI scope
+    // (leaving the chat screen mid-send) after the durable claim must not strand a Sending
+    // row this process can no longer repair; the dispatch completes and settles the row.
+    val dispatch =
+      scope.async {
+        try {
+          val params =
+            buildChatSendParams(
+              // Dispatch exactly what was journaled: the row's captured session key is the
+              // idempotent identity a replay after process death would use.
+              sessionKey = journaled?.sessionKey ?: sessionKey,
+              text = text,
+              thinking = thinking,
+              idempotencyKey = runId,
+              attachments = attachments,
+            )
+          val res = requestGatewayBound(sendGatewayId, "chat.send", params)
+          val ack = parseChatSendAck(json, res)
+          // Row transitions are durable state for the dispatching gateway and apply even when the
+          // UI scope moved on mid-request; only UI updates below are scope-guarded. A terminal
+          // failure ack proves transmission, not that this idempotency key never ran (a timeout ack
+          // can outlive a still-admitted run), so the row parks for review instead of deleting.
+          if (ack.isTerminalFailure) {
+            markJournaledSendUnconfirmed(journaled)
+          } else {
+            markJournaledSendAccepted(journaled)
+          }
+          if (sendCacheScope != currentCacheScope()) return@async true
+          val actualRunId = ack.runId ?: runId
+          if (actualRunId != runId) {
+            transferRunOwnership(runId, actualRunId, optimisticMessage)
+          }
+          if (ack.isTerminal) {
+            clearPendingRun(actualRunId)
+            removeOptimisticMessage(actualRunId)
+            pendingToolCallsById.clear()
+            publishPendingToolCalls()
+            _streamingAssistantText.value = null
+            if (ack.isTerminalSuccess) {
+              unresolvedRepliesByRunId.remove(actualRunId)
+              refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(actualRunId))
+              true
+            } else {
+              // Terminal timeout/error means the gateway did not accept a runnable turn.
+              // Surface failed acceptance instead of letting a cleared composer look successful.
+              unresolvedRepliesByRunId.remove(actualRunId)
+              updateErrorText("Chat failed before the run started; try again.")
+              // The parked row owns the input; restoring the draft would duplicate it.
+              journaled != null
+            }
+          } else {
+            true
+          }
+        } catch (err: CancellationException) {
+          throw err
+        } catch (err: GatewayRequestNotEnqueued) {
+          // The frame provably never entered the socket queue. The journaled row stays queued and
+          // reconnect flush owns delivery, exactly like the flush path treats not-dispatched sends;
+          // deleting here could lose fire-and-forget input if the process died after the delete.
+          if (journaled != null) {
+            persistJournaledSendState(journaled, ChatOutboxStatus.Queued, err.message)
+            if (sendCacheScope != currentCacheScope()) return@async true
+            clearPendingRun(runId)
+            removeOptimisticMessage(runId)
+            unresolvedRepliesByRunId.remove(runId)
+            // The transport is effectively down; drop health so the next health event re-flushes.
+            _healthOk.value = false
+            publishOutbox()
+            true
+          } else {
+            if (sendCacheScope != currentCacheScope()) return@async true
+            clearPendingRun(runId)
+            removeOptimisticMessage(runId)
+            unresolvedRepliesByRunId.remove(runId)
+            updateErrorText(err.message)
+            false
+          }
+        } catch (err: GatewayRequestDefinitiveFailure) {
+          // An ok:false response proves transmission, not that this idempotency key was never run;
+          // park the journaled copy for review instead of deleting a possibly delivered send.
+          markJournaledSendUnconfirmed(journaled)
+          if (sendCacheScope != currentCacheScope()) return@async true
+          clearPendingRun(runId)
+          removeOptimisticMessage(runId)
+          unresolvedRepliesByRunId.remove(runId)
+          updateErrorText(err.message)
+          // The parked row owns the input; only the journal-less path refuses the send.
+          journaled != null
+        } catch (_: GatewayRequestOutcomeUnknown) {
+          // A transport failure cannot distinguish rejection from an accepted send whose ACK was
+          // lost. Keep the journaled row until history confirms or reconciliation parks it.
+          markJournaledSendAccepted(journaled)
+          if (sendCacheScope != currentCacheScope()) return@async true
+          unknownOutcomeRunIds.add(runId)
+          if (_healthOk.value) {
+            refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(runId))
+          }
           true
-        } else {
-          // Terminal timeout/error means the gateway did not accept a runnable turn.
-          // Surface failed acceptance instead of letting a cleared composer look successful.
-          unresolvedRepliesByRunId.remove(actualRunId)
-          updateErrorText("Chat failed before the run started; try again.")
-          // The parked row owns the input; restoring the draft would duplicate it.
+        } catch (err: Throwable) {
+          // Unexpected failure after dispatch is ambiguous; fail closed and keep the row visible.
+          markJournaledSendUnconfirmed(journaled)
+          if (sendCacheScope != currentCacheScope()) return@async true
+          clearPendingRun(runId)
+          removeOptimisticMessage(runId)
+          unresolvedRepliesByRunId.remove(runId)
+          updateErrorText(err.message)
+          // With a journaled row parked for review, the composer must not restore a duplicate
+          // draft: the row owns the input now. Only the journal-less path refuses the send.
           journaled != null
         }
-      } else {
-        true
       }
-    } catch (err: CancellationException) {
-      throw err
-    } catch (err: GatewayRequestNotEnqueued) {
-      // The frame provably never entered the socket queue. The journaled row stays queued and
-      // reconnect flush owns delivery, exactly like the flush path treats not-dispatched sends;
-      // deleting here could lose fire-and-forget input if the process died after the delete.
-      if (journaled != null) {
-        persistJournaledSendState(journaled, ChatOutboxStatus.Queued, err.message)
-        if (sendCacheScope != currentCacheScope()) return true
-        clearPendingRun(runId)
-        removeOptimisticMessage(runId)
-        unresolvedRepliesByRunId.remove(runId)
-        // The transport is effectively down; drop health so the next health event re-flushes.
-        _healthOk.value = false
-        publishOutbox()
-        true
-      } else {
-        if (sendCacheScope != currentCacheScope()) return true
-        clearPendingRun(runId)
-        removeOptimisticMessage(runId)
-        unresolvedRepliesByRunId.remove(runId)
-        updateErrorText(err.message)
-        false
-      }
-    } catch (err: GatewayRequestDefinitiveFailure) {
-      // An ok:false response proves transmission, not that this idempotency key was never run;
-      // park the journaled copy for review instead of deleting a possibly delivered send.
-      markJournaledSendUnconfirmed(journaled)
-      if (sendCacheScope != currentCacheScope()) return true
-      clearPendingRun(runId)
-      removeOptimisticMessage(runId)
-      unresolvedRepliesByRunId.remove(runId)
-      updateErrorText(err.message)
-      // The parked row owns the input; only the journal-less path refuses the send.
-      journaled != null
-    } catch (_: GatewayRequestOutcomeUnknown) {
-      // A transport failure cannot distinguish rejection from an accepted send whose ACK was
-      // lost. Keep the journaled row until history confirms or reconciliation parks it.
-      markJournaledSendAccepted(journaled)
-      if (sendCacheScope != currentCacheScope()) return true
-      unknownOutcomeRunIds.add(runId)
-      if (_healthOk.value) {
-        refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(runId))
-      }
-      true
-    } catch (err: Throwable) {
-      // Unexpected failure after dispatch is ambiguous; fail closed and keep the row visible.
-      markJournaledSendUnconfirmed(journaled)
-      if (sendCacheScope != currentCacheScope()) return true
-      clearPendingRun(runId)
-      removeOptimisticMessage(runId)
-      unresolvedRepliesByRunId.remove(runId)
-      updateErrorText(err.message)
-      // With a journaled row parked for review, the composer must not restore a duplicate
-      // draft: the row owns the input now. Only the journal-less path refuses the send.
-      journaled != null
-    }
+    return dispatch.await()
   }
 
   private fun optimisticUserMessage(

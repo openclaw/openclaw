@@ -9,6 +9,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -292,6 +293,7 @@ class ChatControllerOutboxTest {
     var online = false
     var sendFailureBeforeDispatch: Throwable? = null
     var sendFailureAfterDispatch: Throwable? = null
+    var sendGate: CompletableDeferred<Unit>? = null
     var sendResponse: (idempotencyKey: String) -> String = { key -> """{"runId":"$key","status":"started"}""" }
     val sentIdempotencyKeys = mutableListOf<String>()
     val sentMessages = mutableListOf<String>()
@@ -324,6 +326,7 @@ class ChatControllerOutboxTest {
               ?.mapNotNull { ((it as? JsonObject)?.get("fileName") as? JsonPrimitive)?.content }
               .orEmpty()
           sendFailureAfterDispatch?.let { throw it }
+          sendGate?.await()
           val response = sendResponse(key)
           // Terminal failures never persist a turn; every other returned ack means the gateway
           // accepted the dispatch and the turn becomes visible in canonical history.
@@ -1927,6 +1930,41 @@ class ChatControllerOutboxTest {
       val parked = outbox.rows.values.single()
       assertEquals(ChatOutboxStatus.Failed, parked.status)
       assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, parked.lastError)
+    }
+
+  @Test
+  fun callerCancellationAfterTheClaimDoesNotStrandTheDirectSend() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      chat.load("main")
+      advanceUntilIdle()
+
+      // The UI scope dies (screen leaves composition) while the dispatch is suspended on the
+      // gateway response; the controller-owned dispatch must still settle the claimed row.
+      val gate = CompletableDeferred<Unit>()
+      gateway.sendGate = gate
+      val callerJob = SupervisorJob()
+      val caller = CoroutineScope(coroutineContext + callerJob)
+      caller.launch {
+        chat.sendMessageAwaitAcceptance(message = "survives caller death", thinkingLevel = "off", attachments = emptyList())
+      }
+      runCurrent()
+      assertEquals(
+        ChatOutboxStatus.Sending,
+        outbox.rows.values
+          .single()
+          .status,
+      )
+      callerJob.cancel()
+      gate.complete(Unit)
+      advanceUntilIdle()
+
+      // Delivered exactly once and retired by canonical history proof; nothing stranded.
+      assertEquals(listOf("survives caller death"), gateway.sentMessages)
+      assertTrue(outbox.rows.isEmpty())
     }
 
   @Test
