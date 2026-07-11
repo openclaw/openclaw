@@ -186,6 +186,23 @@ boundary only for a resolved session target. External channel transport remains 
 separate delivery claim and must not be implied by this RFC or by the internal
 handoff unless implementation work proves it directly.
 
+State transitions are intentionally small:
+
+- `pending -> delivered` when durable core has handed the wake to the resolved
+  agent/session, result mailbox, operator-visible surface, or inspectable
+  no-handler surface. Internal session delivery-queue handoff satisfies this
+  boundary for a resolved session target. External channel transport remains a
+  channel/profile/plugin responsibility and is not implied by `delivered`.
+- `pending|delivered -> acked` only through an explicit owner/route/operator
+  acknowledgement or equivalent parent-observed commit.
+- `pending|delivered -> failed` when delivery cannot proceed; the wake remains
+  inspectable and may be retried by request.
+- `pending|delivered|failed -> superseded` when a newer durable fact or explicit
+  owner/route/operator action makes the wake obsolete. Superseding is cleanup,
+  not a semantic decision.
+- Terminal wake states (`acked`, `superseded`) are immutable except retention or
+  compaction metadata.
+
 ## Non Goals
 
 - No runtime code, schema, worker, CLI, Gateway, or transport changes from this

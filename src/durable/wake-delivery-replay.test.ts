@@ -2,9 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { openDurableRuntimeSqliteStore } from "./sqlite-store.js";
 import type { DurableRuntimeStore, DurableWakeDeliveryAttemptStatus } from "./types.js";
 import { replayDurableWakeDeliveryAttempts } from "./wake-delivery-replay.js";
+import { createDurableWakeSessionDeliveryHook } from "./wake-internal-delivery.js";
 import { recordDurableWakeObligation } from "./wake-producers.js";
 
 function tempStore() {
@@ -480,6 +483,70 @@ describe("durable wake delivery replay", () => {
     }
   });
 
+  it("enqueues a resolved wake into the internal session delivery queue exactly once", async () => {
+    await withTempDir({ prefix: "openclaw-durable-wake-internal-delivery-" }, async (stateDir) => {
+      const { store, cleanup } = tempStore();
+      try {
+        const wake = createPendingWake(store, "internal-queue", 100);
+        const hook = createDurableWakeSessionDeliveryHook({ stateDir });
+
+        const first = await replayDurableWakeDeliveryAttempts({
+          store,
+          replayPassId: "pass:internal:first",
+          now: 200,
+          deliveryHook: hook,
+        });
+        const second = await replayDurableWakeDeliveryAttempts({
+          store,
+          replayPassId: "pass:internal:second",
+          now: 300,
+          deliveryHook: hook,
+        });
+        const pending = await loadPendingSessionDeliveries(stateDir);
+
+        expect(first).toMatchObject({
+          scanned: 1,
+          recorded: 1,
+          delivered: 1,
+        });
+        expect(second).toMatchObject({
+          scanned: 0,
+          recorded: 0,
+          deduped: 0,
+        });
+        expect(pending).toEqual([
+          expect.objectContaining({
+            kind: "systemEvent",
+            sessionKey: "agent:session:internal-queue",
+            idempotencyKey: expect.stringContaining(
+              `durable-wake-session-delivery:v1:${wake.wakeId}:`,
+            ),
+            text: expect.stringContaining(`wakeId=${wake.wakeId}`),
+          }),
+        ]);
+        const queuedKeys = collectKeys(pending[0]);
+        expect(queuedKeys).not.toContain("resume");
+        expect(queuedKeys).not.toContain("abandon");
+        expect(queuedKeys).not.toContain("createNew");
+        expect(queuedKeys).not.toContain("maxRetries");
+        expect(store.listWakeDeliveryAttempts({ wakeId: wake.wakeId })).toEqual([
+          expect.objectContaining({
+            status: "delivered",
+            evidence: expect.objectContaining({
+              kind: "wake_internal_session_delivery_enqueued",
+              internalDelivery: "session_delivery_queue",
+              noExternalSend: true,
+              sessionKey: "agent:session:internal-queue",
+            }),
+            deliveredAt: 200,
+          }),
+        ]);
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
   it("persists delivered, failed, and unknown attempt evidence", async () => {
     const { store, cleanup } = tempStore();
     try {
@@ -545,58 +612,66 @@ describe("durable wake delivery replay", () => {
     }
   });
 
-  it("keeps missing or ambiguous targets inspectable through an operator attempt", async () => {
-    const { store, cleanup } = tempStore();
-    try {
-      const wake = recordDurableWakeObligation({
-        store,
-        reason: "delivery_unknown",
-        dedupeKey: "wake:test:ambiguous-delivery-target",
-        facts: {
-          explicitWorkOwners: [
-            {
-              kind: "agent_session",
-              ref: "agent:owner:a",
-              ownerKind: "agent_session",
-              ownerRef: "agent:owner:a",
-            },
-            {
-              kind: "agent_session",
-              ref: "agent:owner:b",
-              ownerKind: "agent_session",
-              ownerRef: "agent:owner:b",
-            },
-          ],
-        },
-        evidence: { kind: "ambiguous_delivery_target" },
-        now: 100,
-      });
+  it("keeps missing or ambiguous targets inspectable without internal queue delivery", async () => {
+    await withTempDir({ prefix: "openclaw-durable-wake-ambiguous-delivery-" }, async (stateDir) => {
+      const { store, cleanup } = tempStore();
+      try {
+        const wake = recordDurableWakeObligation({
+          store,
+          reason: "delivery_unknown",
+          dedupeKey: "wake:test:ambiguous-delivery-target",
+          facts: {
+            explicitWorkOwners: [
+              {
+                kind: "agent_session",
+                ref: "agent:owner:a",
+                ownerKind: "agent_session",
+                ownerRef: "agent:owner:a",
+              },
+              {
+                kind: "agent_session",
+                ref: "agent:owner:b",
+                ownerKind: "agent_session",
+                ownerRef: "agent:owner:b",
+              },
+            ],
+          },
+          evidence: { kind: "ambiguous_delivery_target" },
+          now: 100,
+        });
 
-      await replayDurableWakeDeliveryAttempts({
-        store,
-        replayPassId: "pass:operator",
-        now: 200,
-      });
+        await replayDurableWakeDeliveryAttempts({
+          store,
+          replayPassId: "pass:operator",
+          now: 200,
+          deliveryHook: createDurableWakeSessionDeliveryHook({ stateDir }),
+        });
 
-      expect(store.listWakeDeliveryAttempts({ wakeId: wake.wakeId })).toEqual([
-        expect.objectContaining({
-          routeKind: "operator",
-          routeRef: "operator",
-          status: "pending",
-        }),
-      ]);
-      expect(store.listUnresolvedObligations()).toEqual(
-        expect.arrayContaining([
+        expect(await loadPendingSessionDeliveries(stateDir)).toEqual([]);
+        expect(store.listWakeDeliveryAttempts({ wakeId: wake.wakeId })).toEqual([
           expect.objectContaining({
-            kind: "pending_wake",
-            wakeId: wake.wakeId,
-            status: "pending",
+            routeKind: "operator",
+            routeRef: "operator",
+            status: "unknown",
+            evidence: expect.objectContaining({
+              kind: "wake_internal_session_delivery_not_enqueued",
+              reason: "no_resolved_agent_session_target",
+            }),
           }),
-        ]),
-      );
-    } finally {
-      cleanup();
-    }
+        ]);
+        expect(store.listUnresolvedObligations()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              kind: "pending_wake",
+              wakeId: wake.wakeId,
+              status: "pending",
+            }),
+          ]),
+        );
+      } finally {
+        cleanup();
+      }
+    });
   });
 
   it("replays existing persisted pending obligations after reopening the store", async () => {
