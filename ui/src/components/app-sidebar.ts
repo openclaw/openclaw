@@ -1364,13 +1364,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               aria-checked=${String(pinned)}
               @click=${() => this.togglePinnedRoute(routeId)}
             >
-              <span class="sidebar-customize-menu__check" aria-hidden="true">
-                ${pinned ? icons.check : nothing}
-              </span>
               <span class="nav-item__icon" aria-hidden="true"
                 >${icons[navigationIconForRoute(routeId)]}</span
               >
               <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
+              <span class="sidebar-customize-menu__check" aria-hidden="true">
+                ${pinned ? icons.check : nothing}
+              </span>
             </button>
           `;
         })}
@@ -1385,9 +1385,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             this.closeCustomizeMenu({ restoreFocus: true });
           }}
         >
-          <span class="sidebar-customize-menu__check" aria-hidden="true"></span>
           <span class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
           <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
+          <span class="sidebar-customize-menu__check" aria-hidden="true"></span>
         </button>
       </div>
     `;

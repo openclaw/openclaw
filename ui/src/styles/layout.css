@@ -1524,6 +1524,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 }
 
 .sidebar-customize-menu__text {
+  flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
