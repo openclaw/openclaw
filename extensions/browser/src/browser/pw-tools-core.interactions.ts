@@ -1101,20 +1101,23 @@ export async function waitForViaPlaywright(
               onPredicateAbort();
             }
             try {
-              const predicate = page
-                .waitForFunction(runNormalizedWaitPredicate, fnSource, { timeout })
-                .catch(async (err: unknown) => {
+              const predicate = (async () => {
+                try {
+                  return await page.waitForFunction(runNormalizedWaitPredicate, fnSource, {
+                    timeout,
+                  });
+                } catch (err) {
                   if (err instanceof Error && err.name === "TimeoutError") {
                     await closeUnsafePredicateTarget();
                   }
                   throw err;
-                })
-                .finally(async () => {
+                } finally {
                   predicateSettled = true;
                   if (targetClosure) {
                     await targetClosure;
                   }
-                });
+                }
+              })();
               await waitForStep(predicate);
             } finally {
               predicateSettled = true;

@@ -43,15 +43,19 @@ vi.mock("./pw-interaction-navigation-guard.js", () => ({
       return { cleanup: () => {} };
     }
     let listener: (() => void) | undefined;
+    const abortError = () =>
+      signal.reason instanceof Error
+        ? signal.reason
+        : new Error("Snapshot request aborted", { cause: signal.reason });
     const abortPromise = signal.aborted
       ? (() => {
           onAbort?.();
-          return Promise.reject(signal.reason);
+          return Promise.reject(abortError());
         })()
       : new Promise<never>((_, reject) => {
           listener = () => {
             onAbort?.();
-            reject(signal.reason);
+            reject(abortError());
           };
           signal.addEventListener("abort", listener, { once: true });
         });

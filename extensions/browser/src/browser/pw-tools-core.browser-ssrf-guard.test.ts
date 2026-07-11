@@ -260,7 +260,9 @@ describe("pw-tools-core browser SSRF guards", () => {
       }
       let result = predicate(source);
       if (result === false) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
         result = predicate(source);
       }
       expect(result).toBe(true);
@@ -342,7 +344,9 @@ describe("pw-tools-core browser SSRF guards", () => {
       }
       let result = predicate(source);
       if (result === false) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
         result = predicate(source);
       }
       expect(result).toBe(true);
@@ -400,7 +404,9 @@ describe("pw-tools-core browser SSRF guards", () => {
         throw new Error("wait predicate was not executable");
       }
       expect(predicate(source)).toBe(false);
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
       predicate(source);
     });
     pageState.page = {

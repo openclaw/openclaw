@@ -507,7 +507,7 @@ function runReservedObservedDialogResponse(params: {
   try {
     response = params.runResponse ? params.runResponse(respond, params.mode) : respond();
   } catch (err) {
-    response = Promise.reject(err);
+    response = Promise.reject(toLintErrorObject(err, "Non-Error dialog response failure"));
   }
   return response.finally(() => {
     params.state.respondingDialogIds.delete(params.pending.id);
@@ -1530,7 +1530,9 @@ export async function closeBrowserTargetForUnsafePageExecution(opts: {
       if (!targetExists) {
         return;
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 25);
+      });
     } while (Date.now() < deadline);
 
     throw new Error(`Browser target ${targetId} remained open after close`);
@@ -1908,7 +1910,7 @@ export async function withPageNavigationRequestGuard<T>(
     // removed. Drain to a stable empty set so cleanup cannot dispatch a request
     // whose destination check arrived while an earlier check was still pending.
     while (inFlight.size > 0) {
-      await Promise.allSettled([...inFlight]);
+      await Promise.allSettled(inFlight);
     }
     const cleanupError = await removePageNavigationRequestGuard(opts.page, handler);
     if (cleanupError) {

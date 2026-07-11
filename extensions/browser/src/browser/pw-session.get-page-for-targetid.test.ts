@@ -41,6 +41,8 @@ type BrowserMockBundle = {
   pageActions: Array<{
     bringToFront: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
+    route: ReturnType<typeof vi.fn>;
+    unroute: ReturnType<typeof vi.fn>;
   }>;
 };
 
@@ -50,6 +52,8 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
   const pageActions = pages.map(() => ({
     bringToFront: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
+    route: vi.fn(async () => {}),
+    unroute: vi.fn(async () => {}),
   }));
 
   const pageObjects = pages.map((spec, index) => {
@@ -57,8 +61,8 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
     const mainFrame = {};
     const page = {
       on: vi.fn(),
-      route: vi.fn(async () => {}),
-      unroute: vi.fn(async () => {}),
+      route: actions.route,
+      unroute: actions.unroute,
       isClosed: vi.fn(() => false),
       mainFrame: vi.fn(() => mainFrame),
       context: () => context,
@@ -201,8 +205,9 @@ describe("pw-session getPageForTargetId", () => {
   it("guards navigation while the exact dialog-state URL check is pending", async () => {
     const safeUrl = "https://93.184.216.34/start";
     const blockedUrl = "http://169.254.169.254/latest/meta-data";
-    const { pages } = installBrowser([{ targetId: "TARGET_A", url: safeUrl }]);
+    const { pages, pageActions } = installBrowser([{ targetId: "TARGET_A", url: safeUrl }]);
     const page = pages[0]!;
+    const pageAction = pageActions[0]!;
     let releaseFirstCheck!: () => void;
     navigationResultAllowedMock.mockImplementationOnce(
       async () =>
@@ -217,15 +222,20 @@ describe("pw-session getPageForTargetId", () => {
       browserProxyMode: "explicit-browser-proxy",
     });
     await vi.waitFor(() => expect(navigationResultAllowedMock).toHaveBeenCalledTimes(1));
-    expect(page.route).toHaveBeenCalledOnce();
-    const routeHandler = vi.mocked(page.route).mock.calls[0]?.[1];
+    expect(pageAction.route).toHaveBeenCalledOnce();
+    const routeHandler = pageAction.route.mock.calls[0]?.[1];
     if (!routeHandler) {
       throw new Error("Expected a page navigation route handler");
     }
-    const route = {
+    const routeActions = {
       fulfill: vi.fn(async () => {}),
       abort: vi.fn(async () => {}),
       fallback: vi.fn(async () => {}),
+    };
+    const route = {
+      fulfill: routeActions.fulfill,
+      abort: routeActions.abort,
+      fallback: routeActions.fallback,
     } as unknown as Route;
     const request = {
       frame: () => page.mainFrame(),
@@ -238,13 +248,13 @@ describe("pw-session getPageForTargetId", () => {
     await expect(state).rejects.toThrow(
       "strict browser SSRF policy cannot be enforced while this browser profile is proxy-routed",
     );
-    expect(route.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
+    expect(routeActions.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
     expect(navigationResultAllowedMock).toHaveBeenNthCalledWith(1, {
       url: safeUrl,
       browserProxyMode: "explicit-browser-proxy",
     });
     releaseFirstCheck();
-    await vi.waitFor(() => expect(page.unroute).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(pageAction.unroute).toHaveBeenCalledOnce());
   });
 
   it("focuses and closes only the exact target when URLs are identical", async () => {

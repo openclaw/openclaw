@@ -254,14 +254,17 @@ describe("observed browser dialogs", () => {
       finishResponse = resolve;
     });
     const dialog = createDialog();
-    dialog.dismiss.mockImplementationOnce(async () => await responsePending);
+    const pendingDismiss = vi.fn(async () => {
+      await responsePending;
+    });
+    dialog.dismiss = pendingDismiss;
     emit("dialog", dialog);
     const prepared = respondOrArmObservedDialogOnPage({ page, accept: false });
     if (prepared.kind !== "responding") {
       throw new Error("expected pending dialog response");
     }
 
-    expect(dialog.dismiss).toHaveBeenCalledOnce();
+    expect(pendingDismiss).toHaveBeenCalledOnce();
     const whileDispatched = markObservedDialogsHandledRemotelyForPage(page);
     expect(whileDispatched.dialogs.pending).toMatchObject([{ id: "d1" }]);
     expect(whileDispatched.dialogs.recent).toEqual([]);

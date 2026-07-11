@@ -192,12 +192,11 @@ export async function snapshotAriaViaPlaywright(
         },
       });
       void collectAxTree.catch(() => {});
-      let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new AbortController();
       const timeoutError = new Error(
         `Aria snapshot via Playwright timed out after ${ariaTimeoutMs}ms.`,
       );
-      timer = setTimeout(() => {
+      const timer = setTimeout(() => {
         deadline.abort(timeoutError);
       }, ariaTimeoutMs);
       timer.unref?.();
@@ -222,9 +221,7 @@ export async function snapshotAriaViaPlaywright(
         res = (await collectResult) as { nodes?: RawAXNode[] };
       } finally {
         cleanup();
-        if (timer) {
-          clearTimeout(timer);
-        }
+        clearTimeout(timer);
       }
       const nodes = Array.isArray(res.nodes) ? res.nodes : [];
       const formatted = formatAriaSnapshot(nodes, limit);
