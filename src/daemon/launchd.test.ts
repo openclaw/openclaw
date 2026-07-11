@@ -348,7 +348,7 @@ vi.mock("node:fs/promises", async () => {
       if (state.files.has(key)) {
         return {
           mode: state.fileModes.get(key) ?? 0o666,
-          size: Buffer.byteLength(String(state.files.get(key) ?? "")),
+          size: Buffer.byteLength(state.files.get(key) ?? ""),
         };
       }
       throw new Error(`ENOENT: no such file or directory, stat '${key}'`);
@@ -358,7 +358,7 @@ vi.mock("node:fs/promises", async () => {
       if (data === undefined) {
         throw new Error(`ENOENT: no such file or directory, open '${p}'`);
       }
-      const source = Buffer.from(String(data));
+      const source = Buffer.from(data);
       return {
         read: async (buffer: Buffer, offset: number, length: number, position: number) => {
           const bytesRead = source.copy(buffer, offset, position, position + length);
