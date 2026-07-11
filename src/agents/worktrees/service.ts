@@ -48,10 +48,10 @@ export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain rest
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
 const SETUP_SCRIPT_TIMEOUT_MS = 120_000;
-// Provisioning rows are transient by contract: setup is hard-bounded by
-// SETUP_SCRIPT_TIMEOUT_MS and the include-file copy is short in practice, so a row still
-// 'provisioning' this long after its claim has a dead holder and gc may reclaim the path
-// and branch for the next create().
+// Lease contract: provisioning rows carry a heartbeat (lastActiveAt bumps at claim, after
+// the include-file copy, and at the ready flip), and setup is hard-bounded by
+// SETUP_SCRIPT_TIMEOUT_MS. A lease silent for 10x the setup bound has a dead holder and gc
+// may reclaim the path and branch for the next create().
 export const PROVISIONING_STALE_MS = 10 * SETUP_SCRIPT_TIMEOUT_MS;
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -790,16 +790,24 @@ export class ManagedWorktreeService {
     for (const record of records) {
       try {
         if (record.removedAt === undefined && !(await pathExists(record.path))) {
+          // Provisioning rows have no snapshot and represent no user work; retiring one
+          // whose directory vanished would hide the row while its branch survives and
+          // permanently block the name. Delete branch + row so the name stays retriable.
+          if (record.readiness === "provisioning") {
+            await resetFailedWorktreeAdd(record.repoRoot, record.path, record.branch);
+            deleteRegistryWorktree(this.env, record.id);
+            continue;
+          }
           updateRegistryWorktree(this.env, record.id, { removedAt: now });
           record.removedAt = now;
         }
-        // Stale 'provisioning' rows have a dead holder by contract (PROVISIONING_STALE_MS);
-        // reap worktree+branch+row so the next create() — including auto-named orphans no
-        // retry will ever reach — starts fresh. Fresh provisioning rows stay untouched.
+        // A 'provisioning' lease silent past PROVISIONING_STALE_MS has a dead holder; reap
+        // worktree+branch+row so the next create() — including auto-named orphans no retry
+        // will ever reach — starts fresh. Recently heartbeating leases stay untouched.
         if (
           record.removedAt === undefined &&
           record.readiness === "provisioning" &&
-          now - record.createdAt > PROVISIONING_STALE_MS
+          now - record.lastActiveAt > PROVISIONING_STALE_MS
         ) {
           // resetFailedWorktreeAdd tolerates the partial states a dead holder leaves
           // (unlisted dir, missing branch), unlike the happy-path cleanupFailedCreate.
@@ -909,6 +917,9 @@ export class ManagedWorktreeService {
     // in-flight creates unadoptable and observable. Failed creates still end with no row.
     try {
       await copyIncludedFiles(repository.sourceRoot, worktreePath);
+      // Lease heartbeat between phases: gc treats a lease silent past PROVISIONING_STALE_MS
+      // as dead, and setup alone is bounded well under that (SETUP_SCRIPT_TIMEOUT_MS).
+      updateRegistryWorktree(this.env, record.id, { lastActiveAt: this.now() });
       if (params.runSetupScript !== false) {
         await runSetupScript(repository.sourceRoot, worktreePath);
       }
@@ -924,16 +935,17 @@ export class ManagedWorktreeService {
       throw error;
     }
     // Readiness flips only after provisioning fully succeeded; every usable-record path
-    // (entry shortcut, findLiveByOwner) filters on it.
-    updateRegistryWorktree(this.env, record.id, { readiness: "ready" });
-    // Provisioning can outlive PROVISIONING_STALE_MS (suspension; copy is unbounded) and be
-    // reaped by gc mid-create; the flip above then updated zero rows. Never hand back a
-    // record whose path was already reclaimed.
+    // (entry shortcut, findLiveByOwner) filters on it. The flip is also the final heartbeat.
+    const readyAt = this.now();
+    updateRegistryWorktree(this.env, record.id, { readiness: "ready", lastActiveAt: readyAt });
+    // Backstop for the pathological suspended holder: heartbeats can stall long enough for
+    // gc to reap the lease mid-create; the flip above then updated zero rows. Never hand
+    // back a record whose path was already reclaimed.
     const flipped = getRegistryWorktree(this.env, record.id);
     if (!flipped || flipped.removedAt !== undefined) {
       throw new WorktreeProvisioningReapedError(name);
     }
-    return { ...record, readiness: "ready" };
+    return { ...record, readiness: "ready", lastActiveAt: readyAt };
   }
 
   private requireLiveRecord(id: string): ManagedWorktreeRecord {

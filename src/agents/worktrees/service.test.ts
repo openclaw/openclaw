@@ -1006,7 +1006,7 @@ describe("ManagedWorktreeService", () => {
     );
   });
 
-  it("gc reaps stale provisioning rows and preserves fresh ones", async () => {
+  it("gc reaps silent provisioning leases and preserves heartbeating ones", async () => {
     await fs.mkdir(path.join(repo, ".openclaw"));
     await fs.writeFile(
       path.join(repo, ".openclaw", "worktree-setup.sh"),
@@ -1020,14 +1020,17 @@ describe("ManagedWorktreeService", () => {
     updateRegistryWorktree(env, named.id, { readiness: "provisioning" });
     updateRegistryWorktree(env, autoNamed.id, { readiness: "provisioning" });
 
-    // At the threshold the rows are still considered in-flight and stay untouched.
-    now += PROVISIONING_STALE_MS;
+    // Liveness, not claim age, decides: well past the original claim's age a recent
+    // heartbeat still proves a live holder, so gc must not touch the lease.
+    now += PROVISIONING_STALE_MS + 1;
+    updateRegistryWorktree(env, named.id, { lastActiveAt: now });
+    updateRegistryWorktree(env, autoNamed.id, { lastActiveAt: now });
     await service.gc();
     expect(getRegistryWorktree(env, named.id)?.readiness).toBe("provisioning");
     expect(await fs.stat(named.path)).toBeTruthy();
 
-    // Past the threshold the holder is dead by contract: row, worktree, and branch go away.
-    now += 1;
+    // A lease silent past the threshold has a dead holder: row, worktree, and branch go away.
+    now += PROVISIONING_STALE_MS + 1;
     await service.gc();
     expect(getRegistryWorktree(env, named.id)).toBeUndefined();
     expect(getRegistryWorktree(env, autoNamed.id)).toBeUndefined();
@@ -1040,6 +1043,22 @@ describe("ManagedWorktreeService", () => {
     const recreated = await service.create({ repoRoot: repo, name: "stale-prov" });
     expect(recreated.readiness).toBe("ready");
     expect(await fs.readFile(path.join(recreated.path, "setup-marker.txt"), "utf8")).toBe("ran\n");
+  });
+
+  it("gc hard-deletes provisioning claims whose directory vanished, keeping the name retriable", async () => {
+    const created = await service.create({ repoRoot: repo, name: "gone-dir" });
+    // Constructed: a provisioning claim whose directory is gone (crash + manual cleanup).
+    updateRegistryWorktree(env, created.id, { readiness: "provisioning" });
+    await fs.rm(created.path, { recursive: true, force: true });
+
+    await service.gc();
+
+    // No hidden retired row and no surviving branch — retiring instead would strand the
+    // name forever (row invisible to adoption, branch collides with the next create).
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+    expect(await git(repo, "branch", "--list", created.branch)).toBe("");
+    const recreated = await service.create({ repoRoot: repo, name: "gone-dir" });
+    expect(recreated.readiness).toBe("ready");
   });
 
   it("prunes expired snapshot refs and registry rows", async () => {
