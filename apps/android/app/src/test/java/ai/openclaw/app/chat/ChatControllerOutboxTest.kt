@@ -1890,6 +1890,39 @@ class ChatControllerOutboxTest {
     }
 
   @Test
+  fun acceptedRowAckedUnderDifferentRunIdStaysOwnedWhileTheRunIsLive() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      // The gateway acknowledges the send under a run id that differs from the row's
+      // idempotency key; local ownership transfers to that id while the row keeps its own.
+      gateway.sendResponse = { _ -> """{"runId":"gw-run-777","status":"started"}""" }
+      gateway.echoDeliveredSendsInHistory = false
+      chat.load("main")
+      advanceUntilIdle()
+
+      val accepted = chat.sendMessageAwaitAcceptance(message = "slow turn", thinkingLevel = "off", attachments = emptyList())
+      advanceTimeBy(1_000)
+      assertTrue(accepted)
+      assertEquals(
+        ChatOutboxStatus.Accepted,
+        outbox.rows.values
+          .single()
+          .status,
+      )
+
+      // A follow-up send must see the accepted head as live-owned: it dispatches directly,
+      // and the reconciliation sweep must not park the head while its run is in flight.
+      val followUp = chat.sendMessageAwaitAcceptance(message = "second", thinkingLevel = "off", attachments = emptyList())
+      advanceTimeBy(10_000)
+      assertTrue(followUp)
+      assertEquals(listOf("slow turn", "second"), gateway.sentMessages)
+      assertTrue(outbox.rows.values.none { it.status == ChatOutboxStatus.Failed })
+    }
+
+  @Test
   fun staleGatedParkFailureFailsClosedInsteadOfSpinning() =
     runTest {
       val gateway = FakeGateway()

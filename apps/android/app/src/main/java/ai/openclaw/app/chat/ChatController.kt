@@ -206,6 +206,10 @@ class ChatController internal constructor(
   // delivery-unconfirmed on the second sighting so one lagging transcript write is not loss.
   private val unconfirmedSightings = ConcurrentHashMap<String, Int>()
 
+  // Gateway ACKs may return a run id that differs from the row's idempotency key; ownership
+  // and in-flight checks must recognize both or reconciliation can park a still-live run.
+  private val acknowledgedRunIdByRowId = ConcurrentHashMap<String, String>()
+
   private val outboxRecoveryJob =
     commandOutbox?.let { outbox ->
       scope.launch {
@@ -908,6 +912,10 @@ class ChatController internal constructor(
             markJournaledSendUnconfirmed(journaled)
           } else {
             markJournaledSendAccepted(journaled)
+            val ackRunId = ack.runId
+            if (journaled != null && ackRunId != null && ackRunId != journaled.id) {
+              acknowledgedRunIdByRowId[journaled.id] = ackRunId
+            }
           }
           if (sendCacheScope != currentCacheScope()) return@async true
           val actualRunId = ack.runId ?: runId
@@ -1075,9 +1083,13 @@ class ChatController internal constructor(
   private fun outboxRowUnresolved(row: ChatOutboxItem): Boolean =
     when (row.status) {
       ChatOutboxStatus.Queued, ChatOutboxStatus.Sending -> true
-      ChatOutboxStatus.Accepted -> !locallyOwnedRun(row.id)
+      ChatOutboxStatus.Accepted -> !locallyOwnedOutboxRow(row.id)
       ChatOutboxStatus.Failed -> false
     }
+
+  // A row is live-owned when either its idempotency key or the run id the gateway
+  // acknowledged it under still has local pending/unknown/unresolved state.
+  private fun locallyOwnedOutboxRow(rowId: String): Boolean = locallyOwnedRun(rowId) || acknowledgedRunIdByRowId[rowId]?.let(::locallyOwnedRun) == true
 
   private fun locallyOwnedRun(runId: String): Boolean =
     synchronized(pendingRuns) { pendingRuns.contains(runId) } ||
@@ -1107,6 +1119,7 @@ class ChatController internal constructor(
   ) {
     val outbox = commandOutbox ?: return
     if (row == null) return
+    if (status != ChatOutboxStatus.Accepted) acknowledgedRunIdByRowId.remove(row.id)
     val persisted =
       try {
         outbox.updateStatus(row.id, status, row.retryCount, lastError)
@@ -1737,6 +1750,7 @@ class ChatController internal constructor(
     val outbox = commandOutbox ?: return
     scope.launch {
       runCatching { outbox.delete(id) }
+      acknowledgedRunIdByRowId.remove(id)
       publishOutbox()
       // Deleting an unresolved row can release its session's queued successors.
       if (_healthOk.value) requestOutboxFlush()
@@ -1884,7 +1898,7 @@ class ChatController internal constructor(
     val rows = runCatching { outbox.load(flushScope.gatewayId) }.getOrDefault(emptyList())
     val orphanSessions =
       rows
-        .filter { it.status == ChatOutboxStatus.Accepted && !locallyOwnedRun(it.id) }
+        .filter { it.status == ChatOutboxStatus.Accepted && !locallyOwnedOutboxRow(it.id) }
         .map { normalizeRequestedSessionKey(it.sessionKey) }
         .toSet()
     if (orphanSessions.isEmpty()) return 0
@@ -1916,7 +1930,7 @@ class ChatController internal constructor(
     }
     return runCatching { outbox.load(flushScope.gatewayId) }
       .getOrDefault(emptyList())
-      .count { it.status == ChatOutboxStatus.Accepted && !locallyOwnedRun(it.id) }
+      .count { it.status == ChatOutboxStatus.Accepted && !locallyOwnedOutboxRow(it.id) }
   }
 
   /**
@@ -1945,12 +1959,18 @@ class ChatController internal constructor(
     if (confirmed.isNotEmpty()) {
       val removed = runCatching { outbox.confirmDelivered(confirmed) }.getOrDefault(0)
       confirmed.forEach(unconfirmedSightings::remove)
+      confirmed.forEach(acknowledgedRunIdByRowId::remove)
       changed = removed > 0
     }
     for (row in sessionRows) {
       if (row.status != ChatOutboxStatus.Accepted || row.id in confirmed) continue
-      if (locallyOwnedRun(row.id)) continue
-      if (row.id == inFlightRunId) {
+      if (locallyOwnedOutboxRow(row.id)) continue
+      // inFlightRunId must be non-null before the map compare: a missing in-flight run would
+      // otherwise match rows with no acknowledged id (null == null) and block parking forever.
+      val rowInFlight =
+        inFlightRunId != null &&
+          (row.id == inFlightRunId || acknowledgedRunIdByRowId[row.id] == inFlightRunId)
+      if (rowInFlight) {
         // The run is still alive on the gateway; its user turn persists with the run.
         unconfirmedSightings.remove(row.id)
         continue
@@ -1959,6 +1979,7 @@ class ChatController internal constructor(
       if (sightings >= 2) {
         runCatching { outbox.updateStatus(row.id, ChatOutboxStatus.Failed, row.retryCount, OUTBOX_DELIVERY_UNCONFIRMED_ERROR) }
         unconfirmedSightings.remove(row.id)
+        acknowledgedRunIdByRowId.remove(row.id)
         changed = true
       } else {
         unconfirmedSightings[row.id] = sightings
@@ -1982,7 +2003,9 @@ class ChatController internal constructor(
   private enum class GatewayResponseState { Received, Unknown }
 
   private sealed interface OutboxSendResult {
-    data object Accepted : OutboxSendResult
+    data class Accepted(
+      val runId: String,
+    ) : OutboxSendResult
 
     /** The request never entered the socket queue, so reconnect may retry it automatically. */
     data class NotDispatched(
@@ -2055,9 +2078,10 @@ class ChatController internal constructor(
         }
       }
     return when (val result = attemptOutboxSend(outbox, item, flushScope.gatewayId, attachments)) {
-      OutboxSendResult.Accepted -> {
+      is OutboxSendResult.Accepted -> {
         // Ack received: keep the row as accepted until canonical history proves the user turn
         // persisted; the started ACK alone is not durable proof (issue #86946 tracks the gap).
+        if (result.runId != item.id) acknowledgedRunIdByRowId[item.id] = result.runId
         val persisted = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Accepted, null)
         if (persisted == null) rearmOutboxRecovery()
         publishOutbox()
@@ -2193,7 +2217,7 @@ class ChatController internal constructor(
           if (ack.runId.isNullOrBlank()) {
             OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
           } else {
-            OutboxSendResult.Accepted
+            OutboxSendResult.Accepted(ack.runId)
           }
         "timeout", "error" -> OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
         else -> OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
@@ -2483,8 +2507,13 @@ class ChatController internal constructor(
   /** Parks a still-accepted journaled row as delivery-unconfirmed once local ownership expires. */
   private suspend fun parkUnconfirmedDurableSend(runId: String) {
     val outbox = commandOutbox ?: return
-    val row = _outboxItems.value.firstOrNull { it.id == runId && it.status == ChatOutboxStatus.Accepted } ?: return
+    val row =
+      _outboxItems.value.firstOrNull {
+        it.status == ChatOutboxStatus.Accepted &&
+          (it.id == runId || acknowledgedRunIdByRowId[it.id] == runId)
+      } ?: return
     runCatching { outbox.updateStatus(row.id, ChatOutboxStatus.Failed, row.retryCount, OUTBOX_DELIVERY_UNCONFIRMED_ERROR) }
+    acknowledgedRunIdByRowId.remove(row.id)
     publishOutbox()
   }
 
