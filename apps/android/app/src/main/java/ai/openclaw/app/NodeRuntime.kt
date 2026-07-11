@@ -87,7 +87,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -723,6 +722,7 @@ class NodeRuntime private constructor(
   val providerModelCatalogRefreshing: StateFlow<Boolean> = _providerModelCatalogRefreshing.asStateFlow()
   private val _providerModelCatalogErrorText = MutableStateFlow<String?>(null)
   val providerModelCatalogErrorText: StateFlow<String?> = _providerModelCatalogErrorText.asStateFlow()
+  private val providerModelCatalogRefreshGuard = LatestGatewayRefreshGuard()
   private val _modelAuthProviders = MutableStateFlow<List<GatewayModelProviderSummary>>(emptyList())
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = _modelAuthProviders.asStateFlow()
   private val _modelCatalogRefreshing = MutableStateFlow(false)
@@ -925,6 +925,7 @@ class NodeRuntime private constructor(
     _gatewayAgents.value = emptyList()
     selectedChatAgentId = null
     _modelCatalog.value = emptyList()
+    providerModelCatalogRefreshGuard.invalidate()
     _providerModelCatalog.value = emptyList()
     _providerModelCatalogRefreshing.value = false
     _providerModelCatalogErrorText.value = null
@@ -3752,6 +3753,15 @@ class NodeRuntime private constructor(
       cronRefreshGuard.publishIfCurrent(refreshGeneration) { publish() }
     }
 
+  private inline fun publishProviderModelRefresh(
+    gatewayScope: GatewayDataScope,
+    refreshGeneration: Long,
+    crossinline publish: () -> Unit,
+  ): Boolean =
+    publishGatewayData(gatewayScope) {
+      providerModelCatalogRefreshGuard.publishIfCurrent(refreshGeneration) { publish() }
+    }
+
   private suspend fun refreshBrandingFromGateway() {
     val gatewayScope = captureGatewayDataScope() ?: return
     if (!gatewayConnectionDisplay.value.isConnected) return
@@ -3851,34 +3861,56 @@ class NodeRuntime private constructor(
   }
 
   private suspend fun refreshProviderModelsFromGateway() {
+    val refreshGeneration = providerModelCatalogRefreshGuard.begin()
     val gatewayScope = captureGatewayDataScope() ?: return
-    publishGatewayData(gatewayScope) {
+    publishProviderModelRefresh(gatewayScope, refreshGeneration) {
       _providerModelCatalogRefreshing.value = true
       _providerModelCatalogErrorText.value = null
     }
     if (!operatorConnected) {
-      _providerModelCatalog.value = emptyList()
-      _modelAuthProviders.value = emptyList()
-      _providerModelCatalogRefreshing.value = false
+      publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+        _providerModelCatalog.value = emptyList()
+        _modelAuthProviders.value = emptyList()
+        _providerModelCatalogRefreshing.value = false
+      }
       return
     }
     try {
-      val (models, providers) =
-        coroutineScope {
-          val models = async { requestProviderModelCatalog(gatewayScope) }
-          val providers = async { requestModelAuthProviders(gatewayScope) }
-          models.await() to providers.await()
+      try {
+        val models = requestProviderModelCatalog(gatewayScope)
+        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+          _providerModelCatalog.value = models
         }
-      publishGatewayData(gatewayScope) {
-        _providerModelCatalog.value = models
-        _modelAuthProviders.value = providers
+      } catch (err: Throwable) {
+        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+          _providerModelCatalogErrorText.value =
+            if (err is ProviderModelConfigUnsupported) {
+              "Update your Gateway to view provider model config."
+            } else {
+              "Could not load provider model config."
+            }
+        }
       }
-    } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) {
-        _providerModelCatalogErrorText.value = "Could not load provider model config."
+
+      // Keep readiness independent from the additive provider-config view so
+      // older Gateways still populate provider status while prompting an upgrade.
+      try {
+        val providers = requestModelAuthProviders(gatewayScope)
+        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+          _modelAuthProviders.value = providers
+        }
+      } catch (_: Throwable) {
+        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+          if (_providerModelCatalogErrorText.value == null) {
+            _providerModelCatalogErrorText.value =
+              "Provider models loaded, but readiness is unavailable."
+          }
+        }
       }
     } finally {
-      publishGatewayData(gatewayScope) { _providerModelCatalogRefreshing.value = false }
+      publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+        _providerModelCatalogRefreshing.value = false
+      }
     }
   }
 
@@ -5726,18 +5758,18 @@ internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
         supportsVideo = "video" in inputTypes,
         supportsDocuments = "document" in inputTypes,
         supportsReasoning = obj["reasoning"].toString().trim() == "true",
-        contextTokens = obj["contextWindow"].toString().toLongOrNull() ?: obj["contextTokens"].toString().toLongOrNull(),
+        contextTokens = obj["contextTokens"].toString().toLongOrNull() ?: obj["contextWindow"].toString().toLongOrNull(),
       )
     }.orEmpty()
+
+internal class ProviderModelConfigUnsupported : Exception()
 
 internal suspend fun requestProviderModelConfig(request: suspend (String) -> String): String =
   try {
     request("""{"view":"provider-config"}""")
   } catch (err: GatewayRequestRejected) {
     if (err.gatewayError.code != "INVALID_REQUEST") throw err
-    // Released Gateways without the inventory view still provide the closest
-    // read-only catalog through the configured picker contract.
-    request("""{"view":"configured"}""")
+    throw ProviderModelConfigUnsupported()
   }
 
 data class GatewayModelProviderSummary(

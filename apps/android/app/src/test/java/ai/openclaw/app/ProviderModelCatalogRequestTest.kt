@@ -3,30 +3,44 @@ package ai.openclaw.app
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProviderModelCatalogRequestTest {
   @Test
-  fun fallsBackToConfiguredViewWhenGatewayRejectsProviderConfigView() =
+  fun prefersEffectiveContextCapOverNativeWindow() {
+    val models =
+      parseGatewayModels(
+        Json
+          .parseToJsonElement(
+            """[{"id":"model","name":"Model","provider":"example","contextWindow":128000,"contextTokens":96000}]""",
+          ).jsonArray,
+      )
+
+    assertEquals(96_000L, models.single().contextTokens)
+  }
+
+  @Test
+  fun reportsProviderConfigUnsupportedWithoutSubstitutingConfiguredView() =
     runBlocking {
       val requests = mutableListOf<String>()
+      var actual: Throwable? = null
 
-      val response =
+      try {
         requestProviderModelConfig { paramsJson ->
           requests += paramsJson
-          if (requests.size == 1) {
-            throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "unsupported view"))
-          }
-          "configured-response"
+          throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "unsupported view"))
         }
+      } catch (err: Throwable) {
+        actual = err
+      }
 
-      assertEquals("configured-response", response)
-      assertEquals(
-        listOf("""{"view":"provider-config"}""", """{"view":"configured"}"""),
-        requests,
-      )
+      assertTrue(actual is ProviderModelConfigUnsupported)
+      assertEquals(listOf("""{"view":"provider-config"}"""), requests)
     }
 
   @Test

@@ -219,7 +219,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 667,
+      "line": 666,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Offline",
       "surface": "android",
@@ -227,7 +227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1547,
+      "line": 1548,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job started.",
       "surface": "android",
@@ -235,7 +235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1547,
+      "line": 1548,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron run queued.",
       "surface": "android",
@@ -243,7 +243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1591,
+      "line": 1592,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job disabled.",
       "surface": "android",
@@ -251,7 +251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1591,
+      "line": 1592,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job enabled.",
       "surface": "android",
@@ -259,7 +259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3194,
+      "line": 3195,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
       "surface": "android",
@@ -267,7 +267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3196,
+      "line": 3197,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -275,7 +275,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3198,
+      "line": 3199,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",

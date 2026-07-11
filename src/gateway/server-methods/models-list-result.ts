@@ -60,7 +60,8 @@ let loggedSlowModelsListCatalog = false;
 // Unknown views are rejected by protocol validation first; this helper keeps the
 // handler default explicit for older clients that omit the field.
 function resolveModelsListView(params: Record<string, unknown>): ModelsListView {
-  return typeof params.view === "string" ? (params.view as ModelsListView) : "default";
+  const view = params.view;
+  return view === "configured" || view === "provider-config" || view === "all" ? view : "default";
 }
 
 function resolvePositiveSafeInteger(value: unknown): number | undefined {
@@ -419,9 +420,7 @@ export async function buildModelsListResult(params: {
       cfg,
       agentId,
       snapshot: inventorySnapshot,
-      ...(params.routeResolverFactory
-        ? { routeResolverFactory: params.routeResolverFactory }
-        : {}),
+      ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
     });
     const inventory = await inventoryProjector.projectCatalog();
     return {
