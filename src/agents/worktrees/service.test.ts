@@ -1006,6 +1006,60 @@ describe("ManagedWorktreeService", () => {
     );
   });
 
+  it("per-file copy heartbeats keep a long-running copy's lease alive through gc", async () => {
+    const syncDir = path.join(root, "sync");
+    await fs.mkdir(syncDir, { recursive: true });
+    const startedFlag = path.join(syncDir, "setup-started");
+    const releaseFlag = path.join(syncDir, "setup-release");
+    await fs.writeFile(path.join(repo, ".gitignore"), "a.env\nb.env\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "a.env\nb.env\n");
+    await fs.writeFile(path.join(repo, "a.env"), "a\n");
+    await fs.writeFile(path.join(repo, "b.env"), "b\n");
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      `#!/bin/sh\n: > "${startedFlag}"\ni=0\nwhile [ ! -f "${releaseFlag}" ]; do\n  i=$((i + 1))\n  [ "$i" -gt 400 ] && exit 9\n  sleep 0.1\ndone\nexit 0\n`,
+      { mode: 0o755 },
+    );
+    let nowCalls = 0;
+    // The first per-file heartbeat's now() read (call #2, after the claim's createdAt) jumps
+    // the clock past the stale threshold — simulating a first include-file copy that took far
+    // longer than PROVISIONING_STALE_MS while the holder stayed alive.
+    const racingService = new ManagedWorktreeService({
+      env,
+      now: () => {
+        nowCalls += 1;
+        if (nowCalls === 2) {
+          now += PROVISIONING_STALE_MS + 1;
+        }
+        return now;
+      },
+    });
+
+    const createPromise = racingService.create({ repoRoot: repo, name: "slow-copy" });
+    while (!(await fs.stat(startedFlag).catch(() => undefined))) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    }
+
+    // Mid-provisioning and far past the CLAIM's age, the fresh per-file heartbeat is what
+    // keeps gc from reaping the live holder.
+    const parked = listRegistryWorktrees(env).find((entry) => entry.name === "slow-copy");
+    expect(parked?.readiness).toBe("provisioning");
+    expect(now - parked!.createdAt).toBeGreaterThan(PROVISIONING_STALE_MS);
+    expect(parked?.lastActiveAt).toBe(now);
+    await service.gc();
+    expect(getRegistryWorktree(env, parked!.id)?.readiness).toBe("provisioning");
+    expect(await fs.stat(parked!.path)).toBeTruthy();
+
+    await fs.writeFile(releaseFlag, "");
+    const created = await createPromise;
+    expect(created.readiness).toBe("ready");
+    // now() reads: claim createdAt + one heartbeat per copied file (2) + the ready flip.
+    expect(nowCalls).toBe(4);
+  });
+
   it("gc reaps silent provisioning leases and preserves heartbeating ones", async () => {
     await fs.mkdir(path.join(repo, ".openclaw"));
     await fs.writeFile(

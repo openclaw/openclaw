@@ -48,10 +48,10 @@ export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain rest
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
 const SETUP_SCRIPT_TIMEOUT_MS = 120_000;
-// Lease contract: provisioning rows carry a heartbeat (lastActiveAt bumps at claim, after
-// the include-file copy, and at the ready flip), and setup is hard-bounded by
-// SETUP_SCRIPT_TIMEOUT_MS. A lease silent for 10x the setup bound has a dead holder and gc
-// may reclaim the path and branch for the next create().
+// Lease contract: provisioning rows carry a heartbeat (lastActiveAt bumps at claim, per
+// copied include-file, and at the ready flip), so the longest legitimate silent gap is the
+// SETUP_SCRIPT_TIMEOUT_MS-bounded setup script plus a single file copy. A lease silent for
+// 10x the setup bound has a dead holder and gc may reclaim the path and branch.
 export const PROVISIONING_STALE_MS = 10 * SETUP_SCRIPT_TIMEOUT_MS;
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -171,7 +171,13 @@ async function ensureNoSymlinkDirectory(root: string, relativePath: string): Pro
   return true;
 }
 
-async function copyIncludedFiles(repoRoot: string, worktreePath: string): Promise<void> {
+async function copyIncludedFiles(
+  repoRoot: string,
+  worktreePath: string,
+  // Invoked once per copied file so provisioning callers can heartbeat their lease
+  // through arbitrarily long multi-file copies; stays clock/env-free itself.
+  heartbeat?: () => void,
+): Promise<void> {
   const includePath = path.join(repoRoot, ".worktreeinclude");
   if (!(await pathExists(includePath))) {
     return;
@@ -218,6 +224,7 @@ async function copyIncludedFiles(repoRoot: string, worktreePath: string): Promis
       }
     });
     await fs.chmod(destination, sourceStat.mode);
+    heartbeat?.();
   }
 }
 
@@ -916,10 +923,11 @@ export class ManagedWorktreeService {
     // The row is visible as 'provisioning' (list()) while copy/setup run; that is what makes
     // in-flight creates unadoptable and observable. Failed creates still end with no row.
     try {
-      await copyIncludedFiles(repository.sourceRoot, worktreePath);
-      // Lease heartbeat between phases: gc treats a lease silent past PROVISIONING_STALE_MS
-      // as dead, and setup alone is bounded well under that (SETUP_SCRIPT_TIMEOUT_MS).
-      updateRegistryWorktree(this.env, record.id, { lastActiveAt: this.now() });
+      // Per-file lease heartbeats: a long multi-file copy must keep proving a live holder,
+      // or gc would reap the lease mid-copy after PROVISIONING_STALE_MS of silence.
+      await copyIncludedFiles(repository.sourceRoot, worktreePath, () => {
+        updateRegistryWorktree(this.env, record.id, { lastActiveAt: this.now() });
+      });
       if (params.runSetupScript !== false) {
         await runSetupScript(repository.sourceRoot, worktreePath);
       }
