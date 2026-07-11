@@ -2042,7 +2042,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               class="sidebar-session-pagination__button"
               aria-label=${t("codexSessions.loadMore")}
               @click=${() => {
-                this.visibleSessionLimit += SIDEBAR_SESSION_PAGE_SIZE;
+                this.visibleSessionLimit = visible + SIDEBAR_SESSION_PAGE_SIZE;
               }}
             >
               ${t("codexSessions.loadMore")}

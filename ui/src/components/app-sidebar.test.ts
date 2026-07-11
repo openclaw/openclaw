@@ -347,6 +347,43 @@ describe("AppSidebar session pagination", () => {
     expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
   });
 
+  it("reveals optional sessions immediately when required sessions exceed the page size", async () => {
+    const keys = [
+      "agent:main:main",
+      ...Array.from({ length: 40 }, (_, index) => `agent:main:session-${index + 1}`),
+    ];
+    const sessions = createSessionsHarness("main", keys);
+    const result = sessions.sessions.state.result;
+    expect(result).not.toBeNull();
+    if (!result) {
+      return;
+    }
+    for (const row of result.sessions.slice(0, 31)) {
+      row.pinned = true;
+    }
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    const rows = () => sidebar.querySelectorAll(".sidebar-recent-session");
+    const button = (label: string) =>
+      sidebar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+
+    expect(rows()).toHaveLength(31);
+    expect(button("Load more")).not.toBeNull();
+    expect(button("Collapse")).toBeNull();
+
+    button("Load more")?.click();
+    await sidebar.updateComplete;
+    expect(rows()).toHaveLength(41);
+    expect(button("Load more")).toBeNull();
+    expect(button("Collapse")).not.toBeNull();
+
+    button("Collapse")?.click();
+    await sidebar.updateComplete;
+    expect(rows()).toHaveLength(31);
+    expect(button("Load more")).not.toBeNull();
+    expect(button("Collapse")).toBeNull();
+  });
+
   it("reveals sessions ten at a time and offers Collapse after thirty", async () => {
     const keys = [
       "agent:main:main",
