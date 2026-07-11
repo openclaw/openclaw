@@ -1188,7 +1188,10 @@ async function materializePendingSupervisionBranch(
   params: PendingSupervisionMaterializationParams,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   let pending = params.binding.pendingSupervisionBranch;
-  const connectionFingerprint = buildCodexAppServerConnectionFingerprint(params.appServer);
+  const connectionFingerprint = buildCodexAppServerConnectionFingerprint(
+    params.appServer,
+    params.attempt.agentDir,
+  );
   if (!pending.connectionFingerprint || pending.connectionFingerprint !== connectionFingerprint) {
     throw new Error("Codex supervision source connection changed before branch materialization");
   }

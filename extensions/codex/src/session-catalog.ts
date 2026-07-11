@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  listAgentIds,
+  resolveDefaultAgentDir,
+  resolveDefaultAgentId,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   ErrorCodes,
@@ -302,7 +306,10 @@ export function createCodexSessionCatalogControl(params: {
       const pinnedControl: CodexSessionCatalogControl =
         createCodexSessionCatalogControlFromRequests({
           assertEnabled,
-          connectionFingerprint: buildCodexAppServerConnectionFingerprint(runtime),
+          connectionFingerprint: buildCodexAppServerConnectionFingerprint(
+            runtime,
+            resolveDefaultAgentDir(runtimeConfig),
+          ),
           createRequestSnapshot: () => requests,
           now,
           withPinnedConnection: async (nestedRun) => await nestedRun(pinnedControl),
