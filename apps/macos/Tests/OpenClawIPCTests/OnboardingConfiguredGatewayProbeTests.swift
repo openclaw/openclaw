@@ -15,6 +15,29 @@ private actor OnboardingProbeGatewayConfig {
     }
 }
 
+private actor OnboardingProbeEndpoint {
+    private let url: URL
+    private var generation: UInt64 = 1
+
+    init(url: URL) {
+        self.url = url
+    }
+
+    func snapshot() -> GatewayConnection.EndpointSnapshot {
+        GatewayConnection.EndpointSnapshot(
+            config: (
+                url: self.url,
+                token: "route-\(self.generation)",
+                password: nil),
+            routeAuthority: self.generation,
+            revision: self.generation)
+    }
+
+    func advance() {
+        self.generation &+= 1
+    }
+}
+
 private actor OnboardingProbeRequestGate {
     private var started = false
     private var released = false
@@ -86,6 +109,54 @@ private actor OnboardingProbeConfigReadGate {
     }
 }
 
+private actor OnboardingEndpointRevisionGate {
+    private let stale: GatewayConnection.EndpointSnapshot
+    private let current: GatewayConnection.EndpointSnapshot
+    private var reads = 0
+    private var staleReadStarted = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(staleURL: URL, currentURL: URL) {
+        self.stale = GatewayConnection.EndpointSnapshot(
+            config: (staleURL, "stale-token", nil),
+            routeAuthority: 1,
+            revision: 1)
+        self.current = GatewayConnection.EndpointSnapshot(
+            config: (currentURL, "current-token", nil),
+            routeAuthority: 2,
+            revision: 2)
+    }
+
+    func snapshot() async -> GatewayConnection.EndpointSnapshot {
+        self.reads += 1
+        guard self.reads == 1 else { return self.current }
+        self.staleReadStarted = true
+        self.startWaiters.forEach { $0.resume() }
+        self.startWaiters.removeAll()
+        if !self.released {
+            await withCheckedContinuation { continuation in
+                self.releaseWaiters.append(continuation)
+            }
+        }
+        return self.stale
+    }
+
+    func waitUntilStaleReadStarted() async {
+        guard !self.staleReadStarted else { return }
+        await withCheckedContinuation { continuation in
+            self.startWaiters.append(continuation)
+        }
+    }
+
+    func releaseStaleRead() {
+        self.released = true
+        self.releaseWaiters.forEach { $0.resume() }
+        self.releaseWaiters.removeAll()
+    }
+}
+
 private func onboardingAgentsResponse(
     id: String,
     defaultAgentID: String = "main",
@@ -139,6 +210,20 @@ private func runOnboardingProbe(
     return await probe.probe(connectionMode: connectionMode, attempt: attempt)
 }
 
+private func configuredModel(
+    _ outcome: OnboardingConfiguredGatewayProbe.Outcome) -> String?
+{
+    guard case let .configured(modelRef, _) = outcome else { return nil }
+    return modelRef
+}
+
+private func isMissing(_ outcome: OnboardingConfiguredGatewayProbe.Outcome) -> Bool {
+    if case .missing = outcome {
+        return true
+    }
+    return false
+}
+
 @Suite(.serialized)
 @MainActor
 struct OnboardingConfiguredGatewayProbeTests {
@@ -160,7 +245,7 @@ struct OnboardingConfiguredGatewayProbeTests {
             sessionBox: WebSocketSessionBox(session: session))
         let probe = OnboardingConfiguredGatewayProbe(gateway: gateway)
 
-        #expect(await runOnboardingProbe(probe, connectionMode: .remote) == .configured("openai/gpt-5.5"))
+        #expect(await configuredModel(runOnboardingProbe(probe, connectionMode: .remote)) == "openai/gpt-5.5")
         #expect(session.snapshotMakeCount() == 1)
         #expect(session.latestTask()?.snapshotSendCount() == 2)
     }
@@ -180,7 +265,7 @@ struct OnboardingConfiguredGatewayProbeTests {
             sessionBox: WebSocketSessionBox(session: session))
         let probe = OnboardingConfiguredGatewayProbe(gateway: gateway)
 
-        #expect(await runOnboardingProbe(probe, connectionMode: .local) == .missing)
+        #expect(await isMissing(runOnboardingProbe(probe, connectionMode: .local)))
     }
 
     @Test func `gateway with a blank default agent model stays in onboarding`() async throws {
@@ -198,7 +283,7 @@ struct OnboardingConfiguredGatewayProbeTests {
             sessionBox: WebSocketSessionBox(session: session))
         let probe = OnboardingConfiguredGatewayProbe(gateway: gateway)
 
-        #expect(await runOnboardingProbe(probe, connectionMode: .local) == .missing)
+        #expect(await isMissing(runOnboardingProbe(probe, connectionMode: .local)))
     }
 
     @Test func `current route read failure is unavailable rather than missing`() async throws {
@@ -216,7 +301,9 @@ struct OnboardingConfiguredGatewayProbeTests {
 
         let outcome = await runOnboardingProbe(probe, connectionMode: .remote)
         #expect({
-            if case .unavailable = outcome { return true }
+            if case .unavailable = outcome {
+                return true
+            }
             return false
         }())
     }
@@ -233,7 +320,9 @@ struct OnboardingConfiguredGatewayProbeTests {
 
         let outcome = await runOnboardingProbe(probe, connectionMode: .remote)
         #expect({
-            if case .unavailable = outcome { return true }
+            if case .unavailable = outcome {
+                return true
+            }
             return false
         }())
     }
@@ -266,6 +355,107 @@ struct OnboardingConfiguredGatewayProbeTests {
         await gate.release()
 
         #expect(await result.value == .superseded)
+    }
+
+    @Test func `configured result remains bound to its captured effective route`() async throws {
+        let config = OnboardingProbeGatewayConfig()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                task.emitReceiveSuccess(.data(onboardingAgentsResponse(id: id)))
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: {
+                let token = await config.snapshotToken()
+                return (url: url, token: token, password: nil)
+            },
+            sessionBox: WebSocketSessionBox(session: session))
+        let probe = OnboardingConfiguredGatewayProbe(gateway: gateway)
+        let attempt = probe.beginProbe()
+        let outcome = await probe.probe(
+            connectionMode: .remote,
+            attempt: attempt,
+            routeIdentity: "remote:id:gateway-a")
+        guard case let .configured(_, route) = outcome else {
+            Issue.record("expected configured route")
+            return
+        }
+
+        #expect(route.identity == "remote:id:gateway-a")
+        #expect(await probe.isCurrent(route))
+        await config.setToken("route-b")
+        let staleRouteIsCurrent = await probe.isCurrent(route)
+        #expect(!staleRouteIsCurrent)
+    }
+
+    @Test func `ssh gateway replacement cannot reuse same loopback websocket`() async throws {
+        let url = try #require(URL(string: "ws://127.0.0.1:18789"))
+        let endpoint = OnboardingProbeEndpoint(url: url)
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                task.emitReceiveSuccess(.data(onboardingAgentsResponse(id: id)))
+            })
+        })
+        let gateway = GatewayConnection(
+            endpointProvider: { await endpoint.snapshot() },
+            sessionBox: WebSocketSessionBox(session: session))
+        let probe = OnboardingConfiguredGatewayProbe(gateway: gateway)
+
+        let firstAttempt = probe.beginProbe()
+        let first = await probe.probe(
+            connectionMode: .remote,
+            attempt: firstAttempt,
+            routeIdentity: "remote:id:gateway-a")
+        guard case let .configured(_, firstRoute) = first else {
+            Issue.record("expected first configured route")
+            return
+        }
+
+        await endpoint.advance()
+        let secondAttempt = probe.beginProbe()
+        let second = await probe.probe(
+            connectionMode: .remote,
+            attempt: secondAttempt,
+            routeIdentity: "remote:id:gateway-b")
+        guard case let .configured(_, secondRoute) = second else {
+            Issue.record("expected replacement configured route")
+            return
+        }
+
+        let firstRouteIsCurrent = await probe.isCurrent(firstRoute)
+        #expect(session.snapshotMakeCount() == 2)
+        #expect(session.snapshotCancelCount() == 1)
+        #expect(!firstRouteIsCurrent)
+        #expect(await probe.isCurrent(secondRoute))
+        #expect(secondRoute.identity == "remote:id:gateway-b")
+    }
+
+    @Test func `delayed endpoint snapshot cannot replace a newer revision`() async throws {
+        let staleURL = try #require(URL(string: "ws://stale.example.invalid"))
+        let currentURL = try #require(URL(string: "ws://current.example.invalid"))
+        let endpoints = OnboardingEndpointRevisionGate(staleURL: staleURL, currentURL: currentURL)
+        let gateway = GatewayConnection(
+            endpointProvider: { await endpoints.snapshot() },
+            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
+                GatewayTestWebSocketTask()
+            })))
+
+        let staleCapture = Task { await gateway.captureRoute() }
+        await endpoints.waitUntilStaleReadStarted()
+        let currentRoute = await gateway.captureRoute()
+        await endpoints.releaseStaleRead()
+        let staleRoute = await staleCapture.value
+
+        #expect(currentRoute != nil)
+        #expect(staleRoute == nil)
+        #expect(await gateway._test_configuredURL() == currentURL)
     }
 
     @Test func `invalidation during final success route validation supersedes result`() async throws {
@@ -384,9 +574,11 @@ struct OnboardingConfiguredGatewayProbeTests {
         await gate.waitUntilStarted()
         #expect(reconnectCount == 0)
         await gate.release()
-        #expect(await result.value == .configured("openai/gpt-5.5"))
+        #expect(await configuredModel(result.value) == "openai/gpt-5.5")
         for _ in 0..<100 {
-            if reconnectCount > 0 { break }
+            if reconnectCount > 0 {
+                break
+            }
             await Task.yield()
         }
 
@@ -438,7 +630,9 @@ struct OnboardingConfiguredGatewayProbeTests {
         let newer = probe.beginProbe()
 
         #expect(await probe.probe(connectionMode: .remote, attempt: older) == .superseded)
-        #expect(await probe.probe(connectionMode: .remote, attempt: newer) == .configured("openai/gpt-5.5"))
+        #expect(await configuredModel(probe.probe(
+            connectionMode: .remote,
+            attempt: newer)) == "openai/gpt-5.5")
     }
 
     @Test func `invalidation before queued probe starts supersedes it`() async throws {

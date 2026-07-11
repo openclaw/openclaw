@@ -1,13 +1,17 @@
 // Crestodian command gate: prove inference before starting conversational setup.
 
 import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
-import type { RunCrestodianOptions } from "../crestodian/crestodian.js";
+import type { CrestodianCommandOptions } from "../crestodian/crestodian.js";
+import type { BoundVerifySetupInferenceResult } from "../crestodian/setup-inference.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import type { OnboardOptions } from "./onboard-types.js";
 
 type RunCrestodian = typeof import("../crestodian/crestodian.js").runCrestodian;
-type VerifySetupInference = typeof import("../crestodian/setup-inference.js").verifySetupInference;
+type VerifySetupInference = (params: {
+  runtime: RuntimeEnv;
+  bindSession: true;
+}) => Promise<BoundVerifySetupInferenceResult>;
 type RunGuidedOnboarding = typeof import("./onboard-guided.js").runGuidedOnboarding;
 
 export type CrestodianWithInferenceDeps = {
@@ -16,7 +20,7 @@ export type CrestodianWithInferenceDeps = {
   runCrestodian?: RunCrestodian;
 };
 
-function hasInteractiveTty(opts: RunCrestodianOptions): boolean {
+function hasInteractiveTty(opts: CrestodianCommandOptions): boolean {
   const input = opts.input ?? process.stdin;
   const output = opts.output ?? process.stdout;
   return (
@@ -24,7 +28,7 @@ function hasInteractiveTty(opts: RunCrestodianOptions): boolean {
   );
 }
 
-function isOneShotRequest(opts: RunCrestodianOptions): boolean {
+function isOneShotRequest(opts: CrestodianCommandOptions): boolean {
   return Boolean(opts.json || opts.message?.trim() || opts.interactive === false);
 }
 
@@ -33,7 +37,7 @@ function formatOneShotExecutionError(error: unknown): string {
 }
 
 function failOneShotExecution(
-  opts: RunCrestodianOptions,
+  opts: CrestodianCommandOptions,
   runtime: RuntimeEnv,
   error: unknown,
 ): void {
@@ -54,7 +58,7 @@ function failOneShotExecution(
  * closed with a stable command operators can run to repair the prerequisite.
  */
 export async function runCrestodianWithInference(
-  opts: RunCrestodianOptions = {},
+  opts: CrestodianCommandOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
   onboardingOptions: Pick<OnboardOptions, "workspace" | "acceptRisk"> = {},
   deps: CrestodianWithInferenceDeps = {},
@@ -73,12 +77,14 @@ export async function runCrestodianWithInference(
     runtime.exit(1);
     return;
   }
-  let inference: Awaited<ReturnType<VerifySetupInference>>;
+  let inference: BoundVerifySetupInferenceResult;
   try {
     const verifyInference =
       deps.verifyInference ??
       (await import("../crestodian/setup-inference.js")).verifySetupInference;
-    inference = await withConsoleSubsystemsSuppressed(() => verifyInference({ runtime }));
+    inference = await withConsoleSubsystemsSuppressed(() =>
+      verifyInference({ runtime, bindSession: true }),
+    );
   } catch (error) {
     if (!oneShot) {
       throw error;
@@ -90,7 +96,7 @@ export async function runCrestodianWithInference(
     const runCrestodian =
       deps.runCrestodian ?? (await import("../crestodian/crestodian.js")).runCrestodian;
     try {
-      await runCrestodian(opts, runtime);
+      await runCrestodian({ ...opts, verifiedInference: inference.binding }, runtime);
     } catch (error) {
       if (!oneShot) {
         throw error;

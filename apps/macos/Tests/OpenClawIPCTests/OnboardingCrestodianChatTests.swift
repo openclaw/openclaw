@@ -174,7 +174,9 @@ struct OnboardingCrestodianChatTests {
                       let id = GatewayWebSocketTestSupport.requestID(from: message)
                 else { return }
                 let method = crestodianRequestMethod(from: message)
-                if let method { await methods.record(method) }
+                if let method {
+                    await methods.record(method)
+                }
                 switch method {
                 case "crestodian.setup.verify":
                     task.emitReceiveSuccess(.data(verifiedInferenceResponse(id: id)))
@@ -321,7 +323,9 @@ struct OnboardingCrestodianChatTests {
 
         let staleResume = view.resumePendingCrestodian(modelRef: "openai/gpt-5.5")
         for _ in 0..<200 {
-            if await methods.snapshot() == ["crestodian.setup.verify"] { break }
+            if await methods.snapshot() == ["crestodian.setup.verify"] {
+                break
+            }
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
         view.resetGatewayBoundAIState()
@@ -369,11 +373,17 @@ struct OnboardingCrestodianChatTests {
         let appState = AppState(preview: true)
         appState.connectionMode = .local
         let routeIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(state: appState)
+        let route = try #require(await gateway.captureRoute())
+        let activationOwner = try OnboardingCrestodianResumeStore.ActivationOwner(
+            id: "completed-before-relaunch",
+            routeFingerprint: #require(route.activationOwnershipFingerprint))
         OnboardingCrestodianResumeStore.markPending(
             routeIdentity: routeIdentity,
+            activationOwner: activationOwner,
             defaults: defaults)
         OnboardingCrestodianResumeStore.markCompleted(
             ifOwnedBy: routeIdentity,
+            activationOwner: activationOwner,
             defaults: defaults)
         let view = OnboardingView(
             state: appState,
@@ -386,7 +396,9 @@ struct OnboardingCrestodianChatTests {
         let initialProbe = try #require(view.onboardingDidAppear())
         await initialProbe.value
         for _ in 0..<200 {
-            if crestodianState.chat.messages.map(\.text) == ["ready"] { break }
+            if crestodianState.chat.messages.map(\.text) == ["ready"] {
+                break
+            }
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
 

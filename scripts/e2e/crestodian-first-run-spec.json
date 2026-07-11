@@ -6,8 +6,8 @@
   "dockerAgentWorkspace": "/tmp/openclaw-reef",
   "agentId": "reef",
   "model": "claude-cli/claude-opus-4-8",
-  "discordEnv": "DISCORD_BOT_TOKEN",
-  "discordToken": "openclaw-crestodian-discord-e2e-token",
+  "telegramEnv": "TELEGRAM_BOT_TOKEN",
+  "telegramToken": "123456:openclaw-crestodian-telegram-e2e-token",
   "commands": [
     {
       "id": "setup",
@@ -29,26 +29,14 @@
       "approve": true
     },
     {
-      "id": "discord-plugin-allow",
-      "message": "config set plugins.allow [\"discord\"]",
-      "expectOutput": "[crestodian] done: config.set",
-      "approve": true
-    },
-    {
-      "id": "discord-plugin-entry",
-      "message": "config set plugins.entries.discord.enabled true",
-      "expectOutput": "[crestodian] done: config.set",
-      "approve": true
-    },
-    {
-      "id": "discord-token",
-      "message": "config set-ref channels.discord.token env {discordEnv}",
+      "id": "telegram-token",
+      "message": "config set-ref channels.telegram.botToken env {telegramEnv}",
       "expectOutput": "[crestodian] done: config.setRef",
       "approve": true
     },
     {
-      "id": "discord-enabled",
-      "message": "config set channels.discord.enabled true",
+      "id": "telegram-enabled",
+      "message": "config set channels.telegram.enabled true",
       "expectOutput": "[crestodian] done: config.set",
       "approve": true
     },

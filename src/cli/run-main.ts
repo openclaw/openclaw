@@ -293,7 +293,13 @@ export async function shouldStartOnboardingForFreshInstall(argv: string[]): Prom
 
 type BareRootLaunchTarget =
   | { kind: "onboarding"; classic?: boolean }
-  | { kind: "tui"; local: boolean; gatewayUrl?: string; authSource?: "config" };
+  | {
+      kind: "tui";
+      local: boolean;
+      gatewayUrl?: string;
+      authSource?: "config";
+      tlsFingerprint?: string;
+    };
 
 async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaunchTarget | null> {
   if (!shouldHandleBareRoot(argv)) {
@@ -313,13 +319,25 @@ async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaun
 async function resolveConfiguredTuiLaunchTarget(
   config: OpenClawConfig,
 ): Promise<BareRootLaunchTarget> {
-  const gateway = await resolveReachableGateway(config);
-  if (gateway) {
+  const gatewayResolution = await resolveReachableGateway(config);
+  if (
+    gatewayResolution.kind === "configured" ||
+    gatewayResolution.kind === "reachable-unverified"
+  ) {
+    const gateway = gatewayResolution.gateway;
     const target: BareRootLaunchTarget = { kind: "tui", local: false, gatewayUrl: gateway.url };
     if (gateway.authSource) {
       target.authSource = gateway.authSource;
     }
+    if (gateway.tlsFingerprint) {
+      target.tlsFingerprint = gateway.tlsFingerprint;
+    }
     return target;
+  }
+  if (gatewayResolution.kind === "missing-configured-model") {
+    // The connected Gateway is authoritative. Never fall back to a model in
+    // this client's local config when that server still needs inference.
+    return { kind: "onboarding" };
   }
   const { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } =
     await import("../agents/agent-scope.js");
@@ -333,12 +351,21 @@ type GatewayProbeTarget = {
   url: string;
   auth: "local" | "remote";
   scope: "local-loopback" | "local-configured" | "remote";
+  tlsFingerprint?: string;
+  preauthHandshakeTimeoutMs?: number;
 };
 
 type ReachableGateway = {
   url: string;
   authSource?: "config";
+  tlsFingerprint?: string;
 };
+
+type GatewayResolution =
+  | { kind: "configured"; gateway: ReachableGateway }
+  | { kind: "missing-configured-model" }
+  | { kind: "reachable-unverified"; gateway: ReachableGateway }
+  | { kind: "unreachable" };
 
 type GatewayProbeAuth = {
   token?: string;
@@ -346,14 +373,24 @@ type GatewayProbeAuth = {
   authSource?: "config";
 };
 
-async function resolveReachableGateway(config: OpenClawConfig): Promise<ReachableGateway | null> {
+function toReachableGateway(target: GatewayProbeTarget, auth: GatewayProbeAuth): ReachableGateway {
+  return {
+    url: target.url,
+    ...(auth.authSource ? { authSource: auth.authSource } : {}),
+    ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
+  };
+}
+
+async function resolveReachableGateway(config: OpenClawConfig): Promise<GatewayResolution> {
   const targets = await resolveGatewayProbeTargets(config);
   if (targets.length === 0) {
-    return null;
+    return { kind: "unreachable" };
   }
   const usesRemoteAuth = targets.some((target) => target.auth === "remote");
   const auth = await resolveGatewayProbeAuth(config, usesRemoteAuth ? "remote" : "local");
-  const { probeGatewayReachable } = await import("../commands/onboard-helpers.js");
+  const { probeGatewayConfiguredModel } = await import("../commands/onboard-helpers.js");
+  let reachedGatewayWithoutModel = false;
+  let reachableUnverifiedGateway: ReachableGateway | undefined;
   for (const target of targets) {
     if (!isSafeGatewayProbeTarget(target)) {
       continue;
@@ -362,54 +399,59 @@ async function resolveReachableGateway(config: OpenClawConfig): Promise<Reachabl
       url: string;
       token?: string;
       password?: string;
-      requireConfiguredModel: true;
-    } = { url: target.url, requireConfiguredModel: true };
+      tlsFingerprint?: string;
+      preauthHandshakeTimeoutMs?: number;
+    } = { url: target.url };
     if (auth.token) {
       probeOptions.token = auth.token;
     }
     if (auth.password) {
       probeOptions.password = auth.password;
     }
-    const probe = await probeGatewayReachable(probeOptions);
-    if (probe.ok) {
-      const reachable: ReachableGateway = { url: target.url };
-      if (auth.authSource) {
-        reachable.authSource = auth.authSource;
-      }
-      return reachable;
+    if (target.tlsFingerprint) {
+      probeOptions.tlsFingerprint = target.tlsFingerprint;
+    }
+    if (target.preauthHandshakeTimeoutMs) {
+      probeOptions.preauthHandshakeTimeoutMs = target.preauthHandshakeTimeoutMs;
+    }
+    const probe = await probeGatewayConfiguredModel(probeOptions);
+    if (probe.kind === "configured") {
+      return { kind: "configured", gateway: toReachableGateway(target, auth) };
+    }
+    if (probe.kind === "missing-configured-model") {
+      reachedGatewayWithoutModel = true;
+      continue;
+    }
+    if (probe.kind === "reachable-unverified" && !reachableUnverifiedGateway) {
+      reachableUnverifiedGateway = toReachableGateway(target, auth);
     }
   }
-  return null;
+  if (reachedGatewayWithoutModel) {
+    return { kind: "missing-configured-model" };
+  }
+  if (reachableUnverifiedGateway) {
+    return { kind: "reachable-unverified", gateway: reachableUnverifiedGateway };
+  }
+  return { kind: "unreachable" };
 }
 
 async function resolveGatewayProbeAuth(
   config: OpenClawConfig,
   auth: "local" | "remote",
 ): Promise<GatewayProbeAuth> {
-  const gateway = config.gateway;
-  const remoteAuth = auth === "remote";
-  const [configToken, configPassword] = await Promise.all([
-    resolveGatewayProbeSecret({
-      config,
-      value: remoteAuth ? gateway?.remote?.token : gateway?.auth?.token,
-      path: remoteAuth ? "gateway.remote.token" : "gateway.auth.token",
-    }),
-    resolveGatewayProbeSecret({
-      config,
-      value: remoteAuth ? gateway?.remote?.password : gateway?.auth?.password,
-      path: remoteAuth ? "gateway.remote.password" : "gateway.auth.password",
-    }),
-  ]);
+  const { resolveGatewayProbeSurfaceAuth } = await import("../gateway/auth-surface-resolution.js");
+  const authResolution = await resolveGatewayProbeSurfaceAuth({
+    config,
+    surface: auth,
+  });
   const resolved: GatewayProbeAuth = {};
-  const token = configToken ?? normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN);
-  const password = configPassword ?? normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD);
-  if (token) {
-    resolved.token = token;
+  if (authResolution.token) {
+    resolved.token = authResolution.token;
   }
-  if (password) {
-    resolved.password = password;
+  if (authResolution.password) {
+    resolved.password = authResolution.password;
   }
-  if (configToken || configPassword) {
+  if (authResolution.source === "config") {
     resolved.authSource = "config";
   }
   return resolved;
@@ -419,13 +461,21 @@ async function resolveGatewayProbeTargets(config: OpenClawConfig): Promise<Gatew
   const remoteUrl = normalizeOptionalString(config.gateway?.remote?.url);
   if (normalizeOptionalString(config.gateway?.mode) === "remote" && remoteUrl) {
     const url = await resolveValidatedRemoteGatewayUrl(config);
-    return url ? [{ url, auth: "remote", scope: "remote" }] : [];
+    const tlsFingerprint = normalizeOptionalString(config.gateway?.remote?.tlsFingerprint);
+    const preauthHandshakeTimeoutMs = config.gateway?.handshakeTimeoutMs;
+    return url
+      ? [
+          {
+            url,
+            auth: "remote",
+            scope: "remote",
+            ...(tlsFingerprint ? { tlsFingerprint } : {}),
+            ...(preauthHandshakeTimeoutMs ? { preauthHandshakeTimeoutMs } : {}),
+          },
+        ]
+      : [];
   }
-  return (await resolveLocalGatewayWebSocketUrls(config)).map((url, index) => ({
-    url,
-    auth: "local",
-    scope: index === 0 ? "local-loopback" : "local-configured",
-  }));
+  return resolveLocalGatewayProbeTargets(config);
 }
 
 function isSafeGatewayProbeTarget(target: GatewayProbeTarget): boolean {
@@ -484,46 +534,67 @@ async function resolveValidatedRemoteGatewayUrl(config: OpenClawConfig): Promise
   }
 }
 
-async function resolveGatewayProbeSecret(params: {
-  config: OpenClawConfig;
-  value: unknown;
-  path: string;
-}): Promise<string | undefined> {
-  try {
-    const { resolveSetupSecretInputString } = await import("../wizard/setup.secret-input.js");
-    return await resolveSetupSecretInputString(params);
-  } catch {
-    return undefined;
-  }
-}
-
-async function resolveLocalGatewayWebSocketUrls(config: OpenClawConfig): Promise<string[]> {
-  const [{ resolveGatewayPort }, { resolveControlUiLinks }] = await Promise.all([
+async function resolveLocalGatewayProbeTargets(
+  config: OpenClawConfig,
+): Promise<GatewayProbeTarget[]> {
+  const [
+    { resolveGatewayPort },
+    { resolveControlUiLinks },
+    { buildGatewayProbeConnectionDetails },
+    { readActiveGatewayLockPort },
+  ] = await Promise.all([
     import("../config/paths.js"),
     import("../gateway/control-ui-links.js"),
+    import("../gateway/call.js"),
+    import("../infra/gateway-lock.js"),
   ]);
   const gateway = config.gateway;
+  const configuredPort = resolveGatewayPort(config);
+  const hasExplicitPort = Boolean(normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PORT));
+  const activePort = hasExplicitPort ? undefined : await readActiveGatewayLockPort();
+  const port = activePort ?? configuredPort;
+  // Supplying the selected local port keeps inherited remote URL overrides out
+  // of bare-root routing while reusing canonical local TLS/fingerprint logic.
+  const connection = await buildGatewayProbeConnectionDetails({
+    config,
+    localPortOverride: port,
+  });
   const baseParams = {
-    port: resolveGatewayPort(config),
+    port,
     basePath: gateway?.controlUi?.basePath,
     tlsEnabled: gateway?.tls?.enabled === true,
   };
-  const loopbackLinks = resolveControlUiLinks({
-    ...baseParams,
-    bind: "loopback",
-  });
+  const sharedTarget = {
+    auth: "local" as const,
+    ...(connection.tlsFingerprint ? { tlsFingerprint: connection.tlsFingerprint } : {}),
+    ...(connection.preauthHandshakeTimeoutMs
+      ? { preauthHandshakeTimeoutMs: connection.preauthHandshakeTimeoutMs }
+      : {}),
+  };
+  const loopbackTarget: GatewayProbeTarget = {
+    ...sharedTarget,
+    url: connection.url,
+    scope: "local-loopback",
+  };
   const bind = gateway?.bind;
   if (bind !== "tailnet" && bind !== "custom") {
-    return [loopbackLinks.wsUrl];
+    return [loopbackTarget];
   }
   const configuredLinks = resolveControlUiLinks({
     ...baseParams,
     bind,
     customBindHost: gateway?.customBindHost,
   });
-  return configuredLinks.wsUrl === loopbackLinks.wsUrl
-    ? [loopbackLinks.wsUrl]
-    : [loopbackLinks.wsUrl, configuredLinks.wsUrl];
+  return configuredLinks.wsUrl === connection.url
+    ? [loopbackTarget]
+    : [
+        loopbackTarget,
+        {
+          ...sharedTarget,
+          url: configuredLinks.wsUrl,
+          scope: "local-configured",
+        },
+      ];
 }
 
 function pauseNonTtyStdinForCliExit(): void {
@@ -1111,7 +1182,12 @@ export async function runCli(argv: string[] = process.argv) {
         const { launchTuiCli } = await import("../tui/tui-launch.js");
         const tuiOptions = bareRootLaunchTarget.local
           ? { deliver: false, local: true }
-          : { deliver: false };
+          : {
+              deliver: false,
+              ...(bareRootLaunchTarget.tlsFingerprint
+                ? { tlsFingerprint: bareRootLaunchTarget.tlsFingerprint }
+                : {}),
+            };
         const tuiLaunchOptions: { gatewayUrl?: string; authSource?: "config" } = {};
         if (bareRootLaunchTarget.gatewayUrl) {
           tuiLaunchOptions.gatewayUrl = bareRootLaunchTarget.gatewayUrl;

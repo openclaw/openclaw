@@ -33,12 +33,14 @@ import { resetContextWindowCacheForTest } from "../context.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
+import type { CrestodianToolOptions } from "../tools/crestodian-tool.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import {
   prepareCliRunContext,
   setCliRunnerPrepareTestDeps,
   shouldSkipLocalCliCredentialEpoch,
 } from "./prepare.js";
+import type { RunCliAgentParams } from "./types.js";
 
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
 const ensureSandboxWorkspaceForSessionMock = vi.hoisted(() =>
@@ -461,7 +463,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     });
 
     try {
-      await prepareCliRunContext({
+      const context = await prepareCliRunContext({
         sessionId: "session-test",
         sessionKey: "agent:main:main",
         sessionFile,
@@ -472,6 +474,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         timeoutMs: 1_000,
         runId: "run-test-gemini-oauth-raw-profile-fields",
         authProfileId,
+        onSuccessfulAuthBinding: () => {},
         config: {},
       });
 
@@ -488,6 +491,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           }),
         }),
       );
+      expect(context.authBindingFingerprint).toMatch(/^[a-f0-9]{64}$/);
+      expect(context.authBindingSkipsLocalCredential).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -3174,6 +3179,18 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     const { dir, sessionFile } = createSessionFile();
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => undefined);
+      const resolveExecutionArgs = vi.fn(
+        (context: {
+          baseArgs: readonly string[];
+          toolAvailability?: { native: readonly string[]; mcp: readonly string[] };
+        }) => [
+          ...context.baseArgs,
+          "--tools",
+          context.toolAvailability?.native.join(",") ?? "default",
+          "--allowedTools",
+          context.toolAvailability?.mcp.join(",") ?? "",
+        ],
+      );
       setCliRunnerPrepareTestDeps({ getActiveMcpLoopbackRuntime });
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
@@ -3183,9 +3200,12 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
             pluginId: "anthropic",
             bundleMcp: true,
             bundleMcpMode: "claude-config-file",
+            nativeToolMode: "selectable",
+            resolveExecutionArgs,
             config: {
               command: "claude",
               args: ["--print"],
+              resumeArgs: ["--print", "--resume", "{sessionId}"],
               output: "jsonl",
               jsonlDialect: "claude-stream-json",
               input: "stdin",
@@ -3195,7 +3215,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         ],
       });
 
-      const context = await prepareCliRunContext({
+      const params: RunCliAgentParams & { crestodianTool: CrestodianToolOptions } = {
         sessionId: "session-test",
         sessionFile,
         workspaceDir: dir,
@@ -3206,13 +3226,28 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         runId: "run-test-crestodian-mcp",
         config: createCliBackendConfig(),
         crestodianTool: { surface: "cli" },
-      });
+        cliToolAvailability: {
+          native: [],
+          mcp: ["mcp__openclaw__crestodian"],
+        },
+      };
+      const context = await prepareCliRunContext(params);
 
       // Ring-zero runs never touch the loopback surface (no message tools).
       expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
       expect(context.mcpDeliveryCapture).toBeUndefined();
       const args = context.preparedBackend.backend.args ?? [];
       expect(args).toContain("--strict-mcp-config");
+      expect(args).not.toContain("--tools");
+      expect(args).not.toContain("--allowedTools");
+      expect(context.preparedBackend.backend.resumeArgs).toEqual(
+        expect.arrayContaining(["--strict-mcp-config"]),
+      );
+      expect(resolveExecutionArgs).not.toHaveBeenCalled();
+      expect(context.params.cliToolAvailability).toEqual({
+        native: [],
+        mcp: ["mcp__openclaw__crestodian"],
+      });
       const mcpConfigPath = args[args.indexOf("--mcp-config") + 1];
       const raw = JSON.parse(fs.readFileSync(mcpConfigPath, "utf-8")) as {
         mcpServers?: Record<string, { env?: Record<string, string> }>;

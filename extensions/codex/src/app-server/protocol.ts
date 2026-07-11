@@ -618,6 +618,15 @@ export type CodexListMcpServerStatusResponse = {
   nextCursor?: string | null;
 };
 
+export type CodexConfigReadResponse = {
+  config: JsonObject;
+  layers?: JsonValue[] | null;
+};
+
+export type CodexConfigRequirementsReadResponse = {
+  requirements: JsonObject | null;
+};
+
 export type CodexRequestObject = Record<string, unknown>;
 
 export declare namespace v2 {
@@ -660,7 +669,8 @@ type CodexAppServerRequestResultMap = {
   "account/read": CodexGetAccountResponse;
   "app/list": CodexAppsListResponse;
   "config/mcpServer/reload": JsonValue;
-  "config/read": JsonValue;
+  "config/read": CodexConfigReadResponse;
+  "configRequirements/read": CodexConfigRequirementsReadResponse;
   "config/value/write": JsonValue;
   "environment/add": JsonValue;
   "experimentalFeature/enablement/set": JsonValue;

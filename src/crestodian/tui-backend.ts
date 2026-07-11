@@ -21,7 +21,7 @@ import { runTui as defaultRunTui } from "../tui/tui.js";
 import type { CrestodianAssistantPlanner } from "./assistant.js";
 import { CrestodianChatEngine, type CrestodianChatEngineOptions } from "./chat-engine.js";
 import {
-  type CrestodianInferenceUnavailableError,
+  CrestodianInferenceUnavailableError,
   isCrestodianInferenceUnavailableError,
 } from "./inference-error.js";
 import { buildOnboardingWelcome } from "./onboarding-welcome.js";
@@ -31,6 +31,10 @@ import {
   type CrestodianOperation,
 } from "./operations.js";
 import { formatCrestodianStartupMessage, loadCrestodianOverview } from "./overview.js";
+import {
+  resolveCrestodianVerifiedInferenceRoute,
+  type CrestodianVerifiedInferenceBinding,
+} from "./verified-inference.js";
 
 type RunTui = typeof defaultRunTui;
 
@@ -48,8 +52,9 @@ export type CrestodianTuiOptions = {
   runChannelsAdd?: (
     opts: ChannelsAddOptions,
     runtime: RuntimeEnv,
-    params?: { hasFlags?: boolean },
+    params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
   ) => Promise<unknown>;
+  readonly verifiedInference: CrestodianVerifiedInferenceBinding;
 };
 
 type CrestodianHistoryMessage = {
@@ -67,6 +72,7 @@ function createChatEngine(opts: CrestodianTuiOptions): CrestodianChatEngine {
     deps: opts.deps,
     planWithAssistant: opts.planWithAssistant,
     surface: "cli",
+    verifiedInference: opts.verifiedInference,
     ...(opts.runChannelSetupWizard ? { runChannelSetupWizard: opts.runChannelSetupWizard } : {}),
   });
 }
@@ -378,8 +384,32 @@ async function runSetupHandoff(
   }
   const runChannelsAdd =
     opts.runChannelsAdd ?? (await import("../commands/channels/add.js")).channelsAddCommand;
+  const beforePersistentEffect = async () => {
+    const binding = opts?.verifiedInference;
+    if (!binding) {
+      throw new CrestodianInferenceUnavailableError("conversation");
+    }
+    try {
+      const { resolveCrestodianInferenceForPersistentApply } = await import("./setup-inference.js");
+      const route = await resolveCrestodianInferenceForPersistentApply({
+        binding,
+        runtime,
+        deps: opts.deps,
+      });
+      if (route) {
+        return;
+      }
+    } catch (error) {
+      if (isCrestodianInferenceUnavailableError(error)) {
+        throw error;
+      }
+      throw new CrestodianInferenceUnavailableError("conversation", [error]);
+    }
+    throw new CrestodianInferenceUnavailableError("conversation");
+  };
   await runChannelsAdd(handoff.channel ? { channel: handoff.channel } : {}, runtime, {
     hasFlags: false,
+    beforePersistentEffect,
   });
 }
 
@@ -387,29 +417,37 @@ export async function runCrestodianTui(
   opts: CrestodianTuiOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
+  const binding = opts?.verifiedInference;
+  if (!binding) {
+    throw new CrestodianInferenceUnavailableError("conversation");
+  }
+  // Snapshot the verified owner so an external options mutation cannot swap
+  // authority between the chat shell and a later host-owned wizard handoff.
+  const boundOpts: CrestodianTuiOptions = { ...opts, verifiedInference: binding };
   let nextInput: string | undefined;
-  let welcomeVariant = opts.welcomeVariant;
+  let welcomeVariant = boundOpts.welcomeVariant;
   for (;;) {
+    await requireTuiVerifiedInference(boundOpts);
     // A returned agent request is single-use; a later wizard handoff must not
     // replay it when Crestodian re-enters the chat shell.
     const initialMessage = nextInput;
     nextInput = undefined;
-    const engine = createChatEngine(opts);
+    const engine = createChatEngine(boundOpts);
     let welcome: string;
     if (welcomeVariant === "onboarding") {
       welcome = await buildOnboardingWelcome({
         engine,
-        ...(opts.setupWorkspace ? { workspace: opts.setupWorkspace } : {}),
+        ...(boundOpts.setupWorkspace ? { workspace: boundOpts.setupWorkspace } : {}),
       });
     } else {
-      welcome = formatCrestodianStartupMessage(await loadOverviewForTui(opts));
+      welcome = formatCrestodianStartupMessage(await loadOverviewForTui(boundOpts));
       engine.noteAssistantMessage(welcome);
     }
     // The onboarding greeting applies to the first shell only; re-entry after
     // an agent handoff uses the normal repair-oriented startup message.
     welcomeVariant = undefined;
-    const backend = new CrestodianTuiBackend(opts, welcome, engine);
-    const runTui = opts.runTui ?? defaultRunTui;
+    const backend = new CrestodianTuiBackend(boundOpts, welcome, engine);
+    const runTui = boundOpts.runTui ?? defaultRunTui;
     try {
       await runTui({
         local: true,
@@ -435,16 +473,32 @@ export async function runCrestodianTui(
       return;
     }
     if (handoff.kind === "open-setup") {
-      await runSetupHandoff(handoff, opts, runtime);
+      await runSetupHandoff(handoff, boundOpts, runtime);
       return;
     }
     const result = await executeCrestodianOperation(handoff, runtime, {
       approved: true,
-      deps: opts.deps,
+      deps: boundOpts.deps,
     });
     nextInput = result.nextInput;
     if (!nextInput?.trim()) {
       return;
     }
   }
+}
+
+async function requireTuiVerifiedInference(opts: CrestodianTuiOptions): Promise<void> {
+  const binding = opts?.verifiedInference;
+  if (!binding) {
+    throw new CrestodianInferenceUnavailableError("conversation");
+  }
+  try {
+    const route = await resolveCrestodianVerifiedInferenceRoute(binding, opts.deps);
+    if (route) {
+      return;
+    }
+  } catch (error) {
+    throw new CrestodianInferenceUnavailableError("conversation", [error]);
+  }
+  throw new CrestodianInferenceUnavailableError("conversation");
 }

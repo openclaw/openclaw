@@ -9,22 +9,48 @@ import {
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import {
+  fingerprintAuthProfileCredential,
+  fingerprintResolvedProviderAuth,
+  type AgentExecutionAuthBinding,
+} from "../agents/execution-auth-binding.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  getActivePluginRegistryWorkspaceDir,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { ensurePluginRegistryLoaded } from "../plugins/runtime/runtime-registry-loader.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
+import {
+  cleanupCrestodianAgentSession,
+  createCrestodianAgentSession,
+  runCrestodianAgentTurnWithDeps,
+} from "./agent-turn.js";
 import { resolveCrestodianConfiguredRouteFromConfig } from "./inference-route.js";
 import { applyCrestodianModelSelection } from "./setup-apply.js";
 import {
-  activateSetupInference,
+  SetupInferenceActivationIndeterminateError,
+  activateSetupInference as activateSetupInferenceImpl,
   detectSetupInference,
   listSetupInferenceManualProviders,
+  resolveCrestodianInferenceForPersistentApply,
   verifySetupInference,
   verifySetupInferenceConfig,
 } from "./setup-inference.js";
+import {
+  createCrestodianVerifiedInferenceBinding,
+  type CrestodianVerifiedInferenceBinding,
+} from "./verified-inference.js";
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: vi.fn(async () => ({
@@ -60,18 +86,99 @@ vi.mock("../commands/onboard-inference.js", async (importActual) => {
 });
 
 const runtime = { log: () => {}, error: () => {}, exit: () => {} } as never;
+const testCliRuntimeArtifactFingerprint = "test-cli-runtime-artifact";
+const testCodexRuntimeArtifact = {
+  id: "codex-app-server",
+  fingerprint: "codex-runtime-v1",
+} as const;
+
+async function activateSetupInference(
+  params: Parameters<typeof activateSetupInferenceImpl>[0],
+): ReturnType<typeof activateSetupInferenceImpl> {
+  const deps = Object.create(
+    Object.getPrototypeOf(params.deps ?? {}),
+    Object.getOwnPropertyDescriptors(params.deps ?? {}),
+  ) as NonNullable<typeof params.deps>;
+  const ownerPluginArtifacts = { ownerPluginIds: [], ownerPluginArtifacts: [] } as const;
+  const usesRealOwnerBinding =
+    params.deps?.createCrestodianVerifiedInferenceBinding ===
+    createCrestodianVerifiedInferenceBinding;
+  if (!deps.captureCrestodianOwnerPluginArtifacts && !usesRealOwnerBinding) {
+    deps.captureCrestodianOwnerPluginArtifacts = () => ownerPluginArtifacts;
+  }
+  if (!deps.createCrestodianVerifiedInferenceBinding) {
+    deps.createCrestodianVerifiedInferenceBinding = async () => ownerPluginArtifacts as never;
+  }
+  if (!deps.ensurePluginRegistryLoaded) {
+    deps.ensurePluginRegistryLoaded = () => {};
+  }
+  if (!deps.resolveCliRuntimeArtifactFingerprint) {
+    deps.resolveCliRuntimeArtifactFingerprint = vi.fn(
+      async () => testCliRuntimeArtifactFingerprint,
+    );
+  }
+  return activateSetupInferenceImpl({
+    ...params,
+    // Most activation tests isolate commit mechanics from the verified-owner
+    // implementation. Owner-CAS regressions opt back into the real helper.
+    deps,
+  });
+}
 
 async function makeTempDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "setup-inference-test-"));
 }
 
-function successfulRun(provider: string, model: string) {
+type SuccessfulRunParams = {
+  onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
+  authProfileId?: string;
+  agentHarnessRuntimeOverride?: string;
+};
+
+function successfulAgentHarnessBinding(params?: SuccessfulRunParams): AgentExecutionAuthBinding {
+  const requestedHarnessId = params?.agentHarnessRuntimeOverride?.trim();
+  const agentHarnessId =
+    !requestedHarnessId || requestedHarnessId === "auto" ? "openclaw" : requestedHarnessId;
+  return {
+    agentHarnessId,
+    ...(agentHarnessId === "codex"
+      ? {
+          runtimeOwnerKind: "plugin-harness",
+          runtimeOwnerId: agentHarnessId,
+          runtimeArtifactId: testCodexRuntimeArtifact.id,
+          runtimeArtifactFingerprint: testCodexRuntimeArtifact.fingerprint,
+        }
+      : {}),
+  };
+}
+
+function successfulRun(provider: string, model: string, params?: SuccessfulRunParams) {
+  params?.onSuccessfulAuthBinding?.(
+    provider.endsWith("-cli")
+      ? {
+          runtimeOwnerFingerprint: "test-runtime-owner",
+          runtimeOwnerKind: "cli-runtime",
+          runtimeOwnerId: provider,
+          runtimeArtifactFingerprint: testCliRuntimeArtifactFingerprint,
+          runtimeArtifactId: provider,
+          ...(params?.authProfileId ? { authProfileId: params.authProfileId } : {}),
+        }
+      : {
+          ...successfulAgentHarnessBinding(params),
+          authFingerprint: "test-credential-owner",
+          ...(params?.authProfileId ? { authProfileId: params.authProfileId } : {}),
+        },
+  );
   return {
     meta: {
       finalAssistantVisibleText: "OK",
       executionTrace: { winnerProvider: provider, winnerModel: model },
     },
   };
+}
+
+function successfulRunner(provider: string, model: string) {
+  return async (params: SuccessfulRunParams) => successfulRun(provider, model, params);
 }
 
 function createConfigTransformHarness(
@@ -338,15 +445,38 @@ describe("activateSetupInference", () => {
   }
 
   it("persists inference only after the live test succeeds", async () => {
-    const configHarness = createConfigTransformHarness();
-    const runCliAgent = vi.fn(async (_params: unknown) =>
-      successfulRun("claude-cli", "claude-opus-4-8"),
-    );
+    const initialConfig = {
+      agents: {
+        list: [
+          {
+            id: "ops",
+            default: true,
+            agentDir: "/tmp/openclaw-ops-agent",
+            params: { temperature: 0.2 },
+            tools: { allow: ["read"], deny: ["exec"] },
+          },
+          {
+            id: "crestodian",
+            params: { temperature: 1.7 },
+            tools: { allow: ["exec"] },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    const configHarness = createConfigTransformHarness(initialConfig);
+    const runCliAgent = vi.fn(successfulRunner("claude-cli", "claude-opus-4-8"));
     const result = await activateSetupInference({
       kind: "claude-cli",
       surface: "gateway",
       runtime,
       deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          config: initialConfig,
+          sourceConfig: initialConfig,
+          runtimeConfig: initialConfig,
+        })) as never,
         runCliAgent: runCliAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         createTempDir: makeTempDir,
@@ -360,12 +490,74 @@ describe("activateSetupInference", () => {
     expect(runCliAgent).toHaveBeenCalledOnce();
     expect(runCliAgent).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentId: "crestodian",
+        agentDir: "/tmp/openclaw-ops-agent",
         executionMode: "side-question",
         disableTools: true,
         cleanupCliLiveSessionOnRunEnd: true,
       }),
     );
+    const probeConfig = runCliAgent.mock.calls[0]?.[0].config;
+    expect(probeConfig?.agents?.list?.find((agent) => agent.id === "crestodian")).toEqual({
+      id: "crestodian",
+      params: { temperature: 0.2 },
+      tools: { allow: ["read"], deny: ["exec"] },
+    });
+    expect(
+      configHarness.current().agents?.list?.find((agent) => agent.id === "crestodian"),
+    ).toEqual({
+      id: "crestodian",
+      params: { temperature: 1.7 },
+      tools: { allow: ["exec"] },
+    });
     expect(configHarness.transform).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an unattested successful candidate before persisting its model", async () => {
+    const configHarness = createConfigTransformHarness();
+    const result = await activateSetupInference({
+      kind: "claude-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        runCliAgent: vi.fn(async () => successfulRun("claude-cli", "claude-opus-4-8")) as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "unknown",
+      error: expect.stringContaining("did not report an owner"),
+    });
+    expect(configHarness.transform).not.toHaveBeenCalled();
+    expect(configHarness.current()).toEqual({});
+  });
+
+  it("rejects an unattested existing route before handing off to Crestodian", async () => {
+    const config = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    } satisfies OpenClawConfig;
+    const configHarness = createConfigTransformHarness();
+    const result = await activateSetupInference({
+      kind: "existing-model",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({ exists: true, valid: true, config })) as never,
+        runEmbeddedAgent: vi.fn(async () => successfulRun("openai", "gpt-5.5")) as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "unknown",
+      error: expect.stringContaining("did not report an owner"),
+    });
+    expect(configHarness.transform).not.toHaveBeenCalled();
   });
 
   it("keeps a committed success when temporary cleanup fails", async () => {
@@ -376,7 +568,7 @@ describe("activateSetupInference", () => {
       surface: "gateway",
       runtime: { log: runtimeLog, error: () => {}, exit: () => {} } as never,
       deps: {
-        runCliAgent: vi.fn(async () => successfulRun("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         createTempDir: async () => "/tmp/openclaw-setup-cleanup-fixture",
         removeTempDir: async () => {
@@ -387,6 +579,48 @@ describe("activateSetupInference", () => {
 
     expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-4-8" });
     expect(runtimeLog).not.toHaveBeenCalled();
+  });
+
+  it("disposes the temporary auth database before Windows-style removal", async () => {
+    const tempDir = await makeTempDir();
+    const databasePath = path.join(tempDir, "agent", "openclaw-agent.sqlite");
+    let disposed = false;
+    const disposeDatabase = vi.fn((pathname: string) => {
+      expect(pathname).toBe(databasePath);
+      disposed = disposeOpenClawAgentDatabaseByPath(pathname);
+      return disposed;
+    });
+    const removeTempDir = vi.fn(async (dir: string) => {
+      if (!disposed) {
+        const error = new Error("file is in use") as NodeJS.ErrnoException;
+        error.code = "EBUSY";
+        throw error;
+      }
+      await fs.rm(dir, { recursive: true, force: true });
+    });
+
+    const result = await activateSetupInference({
+      kind: "api-key",
+      authChoice: "groq-api-key",
+      apiKey: "temporary-plaintext-key",
+      surface: "gateway",
+      runtime,
+      deps: {
+        resolvePluginProviders: () => [createGroqSetupProvider()],
+        resolveManifestProviderAuthChoice: groqSetupChoice,
+        runEmbeddedAgent: vi.fn(async () => {
+          throw new Error("401 invalid_api_key");
+        }) as never,
+        disposeOpenClawAgentDatabaseByPath: disposeDatabase,
+        createTempDir: async () => tempDir,
+        removeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, status: "auth" });
+    expect(disposeDatabase).toHaveBeenCalledOnce();
+    expect(removeTempDir).toHaveBeenCalledWith(tempDir);
+    await expect(fs.stat(tempDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reconciles a config write that committed before its writer threw", async () => {
@@ -417,7 +651,7 @@ describe("activateSetupInference", () => {
       runtime,
       deps: {
         readConfigFileSnapshot: readConfigFileSnapshot as never,
-        runCliAgent: vi.fn(async () => successfulRun("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         createTempDir: makeTempDir,
       },
@@ -436,7 +670,7 @@ describe("activateSetupInference", () => {
       surface: "cli",
       runtime,
       deps: {
-        runCliAgent: vi.fn(async () => successfulRun("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         createTempDir: makeTempDir,
       },
@@ -477,7 +711,7 @@ describe("activateSetupInference", () => {
           valid: true,
           config: probedConfig,
         })) as never,
-        runCliAgent: vi.fn(async () => successfulRun("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         createTempDir: makeTempDir,
       },
@@ -540,6 +774,24 @@ describe("activateSetupInference", () => {
         },
       } satisfies OpenClawConfig,
     },
+    {
+      name: "default agent execution settings",
+      concurrent: {
+        agents: {
+          list: [
+            {
+              id: "ops",
+              default: true,
+              agentDir: "/tmp/ops",
+              model: "openai/broken",
+              params: { temperature: 0.9 },
+              tools: { deny: ["exec"] },
+            },
+            { id: "other", agentDir: "/tmp/other", model: "openai/broken" },
+          ],
+        },
+      } satisfies OpenClawConfig,
+    },
   ])("rejects a changed $name after the live probe", async ({ concurrent }) => {
     const probedConfig = {
       agents: {
@@ -565,7 +817,7 @@ describe("activateSetupInference", () => {
             config: probedConfig,
             runtimeConfig: probedConfig,
           })) as never,
-          runCliAgent: vi.fn(async () => successfulRun("claude-cli", "claude-opus-4-8")) as never,
+          runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
           transformConfigWithPendingPluginInstalls: configHarness.transform as never,
           createTempDir: makeTempDir,
         },
@@ -573,6 +825,93 @@ describe("activateSetupInference", () => {
     ).rejects.toThrow("route changed during its live test");
 
     expect(configHarness.current()).toEqual(concurrent);
+  });
+
+  it("rejects a concurrent edit to inactive target-model metadata", async () => {
+    const initialConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+          models: {
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const concurrentConfig = structuredClone(initialConfig);
+    concurrentConfig.agents!.defaults!.models!["anthropic/claude-opus-4-8"] = {
+      agentRuntime: { id: "codex" },
+    };
+    const configHarness = createConfigTransformHarness(concurrentConfig);
+
+    await expect(
+      activateSetupInference({
+        kind: "anthropic-api-key",
+        surface: "gateway",
+        runtime,
+        deps: {
+          readConfigFileSnapshot: vi.fn(async () => ({
+            exists: true,
+            valid: true,
+            config: initialConfig,
+            sourceConfig: initialConfig,
+            runtimeConfig: initialConfig,
+          })) as never,
+          runEmbeddedAgent: vi.fn(successfulRunner("anthropic", "claude-opus-4-8")) as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+          createTempDir: makeTempDir,
+        },
+      }),
+    ).rejects.toThrow("target model metadata changed");
+
+    expect(configHarness.current()).toEqual(concurrentConfig);
+  });
+
+  it("compares sparse authored provider rows against the authored candidate", async () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5.6" }],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const runtimeConfig = structuredClone(sourceConfig);
+    runtimeConfig.models!.providers!.openai!.models = [
+      {
+        id: "gpt-5.6",
+        name: "GPT-5.6",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 272_000,
+        maxTokens: 128_000,
+      },
+    ];
+    const configHarness = createConfigTransformHarness(sourceConfig, runtimeConfig);
+
+    const result = await activateSetupInference({
+      kind: "openai-api-key",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          config: sourceConfig,
+          sourceConfig,
+          runtimeConfig,
+        })) as never,
+        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6")) as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.6" });
+    expect(configHarness.current().models?.providers?.openai?.models).toEqual([{ id: "gpt-5.6" }]);
   });
 
   it("rejects an existing route that changes after its live probe", async () => {
@@ -593,7 +932,7 @@ describe("activateSetupInference", () => {
       runtime,
       deps: {
         readConfigFileSnapshot: readConfigFileSnapshot as never,
-        runEmbeddedAgent: vi.fn(async () => successfulRun("openai", "gpt-5.5")) as never,
+        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.5")) as never,
         createTempDir: makeTempDir,
       },
     });
@@ -603,6 +942,105 @@ describe("activateSetupInference", () => {
       status: "unknown",
       error: expect.stringContaining("route changed during its live test"),
     });
+  });
+
+  it("revalidates a stable CLI runtime owner at the config commit boundary", async () => {
+    const configHarness = createConfigTransformHarness();
+    const resolveCliRuntimeOwnerFingerprint = vi.fn(async () => "test-runtime-owner");
+
+    const result = await activateSetupInference({
+      kind: "claude-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+        resolveCliRuntimeOwnerFingerprint: resolveCliRuntimeOwnerFingerprint as never,
+        fingerprintPluginRuntimeArtifact: ({ pluginId }) => `${pluginId}-runtime-v1`,
+        createCrestodianVerifiedInferenceBinding,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(resolveCliRuntimeOwnerFingerprint).toHaveBeenCalledOnce();
+    expect(configHarness.current().agents?.defaults?.model).toBe("claude-cli/claude-opus-4-8");
+  });
+
+  it("rejects a CLI owner drift on an existing route before handoff", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: "claude-cli/claude-opus-4-8",
+          cliBackends: {
+            "claude-cli": { command: "claude", sideQuestionToolMode: "disabled" },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const result = await activateSetupInference({
+      kind: "existing-model",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          config,
+          runtimeConfig: config,
+        })) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+        resolveCliRuntimeOwnerFingerprint: vi.fn(async () => "changed-runtime-owner") as never,
+        createCrestodianVerifiedInferenceBinding,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "auth",
+      error: expect.stringContaining("owner changed"),
+    });
+  });
+
+  it("rejects ambient credential drift before persisting a model", async () => {
+    const initialAuthFingerprint = fingerprintResolvedProviderAuth({
+      apiKey: "initial-env-key",
+      source: "env:ANTHROPIC_API_KEY",
+      mode: "api-key",
+    });
+    if (!initialAuthFingerprint) {
+      throw new Error("expected auth fingerprint");
+    }
+    const configHarness = createConfigTransformHarness();
+    const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
+      params.onSuccessfulAuthBinding?.({
+        ...successfulAgentHarnessBinding(params),
+        authFingerprint: initialAuthFingerprint,
+      });
+      return successfulRun("anthropic", "claude-opus-4-8");
+    });
+
+    await expect(
+      activateSetupInference({
+        kind: "anthropic-api-key",
+        surface: "gateway",
+        runtime,
+        deps: {
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          resolveApiKeyForProvider: vi.fn(async () => ({
+            apiKey: "rotated-env-key",
+            source: "env:ANTHROPIC_API_KEY",
+            mode: "api-key",
+          })) as never,
+          createCrestodianVerifiedInferenceBinding,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+          createTempDir: makeTempDir,
+        },
+      }),
+    ).rejects.toThrow("active route owner");
+    expect(configHarness.transform).toHaveBeenCalledOnce();
+    expect(configHarness.current()).toEqual({});
   });
 
   it("does not touch config when the live test fails", async () => {
@@ -772,7 +1210,7 @@ describe("activateSetupInference", () => {
         ],
       },
     } satisfies OpenClawConfig;
-    const runEmbeddedAgent = vi.fn(async () => successfulRun("anthropic", "claude-opus-4-8"));
+    const runEmbeddedAgent = vi.fn(successfulRunner("anthropic", "claude-opus-4-8"));
     const configHarness = createConfigTransformHarness(initialConfig);
 
     const result = await activateSetupInference({
@@ -906,8 +1344,9 @@ describe("activateSetupInference", () => {
         },
         enabled: true,
       }));
-      const runEmbeddedAgent = vi.fn(async (_params: { authProfileId?: string }) =>
-        successfulRun("groq", "llama-3.3-70b-versatile"),
+      const runEmbeddedAgent = vi.fn(
+        async (params: SuccessfulRunParams & { authProfileId?: string }) =>
+          successfulRun("groq", "llama-3.3-70b-versatile", params),
       );
       const configHarness = createConfigTransformHarness(initialConfig);
 
@@ -973,6 +1412,7 @@ describe("activateSetupInference", () => {
             model: "llama-3.3-70b-versatile",
             authProfileId: activatedProfileId,
             agentDir: expect.stringContaining("setup-inference-test-"),
+            authProfileStateMode: "read-only",
           }),
         );
         expect(configHarness.current()).toMatchObject({
@@ -1003,6 +1443,323 @@ describe("activateSetupInference", () => {
       }
     },
   );
+
+  it("rejects a manual probe that reports a different credential owner", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const initialConfig = {
+      agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+    resolveAgentDir(initialConfig, "main");
+    const transformConfig = vi.fn();
+    const runEmbeddedAgent = vi.fn(
+      async (params: SuccessfulRunParams & { authProfileId?: string }) => {
+        params.onSuccessfulAuthBinding?.({
+          authProfileId: "groq:fallback",
+          ...successfulAgentHarnessBinding(params),
+          authFingerprint: "fallback-owner",
+        });
+        return successfulRun("groq", "llama-3.3-70b-versatile");
+      },
+    );
+
+    try {
+      const result = await activateSetupInference({
+        kind: "api-key",
+        authChoice: "groq-api-key",
+        apiKey: "candidate-key",
+        surface: "gateway",
+        runtime,
+        deps: {
+          readConfigFileSnapshot: vi.fn(async () => ({
+            exists: true,
+            valid: true,
+            config: initialConfig,
+            sourceConfig: initialConfig,
+            runtimeConfig: initialConfig,
+          })) as never,
+          resolvePluginProviders: () => [createGroqSetupProvider()],
+          resolveManifestProviderAuthChoice: groqSetupChoice,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          transformConfigWithPendingPluginInstalls: transformConfig as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: "auth",
+        error: expect.stringContaining('used profile "groq:fallback"'),
+      });
+      expect(transformConfig).not.toHaveBeenCalled();
+      expect(readAuthProfileStoreForTest(agentDir).profiles).toEqual({});
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("scopes provider setup to the selected inference route and one credential", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const initialConfig = {
+      gateway: { port: 18_789 },
+      channels: { discord: { enabled: false } },
+      agents: {
+        defaults: { workspace: "/operator/workspace" },
+        list: [{ id: "main", default: true, agentDir }],
+      },
+      auth: {
+        profiles: { "operator:existing": { provider: "operator", mode: "api_key" } },
+        order: { operator: ["operator:existing"] },
+      },
+      models: {
+        providers: {
+          aux: { baseUrl: "https://aux.example.test/v1", models: [] },
+        },
+      },
+      plugins: {
+        entries: { operator: { enabled: true, config: { revision: "initial" } } },
+      },
+    } satisfies OpenClawConfig;
+    const concurrentConfig = structuredClone(initialConfig);
+    concurrentConfig.gateway = { port: 19_000 };
+    concurrentConfig.agents!.defaults!.workspace = "/operator/concurrent";
+    concurrentConfig.models!.providers!.aux!.baseUrl = "https://concurrent.example.test/v1";
+    resolveAgentDir(initialConfig, "main");
+    const provider: ProviderPlugin = {
+      id: "groq",
+      label: "Groq",
+      pluginId: "groq",
+      auth: [
+        {
+          id: "api-key",
+          label: "Groq API key",
+          kind: "api_key",
+          wizard: { choiceId: "groq-api-key" },
+          run: async (ctx) => ({
+            profiles: [
+              {
+                profileId: "groq:selected",
+                credential: {
+                  type: "api_key" as const,
+                  provider: "groq",
+                  key: ctx.opts?.token,
+                },
+              },
+              {
+                profileId: "other:unselected",
+                credential: {
+                  type: "api_key" as const,
+                  provider: "other",
+                  key: "must-not-persist",
+                },
+              },
+            ],
+            defaultModel: "groq/llama-3.3-70b-versatile",
+            configPatch: {
+              gateway: { port: 99_999 },
+              channels: { discord: { enabled: true, token: "must-not-persist" } },
+              agents: {
+                defaults: {
+                  workspace: "/provider/workspace",
+                  models: {
+                    "groq/llama-3.3-70b-versatile": { alias: "selected-groq" },
+                    "other/unrelated": { alias: "must-not-persist" },
+                  },
+                },
+              },
+              auth: { order: { other: ["other:unselected"] } },
+              models: {
+                providers: {
+                  groq: {
+                    baseUrl: "https://selected.groq.example.test/v1",
+                    models: [],
+                  },
+                  aux: { baseUrl: "https://provider-overwrite.example.test/v1", models: [] },
+                },
+              },
+              plugins: {
+                entries: {
+                  groq: { enabled: true, config: { endpoint: "selected" } },
+                  operator: { enabled: false, config: { revision: "provider-overwrite" } },
+                },
+              },
+            },
+          }),
+        },
+      ],
+    };
+    const enablePluginInConfig = (config: OpenClawConfig, pluginId: string) => ({
+      enabled: true as const,
+      config: {
+        ...config,
+        plugins: {
+          ...config.plugins,
+          entries: {
+            ...config.plugins?.entries,
+            [pluginId]: { ...config.plugins?.entries?.[pluginId], enabled: true },
+          },
+        },
+      },
+    });
+    const runEmbeddedAgent = vi.fn(
+      async (params: SuccessfulRunParams & { config: OpenClawConfig }) =>
+        successfulRun("groq", "llama-3.3-70b-versatile", params),
+    );
+    const configHarness = createConfigTransformHarness(concurrentConfig);
+
+    try {
+      const result = await activateSetupInference({
+        kind: "api-key",
+        authChoice: "groq-api-key",
+        apiKey: "selected-key",
+        surface: "gateway",
+        runtime,
+        deps: {
+          readConfigFileSnapshot: vi.fn(async () => ({
+            exists: true,
+            valid: true,
+            config: initialConfig,
+            runtimeConfig: initialConfig,
+          })) as never,
+          resolvePluginProviders: () => [provider],
+          resolveManifestProviderAuthChoice: groqSetupChoice,
+          enablePluginInConfig: enablePluginInConfig as never,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      const probeConfig = runEmbeddedAgent.mock.calls[0]![0].config;
+      expect(probeConfig.gateway?.port).toBe(18_789);
+      expect(probeConfig.agents?.defaults?.workspace).toBe("/operator/workspace");
+      expect(probeConfig.channels?.discord).toEqual({ enabled: false });
+      expect(probeConfig.models?.providers?.groq?.baseUrl).toBe(
+        "https://selected.groq.example.test/v1",
+      );
+      expect(probeConfig.models?.providers?.aux?.baseUrl).toBe("https://aux.example.test/v1");
+      expect(probeConfig.agents?.defaults?.models).toEqual({
+        "groq/llama-3.3-70b-versatile": {
+          alias: "selected-groq",
+          agentRuntime: { id: "openclaw" },
+        },
+      });
+      expect(probeConfig.plugins?.entries?.groq).toEqual({
+        enabled: true,
+        config: { endpoint: "selected" },
+      });
+      expect(probeConfig.plugins?.entries?.operator).toEqual(
+        initialConfig.plugins.entries.operator,
+      );
+      expect(Object.keys(probeConfig.auth?.profiles ?? {})).toEqual(
+        expect.arrayContaining(["operator:existing"]),
+      );
+      expect(Object.keys(probeConfig.auth?.profiles ?? {})).not.toContain("other:unselected");
+      expect(probeConfig.auth?.order).toEqual(initialConfig.auth.order);
+
+      const persisted = configHarness.current();
+      expect(persisted.gateway?.port).toBe(19_000);
+      expect(persisted.agents?.defaults?.workspace).toBe("/operator/concurrent");
+      expect(persisted.channels?.discord).toEqual({ enabled: false });
+      expect(persisted.models?.providers?.aux?.baseUrl).toBe("https://concurrent.example.test/v1");
+      expect(persisted.models?.providers?.groq?.baseUrl).toBe(
+        "https://selected.groq.example.test/v1",
+      );
+      expect(persisted.plugins?.entries?.operator).toEqual(initialConfig.plugins.entries.operator);
+      expect(persisted.plugins?.entries?.groq).toEqual({
+        enabled: true,
+        config: { endpoint: "selected" },
+      });
+      const setupProfileIds = Object.keys(persisted.auth?.profiles ?? {}).filter((id) =>
+        id.includes(":setup-"),
+      );
+      expect(setupProfileIds).toHaveLength(1);
+      expect(setupProfileIds[0]).toMatch(/^groq:setup-/);
+      expect(Object.keys(readAuthProfileStoreForTest(agentDir).profiles)).toEqual(setupProfileIds);
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("rolls back manual auth when the real-store owner differs at commit", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const initialConfig = {
+      agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+    resolveAgentDir(initialConfig, "main");
+    const configHarness = createConfigTransformHarness(initialConfig);
+    const runEmbeddedAgent = vi.fn(
+      async (
+        params: SuccessfulRunParams & {
+          authProfileId?: string;
+        },
+      ) => {
+        const profileId = params.authProfileId;
+        if (!profileId) {
+          throw new Error("expected setup profile");
+        }
+        const authFingerprint = fingerprintResolvedProviderAuth({
+          apiKey: "submitted-key",
+          profileId,
+          source: `profile:${profileId}`,
+          mode: "api-key",
+        });
+        if (!authFingerprint) {
+          throw new Error("expected setup fingerprint");
+        }
+        params.onSuccessfulAuthBinding?.({
+          authProfileId: profileId,
+          ...successfulAgentHarnessBinding(params),
+          authFingerprint,
+        });
+        return successfulRun("groq", "llama-3.3-70b-versatile");
+      },
+    );
+
+    try {
+      await expect(
+        activateSetupInference({
+          kind: "api-key",
+          authChoice: "groq-api-key",
+          apiKey: "submitted-key",
+          surface: "gateway",
+          runtime,
+          deps: {
+            readConfigFileSnapshot: vi.fn(async () => ({
+              exists: true,
+              valid: true,
+              config: initialConfig,
+              runtimeConfig: initialConfig,
+            })) as never,
+            resolvePluginProviders: () => [createGroqSetupProvider()],
+            resolveManifestProviderAuthChoice: groqSetupChoice,
+            runEmbeddedAgent: runEmbeddedAgent as never,
+            resolveApiKeyForProvider: vi.fn(async (params: { profileId?: string }) => ({
+              apiKey: "different-real-store-key",
+              profileId: params.profileId,
+              source: `profile:${params.profileId}`,
+              mode: "api-key",
+            })) as never,
+            createCrestodianVerifiedInferenceBinding,
+            transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+            createTempDir: makeTempDir,
+          },
+        }),
+      ).rejects.toThrow("active route owner");
+
+      expect(configHarness.current()).toEqual(initialConfig);
+      expect(
+        Object.keys(readAuthProfileStoreForTest(agentDir).profiles).filter((id) =>
+          id.startsWith("groq:setup-"),
+        ),
+      ).toEqual([]);
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
 
   it("rolls back a staged key when the config commit fails", async () => {
     const stateDir = await makeTempDir();
@@ -1076,9 +1833,7 @@ describe("activateSetupInference", () => {
               choiceLabel: "Groq API key",
               appGuidedSecret: true,
             }),
-            runEmbeddedAgent: vi.fn(async () =>
-              successfulRun("groq", "llama-3.3-70b-versatile"),
-            ) as never,
+            runEmbeddedAgent: vi.fn(successfulRunner("groq", "llama-3.3-70b-versatile")) as never,
             transformConfigWithPendingPluginInstalls: transformConfig as never,
             createTempDir: makeTempDir,
           },
@@ -1088,6 +1843,160 @@ describe("activateSetupInference", () => {
       const store = readAuthProfileStoreForTest(agentDir);
       expect(store.profiles["groq:default"]).toMatchObject({ key: "existing-key" });
       expect(Object.keys(store.profiles).filter((id) => id.startsWith("groq:setup-"))).toEqual([]);
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("does not delete an identical credential that existed before activation", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const initialConfig = {
+      agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+    resolveAgentDir(initialConfig, "main");
+    const credential = {
+      type: "api_key" as const,
+      provider: "groq",
+      key: "submitted-key",
+    };
+    let existingProfileId: string | undefined;
+    let preexistingCredentialDeleted = false;
+    let realStoreUpdates = 0;
+    const profiles = new Proxy<Record<string, typeof credential>>(
+      {},
+      {
+        get: (target, property) => {
+          if (typeof property === "string" && property.startsWith("groq:setup-")) {
+            existingProfileId ??= property;
+            return credential;
+          }
+          return Reflect.get(target, property);
+        },
+        deleteProperty: (target, property) => {
+          if (property === existingProfileId) {
+            preexistingCredentialDeleted = true;
+          }
+          return Reflect.deleteProperty(target, property);
+        },
+      },
+    );
+    const preexistingStore = { version: 1, profiles };
+    const updateAuthProfileStore = vi.fn(
+      async (params: Parameters<typeof updateAuthProfileStoreWithLock>[0]) => {
+        if (params.agentDir !== agentDir) {
+          return await updateAuthProfileStoreWithLock(params);
+        }
+        realStoreUpdates += 1;
+        params.updater(preexistingStore);
+        return preexistingStore;
+      },
+    );
+    const transformConfig = vi.fn(async () => {
+      throw new Error("simulated config commit failure");
+    });
+
+    try {
+      await expect(
+        activateSetupInference({
+          kind: "api-key",
+          authChoice: "groq-api-key",
+          apiKey: "submitted-key",
+          surface: "gateway",
+          runtime,
+          deps: {
+            readConfigFileSnapshot: vi.fn(async () => ({
+              exists: true,
+              valid: true,
+              config: initialConfig,
+              runtimeConfig: initialConfig,
+            })) as never,
+            resolvePluginProviders: () => [createGroqSetupProvider()],
+            resolveManifestProviderAuthChoice: groqSetupChoice,
+            runEmbeddedAgent: vi.fn(successfulRunner("groq", "llama-3.3-70b-versatile")) as never,
+            updateAuthProfileStoreWithLock: updateAuthProfileStore as never,
+            loadPersistedAuthProfileStore: vi.fn((candidateAgentDir?: string) =>
+              candidateAgentDir === agentDir
+                ? preexistingStore
+                : readAuthProfileStoreForTest(candidateAgentDir),
+            ) as never,
+            transformConfigWithPendingPluginInstalls: transformConfig as never,
+            createTempDir: makeTempDir,
+          },
+        }),
+      ).rejects.toThrow("simulated config commit failure");
+
+      expect(existingProfileId).toMatch(/^groq:setup-/);
+      expect(realStoreUpdates).toBe(1);
+      expect(preexistingCredentialDeleted).toBe(false);
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("rolls back before reconciliation when the config transform rejects the candidate", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const initialConfig = {
+      agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+    const concurrentConfig = {
+      ...initialConfig,
+      agents: {
+        ...initialConfig.agents,
+        defaults: { model: "openai/gpt-5.5" },
+      },
+    } satisfies OpenClawConfig;
+    resolveAgentDir(initialConfig, "main");
+    const readConfigFileSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({
+        exists: true,
+        valid: true,
+        config: initialConfig,
+        sourceConfig: initialConfig,
+        runtimeConfig: initialConfig,
+      })
+      .mockRejectedValue(new Error("simulated reconciliation read failure"));
+    const transformConfig = vi.fn(async (params: { transform: Function }) => {
+      await params.transform(concurrentConfig, {
+        snapshot: {
+          config: concurrentConfig,
+          sourceConfig: concurrentConfig,
+          runtimeConfig: concurrentConfig,
+        },
+        previousHash: null,
+        attempt: 0,
+      });
+      throw new Error("unreachable config commit");
+    });
+
+    try {
+      await expect(
+        activateSetupInference({
+          kind: "api-key",
+          authChoice: "groq-api-key",
+          apiKey: "candidate-key",
+          workspace: "/tmp/openclaw-workspace",
+          surface: "gateway",
+          runtime,
+          deps: {
+            readConfigFileSnapshot: readConfigFileSnapshot as never,
+            resolvePluginProviders: () => [createGroqSetupProvider()],
+            resolveManifestProviderAuthChoice: groqSetupChoice,
+            runEmbeddedAgent: vi.fn(successfulRunner("groq", "llama-3.3-70b-versatile")) as never,
+            transformConfigWithPendingPluginInstalls: transformConfig as never,
+            createTempDir: makeTempDir,
+          },
+        }),
+      ).rejects.toThrow("default-agent inference route changed during its live test");
+
+      expect(readConfigFileSnapshot).toHaveBeenCalledOnce();
+      expect(
+        Object.keys(readAuthProfileStoreForTest(agentDir).profiles).filter((id) =>
+          id.startsWith("groq:setup-"),
+        ),
+      ).toEqual([]);
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }
@@ -1143,9 +2052,7 @@ describe("activateSetupInference", () => {
             readConfigFileSnapshot: readConfigFileSnapshot as never,
             resolvePluginProviders: () => [createGroqSetupProvider()],
             resolveManifestProviderAuthChoice: groqSetupChoice,
-            runEmbeddedAgent: vi.fn(async () =>
-              successfulRun("groq", "llama-3.3-70b-versatile"),
-            ) as never,
+            runEmbeddedAgent: vi.fn(successfulRunner("groq", "llama-3.3-70b-versatile")) as never,
             transformConfigWithPendingPluginInstalls: transformConfig as never,
             createTempDir: makeTempDir,
           },
@@ -1163,7 +2070,7 @@ describe("activateSetupInference", () => {
     }
   });
 
-  it("fails closed when rollback cannot read back the auth store", async () => {
+  it("confirms rollback from the locked update when independent readback fails", async () => {
     const stateDir = await makeTempDir();
     const agentDir = path.join(stateDir, "agent");
     const initialConfig = {
@@ -1196,9 +2103,7 @@ describe("activateSetupInference", () => {
             })) as never,
             resolvePluginProviders: () => [createGroqSetupProvider()],
             resolveManifestProviderAuthChoice: groqSetupChoice,
-            runEmbeddedAgent: vi.fn(async () =>
-              successfulRun("groq", "llama-3.3-70b-versatile"),
-            ) as never,
+            runEmbeddedAgent: vi.fn(successfulRunner("groq", "llama-3.3-70b-versatile")) as never,
             transformConfigWithPendingPluginInstalls: transformConfig as never,
             loadPersistedAuthProfileStore: vi.fn(() => {
               throw new Error("simulated auth read failure");
@@ -1206,7 +2111,7 @@ describe("activateSetupInference", () => {
             createTempDir: makeTempDir,
           },
         }),
-      ).rejects.toThrow("staged credential could not be rolled back");
+      ).rejects.toThrow("simulated config commit failure");
 
       expect(
         Object.keys(readAuthProfileStoreForTest(agentDir).profiles).filter((id) =>
@@ -1218,7 +2123,161 @@ describe("activateSetupInference", () => {
     }
   });
 
-  it("rejects scalar-to-object provider config patches after a concurrent scalar edit", async () => {
+  it.each([
+    { name: "returns no store", failure: "null" as const },
+    { name: "throws", failure: "throw" as const },
+  ])("reports an indeterminate activation when rollback $name", async ({ failure }) => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const initialConfig = {
+      agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+    resolveAgentDir(initialConfig, "main");
+    const concurrentConfig = {
+      ...initialConfig,
+      agents: {
+        ...initialConfig.agents,
+        defaults: { model: "openai/gpt-5.5" },
+      },
+    } satisfies OpenClawConfig;
+    let realStoreWrites = 0;
+    const updateAuthProfileStore = vi.fn(async (params) => {
+      if (params.agentDir === agentDir) {
+        realStoreWrites += 1;
+        if (realStoreWrites > 1) {
+          if (failure === "throw") {
+            throw new Error("simulated rollback write failure");
+          }
+          return null;
+        }
+      }
+      return await updateAuthProfileStoreWithLock(params);
+    });
+    const transformConfig = vi.fn(async (params: { transform: Function }) => {
+      await params.transform(concurrentConfig, {
+        snapshot: {
+          config: concurrentConfig,
+          sourceConfig: concurrentConfig,
+          runtimeConfig: concurrentConfig,
+        },
+        previousHash: null,
+        attempt: 0,
+      });
+      throw new Error("unreachable config commit");
+    });
+
+    try {
+      const error = await activateSetupInference({
+        kind: "api-key",
+        authChoice: "groq-api-key",
+        apiKey: "candidate-key",
+        workspace: "/tmp/openclaw-workspace",
+        surface: "gateway",
+        runtime,
+        deps: {
+          readConfigFileSnapshot: vi.fn(async () => ({
+            exists: true,
+            valid: true,
+            config: initialConfig,
+            sourceConfig: initialConfig,
+            runtimeConfig: initialConfig,
+          })) as never,
+          resolvePluginProviders: () => [createGroqSetupProvider()],
+          resolveManifestProviderAuthChoice: groqSetupChoice,
+          runEmbeddedAgent: vi.fn(successfulRunner("groq", "llama-3.3-70b-versatile")) as never,
+          transformConfigWithPendingPluginInstalls: transformConfig as never,
+          updateAuthProfileStoreWithLock: updateAuthProfileStore as never,
+          loadPersistedAuthProfileStore: vi.fn(() => {
+            throw new Error("simulated auth read failure");
+          }),
+          createTempDir: makeTempDir,
+        },
+      }).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(SetupInferenceActivationIndeterminateError);
+      expect(error).toMatchObject({
+        message: expect.stringContaining("could not confirm removal"),
+      });
+      expect(
+        Object.keys(readAuthProfileStoreForTest(agentDir).profiles).filter((id) =>
+          id.startsWith("groq:setup-"),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("rolls back an uncertain auth write without accumulating profiles on retry", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const initialConfig = {
+      agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+    resolveAgentDir(initialConfig, "main");
+    const transformConfig = vi.fn();
+    let realStoreUpdates = 0;
+    const updateAuthProfileStore = vi.fn(async (params) => {
+      const updated = await updateAuthProfileStoreWithLock(params);
+      if (params.agentDir !== agentDir) {
+        return updated;
+      }
+      realStoreUpdates += 1;
+      return realStoreUpdates % 2 === 1 ? null : updated;
+    });
+
+    try {
+      const activate = () =>
+        activateSetupInference({
+          kind: "api-key",
+          authChoice: "groq-api-key",
+          apiKey: "candidate-key",
+          workspace: "/tmp/openclaw-workspace",
+          surface: "gateway",
+          runtime,
+          deps: {
+            readConfigFileSnapshot: vi.fn(async () => ({
+              exists: true,
+              valid: true,
+              config: initialConfig,
+              sourceConfig: initialConfig,
+              runtimeConfig: initialConfig,
+            })) as never,
+            resolvePluginProviders: () => [createGroqSetupProvider()],
+            resolveManifestProviderAuthChoice: groqSetupChoice,
+            runEmbeddedAgent: vi.fn(successfulRunner("groq", "llama-3.3-70b-versatile")) as never,
+            transformConfigWithPendingPluginInstalls: transformConfig as never,
+            updateAuthProfileStoreWithLock: updateAuthProfileStore as never,
+            loadPersistedAuthProfileStore: vi.fn(() => {
+              throw new Error("simulated auth read failure");
+            }),
+            createTempDir: makeTempDir,
+          },
+        });
+
+      await expect(activate()).resolves.toMatchObject({
+        ok: false,
+        status: "unknown",
+        error: expect.stringContaining("rolled back"),
+      });
+      await expect(activate()).resolves.toMatchObject({
+        ok: false,
+        status: "unknown",
+        error: expect.stringContaining("rolled back"),
+      });
+      expect(transformConfig).not.toHaveBeenCalled();
+      expect(realStoreUpdates).toBe(4);
+      expect(
+        Object.keys(readAuthProfileStoreForTest(agentDir).profiles).filter((id) =>
+          id.startsWith("groq:setup-"),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("ignores an unrelated provider patch and preserves a concurrent operator edit", async () => {
     const stateDir = await makeTempDir();
     const agentDir = path.join(stateDir, "agent");
     const auxProvider = {
@@ -1269,21 +2328,23 @@ describe("activateSetupInference", () => {
             })) as never,
             resolvePluginProviders: () => [provider],
             resolveManifestProviderAuthChoice: groqSetupChoice,
-            runEmbeddedAgent: vi.fn(async () =>
-              successfulRun("groq", "llama-3.3-70b-versatile"),
-            ) as never,
+            runEmbeddedAgent: vi.fn(successfulRunner("groq", "llama-3.3-70b-versatile")) as never,
             transformConfigWithPendingPluginInstalls: configHarness.transform as never,
             createTempDir: makeTempDir,
           },
         }),
-      ).rejects.toThrow("Provider configuration changed during the live inference test");
+      ).resolves.toMatchObject({ ok: true });
 
-      expect(configHarness.current()).toEqual(concurrentConfig);
+      const persisted = configHarness.current();
+      expect(persisted.models?.providers?.aux).toEqual(concurrentConfig.models?.providers?.aux);
+      expect(persisted.agents?.defaults?.model).toMatch(
+        /^groq\/llama-3\.3-70b-versatile@groq:setup-/,
+      );
       expect(
         Object.keys(readAuthProfileStoreForTest(agentDir).profiles).filter((id) =>
           id.startsWith("groq:setup-"),
         ),
-      ).toEqual([]);
+      ).toHaveLength(1);
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }
@@ -1306,9 +2367,7 @@ describe("activateSetupInference", () => {
       })) as never,
       resolvePluginProviders: () => [createGroqSetupProvider()],
       resolveManifestProviderAuthChoice: groqSetupChoice,
-      runEmbeddedAgent: vi.fn(async () =>
-        successfulRun("groq", "llama-3.3-70b-versatile"),
-      ) as never,
+      runEmbeddedAgent: vi.fn(successfulRunner("groq", "llama-3.3-70b-versatile")) as never,
       updateAuthProfileStoreWithLock: vi.fn(async (params) => {
         authWriteDirs.push(params.agentDir ?? "");
         return await updateAuthProfileStoreWithLock(params);
@@ -1397,8 +2456,9 @@ describe("activateSetupInference", () => {
         },
       ],
     };
-    const runEmbeddedAgent = vi.fn(async (_params: { authProfileId?: string }) =>
-      successfulRun("github-copilot", "claude-sonnet-4.5"),
+    const runEmbeddedAgent = vi.fn(
+      async (params: SuccessfulRunParams & { authProfileId?: string }) =>
+        successfulRun("github-copilot", "claude-sonnet-4.5", params),
     );
     const initialConfig = {
       gateway: { port: 18789 },
@@ -1618,14 +2678,15 @@ describe("activateSetupInference", () => {
         status: "installed" as const,
       };
     });
-    const runEmbeddedAgent = vi.fn(async (_params: unknown) => {
+    const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
       events.push("live-test");
-      return successfulRun("openai", "gpt-5.6-sol");
+      return successfulRun("openai", "gpt-5.6-sol", params);
     });
     let persistedConfig: OpenClawConfig = {
       ...initialConfig,
       gateway: { port: 19000 },
     };
+    let activationCommitted = false;
     const pendingCodexInstalls: unknown[] = [];
     const transformConfig = vi.fn(
       async (params: {
@@ -1647,6 +2708,7 @@ describe("activateSetupInference", () => {
         events.push(configuredRuntime === "codex" ? "persist-plugin-config" : "unexpected-write");
         pendingCodexInstalls.push(transformed.plugins?.installs?.codex);
         persistedConfig = withoutPluginInstallRecords(transformed);
+        activationCommitted = true;
         return { nextConfig: persistedConfig };
       },
     );
@@ -1654,24 +2716,37 @@ describe("activateSetupInference", () => {
       events.push("refresh-plugin-registry");
       throw new Error("simulated registry refresh failure");
     });
+    const markRetainedInstall = vi.fn(async () => {
+      events.push("retain-plugin-install");
+      return true;
+    });
+    const ensureRegistryLoaded = vi.fn(() => {
+      events.push("reload-active-registry");
+    });
     const result = await activateSetupInference({
       kind: "codex-cli",
       workspace: "/tmp/openclaw-workspace",
       surface: "gateway",
       runtime: { log: runtimeLog, error: () => {}, exit: () => {} } as never,
       deps: {
-        readConfigFileSnapshot: vi.fn(async () => ({
-          exists: true,
-          valid: true,
-          path: "/tmp/openclaw.json",
-          issues: [],
-          config: initialConfig,
-          runtimeConfig: initialConfig,
-        })) as never,
+        readConfigFileSnapshot: vi.fn(async () => {
+          const config = activationCommitted ? persistedConfig : initialConfig;
+          return {
+            exists: true,
+            valid: true,
+            path: "/tmp/openclaw.json",
+            issues: [],
+            config,
+            sourceConfig: config,
+            runtimeConfig: config,
+          };
+        }) as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
+        markRetainedManagedNpmInstall: markRetainedInstall,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        ensurePluginRegistryLoaded: ensureRegistryLoaded,
         createTempDir: makeTempDir,
       },
     });
@@ -1709,9 +2784,11 @@ describe("activateSetupInference", () => {
     );
     expect(events).toEqual([
       "install-plugin",
+      "retain-plugin-install",
       "live-test",
       "persist-plugin-config",
       "refresh-plugin-registry",
+      "reload-active-registry",
     ]);
     expect(transformConfig).toHaveBeenCalledOnce();
     expect(transformConfig).toHaveBeenCalledWith(
@@ -1728,11 +2805,18 @@ describe("activateSetupInference", () => {
       workspaceDir: "/tmp/openclaw-workspace",
       logger: expect.objectContaining({ warn: expect.any(Function) }),
     });
+    expect(ensureRegistryLoaded).toHaveBeenCalledWith({
+      scope: "all",
+      config: persistedConfig,
+      activationSourceConfig: persistedConfig,
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
     // Harness selection: codex tests run embedded with the codex harness.
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
       agentId: "crestodian",
-      agentDir: expect.stringContaining("setup-inference-test-"),
+      agentDir: resolveAgentDir(initialConfig, "ops"),
       provider: "openai",
+      authProfileStateMode: "read-only",
       config: {
         agents: {
           defaults: {
@@ -1754,6 +2838,9 @@ describe("activateSetupInference", () => {
         },
         plugins: {
           entries: { codex: { enabled: true } },
+          installs: {
+            codex: expect.objectContaining({ installPath: "/tmp/plugins/codex" }),
+          },
         },
       },
     });
@@ -1887,7 +2974,8 @@ describe("activateSetupInference", () => {
           runtimeConfig,
         })) as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
-        runEmbeddedAgent: vi.fn(async () => successfulRun("openai", "gpt-5.6-sol")) as never,
+        markRetainedManagedNpmInstall: vi.fn(async () => true),
+        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6-sol")) as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
         createTempDir: makeTempDir,
@@ -1936,6 +3024,217 @@ describe("activateSetupInference", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
     expect(transformConfig).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before inference when the staged Codex package cannot be retained", async () => {
+    const installRecord: PluginInstallRecord = {
+      source: "npm",
+      spec: "@openclaw/codex",
+      installPath: "/tmp/plugins/codex-unretained",
+    };
+    const runEmbeddedAgent = vi.fn();
+    const transformConfig = vi.fn();
+    const markRetainedInstall = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+    const clearInstallRecords = vi.fn();
+    const clearMetadata = vi.fn();
+    const clearDiscovery = vi.fn(async () => {});
+    const refreshPluginRegistry = vi.fn(async () => {});
+    const result = await activateSetupInference({
+      kind: "codex-cli",
+      workspace: "/tmp/openclaw-workspace",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          path: "/tmp/openclaw.json",
+          issues: [],
+          config: {},
+          runtimeConfig: {},
+        })) as never,
+        ensureCodexRuntimePlugin: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+          cfg: {
+            ...cfg,
+            plugins: { ...cfg.plugins, installs: { codex: installRecord } },
+          },
+          required: true,
+          installed: true,
+          status: "installed" as const,
+        })) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        transformConfigWithPendingPluginInstalls: transformConfig as never,
+        markRetainedManagedNpmInstall: markRetainedInstall,
+        clearLoadInstalledPluginIndexInstallRecordsCache: clearInstallRecords,
+        clearPluginMetadataLifecycleCaches: clearMetadata,
+        invalidatePluginRuntimeDiscoveryAfterConfigMutation: clearDiscovery as never,
+        refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "unavailable",
+      error: expect.stringContaining("retain the staged Codex runtime safely"),
+    });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(transformConfig).not.toHaveBeenCalled();
+    expect(markRetainedInstall).toHaveBeenCalledTimes(2);
+    expect(clearInstallRecords).toHaveBeenCalledTimes(2);
+    expect(clearMetadata).toHaveBeenCalledTimes(2);
+    expect(clearDiscovery).toHaveBeenCalledTimes(2);
+    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: {},
+      reason: "source-changed",
+      workspaceDir: "/tmp/openclaw-workspace",
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
+    });
+  });
+
+  it("reports an indeterminate activation when final Codex retention fails", async () => {
+    const installRecord: PluginInstallRecord = {
+      source: "npm",
+      spec: "@openclaw/codex",
+      installPath: "/tmp/plugins/codex-final-retention-failure",
+    };
+    const markRetainedInstall = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const refreshPluginRegistry = vi.fn(async () => {});
+    let tempDir: string | undefined;
+    const activation = activateSetupInference({
+      kind: "codex-cli",
+      workspace: "/tmp/openclaw-workspace",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          path: "/tmp/openclaw.json",
+          issues: [],
+          config: {},
+          runtimeConfig: {},
+        })) as never,
+        ensureCodexRuntimePlugin: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+          cfg: {
+            ...cfg,
+            plugins: { ...cfg.plugins, installs: { codex: installRecord } },
+          },
+          required: true,
+          installed: true,
+          status: "installed" as const,
+        })) as never,
+        runEmbeddedAgent: vi.fn(async () => {
+          throw new Error("401 invalid_api_key");
+        }) as never,
+        transformConfigWithPendingPluginInstalls: vi.fn() as never,
+        markRetainedManagedNpmInstall: markRetainedInstall,
+        clearLoadInstalledPluginIndexInstallRecordsCache: vi.fn(),
+        clearPluginMetadataLifecycleCaches: vi.fn(),
+        invalidatePluginRuntimeDiscoveryAfterConfigMutation: vi.fn(async () => {}) as never,
+        refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        createTempDir: async () => {
+          tempDir = await makeTempDir();
+          return tempDir;
+        },
+      },
+    });
+
+    await expect(activation).rejects.toThrow(
+      "stopped before its Codex runtime package could be retained safely",
+    );
+    expect(markRetainedInstall).toHaveBeenCalledTimes(2);
+    expect(refreshPluginRegistry).toHaveBeenCalledOnce();
+    expect(tempDir).toBeDefined();
+    await expect(fs.stat(tempDir!)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("restores the active registry from persisted config after a failed Codex probe", async () => {
+    resetPluginRuntimeStateForTest();
+    const installRecord: PluginInstallRecord = {
+      source: "npm",
+      spec: "@openclaw/codex",
+      installPath: "/tmp/plugins/codex-staged-registry",
+    };
+    const persistedConfig = { plugins: { enabled: false } } satisfies OpenClawConfig;
+    const stagedRegistry = createEmptyPluginRegistry();
+    stagedRegistry.plugins.push({
+      id: "codex",
+      name: "Codex",
+      status: "loaded",
+      format: "bundle",
+      imported: true,
+    } as never);
+    let snapshotRead = 0;
+    const ensureRegistryLoaded = vi.fn(
+      (options: Parameters<typeof ensurePluginRegistryLoaded>[0]) =>
+        ensurePluginRegistryLoaded(options),
+    );
+
+    try {
+      const result = await activateSetupInference({
+        kind: "codex-cli",
+        workspace: "/tmp/openclaw-workspace",
+        surface: "gateway",
+        runtime,
+        deps: {
+          readConfigFileSnapshot: vi.fn(async () => {
+            const config = snapshotRead++ === 0 ? {} : persistedConfig;
+            return {
+              exists: true,
+              valid: true,
+              path: "/tmp/openclaw.json",
+              issues: [],
+              config,
+              sourceConfig: config,
+              runtimeConfig: config,
+            };
+          }) as never,
+          ensureCodexRuntimePlugin: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+            cfg: {
+              ...cfg,
+              plugins: { ...cfg.plugins, installs: { codex: installRecord } },
+            },
+            required: true,
+            installed: true,
+            status: "installed" as const,
+          })) as never,
+          runEmbeddedAgent: vi.fn(async () => {
+            setActivePluginRegistry(
+              stagedRegistry,
+              "staged-codex-registry",
+              "default",
+              "/tmp/setup-probe",
+            );
+            throw new Error("401 invalid_api_key");
+          }) as never,
+          transformConfigWithPendingPluginInstalls: vi.fn() as never,
+          markRetainedManagedNpmInstall: vi.fn(async () => true),
+          clearLoadInstalledPluginIndexInstallRecordsCache: vi.fn(),
+          clearPluginMetadataLifecycleCaches: vi.fn(),
+          invalidatePluginRuntimeDiscoveryAfterConfigMutation: vi.fn(async () => {}) as never,
+          refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
+          ensurePluginRegistryLoaded: ensureRegistryLoaded,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      expect(result).toMatchObject({ ok: false, status: "auth" });
+      expect(ensureRegistryLoaded).toHaveBeenCalledWith({
+        scope: "all",
+        config: persistedConfig,
+        activationSourceConfig: persistedConfig,
+        workspaceDir: "/tmp/openclaw-workspace",
+      });
+      expect(getActivePluginRegistry()).not.toBe(stagedRegistry);
+      expect(getActivePluginRegistry()?.plugins.some((plugin) => plugin.id === "codex")).toBe(
+        false,
+      );
+      expect(getActivePluginRegistryKey()).not.toBe("staged-codex-registry");
+      expect(getActivePluginRegistryWorkspaceDir()).toBe("/tmp/openclaw-workspace");
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it("does not install codex when plugin policy blocks it", async () => {
@@ -2033,13 +3332,13 @@ describe("activateSetupInference", () => {
       await expect(fs.stat(packageDir)).resolves.toBeDefined();
       expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(true);
       expect(transformConfig).not.toHaveBeenCalled();
-      expect(refreshPluginRegistry).not.toHaveBeenCalled();
+      expect(refreshPluginRegistry).toHaveBeenCalledOnce();
     } finally {
       await fs.rm(installProjectDir, { recursive: true, force: true });
     }
   });
 
-  it("clears transient Codex install caches before a same-process retry", async () => {
+  it("clears transient Codex install caches before and after a failed probe", async () => {
     const installRecords = [
       {
         source: "npm" as const,
@@ -2090,7 +3389,7 @@ describe("activateSetupInference", () => {
     const runEmbeddedAgent = vi
       .fn()
       .mockRejectedValueOnce(new Error("401 invalid_api_key"))
-      .mockResolvedValueOnce(successfulRun("openai", "gpt-5.6-sol"));
+      .mockImplementationOnce(successfulRunner("openai", "gpt-5.6-sol"));
     const clearInstallRecords = vi.fn(() => {
       installedRecordCache = undefined;
     });
@@ -2149,14 +3448,24 @@ describe("activateSetupInference", () => {
     expect(first).toMatchObject({ ok: false, status: "auth" });
     expect(second).toMatchObject({ ok: true, modelRef: "openai/gpt-5.6-sol" });
     expect(createdRecords).toStrictEqual(installRecords);
-    expect(markRetained).toHaveBeenCalledWith({
+    expect(markRetained).toHaveBeenNthCalledWith(1, {
       packageDir: installRecords[0].installPath,
       pluginId: "codex",
       reason: "crestodian-inference-activation-not-committed",
     });
-    expect(clearInstallRecords).toHaveBeenCalledOnce();
-    expect(clearMetadata).toHaveBeenCalledOnce();
-    expect(clearDiscovery).toHaveBeenCalledOnce();
+    expect(markRetained).toHaveBeenNthCalledWith(2, {
+      packageDir: installRecords[0].installPath,
+      pluginId: "codex",
+      reason: "crestodian-inference-activation-not-committed",
+    });
+    expect(markRetained).toHaveBeenNthCalledWith(3, {
+      packageDir: installRecords[1].installPath,
+      pluginId: "codex",
+      reason: "crestodian-inference-activation-not-committed",
+    });
+    expect(clearInstallRecords).toHaveBeenCalledTimes(3);
+    expect(clearMetadata).toHaveBeenCalledTimes(3);
+    expect(clearDiscovery).toHaveBeenCalledTimes(3);
     expect(transformConfig).toHaveBeenCalledOnce();
     expect(committedInstallRecords).toStrictEqual([installRecords[1]]);
   });
@@ -2189,19 +3498,12 @@ describe("activateSetupInference", () => {
     let committedConfig: OpenClawConfig | undefined;
     const readConfigFileSnapshot = vi.fn(async () => {
       const sourceConfig = committedConfig ?? {};
-      const runtimeConfig =
-        committedConfig && installRecords.codex
-          ? {
-              ...sourceConfig,
-              plugins: { ...sourceConfig.plugins, installs: { codex: installRecords.codex } },
-            }
-          : sourceConfig;
       return {
         exists: true,
         valid: true,
         config: sourceConfig,
         sourceConfig,
-        runtimeConfig,
+        runtimeConfig: sourceConfig,
       };
     });
     const transformConfig = vi.fn(
@@ -2240,7 +3542,7 @@ describe("activateSetupInference", () => {
           installed: true,
           status: "installed" as const,
         })) as never,
-        runEmbeddedAgent: vi.fn(async () => successfulRun("openai", "gpt-5.6-sol")) as never,
+        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6-sol")) as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         readPersistedInstalledPluginIndexInstallRecords: readInstallRecords,
         markRetainedManagedNpmInstall: markRetainedInstall,
@@ -2258,7 +3560,177 @@ describe("activateSetupInference", () => {
       await expect(activation).rejects.toThrow("simulated post-write failure");
     }
     expect(readInstallRecords).toHaveBeenCalledOnce();
-    expect(markRetainedInstall).toHaveBeenCalledTimes(testCase.succeeds ? 0 : 1);
+    expect(markRetainedInstall).toHaveBeenCalledTimes(testCase.succeeds ? 1 : 2);
+  });
+});
+
+describe("resolveCrestodianInferenceForPersistentApply", () => {
+  function createBinding(
+    proofKind: "runtime-owner" | "credential" = "runtime-owner",
+  ): CrestodianVerifiedInferenceBinding {
+    const execution = {
+      runner: "embedded" as const,
+      runConfig: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      modelLabel: "openai/gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.5",
+      agentDir: "/tmp/openclaw-agent",
+      agentId: "main",
+      agentHarnessRuntimeOverride: "codex",
+    };
+    return {
+      configuredRoute: {
+        runner: "embedded",
+        modelLabel: execution.modelLabel,
+        provider: execution.provider,
+        model: execution.model,
+        agentDir: execution.agentDir,
+        agentId: execution.agentId,
+        agentHarnessRuntimeOverride: execution.agentHarnessRuntimeOverride,
+      },
+      execution,
+      executionFingerprint: {
+        route: { provider: "openai", model: "gpt-5.5" },
+        defaultSelection: { explicitIds: [] },
+        auth: {},
+        models: {},
+        defaults: {},
+        plugins: {},
+        ownerPluginRuntimes: [],
+      },
+      ownerPluginIds: ["codex"],
+      ownerPluginArtifacts: [{ pluginId: "codex", fingerprint: "codex-runtime-v1" }],
+      auth:
+        proofKind === "runtime-owner"
+          ? {
+              authFingerprint: "runtime-owner-fingerprint",
+              proofKind,
+              runtimeOwnerKind: "plugin-harness",
+              runtimeOwnerId: "codex",
+            }
+          : { authFingerprint: "strict-credential-fingerprint" },
+    };
+  }
+
+  function currentOwnerPluginArtifactDeps() {
+    return { hasCurrentOwnerPluginArtifacts: vi.fn(async () => true) };
+  }
+
+  it("skips a live turn for a strict credential", async () => {
+    const binding = createBinding("credential");
+    const resolveVerifiedInferenceRoute = vi.fn(async () => binding.execution);
+    const verifyBoundInference = vi.fn();
+
+    const route = await resolveCrestodianInferenceForPersistentApply({
+      binding,
+      runtime,
+      deps: {
+        ...currentOwnerPluginArtifactDeps(),
+        resolveVerifiedInferenceRoute,
+        verifyBoundInference,
+      },
+    });
+
+    expect(route).toBe(binding.execution);
+    expect(resolveVerifiedInferenceRoute).toHaveBeenCalledOnce();
+    expect(verifyBoundInference).not.toHaveBeenCalled();
+  });
+
+  it("blocks a strict-credential write when its static owner binding is stale", async () => {
+    const binding = createBinding("credential");
+    const resolveVerifiedInferenceRoute = vi.fn(async () => null);
+    const verifyBoundInference = vi.fn();
+
+    const route = await resolveCrestodianInferenceForPersistentApply({
+      binding,
+      runtime,
+      deps: {
+        ...currentOwnerPluginArtifactDeps(),
+        resolveVerifiedInferenceRoute,
+        verifyBoundInference,
+      },
+    });
+
+    expect(route).toBeNull();
+    expect(resolveVerifiedInferenceRoute).toHaveBeenCalledOnce();
+    expect(verifyBoundInference).not.toHaveBeenCalled();
+  });
+
+  it("rejects an opaque runtime when its liveness turn fails auth", async () => {
+    const binding = createBinding();
+    const resolveVerifiedInferenceRoute = vi.fn(async () => binding.execution);
+    const verifyBoundInference = vi.fn(async () => ({
+      ok: false as const,
+      status: "auth" as const,
+      error: "logged out",
+    }));
+
+    await expect(
+      resolveCrestodianInferenceForPersistentApply({
+        binding,
+        runtime,
+        deps: {
+          ...currentOwnerPluginArtifactDeps(),
+          resolveVerifiedInferenceRoute,
+          verifyBoundInference,
+        },
+      }),
+    ).resolves.toBeNull();
+    expect(resolveVerifiedInferenceRoute).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a liveness turn that used a different actual harness", async () => {
+    const binding = createBinding();
+    const changedBinding = structuredClone(binding);
+    if (changedBinding.execution.runner !== "embedded") {
+      throw new Error("expected embedded fixture");
+    }
+    changedBinding.execution.agentHarnessRuntimeOverride = "openclaw";
+    const resolveVerifiedInferenceRoute = vi.fn(async () => binding.execution);
+
+    await expect(
+      resolveCrestodianInferenceForPersistentApply({
+        binding,
+        runtime,
+        deps: {
+          ...currentOwnerPluginArtifactDeps(),
+          resolveVerifiedInferenceRoute,
+          verifyBoundInference: vi.fn(async () => ({
+            ok: true as const,
+            modelRef: changedBinding.execution.modelLabel,
+            latencyMs: 1,
+            binding: changedBinding,
+          })),
+        },
+      }),
+    ).resolves.toBeNull();
+    expect(resolveVerifiedInferenceRoute).toHaveBeenCalledOnce();
+  });
+
+  it("rejects route drift after an opaque liveness turn", async () => {
+    const binding = createBinding();
+    const resolveVerifiedInferenceRoute = vi
+      .fn()
+      .mockResolvedValueOnce(binding.execution)
+      .mockResolvedValueOnce(null);
+
+    await expect(
+      resolveCrestodianInferenceForPersistentApply({
+        binding,
+        runtime,
+        deps: {
+          ...currentOwnerPluginArtifactDeps(),
+          resolveVerifiedInferenceRoute,
+          verifyBoundInference: vi.fn(async () => ({
+            ok: true as const,
+            modelRef: binding.execution.modelLabel,
+            latencyMs: 1,
+            binding,
+          })),
+        },
+      }),
+    ).resolves.toBeNull();
+    expect(resolveVerifiedInferenceRoute).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -2306,6 +3778,329 @@ describe("verifySetupInference", () => {
     });
 
     expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.5" });
+  });
+
+  it("locks the exact winning profile into a bound Crestodian session", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: { "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } } },
+        },
+      },
+      auth: {
+        profiles: {
+          "openai:p1": { provider: "openai", mode: "api_key" },
+          "openai:p2": { provider: "openai", mode: "api_key" },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const profiles = {
+      "openai:p1": { type: "api_key" as const, provider: "openai", key: "key-1" },
+      "openai:p2": { type: "api_key" as const, provider: "openai", key: "key-2" },
+    };
+    const verifiedAuth = {
+      apiKey: "key-2",
+      profileId: "openai:p2",
+      source: "profile:openai:p2",
+      mode: "api-key" as const,
+    };
+    const verifiedAuthFingerprint = fingerprintResolvedProviderAuth(verifiedAuth);
+    if (!verifiedAuthFingerprint) {
+      throw new Error("missing test auth fingerprint");
+    }
+    const runEmbeddedAgent = vi.fn(
+      async (params: {
+        authProfileId?: string;
+        authProfileIdSource?: string;
+        onSuccessfulAuthBinding?: (binding: {
+          authProfileId?: string;
+          agentHarnessId?: string;
+          authFingerprint?: string;
+        }) => void;
+      }) => {
+        params.onSuccessfulAuthBinding?.({
+          authProfileId: "openai:p2",
+          agentHarnessId: "openclaw",
+          authFingerprint: verifiedAuthFingerprint,
+        });
+        return successfulRun("openai", "gpt-5.5");
+      },
+    );
+
+    const result = await verifySetupInference({
+      runtime,
+      bindSession: true,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({ exists: true, valid: true, config })) as never,
+        loadAuthProfileStoreForRuntime: vi.fn(() => ({ version: 1, profiles })) as never,
+        ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles })) as never,
+        resolveApiKeyForProvider: vi.fn(async () => verifiedAuth),
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      binding: {
+        auth: { authProfileId: "openai:p2", authFingerprint: verifiedAuthFingerprint },
+        execution: { authProfileId: "openai:p2", modelLabel: "openai/gpt-5.5" },
+      },
+    });
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedAgent.mock.calls[0]?.[0].authProfileId).toBeUndefined();
+    expect(runEmbeddedAgent.mock.calls[1]?.[0]).toMatchObject({
+      authProfileId: "openai:p2",
+      authProfileIdSource: "user",
+    });
+  });
+
+  it("rejects an owner plugin replacement during the live inference turn", async () => {
+    const profileId = "openai:verified";
+    const credential = {
+      type: "api_key" as const,
+      provider: "openai",
+      key: "verified-key",
+    };
+    const authFingerprint = fingerprintAuthProfileCredential({ profileId, credential });
+    if (!authFingerprint) {
+      throw new Error("missing test auth fingerprint");
+    }
+    const config = {
+      agents: { defaults: { model: `openai/gpt-5.5@${profileId}` } },
+      auth: { profiles: { [profileId]: { provider: "openai", mode: "api_key" } } },
+    } satisfies OpenClawConfig;
+    const captureCrestodianOwnerPluginArtifacts = vi.fn(() => ({
+      ownerPluginIds: ["openai"],
+      ownerPluginArtifacts: [{ pluginId: "openai", fingerprint: "openai-runtime-v1" }],
+    }));
+    const createCrestodianVerifiedInferenceBinding = vi.fn(async () => ({
+      ownerPluginIds: ["openai"],
+      ownerPluginArtifacts: [{ pluginId: "openai", fingerprint: "openai-runtime-v2" }],
+    })) as never;
+    const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
+      params.onSuccessfulAuthBinding?.({
+        authProfileId: profileId,
+        ...successfulAgentHarnessBinding(params),
+        authFingerprint,
+      });
+      return successfulRun("openai", "gpt-5.5");
+    });
+
+    const result = await verifySetupInference({
+      runtime,
+      bindSession: true,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({ exists: true, valid: true, config })) as never,
+        loadAuthProfileStoreForRuntime: vi.fn(() => ({
+          version: 1,
+          profiles: { [profileId]: credential },
+        })) as never,
+        ensureAuthProfileStore: vi.fn(() => ({
+          version: 1,
+          profiles: { [profileId]: credential },
+        })) as never,
+        resolveApiKeyForProvider: vi.fn(async () => ({
+          apiKey: credential.key,
+          profileId,
+          source: `profile:${profileId}`,
+          mode: "api-key" as const,
+        })),
+        captureCrestodianOwnerPluginArtifacts,
+        createCrestodianVerifiedInferenceBinding,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "auth",
+      error: expect.stringContaining("owner changed"),
+    });
+    expect(captureCrestodianOwnerPluginArtifacts).toHaveBeenCalledOnce();
+    expect(createCrestodianVerifiedInferenceBinding).toHaveBeenCalledOnce();
+  });
+
+  it("binds a runtime-only Codex profile after activation and runs the first Crestodian turn", async () => {
+    const stateDir = await makeTempDir();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const profileId = "openai:default";
+    const credential = {
+      type: "oauth" as const,
+      provider: "openai",
+      access: "test-access",
+      refresh: "test-refresh",
+      expires: Date.now() + 3_600_000,
+    };
+    const authFingerprint = fingerprintAuthProfileCredential({ profileId, credential });
+    if (!authFingerprint) {
+      throw new Error("missing external Codex auth fingerprint");
+    }
+    // This is the authored route produced by a successful Codex activation:
+    // model + harness persist, while the CLI-owned credential stays runtime-only.
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+      plugins: { entries: { codex: { enabled: true } } },
+    } satisfies OpenClawConfig;
+    const externalStore = vi.fn(
+      (_agentDir?: string, options?: { externalCliProviderIds?: Iterable<string> }) => {
+        const exposeCodexProfile = Array.from(options?.externalCliProviderIds ?? []).includes(
+          "openai",
+        );
+        return {
+          version: 1,
+          profiles: exposeCodexProfile ? { [profileId]: credential } : {},
+          runtimeExternalProfileIds: exposeCodexProfile ? [profileId] : [],
+          runtimeExternalProfileIdsAuthoritative: true,
+        };
+      },
+    );
+    const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
+      params.onSuccessfulAuthBinding?.({
+        authProfileId: profileId,
+        ...successfulAgentHarnessBinding(params),
+        authFingerprint,
+      });
+      return successfulRun("openai", "gpt-5.6-sol");
+    });
+    const readConfigFileSnapshot = vi.fn(async () => ({
+      exists: true,
+      valid: true,
+      config,
+      runtimeConfig: config,
+      sourceConfig: config,
+    }));
+    const validateAgentHarnessRuntimeArtifact = vi.fn(async () => true);
+
+    try {
+      const verification = await verifySetupInference({
+        runtime,
+        bindSession: true,
+        deps: {
+          readConfigFileSnapshot: readConfigFileSnapshot as never,
+          loadAuthProfileStoreForRuntime: externalStore as never,
+          ensureAuthProfileStore: externalStore as never,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          validateAgentHarnessRuntimeArtifact,
+          createTempDir: makeTempDir,
+        },
+      });
+      expect(verification).toMatchObject({
+        ok: true,
+        modelRef: "openai/gpt-5.6-sol",
+        binding: {
+          auth: { authProfileId: profileId, authFingerprint },
+          execution: {
+            authProfileId: profileId,
+            agentHarnessRuntimeOverride: "codex",
+          },
+        },
+      });
+      if (!verification.ok) {
+        throw new Error(verification.error);
+      }
+
+      const session = createCrestodianAgentSession(verification.binding);
+      try {
+        const reply = await runCrestodianAgentTurnWithDeps(
+          {
+            input: "continue setup",
+            overview: { defaultModel: "openai/gpt-5.6-sol" } as never,
+            surface: "gateway",
+            approvalArmed: false,
+            session,
+          },
+          {
+            readConfigFileSnapshot: readConfigFileSnapshot as never,
+            ensureAuthProfileStore: externalStore as never,
+            runEmbeddedAgent: runEmbeddedAgent as never,
+            validateAgentHarnessRuntimeArtifact,
+          },
+        );
+        expect(reply).toMatchObject({ text: "OK", modelLabel: "openai/gpt-5.6-sol" });
+      } finally {
+        await cleanupCrestodianAgentSession(session);
+      }
+
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
+      expect(runEmbeddedAgent.mock.calls[0]?.[0].authProfileId).toBeUndefined();
+      expect(runEmbeddedAgent.mock.calls[1]?.[0]).toMatchObject({
+        authProfileId: profileId,
+        authProfileIdSource: "user",
+      });
+      expect(runEmbeddedAgent.mock.calls[2]?.[0]).toMatchObject({
+        authProfileId: profileId,
+        authProfileIdSource: "user",
+        agentHarnessRuntimeOverride: "codex",
+        agentId: "crestodian",
+        toolsAllow: ["crestodian"],
+      });
+      expect((runEmbeddedAgent.mock.calls[2]?.[0] as { config?: OpenClawConfig }).config).toBe(
+        verification.binding.execution.runConfig,
+      );
+      expect(validateAgentHarnessRuntimeArtifact).toHaveBeenCalledWith({
+        harnessId: "codex",
+        artifact: testCodexRuntimeArtifact,
+      });
+      expect(externalStore).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          readOnly: true,
+          allowKeychainPrompt: false,
+          config,
+          externalCliProviderIds: ["openai"],
+        }),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("does not repeat an unbound verification after automatic profile selection", async () => {
+    const config = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      auth: {
+        profiles: {
+          "openai:p1": { provider: "openai", mode: "api_key" },
+          "openai:p2": { provider: "openai", mode: "api_key" },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const profiles = {
+      "openai:p1": { type: "api_key" as const, provider: "openai", key: "key-1" },
+      "openai:p2": { type: "api_key" as const, provider: "openai", key: "key-2" },
+    };
+    const runEmbeddedAgent = vi.fn(
+      async (params: {
+        onSuccessfulAuthBinding?: (binding: { authProfileId?: string }) => void;
+      }) => {
+        params.onSuccessfulAuthBinding?.({ authProfileId: "openai:p2" });
+        return successfulRun("openai", "gpt-5.5");
+      },
+    );
+
+    const result = await verifySetupInferenceConfig({
+      config,
+      runtime,
+      deps: {
+        loadAuthProfileStoreForRuntime: vi.fn(() => ({ version: 1, profiles })) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.5" });
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
   it("rejects a configured route that changes during its live check", async () => {
@@ -2382,7 +4177,9 @@ describe("verifySetupInference", () => {
       config: {
         agents: {
           defaults: {
-            cliBackends: { "claude-cli": { command: "claude" } },
+            cliBackends: {
+              "claude-cli": { command: "claude", sideQuestionToolMode: "disabled" },
+            },
           },
           list: [
             {

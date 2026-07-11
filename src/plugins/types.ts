@@ -201,6 +201,7 @@ export type {
   CliBackendSideQuestionToolMode,
   CliBackendThinkingLevel,
   CliBackendPlugin,
+  CliBackendRuntimeArtifactPolicy,
   CliBundleMcpMode,
   PluginTextReplacement,
   PluginTextTransforms,

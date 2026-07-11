@@ -177,7 +177,7 @@ and config, and the credential is verified the same way before it is saved.
 
 ## AI conversation
 
-Interactive Crestodian's free-form conversation runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero `crestodian` tool that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so Crestodian has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.
+Interactive Crestodian's free-form conversation runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero OpenClaw authority tool, `crestodian`, that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so Crestodian has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.
 
 The host does not parse natural-language requests into operations. Free-form
 messages — including command-looking text and questions such as "why did my
@@ -198,32 +198,29 @@ Message-channel rescue mode never uses the model-assisted planner. Remote rescue
 ### CLI harness trust model
 
 Embedded runtimes and the Codex app-server harness enforce the ring-zero
-restriction directly: the run carries a tool allow-list with only the
-`crestodian` tool. CLI harnesses such as Claude Code cannot enforce an
-OpenClaw tool allow-list — the CLI owns its native tools and its own permission
-policy, so OpenClaw fails closed if asked to restrict one. For CLI-harness
-models Crestodian instead:
+restriction directly: the run carries an OpenClaw tool allow-list with only
+the `crestodian` tool. For Codex, OpenClaw also disables environments, native
+execution, multi-agent, goal, app/plugin, skill/MCP, web-search, and
+`request_user_input` surfaces for that run. Codex still injects its inert native `update_plan`
+utility; it can update the model's temporary checklist but cannot write files
+or OpenClaw configuration. CLI harnesses do not consume OpenClaw's allow-list,
+so Crestodian admits only backends whose own tool-selection contract can prove
+the same restriction:
 
-- injects a dedicated MCP server that serves only the `crestodian` tool and
-  replaces OpenClaw's normal MCP tool surface for the run (for Claude Code the
-  generated config is applied with `--strict-mcp-config`, so no other MCP
-  servers are loaded),
-- keeps every config mutation inside the tool's approval and audit contract —
-  reads run freely, writes require your conversational yes, and every applied
-  write is audited and re-validated,
-- leaves native tools (file reads, shell) to the harness. They follow the same
-  permission posture as normal OpenClaw agent runs on this machine: with
-  OpenClaw's default exec settings Claude Code runs with permissions bypassed,
-  and a restricted `tools.exec` config falls back to the CLI's own permission
-  policy.
+- Selectable backends, including Claude Code, launch with an empty native-tool
+  selection and one MCP tool, `crestodian`. Claude's generated MCP config is
+  applied with `--strict-mcp-config`, so no other MCP servers are loaded.
+- Backends that declare no native tools receive the same dedicated Crestodian
+  MCP server.
+- Always-on or unknown native-tool backends fail closed before inference; they
+  cannot host a Crestodian session.
 
 Only Crestodian sessions get the crestodian MCP server; normal agent runs
-never see this tool. Treat a Crestodian session on a CLI-harness model like a
-normal local agent run on the same host: the ring-zero tool adds an audited,
-approval-gated path for config repair, but it does not prevent the harness's
-native tools from touching files directly. The Codex app-server fallback and
-API-key models enforce the strict single-tool loop; prefer those when you want
-the hard restriction.
+never see this tool. Selectable/no-native CLI backends and API-key models
+therefore enforce the literal single-tool loop. Codex app-server models enforce
+a single OpenClaw authority tool plus the inert native planning utility. In all
+three cases, setup writes remain confined to Crestodian's audited approval
+contract.
 
 Gemini CLI remains available for normal agents, but it cannot enforce the
 tool-free probe required by the inference gate, so it cannot host Crestodian.

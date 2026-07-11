@@ -8,11 +8,25 @@ final class OnboardingConfiguredGatewayProbe {
         fileprivate let generation: UInt64
     }
 
+    struct BoundRoute: Equatable {
+        fileprivate let route: GatewayConnection.Route
+        let identity: String?
+    }
+
     enum Outcome: Equatable {
-        case configured(String)
-        case missing
+        case configured(modelRef: String, route: BoundRoute)
+        case missing(route: BoundRoute)
         case unavailable
         case superseded
+
+        var boundRoute: BoundRoute? {
+            switch self {
+            case let .configured(_, route), let .missing(route):
+                route
+            case .unavailable, .superseded:
+                nil
+            }
+        }
     }
 
     private let gateway: GatewayConnection
@@ -90,19 +104,21 @@ final class OnboardingConfiguredGatewayProbe {
 
     func probe(
         connectionMode: AppState.ConnectionMode,
-        attempt: Attempt) async -> Outcome
+        attempt: Attempt,
+        routeIdentity: String? = nil) async -> Outcome
     {
         guard self.isCurrent(attempt) else { return .superseded }
         self.activeProbeCount += 1
         defer { self.finishProbe() }
         guard connectionMode != .unconfigured else { return .unavailable }
-        guard let route = await self.gateway.captureRoute() else {
+        guard let route = await gateway.captureRoute() else {
             return self.isCurrent(attempt) ? .unavailable : .superseded
         }
         guard self.isCurrent(attempt) else { return .superseded }
+        let boundRoute = BoundRoute(route: route, identity: routeIdentity)
 
         do {
-            let model = try await self.gateway.configuredInferenceModel(
+            let model = try await gateway.configuredInferenceModel(
                 ifCurrentRoute: route,
                 timeoutMs: self.timeoutMs)
             guard await self.gateway.isCurrentRoute(route),
@@ -110,8 +126,8 @@ final class OnboardingConfiguredGatewayProbe {
             else { return .superseded }
             guard let model = model?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !model.isEmpty
-            else { return .missing }
-            return .configured(model)
+            else { return .missing(route: boundRoute) }
+            return .configured(modelRef: model, route: boundRoute)
         } catch is CancellationError {
             return .superseded
         } catch {
@@ -122,13 +138,17 @@ final class OnboardingConfiguredGatewayProbe {
         }
     }
 
+    func isCurrent(_ route: BoundRoute) async -> Bool {
+        await self.gateway.isCurrentRoute(route.route)
+    }
+
     func consumeReconnects(onReconnect: @escaping @MainActor () -> Void) async {
         self.reconnectHandler = onReconnect
         defer {
             self.reconnectHandler = nil
             self.reconnectPending = false
         }
-        let stream = await self.gateway.subscribe(bufferingNewest: 1)
+        let stream = await gateway.subscribe(bufferingNewest: 1)
         for await push in stream {
             guard !Task.isCancelled else { return }
             guard case .snapshot = push else { continue }

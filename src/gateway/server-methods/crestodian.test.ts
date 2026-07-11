@@ -1,7 +1,13 @@
 // crestodian.chat handler tests: session reuse, reset, and action mapping.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { CrestodianChatEngine } from "../../crestodian/chat-engine.js";
+import { createCrestodianVerifiedInferenceTestFixture } from "../../crestodian/crestodian.test-helpers.js";
 import { CrestodianInferenceUnavailableError } from "../../crestodian/inference-error.js";
+import {
+  type CrestodianVerifiedInferenceBinding,
+  type CrestodianVerifiedInferenceDeps,
+} from "../../crestodian/verified-inference.js";
 import {
   getCommandLaneSnapshot,
   resetCommandQueueStateForTest,
@@ -42,27 +48,99 @@ function makeContext(sessions: Map<string, CrestodianChatSession>): GatewayReque
   return { crestodianSessions: sessions } as unknown as GatewayRequestContext;
 }
 
+const verifiedConfig: OpenClawConfig = {
+  agents: { defaults: { model: "openai/gpt-5.5@openai:verified" } },
+  auth: {
+    profiles: {
+      "openai:verified": { provider: "openai", mode: "api_key" },
+    },
+  },
+};
+let verifiedInference: CrestodianVerifiedInferenceBinding | undefined;
+let verifiedInferenceDeps: CrestodianVerifiedInferenceDeps | undefined;
+
+function requireVerifiedInferenceFixture(): CrestodianVerifiedInferenceBinding {
+  if (!verifiedInference) {
+    throw new Error("verified inference fixture was not initialized");
+  }
+  return verifiedInference;
+}
+
+function requireVerifiedInferenceDeps(): CrestodianVerifiedInferenceDeps {
+  if (!verifiedInferenceDeps) {
+    throw new Error("verified inference dependencies were not initialized");
+  }
+  return {
+    ...verifiedInferenceDeps,
+    readConfigFileSnapshot: async () =>
+      ({
+        exists: true,
+        valid: true,
+        path: "/tmp/openclaw.json",
+        hash: "verified-config",
+        config: verifiedConfig,
+        runtimeConfig: verifiedConfig,
+        sourceConfig: verifiedConfig,
+        issues: [],
+      }) as never,
+  };
+}
+
+function makeVerifiedEngine(): CrestodianChatEngine {
+  return new CrestodianChatEngine({
+    verifiedInference: requireVerifiedInferenceFixture(),
+    deps: requireVerifiedInferenceDeps(),
+  });
+}
+
+function stubEngineOverview() {
+  return vi.spyOn(CrestodianChatEngine.prototype, "loadOverview").mockResolvedValue({
+    config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
+    agents: [],
+    defaultAgentId: "main",
+    defaultModel: "openai/gpt-5.5",
+    tools: {
+      codex: { available: false },
+      claude: { available: false },
+      gemini: { available: false },
+      apiKeys: { openai: false, anthropic: false },
+    },
+    gateway: { url: "ws://127.0.0.1:18789", source: "test", reachable: true },
+    references: {
+      docsUrl: "https://docs.openclaw.ai",
+      sourceUrl: "https://github.com/openclaw/openclaw",
+    },
+  } as never);
+}
+
 function seededSession(overrides?: Partial<CrestodianChatSession>): CrestodianChatSession {
   return {
-    engine: new CrestodianChatEngine({}),
+    engine: makeVerifiedEngine(),
     welcome: "welcome text",
     lastUsedAt: 1,
     ...overrides,
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  const fixture = await createCrestodianVerifiedInferenceTestFixture(verifiedConfig);
+  verifiedInference = fixture.binding;
+  verifiedInferenceDeps = fixture.deps;
   setupInferenceMocks.verifySetupInference.mockResolvedValue({
     ok: true,
     modelRef: "openai/gpt-5.5",
     latencyMs: 10,
+    binding: verifiedInference,
   });
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   setupInferenceMocks.activateSetupInference.mockReset();
   setupInferenceMocks.detectSetupInference.mockReset();
   setupInferenceMocks.verifySetupInference.mockReset();
+  verifiedInference = undefined;
+  verifiedInferenceDeps = undefined;
   resetCommandQueueStateForTest();
 });
 
@@ -105,6 +183,7 @@ describe("crestodian.chat", () => {
   });
 
   it("coalesces concurrent initialization for the same session", async () => {
+    stubEngineOverview();
     const started = createDeferred();
     const release = createDeferred();
     setupInferenceMocks.verifySetupInference.mockImplementation(async () => {
@@ -114,6 +193,7 @@ describe("crestodian.chat", () => {
         ok: true,
         modelRef: "openai/gpt-5.5",
         latencyMs: 10,
+        binding: requireVerifiedInferenceFixture(),
       };
     });
     const sessions = new Map<string, CrestodianChatSession>();
@@ -261,7 +341,7 @@ describe("crestodian.chat", () => {
   });
 
   it("routes messages through the session engine", async () => {
-    const engine = new CrestodianChatEngine({});
+    const engine = makeVerifiedEngine();
     const handle = vi
       .spyOn(engine, "handle")
       .mockResolvedValue({ text: "did the thing", action: "none" });
@@ -274,7 +354,8 @@ describe("crestodian.chat", () => {
   });
 
   it("drops a failed session and requires fresh inference on retry", async () => {
-    const engine = new CrestodianChatEngine({});
+    stubEngineOverview();
+    const engine = makeVerifiedEngine();
     vi.spyOn(engine, "handle").mockRejectedValue(
       new CrestodianInferenceUnavailableError("conversation"),
     );
@@ -303,7 +384,7 @@ describe("crestodian.chat", () => {
   });
 
   it("does not relabel unrelated session failures as inference errors", async () => {
-    const engine = new CrestodianChatEngine({});
+    const engine = makeVerifiedEngine();
     vi.spyOn(engine, "handle").mockRejectedValue(new Error("wizard bug"));
     const sessions = new Map<string, CrestodianChatSession>([["s1", seededSession({ engine })]]);
 
@@ -318,13 +399,13 @@ describe("crestodian.chat", () => {
     const secondStarted = createDeferred();
     const releaseFirst = createDeferred();
     const releaseSecond = createDeferred();
-    const firstEngine = new CrestodianChatEngine({});
+    const firstEngine = makeVerifiedEngine();
     vi.spyOn(firstEngine, "handle").mockImplementation(async () => {
       firstStarted.resolve();
       await releaseFirst.promise;
       return { text: "first setup complete", action: "none" };
     });
-    const secondEngine = new CrestodianChatEngine({});
+    const secondEngine = makeVerifiedEngine();
     vi.spyOn(secondEngine, "handle").mockImplementation(async () => {
       secondStarted.resolve();
       await releaseSecond.promise;
@@ -381,46 +462,24 @@ describe("crestodian.chat", () => {
     for (let index = 1; index < 8; index += 1) {
       sessions.set(`existing-${index}`, seededSession({ lastUsedAt: index }));
     }
-    const loadOverview = vi
-      .spyOn(CrestodianChatEngine.prototype, "loadOverview")
-      .mockResolvedValue({
-        config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
-        agents: [],
-        defaultAgentId: "main",
-        defaultModel: "openai/gpt-5.5",
-        tools: {
-          codex: { available: false },
-          claude: { available: false },
-          gemini: { available: false },
-          apiKeys: { openai: false, anthropic: false },
-        },
-        gateway: { url: "ws://127.0.0.1:18789", source: "test", reachable: true },
-        references: {
-          docsUrl: "https://docs.openclaw.ai",
-          sourceUrl: "https://github.com/openclaw/openclaw",
-        },
-      } as never);
+    stubEngineOverview();
 
-    try {
-      const context = makeContext(sessions);
-      const first = callChat(context, { sessionId: "new-1" });
-      const second = callChat(context, { sessionId: "new-2" });
-      await evictionStarted.promise;
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      releaseEviction.resolve();
-      await Promise.all([first, second]);
+    const context = makeContext(sessions);
+    const first = callChat(context, { sessionId: "new-1" });
+    const second = callChat(context, { sessionId: "new-2" });
+    await evictionStarted.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseEviction.resolve();
+    await Promise.all([first, second]);
 
-      expect(disposeOldest).toHaveBeenCalledOnce();
-      expect(sessions.size).toBe(8);
-      expect(sessions.has("new-1")).toBe(true);
-      expect(sessions.has("new-2")).toBe(true);
-    } finally {
-      loadOverview.mockRestore();
-    }
+    expect(disposeOldest).toHaveBeenCalledOnce();
+    expect(sessions.size).toBe(8);
+    expect(sessions.has("new-1")).toBe(true);
+    expect(sessions.has("new-2")).toBe(true);
   });
 
   it("forwards sensitive-input metadata to clients", async () => {
-    const engine = new CrestodianChatEngine({});
+    const engine = makeVerifiedEngine();
     vi.spyOn(engine, "handle").mockResolvedValue({
       text: "Enter the bot token",
       action: "none",
@@ -434,7 +493,7 @@ describe("crestodian.chat", () => {
   });
 
   it("maps the TUI handoff to an open-agent action for clients", async () => {
-    const engine = new CrestodianChatEngine({});
+    const engine = makeVerifiedEngine();
     vi.spyOn(engine, "handle").mockResolvedValue({
       text: "",
       action: "open-tui",
@@ -452,7 +511,8 @@ describe("crestodian.chat", () => {
   });
 
   it("resets a session on request", async () => {
-    const engine = new CrestodianChatEngine({});
+    stubEngineOverview();
+    const engine = makeVerifiedEngine();
     const handle = vi.spyOn(engine, "handle");
     const dispose = vi.spyOn(engine, "dispose").mockResolvedValue();
     const sessions = new Map<string, CrestodianChatSession>([["s1", seededSession({ engine })]]);

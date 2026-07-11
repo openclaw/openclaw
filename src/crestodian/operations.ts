@@ -90,6 +90,10 @@ export type CrestodianOperationResult = {
 
 /** Injectable command dependencies used by tests and alternate runners. */
 export type CrestodianCommandDeps = {
+  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
+  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store.js").ensureAuthProfileStore;
+  resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
+  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
   formatOverview?: CrestodianOverviewFormatter;
   loadOverview?: CrestodianOverviewLoader;
   runAgentsAdd?: (
@@ -674,6 +678,12 @@ type ExecuteOptions = {
   approved?: boolean;
   deps?: CrestodianCommandDeps;
   auditDetails?: Record<string, unknown>;
+  /**
+   * Authority check used by the guarded commit seam for host-approved writes.
+   * A multi-step operation may invoke it more than once; every invocation is
+   * immediately followed by the persistent effect it authorizes.
+   */
+  beforePersistentApply?: () => Promise<void>;
 };
 
 /**
@@ -685,6 +695,8 @@ type ExecuteOptions = {
 type PersistentApplyContext = {
   runtime: RuntimeEnv;
   deps?: CrestodianCommandDeps;
+  /** Re-check authority, then enter one persistent side-effect boundary. */
+  commit<T>(effect: () => Promise<T> | T): Promise<T>;
 };
 
 type PersistentApplyOutcome = {
@@ -710,7 +722,11 @@ async function applyPersistentOperation(params: {
   runtime.log(`[crestodian] running: ${auditOperation}`);
   const { readConfigFileSnapshot } = await loadConfigModule();
   const before = await readConfigFileSnapshot();
-  const outcome = await params.run({ runtime, deps: opts.deps });
+  const commit: PersistentApplyContext["commit"] = async (effect) => {
+    await opts.beforePersistentApply?.();
+    return await effect();
+  };
+  const outcome = await params.run({ runtime, deps: opts.deps, commit });
   const after = await readConfigFileSnapshot();
   await appendCrestodianAuditEntry({
     operation: auditOperation,
@@ -739,16 +755,20 @@ async function runConfigSetOperation(params: {
       });
     });
   if (operation.kind === "config-set") {
-    await runConfigSet({ path: operation.path, value: operation.value, cliOptions: {} });
+    await ctx.commit(async () => {
+      await runConfigSet({ path: operation.path, value: operation.value, cliOptions: {} });
+    });
     return;
   }
-  await runConfigSet({
-    path: operation.path,
-    cliOptions: {
-      refProvider: operation.provider ?? "default",
-      refSource: operation.source,
-      refId: operation.id,
-    },
+  await ctx.commit(async () => {
+    await runConfigSet({
+      path: operation.path,
+      cliOptions: {
+        refProvider: operation.provider ?? "default",
+        refSource: operation.source,
+        refId: operation.id,
+      },
+    });
   });
 }
 
@@ -898,12 +918,20 @@ async function executeSetup(
       const applySetup =
         ctx.deps?.applySetup ?? (await import("./setup-apply.js")).applyCrestodianSetup;
       const surface = ctx.deps?.setupSurface ?? "cli";
-      const applied = await applySetup({
-        workspace,
-        expectedInferenceRoute: verified.route,
-        surface,
-        runtime: ctx.runtime,
-      });
+      // The outer boundary covers injected implementations. The production
+      // setup helper also uses this same seam for each of its internal writes.
+      const applied = await ctx.commit(
+        async () =>
+          await applySetup(
+            {
+              workspace,
+              expectedInferenceRoute: verified.route,
+              surface,
+              runtime: ctx.runtime,
+            },
+            { commit: ctx.commit },
+          ),
+      );
       const after = await readConfigFileSnapshotLazy();
       ctx.runtime.log(`Updated ${after.path || applied.configPath || "config"}`);
       for (const line of applied.lines) {
@@ -951,10 +979,17 @@ async function executeSetDefaultModel(
       const initialVerification = await verifyInferenceConfig({
         config: stagedConfig,
         runtime: ctx.runtime,
+        requireExecutionOwner: true,
       });
       if (!initialVerification.ok) {
         throw new Error(
           `The requested model failed a live inference test, so the current default model was not changed. ${initialVerification.error} Fix provider authentication or model access, then retry.`,
+        );
+      }
+      const verifiedModelRef = verifiedRoute.route?.modelLabel;
+      if (!verifiedModelRef || initialVerification.modelRef !== verifiedModelRef) {
+        throw new Error(
+          "The live inference test did not verify the exact model route that would be saved, so the current default model was not changed. Review model aliases and runtime routing, then retry.",
         );
       }
       let persistedVerification = initialVerification;
@@ -963,6 +998,36 @@ async function executeSetDefaultModel(
       });
       const result = await mutateConfigFile({
         base: "source",
+        writeOptions: {
+          preCommitRuntimePreflight: async (sourceConfig) => {
+            const commitRoute = await projectDefaultInferenceRoute(sourceConfig);
+            if (!sameDefaultInferenceRoute(commitRoute, verifiedRoute)) {
+              throw new Error(
+                "The verified inference route changed while preparing the config write, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
+              );
+            }
+            await opts.beforePersistentApply?.();
+            const latestVerification = await verifyInferenceConfig({
+              config: sourceConfig,
+              runtime: ctx.runtime,
+              requireExecutionOwner: true,
+            });
+            if (!latestVerification.ok) {
+              throw new Error(
+                `The requested model no longer passes live inference at the config commit boundary, so it was not saved. ${latestVerification.error} Review concurrent configuration changes and retry.`,
+              );
+            }
+            if (latestVerification.modelRef !== commitRoute.route?.modelLabel) {
+              throw new Error(
+                "The final live inference test did not verify the exact model route at the config commit boundary, so the requested model was not saved. Review model aliases and runtime routing, then retry.",
+              );
+            }
+            // The live probe can outlive the original Crestodian authority.
+            // Re-check it last, immediately before the writer crosses to disk.
+            await opts.beforePersistentApply?.();
+            persistedVerification = latestVerification;
+          },
+        },
         mutate: async (cfg) => {
           // Verification may take time. Preserve unrelated edits, but never
           // combine the passing result with a concurrently changed route.
@@ -979,19 +1044,6 @@ async function executeSetDefaultModel(
               "The verified inference route no longer matches the model selection that would be saved. Review the current model/auth/runtime settings and retry.",
             );
           }
-          // Re-test the exact latest config under the mutation lock. This
-          // covers route inputs (env, secrets, plugins) that cannot be safely
-          // reduced to provider/model identity without false positives.
-          const latestVerification = await verifyInferenceConfig({
-            config: selected,
-            runtime: ctx.runtime,
-          });
-          if (!latestVerification.ok) {
-            throw new Error(
-              `The requested model no longer passes live inference with the latest config, so it was not saved. ${latestVerification.error} Review concurrent configuration changes and retry.`,
-            );
-          }
-          persistedVerification = latestVerification;
           cfg.agents = selected.agents;
         },
       });
@@ -1034,7 +1086,9 @@ async function executePluginInstall(
           const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
           await runPluginInstallCommand({ raw: spec, opts: {}, runtime: pluginRuntime });
         });
-      await runPluginInstall(operation.spec, createNoExitRuntime(ctx.runtime));
+      await ctx.commit(async () => {
+        await runPluginInstall(operation.spec, createNoExitRuntime(ctx.runtime));
+      });
       return { summary: `Installed plugin ${operation.spec}`, details: { spec: operation.spec } };
     },
   });
@@ -1345,15 +1399,17 @@ export async function executeCrestodianOperation(
           const runAgentsAdd =
             ctx.deps?.runAgentsAdd ??
             (await import("../commands/agents.commands.add.js")).agentsAddCommand;
-          await runAgentsAdd(
-            {
-              name: operation.agentId,
-              workspace,
-              nonInteractive: true,
-            },
-            ctx.runtime,
-            { hasFlags: true },
-          );
+          await ctx.commit(async () => {
+            await runAgentsAdd(
+              {
+                name: operation.agentId,
+                workspace,
+                nonInteractive: true,
+              },
+              ctx.runtime,
+              { hasFlags: true },
+            );
+          });
           return {
             summary: `Created agent ${operation.agentId}`,
             details: {
@@ -1398,7 +1454,7 @@ export async function executeCrestodianOperation(
         opts,
         run: async (ctx) => {
           const runGatewayStart = ctx.deps?.runGatewayStart ?? (() => runGatewayLifecycle("start"));
-          await runGatewayStart();
+          await ctx.commit(runGatewayStart);
           return { summary: "Started Gateway" };
         },
       });
@@ -1410,7 +1466,7 @@ export async function executeCrestodianOperation(
         opts,
         run: async (ctx) => {
           const runGatewayStop = ctx.deps?.runGatewayStop ?? (() => runGatewayLifecycle("stop"));
-          await runGatewayStop();
+          await ctx.commit(runGatewayStop);
           return { summary: "Stopped Gateway" };
         },
       });
@@ -1423,7 +1479,7 @@ export async function executeCrestodianOperation(
         run: async (ctx) => {
           const runGatewayRestart =
             ctx.deps?.runGatewayRestart ?? (() => runGatewayLifecycle("restart"));
-          await runGatewayRestart();
+          await ctx.commit(runGatewayRestart);
           return { summary: "Restarted Gateway" };
         },
       });

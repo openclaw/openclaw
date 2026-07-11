@@ -47,6 +47,7 @@ describe("workspace template package paths", () => {
 
     expect(packageJson.files).toContain("src/agents/templates/");
   });
+
 });
 
 describe("parseReleaseVersion", () => {

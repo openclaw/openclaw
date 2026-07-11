@@ -6,6 +6,108 @@ import Testing
 @MainActor
 struct AppStateRemoteConfigTests {
     @Test
+    func `invalid remote drafts cannot be persisted for a configured gateway probe`() {
+        let base = AppState.GatewayConfigSyncDraft(
+            connectionMode: .remote,
+            remoteTransport: .direct,
+            remoteTarget: "",
+            remoteIdentity: "",
+            remoteUrl: "not a gateway URL",
+            remoteToken: "",
+            remoteTokenDirty: false)
+
+        #expect(!AppState._testGatewayDraftCanPersist(base))
+        #expect(AppState._testGatewayDraftCanPersist(.init(
+            connectionMode: .remote,
+            remoteTransport: .direct,
+            remoteTarget: "",
+            remoteIdentity: "",
+            remoteUrl: "wss://gateway.example.test",
+            remoteToken: "",
+            remoteTokenDirty: false)))
+        #expect(!AppState._testGatewayDraftCanPersist(.init(
+            connectionMode: .remote,
+            remoteTransport: .ssh,
+            remoteTarget: "",
+            remoteIdentity: "",
+            remoteUrl: "ws://127.0.0.1:18789",
+            remoteToken: "",
+            remoteTokenDirty: false)))
+    }
+
+    @Test
+    func `config watcher endpoint replacement clears and ignores stale discovery identity`() {
+        let previousGatewayID = GatewayDiscoveryPreferences.preferredStableID()
+        let previousPending = UserDefaults.standard.object(forKey: onboardingCrestodianPendingKey)
+        defer {
+            GatewayDiscoveryPreferences.setPreferredStableID(previousGatewayID)
+            if let previousPending {
+                UserDefaults.standard.set(previousPending, forKey: onboardingCrestodianPendingKey)
+            } else {
+                OnboardingCrestodianResumeStore.clear()
+            }
+        }
+        let state = AppState(preview: true)
+        state.connectionMode = .remote
+        state.remoteTransport = .direct
+        state.remoteUrl = "wss://gateway-a.example.test"
+        GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
+        OnboardingCrestodianResumeStore.markPending(routeIdentity: "remote:id:gateway-a")
+        let view = OnboardingView(state: state)
+        view.preferredGatewayID = "gateway-a"
+
+        state._testApplyConfigOverrides([
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "direct",
+                    "url": "wss://gateway-b.example.test",
+                ],
+            ],
+        ])
+
+        #expect(state.remoteUrl == "wss://gateway-b.example.test")
+        #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
+        #expect(view.effectivePreferredGatewayID == nil)
+        let routeIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(
+            state: state,
+            preferredGatewayID: view.effectivePreferredGatewayID)
+        #expect(routeIdentity?.hasPrefix("remote:direct:") == true)
+        #expect(routeIdentity != "remote:id:gateway-a")
+        #expect(!OnboardingCrestodianResumeStore.isPending(for: routeIdentity))
+        #expect(OnboardingCrestodianResumeStore.isPending(for: "remote:id:gateway-a"))
+    }
+
+    @Test
+    func `config watcher explicit ssh target replacement clears stale discovery identity`() {
+        let previousGatewayID = GatewayDiscoveryPreferences.preferredStableID()
+        defer { GatewayDiscoveryPreferences.setPreferredStableID(previousGatewayID) }
+        let state = AppState(preview: true)
+        state.connectionMode = .remote
+        state.remoteTransport = .ssh
+        state.remoteUrl = "ws://127.0.0.1:18789"
+        state.remoteTarget = "alice@gateway-a.example.test"
+        GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
+        let view = OnboardingView(state: state)
+        view.preferredGatewayID = "gateway-a"
+
+        state._testApplyConfigOverrides([
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "ssh",
+                    "url": "ws://127.0.0.1:18789",
+                    "sshTarget": "bob@gateway-b.example.test",
+                ],
+            ],
+        ])
+
+        #expect(state.remoteTarget == "bob@gateway-b.example.test")
+        #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
+        #expect(view.effectivePreferredGatewayID == nil)
+    }
+
+    @Test
     func `updated remote gateway config sets trimmed token`() {
         let remote = AppState._testUpdatedRemoteGatewayConfig(
             current: [:],

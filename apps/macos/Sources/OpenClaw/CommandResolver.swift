@@ -53,8 +53,8 @@ enum CommandResolver {
     }
 
     static func projectRoot() -> URL {
-        if let stored = UserDefaults.standard.string(forKey: self.projectRootDefaultsKey),
-           let url = self.expandPath(stored),
+        if let stored = UserDefaults.standard.string(forKey: projectRootDefaultsKey),
+           let url = expandPath(stored),
            FileManager().fileExists(atPath: url.path)
         {
             return url
@@ -286,7 +286,7 @@ enum CommandResolver {
         projectRoot: URL? = nil) -> [String]
     {
         let settings = self.connectionSettings(defaults: defaults, configRoot: configRoot)
-        if settings.mode == .remote, let ssh = self.sshNodeCommand(
+        if settings.mode == .remote, let ssh = sshNodeCommand(
             subcommand: subcommand,
             extraArgs: extraArgs,
             settings: settings)
@@ -295,17 +295,17 @@ enum CommandResolver {
         }
 
         let root = projectRoot ?? self.projectRoot()
-        if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
+        if let openclawPath = projectOpenClawExecutable(projectRoot: root) {
             return [openclawPath, subcommand] + extraArgs
         }
-        if let openclawPath = self.openclawExecutable(searchPaths: searchPaths) {
+        if let openclawPath = openclawExecutable(searchPaths: searchPaths) {
             return [openclawPath, subcommand] + extraArgs
         }
 
         let runtimeResult = self.runtimeResolution(searchPaths: searchPaths)
         switch runtimeResult {
         case let .success(runtime):
-            if let entry = self.gatewayEntrypoint(in: root) {
+            if let entry = gatewayEntrypoint(in: root) {
                 return self.makeRuntimeCommand(
                     runtime: runtime,
                     entrypoint: entry,
@@ -316,7 +316,7 @@ enum CommandResolver {
             break
         }
 
-        if let pnpm = self.findExecutable(named: "pnpm", searchPaths: searchPaths) {
+        if let pnpm = findExecutable(named: "pnpm", searchPaths: searchPaths) {
             // Use --silent to avoid pnpm lifecycle banners that would corrupt JSON outputs.
             return [pnpm, "--silent", "openclaw", subcommand] + extraArgs
         }
@@ -362,7 +362,7 @@ enum CommandResolver {
 
     private static func sshNodeCommand(subcommand: String, extraArgs: [String], settings: RemoteSettings) -> [String]? {
         guard !settings.target.isEmpty else { return nil }
-        guard let parsed = self.parseSSHTarget(settings.target) else { return nil }
+        guard let parsed = parseSSHTarget(settings.target) else { return nil }
 
         // Run the real openclaw CLI on the remote host.
         let exportedPath = [
@@ -463,7 +463,7 @@ enum CommandResolver {
         return ["/usr/bin/ssh"] + args
     }
 
-    enum SSHHostKeyPolicy: String {
+    enum SSHHostKeyPolicy: String, Sendable {
         case strict
         case openssh
 
@@ -544,7 +544,7 @@ enum CommandResolver {
         return trimmed
     }
 
-    struct SSHParsedTarget {
+    struct SSHParsedTarget: Equatable, Sendable {
         let user: String?
         let host: String
         let port: Int

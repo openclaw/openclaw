@@ -54,6 +54,13 @@ final class AppState {
         var remoteTokenDirty: Bool
     }
 
+    private struct GatewaySelectionSnapshot: Equatable {
+        let connectionMode: ConnectionMode
+        let remoteTransport: RemoteTransport
+        let remoteUrl: String
+        let remoteTarget: String
+    }
+
     var isPaused: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.isPaused, forKey: pauseDefaultsKey) } }
     }
@@ -596,7 +603,9 @@ final class AppState {
     }
 
     private func applyConfigOverrides(_ root: [String: Any]) {
+        let previousSelection = self.gatewaySelectionSnapshot()
         let gateway = root["gateway"] as? [String: Any]
+        let remote = gateway?["remote"] as? [String: Any]
         let modeRaw = (gateway?["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let remoteUrl = GatewayRemoteConfig.resolveUrlString(root: root)
         let remoteToken = GatewayRemoteConfig.resolveTokenValue(root: root)
@@ -635,13 +644,34 @@ final class AppState {
         self.applyRemoteTokenState(remoteToken)
 
         let targetMode = desiredMode ?? self.connectionMode
-        if targetMode == .remote,
-           remoteTransport != .direct,
-           let host = AppState.remoteHost(from: remoteUrl),
-           !LoopbackHost.isLoopbackHost(host)
-        {
-            self.updateRemoteTarget(host: host)
+        if targetMode == .remote, remoteTransport != .direct {
+            let configuredTarget = Self.sanitizeSSHTarget(remote?["sshTarget"] as? String ?? "")
+            if !configuredTarget.isEmpty, configuredTarget != Self.sanitizeSSHTarget(self.remoteTarget) {
+                self.remoteTarget = configuredTarget
+            } else if configuredTarget.isEmpty,
+                      let host = AppState.remoteHost(from: remoteUrl),
+                      !LoopbackHost.isLoopbackHost(host)
+            {
+                self.updateRemoteTarget(host: host)
+            }
         }
+        if self.gatewaySelectionSnapshot() != previousSelection {
+            // Discovery ids describe one concrete endpoint. An external config
+            // edit has no discovery selection event to update that ownership,
+            // so retaining the old id would apply its activation lease to the
+            // replacement Gateway.
+            GatewayDiscoveryPreferences.setPreferredStableID(nil)
+        }
+    }
+
+    private func gatewaySelectionSnapshot() -> GatewaySelectionSnapshot {
+        let remoteUrl = GatewayRemoteConfig.normalizeGatewayUrlString(self.remoteUrl) ??
+            self.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        return GatewaySelectionSnapshot(
+            connectionMode: self.connectionMode,
+            remoteTransport: self.remoteTransport,
+            remoteUrl: remoteUrl,
+            remoteTarget: Self.sanitizeSSHTarget(self.remoteTarget))
     }
 
     private func updateRemoteTarget(host: String) {
@@ -725,28 +755,46 @@ final class AppState {
         }
     }
 
+    private static func gatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
+        guard draft.connectionMode == .remote else { return true }
+        switch draft.remoteTransport {
+        case .direct:
+            return GatewayRemoteConfig.normalizeGatewayUrl(draft.remoteUrl) != nil
+        case .ssh:
+            let target = Self.sanitizeSSHTarget(draft.remoteTarget)
+            return !target.isEmpty &&
+                CommandResolver.sshTargetValidationMessage(target) == nil &&
+                CommandResolver.parseSSHTarget(target) != nil
+        }
+    }
+
     @MainActor
-    func syncGatewayConfigNow() {
-        guard !self.isPreview, !self.isInitializing else { return }
+    @discardableResult
+    func syncGatewayConfigNow() -> Bool {
+        guard !self.isPreview, !self.isInitializing else { return true }
+
+        let draft = GatewayConfigSyncDraft(
+            connectionMode: connectionMode,
+            remoteTransport: remoteTransport,
+            remoteTarget: remoteTarget,
+            remoteIdentity: remoteIdentity,
+            remoteUrl: remoteUrl,
+            remoteToken: remoteToken,
+            remoteTokenDirty: remoteTokenDirty)
+        guard Self.gatewayDraftCanPersist(draft) else { return false }
 
         // Keep app-only connection settings local to avoid overwriting remote gateway config.
         let synced = Self.syncedGatewayRoot(
             currentRoot: OpenClawConfigFile.loadDict(),
-            draft: .init(
-                connectionMode: self.connectionMode,
-                remoteTransport: self.remoteTransport,
-                remoteTarget: self.remoteTarget,
-                remoteIdentity: self.remoteIdentity,
-                remoteUrl: self.remoteUrl,
-                remoteToken: self.remoteToken,
-                remoteTokenDirty: self.remoteTokenDirty))
-        guard synced.changed else { return }
+            draft: draft)
+        guard synced.changed else { return true }
         guard OpenClawConfigFile.saveDict(synced.root) else {
             Self.logger.warning("gateway config sync rejected to protect persisted gateway auth/mode")
-            return
+            return false
         }
         self.lastConfigFingerprint = Self.configFingerprint(synced.root)
         NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+        return true
     }
 
     func triggerVoiceEars(ttl: TimeInterval? = 5) {
@@ -834,7 +882,7 @@ final class AppState {
 
     private func scheduleVoiceWakeGlobalSyncIfNeeded() {
         guard !self.suppressVoiceWakeGlobalSync else { return }
-        let sanitized = sanitizeVoiceWakeTriggers(self.swabbleTriggerWords)
+        let sanitized = sanitizeVoiceWakeTriggers(swabbleTriggerWords)
         self.voiceWakeGlobalSyncTask?.cancel()
         self.voiceWakeGlobalSyncTask = Task { [sanitized] in
             try? await Task.sleep(nanoseconds: 650_000_000)
@@ -917,6 +965,14 @@ extension AppState {
         self.syncedGatewayRoot(
             currentRoot: currentRoot,
             draft: draft).root
+    }
+
+    static func _testGatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
+        self.gatewayDraftCanPersist(draft)
+    }
+
+    func _testApplyConfigOverrides(_ root: [String: Any]) {
+        self.applyConfigOverrides(root)
     }
 }
 #endif

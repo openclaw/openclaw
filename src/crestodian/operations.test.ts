@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";
+import { CrestodianInferenceUnavailableError } from "./inference-error.js";
 import {
   describeCrestodianPersistentOperation,
   executeCrestodianOperation,
@@ -108,6 +109,9 @@ const mockConfig = vi.hoisted(() => {
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
     mutateConfigFile: vi.fn(
       async (params: {
+        writeOptions?: {
+          preCommitRuntimePreflight?: (sourceConfig: TestConfig) => Promise<unknown>;
+        };
         mutate: (
           draft: TestConfig,
           context: { snapshot: ReturnType<typeof snapshot> },
@@ -116,6 +120,7 @@ const mockConfig = vi.hoisted(() => {
         const before = snapshot();
         const draft = cloneConfig();
         await params.mutate(draft, { snapshot: before });
+        await params.writeOptions?.preCommitRuntimePreflight?.(structuredClone(draft));
         state.exists = true;
         state.config = draft;
         state.hash = "mock-hash-1";
@@ -908,12 +913,15 @@ describe("parseCrestodianOperation", () => {
     expect(result.applied).toBe(true);
 
     expect(lines.join("\n")).toContain("[crestodian] done: crestodian.setup");
-    expect(applySetup).toHaveBeenCalledWith({
-      workspace: "/tmp/work",
-      expectedInferenceRoute: expect.any(Object),
-      surface: "cli",
-      runtime,
-    });
+    expect(applySetup).toHaveBeenCalledWith(
+      {
+        workspace: "/tmp/work",
+        expectedInferenceRoute: expect.any(Object),
+        surface: "cli",
+        runtime,
+      },
+      { commit: expect.any(Function) },
+    );
     expect(lines.join("\n")).toContain("Default model: openai/gpt-5.5 (verified and kept)");
     const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
     const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
@@ -1045,6 +1053,7 @@ describe("parseCrestodianOperation", () => {
     expect(mockConfig.currentConfig()).toMatchObject({ gateway: { port: 19000 } });
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ expectedInferenceRoute: expect.any(Object) }),
+      { commit: expect.any(Function) },
     );
   });
 
@@ -1099,12 +1108,15 @@ describe("parseCrestodianOperation", () => {
     );
 
     expect(result).toEqual({ applied: true });
-    expect(applySetup).toHaveBeenCalledWith({
-      workspace: "/tmp/work",
-      expectedInferenceRoute: expect.any(Object),
-      surface: "cli",
-      runtime,
-    });
+    expect(applySetup).toHaveBeenCalledWith(
+      {
+        workspace: "/tmp/work",
+        expectedInferenceRoute: expect.any(Object),
+        surface: "cli",
+        runtime,
+      },
+      { commit: expect.any(Function) },
+    );
   });
 
   it("live-verifies a staged default model before writing and preserves concurrent edits", async () => {
@@ -1186,7 +1198,20 @@ describe("parseCrestodianOperation", () => {
 
     expect(result).toEqual({ applied: true });
     expect(verifyInferenceConfig).toHaveBeenCalledTimes(2);
+    expect(verifyInferenceConfig).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ requireExecutionOwner: true }),
+    );
+    expect(verifyInferenceConfig).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ requireExecutionOwner: true }),
+    );
     expect(mockConfig.mutateConfigFile).toHaveBeenCalledOnce();
+    expect(mockConfig.mutateConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        writeOptions: { preCommitRuntimePreflight: expect.any(Function) },
+      }),
+    );
     const persisted = mockConfig.currentConfig();
     expect(
       requireRecord(requireRecord(persisted.agents, "agents").defaults, "defaults").model,
@@ -1426,9 +1451,147 @@ describe("parseCrestodianOperation", () => {
         approved: true,
         deps: { verifyInferenceConfig },
       }),
-    ).rejects.toThrow("no longer passes live inference with the latest config");
+    ).rejects.toThrow("no longer passes live inference at the config commit boundary");
 
     expect(verifyInferenceConfig).toHaveBeenCalledTimes(2);
+    expect(mockConfig.currentConfig()).toEqual(originalConfig);
+    expect(lines.join("\n")).not.toContain("[crestodian] done: config.setDefaultModel");
+    await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();
+  });
+
+  it("rejects a live result from a different model before opening the write boundary", async () => {
+    const tempDir = opTempDirs.make("crestodian-mismatched-model-result-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const originalConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+    };
+    mockConfig.setConfig(originalConfig);
+    mockConfig.mutateConfigFile.mockClear();
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const verifyInferenceConfig = vi.fn(async () => ({
+      ok: true as const,
+      modelRef: "openai/gpt-5.4",
+      latencyMs: 5,
+    }));
+
+    await expect(
+      executeCrestodianOperation({ kind: "set-default-model", model: "openai/gpt-5.5" }, runtime, {
+        approved: true,
+        deps: { verifyInferenceConfig },
+      }),
+    ).rejects.toThrow("did not verify the exact model route");
+
+    expect(verifyInferenceConfig).toHaveBeenCalledOnce();
+    expect(mockConfig.mutateConfigFile).not.toHaveBeenCalled();
+    expect(mockConfig.currentConfig()).toEqual(originalConfig);
+    expect(lines.join("\n")).not.toContain("[crestodian] done: config.setDefaultModel");
+    await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();
+  });
+
+  it("rejects a different model result from the final commit-boundary probe", async () => {
+    const tempDir = opTempDirs.make("crestodian-final-mismatched-model-result-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const originalConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+    };
+    mockConfig.setConfig(originalConfig);
+    mockConfig.mutateConfigFile.mockClear();
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const verifyInferenceConfig = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, modelRef: "openai/gpt-5.5", latencyMs: 5 })
+      .mockResolvedValueOnce({ ok: true, modelRef: "openai/gpt-5.4", latencyMs: 5 });
+
+    await expect(
+      executeCrestodianOperation({ kind: "set-default-model", model: "openai/gpt-5.5" }, runtime, {
+        approved: true,
+        deps: { verifyInferenceConfig },
+      }),
+    ).rejects.toThrow("did not verify the exact model route at the config commit boundary");
+
+    expect(verifyInferenceConfig).toHaveBeenCalledTimes(2);
+    expect(mockConfig.currentConfig()).toEqual(originalConfig);
+    expect(lines.join("\n")).not.toContain("[crestodian] done: config.setDefaultModel");
+    await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();
+  });
+
+  it("rechecks the existing inference binding inside the locked model transform", async () => {
+    const tempDir = opTempDirs.make("crestodian-model-binding-rotated-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const originalConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+    };
+    mockConfig.setConfig(originalConfig);
+    mockConfig.mutateConfigFile.mockClear();
+    const { runtime, lines } = createCrestodianTestRuntime();
+    let bindingOwner = "verified";
+    const verifyInferenceConfig = vi.fn(async () => {
+      bindingOwner = "rotated";
+      return {
+        ok: true as const,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 5,
+      };
+    });
+    const beforePersistentApply = vi.fn(async () => {
+      if (bindingOwner !== "verified") {
+        throw new CrestodianInferenceUnavailableError("conversation");
+      }
+    });
+
+    await expect(
+      executeCrestodianOperation({ kind: "set-default-model", model: "openai/gpt-5.5" }, runtime, {
+        approved: true,
+        deps: { verifyInferenceConfig },
+        beforePersistentApply,
+      }),
+    ).rejects.toBeInstanceOf(CrestodianInferenceUnavailableError);
+
+    expect(verifyInferenceConfig).toHaveBeenCalledOnce();
+    expect(beforePersistentApply).toHaveBeenCalledOnce();
+    expect(mockConfig.currentConfig()).toEqual(originalConfig);
+    expect(lines.join("\n")).not.toContain("[crestodian] done: config.setDefaultModel");
+    await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();
+  });
+
+  it("rechecks the existing inference binding after the candidate's final live probe", async () => {
+    const tempDir = opTempDirs.make("crestodian-model-binding-final-probe-rotated-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const originalConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+    };
+    mockConfig.setConfig(originalConfig);
+    mockConfig.mutateConfigFile.mockClear();
+    const { runtime, lines } = createCrestodianTestRuntime();
+    let bindingOwner = "verified";
+    let verificationCalls = 0;
+    const verifyInferenceConfig = vi.fn(async () => {
+      verificationCalls += 1;
+      if (verificationCalls === 2) {
+        bindingOwner = "rotated";
+      }
+      return {
+        ok: true as const,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 5,
+      };
+    });
+    const beforePersistentApply = vi.fn(async () => {
+      if (bindingOwner !== "verified") {
+        throw new CrestodianInferenceUnavailableError("conversation");
+      }
+    });
+
+    await expect(
+      executeCrestodianOperation({ kind: "set-default-model", model: "openai/gpt-5.5" }, runtime, {
+        approved: true,
+        deps: { verifyInferenceConfig },
+        beforePersistentApply,
+      }),
+    ).rejects.toBeInstanceOf(CrestodianInferenceUnavailableError);
+
+    expect(verifyInferenceConfig).toHaveBeenCalledTimes(2);
+    expect(beforePersistentApply).toHaveBeenCalledTimes(2);
     expect(mockConfig.currentConfig()).toEqual(originalConfig);
     expect(lines.join("\n")).not.toContain("[crestodian] done: config.setDefaultModel");
     await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();

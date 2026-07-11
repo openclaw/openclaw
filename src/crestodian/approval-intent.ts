@@ -1,11 +1,13 @@
 // Classifies whether a user's chat message approves a pending Crestodian proposal.
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { extractAssistantText } from "../agents/embedded-agent-utils.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import {
+  resolveCrestodianVerifiedInferenceRoute,
+  type CrestodianVerifiedInferenceBinding,
+} from "./verified-inference.js";
 
 /**
  * Approval detection for pending mutations. The host — not the conversation
@@ -23,6 +25,8 @@ export type CrestodianApprovalClassifier = (params: {
   message: string;
   /** Human-readable proposal description when the host knows it. */
   proposal?: string;
+  /** Exact execution owner that completed the live Crestodian inference gate. */
+  verifiedInference: CrestodianVerifiedInferenceBinding;
 }) => Promise<CrestodianApprovalIntent>;
 
 const APPROVAL_INTENT_TIMEOUT_MS = 10_000;
@@ -66,7 +70,7 @@ const APPROVAL_INTENT_SYSTEM_PROMPT = [
 ].join("\n");
 
 export type CrestodianApprovalIntentDeps = {
-  readConfigFileSnapshot?: typeof readConfigFileSnapshot;
+  resolveVerifiedInferenceRoute?: typeof resolveCrestodianVerifiedInferenceRoute;
   prepareSimpleCompletionModelForAgent?: typeof prepareSimpleCompletionModelForAgent;
   completeWithPreparedSimpleCompletionModel?: typeof completeWithPreparedSimpleCompletionModel;
 };
@@ -82,6 +86,7 @@ export async function classifyCrestodianApprovalIntent(
   params: {
     message: string;
     proposal?: string;
+    verifiedInference: CrestodianVerifiedInferenceBinding;
   },
   deps: CrestodianApprovalIntentDeps = {},
 ): Promise<CrestodianApprovalIntent> {
@@ -90,19 +95,41 @@ export async function classifyCrestodianApprovalIntent(
     return textIntent;
   }
   try {
-    const snapshot = await (deps.readConfigFileSnapshot ?? readConfigFileSnapshot)();
-    if (!snapshot.exists || !snapshot.valid) {
+    const resolveVerifiedRoute =
+      deps.resolveVerifiedInferenceRoute ?? resolveCrestodianVerifiedInferenceRoute;
+    const route = await resolveVerifiedRoute(params.verifiedInference);
+    // A second direct completion would bypass CLI and plugin-harness execution
+    // ownership. Those routes require an exact closed-list approval instead.
+    if (!route || route.runner !== "embedded" || route.agentHarnessRuntimeOverride !== "openclaw") {
       return "other";
     }
-    const cfg = snapshot.runtimeConfig ?? snapshot.config;
+    const modelRef = route.authProfileId
+      ? `${route.modelLabel}@${route.authProfileId}`
+      : route.modelLabel;
     const prepared = await (
       deps.prepareSimpleCompletionModelForAgent ?? prepareSimpleCompletionModelForAgent
     )({
-      cfg,
-      agentId: resolveDefaultAgentId(cfg),
+      cfg: route.runConfig,
+      agentId: route.agentId,
+      agentDir: route.agentDir,
+      modelRef,
+      ...(route.authProfileId ? { preferredProfile: route.authProfileId } : {}),
       allowMissingApiKeyModes: ["aws-sdk"],
+      bindAuthOwner: true,
     });
     if ("error" in prepared) {
+      return "other";
+    }
+    const preparedProvider = prepared.selection.runtimeProvider ?? prepared.selection.provider;
+    if (
+      preparedProvider !== route.provider ||
+      prepared.selection.modelId !== route.model ||
+      prepared.selection.agentDir !== route.agentDir ||
+      prepared.selection.profileId !== route.authProfileId ||
+      prepared.auth.profileId !== route.authProfileId ||
+      !params.verifiedInference.auth.authFingerprint ||
+      prepared.sourceAuthFingerprint !== params.verifiedInference.auth.authFingerprint
+    ) {
       return "other";
     }
     const controller = new AbortController();
@@ -113,6 +140,7 @@ export async function classifyCrestodianApprovalIntent(
       )({
         model: prepared.model,
         auth: prepared.auth,
+        cfg: route.runConfig,
         context: {
           systemPrompt: APPROVAL_INTENT_SYSTEM_PROMPT,
           messages: [
@@ -131,6 +159,9 @@ export async function classifyCrestodianApprovalIntent(
           signal: controller.signal,
         },
       });
+      if (!(await resolveVerifiedRoute(params.verifiedInference))) {
+        return "other";
+      }
       const verdict = extractAssistantText(response)?.trim().toLowerCase().split(/\s+/)[0];
       if (verdict === "approve" || verdict === "decline") {
         return verdict;

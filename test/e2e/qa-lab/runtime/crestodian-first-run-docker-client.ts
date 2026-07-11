@@ -24,8 +24,8 @@ type CrestodianFirstRunSpec = {
   dockerAgentWorkspace: string;
   agentId: string;
   model: string;
-  discordEnv: string;
-  discordToken: string;
+  telegramEnv: string;
+  telegramToken: string;
   commands: CrestodianFirstRunCommand[];
   auditOperations: string[];
 };
@@ -69,6 +69,22 @@ function renderCommandTemplate(template: string, vars: Record<string, string>): 
 
 const FAKE_PLANNER_REPLY = "Fake Claude planner selected an inference-backed typed setup.";
 const PACKAGED_CLI_TIMEOUT_MS = 60_000;
+const INFERENCE_PROBE_PROMPT = "Reply with the single word OK";
+
+async function readFakeClaudePromptLines(promptLogPath: string): Promise<string[]> {
+  return (await fs.readFile(promptLogPath, "utf8"))
+    .split("\n")
+    .filter((line) => line.trim().length > 0);
+}
+
+function countInferencePrompts(lines: string[]): number {
+  return lines.filter((line) => line.includes(INFERENCE_PROBE_PROMPT)).length;
+}
+
+function resolveDefaultModel(config: OpenClawConfig): string | undefined {
+  const model = config.agents?.defaults?.model;
+  return typeof model === "string" ? model : model?.primary;
+}
 
 async function installFakeClaudeCli(
   fakeBinDir: string,
@@ -203,12 +219,8 @@ async function main() {
     `activation selected the wrong model: ${activation.modelRef}`,
   );
   const inferenceConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-  const persistedInferenceModel =
-    typeof inferenceConfig.agents?.defaults?.model === "string"
-      ? inferenceConfig.agents.defaults.model
-      : inferenceConfig.agents?.defaults?.model?.primary;
   assert(
-    persistedInferenceModel === activation.modelRef,
+    resolveDefaultModel(inferenceConfig) === activation.modelRef,
     "activation did not persist the verified inference route",
   );
   assert(
@@ -218,7 +230,7 @@ async function main() {
   );
   const activationPrompts = await fs.readFile(promptLogPath, "utf8");
   assert(
-    activationPrompts.includes("Reply with the single word OK"),
+    activationPrompts.includes(INFERENCE_PROBE_PROMPT),
     "inference activation did not send the live model probe",
   );
 
@@ -242,17 +254,18 @@ async function main() {
     "verified overview did not report the activated model",
   );
 
-  setEnvValue(spec.discordEnv, spec.discordToken);
+  setEnvValue(spec.telegramEnv, spec.telegramToken);
 
   const commandVars = {
     defaultWorkspace: spec.dockerDefaultWorkspace,
     agentWorkspace: spec.dockerAgentWorkspace,
     agentId: spec.agentId,
     model: spec.model,
-    discordEnv: spec.discordEnv,
+    telegramEnv: spec.telegramEnv,
   };
   for (const command of spec.commands) {
     const message = renderCommandTemplate(command.message, commandVars);
+    const probesBefore = countInferencePrompts(await readFakeClaudePromptLines(promptLogPath));
     const result = await runPackagedCli([
       "crestodian",
       "--message",
@@ -272,18 +285,37 @@ async function main() {
         `Crestodian first-run command ${command.id} did not use the verified planner: ${output}`,
       );
     }
+    const probesAfter = countInferencePrompts(await readFakeClaudePromptLines(promptLogPath));
+    const probeDelta = probesAfter - probesBefore;
+    const minimumProbes = command.approve ? 2 : 1;
+    assert(
+      probeDelta >= minimumProbes,
+      `Crestodian command ${command.id} ran ${probeDelta} inference probes; expected at least ${minimumProbes} for preflight${command.approve ? " plus its persistent boundary" : ""}`,
+    );
   }
 
-  const probeLines = (await fs.readFile(promptLogPath, "utf8"))
-    .split("\n")
-    .filter((line) => line.trim().length > 0);
-  const inferencePrompts = probeLines.filter((line) =>
-    line.includes("Reply with the single word OK"),
-  );
-  const plannerPrompts = probeLines.filter((line) => line.includes("User request:"));
+  const pluginList = await runPackagedCli(["plugins", "list", "--json"]);
   assert(
-    inferencePrompts.length === spec.commands.length + 4,
-    `expected one activation or preflight probe per Crestodian CLI call; got ${inferencePrompts.length}`,
+    pluginList.code === 0,
+    `packaged plugin listing failed: ${pluginList.stdout}\n${pluginList.stderr}`,
+  );
+  const pluginReport = JSON.parse(pluginList.stdout) as {
+    plugins?: Array<{ id?: string; enabled?: boolean }>;
+  };
+  const telegramPlugin = pluginReport.plugins?.find((plugin) => plugin.id === "telegram");
+  assert(
+    telegramPlugin?.enabled === true,
+    "Telegram channel config did not auto-enable the packaged Telegram plugin",
+  );
+
+  const probeLines = await readFakeClaudePromptLines(promptLogPath);
+  const inferencePrompts = probeLines.filter((line) => line.includes(INFERENCE_PROBE_PROMPT));
+  const plannerPrompts = probeLines.filter((line) => line.includes("User request:"));
+  const minimumEntryAndActivationProbes = spec.commands.length + 4;
+  const minimumPersistentBoundaryProbes = spec.auditOperations.length;
+  assert(
+    inferencePrompts.length >= minimumEntryAndActivationProbes + minimumPersistentBoundaryProbes,
+    `expected activation/preflight probes plus at least ${minimumPersistentBoundaryProbes} persistent-boundary probes; got ${inferencePrompts.length}`,
   );
   assert(
     plannerPrompts.length === 1 && plannerPrompts[0]?.includes("finish basic setup"),
@@ -299,13 +331,7 @@ async function main() {
     config.agents?.defaults?.workspace === spec.dockerDefaultWorkspace,
     "first-run setup did not write default workspace",
   );
-  assert(
-    config.agents?.defaults?.model &&
-      typeof config.agents.defaults.model === "object" &&
-      "primary" in config.agents.defaults.model &&
-      config.agents.defaults.model.primary === spec.model,
-    "first-run setup did not write default model",
-  );
+  assert(resolveDefaultModel(config) === spec.model, "first-run setup did not write default model");
   const reef = config.agents?.list?.find((agent) => agent.id === spec.agentId);
   assert(reef, "Crestodian did not create reef agent");
   assert(reef.workspace === spec.dockerAgentWorkspace, "Crestodian did not write reef workspace");
@@ -313,25 +339,20 @@ async function main() {
     reef.model === undefined,
     "Crestodian wrote a per-agent model instead of inheriting the verified default",
   );
-  assert(config.plugins?.allow?.includes("discord"), "Crestodian did not allow Discord plugin");
+  assert(config.channels?.telegram?.enabled === true, "Crestodian did not enable Telegram");
+  const telegramToken = config.channels?.telegram?.botToken;
   assert(
-    config.plugins?.entries?.discord?.enabled === true,
-    "Crestodian did not enable Discord plugin entry",
-  );
-  assert(config.channels?.discord?.enabled === true, "Crestodian did not enable Discord");
-  const discordToken = config.channels?.discord?.token;
-  assert(
-    discordToken &&
-      typeof discordToken === "object" &&
-      "source" in discordToken &&
-      discordToken.source === "env" &&
-      "id" in discordToken &&
-      discordToken.id === spec.discordEnv,
-    "Crestodian did not write Discord token SecretRef",
+    telegramToken &&
+      typeof telegramToken === "object" &&
+      "source" in telegramToken &&
+      telegramToken.source === "env" &&
+      "id" in telegramToken &&
+      telegramToken.id === spec.telegramEnv,
+    "Crestodian did not write Telegram token SecretRef",
   );
   assert(
-    !JSON.stringify(config.channels.discord).includes(spec.discordToken),
-    "Crestodian persisted the raw Discord token",
+    !JSON.stringify(config.channels.telegram).includes(spec.telegramToken),
+    "Crestodian persisted the raw Telegram token",
   );
 
   const auditPath = path.join(stateDir, "audit", "crestodian.jsonl");

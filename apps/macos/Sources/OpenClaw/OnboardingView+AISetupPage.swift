@@ -56,8 +56,7 @@ extension OnboardingView {
         aiSetup.onPendingActivationDeadline = { [self] deadline, routeIdentity in
             let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(
                 state: self.state,
-                preferredGatewayID: self.preferredGatewayID ??
-                    GatewayDiscoveryPreferences.preferredStableID())
+                preferredGatewayID: self.effectivePreferredGatewayID)
             guard currentRouteIdentity == routeIdentity else { return }
             self.configuredGatewayProbe.schedulePendingActivationRecheck(deadline: deadline) {
                 self.probeConfiguredGatewayForDashboard(startAISetupWhenMissing: true)
@@ -76,9 +75,8 @@ extension OnboardingView {
     func resumePendingCrestodian(modelRef: String) -> Task<Void, Never> {
         self.prepareCrestodianHandoff()
         let expectedRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(
-            state: self.state,
-            preferredGatewayID: self.preferredGatewayID ??
-                GatewayDiscoveryPreferences.preferredStableID())
+            state: state,
+            preferredGatewayID: effectivePreferredGatewayID)
         aiSetup.resumeConfiguredInference(modelRef: modelRef)
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
             currentPage = page
@@ -89,8 +87,7 @@ extension OnboardingView {
             // verification. Never infer success from newer mutable UI state.
             let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(
                 state: self.state,
-                preferredGatewayID: self.preferredGatewayID ??
-                    GatewayDiscoveryPreferences.preferredStableID())
+                preferredGatewayID: self.effectivePreferredGatewayID)
             guard outcome == .connected,
                   self.aiSetup.connected,
                   currentRouteIdentity == expectedRouteIdentity,

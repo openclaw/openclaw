@@ -78,8 +78,23 @@ const setupWizardCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const launchTuiCliMock = vi.hoisted(() =>
   vi.fn<(opts: unknown, launchOptions?: unknown) => Promise<void>>(async () => {}),
 );
-const probeGatewayReachableMock = vi.hoisted(() =>
-  vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
+const probeGatewayConfiguredModelMock = vi.hoisted(() =>
+  vi.fn<
+    () => Promise<{
+      kind: "configured" | "missing-configured-model" | "reachable-unverified" | "unreachable";
+      detail?: string;
+    }>
+  >(async () => ({ kind: "configured" })),
+);
+const readActiveGatewayLockPortMock = vi.hoisted(() => vi.fn(async () => undefined));
+const loadGatewayTlsRuntimeMock = vi.hoisted(() =>
+  vi.fn<
+    () => Promise<{
+      enabled: boolean;
+      required: boolean;
+      fingerprintSha256?: string;
+    }>
+  >(async () => ({ enabled: false, required: false })),
 );
 const resolveControlUiLinksMock = vi.hoisted(() =>
   vi.fn(() => ({
@@ -207,6 +222,16 @@ vi.mock("../gateway/control-ui-links.js", () => ({
   resolveControlUiLinks: resolveControlUiLinksMock,
 }));
 
+vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
+  readActiveGatewayLockPort: readActiveGatewayLockPortMock,
+}));
+
+vi.mock("../infra/tls/gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/tls/gateway.js")>()),
+  loadGatewayTlsRuntime: loadGatewayTlsRuntimeMock,
+}));
+
 vi.mock("../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils.js")>()),
   pinConfigDir: pinConfigDirMock,
@@ -313,7 +338,7 @@ vi.mock("../commands/onboard.js", () => ({
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
-  probeGatewayReachable: probeGatewayReachableMock,
+  probeGatewayConfiguredModel: probeGatewayConfiguredModelMock,
 }));
 
 vi.mock("../tui/tui-launch.js", () => ({
@@ -382,7 +407,12 @@ describe("runCli exit behavior", () => {
       valid: true,
       sourceConfig: { gateway: { mode: "local" } },
     });
-    probeGatewayReachableMock.mockResolvedValue({ ok: true });
+    probeGatewayConfiguredModelMock.mockResolvedValue({ kind: "configured" });
+    readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
+    loadGatewayTlsRuntimeMock.mockReset().mockResolvedValue({
+      enabled: false,
+      required: false,
+    });
     resolveControlUiLinksMock.mockReturnValue({
       httpUrl: "http://127.0.0.1:18789/",
       wsUrl: "ws://127.0.0.1:18789",
@@ -2722,20 +2752,126 @@ describe("runCli exit behavior", () => {
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expect(resolveControlUiLinksMock).toHaveBeenCalledWith({
-      port: 18789,
-      bind: "loopback",
-      basePath: undefined,
-      tlsEnabled: false,
-    });
-    expect(probeGatewayReachableMock).toHaveBeenCalledWith({
+    expect(readActiveGatewayLockPortMock).toHaveBeenCalledTimes(1);
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url: "ws://127.0.0.1:18789",
       password: "gateway-ref-password",
-      requireConfiguredModel: true,
     });
     expect(launchTuiCliMock).toHaveBeenCalledWith(
       { deliver: false },
       { gatewayUrl: "ws://127.0.0.1:18789", authSource: "config" },
+    );
+  });
+
+  it("keeps a reachable Gateway without a default model in inference onboarding", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        agents: { defaults: { model: { primary: "openai/local-only-model" } } },
+        gateway: { mode: "remote", remote: { url: "ws://127.0.0.1:18789" } },
+      },
+    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
+      kind: "missing-configured-model",
+      detail: "Gateway default agent has no configured model",
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
+    expect(launchTuiCliMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the active local gateway lock port for bare root preflight and TUI handoff", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "local",
+          port: 18789,
+          auth: { mode: "token", token: "configured-token" },
+        },
+      },
+    });
+    readActiveGatewayLockPortMock.mockResolvedValueOnce(48789);
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:48789",
+      token: "configured-token",
+    });
+    expect(launchTuiCliMock).toHaveBeenCalledWith(
+      { deliver: false },
+      { gatewayUrl: "ws://127.0.0.1:48789", authSource: "config" },
+    );
+  });
+
+  it("keeps an explicit gateway port ahead of active local lock metadata", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "local",
+          port: 18789,
+          auth: { mode: "token", token: "configured-token" },
+        },
+      },
+    });
+    readActiveGatewayLockPortMock.mockResolvedValueOnce(48789);
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19001" }, async () => {
+      await withInteractiveTty(async () => {
+        await runCli(["node", "openclaw"]);
+      });
+    });
+
+    expect(readActiveGatewayLockPortMock).not.toHaveBeenCalled();
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:19001",
+      token: "configured-token",
+    });
+  });
+
+  it("carries canonical local TLS fingerprint and handshake timeout through bare root", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "local",
+          tls: { enabled: true },
+          handshakeTimeoutMs: 30_000,
+          auth: { mode: "token", token: "configured-token" },
+        },
+      },
+    });
+    loadGatewayTlsRuntimeMock.mockResolvedValueOnce({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "sha256:local-self-signed-fingerprint",
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+      url: "wss://127.0.0.1:18789",
+      token: "configured-token",
+      tlsFingerprint: "sha256:local-self-signed-fingerprint",
+      preauthHandshakeTimeoutMs: 30_000,
+    });
+    expect(launchTuiCliMock).toHaveBeenCalledWith(
+      { deliver: false, tlsFingerprint: "sha256:local-self-signed-fingerprint" },
+      { gatewayUrl: "wss://127.0.0.1:18789", authSource: "config" },
     );
   });
 
@@ -2757,15 +2893,83 @@ describe("runCli exit behavior", () => {
       });
     });
 
-    expect(probeGatewayReachableMock).toHaveBeenCalledWith({
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url: "ws://127.0.0.1:18789",
       token: "env-token",
-      requireConfiguredModel: true,
     });
     expect(launchTuiCliMock).toHaveBeenCalledWith(
       { deliver: false },
       { gatewayUrl: "ws://127.0.0.1:18789" },
     );
+  });
+
+  it("resolves only the configured auth-mode SecretRef for bare root preflight", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bare-auth-mode-"));
+    const tokenMarker = path.join(tempDir, "token-provider-ran");
+    const passwordMarker = path.join(tempDir, "password-provider-ran");
+    const tokenProgram = [
+      "const fs=require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(tokenMarker)},'1');`,
+      "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { TOKEN_SECRET: 'token-from-exec' } }));", // pragma: allowlist secret
+    ].join("");
+    const passwordProgram = [
+      "const fs=require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(passwordMarker)},'1');`,
+      "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { PASSWORD_SECRET: 'password-from-exec' } }));", // pragma: allowlist secret
+    ].join("");
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        secrets: {
+          providers: {
+            tokenprovider: {
+              source: "exec",
+              command: process.execPath,
+              args: ["-e", tokenProgram],
+              allowInsecurePath: true,
+            },
+            passwordprovider: {
+              source: "exec",
+              command: process.execPath,
+              args: ["-e", passwordProgram],
+              allowInsecurePath: true,
+            },
+          },
+        },
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "password",
+            token: { source: "exec", provider: "tokenprovider", id: "TOKEN_SECRET" },
+            password: {
+              source: "exec",
+              provider: "passwordprovider",
+              id: "PASSWORD_SECRET",
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      await withInteractiveTty(async () => {
+        await runCli(["node", "openclaw"]);
+      });
+
+      expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+        url: "ws://127.0.0.1:18789",
+        password: "password-from-exec",
+      });
+      await expect(fs.access(tokenMarker)).rejects.toThrow();
+      await expect(fs.access(passwordMarker)).resolves.toBeUndefined();
+      expect(launchTuiCliMock).toHaveBeenCalledWith(
+        { deliver: false },
+        { gatewayUrl: "ws://127.0.0.1:18789", authSource: "config" },
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("probes local gateways over loopback even when the gateway advertises a LAN bind", async () => {
@@ -2788,16 +2992,10 @@ describe("runCli exit behavior", () => {
       await runCli(["node", "openclaw"]);
     });
 
-    expect(resolveControlUiLinksMock).toHaveBeenCalledWith({
-      port: 18789,
-      bind: "loopback",
-      basePath: undefined,
-      tlsEnabled: false,
-    });
-    expect(probeGatewayReachableMock).toHaveBeenCalledWith({
+    expect(readActiveGatewayLockPortMock).toHaveBeenCalledTimes(1);
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url: "ws://127.0.0.1:18789",
       token: "local-token",
-      requireConfiguredModel: true,
     });
     expect(launchTuiCliMock).toHaveBeenCalledWith(
       { deliver: false },
@@ -2831,27 +3029,122 @@ describe("runCli exit behavior", () => {
             wsUrl: "ws://127.0.0.1:18789",
           },
     );
-    probeGatewayReachableMock
-      .mockResolvedValueOnce({ ok: false, detail: "loopback offline" })
-      .mockResolvedValueOnce({ ok: true });
+    probeGatewayConfiguredModelMock
+      .mockResolvedValueOnce({ kind: "unreachable", detail: "loopback offline" })
+      .mockResolvedValueOnce({ kind: "configured" });
 
     await withInteractiveTty(async () => {
       await runCli(["node", "openclaw"]);
     });
 
-    expect(probeGatewayReachableMock).toHaveBeenNthCalledWith(1, {
+    expect(probeGatewayConfiguredModelMock).toHaveBeenNthCalledWith(1, {
       url: "ws://127.0.0.1:18789",
       token: "local-token",
-      requireConfiguredModel: true,
     });
-    expect(probeGatewayReachableMock).toHaveBeenNthCalledWith(2, {
+    expect(probeGatewayConfiguredModelMock).toHaveBeenNthCalledWith(2, {
       url: "ws://100.64.0.10:18789",
       token: "local-token",
-      requireConfiguredModel: true,
     });
     expect(launchTuiCliMock).toHaveBeenCalledWith(
       { deliver: false },
       { gatewayUrl: "ws://100.64.0.10:18789", authSource: "config" },
+    );
+  });
+
+  it("prefers a configured secondary Gateway over a missing-model primary probe", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "local",
+          bind: "tailnet",
+          auth: { mode: "token", token: "local-token" },
+        },
+      },
+    });
+    resolveControlUiLinksMock.mockImplementation(({ bind }: { bind?: string } = {}) =>
+      bind === "tailnet"
+        ? { httpUrl: "http://100.64.0.10:18789/", wsUrl: "ws://100.64.0.10:18789" }
+        : { httpUrl: "http://127.0.0.1:18789/", wsUrl: "ws://127.0.0.1:18789" },
+    );
+    probeGatewayConfiguredModelMock
+      .mockResolvedValueOnce({
+        kind: "missing-configured-model",
+        detail: "Gateway default agent has no configured model",
+      })
+      .mockResolvedValueOnce({ kind: "configured" });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith(
+      { deliver: false },
+      { gatewayUrl: "ws://100.64.0.10:18789", authSource: "config" },
+    );
+  });
+
+  it("keeps confirmed missing inference ahead of an unverified secondary Gateway", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        agents: { defaults: { model: { primary: "openai/local-only-model" } } },
+        gateway: {
+          mode: "local",
+          bind: "tailnet",
+          auth: { mode: "token", token: "local-token" },
+        },
+      },
+    });
+    resolveControlUiLinksMock.mockImplementation(({ bind }: { bind?: string } = {}) =>
+      bind === "tailnet"
+        ? { httpUrl: "http://100.64.0.10:18789/", wsUrl: "ws://100.64.0.10:18789" }
+        : { httpUrl: "http://127.0.0.1:18789/", wsUrl: "ws://127.0.0.1:18789" },
+    );
+    probeGatewayConfiguredModelMock
+      .mockResolvedValueOnce({
+        kind: "reachable-unverified",
+        detail: "config.get: unauthorized",
+      })
+      .mockResolvedValueOnce({
+        kind: "missing-configured-model",
+        detail: "Gateway default agent has no configured model",
+      });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
+    expect(launchTuiCliMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a reachable unverified Gateway ahead of local inference fallback", async () => {
+    const url = "ws://127.0.0.1:18789";
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        agents: { defaults: { model: { primary: "openai/local-only-model" } } },
+        gateway: { mode: "remote", remote: { url, token: "remote-token" } },
+      },
+    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
+      kind: "reachable-unverified",
+      detail: "config.get: unauthorized",
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith(
+      { deliver: false },
+      { gatewayUrl: url, authSource: "config" },
     );
   });
 
@@ -2864,7 +3157,10 @@ describe("runCli exit behavior", () => {
         gateway: { mode: "local" },
       },
     });
-    probeGatewayReachableMock.mockResolvedValueOnce({ ok: false, detail: "offline" });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
+      kind: "unreachable",
+      detail: "offline",
+    });
 
     await withInteractiveTty(async () => {
       await runCli(["node", "openclaw"]);
@@ -2873,7 +3169,11 @@ describe("runCli exit behavior", () => {
     expect(launchTuiCliMock).toHaveBeenCalledWith({ deliver: false, local: true }, {});
   });
 
-  it("routes to inference onboarding when an unsafe remote gateway is unavailable", async () => {
+  it.each([
+    { label: "LAN IP", url: "ws://192.168.1.10:18789" },
+    { label: "mDNS", url: "ws://gateway.local:18789" },
+    { label: "Tailnet DNS", url: "ws://machine.tail123.ts.net:18789" },
+  ])("does not probe a plaintext remote gateway over $label without opt-in", async ({ url }) => {
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       exists: true,
       valid: true,
@@ -2881,7 +3181,7 @@ describe("runCli exit behavior", () => {
         gateway: {
           mode: "remote",
           remote: {
-            url: "ws://192.168.1.10:18789",
+            url,
             token: "remote-token",
           },
         },
@@ -2894,7 +3194,210 @@ describe("runCli exit behavior", () => {
       });
     });
 
-    expect(probeGatewayReachableMock).not.toHaveBeenCalled();
+    expect(probeGatewayConfiguredModelMock).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
+    expect(launchTuiCliMock).not.toHaveBeenCalled();
+  });
+
+  it("probes a plaintext remote loopback gateway", async () => {
+    const url = "ws://127.0.0.1:18789";
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url,
+            token: "remote-token",
+          },
+        },
+      },
+    });
+
+    await withEnvAsync({ OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: undefined }, async () => {
+      await withInteractiveTty(async () => {
+        await runCli(["node", "openclaw"]);
+      });
+    });
+
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+      url,
+      token: "remote-token",
+    });
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith(
+      { deliver: false },
+      { gatewayUrl: url, authSource: "config" },
+    );
+  });
+
+  it("keeps configured remote password authoritative from preflight through TUI launch", async () => {
+    const url = "ws://127.0.0.1:18789";
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url,
+            password: "configured-remote-password", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "stale-env-password" }, async () => {
+      await withInteractiveTty(async () => {
+        await runCli(["node", "openclaw"]);
+      });
+    });
+
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+      url,
+      password: "configured-remote-password",
+    });
+    expect(launchTuiCliMock).toHaveBeenCalledWith(
+      { deliver: false },
+      { gatewayUrl: url, authSource: "config" },
+    );
+  });
+
+  it("falls back to gateway env auth when configured remote SecretRefs are unresolved", async () => {
+    const url = "ws://127.0.0.1:18789";
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url,
+            token: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_REMOTE_GATEWAY_TOKEN",
+            },
+            password: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_REMOTE_GATEWAY_PASSWORD",
+            },
+          },
+        },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        MISSING_REMOTE_GATEWAY_TOKEN: undefined,
+        MISSING_REMOTE_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: "env-remote-token",
+        OPENCLAW_GATEWAY_PASSWORD: "env-remote-password",
+      },
+      async () => {
+        await withInteractiveTty(async () => {
+          await runCli(["node", "openclaw"]);
+        });
+      },
+    );
+
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+      url,
+      token: "env-remote-token",
+      password: "env-remote-password",
+    });
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith({ deliver: false }, { gatewayUrl: url });
+  });
+
+  it("probes an explicitly allowed plaintext private remote gateway", async () => {
+    const url = "ws://192.168.1.10:18789";
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url,
+            token: "remote-token",
+          },
+        },
+      },
+    });
+
+    await withEnvAsync({ OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1" }, async () => {
+      await withInteractiveTty(async () => {
+        await runCli(["node", "openclaw"]);
+      });
+    });
+
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+      url,
+      token: "remote-token",
+    });
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith(
+      { deliver: false },
+      { gatewayUrl: url, authSource: "config" },
+    );
+  });
+
+  it("forwards the configured TLS pin when probing a remote gateway", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example.com:18789",
+            token: "remote-token",
+            tlsFingerprint: "sha256:11:22:33:44",
+          },
+        },
+      },
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+      url: "wss://gateway.example.com:18789",
+      token: "remote-token",
+      tlsFingerprint: "sha256:11:22:33:44",
+    });
+    expect(launchTuiCliMock).toHaveBeenCalledWith(
+      { deliver: false, tlsFingerprint: "sha256:11:22:33:44" },
+      { gatewayUrl: "wss://gateway.example.com:18789", authSource: "config" },
+    );
+  });
+
+  it("routes to inference onboarding without probing a public plaintext remote gateway", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "ws://gateway.example.com:18789",
+            token: "remote-token",
+          },
+        },
+      },
+    });
+
+    await withEnvAsync({ OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: undefined }, async () => {
+      await withInteractiveTty(async () => {
+        await runCli(["node", "openclaw"]);
+      });
+    });
+
+    expect(probeGatewayConfiguredModelMock).not.toHaveBeenCalled();
     expect(setupWizardCommandMock).toHaveBeenCalledWith({});
     expect(launchTuiCliMock).not.toHaveBeenCalled();
   });
@@ -3010,7 +3513,7 @@ describe("runCli exit behavior", () => {
     expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledTimes(1);
     expect(launchTuiCliMock).toHaveBeenCalledOnce();
     expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
-      probeGatewayReachableMock.mock.invocationCallOrder[0],
+      probeGatewayConfiguredModelMock.mock.invocationCallOrder[0],
     );
     expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
       launchTuiCliMock.mock.invocationCallOrder[0],

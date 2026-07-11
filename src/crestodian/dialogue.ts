@@ -8,6 +8,11 @@ import {
   type CrestodianOperation,
 } from "./operations.js";
 import { loadCrestodianOverview, type CrestodianOverview } from "./overview.js";
+import {
+  resolveCrestodianVerifiedInferenceRoute,
+  type CrestodianVerifiedInferenceBinding,
+  type CrestodianVerifiedInferenceDeps,
+} from "./verified-inference.js";
 
 /**
  * Dialogue helpers for turning user text into Crestodian operations.
@@ -18,6 +23,8 @@ import { loadCrestodianOverview, type CrestodianOverview } from "./overview.js";
 type CrestodianDialogueOptions = {
   loadOverview?: typeof loadCrestodianOverview;
   planWithAssistant?: CrestodianAssistantPlanner;
+  deps?: CrestodianVerifiedInferenceDeps;
+  readonly verifiedInference: CrestodianVerifiedInferenceBinding;
 };
 
 /** Format the interactive approval prompt for a persistent operation. */
@@ -31,6 +38,9 @@ export async function resolveCrestodianOperation(
   runtime: RuntimeEnv,
   opts: CrestodianDialogueOptions,
 ): Promise<CrestodianOperation> {
+  if (!opts.verifiedInference) {
+    throw new CrestodianInferenceUnavailableError("conversation");
+  }
   const operation = parseCrestodianOperation(input);
   if (!shouldAskAssistant(input, operation)) {
     return operation;
@@ -39,8 +49,21 @@ export async function resolveCrestodianOperation(
   const planner = opts.planWithAssistant ?? (await import("./assistant.js")).planCrestodianCommand;
   let plan: CrestodianAssistantPlan | null;
   try {
-    plan = await planner({ input, overview });
+    plan = await planner({
+      input,
+      overview,
+      verifiedInference: opts.verifiedInference,
+    });
+    if (
+      plan &&
+      !(await resolveCrestodianVerifiedInferenceRoute(opts.verifiedInference, opts.deps))
+    ) {
+      throw new CrestodianInferenceUnavailableError("planner");
+    }
   } catch (error) {
+    if (error instanceof CrestodianInferenceUnavailableError) {
+      throw error;
+    }
     throw new CrestodianInferenceUnavailableError("planner", [error]);
   }
   if (!plan) {

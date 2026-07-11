@@ -17,6 +17,11 @@ enum RemoteOnboardingProbeState: Equatable {
 }
 
 enum OnboardingCrestodianResumeStore {
+    struct ActivationOwner: Equatable {
+        let id: String
+        let routeFingerprint: String
+    }
+
     enum PendingState: Equatable {
         case none
         case activating(deadline: Date)
@@ -35,9 +40,16 @@ enum OnboardingCrestodianResumeStore {
         let phase: RecordPhase
         let startedAt: Date?
         let deadline: Date?
+        let activationOwner: ActivationOwner?
     }
 
-    private static let recordVersion = 2
+    private static let recordVersion = 4
+    /// v2 receipts had no auth binding, so a completed marker could otherwise
+    /// attach to replacement credentials on the same endpoint.
+    private static let unsafeOwnerlessRecordVersion = 2
+    /// v3 persisted a plain SHA-256 credential verifier. Never retain or
+    /// migrate it; a fresh activation is safer than carrying sensitive bytes.
+    private static let unsafeCredentialFingerprintRecordVersion = 3
     private static let legacyRecordVersion = 1
     private static let activationDeadlineSafetySeconds: TimeInterval = 5
     static let maximumActivationTimeoutMs: Double = 480_000
@@ -115,50 +127,104 @@ enum OnboardingCrestodianResumeStore {
         self.pendingState(for: routeIdentity, defaults: defaults, now: now) != .none
     }
 
+    @discardableResult
     static func markPending(
         routeIdentity: String?,
+        activationOwner: ActivationOwner? = nil,
         activationTimeoutMs: Double = OnboardingCrestodianResumeStore.maximumActivationTimeoutMs,
         defaults: UserDefaults = .standard,
         now: Date = Date())
+        -> Date?
     {
-        guard let routeIdentity = normalized(routeIdentity) else { return }
+        guard let routeIdentity = normalized(routeIdentity) else { return nil }
         let duration = max(0, activationTimeoutMs / 1000) + self.activationDeadlineSafetySeconds
+        let deadline = now.addingTimeInterval(duration)
         var records = self.loadRecords(defaults: defaults, now: now)
         records[routeIdentity] = Record(
             phase: .activating,
             startedAt: now,
-            deadline: now.addingTimeInterval(duration))
+            deadline: deadline,
+            activationOwner: activationOwner)
+        self.writeRecords(records, defaults: defaults)
+        return deadline
+    }
+
+    static func restorePending(
+        routeIdentity: String,
+        activationOwner: ActivationOwner? = nil,
+        deadline: Date,
+        defaults: UserDefaults = .standard,
+        now: Date = Date())
+    {
+        guard let routeIdentity = normalized(routeIdentity) else { return }
+        var records = self.loadRecords(defaults: defaults, now: now)
+        records[routeIdentity] = Record(
+            phase: .activating,
+            startedAt: now,
+            deadline: deadline,
+            activationOwner: activationOwner)
         self.writeRecords(records, defaults: defaults)
     }
 
     static func markVerified(
         ifOwnedBy routeIdentity: String?,
+        activationOwner: ActivationOwner? = nil,
         defaults: UserDefaults = .standard,
         now: Date = Date())
     {
         guard let routeIdentity = normalized(routeIdentity) else { return }
         var records = self.loadRecords(defaults: defaults, now: now)
-        guard let record = records[routeIdentity] else { return }
+        guard let record = records[routeIdentity],
+              ownerMatches(record, activationOwner: activationOwner)
+        else { return }
         records[routeIdentity] = Record(
             phase: .verified,
             startedAt: record.startedAt,
-            deadline: record.deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds))
+            deadline: record.deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds),
+            activationOwner: record.activationOwner)
         self.writeRecords(records, defaults: defaults)
     }
 
+    @discardableResult
     static func markCompleted(
         ifOwnedBy routeIdentity: String?,
+        activationOwner: ActivationOwner? = nil,
         defaults: UserDefaults = .standard,
-        now: Date = Date())
+        now: Date = Date()) -> Bool
     {
-        guard let routeIdentity = normalized(routeIdentity) else { return }
+        guard let routeIdentity = normalized(routeIdentity) else { return false }
         var records = self.loadRecords(defaults: defaults, now: now)
-        guard let record = records[routeIdentity] else { return }
+        guard let record = records[routeIdentity],
+              ownerMatches(record, activationOwner: activationOwner)
+        else { return false }
         records[routeIdentity] = Record(
             phase: .completed,
             startedAt: record.startedAt,
-            deadline: record.deadline)
+            deadline: record.deadline,
+            activationOwner: record.activationOwner)
         self.writeRecords(records, defaults: defaults)
+        return true
+    }
+
+    static func activationOwner(
+        for routeIdentity: String?,
+        defaults: UserDefaults = .standard,
+        now: Date = Date()) -> ActivationOwner?
+    {
+        guard let routeIdentity = normalized(routeIdentity) else { return nil }
+        return self.loadRecords(defaults: defaults, now: now)[routeIdentity]?.activationOwner
+    }
+
+    static func isOwned(
+        by activationOwner: ActivationOwner,
+        for routeIdentity: String?,
+        defaults: UserDefaults = .standard,
+        now: Date = Date()) -> Bool
+    {
+        guard let routeIdentity = normalized(routeIdentity),
+              let record = loadRecords(defaults: defaults, now: now)[routeIdentity]
+        else { return false }
+        return record.activationOwner == activationOwner
     }
 
     static func pendingState(
@@ -167,7 +233,7 @@ enum OnboardingCrestodianResumeStore {
         now: Date = Date()) -> PendingState
     {
         guard let routeIdentity = normalized(routeIdentity),
-              let record = self.loadRecords(defaults: defaults, now: now)[routeIdentity]
+              let record = loadRecords(defaults: defaults, now: now)[routeIdentity]
         else { return .none }
 
         switch record.phase {
@@ -182,14 +248,20 @@ enum OnboardingCrestodianResumeStore {
         }
     }
 
+    @discardableResult
     static func clear(
         ifOwnedBy routeIdentity: String,
-        defaults: UserDefaults = .standard)
+        activationOwner: ActivationOwner? = nil,
+        defaults: UserDefaults = .standard) -> Bool
     {
-        guard let routeIdentity = self.normalized(routeIdentity) else { return }
+        guard let routeIdentity = normalized(routeIdentity) else { return false }
         var records = self.loadRecords(defaults: defaults)
-        guard records.removeValue(forKey: routeIdentity) != nil else { return }
+        guard let record = records[routeIdentity],
+              ownerMatches(record, activationOwner: activationOwner)
+        else { return false }
+        records.removeValue(forKey: routeIdentity)
         self.writeRecords(records, defaults: defaults)
+        return true
     }
 
     static func clear(defaults: UserDefaults = .standard) {
@@ -202,7 +274,7 @@ enum OnboardingCrestodianResumeStore {
     {
         guard let stored = defaults.object(forKey: onboardingCrestodianPendingKey) else { return [:] }
         if let legacyRoute = normalized(stored as? String) {
-            let records = [legacyRoute: self.conservativeLegacyRecord(now: now)]
+            let records = [legacyRoute: conservativeLegacyRecord(now: now)]
             self.writeRecords(records, defaults: defaults)
             return records
         }
@@ -219,6 +291,30 @@ enum OnboardingCrestodianResumeStore {
             self.writeRecords(records, defaults: defaults)
             return records
         }
+        if version == self.unsafeOwnerlessRecordVersion ||
+            version == self.unsafeCredentialFingerprintRecordVersion
+        {
+            guard let storedRecords = container["records"] as? [String: Any] else {
+                self.clear(defaults: defaults)
+                return [:]
+            }
+            // Strip the unsafe/absent auth owner immediately, but retain active
+            // deadlines so a possibly running activation cannot overlap a new one.
+            let records: [String: Record] = storedRecords.reduce(into: [:]) { result, entry in
+                guard let routeIdentity = normalized(entry.key),
+                      let payload = entry.value as? [String: Any],
+                      let record = decodeRecord(payload),
+                      record.phase != .completed
+                else { return }
+                result[routeIdentity] = Record(
+                    phase: record.phase,
+                    startedAt: record.startedAt,
+                    deadline: record.deadline,
+                    activationOwner: nil)
+            }
+            self.writeRecords(records, defaults: defaults)
+            return records
+        }
         guard version == self.recordVersion,
               let storedRecords = container["records"] as? [String: Any]
         else {
@@ -228,7 +324,7 @@ enum OnboardingCrestodianResumeStore {
         return storedRecords.reduce(into: [:]) { result, entry in
             guard let routeIdentity = normalized(entry.key),
                   let payload = entry.value as? [String: Any],
-                  let record = self.decodeRecord(payload)
+                  let record = decodeRecord(payload)
             else { return }
             result[routeIdentity] = record
         }
@@ -245,14 +341,16 @@ enum OnboardingCrestodianResumeStore {
             return Record(
                 phase: .activating,
                 startedAt: startedAt ?? now,
-                deadline: deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds))
+                deadline: deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds),
+                activationOwner: nil)
         case .verified, .completed:
             // v1 `verified` could be written by an early read-only probe and
             // carried no deadline, so migration must restore a full lease.
             return Record(
                 phase: .verified,
                 startedAt: startedAt ?? now,
-                deadline: deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds))
+                deadline: deadline ?? now.addingTimeInterval(self.legacyActivationLeaseSeconds),
+                activationOwner: nil)
         }
     }
 
@@ -260,17 +358,26 @@ enum OnboardingCrestodianResumeStore {
         Record(
             phase: .activating,
             startedAt: now,
-            deadline: now.addingTimeInterval(self.legacyActivationLeaseSeconds))
+            deadline: now.addingTimeInterval(self.legacyActivationLeaseSeconds),
+            activationOwner: nil)
     }
 
     private static func decodeRecord(_ payload: [String: Any]) -> Record? {
         guard let phaseRaw = payload["phase"] as? String,
               let phase = RecordPhase(rawValue: phaseRaw)
         else { return nil }
+        let activationID = self.normalized(payload["activationId"] as? String)
+        let routeFingerprint = self.normalized(payload["routeFingerprint"] as? String)
+        let activationOwner: ActivationOwner? = if let activationID, let routeFingerprint {
+            ActivationOwner(id: activationID, routeFingerprint: routeFingerprint)
+        } else {
+            nil
+        }
         return Record(
             phase: phase,
             startedAt: self.date(payload["startedAt"]),
-            deadline: self.date(payload["deadlineAt"]))
+            deadline: self.date(payload["deadlineAt"]),
+            activationOwner: activationOwner)
     }
 
     private static func writeRecords(_ records: [String: Record], defaults: UserDefaults) {
@@ -285,6 +392,10 @@ enum OnboardingCrestodianResumeStore {
             }
             if let deadline = record.deadline {
                 value["deadlineAt"] = deadline.timeIntervalSince1970
+            }
+            if let activationOwner = record.activationOwner {
+                value["activationId"] = activationOwner.id
+                value["routeFingerprint"] = activationOwner.routeFingerprint
             }
             return value
         }
@@ -301,6 +412,15 @@ enum OnboardingCrestodianResumeStore {
     private static func normalized(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    private static func ownerMatches(
+        _ record: Record,
+        activationOwner: ActivationOwner?) -> Bool
+    {
+        // A missing owner names legacy ownerless records; it is not a wildcard.
+        // Otherwise stale UI paths can verify, complete, or clear a newer activation.
+        record.activationOwner == activationOwner
     }
 
     private static func nonSecretFingerprint(_ value: String) -> String {
@@ -372,15 +492,10 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     /// setup mid-operation.
     var busyReason: String?
 
-    static func markComplete(clearSelectedRouteResume: Bool = true) {
+    static func markComplete() {
         UserDefaults.standard.set(true, forKey: onboardingSeenKey)
         UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
         AppStateStore.shared.onboardingSeen = true
-        if clearSelectedRouteResume,
-           let routeIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
-        {
-            OnboardingCrestodianResumeStore.clear(ifOwnedBy: routeIdentity)
-        }
     }
 
     func show() {
@@ -482,6 +597,7 @@ struct OnboardingView: View {
     @Bindable var state: AppState
     var permissionMonitor: PermissionMonitor
     let crestodianDefaults: UserDefaults
+    let gatewaySelectionPersister: @MainActor () -> Bool
 
     static let windowWidth: CGFloat = 630
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
@@ -606,11 +722,15 @@ struct OnboardingView: View {
             filterLocalGateways: false),
         aiSetupGateway: GatewayConnection = .shared,
         crestodianDefaults: UserDefaults = .standard,
-        configuredGatewayProbeTimeoutMs: Double = 15000)
+        configuredGatewayProbeTimeoutMs: Double = 15000,
+        gatewaySelectionPersister: (@MainActor () -> Bool)? = nil)
     {
         self.state = state
         self.permissionMonitor = permissionMonitor
         self.crestodianDefaults = crestodianDefaults
+        self.gatewaySelectionPersister = gatewaySelectionPersister ?? {
+            state.syncGatewayConfigNow()
+        }
         _defaultsToLocalGateway = State(
             initialValue: !state.onboardingSeen && state.connectionMode == .unconfigured)
         _gatewayDiscovery = State(initialValue: discoveryModel)

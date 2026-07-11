@@ -52,6 +52,7 @@ export type GatewayConnectionOptions = {
   url?: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
 };
 
 export type GatewayEvent = TuiEvent;
@@ -64,6 +65,7 @@ type ResolvedGatewayConnection = {
   url: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
   allowInsecureLocalOperatorUi: boolean;
 };
@@ -141,6 +143,7 @@ export class GatewayChatClient implements TuiBackend {
       url: connection.url,
       token: connection.token,
       password: connection.password,
+      tlsFingerprint: connection.tlsFingerprint,
       preauthHandshakeTimeoutMs: connection.preauthHandshakeTimeoutMs,
       clientName: GATEWAY_CLIENT_NAMES.TUI,
       clientDisplayName: "openclaw-tui",
@@ -426,6 +429,7 @@ export async function resolveGatewayConnection(
       url,
       token: explicitAuth.token,
       password: explicitAuth.password,
+      ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
       preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
@@ -436,6 +440,7 @@ export async function resolveGatewayConnection(
       config,
       env,
       explicitAuth,
+      suppressEnvAuthFallback: preferConfiguredAuth,
       surface: "remote",
     });
     if (resolved.failureReason) {
@@ -445,6 +450,9 @@ export async function resolveGatewayConnection(
       url,
       token: resolved.token,
       password: resolved.password,
+      ...((opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint)
+        ? { tlsFingerprint: opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint }
+        : {}),
       preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi: false,
     };
@@ -461,6 +469,7 @@ export async function resolveGatewayConnection(
       url,
       token: resolved.token,
       password: resolved.password,
+      ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
       preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
@@ -486,6 +495,7 @@ export async function resolveGatewayConnection(
     url,
     token: resolved.token,
     password: resolved.password,
+    ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
     preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
     allowInsecureLocalOperatorUi,
   };

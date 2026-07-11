@@ -5,48 +5,47 @@ import SwiftUI
 
 extension OnboardingView {
     func selectLocalGateway() {
-        if self.state.connectionMode != .local {
-            self.resetGatewayBoundAIState()
+        if state.connectionMode != .local {
+            resetGatewayBoundAIState()
         }
-        self.defaultsToLocalGateway = false
-        self.state.connectionMode = .local
-        self.preferredGatewayID = nil
-        self.showAdvancedConnection = false
-        self.showRemoteChoices = false
+        defaultsToLocalGateway = false
+        state.connectionMode = .local
+        preferredGatewayID = nil
+        showAdvancedConnection = false
+        showRemoteChoices = false
         GatewayDiscoveryPreferences.setPreferredStableID(nil)
-        self.probeConfiguredGatewayForDashboard()
+        probeConfiguredGatewayForDashboard()
     }
 
     func selectUnconfiguredGateway() {
-        self.resetGatewayBoundAIState()
-        self.defaultsToLocalGateway = false
-        self.state.connectionMode = .unconfigured
-        self.preferredGatewayID = nil
-        self.showAdvancedConnection = false
-        self.showRemoteChoices = false
+        resetGatewayBoundAIState()
+        defaultsToLocalGateway = false
+        state.connectionMode = .unconfigured
+        preferredGatewayID = nil
+        showAdvancedConnection = false
+        showRemoteChoices = false
         GatewayDiscoveryPreferences.setPreferredStableID(nil)
     }
 
     func selectRemoteGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
         let shouldResetGatewayState = Self.shouldResetGatewayBoundAIState(
-            connectionMode: self.state.connectionMode,
-            currentPreferredGatewayID: self.preferredGatewayID,
+            connectionMode: state.connectionMode,
+            currentPreferredGatewayID: self.effectivePreferredGatewayID,
             persistedPreferredGatewayID: GatewayDiscoveryPreferences.preferredStableID(),
             selectedGatewayID: gateway.stableID)
         if shouldResetGatewayState {
             // The mode can remain `.remote` while the selected Gateway changes,
             // so its onChange hook alone cannot retire route-bound state.
-            self.resetGatewayBoundAIState()
-            self.resetRemoteProbeFeedback()
+            resetGatewayBoundAIState()
+            resetRemoteProbeFeedback()
         }
-        self.defaultsToLocalGateway = false
-        self.preferredGatewayID = gateway.stableID
-        GatewayDiscoveryPreferences.setPreferredStableID(gateway.stableID)
-        GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
+        defaultsToLocalGateway = false
+        preferredGatewayID = gateway.stableID
+        GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: state)
 
-        self.state.connectionMode = .remote
+        state.connectionMode = .remote
         MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)
-        self.probeConfiguredGatewayForDashboard()
+        probeConfiguredGatewayForDashboard()
     }
 
     static func shouldResetGatewayBoundAIState(
@@ -65,6 +64,16 @@ extension OnboardingView {
         return trimmed?.isEmpty == false ? trimmed : nil
     }
 
+    var effectivePreferredGatewayID: String? {
+        let persisted = Self.normalizedGatewayID(GatewayDiscoveryPreferences.preferredStableID())
+        guard let local = Self.normalizedGatewayID(preferredGatewayID) else {
+            return persisted
+        }
+        // Config-watcher endpoint changes clear the persisted owner. Ignore the
+        // stale @State copy until the view's next render catches up.
+        return local == persisted ? local : persisted
+    }
+
     func openSettings(tab: SettingsTab) {
         AppNavigationActions.openSettings(tab: tab)
     }
@@ -77,9 +86,9 @@ extension OnboardingView {
 
     func handleNext() {
         // All callers (Next button, chat handoff) honor the same page gates.
-        guard self.canAdvance else { return }
-        self.commitRecommendedConnectionIfNeeded(for: self.activePageIndex)
-        if self.currentPage < self.pageCount - 1 {
+        guard canAdvance else { return }
+        self.commitRecommendedConnectionIfNeeded(for: activePageIndex)
+        if currentPage < pageCount - 1 {
             withAnimation { self.currentPage += 1 }
         } else {
             self.finish()
@@ -87,28 +96,21 @@ extension OnboardingView {
     }
 
     func commitRecommendedConnectionIfNeeded(for pageIndex: Int) {
-        if pageIndex == self.connectionPageIndex,
-           self.defaultsToLocalGateway,
-           self.state.connectionMode == .unconfigured
+        if pageIndex == connectionPageIndex,
+           defaultsToLocalGateway,
+           state.connectionMode == .unconfigured
         {
             self.selectLocalGateway()
         }
     }
 
     func finish() {
-        let routeIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(
-            state: self.state,
-            preferredGatewayID: self.preferredGatewayID ?? GatewayDiscoveryPreferences.preferredStableID())
-        if let routeIdentity {
-            OnboardingCrestodianResumeStore.clear(
-                ifOwnedBy: routeIdentity,
-                defaults: self.crestodianDefaults)
-        }
-        OnboardingController.markComplete(clearSelectedRouteResume: false)
+        aiSetup.clearCompletedHandoffIfOwned()
+        OnboardingController.markComplete()
         OnboardingController.shared.close()
         // Land people in the real conversation, not on an empty desktop: the
         // agent chat is the product, and it is verified working by now.
-        if self.state.connectionMode != .unconfigured {
+        if state.connectionMode != .unconfigured {
             AppNavigationActions.openChat()
         }
     }

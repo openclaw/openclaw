@@ -11,11 +11,14 @@ import {
   type CrestodianAssistantPlan,
   type CrestodianAssistantTurn,
 } from "./assistant-prompts.js";
-import {
-  resolveCrestodianConfiguredRoute,
-  type CrestodianConfiguredRouteDeps,
-} from "./inference-route.js";
+import { CrestodianInferenceUnavailableError } from "./inference-error.js";
 import type { CrestodianOverview } from "./overview.js";
+import {
+  resolveCrestodianExpectedAgentHarnessRuntimeArtifact,
+  resolveCrestodianVerifiedInferenceRoute,
+  type CrestodianVerifiedInferenceBinding,
+  type CrestodianVerifiedInferenceDeps,
+} from "./verified-inference.js";
 
 export {
   buildCrestodianAssistantUserPrompt,
@@ -29,12 +32,13 @@ export type CrestodianAssistantPlanner = (params: {
   overview: CrestodianOverview;
   history?: CrestodianAssistantTurn[];
   pendingOperation?: string;
+  readonly verifiedInference: CrestodianVerifiedInferenceBinding;
 }) => Promise<CrestodianAssistantPlan | null>;
 
 type RunCliAgentFn = typeof import("../agents/cli-runner.js").runCliAgent;
 type RunEmbeddedAgentFn = typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
 
-export type CrestodianConfiguredModelPlannerDeps = CrestodianConfiguredRouteDeps & {
+export type CrestodianConfiguredModelPlannerDeps = CrestodianVerifiedInferenceDeps & {
   runCliAgent?: RunCliAgentFn;
   runEmbeddedAgent?: RunEmbeddedAgentFn;
   createTempDir?: () => Promise<string>;
@@ -46,6 +50,7 @@ export async function planCrestodianCommand(params: {
   overview: CrestodianOverview;
   history?: CrestodianAssistantTurn[];
   pendingOperation?: string;
+  readonly verifiedInference: CrestodianVerifiedInferenceBinding;
   deps?: CrestodianConfiguredModelPlannerDeps;
 }): Promise<CrestodianAssistantPlan | null> {
   return await planCrestodianCommandWithConfiguredModel(params);
@@ -57,19 +62,23 @@ export async function planCrestodianCommandWithConfiguredModel(params: {
   overview: CrestodianOverview;
   history?: CrestodianAssistantTurn[];
   pendingOperation?: string;
+  readonly verifiedInference: CrestodianVerifiedInferenceBinding;
   deps?: CrestodianConfiguredModelPlannerDeps;
 }): Promise<CrestodianAssistantPlan | null> {
+  const route = await requireVerifiedPlannerRoute(params.verifiedInference, params.deps);
   const input = params.input.trim();
   if (!input) {
     return null;
   }
-  const route = await resolveCrestodianConfiguredRoute({
-    ...(params.deps?.readConfigFileSnapshot
-      ? { readConfigFileSnapshot: params.deps.readConfigFileSnapshot }
-      : {}),
-  });
-  if (!route) {
-    return null;
+  let expectedAgentHarnessRuntimeArtifact: ReturnType<
+    typeof resolveCrestodianExpectedAgentHarnessRuntimeArtifact
+  >;
+  try {
+    expectedAgentHarnessRuntimeArtifact = resolveCrestodianExpectedAgentHarnessRuntimeArtifact(
+      params.verifiedInference,
+    );
+  } catch (error) {
+    throw new CrestodianInferenceUnavailableError("planner", [error]);
   }
   const prompt = buildCrestodianAssistantUserPrompt({
     input,
@@ -78,6 +87,7 @@ export async function planCrestodianCommandWithConfiguredModel(params: {
     ...(params.pendingOperation ? { pendingOperation: params.pendingOperation } : {}),
   });
   const tempDir = await (params.deps?.createTempDir ?? createTempPlannerDir)();
+  let plan: CrestodianAssistantPlan | null;
   try {
     const runId = `crestodian-planner-${randomUUID()}`;
     const shared = {
@@ -118,16 +128,44 @@ export async function planCrestodianCommandWithConfiguredModel(params: {
             ...shared,
             toolsAllow: [],
             agentHarnessRuntimeOverride: route.agentHarnessRuntimeOverride,
+            ...(expectedAgentHarnessRuntimeArtifact ? { expectedAgentHarnessRuntimeArtifact } : {}),
             cleanupBundleMcpOnRunEnd: true,
             ...(route.authProfileId ? { authProfileIdSource: "user" as const } : {}),
           });
     const parsed = parseCrestodianAssistantPlanText(extractPlannerResultText(result));
-    return parsed ? { ...parsed, modelLabel: route.modelLabel } : null;
-  } catch {
-    return null;
+    plan = parsed ? { ...parsed, modelLabel: route.modelLabel } : null;
+  } catch (error) {
+    if (error instanceof CrestodianInferenceUnavailableError) {
+      throw error;
+    }
+    plan = null;
   } finally {
     await (params.deps?.removeTempDir ?? removeTempPlannerDir)(tempDir);
   }
+  // Cleanup is the final suspension before callers can display or execute the
+  // model result, so authority must still match after cleanup completes.
+  if (plan) {
+    await requireVerifiedPlannerRoute(params.verifiedInference, params.deps);
+  }
+  return plan;
+}
+
+async function requireVerifiedPlannerRoute(
+  binding: CrestodianVerifiedInferenceBinding | undefined,
+  deps: CrestodianConfiguredModelPlannerDeps | undefined,
+) {
+  if (!binding) {
+    throw new CrestodianInferenceUnavailableError("planner");
+  }
+  try {
+    const route = await resolveCrestodianVerifiedInferenceRoute(binding, deps);
+    if (route) {
+      return route;
+    }
+  } catch (error) {
+    throw new CrestodianInferenceUnavailableError("planner", [error]);
+  }
+  throw new CrestodianInferenceUnavailableError("planner");
 }
 
 async function createTempPlannerDir(): Promise<string> {

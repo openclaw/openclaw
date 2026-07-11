@@ -31,7 +31,7 @@ import {
   resolveLocalControlUiProbeLinks,
 } from "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { probeGateway } from "../gateway/probe.js";
+import { probeGateway, type GatewayProbeResult } from "../gateway/probe.js";
 import {
   detectBrowserOpenSupport,
   openUrl,
@@ -334,46 +334,109 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
   }
 }
 
-/** Runs a single lightweight gateway probe for onboarding readiness checks. */
-export async function probeGatewayReachable(params: {
+type OnboardingGatewayProbeParams = {
   url: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
+  preauthHandshakeTimeoutMs?: number;
   timeoutMs?: number;
-  requireConfiguredModel?: boolean;
-}): Promise<{ ok: boolean; detail?: string }> {
+};
+
+function runOnboardingGatewayProbe(
+  params: OnboardingGatewayProbeParams,
+  detailLevel: "none" | "config",
+): Promise<GatewayProbeResult> {
   const url = params.url.trim();
-  const timeoutMs = params.timeoutMs ?? 1500;
+  const timeoutMs = params.timeoutMs ?? Math.max(1500, params.preauthHandshakeTimeoutMs ?? 0);
+  return probeGateway({
+    url,
+    timeoutMs,
+    auth: {
+      token: params.token,
+      password: params.password,
+    },
+    ...(params.tlsFingerprint ? { tlsFingerprint: params.tlsFingerprint } : {}),
+    ...(params.preauthHandshakeTimeoutMs
+      ? { preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs }
+      : {}),
+    detailLevel,
+  });
+}
+
+/** Runs a single lightweight gateway probe for onboarding readiness checks. */
+export async function probeGatewayReachable(
+  params: OnboardingGatewayProbeParams,
+): Promise<{ ok: boolean; detail?: string }> {
   try {
-    const probe = await probeGateway({
-      url,
-      timeoutMs,
-      auth: {
-        token: params.token,
-        password: params.password,
-      },
-      detailLevel: params.requireConfiguredModel ? "full" : "none",
-    });
+    const probe = await runOnboardingGatewayProbe(params, "none");
     if (!probe.ok) {
       return { ok: false, detail: probe.error ?? undefined };
-    }
-    if (params.requireConfiguredModel) {
-      const snapshot = probe.configSnapshot as {
-        valid?: unknown;
-        runtimeConfig?: OpenClawConfig;
-        config?: OpenClawConfig;
-      } | null;
-      const config = snapshot?.valid === true ? (snapshot.runtimeConfig ?? snapshot.config) : null;
-      const model = config
-        ? resolveAgentEffectiveModelPrimary(config, resolveDefaultAgentId(config))
-        : undefined;
-      if (!model) {
-        return { ok: false, detail: "Gateway default agent has no configured model" };
-      }
     }
     return { ok: true };
   } catch (err) {
     return { ok: false, detail: summarizeError(err) };
+  }
+}
+
+export type GatewayConfiguredModelProbeResult =
+  | { kind: "configured" }
+  | { kind: "missing-configured-model"; detail: string }
+  | { kind: "reachable-unverified"; detail?: string }
+  | { kind: "unreachable"; detail?: string };
+
+function didProbeReachGateway(probe: GatewayProbeResult): boolean {
+  return (
+    probe.connectLatencyMs !== null ||
+    probe.auth.capability !== "unknown" ||
+    probe.server?.connId != null ||
+    probe.server?.version != null
+  );
+}
+
+/** Reads only Gateway config and classifies whether its default agent has inference. */
+export async function probeGatewayConfiguredModel(
+  params: OnboardingGatewayProbeParams,
+): Promise<GatewayConfiguredModelProbeResult> {
+  let probe: GatewayProbeResult;
+  try {
+    probe = await runOnboardingGatewayProbe(params, "config");
+  } catch (err) {
+    return { kind: "unreachable", detail: summarizeError(err) };
+  }
+  if (!probe.ok) {
+    const detail = probe.error ?? undefined;
+    return didProbeReachGateway(probe)
+      ? { kind: "reachable-unverified", detail }
+      : { kind: "unreachable", detail };
+  }
+  const snapshot = probe.configSnapshot as {
+    valid?: unknown;
+    runtimeConfig?: unknown;
+    config?: unknown;
+  } | null;
+  const configCandidate =
+    snapshot?.valid === true ? (snapshot.runtimeConfig ?? snapshot.config) : null;
+  if (!configCandidate || typeof configCandidate !== "object" || Array.isArray(configCandidate)) {
+    return {
+      kind: "reachable-unverified",
+      detail: "Gateway returned an invalid config snapshot",
+    };
+  }
+  try {
+    const config = configCandidate as OpenClawConfig;
+    const model = resolveAgentEffectiveModelPrimary(config, resolveDefaultAgentId(config));
+    return model
+      ? { kind: "configured" }
+      : {
+          kind: "missing-configured-model",
+          detail: "Gateway default agent has no configured model",
+        };
+  } catch {
+    return {
+      kind: "reachable-unverified",
+      detail: "Gateway returned an invalid config snapshot",
+    };
   }
 }
 

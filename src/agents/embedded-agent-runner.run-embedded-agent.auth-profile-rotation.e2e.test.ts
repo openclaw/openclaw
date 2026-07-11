@@ -108,8 +108,12 @@ beforeAll(async () => {
     await import("../logging/logger.js"));
 });
 
+type RunEmbeddedAgentTestParams = Parameters<typeof runEmbeddedAgent>[0] & {
+  authProfileStateMode?: "read-write" | "read-only";
+};
+
 async function runEmbeddedAgentInline(
-  params: Parameters<typeof runEmbeddedAgent>[0],
+  params: RunEmbeddedAgentTestParams,
 ): Promise<Awaited<ReturnType<typeof runEmbeddedAgent>>> {
   return await runEmbeddedAgent({
     ...params,

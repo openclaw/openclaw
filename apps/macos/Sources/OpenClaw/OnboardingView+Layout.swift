@@ -60,23 +60,23 @@ extension OnboardingView {
 
     @discardableResult
     func onboardingDidAppear() -> Task<Void, Never>? {
-        self.onboardingVisible = true
-        self.currentPage = 0
-        self.updateMonitoring(for: 0)
+        onboardingVisible = true
+        currentPage = 0
+        updateMonitoring(for: 0)
         // App launch may have connected and emitted its snapshot before this
         // view subscribed. Always inspect the selected route once on appear.
         return self.probeConfiguredGatewayForDashboard(knownVisible: true)
     }
 
     func onboardingDidDisappear() {
-        self.onboardingVisible = false
-        self.configuredGatewayProbe.invalidate()
+        onboardingVisible = false
+        configuredGatewayProbe.invalidate()
         // Queued detection can otherwise proceed into a mutating activation
         // after the window or its selected route has gone away.
-        self.aiSetup.resetForGatewayChange(clearPendingHandoff: false)
-        self.crestodianState.resetForGatewayChange()
-        self.stopPermissionMonitoring()
-        self.stopDiscovery()
+        aiSetup.resetForGatewayChange(clearPendingHandoff: false)
+        crestodianState.resetForGatewayChange()
+        stopPermissionMonitoring()
+        stopDiscovery()
     }
 
     func activePageIndex(for pageCursor: Int) -> Int {
@@ -105,23 +105,23 @@ extension OnboardingView {
         if let updatePageMonitoring {
             updatePageMonitoring(self.activePageIndex)
             self.probeConfiguredGatewayForDashboard(
-                startAISetupWhenMissing: self.activePageIndex == self.aiPageIndex)
+                startAISetupWhenMissing: self.activePageIndex == aiPageIndex)
             return
         }
         // A mode swap can keep the same page cursor, so its onChange hook may not restart AI setup.
-        self.updateMonitoring(for: self.activePageIndex)
+        updateMonitoring(for: self.activePageIndex)
         self.probeConfiguredGatewayForDashboard(
-            startAISetupWhenMissing: self.activePageIndex == self.aiPageIndex)
+            startAISetupWhenMissing: self.activePageIndex == aiPageIndex)
     }
 
     func resetGatewayBoundAIState() {
-        self.configuredGatewayProbe.invalidate()
+        configuredGatewayProbe.invalidate()
         // The UI attempt belongs to one route, but its durable activation lease
         // must survive A -> B -> A while the old Gateway can still be mutating.
-        self.aiSetup.resetForGatewayChange(clearPendingHandoff: false)
+        aiSetup.resetForGatewayChange(clearPendingHandoff: false)
         // Crestodian sessions belong to one Gateway. Dismiss and replace the chat so
         // changing routes cannot send an old session ID to the new endpoint.
-        self.crestodianState.resetForGatewayChange()
+        crestodianState.resetForGatewayChange()
     }
 
     @discardableResult
@@ -132,25 +132,37 @@ extension OnboardingView {
     {
         // onAppear itself is authoritative even before SwiftUI commits the
         // @State write; probe invalidation still rejects post-disappear results.
-        guard knownVisible || self.onboardingVisible else { return nil }
+        guard knownVisible || onboardingVisible else { return nil }
         // `Check connection` temporarily borrows remote mode without selecting
         // that Gateway. Its successful handshake must never complete onboarding.
-        guard !self.configuredGatewayProbe.isSuppressedForTemporaryConnectionCheck else { return nil }
+        guard !configuredGatewayProbe.isSuppressedForTemporaryConnectionCheck else { return nil }
         // Persist the latest selection before GatewayEndpointStore resolves the
         // route, so an immediate probe cannot attach to the previous endpoint.
-        self.state.syncGatewayConfigNow()
-        let expectedMode = self.state.connectionMode
+        guard gatewaySelectionPersister() else { return nil }
+        let expectedMode = state.connectionMode
         let expectedRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(
-            state: self.state,
-            preferredGatewayID: self.preferredGatewayID ?? GatewayDiscoveryPreferences.preferredStableID())
-        let probeAttempt = self.configuredGatewayProbe.beginProbe()
+            state: state,
+            preferredGatewayID: effectivePreferredGatewayID)
+        let expectedPendingState = OnboardingCrestodianResumeStore.pendingState(
+            for: expectedRouteIdentity,
+            defaults: crestodianDefaults)
+        let expectedActivationOwner = OnboardingCrestodianResumeStore.activationOwner(
+            for: expectedRouteIdentity,
+            defaults: crestodianDefaults)
+        let probeAttempt = configuredGatewayProbe.beginProbe()
         return Task { @MainActor in
             let outcome = await self.configuredGatewayProbe.probe(
                 connectionMode: expectedMode,
-                attempt: probeAttempt)
+                attempt: probeAttempt,
+                routeIdentity: expectedRouteIdentity)
+            if let boundRoute = outcome.boundRoute {
+                guard boundRoute.identity == expectedRouteIdentity,
+                      await self.configuredGatewayProbe.isCurrent(boundRoute)
+                else { return }
+            }
             let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(
                 state: self.state,
-                preferredGatewayID: self.preferredGatewayID ?? GatewayDiscoveryPreferences.preferredStableID())
+                preferredGatewayID: self.effectivePreferredGatewayID)
             guard self.configuredGatewayProbe.isCurrent(probeAttempt),
                   Self.isCurrentConfiguredGatewayProbe(
                       onboardingVisible: knownVisible || self.onboardingVisible,
@@ -172,7 +184,7 @@ extension OnboardingView {
             }
 
             switch outcome {
-            case let .configured(modelRef):
+            case let .configured(modelRef, _):
                 switch pendingState {
                 case .activating, .activationExpired, .completed:
                     // A live setup/verification already owns this marker. A
@@ -187,7 +199,13 @@ extension OnboardingView {
                     self.waitForPendingInferenceSetup()
                     return
                 case .none:
-                    break
+                    // A concurrent probe can clear an expired marker while
+                    // the dispatched activation is still returning. Keep the
+                    // setup-owned handoff, and prove inference on this route.
+                    if self.aiSetup.pendingActivationVerification {
+                        self.resumePendingCrestodian(modelRef: modelRef)
+                        return
+                    }
                 }
                 guard Self.shouldOpenConfiguredGatewayDashboard(
                     onboardingVisible: self.onboardingVisible,
@@ -198,7 +216,7 @@ extension OnboardingView {
                 else { return }
                 self.onboardingVisible = false
                 self.configuredGatewayProbe.invalidate()
-                OnboardingController.markComplete(clearSelectedRouteResume: false)
+                OnboardingController.markComplete()
                 OnboardingController.shared.close()
                 AppNavigationActions.openDashboard()
             case .missing:
@@ -213,11 +231,15 @@ extension OnboardingView {
                     self.waitForPendingInferenceSetup()
                     return
                 case .activationExpired, .completed:
-                    if let expectedRouteIdentity {
-                        OnboardingCrestodianResumeStore.clear(
-                            ifOwnedBy: expectedRouteIdentity,
-                            defaults: self.crestodianDefaults)
-                    }
+                    // The absence result was dispatched for the receipt visible
+                    // at probe start. A replacement attempt owns its own retry.
+                    guard expectedPendingState != .none,
+                          let expectedRouteIdentity,
+                          OnboardingCrestodianResumeStore.clear(
+                              ifOwnedBy: expectedRouteIdentity,
+                              activationOwner: expectedActivationOwner,
+                              defaults: self.crestodianDefaults)
+                    else { return }
                     self.resumePendingInferenceSetup()
                     return
                 case .none:
@@ -265,10 +287,10 @@ extension OnboardingView {
 
     private func returnToInferenceSetupIfNeeded() {
         let targetPage = Self.pageCursorAfterGatewayReset(
-            currentPage: self.currentPage,
-            pageOrder: self.pageOrder,
-            aiPageIndex: self.aiPageIndex)
-        guard targetPage != self.currentPage else { return }
+            currentPage: currentPage,
+            pageOrder: pageOrder,
+            aiPageIndex: aiPageIndex)
+        guard targetPage != currentPage else { return }
         withAnimation { self.currentPage = targetPage }
     }
 

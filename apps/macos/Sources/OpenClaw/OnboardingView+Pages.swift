@@ -15,7 +15,7 @@ extension OnboardingView {
         case 2:
             self.cliPage()
         case 3:
-            self.aiSetupPage()
+            aiSetupPage()
         case 5:
             self.permissionsPage()
         case 9:
@@ -26,7 +26,7 @@ extension OnboardingView {
     }
 
     func welcomePage() -> some View {
-        self.onboardingPage {
+        onboardingPage {
             VStack(spacing: 18) {
                 VStack(spacing: 8) {
                     Text("Welcome to OpenClaw")
@@ -76,7 +76,7 @@ extension OnboardingView {
     }
 
     func connectionPage() -> some View {
-        self.onboardingPage {
+        onboardingPage {
             Text("Where should your assistant live?")
                 .font(.largeTitle.weight(.semibold))
             Text(
@@ -144,7 +144,7 @@ extension OnboardingView {
                     .multilineTextAlignment(.center)
             }
         }
-        .onChange(of: self.state.connectionMode) { _, newValue in
+        .onChange(of: state.connectionMode) { _, newValue in
             // The root view's mode observer calls handleConnectionModeChange(), which
             // retires route-owned AI/Crestodian state. This nested observer owns probe copy only.
             guard Self.shouldResetRemoteProbeFeedback(
@@ -153,25 +153,25 @@ extension OnboardingView {
             else { return }
             self.resetRemoteProbeFeedback()
         }
-        .onChange(of: self.state.remoteTransport) { _, _ in
+        .onChange(of: state.remoteTransport) { _, _ in
             self.retireGatewayStateForRemoteEndpointEdit()
         }
-        .onChange(of: self.state.remoteTarget) { _, _ in
+        .onChange(of: state.remoteTarget) { _, _ in
             self.retireGatewayStateForRemoteEndpointEdit()
         }
-        .onChange(of: self.state.remoteUrl) { _, _ in
+        .onChange(of: state.remoteUrl) { _, _ in
             self.retireGatewayStateForRemoteEndpointEdit()
         }
-        .onChange(of: self.state.remoteToken) { _, _ in
+        .onChange(of: state.remoteToken) { _, _ in
             self.retireGatewayStateForRemoteEndpointEdit()
         }
-        .onChange(of: self.state.remoteIdentity) { _, _ in
+        .onChange(of: state.remoteIdentity) { _, _ in
             self.retireGatewayStateForRemoteEndpointEdit()
         }
     }
 
     private var localGatewaySubtitle: String {
-        guard let probe = self.localGatewayProbe else {
+        guard let probe = localGatewayProbe else {
             return "Private to this computer. Installs and starts automatically."
         }
         let base = probe.expected
@@ -182,7 +182,7 @@ extension OnboardingView {
     }
 
     private var remoteChoiceSubtitle: String {
-        let count = self.gatewayDiscovery.gateways.count
+        let count = gatewayDiscovery.gateways.count
         if count > 0 {
             return count == 1
                 ? "1 gateway found on your network — click to choose it."
@@ -195,7 +195,7 @@ extension OnboardingView {
     private func gatewayDiscoverySection() -> some View {
         // Quiet by design: discovery runs in the background and must not make
         // the page read as "loading" — no spinner, just a status line.
-        if self.gatewayDiscovery.gateways.isEmpty {
+        if gatewayDiscovery.gateways.isEmpty {
             HStack(spacing: 8) {
                 Image(systemName: "dot.radiowaves.left.and.right")
                     .font(.caption)
@@ -236,7 +236,7 @@ extension OnboardingView {
 
     @ViewBuilder
     private func advancedConnectionSection() -> some View {
-        Button(self.showAdvancedConnection ? "Hide Advanced" : "Advanced…") {
+        Button(showAdvancedConnection ? "Hide Advanced" : "Advanced…") {
             withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
                 self.showAdvancedConnection.toggle()
             }
@@ -246,7 +246,7 @@ extension OnboardingView {
         }
         .buttonStyle(.link)
 
-        if self.showAdvancedConnection {
+        if showAdvancedConnection {
             let labelWidth: CGFloat = 110
             let fieldWidth: CGFloat = 320
 
@@ -353,67 +353,67 @@ extension OnboardingView {
     }
 
     func updateManualRemoteTransport(_ value: AppState.RemoteTransport) {
-        guard value != self.state.remoteTransport else { return }
+        guard value != state.remoteTransport else { return }
         self.retireGatewayStateForRemoteEndpointEdit()
         self.clearPreferredGatewayForManualEndpointEdit()
-        self.state.remoteTransport = value
+        state.remoteTransport = value
     }
 
     func updateManualRemoteURL(_ value: String) {
-        guard value != self.state.remoteUrl else { return }
+        guard value != state.remoteUrl else { return }
         self.retireGatewayStateForRemoteEndpointEdit()
         self.clearPreferredGatewayForManualEndpointEdit()
-        self.state.remoteUrl = value
+        state.remoteUrl = value
     }
 
     func updateManualRemoteTarget(_ value: String) {
-        guard value != self.state.remoteTarget else { return }
+        guard value != state.remoteTarget else { return }
         self.retireGatewayStateForRemoteEndpointEdit()
         self.clearPreferredGatewayForManualEndpointEdit()
-        self.state.remoteTarget = value
+        state.remoteTarget = value
     }
 
     func retireGatewayStateForRemoteEndpointEdit() {
         self.resetRemoteProbeFeedback()
         // Editing only retires work owned by the old route. The durable lease
         // survives, and Check connection / the AI page probes the finished value.
-        self.resetGatewayBoundAIState()
+        resetGatewayBoundAIState()
     }
 
     private func clearPreferredGatewayForManualEndpointEdit() {
-        let preferred = self.preferredGatewayID ?? GatewayDiscoveryPreferences.preferredStableID()
+        let preferred = preferredGatewayID ?? GatewayDiscoveryPreferences.preferredStableID()
         guard preferred != nil else { return }
-        self.preferredGatewayID = nil
+        preferredGatewayID = nil
         // The coordinator clears the persisted discovery preference and revokes
         // any suspended attempt before this manual endpoint can become active.
         MacNodeModeCoordinator.shared.setPreferredGatewayStableID(nil)
     }
 
     private var shouldShowRemoteConnectionSection: Bool {
-        self.state.connectionMode == .remote ||
-            self.showAdvancedConnection ||
-            self.remoteProbeState != .idle ||
-            self.remoteAuthIssue != nil ||
+        state.connectionMode == .remote ||
+            showAdvancedConnection ||
+            remoteProbeState != .idle ||
+            remoteAuthIssue != nil ||
             Self.shouldShowRemoteTokenField(
-                showAdvancedConnection: self.showAdvancedConnection,
-                remoteToken: self.state.remoteToken,
-                remoteTokenUnsupported: self.state.remoteTokenUnsupported,
-                authIssue: self.remoteAuthIssue)
+                showAdvancedConnection: showAdvancedConnection,
+                remoteToken: state.remoteToken,
+                remoteTokenUnsupported: state.remoteTokenUnsupported,
+                authIssue: remoteAuthIssue)
     }
 
     private var shouldShowRemoteTokenField: Bool {
         guard self.shouldShowRemoteConnectionSection else { return false }
         return Self.shouldShowRemoteTokenField(
-            showAdvancedConnection: self.showAdvancedConnection,
-            remoteToken: self.state.remoteToken,
-            remoteTokenUnsupported: self.state.remoteTokenUnsupported,
-            authIssue: self.remoteAuthIssue)
+            showAdvancedConnection: showAdvancedConnection,
+            remoteToken: state.remoteToken,
+            remoteTokenUnsupported: state.remoteTokenUnsupported,
+            authIssue: remoteAuthIssue)
     }
 
     private var remoteProbePreflightMessage: String? {
-        switch self.state.remoteTransport {
+        switch state.remoteTransport {
         case .direct:
-            let trimmedUrl = self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedUrl = state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmedUrl.isEmpty {
                 return "Select a nearby gateway or open Advanced to enter a gateway URL."
             }
@@ -424,7 +424,7 @@ extension OnboardingView {
             }
             return nil
         case .ssh:
-            let trimmedTarget = self.state.remoteTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedTarget = state.remoteTarget.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmedTarget.isEmpty {
                 return "Select a nearby gateway or open Advanced to enter an SSH target."
             }
@@ -433,7 +433,7 @@ extension OnboardingView {
     }
 
     private var canProbeRemoteConnection: Bool {
-        self.remoteProbePreflightMessage == nil && self.remoteProbeState != .checking
+        self.remoteProbePreflightMessage == nil && remoteProbeState != .checking
     }
 
     private func remoteConnectionSection() -> some View {
@@ -509,7 +509,7 @@ extension OnboardingView {
 
     @ViewBuilder
     private func remoteProbeStatusView() -> some View {
-        switch self.remoteProbeState {
+        switch remoteProbeState {
         case .idle:
             EmptyView()
         case .checking:
@@ -529,7 +529,7 @@ extension OnboardingView {
                 }
             }
         case let .failed(message):
-            if self.remoteAuthIssue == nil {
+            if remoteAuthIssue == nil {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -565,15 +565,15 @@ extension OnboardingView {
 
     @MainActor
     private func probeRemoteConnection() async {
-        let originalMode = self.state.connectionMode
+        let originalMode = state.connectionMode
         let shouldRestoreMode = originalMode != .remote
         if shouldRestoreMode {
             // Reuse the shared remote endpoint stack for probing without committing the user's mode choice.
-            self.configuredGatewayProbe.beginTemporaryConnectionCheck()
-            self.state.connectionMode = .remote
+            configuredGatewayProbe.beginTemporaryConnectionCheck()
+            state.connectionMode = .remote
         }
-        self.remoteProbeState = .checking
-        self.remoteAuthIssue = nil
+        remoteProbeState = .checking
+        remoteAuthIssue = nil
         defer {
             if shouldRestoreMode {
                 self.suppressRemoteProbeReset = true
@@ -585,18 +585,18 @@ extension OnboardingView {
 
         switch await RemoteGatewayProbe.run() {
         case let .ready(success):
-            self.remoteProbeState = .ok(success)
+            remoteProbeState = .ok(success)
         case let .authIssue(issue):
-            self.remoteAuthIssue = issue
-            self.remoteProbeState = .failed(issue.statusMessage)
+            remoteAuthIssue = issue
+            remoteProbeState = .failed(issue.statusMessage)
         case let .failed(message):
-            self.remoteProbeState = .failed(message)
+            remoteProbeState = .failed(message)
         }
     }
 
     func resetRemoteProbeFeedback() {
-        self.remoteProbeState = .idle
-        self.remoteAuthIssue = nil
+        remoteProbeState = .idle
+        remoteAuthIssue = nil
     }
 
     static func remoteAuthPromptStyle(
@@ -639,7 +639,7 @@ extension OnboardingView {
     }
 
     func gatewaySubtitle(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
-        if self.state.remoteTransport == .direct {
+        if state.remoteTransport == .direct {
             return GatewayDiscoveryHelpers.directUrl(for: gateway) ?? "Gateway pairing only"
         }
         if let target = GatewayDiscoveryHelpers.sshTarget(for: gateway),
@@ -652,9 +652,8 @@ extension OnboardingView {
     }
 
     func isSelectedGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool {
-        guard self.state.connectionMode == .remote else { return false }
-        let preferred = self.preferredGatewayID ?? GatewayDiscoveryPreferences.preferredStableID()
-        return preferred == gateway.stableID
+        guard state.connectionMode == .remote else { return false }
+        return effectivePreferredGatewayID == gateway.stableID
     }
 
     func connectionChoiceButton(
@@ -744,11 +743,11 @@ extension OnboardingView {
             }
         }
         .padding(.horizontal, 28)
-        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
+        .frame(width: pageWidth, height: contentHeight, alignment: .top)
     }
 
     func cliPage() -> some View {
-        self.onboardingPage {
+        onboardingPage {
             Text("Getting things ready")
                 .font(.largeTitle.weight(.semibold))
             Text(
@@ -796,17 +795,17 @@ extension OnboardingView {
     }
 
     private var installFailed: Bool {
-        self.cliStatusKnown && !self.installingCLI && !self.cliInstalled
+        cliStatusKnown && !installingCLI && !cliInstalled
     }
 
     /// Exactly one spinner at a time: the install row finishes before the
     /// service row starts, mirroring the actual runCLIInstall phases.
     private var installStepStateForInstall: InstallStepState {
-        if self.cliInstalled {
+        if cliInstalled {
             return .done
         }
-        if self.installingCLI {
-            return self.cliInstallPhase == .startingService ? .done : .running
+        if installingCLI {
+            return cliInstallPhase == .startingService ? .done : .running
         }
         if self.installFailed {
             return .failed
@@ -815,11 +814,11 @@ extension OnboardingView {
     }
 
     private var installStepStateForService: InstallStepState {
-        if self.cliInstalled {
+        if cliInstalled {
             return .done
         }
-        if self.installingCLI {
-            return self.cliInstallPhase == .startingService ? .running : .pending
+        if installingCLI {
+            return cliInstallPhase == .startingService ? .running : .pending
         }
         if self.installFailed {
             return .failed
@@ -876,7 +875,7 @@ extension OnboardingView {
     }
 
     func readyPage() -> some View {
-        self.onboardingPage {
+        onboardingPage {
             Text("You’re all set!")
                 .font(.largeTitle.weight(.semibold))
             if self.state.connectionMode != .unconfigured {
@@ -942,7 +941,7 @@ extension OnboardingView {
             }
         }
         .task { await self.maybeLoadOnboardingSkills() }
-        .onChange(of: self.currentPage) { _, newValue in
+        .onChange(of: currentPage) { _, newValue in
             // The pager builds every page up front, so the initial load above
             // can run before the local gateway is configured and fail. Retry
             // when the user actually lands here instead of latching the error.
@@ -952,14 +951,14 @@ extension OnboardingView {
     }
 
     private func maybeLoadOnboardingSkills() async {
-        if self.onboardingSkillsModel.isLoading {
+        if onboardingSkillsModel.isLoading {
             return
         }
-        if self.didLoadOnboardingSkills, self.onboardingSkillsModel.error == nil {
+        if didLoadOnboardingSkills, onboardingSkillsModel.error == nil {
             return
         }
-        self.didLoadOnboardingSkills = true
-        await self.onboardingSkillsModel.refresh()
+        didLoadOnboardingSkills = true
+        await onboardingSkillsModel.refresh()
     }
 
     private var skillsOverview: some View {

@@ -128,6 +128,9 @@ final class OnboardingAISetupModel {
     private var started = false
     private var attemptToken = UUID()
     @ObservationIgnored private var pendingVerification: PendingVerification?
+    @ObservationIgnored private var pendingActivationOwner: OnboardingCrestodianResumeStore.ActivationOwner?
+    @ObservationIgnored private var completedHandoff: CompletedHandoff?
+    @ObservationIgnored private var pendingActivationRequiresFreshActivation = false
 
     private struct AttemptContext: Equatable {
         let token: UUID
@@ -137,6 +140,11 @@ final class OnboardingAISetupModel {
     private struct PendingVerification {
         let context: AttemptContext
         let task: Task<PendingVerificationOutcome, Never>
+    }
+
+    private struct CompletedHandoff {
+        let routeIdentity: String
+        let activationOwner: OnboardingCrestodianResumeStore.ActivationOwner?
     }
 
     init(
@@ -163,9 +171,6 @@ final class OnboardingAISetupModel {
 
         let candidates: [DetectedCandidate]
         let manualProviders: [ManualProvider]?
-        let workspace: String
-        let configuredModel: String?
-        let setupComplete: Bool
     }
 
     private struct ActivateResult: Decodable {
@@ -228,8 +233,8 @@ final class OnboardingAISetupModel {
               self.phase != .testing,
               !self.manualTesting,
               !self.pendingActivationVerification,
-              let routeIdentity = self.routeIdentityProvider(),
-              let deadline = self.activePendingActivationDeadline(for: routeIdentity)
+              let routeIdentity = routeIdentityProvider(),
+              let deadline = activePendingActivationDeadline(for: routeIdentity)
         else { return }
         if !self.waitingForPendingActivationDeadline {
             self.resetForGatewayChange(clearPendingHandoff: false)
@@ -250,14 +255,32 @@ final class OnboardingAISetupModel {
         // Reconnects and page changes can discover the same pending handoff
         // repeatedly. Keep the first attempt and let every caller await it.
         guard !self.ownsInferenceTransition else { return }
+        let routeIdentity = self.routeIdentityProvider()
+        let pendingState = OnboardingCrestodianResumeStore.pendingState(
+            for: routeIdentity,
+            defaults: self.defaults)
+        let inMemoryOwner = self.pendingActivationOwner
+        let restoredOwner = OnboardingCrestodianResumeStore.activationOwner(
+            for: routeIdentity,
+            defaults: self.defaults)
+        let activationOwner = inMemoryOwner ?? restoredOwner
+        // A completed receipt may resume only after live inference and an exact
+        // owner check. Other relaunched states must repeat activation because a
+        // model label alone does not prove which attempt committed it.
+        let requiresFreshActivation = inMemoryOwner != nil || pendingState != .none
         self.resetForGatewayChange(clearPendingHandoff: false)
+        // resetForGatewayChange retires the async attempt but the route-owned
+        // durable receipt above must survive into this reconciliation attempt.
+        self.pendingActivationOwner = activationOwner
+        self.pendingActivationRequiresFreshActivation = requiresFreshActivation
         self.started = true
         self.pendingActivationVerification = true
         self.phase = .detecting
     }
 
-    /// Resolve an ambiguous activation only by making the configured route
-    /// answer a fresh, tool-free inference turn on the same Gateway route.
+    /// Reconcile an ambiguous activation on the same Gateway route. A live turn
+    /// is necessary, but only a matching durable completion receipt may hand off;
+    /// otherwise setup repeats a fresh activate round-trip.
     @discardableResult
     func verifyPendingConfiguredInference() async -> PendingVerificationOutcome {
         guard self.pendingActivationVerification,
@@ -300,6 +323,41 @@ final class OnboardingAISetupModel {
                 "The selected Gateway changed before inference could be verified. Try again.")
             return self.pendingVerificationFailureOutcome(context: context)
         }
+        if let activationOwner = pendingActivationOwner {
+            guard let currentFingerprint = route.activationOwnershipFingerprint else {
+                self.phase = .ready
+                self.detectError = Self.transportFailure(
+                    "Secure storage is unavailable, so OpenClaw cannot verify which Gateway completed AI setup.")
+                return .notConnected
+            }
+            guard activationOwner.routeFingerprint == currentFingerprint else {
+                switch OnboardingCrestodianResumeStore.pendingState(
+                    for: context.routeIdentity,
+                    defaults: self.defaults)
+                {
+                case let .activating(deadline), let .verified(deadline):
+                    // Replacement auth cannot verify this owner, but the old
+                    // activation may still mutate the same route. Keep its lease.
+                    self.pendingActivationVerification = false
+                    self.beginPendingActivationDeadlineWait(
+                        deadline: deadline,
+                        routeIdentity: context.routeIdentity)
+                    return .notConnected
+                case .activationExpired, .completed, .none:
+                    // No live mutation remains to overlap. Retire only this
+                    // owner, then let the replacement credentials start fresh.
+                    OnboardingCrestodianResumeStore.clear(
+                        ifOwnedBy: context.routeIdentity,
+                        activationOwner: activationOwner,
+                        defaults: self.defaults)
+                    self.pendingActivationVerification = false
+                    self.phase = .ready
+                    self.detectError = Self.transportFailure(
+                        "The Gateway authentication changed while AI setup was finishing. Testing it again.")
+                    return .freshSetupAllowed
+                }
+            }
+        }
         do {
             let data = try await gateway.request(
                 method: "crestodian.setup.verify",
@@ -307,22 +365,23 @@ final class OnboardingAISetupModel {
                 timeoutMs: 150_000,
                 ifCurrentRoute: route,
                 distinguishPreDispatchRouteChange: true)
-            let routeIsCurrent = await self.gateway.isCurrentRoute(route)
+            let routeIsCurrent = await gateway.isCurrentRoute(route)
             guard routeIsCurrent,
                   self.isCurrentAttempt(context),
                   !Task.isCancelled
             else { return .superseded }
             let result = try JSONDecoder().decode(ActivateResult.self, from: data)
             if result.ok, let modelRef = result.modelRef {
-                switch OnboardingCrestodianResumeStore.pendingState(
+                let pendingState = OnboardingCrestodianResumeStore.pendingState(
                     for: context.routeIdentity,
                     defaults: self.defaults)
-                {
+                switch pendingState {
                 case let .activating(deadline), let .verified(deadline):
                     // This proves inference works, but not that the dropped
                     // activation stopped mutating. Preserve its deadline.
                     OnboardingCrestodianResumeStore.markVerified(
                         ifOwnedBy: context.routeIdentity,
+                        activationOwner: self.pendingActivationOwner,
                         defaults: self.defaults)
                     self.pendingActivationVerification = false
                     self.detectError = nil
@@ -330,8 +389,25 @@ final class OnboardingAISetupModel {
                         deadline: deadline,
                         routeIdentity: context.routeIdentity)
                     return .notConnected
-                case .activationExpired, .completed, .none:
-                    break
+                case .activationExpired, .none:
+                    if self.pendingActivationRequiresFreshActivation {
+                        self.pendingActivationVerification = false
+                        self.clearPendingHandoff(ifOwnedBy: context)
+                        return .freshSetupAllowed
+                    }
+                case .completed:
+                    self.finishConnected(
+                        kind: "existing-model",
+                        result: result,
+                        activationOwner: self.pendingActivationOwner,
+                        requireExistingReceipt: true)
+                    if self.connected {
+                        return .connected
+                    }
+                    // The receipt owner changed while verification was in flight.
+                    // Adopt it only for a fresh verification; this result cannot attest it.
+                    self.retainCompletedReceiptForRetry(context: context)
+                    return .notConnected
                 }
                 self.acceptVerifiedPendingInference(
                     modelRef: modelRef,
@@ -361,16 +437,41 @@ final class OnboardingAISetupModel {
             for: context.routeIdentity,
             defaults: self.defaults)
         {
-        case .activating, .verified:
+        case let .activating(deadline), let .verified(deadline):
             // The dropped activation may still be writing config or credentials.
             // Verification may repeat, but mutation stays blocked until its lease ends.
+            if let activationOwner = pendingActivationOwner,
+               !OnboardingCrestodianResumeStore.isOwned(
+                   by: activationOwner,
+                   for: context.routeIdentity,
+                   defaults: defaults)
+            {
+                self.pendingActivationVerification = false
+                self.beginPendingActivationDeadlineWait(
+                    deadline: deadline,
+                    routeIdentity: context.routeIdentity)
+                return .notConnected
+            }
             self.pendingActivationVerification = true
             return .notConnected
-        case .activationExpired, .completed, .none:
+        case .completed:
+            // Completion is durable proof that activation returned success. A
+            // read-only transport failure cannot authorize replacement setup.
+            self.retainCompletedReceiptForRetry(context: context)
+            return .notConnected
+        case .activationExpired, .none:
             self.pendingActivationVerification = false
             self.clearPendingHandoff(ifOwnedBy: context)
             return .freshSetupAllowed
         }
+    }
+
+    private func retainCompletedReceiptForRetry(context: AttemptContext) {
+        self.pendingActivationOwner = OnboardingCrestodianResumeStore.activationOwner(
+            for: context.routeIdentity,
+            defaults: self.defaults)
+        self.pendingActivationRequiresFreshActivation = true
+        self.pendingActivationVerification = true
     }
 
     private func activePendingActivationDeadline(for routeIdentity: String) -> Date? {
@@ -394,19 +495,61 @@ final class OnboardingAISetupModel {
         self.onPendingActivationDeadline?(deadline, routeIdentity)
     }
 
-    private func retainAmbiguousActivation(ifOwnedBy context: AttemptContext) {
+    private func retainAmbiguousActivation(
+        ifOwnedBy context: AttemptContext,
+        activationOwner: OnboardingCrestodianResumeStore.ActivationOwner,
+        activationDeadline: Date)
+    {
         guard self.isCurrentAttempt(context) else { return }
         self.pendingActivationVerification = true
-        guard let deadline = self.activePendingActivationDeadline(for: context.routeIdentity) else { return }
-        self.beginPendingActivationDeadlineWait(
-            deadline: deadline,
-            routeIdentity: context.routeIdentity)
+        switch OnboardingCrestodianResumeStore.pendingState(
+            for: context.routeIdentity,
+            defaults: self.defaults)
+        {
+        case let .activating(deadline), let .verified(deadline):
+            guard OnboardingCrestodianResumeStore.isOwned(
+                by: activationOwner,
+                for: context.routeIdentity,
+                defaults: self.defaults)
+            else {
+                // Another process replaced this lease. Never let our result
+                // complete or clear the newer activation.
+                self.pendingActivationVerification = false
+                self.beginPendingActivationDeadlineWait(
+                    deadline: deadline,
+                    routeIdentity: context.routeIdentity)
+                return
+            }
+            self.beginPendingActivationDeadlineWait(
+                deadline: deadline,
+                routeIdentity: context.routeIdentity)
+        case .none:
+            // A concurrent read-only probe can clear the marker while the
+            // dispatched handler is still returning. Restore route ownership
+            // before probing so failure or relaunch cannot start a duplicate.
+            OnboardingCrestodianResumeStore.restorePending(
+                routeIdentity: context.routeIdentity,
+                activationOwner: activationOwner,
+                deadline: activationDeadline,
+                defaults: self.defaults)
+            self.beginPendingActivationDeadlineWait(
+                deadline: Date(),
+                routeIdentity: context.routeIdentity)
+        case .activationExpired, .completed:
+            // The marker no longer blocks mutation, but the dispatched handler
+            // may still commit. Probe immediately so only observed Gateway
+            // state can decide when a fresh activation is safe.
+            self.beginPendingActivationDeadlineWait(
+                deadline: Date(),
+                routeIdentity: context.routeIdentity)
+        }
     }
 
-    /// Complete a restored handoff only after a route-bound live inference RPC.
+    /// Complete a receipt-backed restored handoff after route-bound live inference.
     func acceptVerifiedPendingInference(modelRef: String, latencyMs: Double? = nil) {
         let model = modelRef.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.pendingActivationVerification, !model.isEmpty else { return }
+        guard self.pendingActivationOwner == nil else { return }
         self.finishConnected(
             kind: "existing-model",
             result: ActivateResult(
@@ -414,19 +557,35 @@ final class OnboardingAISetupModel {
                 modelRef: model,
                 latencyMs: latencyMs,
                 status: nil,
-                error: nil))
+                error: nil),
+            activationOwner: self.pendingActivationOwner)
+    }
+
+    /// Clear only the completed receipt created by this setup attempt.
+    /// A replacement activation on the same route retains its own receipt.
+    func clearCompletedHandoffIfOwned() {
+        guard let completedHandoff else { return }
+        OnboardingCrestodianResumeStore.clear(
+            ifOwnedBy: completedHandoff.routeIdentity,
+            activationOwner: completedHandoff.activationOwner,
+            defaults: self.defaults)
+        self.completedHandoff = nil
     }
 
     /// Cancel route-bound work and discard results that belong to the previous Gateway.
     func resetForGatewayChange(clearPendingHandoff: Bool = true) {
-        if clearPendingHandoff, let routeIdentity = self.routeIdentityProvider() {
+        if clearPendingHandoff, let routeIdentity = routeIdentityProvider() {
             OnboardingCrestodianResumeStore.clear(
                 ifOwnedBy: routeIdentity,
+                activationOwner: self.pendingActivationOwner,
                 defaults: self.defaults)
         }
         self.attemptToken = UUID()
         self.pendingVerification?.task.cancel()
         self.pendingVerification = nil
+        self.pendingActivationOwner = nil
+        self.completedHandoff = nil
+        self.pendingActivationRequiresFreshActivation = false
         self.started = false
         self.phase = .idle
         self.candidates = []
@@ -484,7 +643,7 @@ final class OnboardingAISetupModel {
                 timeoutMs: 20000,
                 ifCurrentRoute: route,
                 distinguishPreDispatchRouteChange: true)
-            let routeIsCurrent = await self.gateway.isCurrentRoute(route)
+            let routeIsCurrent = await gateway.isCurrentRoute(route)
             guard routeIsCurrent,
                   self.isCurrentAttempt(context),
                   !Task.isCancelled
@@ -556,10 +715,14 @@ final class OnboardingAISetupModel {
         return route
     }
 
-    private func clearPendingHandoff(ifOwnedBy context: AttemptContext) {
+    private func clearPendingHandoff(
+        ifOwnedBy context: AttemptContext,
+        activationOwner: OnboardingCrestodianResumeStore.ActivationOwner? = nil)
+    {
         guard self.isCurrentAttempt(context) else { return }
         OnboardingCrestodianResumeStore.clear(
             ifOwnedBy: context.routeIdentity,
+            activationOwner: activationOwner ?? self.pendingActivationOwner,
             defaults: self.defaults)
     }
 
@@ -585,8 +748,17 @@ final class OnboardingAISetupModel {
     }
 
     static func activationFailureIsDefinitive(_ error: Error) -> Bool {
-        error is GatewayResponseError ||
-            error is GatewayConnectAuthError ||
+        if let response = error as? GatewayResponseError {
+            let code = response.code.uppercased()
+            let message = response.message.lowercased()
+            // These responses are emitted before the activation handler runs.
+            // Handler failures are UNAVAILABLE and can arrive after mutation.
+            return code == "UNKNOWN_METHOD" ||
+                (code == "INVALID_REQUEST" &&
+                    (message.contains("unknown method") ||
+                        message.contains("invalid crestodian.setup.activate params")))
+        }
+        return error is GatewayConnectAuthError ||
             error is GatewayTLSValidationError ||
             error is OpenClawChatTransportSendError
     }
@@ -637,14 +809,32 @@ final class OnboardingAISetupModel {
             return
         }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
+        guard let routeFingerprint = route.activationOwnershipFingerprint else {
+            self.statuses[kind] = .failed(Self.transportFailure(
+                "Secure storage is unavailable, so OpenClaw cannot safely resume this AI setup."))
+            self.phase = .ready
+            return
+        }
+        let activationOwner = OnboardingCrestodianResumeStore.ActivationOwner(
+            id: UUID().uuidString,
+            routeFingerprint: routeFingerprint)
+        self.pendingActivationOwner = activationOwner
+        self.pendingActivationRequiresFreshActivation = true
         // Activation can persist before the response reaches the app. Cover the
         // whole ambiguous window so relaunch can inspect the actual Gateway state.
-        OnboardingCrestodianResumeStore.markPending(
+        guard let activationDeadline = OnboardingCrestodianResumeStore.markPending(
             routeIdentity: context.routeIdentity,
+            activationOwner: activationOwner,
             activationTimeoutMs: requestTimeoutMs,
-            defaults: self.defaults)
+            defaults: defaults)
+        else {
+            self.statuses[kind] = .failed(Self.transportFailure(
+                "No Gateway is selected. Select a Gateway, then try again."))
+            self.phase = .ready
+            return
+        }
         guard !Task.isCancelled else {
-            self.clearPendingHandoff(ifOwnedBy: context)
+            self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
             self.phase = .ready
             return
         }
@@ -655,17 +845,17 @@ final class OnboardingAISetupModel {
                 timeoutMs: requestTimeoutMs,
                 ifCurrentRoute: route,
                 distinguishPreDispatchRouteChange: true)
-            let routeIsCurrent = await self.gateway.isCurrentRoute(route)
+            let routeIsCurrent = await gateway.isCurrentRoute(route)
             guard routeIsCurrent,
                   self.isCurrentAttempt(context),
                   !Task.isCancelled
             else { return }
             let result = try JSONDecoder().decode(ActivateResult.self, from: data)
             if result.ok {
-                self.finishConnected(kind: kind, result: result)
+                self.finishConnected(kind: kind, result: result, activationOwner: activationOwner)
             } else {
                 self.pendingActivationVerification = false
-                self.clearPendingHandoff(ifOwnedBy: context)
+                self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
                 self.statuses[kind] = .failed(Self.failure(
                     label: self.candidates.first { $0.kind == kind }?.label ?? kind,
                     status: result.status,
@@ -680,12 +870,15 @@ final class OnboardingAISetupModel {
             self.statuses[kind] = .failed(Self.transportFailure(error.localizedDescription))
             if Self.activationFailureIsDefinitive(error) {
                 self.pendingActivationVerification = false
-                self.clearPendingHandoff(ifOwnedBy: context)
+                self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
                 self.phase = .ready
             } else {
                 // Do not start another provider while the request can still commit.
                 // The route-bound deadline probe decides whether setup may resume.
-                self.retainAmbiguousActivation(ifOwnedBy: context)
+                self.retainAmbiguousActivation(
+                    ifOwnedBy: context,
+                    activationOwner: activationOwner,
+                    activationDeadline: activationDeadline)
             }
         }
     }
@@ -721,14 +914,30 @@ final class OnboardingAISetupModel {
             return
         }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
+        guard let routeFingerprint = route.activationOwnershipFingerprint else {
+            self.manualError = Self.transportFailure(
+                "Secure storage is unavailable, so OpenClaw cannot safely resume this AI setup.")
+            return
+        }
+        let activationOwner = OnboardingCrestodianResumeStore.ActivationOwner(
+            id: UUID().uuidString,
+            routeFingerprint: routeFingerprint)
+        self.pendingActivationOwner = activationOwner
+        self.pendingActivationRequiresFreshActivation = true
         // Manual activation has the same persist-before-response ambiguity as
         // detected candidates, so relaunch must inspect exact Gateway truth.
-        OnboardingCrestodianResumeStore.markPending(
+        guard let activationDeadline = OnboardingCrestodianResumeStore.markPending(
             routeIdentity: context.routeIdentity,
+            activationOwner: activationOwner,
             activationTimeoutMs: 150_000,
-            defaults: self.defaults)
+            defaults: defaults)
+        else {
+            self.manualError = Self.transportFailure(
+                "No Gateway is selected. Select a Gateway, then try again.")
+            return
+        }
         guard !Task.isCancelled else {
-            self.clearPendingHandoff(ifOwnedBy: context)
+            self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
             return
         }
         do {
@@ -742,7 +951,7 @@ final class OnboardingAISetupModel {
                 timeoutMs: 150_000,
                 ifCurrentRoute: route,
                 distinguishPreDispatchRouteChange: true)
-            let routeIsCurrent = await self.gateway.isCurrentRoute(route)
+            let routeIsCurrent = await gateway.isCurrentRoute(route)
             guard routeIsCurrent,
                   self.isCurrentAttempt(context),
                   !Task.isCancelled
@@ -750,10 +959,13 @@ final class OnboardingAISetupModel {
             let result = try JSONDecoder().decode(ActivateResult.self, from: data)
             if result.ok {
                 self.manualKey = ""
-                self.finishConnected(kind: "api-key", result: result)
+                self.finishConnected(
+                    kind: "api-key",
+                    result: result,
+                    activationOwner: activationOwner)
             } else {
                 self.pendingActivationVerification = false
-                self.clearPendingHandoff(ifOwnedBy: context)
+                self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
                 self.manualError = Self.failure(
                     label: provider.label,
                     status: result.status,
@@ -766,14 +978,36 @@ final class OnboardingAISetupModel {
             self.manualError = Self.transportFailure(error.localizedDescription)
             if Self.activationFailureIsDefinitive(error) {
                 self.pendingActivationVerification = false
-                self.clearPendingHandoff(ifOwnedBy: context)
+                self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
             } else {
-                self.retainAmbiguousActivation(ifOwnedBy: context)
+                self.retainAmbiguousActivation(
+                    ifOwnedBy: context,
+                    activationOwner: activationOwner,
+                    activationDeadline: activationDeadline)
             }
         }
     }
 
-    private func finishConnected(kind: String, result: ActivateResult) {
+    private func finishConnected(
+        kind: String,
+        result: ActivateResult,
+        activationOwner: OnboardingCrestodianResumeStore.ActivationOwner? = nil,
+        requireExistingReceipt: Bool = false)
+    {
+        let routeIdentity = self.routeIdentityProvider()?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let completedReceipt = OnboardingCrestodianResumeStore.markCompleted(
+            ifOwnedBy: routeIdentity,
+            activationOwner: activationOwner,
+            defaults: self.defaults)
+        if activationOwner != nil || requireExistingReceipt {
+            guard completedReceipt else {
+                self.pendingActivationVerification = false
+                self.statuses[kind] = .failed(Self.transportFailure(
+                    "Another AI setup attempt replaced this activation. Waiting for its result."))
+                self.phase = .ready
+                return
+            }
+        }
         self.pendingActivationVerification = false
         self.waitingForPendingActivationDeadline = false
         self.statuses[kind] = .connected
@@ -781,9 +1015,13 @@ final class OnboardingAISetupModel {
         self.connectedModelRef = result.modelRef
         self.connectedLatencyMs = result.latencyMs.map { Int($0.rounded()) }
         self.phase = .connected
-        OnboardingCrestodianResumeStore.markCompleted(
-            ifOwnedBy: self.routeIdentityProvider(),
-            defaults: self.defaults)
+        self.pendingActivationOwner = activationOwner
+        self.completedHandoff = completedReceipt ? routeIdentity.flatMap { routeIdentity in
+            routeIdentity.isEmpty ? nil : CompletedHandoff(
+                routeIdentity: routeIdentity,
+                activationOwner: activationOwner)
+        } : nil
+        self.pendingActivationRequiresFreshActivation = false
         self.onConnected?()
     }
 
@@ -1194,7 +1432,7 @@ struct OnboardingAISetupView: View {
             Text(self.manualProviderHelp)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            if let manualError = self.model.manualError {
+            if let manualError = model.manualError {
                 OnboardingErrorCard(
                     title: "That key didn’t work",
                     message: manualError.summary,
@@ -1277,23 +1515,23 @@ struct OnboardingErrorCard: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                if let details = self.details {
+                if let details {
                     OnboardingErrorDetails(text: details)
                 }
                 HStack(spacing: 14) {
-                    if let retryTitle = self.retryTitle, let retry = self.retry {
+                    if let retryTitle, let retry {
                         Button(retryTitle, action: retry)
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                     }
                     Button("Open help…") {
-                        if let url = URL(string: "https://docs.openclaw.ai/\(self.docsSlug)") {
+                        if let url = URL(string: "https://docs.openclaw.ai/\(docsSlug)") {
                             NSWorkspace.shared.open(url)
                         }
                     }
                     .buttonStyle(.link)
                     .font(.caption)
-                    if self.details == nil {
+                    if details == nil {
                         Button("Copy error") {
                             OnboardingErrorDetails.copy(self.message)
                         }

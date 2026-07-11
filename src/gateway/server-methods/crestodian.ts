@@ -15,7 +15,7 @@ import { formatCrestodianStartupMessage } from "../../crestodian/overview.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 /**
@@ -28,11 +28,8 @@ import { assertValidParams } from "./validation.js";
  * conversation, not persisted data. The map is bounded; the oldest session is
  * evicted first, and `reset: true` starts a session over explicitly.
  */
-export type CrestodianChatSession = {
-  engine: CrestodianChatEngine;
-  welcome: string;
-  lastUsedAt: number;
-};
+export type CrestodianChatSession =
+  GatewayRequestContext["crestodianSessions"] extends Map<string, infer Session> ? Session : never;
 
 const MAX_CRESTODIAN_SESSIONS = 8;
 const CRESTODIAN_GATEWAY_EXECUTION_KEY = "gateway";
@@ -169,7 +166,10 @@ export const crestodianHandlers: GatewayRequestHandlers = {
         let session = sessions.get(sessionId);
         if (!session) {
           const { verifySetupInference } = await import("../../crestodian/setup-inference.js");
-          const inference = await verifySetupInference({ runtime: defaultRuntime });
+          const inference = await verifySetupInference({
+            runtime: defaultRuntime,
+            bindSession: true,
+          });
           if (!inference.ok) {
             respond(
               false,
@@ -183,13 +183,25 @@ export const crestodianHandlers: GatewayRequestHandlers = {
           }
           // The gateway surface must never install/restart its own daemon; the
           // engine's setup path honors this via surface: "gateway".
-          const engine = new CrestodianChatEngine({ surface: "gateway" });
+          const engine = new CrestodianChatEngine({
+            surface: "gateway",
+            verifiedInference: inference.binding,
+          });
           let welcome: string;
-          if (params.welcomeVariant === "onboarding") {
-            welcome = await buildOnboardingWelcome({ engine });
-          } else {
-            welcome = formatCrestodianStartupMessage(await engine.loadOverview());
-            engine.noteAssistantMessage(welcome);
+          try {
+            if (params.welcomeVariant === "onboarding") {
+              welcome = await buildOnboardingWelcome({ engine });
+            } else {
+              welcome = formatCrestodianStartupMessage(await engine.loadOverview());
+              engine.noteAssistantMessage(welcome);
+            }
+          } catch (error) {
+            await engine.dispose().catch(() => undefined);
+            if (!isCrestodianInferenceUnavailableError(error)) {
+              throw error;
+            }
+            respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
+            return;
           }
           await evictOldestSession(sessions);
           session = { engine, welcome, lastUsedAt: Date.now() };

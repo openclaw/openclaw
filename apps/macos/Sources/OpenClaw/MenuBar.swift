@@ -33,7 +33,6 @@ struct OpenClawApp: App {
 
     init() {
         OpenClawLogging.bootstrapIfNeeded()
-        GatewayConnectivityCoordinator.shared.start()
 
         Self.applyAttachOnlyOverrideIfNeeded()
         _state = State(initialValue: AppStateStore.shared)
@@ -211,7 +210,7 @@ struct OpenClawApp: App {
 
     @MainActor
     private func statusButtonScreenFrame() -> NSRect? {
-        guard let button = self.statusItem?.button, let window = button.window else { return nil }
+        guard let button = statusItem?.button, let window = button.window else { return nil }
         let inWindow = button.convert(button.bounds, to: nil)
         return window.convertToScreen(inWindow)
     }
@@ -246,7 +245,7 @@ private final class StatusItemMouseHandlerView: NSView {
         }
     }
 
-    override func rightMouseDown(with event: NSEvent) {
+    override func rightMouseDown(with _: NSEvent) {
         self.onRightClick?()
         // Do not call super; menu will be driven by isMenuPresented binding.
     }
@@ -256,11 +255,11 @@ private final class StatusItemMouseHandlerView: NSView {
         TrackingAreaSupport.resetMouseTracking(on: self, tracking: &self.tracking, owner: self)
     }
 
-    override func mouseEntered(with event: NSEvent) {
+    override func mouseEntered(with _: NSEvent) {
         self.onHoverChanged?(true)
     }
 
-    override func mouseExited(with event: NSEvent) {
+    override func mouseExited(with _: NSEvent) {
         self.onHoverChanged?(false)
     }
 }
@@ -373,18 +372,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    func applicationDidFinishLaunching(_: Notification) {
         if self.isDuplicateInstance() {
             NSWorkspace.shared.open(Self.dashboardURL)
             NSApp.terminate(nil)
             return
         }
-        self.state = AppStateStore.shared
+        // Remote startup can spawn an SSH child. Admit tunnel work only after the
+        // singleton check so a short-lived handoff process cannot orphan that child.
+        GatewayEndpointStore.admitPrimaryAppLaunch()
+        GatewayConnectivityCoordinator.shared.start()
+        state = AppStateStore.shared
         if let state {
             MacNodeModeCoordinator.prepareNodeIdentityProfile(
                 isExistingInstallation: state.onboardingSeen || state.connectionMode != .unconfigured)
         }
-        AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
+        AppActivationPolicy.apply(showDockIcon: state?.showDockIcon ?? false)
         if let state {
             let shouldWaitForConnection = state.connectionMode != .unconfigured
             if !shouldWaitForConnection {
@@ -452,7 +455,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
+    func applicationWillTerminate(_: Notification) {
         PresenceReporter.shared.stop()
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()
@@ -589,9 +592,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             gatewayConnected: gatewayConnected,
             configuredInferenceModel: configuredInferenceModel)
         if connectionMode != .unconfigured, onboardingSeen || shouldOpenDashboard {
-            // A previously completed route must not erase another Gateway's
-            // still-active activation lease merely because it is selected now.
-            OnboardingController.markComplete(clearSelectedRouteResume: !onboardingSeen)
+            // Completion flags do not own any route's activation receipt.
+            OnboardingController.markComplete()
             if shouldOpenDashboard {
                 self.openDashboardAction()
             }
@@ -703,22 +705,22 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         self.controller.checkForUpdates(sender)
     }
 
-    func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+    func updater(_: SPUUpdater, didDownloadUpdate _: SUAppcastItem) {
         self.updateStatus.isUpdateReady = true
     }
 
-    func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: Error) {
+    func updater(_: SPUUpdater, failedToDownloadUpdate _: SUAppcastItem, error _: Error) {
         self.updateStatus.isUpdateReady = false
     }
 
-    func userDidCancelDownload(_ updater: SPUUpdater) {
+    func userDidCancelDownload(_: SPUUpdater) {
         self.updateStatus.isUpdateReady = false
     }
 
     func updater(
-        _ updater: SPUUpdater,
+        _: SPUUpdater,
         userDidMakeChoice choice: SPUUserUpdateChoice,
-        forUpdate updateItem: SUAppcastItem,
+        forUpdate _: SUAppcastItem,
         state: SPUUserUpdateState)
     {
         switch choice {

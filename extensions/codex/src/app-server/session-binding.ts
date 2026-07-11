@@ -133,6 +133,7 @@ const pluginAppPolicyContextSchema = z
   .strict();
 const threadBindingSchema = z.object({
   threadId: z.string().refine((value) => Boolean(value.trim())),
+  clientId: optionalStringSchema,
   cwd: z.string(),
   authProfileId: optionalStringSchema,
   model: optionalStringSchema,
@@ -166,6 +167,8 @@ const threadBindingSchema = z.object({
   webSearchThreadConfigFingerprint: optionalStringSchema,
   userMcpServersFingerprint: optionalStringSchema,
   mcpServersFingerprint: optionalStringSchema,
+  ringZeroConfigFingerprint: optionalStringSchema,
+  ringZeroClientInstanceId: optionalStringSchema,
   nativeHookRelayGeneration: optionalNonBlankStringSchema,
   appServerRuntimeFingerprint: optionalStringSchema,
   pluginAppsFingerprint: optionalStringSchema,

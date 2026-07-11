@@ -9,24 +9,28 @@ import type { CliSessionBinding } from "../config/sessions.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import { CRESTODIAN_AGENT_SYSTEM_PROMPT } from "./assistant-prompts.js";
 import { CrestodianInferenceUnavailableError } from "./inference-error.js";
-import {
-  resolveCrestodianConfiguredRoute,
-  type CrestodianConfiguredRoute,
-} from "./inference-route.js";
+import type { CrestodianConfiguredRoute } from "./inference-route.js";
 import type { CrestodianOverview } from "./overview.js";
+import {
+  resolveCrestodianExpectedAgentHarnessRuntimeArtifact,
+  resolveCrestodianVerifiedInferenceRoute,
+  type CrestodianVerifiedInferenceBinding,
+  type CrestodianVerifiedInferenceDeps,
+} from "./verified-inference.js";
 
 /**
  * Crestodian is a real agent: same loop, session transcript, and tool pipeline
  * as regular agents — restricted to the single ring-zero `crestodian` tool.
- * Embedded runtimes enforce that restriction with toolsAllow; CLI harnesses
- * (claude-cli, gemini-cli) cannot, so they get the tool over a dedicated stdio
- * MCP server that replaces the normal bundle MCP surface for the run. Turns
- * share one persistent session so the conversation has genuine multi-turn
- * memory. Inference setup must succeed before this runner is entered.
+ * Embedded runtimes enforce that restriction with toolsAllow. CLI harnesses
+ * must explicitly support per-run native-tool selection, then receive the tool
+ * over a dedicated stdio MCP server that replaces the normal bundle surface.
+ * Turns share one persistent session so the conversation has genuine
+ * multi-turn memory. Inference setup must succeed before this runner is entered.
  */
 export const CRESTODIAN_AGENT_ID = "crestodian";
 
 const AGENT_TURN_TIMEOUT_MS = 120_000;
+const CRESTODIAN_MCP_TOOL_NAME = "mcp__openclaw__crestodian";
 
 export type CrestodianAgentTurnDirective =
   import("../agents/tools/crestodian-tool.js").CrestodianToolDirective;
@@ -49,6 +53,8 @@ export type CrestodianAgentTurnRunner = (params: {
 
 export type CrestodianAgentSession = {
   sessionId: string;
+  /** Exact live-tested inference owner for this ephemeral conversation. */
+  readonly verifiedInference: CrestodianVerifiedInferenceBinding;
   /** Host-owned pending-proposal fingerprint; see crestodian-tool.ts. */
   proposalRef: { current?: string };
   /** Native CLI continuity, bound to the exact configured model/auth owner route. */
@@ -58,13 +64,34 @@ export type CrestodianAgentSession = {
   };
 };
 
-export function createCrestodianAgentSession(): CrestodianAgentSession {
-  return { sessionId: `crestodian-${randomUUID()}`, proposalRef: {} };
+export function createCrestodianAgentSession(
+  verifiedInference: CrestodianVerifiedInferenceBinding,
+): CrestodianAgentSession {
+  if (!verifiedInference) {
+    throw new CrestodianInferenceUnavailableError("agent-turn");
+  }
+  return {
+    sessionId: `crestodian-${randomUUID()}`,
+    verifiedInference,
+    proposalRef: {},
+  };
 }
 
-export type CrestodianAgentTurnDeps = {
-  runEmbeddedAgent?: typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
-  runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
+type CrestodianRunEmbeddedAgent = (
+  params: Parameters<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>[0] & {
+    crestodianTool?: import("../agents/tools/crestodian-tool.js").CrestodianToolOptions;
+  },
+) => ReturnType<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
+
+type CrestodianRunCliAgent = (
+  params: Parameters<typeof import("../agents/cli-runner.js").runCliAgent>[0] & {
+    crestodianTool?: import("../agents/tools/crestodian-tool.js").CrestodianToolOptions;
+  },
+) => ReturnType<typeof import("../agents/cli-runner.js").runCliAgent>;
+
+export type CrestodianAgentTurnDeps = CrestodianVerifiedInferenceDeps & {
+  runEmbeddedAgent?: CrestodianRunEmbeddedAgent;
+  runCliAgent?: CrestodianRunCliAgent;
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
 };
 
@@ -137,6 +164,8 @@ function cliRouteKey(route: CrestodianConfiguredRoute, backend: ResolvedCliBacke
   return JSON.stringify({
     provider: route.provider,
     backendId: backend?.id ?? route.provider,
+    modelLabel: route.modelLabel,
+    configuredModel: route.model,
     model: backend ? normalizeCliModel(route.model, backend.config) : route.model,
     authProfileId: route.authProfileId ?? "",
     agentDir: path.resolve(route.agentDir),
@@ -145,6 +174,8 @@ function cliRouteKey(route: CrestodianConfiguredRoute, backend: ResolvedCliBacke
     // transcript owned by a different executable or resume protocol.
     backend: backend
       ? {
+          pluginId: backend.pluginId,
+          modelProvider: backend.modelProvider,
           config: backend.config,
           bundleMcp: backend.bundleMcp,
           bundleMcpMode: backend.bundleMcpMode,
@@ -169,6 +200,19 @@ function resolveCrestodianCliBackend(route: CrestodianConfiguredRoute): Resolved
   }
   const { liveSession: _liveSession, ...config } = backend.config;
   return { ...backend, config };
+}
+
+function resolveCrestodianCliToolAvailability(
+  backend: ResolvedCliBackend | null,
+): { native: []; mcp: string[] } | undefined {
+  if (backend?.nativeToolMode === "none") {
+    return undefined;
+  }
+  if (backend?.nativeToolMode === "selectable" && backend.resolveExecutionArgs) {
+    return { native: [], mcp: [CRESTODIAN_MCP_TOOL_NAME] };
+  }
+  const backendId = backend?.id ?? "unknown";
+  throw new Error(`CLI backend ${backendId} cannot enforce Crestodian's exact tool availability`);
 }
 
 /**
@@ -212,7 +256,7 @@ async function mirrorCrestodianToolStateFromEvents(params: {
       params.proposalRef.current = transition.proposal;
     }
     const directive = resolveCrestodianDirectiveTransition({ args, resultText });
-    if (directive) {
+    if (directive && params.directiveRef.current?.kind !== "approved-operation") {
       params.directiveRef.current = directive;
     }
   });
@@ -227,13 +271,13 @@ export async function runCrestodianAgentTurnWithDeps(
   params: CrestodianAgentTurnParams,
   deps: CrestodianAgentTurnDeps = {},
 ): Promise<CrestodianAgentTurnReply | null> {
+  const binding = params.session.verifiedInference;
+  if (!binding) {
+    throwCrestodianInferenceUnavailable({ session: params.session });
+  }
   let plan: CrestodianConfiguredRoute | null;
   try {
-    plan = await resolveCrestodianConfiguredRoute({
-      ...(deps.readConfigFileSnapshot
-        ? { readConfigFileSnapshot: deps.readConfigFileSnapshot }
-        : {}),
-    });
+    plan = await resolveCrestodianVerifiedInferenceRoute(binding, deps);
   } catch (error) {
     throwCrestodianInferenceUnavailable({
       session: params.session,
@@ -242,6 +286,15 @@ export async function runCrestodianAgentTurnWithDeps(
   }
   if (!plan) {
     throwCrestodianInferenceUnavailable({ session: params.session });
+  }
+  let expectedAgentHarnessRuntimeArtifact: ReturnType<
+    typeof resolveCrestodianExpectedAgentHarnessRuntimeArtifact
+  >;
+  try {
+    expectedAgentHarnessRuntimeArtifact =
+      resolveCrestodianExpectedAgentHarnessRuntimeArtifact(binding);
+  } catch (error) {
+    throwCrestodianInferenceUnavailable({ session: params.session, failures: [error] });
   }
   let workspaceDir: string;
   let sessionFile: string;
@@ -282,6 +335,7 @@ export async function runCrestodianAgentTurnWithDeps(
     let result: EmbeddedRunResult;
     if (plan.runner === "cli") {
       const backend = resolveCrestodianCliBackend(plan);
+      const cliToolAvailability = resolveCrestodianCliToolAvailability(backend);
       const routeKey = cliRouteKey(plan, backend);
       const previousBinding =
         params.session.cliSession?.routeKey === routeKey
@@ -306,6 +360,7 @@ export async function runCrestodianAgentTurnWithDeps(
           extraSystemPrompt: CRESTODIAN_AGENT_SYSTEM_PROMPT,
           extraSystemPromptStatic: CRESTODIAN_AGENT_SYSTEM_PROMPT,
           crestodianTool,
+          ...(cliToolAvailability ? { cliToolAvailability } : {}),
           ...(previousBinding ? { cliSessionBinding: previousBinding } : {}),
           disableCliLiveSession: true,
           cleanupCliLiveSessionOnRunEnd: true,
@@ -340,10 +395,20 @@ export async function runCrestodianAgentTurnWithDeps(
         model: plan.model,
         agentDir: plan.agentDir,
         agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride,
+        ...(expectedAgentHarnessRuntimeArtifact ? { expectedAgentHarnessRuntimeArtifact } : {}),
         ...(plan.authProfileId
           ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
           : {}),
       })) as EmbeddedRunResult;
+    }
+    if (params.session.verifiedInference !== binding) {
+      throw new CrestodianInferenceUnavailableError("agent-turn");
+    }
+    // A completed model turn is still untrusted until the exact route owner is
+    // revalidated. This also rejects directives produced while config changed.
+    const currentRoute = await resolveCrestodianVerifiedInferenceRoute(binding, deps);
+    if (!currentRoute) {
+      throw new CrestodianInferenceUnavailableError("agent-turn");
     }
     const text = extractRunText(result)?.trim();
     if (!text) {

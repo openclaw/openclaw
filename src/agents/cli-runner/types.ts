@@ -110,6 +110,17 @@ export type RunCliAgentParams = {
   cliSessionId?: string;
   cliSessionBinding?: CliSessionBinding;
   authProfileId?: string;
+  /** Private seam: report the credential/runtime owner only after a successful real turn. */
+  onSuccessfulAuthBinding?: (binding: {
+    authProfileId?: string;
+    authFingerprint?: string;
+    runtimeOwnerFingerprint?: string;
+    runtimeOwnerKind?: "cli-runtime" | "plugin-harness" | "aws-sdk";
+    runtimeOwnerId?: string;
+    runtimeArtifactFingerprint?: string;
+    runtimeArtifactId?: string;
+    skipLocalCredential?: true;
+  }) => void;
   onBeforeFreshCliSessionRetry?: (params: {
     provider: string;
     reason: FailoverReason;
@@ -141,12 +152,11 @@ export type RunCliAgentParams = {
   approvalReviewerDeviceId?: string;
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
   toolsAllow?: string[];
-  /**
-   * Ring-zero Crestodian tool served over a dedicated stdio MCP server; set
-   * only by the Crestodian agent runner. Replaces the normal bundle MCP
-   * surface for the run — the harness still owns its native tools.
-   */
-  crestodianTool?: import("../tools/crestodian-tool.js").CrestodianToolOptions;
+  /** Exact native surface plus host-isolated MCP permissions for a selectable CLI backend. */
+  cliToolAvailability?: {
+    native: [];
+    mcp: string[];
+  };
   disableTools?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
@@ -204,6 +214,7 @@ export type CliSessionBindingFacts = {
 export type PreparedCliRunContext = {
   params: RunCliAgentParams;
   effectiveAuthProfileId?: string;
+  agentDir?: string;
   started: number;
   workspaceDir: string;
   cwd?: string;
@@ -227,6 +238,13 @@ export type PreparedCliRunContext = {
   openClawHistoryPrompt?: string;
   heartbeatPrompt?: string;
   authEpoch?: string;
+  /** Strict owner fingerprint captured for live inference verification only. */
+  authBindingFingerprint?: string;
+  /** Stable CLI backend/profile owner shape, usable only with a successful native session. */
+  runtimeOwnerFingerprint?: string;
+  /** Exact executable/package implementation used by this CLI process. */
+  runtimeArtifactFingerprint?: string;
+  authBindingSkipsLocalCredential?: true;
   authEpochVersion: number;
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;

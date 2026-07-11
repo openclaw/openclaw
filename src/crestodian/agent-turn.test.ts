@@ -1,16 +1,34 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
+import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import type { CliBackendConfig, OpenClawConfig } from "../config/types.js";
 import {
   cleanupCrestodianAgentSession,
   createCrestodianAgentSession,
-  runCrestodianAgentTurn,
   runCrestodianAgentTurnWithDeps,
+  type CrestodianAgentSession,
   type CrestodianAgentTurnDeps,
 } from "./agent-turn.js";
+import { createCrestodianVerifiedInferenceTestFixture } from "./crestodian.test-helpers.js";
 import { CrestodianInferenceUnavailableError } from "./inference-error.js";
+import { resolveCrestodianConfiguredRouteFromConfig } from "./inference-route.js";
+import { createCrestodianVerifiedInferenceBinding } from "./verified-inference.js";
+
+vi.mock("../plugins/providers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/providers.js")>()),
+  resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
+  resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
+}));
+
+vi.mock("../agents/harness/runtime-plugin.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/harness/runtime-plugin.js")>()),
+  resolveAgentHarnessOwnerPluginIds: vi.fn(({ runtime }: { runtime: string }) =>
+    runtime === "codex" ? ["codex"] : [],
+  ),
+}));
 
 type RunCliAgentParams = Parameters<NonNullable<CrestodianAgentTurnDeps["runCliAgent"]>>[0];
 type RunEmbeddedAgentParams = Parameters<
@@ -70,6 +88,14 @@ function requireValue<T>(value: T | undefined, message: string): T {
   return value;
 }
 
+async function createVerifiedSession(config: OpenClawConfig) {
+  const fixture = await createCrestodianVerifiedInferenceTestFixture(config);
+  return {
+    ...fixture,
+    session: createCrestodianAgentSession(fixture.binding),
+  };
+}
+
 const cliBackendRouteChanges: Array<{
   name: string;
   first: CliBackendConfig;
@@ -95,7 +121,36 @@ const cliBackendRouteChanges: Array<{
   },
 ];
 
+beforeEach(() => {
+  // Core tests install a contract-level selectable backend instead of loading
+  // a plugin's generated setup artifact from dist/.
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        pluginId: "anthropic",
+        modelProvider: "anthropic",
+        bundleMcp: true,
+        bundleMcpMode: "claude-config-file",
+        config: { command: "claude" },
+        normalizeConfig: (config, context) => ({
+          ...config,
+          args: [
+            ...(config.args ?? []),
+            "--test-exec-policy",
+            JSON.stringify(context?.config?.tools?.exec ?? null),
+          ],
+        }),
+        nativeToolMode: "selectable",
+        sideQuestionToolMode: "disabled",
+        resolveExecutionArgs: (context) => context.baseArgs,
+      },
+    ],
+  });
+});
+
 afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
   for (const dir of tempDirs.splice(0)) {
@@ -104,26 +159,128 @@ afterEach(() => {
 });
 
 describe("runCrestodianAgentTurn", () => {
+  it("keeps every turn on the verified profile and clears continuity on route drift", async () => {
+    useTempStateDir();
+    const verifiedConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+      auth: {
+        profiles: { "openai:p2": { provider: "openai", mode: "api_key" } },
+      },
+    } satisfies OpenClawConfig;
+    const configuredRoute = await resolveCrestodianConfiguredRouteFromConfig(verifiedConfig);
+    if (!configuredRoute) {
+      throw new Error("missing test route");
+    }
+    const resolvedAuth = {
+      apiKey: "test-key",
+      profileId: "openai:p2",
+      source: "profile:openai:p2",
+      mode: "api-key" as const,
+    };
+    const authDeps = {
+      ensureAuthProfileStore: vi.fn(() => ({
+        version: 1,
+        profiles: {
+          "openai:p2": { type: "api_key", provider: "openai", key: "test-key" },
+        },
+      })) as never,
+      resolveApiKeyForProvider: vi.fn(async () => resolvedAuth),
+    };
+    const executionRoute = { ...configuredRoute, authProfileId: "openai:p2" };
+    const authFingerprint = fingerprintResolvedProviderAuth(resolvedAuth);
+    if (!authFingerprint) {
+      throw new Error("missing test auth fingerprint");
+    }
+    const binding = await createCrestodianVerifiedInferenceBinding({
+      configuredRoute,
+      executionRoute,
+      auth: {
+        authProfileId: "openai:p2",
+        authFingerprint,
+        agentHarnessId: "openclaw",
+      },
+      deps: authDeps,
+    });
+    const session = createCrestodianAgentSession(binding);
+    let currentConfig: OpenClawConfig = verifiedConfig;
+    const runEmbeddedAgent = vi.fn(async () => ({
+      meta: { finalAssistantVisibleText: "ready" },
+    }));
+    const turn = async () =>
+      await runCrestodianAgentTurnWithDeps(
+        {
+          input: "continue setup",
+          overview: { defaultModel: "openai/gpt-5.5" } as never,
+          surface: "gateway",
+          approvalArmed: false,
+          session,
+        },
+        {
+          ...authDeps,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
+        },
+      );
+
+    await turn();
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId: "openai:p2",
+        authProfileIdSource: "user",
+        config: binding.execution.runConfig,
+      }),
+    );
+
+    currentConfig = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+    };
+    await expect(turn()).rejects.toBeInstanceOf(CrestodianInferenceUnavailableError);
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(session.verifiedInference).toBe(binding);
+    expect(session.cliSession).toBeUndefined();
+  });
+
   it("uses a distinct transcript for each chat session", async () => {
     useTempStateDir();
+    const config = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    } satisfies OpenClawConfig;
     const overview = { defaultModel: "openai/gpt-5.5" } as never;
-    const first = createCrestodianAgentSession();
-    const second = createCrestodianAgentSession();
+    const fixture = await createCrestodianVerifiedInferenceTestFixture(config);
+    const first = createCrestodianAgentSession(fixture.binding);
+    const second = createCrestodianAgentSession(fixture.binding);
+    const deps = {
+      ...fixture.deps,
+      readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
+    };
 
-    await runCrestodianAgentTurn({
-      input: "hello",
-      overview,
-      surface: "gateway",
-      approvalArmed: false,
-      session: first,
-    });
-    await runCrestodianAgentTurn({
-      input: "hello",
-      overview,
-      surface: "gateway",
-      approvalArmed: false,
-      session: second,
-    });
+    await runCrestodianAgentTurnWithDeps(
+      {
+        input: "hello",
+        overview,
+        surface: "gateway",
+        approvalArmed: false,
+        session: first,
+      },
+      deps,
+    );
+    await runCrestodianAgentTurnWithDeps(
+      {
+        input: "hello",
+        overview,
+        surface: "gateway",
+        approvalArmed: false,
+        session: second,
+      },
+      deps,
+    );
 
     const firstPath = requireValue(
       mocks.runEmbeddedAgent.mock.calls[0]?.[0]?.sessionFile,
@@ -167,7 +324,7 @@ describe("runCrestodianAgentTurn", () => {
     const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
       payloads: [],
     }));
-    const session = createCrestodianAgentSession();
+    const { session, deps } = await createVerifiedSession(config);
 
     await runCrestodianAgentTurnWithDeps(
       {
@@ -178,6 +335,7 @@ describe("runCrestodianAgentTurn", () => {
         session,
       },
       {
+        ...deps,
         runCliAgent: runCliAgent as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
@@ -202,10 +360,61 @@ describe("runCrestodianAgentTurn", () => {
     });
     expect(call.disableCliLiveSession).toBe(true);
     expect(call.cleanupCliLiveSessionOnRunEnd).toBe(true);
+    expect(call.cliToolAvailability).toEqual({
+      native: [],
+      mcp: ["mcp__openclaw__crestodian"],
+    });
     expect(call.toolsAllow).toBeUndefined();
     expect(requireValue(call.crestodianTool, "missing CLI Crestodian tool").proposalRef).toBe(
       session.proposalRef,
     );
+  });
+
+  it("rejects an always-on CLI backend before launching Crestodian", async () => {
+    useTempStateDir();
+    const config = {
+      agents: {
+        defaults: {
+          cliBackends: { "google-gemini-cli": { command: "gemini" } },
+          model: "google-gemini-cli/gemini-3.1-pro-preview",
+        },
+      },
+    } as OpenClawConfig;
+    const runCliAgent = vi.fn();
+    const runEmbeddedAgent = vi.fn();
+    const { session, deps } = await createVerifiedSession(config);
+    let failure: unknown;
+
+    try {
+      await runCrestodianAgentTurnWithDeps(
+        {
+          input: "set up my workspace",
+          overview: { defaultModel: "google-gemini-cli/gemini-3.1-pro-preview" } as never,
+          surface: "gateway",
+          approvalArmed: false,
+          session,
+        },
+        {
+          ...deps,
+          runCliAgent: runCliAgent as never,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
+        },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(CrestodianInferenceUnavailableError);
+    expect((failure as CrestodianInferenceUnavailableError).failures).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining(
+          "CLI backend google-gemini-cli cannot enforce Crestodian's exact tool availability",
+        ),
+      }),
+    ]);
+    expect(runCliAgent).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("resumes Claude's native transcript through fresh per-turn processes", async () => {
@@ -227,7 +436,7 @@ describe("runCrestodianAgentTurn", () => {
       payloads: [{ text: "ready" }],
       meta: { agentMeta: { cliSessionBinding: binding } },
     }));
-    const session = createCrestodianAgentSession();
+    const { session, deps } = await createVerifiedSession(config);
     const turn = async (input: string) =>
       await runCrestodianAgentTurnWithDeps(
         {
@@ -238,6 +447,7 @@ describe("runCrestodianAgentTurn", () => {
           session,
         },
         {
+          ...deps,
           runCliAgent: runCliAgent as never,
           readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
         },
@@ -289,6 +499,7 @@ describe("runCrestodianAgentTurn", () => {
     const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({
       payloads: [{ text: "ready" }],
     }));
+    const { session, deps } = await createVerifiedSession(config);
 
     await runCrestodianAgentTurnWithDeps(
       {
@@ -296,9 +507,10 @@ describe("runCrestodianAgentTurn", () => {
         overview: { defaultModel: "anthropic/claude-opus-4-8" } as never,
         surface: "gateway",
         approvalArmed: false,
-        session: createCrestodianAgentSession(),
+        session,
       },
       {
+        ...deps,
         runCliAgent: runCliAgent as never,
         runEmbeddedAgent: vi.fn(async (_params: RunEmbeddedAgentParams) => ({
           payloads: [],
@@ -345,7 +557,7 @@ describe("runCrestodianAgentTurn", () => {
       payloads: [{ text: "ready" }],
       meta: { agentMeta: { cliSessionBinding: binding } },
     }));
-    const session = createCrestodianAgentSession();
+    const { session, deps } = await createVerifiedSession(config);
     const readConfigFileSnapshot = vi.fn(async () => configSnapshot(config)) as never;
 
     await runCrestodianAgentTurnWithDeps(
@@ -356,7 +568,7 @@ describe("runCrestodianAgentTurn", () => {
         approvalArmed: false,
         session,
       },
-      { runCliAgent: runCliAgent as never, readConfigFileSnapshot },
+      { ...deps, runCliAgent: runCliAgent as never, readConfigFileSnapshot },
     );
     // Mirrors the denied tool result that arms the exact-operation hash.
     session.proposalRef.current = "proposal-sha256";
@@ -368,7 +580,7 @@ describe("runCrestodianAgentTurn", () => {
         approvalArmed: true,
         session,
       },
-      { runCliAgent: runCliAgent as never, readConfigFileSnapshot },
+      { ...deps, runCliAgent: runCliAgent as never, readConfigFileSnapshot },
     );
 
     expect(runCliAgent).toHaveBeenCalledTimes(2);
@@ -386,7 +598,7 @@ describe("runCrestodianAgentTurn", () => {
     });
   });
 
-  it("does not resume a CLI binding after the configured auth route changes", async () => {
+  it("rejects a configured auth-route change without resuming the CLI binding", async () => {
     useTempStateDir();
     const configForProfile = (profileId: string) =>
       ({
@@ -405,8 +617,9 @@ describe("runCrestodianAgentTurn", () => {
     const readConfigFileSnapshot = vi
       .fn()
       .mockResolvedValueOnce(configSnapshot(configForProfile("claude-cli:ops")))
+      .mockResolvedValueOnce(configSnapshot(configForProfile("claude-cli:ops")))
       .mockResolvedValueOnce(configSnapshot(configForProfile("claude-cli:other")));
-    const session = createCrestodianAgentSession();
+    const { session, deps } = await createVerifiedSession(configForProfile("claude-cli:ops"));
     const turn = async () =>
       await runCrestodianAgentTurnWithDeps(
         {
@@ -417,22 +630,21 @@ describe("runCrestodianAgentTurn", () => {
           session,
         },
         {
+          ...deps,
           runCliAgent: runCliAgent as never,
           readConfigFileSnapshot: readConfigFileSnapshot as never,
         },
       );
 
     await turn();
-    await turn();
+    await expect(turn()).rejects.toBeInstanceOf(CrestodianInferenceUnavailableError);
 
-    expect(runCliAgent).toHaveBeenCalledTimes(2);
-    const secondCall = requireValue(runCliAgent.mock.calls[1]?.[0], "missing second CLI call");
-    expect(secondCall).toMatchObject({ authProfileId: "claude-cli:other" });
-    expect(secondCall.cliSessionBinding).toBeUndefined();
+    expect(runCliAgent).toHaveBeenCalledOnce();
+    expect(session.cliSession).toBeUndefined();
   });
 
   it.each(cliBackendRouteChanges)(
-    "does not resume a CLI binding after the $name changes",
+    "rejects a $name change without resuming the CLI binding",
     async ({ first, second }) => {
       useTempStateDir();
       const configForBackend = (backend: CliBackendConfig) =>
@@ -459,8 +671,9 @@ describe("runCrestodianAgentTurn", () => {
       const readConfigFileSnapshot = vi
         .fn()
         .mockResolvedValueOnce(configSnapshot(configForBackend(first)))
+        .mockResolvedValueOnce(configSnapshot(configForBackend(first)))
         .mockResolvedValueOnce(configSnapshot(configForBackend(second)));
-      const session = createCrestodianAgentSession();
+      const { session, deps } = await createVerifiedSession(configForBackend(first));
       const turn = async () =>
         await runCrestodianAgentTurnWithDeps(
           {
@@ -471,23 +684,76 @@ describe("runCrestodianAgentTurn", () => {
             session,
           },
           {
+            ...deps,
             runCliAgent: runCliAgent as never,
             readConfigFileSnapshot: readConfigFileSnapshot as never,
           },
         );
 
       await turn();
-      await turn();
+      await expect(turn()).rejects.toBeInstanceOf(CrestodianInferenceUnavailableError);
 
-      expect(runCliAgent).toHaveBeenCalledTimes(2);
+      expect(runCliAgent).toHaveBeenCalledOnce();
       const firstCall = requireValue(runCliAgent.mock.calls[0]?.[0], "missing first CLI call");
-      const secondCall = requireValue(runCliAgent.mock.calls[1]?.[0], "missing second CLI call");
       expect(firstCall.cliSessionBinding).toBeUndefined();
-      expect(secondCall.cliSessionBinding).toBeUndefined();
+      expect(session.cliSession).toBeUndefined();
     },
   );
 
-  it("invalidates CLI continuity when the helper's executable policy changes", async () => {
+  it("rejects an alias-identity change without resuming the CLI binding", async () => {
+    useTempStateDir();
+    const configForModel = (model: string) =>
+      ({
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {
+                command: "claude",
+                modelAliases: {
+                  current: "claude-opus-4-8",
+                  stable: "claude-opus-4-8",
+                },
+              },
+            },
+            model: `claude-cli/${model}@claude-cli:ops`,
+          },
+        },
+      }) as OpenClawConfig;
+    const binding = { sessionId: "native-claude-session", authEpochVersion: 1 };
+    const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({
+      payloads: [{ text: "ready" }],
+      meta: { agentMeta: { cliSessionBinding: binding } },
+    }));
+    const readConfigFileSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(configSnapshot(configForModel("current")))
+      .mockResolvedValueOnce(configSnapshot(configForModel("current")))
+      .mockResolvedValueOnce(configSnapshot(configForModel("stable")));
+    const { session, deps } = await createVerifiedSession(configForModel("current"));
+    const turn = async () =>
+      await runCrestodianAgentTurnWithDeps(
+        {
+          input: "hello",
+          overview: { defaultModel: "claude-cli/claude-opus-4-8" } as never,
+          surface: "gateway",
+          approvalArmed: false,
+          session,
+        },
+        {
+          ...deps,
+          runCliAgent: runCliAgent as never,
+          readConfigFileSnapshot: readConfigFileSnapshot as never,
+        },
+      );
+
+    await turn();
+    await expect(turn()).rejects.toBeInstanceOf(CrestodianInferenceUnavailableError);
+
+    expect(runCliAgent).toHaveBeenCalledOnce();
+    expect(session.cliSession).toBeUndefined();
+  });
+
+  it("rejects an executable-policy change and invalidates CLI continuity", async () => {
     useTempStateDir();
     const configForGlobalPolicy = (security: "full" | "deny", ask: "off" | "always") =>
       ({
@@ -520,8 +786,9 @@ describe("runCrestodianAgentTurn", () => {
     const readConfigFileSnapshot = vi
       .fn()
       .mockResolvedValueOnce(configSnapshot(configForGlobalPolicy("full", "off")))
+      .mockResolvedValueOnce(configSnapshot(configForGlobalPolicy("full", "off")))
       .mockResolvedValueOnce(configSnapshot(configForGlobalPolicy("deny", "always")));
-    const session = createCrestodianAgentSession();
+    const { session, deps } = await createVerifiedSession(configForGlobalPolicy("full", "off"));
     const turn = async () =>
       await runCrestodianAgentTurnWithDeps(
         {
@@ -532,19 +799,20 @@ describe("runCrestodianAgentTurn", () => {
           session,
         },
         {
+          ...deps,
           runCliAgent: runCliAgent as never,
           readConfigFileSnapshot: readConfigFileSnapshot as never,
         },
       );
 
     await turn();
-    await turn();
+    await expect(turn()).rejects.toBeInstanceOf(CrestodianInferenceUnavailableError);
 
-    const secondCall = requireValue(runCliAgent.mock.calls[1]?.[0], "missing second CLI call");
-    expect(secondCall.cliSessionBinding).toBeUndefined();
+    expect(runCliAgent).toHaveBeenCalledOnce();
+    expect(session.cliSession).toBeUndefined();
   });
 
-  it("drops CLI continuity across an intervening embedded turn", async () => {
+  it("rejects an intervening embedded route before it can revive CLI continuity", async () => {
     const stateDir = useTempStateDir();
     const agentDir = path.join(stateDir, "ops-agent");
     const cliConfig = {
@@ -584,9 +852,9 @@ describe("runCrestodianAgentTurn", () => {
     const readConfigFileSnapshot = vi
       .fn()
       .mockResolvedValueOnce(configSnapshot(cliConfig))
-      .mockResolvedValueOnce(configSnapshot(embeddedConfig))
-      .mockResolvedValueOnce(configSnapshot(cliConfig));
-    const session = createCrestodianAgentSession();
+      .mockResolvedValueOnce(configSnapshot(cliConfig))
+      .mockResolvedValueOnce(configSnapshot(embeddedConfig));
+    const { session, deps } = await createVerifiedSession(cliConfig);
     const turn = async (input: string) =>
       await runCrestodianAgentTurnWithDeps(
         {
@@ -597,6 +865,7 @@ describe("runCrestodianAgentTurn", () => {
           session,
         },
         {
+          ...deps,
           runCliAgent: runCliAgent as never,
           runEmbeddedAgent: runEmbeddedAgent as never,
           readConfigFileSnapshot: readConfigFileSnapshot as never,
@@ -605,13 +874,11 @@ describe("runCrestodianAgentTurn", () => {
 
     await turn("first CLI turn");
     expect(session.cliSession?.binding.sessionId).toBe(binding.sessionId);
-    await turn("embedded turn");
+    await expect(turn("embedded turn")).rejects.toBeInstanceOf(CrestodianInferenceUnavailableError);
     expect(session.cliSession).toBeUndefined();
-    await turn("return to CLI");
 
-    expect(runCliAgent).toHaveBeenCalledTimes(2);
-    const secondCall = requireValue(runCliAgent.mock.calls[1]?.[0], "missing second CLI call");
-    expect(secondCall.cliSessionBinding).toBeUndefined();
+    expect(runCliAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("uses the default agent embedded model, auth directory, profile, and runtime", async () => {
@@ -631,9 +898,16 @@ describe("runCrestodianAgentTurn", () => {
             default: true,
             agentDir,
             model: { primary: "openai/gpt-5.4@openai:ops" },
+            params: { temperature: 0.2 },
+            tools: { allow: ["read"], deny: ["exec"] },
             models: {
               "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
             },
+          },
+          {
+            id: "crestodian",
+            params: { temperature: 1.7 },
+            tools: { allow: ["exec"] },
           },
         ],
       },
@@ -642,7 +916,7 @@ describe("runCrestodianAgentTurn", () => {
     const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
       payloads: [{ text: "ready" }],
     }));
-    const session = createCrestodianAgentSession();
+    const { session, deps } = await createVerifiedSession(config);
 
     await runCrestodianAgentTurnWithDeps(
       {
@@ -653,6 +927,7 @@ describe("runCrestodianAgentTurn", () => {
         session,
       },
       {
+        ...deps,
         runCliAgent: runCliAgent as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
@@ -680,15 +955,27 @@ describe("runCrestodianAgentTurn", () => {
       disableMessageTool: true,
     });
     expect(call.agentHarnessId).toBeUndefined();
+    expect(call.config?.agents?.list?.find((agent) => agent.id === "crestodian")).toEqual({
+      id: "crestodian",
+      params: { temperature: 0.2 },
+      tools: { allow: ["read"], deny: ["exec"] },
+    });
     expect(requireValue(call.crestodianTool, "missing embedded Crestodian tool").proposalRef).toBe(
       session.proposalRef,
     );
   });
 
-  it("rejects an implicit default model as unavailable inference", async () => {
+  it("rejects a low-level session without verified inference before lookup or run", async () => {
     useTempStateDir();
     const runCliAgent = vi.fn();
     const runEmbeddedAgent = vi.fn();
+    const readConfigFileSnapshot = vi.fn(async () =>
+      configSnapshot({ agents: { defaults: { model: "openai/gpt-5.5" } } }),
+    );
+    const unverifiedSession = {
+      sessionId: "crestodian-unverified",
+      proposalRef: {},
+    } as unknown as CrestodianAgentSession;
 
     await expect(
       runCrestodianAgentTurnWithDeps(
@@ -697,22 +984,26 @@ describe("runCrestodianAgentTurn", () => {
           overview: { defaultModel: "openai/stale-overview-model" } as never,
           surface: "gateway",
           approvalArmed: false,
-          session: createCrestodianAgentSession(),
+          session: unverifiedSession,
         },
         {
           runCliAgent: runCliAgent as never,
           runEmbeddedAgent: runEmbeddedAgent as never,
-          readConfigFileSnapshot: vi.fn(async () => configSnapshot({})) as never,
+          readConfigFileSnapshot: readConfigFileSnapshot as never,
         },
       ),
     ).rejects.toBeInstanceOf(CrestodianInferenceUnavailableError);
+    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(runCliAgent).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("converts route-planning failures to a typed error and clears session state", async () => {
     useTempStateDir();
-    const session = createCrestodianAgentSession();
+    const config = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    } satisfies OpenClawConfig;
+    const { session, deps } = await createVerifiedSession(config);
     session.proposalRef.current = "partial-proposal";
     session.cliSession = {
       routeKey: "stale-route",
@@ -729,6 +1020,7 @@ describe("runCrestodianAgentTurn", () => {
           session,
         },
         {
+          ...deps,
           readConfigFileSnapshot: vi.fn(async () => {
             throw new Error("config read failed");
           }) as never,
@@ -755,7 +1047,7 @@ describe("runCrestodianAgentTurn", () => {
     const config: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
     };
-    const session = createCrestodianAgentSession();
+    const { session, deps } = await createVerifiedSession(config);
     session.proposalRef.current = "partial-proposal";
     session.cliSession = {
       routeKey: "stale-route",
@@ -772,6 +1064,7 @@ describe("runCrestodianAgentTurn", () => {
           session,
         },
         {
+          ...deps,
           runEmbeddedAgent: runEmbeddedAgent as never,
           readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
         },

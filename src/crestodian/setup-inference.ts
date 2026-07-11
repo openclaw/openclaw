@@ -12,9 +12,10 @@ import {
   updateAuthProfileStoreWithLock,
 } from "../agents/auth-profiles/store.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
+import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
+import { legacyModelKey, modelKey, normalizeProviderId } from "../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { buildAgentRuntimeAuthPlan } from "../agents/runtime-plan/auth.js";
 import {
@@ -47,12 +48,14 @@ import {
 } from "../plugins/provider-auth-choices.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import type { ProviderAuthMethod, ProviderAuthResult } from "../plugins/types.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import {
   projectDefaultInferenceRoute,
   resolveCrestodianConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
+  type CrestodianConfiguredRoute,
 } from "./inference-route.js";
 import { loadAuthoredSetupConfig } from "./onboarding-welcome.js";
 import {
@@ -60,6 +63,15 @@ import {
   createCrestodianModelSelectionUpdater,
   createQuickstartNotePrompter,
 } from "./setup-apply.js";
+import {
+  captureCrestodianOwnerPluginArtifacts,
+  createCrestodianVerifiedInferenceBinding,
+  hasCurrentCrestodianOwnerPluginArtifacts,
+  resolveCrestodianVerifiedInferenceRoute,
+  type CrestodianVerifiedInferenceBinding,
+  type CrestodianVerifiedInferenceDeps,
+  type CrestodianOwnerPluginArtifactSnapshot,
+} from "./verified-inference.js";
 
 const log = createSubsystemLogger("crestodian/setup-inference");
 
@@ -117,8 +129,25 @@ export type ActivateSetupInferenceResult =
   | { ok: true; modelRef: string; latencyMs: number; lines: string[] }
   | { ok: false; status: SetupInferenceFailureStatus; error: string };
 
+/**
+ * The config commit may have happened, so callers must verify current setup
+ * instead of treating this like a definitive candidate failure and retrying.
+ */
+export class SetupInferenceActivationIndeterminateError extends Error {
+  override name = "SetupInferenceActivationIndeterminateError";
+}
+
 export type VerifySetupInferenceResult =
   | { ok: true; modelRef: string; latencyMs: number }
+  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+
+export type BoundVerifySetupInferenceResult =
+  | {
+      ok: true;
+      modelRef: string;
+      latencyMs: number;
+      binding: CrestodianVerifiedInferenceBinding;
+    }
   | { ok: false; status: SetupInferenceFailureStatus; error: string };
 
 export type ActivateSetupInferenceParams = {
@@ -133,24 +162,42 @@ export type ActivateSetupInferenceParams = {
   deps?: ActivateSetupInferenceDeps;
 };
 
+type SetupInferenceRunEmbeddedAgent = (
+  params: Parameters<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>[0] & {
+    onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
+    authProfileStateMode?: "read-write" | "read-only";
+  },
+) => ReturnType<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
+
 export type ActivateSetupInferenceDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  runEmbeddedAgent?: typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
+  runEmbeddedAgent?: SetupInferenceRunEmbeddedAgent;
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
+  ensurePluginRegistryLoaded?: typeof import("../plugins/runtime/runtime-registry-loader.js").ensurePluginRegistryLoaded;
   resolvePluginProviders?: typeof resolvePluginProviders;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   enablePluginInConfig?: typeof enablePluginInConfig;
   updateAuthProfileStoreWithLock?: typeof updateAuthProfileStoreWithLock;
   loadPersistedAuthProfileStore?: typeof loadPersistedAuthProfileStore;
   loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
+  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store.js").ensureAuthProfileStore;
+  resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
+  resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
+  resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
+  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+  loadPluginRegistrySnapshot?: CrestodianVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
+  fingerprintPluginRuntimeArtifact?: CrestodianVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
+  captureCrestodianOwnerPluginArtifacts?: typeof captureCrestodianOwnerPluginArtifacts;
+  createCrestodianVerifiedInferenceBinding?: typeof createCrestodianVerifiedInferenceBinding;
   readPersistedInstalledPluginIndexInstallRecords?: typeof import("../plugins/installed-plugin-index-records.js").readPersistedInstalledPluginIndexInstallRecords;
   markRetainedManagedNpmInstall?: typeof import("../plugins/managed-npm-retention.js").markRetainedManagedNpmInstall;
   clearLoadInstalledPluginIndexInstallRecordsCache?: typeof import("../plugins/installed-plugin-index-records.js").clearLoadInstalledPluginIndexInstallRecordsCache;
   clearPluginMetadataLifecycleCaches?: typeof import("../plugins/plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
   invalidatePluginRuntimeDiscoveryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").invalidatePluginRuntimeDiscoveryAfterConfigMutation;
+  disposeOpenClawAgentDatabaseByPath?: typeof import("../state/openclaw-agent-db.js").disposeOpenClawAgentDatabaseByPath;
   createTempDir?: () => Promise<string>;
   removeTempDir?: (dir: string) => Promise<void>;
   timeoutMs?: number;
@@ -336,7 +383,7 @@ function resolveToolFreeCliSetupError(plan: SetupInferenceTestPlan): string | un
     return undefined;
   }
   const geminiCliProvider = parseRef(GEMINI_CLI_DEFAULT_MODEL_REF).provider;
-  if (backend?.nativeToolMode !== "always-on" && plan.provider !== geminiCliProvider) {
+  if (backend?.nativeToolMode === "none" && plan.provider !== geminiCliProvider) {
     return undefined;
   }
   return plan.provider === geminiCliProvider
@@ -358,6 +405,7 @@ function resolveStrictSetupAuthProfileError(params: {
     readOnly: true,
     allowKeychainPrompt: false,
     config: params.plan.config,
+    externalCliProviderIds: [params.plan.provider],
   });
   const credential = store.profiles[profileId];
   if (!credential) {
@@ -405,6 +453,34 @@ function parseRef(modelRef: string): { provider: string; model: string } {
     : { provider: modelRef.slice(0, slash), model: modelRef.slice(slash + 1) };
 }
 
+function projectSetupTargetModelMetadata(config: OpenClawConfig, modelRef: string): unknown {
+  const target = parseRef(modelRef);
+  const canonicalKey = modelKey(target.provider, target.model);
+  const keys = new Set(
+    [
+      canonicalKey,
+      legacyModelKey(target.provider, target.model),
+      `${target.provider}/${canonicalKey}`,
+    ].filter((key): key is string => Boolean(key)),
+  );
+  const project = (models: Record<string, unknown> | undefined) =>
+    Object.fromEntries(
+      [...keys].map((key) => [
+        key,
+        Object.hasOwn(models ?? {}, key)
+          ? { exists: true, value: structuredClone(models?.[key]) }
+          : { exists: false },
+      ]),
+    );
+  const defaultAgentId = resolveDefaultAgentId(config);
+  const agent = config.agents?.list?.find((entry) => normalizeAgentId(entry.id) === defaultAgentId);
+  return {
+    defaultAgentId,
+    defaults: project(config.agents?.defaults?.models),
+    agent: project(agent?.models),
+  };
+}
+
 function resolveSetupAgentRuntimeId(
   kind: ActivateSetupInferenceParams["kind"],
 ): string | undefined {
@@ -441,57 +517,151 @@ function prepareManualAuthForActivation(params: {
   preparedConfig: OpenClawConfig;
   profiles: ProviderAuthResult["profiles"];
   selectedProfileId: string;
+  modelRef: string;
+  providerId: string;
+  pluginId?: string;
 }): {
   config: OpenClawConfig;
   profiles: ProviderAuthResult["profiles"];
   selectedProfileId: string;
 } {
-  const profileIdMap = new Map<string, string>();
-  const profiles = params.profiles.map((profile) => {
-    const provider = normalizeProviderId(profile.credential.provider) || "provider";
-    const profileId = `${provider}:setup-${randomUUID()}`;
-    profileIdMap.set(profile.profileId, profileId);
-    return { ...profile, profileId };
-  });
-  const selectedProfileId = profileIdMap.get(params.selectedProfileId);
-  if (!selectedProfileId) {
+  const selectedProfile = params.profiles.find(
+    (profile) => profile.profileId === params.selectedProfileId,
+  );
+  if (!selectedProfile) {
     throw new Error("The selected setup credential was not returned by its provider.");
   }
-
-  const preparedProfiles = { ...params.preparedConfig.auth?.profiles };
-  for (const profile of params.profiles) {
-    const nextProfileId = profileIdMap.get(profile.profileId);
-    if (!nextProfileId) {
-      continue;
-    }
-    const metadata = preparedProfiles[profile.profileId] ?? {
-      provider: profile.credential.provider,
-      mode: profile.credential.type,
-    };
-    const previousMetadata = params.baseConfig.auth?.profiles?.[profile.profileId];
-    if (previousMetadata) {
-      preparedProfiles[profile.profileId] = previousMetadata;
-    } else {
-      delete preparedProfiles[profile.profileId];
-    }
-    preparedProfiles[nextProfileId] = metadata;
-  }
-  const auth = {
-    ...params.preparedConfig.auth,
-    profiles: preparedProfiles,
-  };
-  // The selected model is pinned to the verified profile. Provider setup must
-  // not rewrite an operator's independent fallback order as a side effect.
-  if (params.baseConfig.auth?.order) {
-    auth.order = structuredClone(params.baseConfig.auth.order);
-  } else {
-    delete auth.order;
-  }
+  const provider = normalizeProviderId(selectedProfile.credential.provider) || "provider";
+  const selectedProfileId = `${provider}:setup-${randomUUID()}`;
+  const profile = { ...selectedProfile, profileId: selectedProfileId };
+  const config = projectManualInferenceConfig({
+    ...params,
+    selectedProfile,
+    selectedProfileId,
+  });
   return {
-    config: { ...params.preparedConfig, auth },
-    profiles,
+    config,
+    profiles: [profile],
     selectedProfileId,
   };
+}
+
+function copySelectedModelMetadata(params: {
+  target: OpenClawConfig;
+  prepared: OpenClawConfig;
+  modelRef: string;
+}): void {
+  const preparedDefaultModels = params.prepared.agents?.defaults?.models;
+  if (preparedDefaultModels && Object.hasOwn(preparedDefaultModels, params.modelRef)) {
+    params.target.agents = {
+      ...params.target.agents,
+      defaults: {
+        ...params.target.agents?.defaults,
+        models: {
+          ...params.target.agents?.defaults?.models,
+          [params.modelRef]: structuredClone(preparedDefaultModels[params.modelRef]),
+        },
+      },
+    };
+  }
+
+  const defaultAgentId = resolveDefaultAgentId(params.target);
+  const preparedAgent = params.prepared.agents?.list?.find((agent) => agent.id === defaultAgentId);
+  if (!preparedAgent?.models || !Object.hasOwn(preparedAgent.models, params.modelRef)) {
+    return;
+  }
+  const targetAgents = params.target.agents?.list;
+  const targetAgentIndex = targetAgents?.findIndex((agent) => agent.id === defaultAgentId) ?? -1;
+  if (!targetAgents || targetAgentIndex < 0) {
+    return;
+  }
+  const nextAgents = structuredClone(targetAgents);
+  const targetAgent = nextAgents[targetAgentIndex];
+  if (!targetAgent) {
+    return;
+  }
+  targetAgent.models = {
+    ...targetAgent.models,
+    [params.modelRef]: structuredClone(preparedAgent.models[params.modelRef]),
+  };
+  params.target.agents = { ...params.target.agents, list: nextAgents };
+}
+
+function findSelectedProviderConfigKey(
+  config: OpenClawConfig,
+  providerId: string,
+): string | undefined {
+  const providers = config.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  if (Object.hasOwn(providers, providerId)) {
+    return providerId;
+  }
+  const normalizedProvider = normalizeProviderId(providerId);
+  return Object.keys(providers).find(
+    (candidate) => normalizeProviderId(candidate) === normalizedProvider,
+  );
+}
+
+/**
+ * Provider auth hooks are untrusted setup input. Carry only the selected
+ * inference route's config into the probe; Crestodian owns every other setup
+ * surface after intelligence exists.
+ */
+function projectManualInferenceConfig(params: {
+  baseConfig: OpenClawConfig;
+  preparedConfig: OpenClawConfig;
+  selectedProfile: ProviderAuthResult["profiles"][number];
+  selectedProfileId: string;
+  modelRef: string;
+  providerId: string;
+  pluginId?: string;
+}): OpenClawConfig {
+  const config = structuredClone(params.baseConfig);
+  const metadata = params.preparedConfig.auth?.profiles?.[params.selectedProfile.profileId] ?? {
+    provider: params.selectedProfile.credential.provider,
+    mode: params.selectedProfile.credential.type,
+  };
+  config.auth = {
+    ...config.auth,
+    profiles: {
+      ...config.auth?.profiles,
+      [params.selectedProfileId]: structuredClone(metadata),
+    },
+  };
+
+  const providerConfigKey = findSelectedProviderConfigKey(params.preparedConfig, params.providerId);
+  if (providerConfigKey) {
+    config.models = {
+      ...config.models,
+      providers: {
+        ...config.models?.providers,
+        [providerConfigKey]: structuredClone(
+          params.preparedConfig.models!.providers![providerConfigKey],
+        ),
+      },
+    };
+  }
+
+  if (params.pluginId) {
+    const preparedEntry = params.preparedConfig.plugins?.entries?.[params.pluginId];
+    if (preparedEntry !== undefined) {
+      config.plugins = {
+        ...config.plugins,
+        entries: {
+          ...config.plugins?.entries,
+          [params.pluginId]: structuredClone(preparedEntry),
+        },
+      };
+    }
+  }
+  copySelectedModelMetadata({
+    target: config,
+    prepared: params.preparedConfig,
+    modelRef: params.modelRef,
+  });
+  return config;
 }
 
 async function buildTestPlan(params: {
@@ -517,7 +687,7 @@ async function buildTestPlan(params: {
         provider: route.provider,
         model: route.model,
         modelRef: route.modelLabel,
-        config: cfg,
+        config: route.runConfig,
         agentId: "crestodian",
         routeAgentId: route.agentId,
         agentDir: route.agentDir,
@@ -686,16 +856,23 @@ async function buildTestPlan(params: {
           error: `${resolved.provider.label} returned an invalid starter model.`,
         };
       }
-      const matchingProfile =
-        result.profiles.find(
-          (profile) =>
-            normalizeProviderId(profile.credential.provider) === normalizeProviderId(ref.provider),
-        ) ?? result.profiles[0];
+      const matchingProfile = result.profiles.find(
+        (profile) =>
+          normalizeProviderId(profile.credential.provider) === normalizeProviderId(ref.provider),
+      );
+      if (!matchingProfile) {
+        return {
+          error: `${resolved.provider.label} did not return credentials for its starter model.`,
+        };
+      }
       const preparedAuth = prepareManualAuthForActivation({
         baseConfig: enableResult.config,
         preparedConfig,
         profiles: result.profiles,
         selectedProfileId: matchingProfile.profileId,
+        modelRef,
+        providerId: ref.provider,
+        ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
       });
       return {
         runner: "embedded",
@@ -816,8 +993,12 @@ export async function activateSetupInference(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const redacted = await redactSetupInferenceError(message, params.apiKey);
+    if (error instanceof SetupInferenceActivationIndeterminateError) {
+      throw new SetupInferenceActivationIndeterminateError(redacted);
+    }
     // oxlint-disable-next-line preserve-caught-error -- The original cause can contain the submitted setup secret.
-    throw new Error(await redactSetupInferenceError(message, params.apiKey));
+    throw new Error(redacted);
   }
 }
 
@@ -830,6 +1011,8 @@ async function activateSetupInferenceUnredacted(
   const snapshot = await readSnapshot();
   const cfg: OpenClawConfig =
     snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const sourceCfg: OpenClawConfig =
+    snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
   const workspace = params.workspace?.trim()
     ? resolveUserPath(params.workspace)
     : (
@@ -845,6 +1028,9 @@ async function activateSetupInferenceUnredacted(
   const testAgentDir = path.join(tempDir, "agent");
   let pendingCodexInstall: PluginInstallRecord | undefined;
   let codexInstallOwnership: "unknown" | "owned" | "unowned" = "unknown";
+  let codexInstallRetained = false;
+  let codexRegistryNeedsReload = false;
+  let codexRegistryReloaded = false;
   try {
     const plan = await buildTestPlan({
       kind: params.kind,
@@ -916,7 +1102,25 @@ async function activateSetupInferenceUnredacted(
                 : "Could not install the Codex runtime plugin. Try again once the plugin is available.",
         };
       }
+      codexRegistryNeedsReload = true;
       pendingCodexInstall = ensured.cfg.plugins?.installs?.codex;
+      if (pendingCodexInstall) {
+        // The managed package exists before inference can run. Mark this
+        // generation retained now so a process exit cannot strand unowned bytes.
+        codexInstallRetained = await retainUnownedCodexInstall({
+          record: pendingCodexInstall,
+          verifyOwnership: false,
+          deps,
+        });
+        if (!codexInstallRetained) {
+          return {
+            ok: false,
+            status: "unavailable",
+            error:
+              "Could not retain the staged Codex runtime safely. No inference route was changed; retry after checking the plugin storage directory.",
+          };
+        }
+      }
       const enabledCodex = enablePluginInConfig(ensured.cfg, "codex");
       if (!enabledCodex.enabled) {
         return {
@@ -940,8 +1144,10 @@ async function activateSetupInferenceUnredacted(
     const baselineRoute = await projectDefaultInferenceRoute(cfg);
     const verifiedRoute = await projectDefaultInferenceRoute(testPlan.config);
     const stagedRoute = verifiedRoute.route;
+    const stagedExecutionRoute = await resolveCrestodianConfiguredRouteFromConfig(testPlan.config);
     if (
       !stagedRoute ||
+      !stagedExecutionRoute ||
       stagedRoute.runner !== testPlan.runner ||
       stagedRoute.provider !== testPlan.provider ||
       stagedRoute.model !== testPlan.model ||
@@ -955,10 +1161,28 @@ async function activateSetupInferenceUnredacted(
           "The staged default-agent route does not match the requested inference candidate. Review model runtime policy and retry.",
       };
     }
+    const baselineTargetModelMetadata = projectSetupTargetModelMetadata(
+      cfg,
+      stagedRoute.modelLabel,
+    );
+    const sourceTargetModelMetadata = projectSetupTargetModelMetadata(
+      sourceCfg,
+      stagedRoute.modelLabel,
+    );
+    // Crestodian executes through the reserved agent id but reuses the default
+    // route's agent directory. Only a submitted key stays in the isolated store.
     if (testPlan.runner === "embedded" && stagedRoute.runner === "embedded") {
       testPlan = {
         ...testPlan,
+        config: stagedExecutionRoute.runConfig,
+        agentDir: plan.manualAuth ? testAgentDir : stagedRoute.agentDir,
         agentHarnessRuntimeOverride: stagedRoute.agentHarnessRuntimeOverride,
+      };
+    } else {
+      testPlan = {
+        ...testPlan,
+        config: stagedExecutionRoute.runConfig,
+        ...(!plan.manualAuth ? { agentDir: stagedRoute.agentDir } : {}),
       };
     }
 
@@ -968,7 +1192,7 @@ async function activateSetupInferenceUnredacted(
         agentDir: testAgentDir,
         deps,
       });
-      if (!staged) {
+      if (staged.status !== "persisted") {
         return {
           ok: false,
           status: "unknown",
@@ -978,14 +1202,42 @@ async function activateSetupInferenceUnredacted(
       }
     }
 
+    let stagedOwnerPluginArtifacts: CrestodianOwnerPluginArtifactSnapshot;
+    try {
+      stagedOwnerPluginArtifacts = (
+        deps.captureCrestodianOwnerPluginArtifacts ?? captureCrestodianOwnerPluginArtifacts
+      )({
+        config: stagedExecutionRoute.runConfig,
+        executionRoute: stagedExecutionRoute,
+        deps,
+      });
+    } catch {
+      return {
+        ok: false,
+        status: "unavailable",
+        error:
+          "Could not bind the staged inference plugin runtime. Refresh or reinstall the plugin and retry.",
+      };
+    }
+
     const test = await runSetupInferenceTest({
       plan: testPlan,
       tempDir,
       deps,
-      authProfileStateMode: "read-write",
+      // The setup probe is evidence, not an auth-store mutation. Manual keys
+      // already exist in the isolated store and every other route stays read-only.
+      authProfileStateMode: "read-only",
+      requireExecutionOwner: true,
     });
     if (!test.ok) {
       return test;
+    }
+    if (plan.authProfileId && test.auth.authProfileId !== plan.authProfileId) {
+      return {
+        ok: false,
+        status: "auth",
+        error: `The inference run used profile "${test.auth.authProfileId ?? "unknown"}" instead of the configured profile "${plan.authProfileId}". No model or credential route was saved.`,
+      };
     }
 
     const needsPersistence =
@@ -993,6 +1245,59 @@ async function activateSetupInferenceUnredacted(
       plan.manualAuth !== undefined ||
       codexPluginPatch !== undefined ||
       pendingCodexInstall !== undefined;
+    if (
+      !test.auth.authFingerprint &&
+      (!test.auth.runtimeOwnerFingerprint ||
+        !test.auth.runtimeOwnerKind ||
+        !test.auth.runtimeOwnerId?.trim())
+    ) {
+      return {
+        ok: false,
+        status: "unknown",
+        error:
+          "Inference succeeded, but its runtime did not report an owner that Crestodian can safely reuse. No model or credential route was saved.",
+      };
+    }
+    if (
+      testPlan.runner === "cli" &&
+      (!test.auth.runtimeArtifactFingerprint || !test.auth.runtimeArtifactId?.trim())
+    ) {
+      return {
+        ok: false,
+        status: "unknown",
+        error:
+          "Inference succeeded, but its CLI executable/package artifact could not be safely reused. No model or credential route was saved.",
+      };
+    }
+    if (testPlan.runner === "embedded") {
+      const successfulHarnessId = test.auth.agentHarnessId?.trim();
+      if (
+        !successfulHarnessId ||
+        (testPlan.agentHarnessRuntimeOverride !== "auto" &&
+          successfulHarnessId !== testPlan.agentHarnessRuntimeOverride)
+      ) {
+        return {
+          ok: false,
+          status: "unknown",
+          error:
+            "Inference succeeded, but its exact agent harness could not be safely reused. No model or credential route was saved.",
+        };
+      }
+      if (
+        successfulHarnessId !== "openclaw" &&
+        (test.auth.runtimeOwnerKind !== "plugin-harness" ||
+          test.auth.runtimeOwnerId?.trim() !== successfulHarnessId ||
+          !test.auth.runtimeArtifactFingerprint ||
+          !test.auth.runtimeArtifactId?.trim())
+      ) {
+        return {
+          ok: false,
+          status: "unknown",
+          error:
+            "Inference succeeded, but its agent harness artifact could not be safely reused. No model or credential route was saved.",
+        };
+      }
+    }
     let committedConfig: OpenClawConfig | undefined;
     if (!needsPersistence) {
       const latestSnapshot = await readSnapshot();
@@ -1009,6 +1314,34 @@ async function activateSetupInferenceUnredacted(
           status: "unknown",
           error:
             "The default-agent inference route changed during its live test. Review the current model/auth/runtime settings and retry.",
+        };
+      }
+      const latestResolvedRoute = latestRuntime
+        ? await resolveCrestodianConfiguredRouteFromConfig(latestRuntime)
+        : null;
+      if (!latestResolvedRoute) {
+        return {
+          ok: false,
+          status: "unknown",
+          error:
+            "The default-agent inference route could not be resolved after its live test. Review the current model/auth/runtime settings and retry.",
+        };
+      }
+      try {
+        const binding = await revalidateSetupInferenceOwner({
+          route: latestResolvedRoute,
+          auth: test.auth,
+          deps,
+        });
+        if (!hasSameOwnerPluginArtifacts(binding, stagedOwnerPluginArtifacts)) {
+          throw new Error("inference owner plugin runtime changed during its live test");
+        }
+      } catch {
+        return {
+          ok: false,
+          status: "auth",
+          error:
+            "The verified inference owner changed before activation completed. Retry the inference check.",
         };
       }
     }
@@ -1048,6 +1381,19 @@ async function activateSetupInferenceUnredacted(
           },
         };
       };
+      // Pending install records are probe-only discovery input. The config
+      // writer moves them into the installed-plugin index before committing,
+      // so post-write reconciliation must compare against the stripped route
+      // and verify the exact index record separately below.
+      const persistedRoute = pendingCodexInstall
+        ? await projectDefaultInferenceRoute(stripPendingPluginInstallRecords(stageCandidate(cfg)))
+        : verifiedRoute;
+      // Runtime config may materialize provider defaults that are intentionally
+      // absent from authored config. Compare source writes against the candidate
+      // produced from the original source shape, without ignoring concurrent rows.
+      const expectedSourceCandidateRoute = await projectDefaultInferenceRoute(
+        stageCandidate(sourceCfg),
+      );
       // Resolve every fallible config-commit dependency before writing a
       // credential into the real agent store. From this point onward, any
       // failure is inside the rollback boundary below.
@@ -1075,15 +1421,30 @@ async function activateSetupInferenceUnredacted(
           agentDir: resolvedRoute.agentDir,
           deps,
         });
-        if (!persistedManualAuth) {
+        if (persistedManualAuth.status === "unknown") {
+          const rolledBack = await rollbackManualAuthProfiles(persistedManualAuth.receipt, deps);
+          if (rolledBack) {
+            return {
+              ok: false,
+              status: "unknown",
+              error:
+                "Could not confirm the credential write, so it was rolled back. Try again in a moment.",
+            };
+          }
+          throw new SetupInferenceActivationIndeterminateError(
+            "Inference activation could not confirm whether its verified credential was saved or rolled back. No config commit was attempted; run openclaw doctor --fix before retrying.",
+          );
+        }
+        if (persistedManualAuth.status === "not-persisted") {
           return {
             ok: false,
             status: "unknown",
             error: "Could not save the verified credential; try again in a moment.",
           };
         }
-        manualAuthReceipt = persistedManualAuth;
+        manualAuthReceipt = persistedManualAuth.receipt;
       }
+      let commitMayHaveStarted = false;
       try {
         const committed = await transformConfig({
           base: "source",
@@ -1096,6 +1457,16 @@ async function activateSetupInferenceUnredacted(
             if (!sameDefaultInferenceRoute(latestBaseline, baselineRoute)) {
               throw new Error(
                 "The default-agent inference route changed during its live test, so the verified candidate was not saved. Review the current model/auth/runtime settings and retry.",
+              );
+            }
+            if (
+              !isDeepStrictEqual(
+                projectSetupTargetModelMetadata(latestRuntime, stagedRoute.modelLabel),
+                baselineTargetModelMetadata,
+              )
+            ) {
+              throw new Error(
+                "The target model metadata changed during its live inference test, so the verified candidate was not saved. Review the current model settings and retry.",
               );
             }
             const stagedRuntime = stageCandidate(latestRuntime);
@@ -1115,7 +1486,41 @@ async function activateSetupInferenceUnredacted(
                 "The latest default-agent route no longer matches the verified candidate, so it was not saved. Review the current config and retry.",
               );
             }
-            return { nextConfig: stageCandidate(current) };
+            if (
+              !isDeepStrictEqual(
+                projectSetupTargetModelMetadata(current, stagedRoute.modelLabel),
+                sourceTargetModelMetadata,
+              )
+            ) {
+              throw new Error(
+                "The authored target model metadata changed during its live inference test, so the verified candidate was not saved. Review the current model settings and retry.",
+              );
+            }
+            const nextConfig = stageCandidate(current);
+            const nextRouteProjection = await projectDefaultInferenceRoute(nextConfig);
+            const nextResolvedRoute = await resolveCrestodianConfiguredRouteFromConfig(nextConfig);
+            if (
+              !sameDefaultInferenceRoute(nextRouteProjection, expectedSourceCandidateRoute) ||
+              !nextResolvedRoute ||
+              nextResolvedRoute.modelLabel !== plan.modelRef ||
+              (plan.manualAuth && nextResolvedRoute.authProfileId !== plan.authProfileId)
+            ) {
+              throw new Error(
+                "The source config no longer matches the verified candidate, so it was not saved. Review the current config and retry.",
+              );
+            }
+            const binding = await revalidateSetupInferenceOwner({
+              route: nextResolvedRoute,
+              auth: test.auth,
+              deps,
+            });
+            if (!hasSameOwnerPluginArtifacts(binding, stagedOwnerPluginArtifacts)) {
+              throw new Error("inference owner plugin runtime changed during its live test");
+            }
+            // Once this callback returns, the config writer owns the candidate.
+            // Any later throw may be post-commit and needs reconciliation.
+            commitMayHaveStarted = true;
+            return { nextConfig };
           },
         });
         committedConfig = committed.nextConfig;
@@ -1123,6 +1528,17 @@ async function activateSetupInferenceUnredacted(
           codexInstallOwnership = "owned";
         }
       } catch (error) {
+        if (!commitMayHaveStarted) {
+          if (manualAuthReceipt) {
+            const rolledBack = await rollbackManualAuthProfiles(manualAuthReceipt, deps);
+            if (!rolledBack) {
+              throw new SetupInferenceActivationIndeterminateError(
+                "Inference activation stopped before its config commit, but could not confirm removal of its staged credential. Run openclaw doctor --fix before retrying.",
+              );
+            }
+          }
+          throw error;
+        }
         const reconciledSnapshot = await readSnapshot().catch(() => null);
         const reconciledRuntime =
           reconciledSnapshot?.exists && reconciledSnapshot.valid
@@ -1134,30 +1550,28 @@ async function activateSetupInferenceUnredacted(
         const codexInstallPersisted = pendingCodexInstall
           ? await isCodexInstallRecordPersisted(pendingCodexInstall, deps)
           : true;
-        if (pendingCodexInstall) {
-          codexInstallOwnership = codexInstallPersisted ? "owned" : "unowned";
-        }
         const committedDespiteError =
           reconciledRoute !== undefined &&
-          sameDefaultInferenceRoute(reconciledRoute, verifiedRoute) &&
+          sameDefaultInferenceRoute(reconciledRoute, persistedRoute) &&
           (!manualAuthReceipt || manualAuthProfilesPersisted(manualAuthReceipt, deps)) &&
           codexInstallPersisted;
+        if (pendingCodexInstall) {
+          codexInstallOwnership = committedDespiteError ? "owned" : "unowned";
+        }
         if (!committedDespiteError) {
           if (manualAuthReceipt) {
             if (
               !reconciledRuntime ||
               configReferencesManualAuthProfiles(reconciledRuntime, manualAuthReceipt)
             ) {
-              throw new Error(
+              throw new SetupInferenceActivationIndeterminateError(
                 "Inference activation could not confirm its config commit state. The verified credential was retained because the current config may reference it. Run openclaw doctor --fix before retrying.",
-                { cause: error },
               );
             }
             const rolledBack = await rollbackManualAuthProfiles(manualAuthReceipt, deps);
             if (!rolledBack) {
-              throw new Error(
+              throw new SetupInferenceActivationIndeterminateError(
                 "Inference activation failed and its staged credential could not be rolled back. Run openclaw doctor --fix before retrying.",
-                { cause: error },
               );
             }
           }
@@ -1167,19 +1581,16 @@ async function activateSetupInferenceUnredacted(
         log.warn("Inference activation committed successfully despite a post-write cleanup error.");
       }
     }
-    if (codexPluginPatch !== undefined && committedConfig) {
-      const refreshPluginRegistry =
-        deps.refreshPluginRegistryAfterConfigMutation ??
-        (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
-      try {
-        await refreshPluginRegistry({
-          config: committedConfig,
-          reason: "source-changed",
-          workspaceDir: workspace,
-          logger: log,
-        });
-      } catch {
-        log.warn("Codex runtime registry refresh will retry on the next Gateway load.");
+    if (codexRegistryNeedsReload && committedConfig) {
+      codexRegistryReloaded = await reloadCodexRegistryAfterActivation({
+        readSnapshot,
+        workspaceDir: workspace,
+        deps,
+      });
+      if (!codexRegistryReloaded) {
+        throw new SetupInferenceActivationIndeterminateError(
+          "Inference activation committed, but the active plugin registry could not be reloaded. Restart the Gateway before using Codex inference.",
+        );
       }
     }
     return {
@@ -1189,14 +1600,39 @@ async function activateSetupInferenceUnredacted(
       lines: [`Inference verified: ${plan.modelRef}`],
     };
   } finally {
+    let codexCleanupError: SetupInferenceActivationIndeterminateError | undefined;
     if (pendingCodexInstall && codexInstallOwnership !== "owned") {
-      await retainUnownedCodexInstall({
+      // Reassert after probing: a partial install-index commit may have cleared
+      // the early marker even though the matching model route never committed.
+      const retained = await retainUnownedCodexInstall({
         record: pendingCodexInstall,
-        verifyOwnership: codexInstallOwnership === "unknown",
+        verifyOwnership: false,
         deps,
       });
+      if (!retained) {
+        codexCleanupError = new SetupInferenceActivationIndeterminateError(
+          "Inference activation stopped before its Codex runtime package could be retained safely. Restart the Gateway before retrying.",
+        );
+      }
+    }
+    if (codexRegistryNeedsReload && !codexRegistryReloaded) {
+      // The probe loaded discovery against staged config. Restore the live
+      // registry from the latest persisted config before another request runs.
+      codexRegistryReloaded = await reloadCodexRegistryAfterActivation({
+        readSnapshot,
+        workspaceDir: workspace,
+        deps,
+      });
+      if (!codexRegistryReloaded) {
+        codexCleanupError = new SetupInferenceActivationIndeterminateError(
+          "Inference activation could not restore the active plugin registry after its Codex probe. Restart the Gateway before retrying.",
+        );
+      }
     }
     await cleanupSetupInferenceTempDir({ tempDir, deps });
+    if (codexCleanupError) {
+      throw codexCleanupError;
+    }
   }
 }
 
@@ -1212,13 +1648,49 @@ async function redactSetupInferenceError(message: string, apiKey?: string): Prom
   return redactToolPayloadText(redacted);
 }
 
-/** Live-test the configured default model without changing config or auth state. */
-export async function verifySetupInference(params: {
+async function revalidateSetupInferenceOwner(params: {
+  route: NonNullable<Awaited<ReturnType<typeof resolveCrestodianConfiguredRouteFromConfig>>>;
+  auth: AgentExecutionAuthBinding;
+  deps: ActivateSetupInferenceDeps;
+}): Promise<CrestodianVerifiedInferenceBinding> {
+  const createBinding =
+    params.deps.createCrestodianVerifiedInferenceBinding ??
+    createCrestodianVerifiedInferenceBinding;
+  return await createBinding({
+    configuredRoute: params.route,
+    executionRoute: params.route,
+    auth: params.auth,
+    deps: params.deps,
+  });
+}
+
+function hasSameOwnerPluginArtifacts(
+  binding: CrestodianVerifiedInferenceBinding,
+  snapshot: CrestodianOwnerPluginArtifactSnapshot,
+): boolean {
+  return (
+    isDeepStrictEqual(binding.ownerPluginIds, snapshot.ownerPluginIds) &&
+    isDeepStrictEqual(binding.ownerPluginArtifacts, snapshot.ownerPluginArtifacts)
+  );
+}
+
+type VerifySetupInferenceParams = {
   kind?: "existing-model";
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
-}): Promise<VerifySetupInferenceResult> {
+};
+
+/** Live-test the configured default model without changing config or auth state. */
+export function verifySetupInference(
+  params: VerifySetupInferenceParams & { bindSession: true },
+): Promise<BoundVerifySetupInferenceResult>;
+export function verifySetupInference(
+  params: VerifySetupInferenceParams & { bindSession?: false },
+): Promise<VerifySetupInferenceResult>;
+export async function verifySetupInference(
+  params: VerifySetupInferenceParams & { bindSession?: boolean },
+): Promise<VerifySetupInferenceResult | BoundVerifySetupInferenceResult> {
   const deps: ActivateSetupInferenceDeps = {
     ...params.deps,
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
@@ -1242,11 +1714,23 @@ export async function verifySetupInference(params: {
   }
   const cfg: OpenClawConfig = snapshot.runtimeConfig ?? snapshot.config;
   const baselineRoute = await projectDefaultInferenceRoute(cfg);
+  let verifiedBinding: CrestodianVerifiedInferenceBinding | undefined;
   const verification = await verifySetupInferenceConfig({
     config: cfg,
     runtime: params.runtime,
+    requireExecutionOwner: params.bindSession === true,
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     ...(params.deps ? { deps: params.deps } : {}),
+    ...(params.bindSession
+      ? {
+          onVerifiedExecution: (
+            _auth: AgentExecutionAuthBinding,
+            binding: CrestodianVerifiedInferenceBinding,
+          ) => {
+            verifiedBinding = binding;
+          },
+        }
+      : {}),
   });
   if (!verification.ok) {
     return verification;
@@ -1265,7 +1749,91 @@ export async function verifySetupInference(params: {
         "The default-agent inference route changed during its live test. Review the current model/auth/runtime settings and retry.",
     };
   }
-  return verification;
+  if (!params.bindSession) {
+    return verification;
+  }
+  const configuredRoute = await resolveCrestodianConfiguredRouteFromConfig(cfg);
+  if (!configuredRoute || !verifiedBinding) {
+    return {
+      ok: false,
+      status: "unknown",
+      error:
+        "The successful inference run did not report an exact execution binding. Retry setup before starting Crestodian.",
+    };
+  }
+  return { ...verification, binding: verifiedBinding };
+}
+
+type BoundSetupInferenceVerifier = (params: {
+  runtime: RuntimeEnv;
+  bindSession: true;
+  deps?: ActivateSetupInferenceDeps;
+}) => Promise<BoundVerifySetupInferenceResult>;
+
+export type ResolveCrestodianInferenceForPersistentApplyDeps = CrestodianVerifiedInferenceDeps & {
+  resolveVerifiedInferenceRoute?: typeof resolveCrestodianVerifiedInferenceRoute;
+  hasCurrentOwnerPluginArtifacts?: typeof hasCurrentCrestodianOwnerPluginArtifacts;
+  verifyBoundInference?: BoundSetupInferenceVerifier;
+};
+
+function executionRouteIdentity(route: CrestodianConfiguredRoute): unknown {
+  const { runConfig: _runConfig, ...identity } = route;
+  return identity;
+}
+
+/**
+ * Strict credentials need only the static owner check. Opaque runtimes can
+ * prove liveness only by completing another exact turn at the side-effect
+ * boundary; the result must still be the original frozen route.
+ */
+export async function resolveCrestodianInferenceForPersistentApply(params: {
+  binding: CrestodianVerifiedInferenceBinding;
+  runtime: RuntimeEnv;
+  deps?: ResolveCrestodianInferenceForPersistentApplyDeps;
+}): Promise<CrestodianConfiguredRoute | null> {
+  const deps = params.deps ?? {};
+  const resolveVerified =
+    deps.resolveVerifiedInferenceRoute ?? resolveCrestodianVerifiedInferenceRoute;
+  const initialRoute = await resolveVerified(params.binding, deps);
+  if (!initialRoute) {
+    return null;
+  }
+  const hasCurrentOwnerPluginArtifacts =
+    deps.hasCurrentOwnerPluginArtifacts ?? hasCurrentCrestodianOwnerPluginArtifacts;
+  if (!(await hasCurrentOwnerPluginArtifacts(params.binding, deps))) {
+    return null;
+  }
+  if (params.binding.auth.proofKind !== "runtime-owner") {
+    return initialRoute;
+  }
+
+  const verifyBound = deps.verifyBoundInference ?? verifySetupInference;
+  const live = await verifyBound({
+    runtime: params.runtime,
+    bindSession: true,
+    deps,
+  });
+  if (
+    !live.ok ||
+    !isDeepStrictEqual(live.binding.configuredRoute, params.binding.configuredRoute) ||
+    !isDeepStrictEqual(
+      executionRouteIdentity(live.binding.execution),
+      executionRouteIdentity(params.binding.execution),
+    ) ||
+    !isDeepStrictEqual(live.binding.executionFingerprint, params.binding.executionFingerprint) ||
+    !isDeepStrictEqual(live.binding.ownerPluginIds, params.binding.ownerPluginIds) ||
+    !isDeepStrictEqual(live.binding.ownerPluginArtifacts, params.binding.ownerPluginArtifacts) ||
+    !isDeepStrictEqual(live.binding.auth, params.binding.auth)
+  ) {
+    return null;
+  }
+  // The live probe is not a lock. Recheck the authored route after it returns,
+  // then keep using the original frozen execution snapshot.
+  const finalRoute = await resolveVerified(params.binding, deps);
+  if (!finalRoute || !(await hasCurrentOwnerPluginArtifacts(params.binding, deps))) {
+    return null;
+  }
+  return finalRoute;
 }
 
 /** Live-test a staged default-agent route before any caller persists it. */
@@ -1274,6 +1842,13 @@ export async function verifySetupInferenceConfig(params: {
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
+  /** Internal session gate: capture only the final exact successful credential. */
+  onVerifiedExecution?: (
+    auth: AgentExecutionAuthBinding,
+    binding: CrestodianVerifiedInferenceBinding,
+  ) => void;
+  /** Reject a successful turn unless its runner reports the exact execution owner. */
+  requireExecutionOwner?: boolean;
 }): Promise<VerifySetupInferenceResult> {
   const deps: ActivateSetupInferenceDeps = {
     ...params.deps,
@@ -1304,14 +1879,103 @@ export async function verifySetupInferenceConfig(params: {
     if ("error" in plan) {
       return { ok: false, status: "unavailable", error: plan.error };
     }
-    const test = await runSetupInferenceTest({
+    const requiresExecutionOwner =
+      params.requireExecutionOwner === true || params.onVerifiedExecution !== undefined;
+    let configuredRoute:
+      | NonNullable<Awaited<ReturnType<typeof resolveCrestodianConfiguredRouteFromConfig>>>
+      | undefined;
+    let stagedOwnerPluginArtifacts: CrestodianOwnerPluginArtifactSnapshot | undefined;
+    if (requiresExecutionOwner) {
+      configuredRoute = (await resolveCrestodianConfiguredRouteFromConfig(cfg)) ?? undefined;
+      if (!configuredRoute) {
+        return {
+          ok: false,
+          status: "unknown",
+          error: "The verified inference route could not be resolved for owner validation.",
+        };
+      }
+      try {
+        stagedOwnerPluginArtifacts = (
+          deps.captureCrestodianOwnerPluginArtifacts ?? captureCrestodianOwnerPluginArtifacts
+        )({
+          config: cfg,
+          executionRoute: configuredRoute,
+          deps,
+        });
+      } catch {
+        return {
+          ok: false,
+          status: "unavailable",
+          error:
+            "Could not bind the configured inference plugin runtime. Refresh or reinstall the plugin and retry.",
+        };
+      }
+    }
+    let test = await runSetupInferenceTest({
       plan,
       tempDir,
       deps,
       authProfileStateMode: "read-only",
+      requireExecutionOwner: requiresExecutionOwner,
     });
     if (test.ok) {
-      return { ...test, modelRef: plan.modelRef };
+      const verifiedProfileId = test.auth.authProfileId;
+      if (plan.authProfileId && verifiedProfileId !== plan.authProfileId) {
+        return {
+          ok: false,
+          status: "auth",
+          error: `The inference run used profile "${verifiedProfileId ?? "unknown"}" instead of the configured profile "${plan.authProfileId}".`,
+        };
+      }
+      if (params.onVerifiedExecution && !plan.authProfileId && verifiedProfileId) {
+        // Auto-selection may rotate through several profiles before succeeding.
+        // Re-run once with the winner locked so the session proof cannot bind a
+        // credential that never completed an exact, non-rotating turn.
+        test = await runSetupInferenceTest({
+          plan: { ...plan, authProfileId: verifiedProfileId },
+          tempDir,
+          deps,
+          authProfileStateMode: "read-only",
+          requireExecutionOwner: true,
+        });
+        if (!test.ok) {
+          return {
+            ...test,
+            error: await redactSetupInferenceError(test.error),
+          };
+        }
+        if (test.auth.authProfileId !== verifiedProfileId) {
+          return {
+            ok: false,
+            status: "auth",
+            error: "The selected inference credential changed during its locked verification.",
+          };
+        }
+      }
+      if (params.requireExecutionOwner || params.onVerifiedExecution) {
+        try {
+          const binding = await revalidateSetupInferenceOwner({
+            route: configuredRoute!,
+            auth: test.auth,
+            deps,
+          });
+          if (
+            !stagedOwnerPluginArtifacts ||
+            !hasSameOwnerPluginArtifacts(binding, stagedOwnerPluginArtifacts)
+          ) {
+            throw new Error("inference owner plugin runtime changed during its live test");
+          }
+          params.onVerifiedExecution?.(test.auth, binding);
+        } catch {
+          return {
+            ok: false,
+            status: "auth",
+            error:
+              "The verified inference owner changed before validation completed. Retry the inference check.",
+          };
+        }
+      }
+      return { ok: true, latencyMs: test.latencyMs, modelRef: plan.modelRef };
     }
     return {
       ...test,
@@ -1326,6 +1990,16 @@ async function cleanupSetupInferenceTempDir(params: {
   tempDir: string;
   deps: ActivateSetupInferenceDeps;
 }): Promise<void> {
+  try {
+    const disposeDatabase =
+      params.deps.disposeOpenClawAgentDatabaseByPath ??
+      (await import("../state/openclaw-agent-db.js")).disposeOpenClawAgentDatabaseByPath;
+    disposeDatabase(path.join(params.tempDir, "agent", "openclaw-agent.sqlite"));
+  } catch {
+    // Windows cannot remove an open SQLite file. Keep cleanup nonfatal, but
+    // always try the directory removal so callers do not retain probe secrets.
+    log.warn("Could not dispose the temporary inference auth database.");
+  }
   try {
     await (
       params.deps.removeTempDir ?? ((dir: string) => fs.rm(dir, { recursive: true, force: true }))
@@ -1357,12 +2031,12 @@ async function retainUnownedCodexInstall(params: {
   record: PluginInstallRecord;
   verifyOwnership: boolean;
   deps: ActivateSetupInferenceDeps;
-}): Promise<void> {
+}): Promise<boolean> {
   if (params.verifyOwnership && (await isCodexInstallRecordPersisted(params.record, params.deps))) {
-    return;
+    return true;
   }
   if (params.record.source !== "npm" || !params.record.installPath?.trim()) {
-    return;
+    return true;
   }
   try {
     // Never delete an unowned generation: recovery/startup cleanup skips the
@@ -1379,10 +2053,12 @@ async function retainUnownedCodexInstall(params: {
     if (!marked) {
       log.warn("Could not retain the uncommitted Codex runtime package generation.");
     }
+    return marked;
   } catch {
     // Retention is best effort and marker-after-adoption is non-destructive.
     // A later install or GC may still reuse or remove the unowned generation.
     log.warn("Could not retain the uncommitted Codex runtime package generation.");
+    return false;
   } finally {
     await clearUnownedCodexInstallCaches(params.deps);
   }
@@ -1414,6 +2090,58 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
     await invalidateRuntimeDiscovery({ logger: log });
   } catch {
     log.warn("Could not clear plugin runtime discovery after failed Codex activation.");
+  }
+}
+
+async function reloadCodexRegistryAfterActivation(params: {
+  readSnapshot: () => Promise<
+    Awaited<ReturnType<typeof import("../config/config.js").readConfigFileSnapshot>>
+  >;
+  workspaceDir: string;
+  deps: ActivateSetupInferenceDeps;
+}): Promise<boolean> {
+  let snapshot: Awaited<ReturnType<typeof import("../config/config.js").readConfigFileSnapshot>>;
+  try {
+    snapshot = await params.readSnapshot();
+  } catch {
+    log.warn("Could not read config while reloading the plugin registry after Codex activation.");
+    return false;
+  }
+  const runtimeConfig =
+    snapshot.exists && snapshot.valid
+      ? (snapshot.runtimeConfig ?? snapshot.config)
+      : ({} satisfies OpenClawConfig);
+  const sourceConfig =
+    snapshot.exists && snapshot.valid
+      ? (snapshot.sourceConfig ?? snapshot.config)
+      : ({} satisfies OpenClawConfig);
+  try {
+    const refreshPluginRegistry =
+      params.deps.refreshPluginRegistryAfterConfigMutation ??
+      (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
+    await refreshPluginRegistry({
+      config: sourceConfig,
+      reason: "source-changed",
+      workspaceDir: params.workspaceDir,
+      logger: log,
+    });
+  } catch {
+    log.warn("Could not refresh persisted plugin registry metadata after Codex activation.");
+  }
+  try {
+    const ensurePluginRegistryLoaded =
+      params.deps.ensurePluginRegistryLoaded ??
+      (await import("../plugins/runtime/runtime-registry-loader.js")).ensurePluginRegistryLoaded;
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: runtimeConfig,
+      activationSourceConfig: sourceConfig,
+      workspaceDir: params.workspaceDir,
+    });
+    return true;
+  } catch {
+    log.warn("Could not reload the active plugin registry after Codex inference activation.");
+    return false;
   }
 }
 
@@ -1467,9 +2195,16 @@ type ManualAuthPersistenceReceipt = {
     profileId: string;
     credential: ReturnType<typeof normalizeAuthProfileCredential>;
   }>;
+  /** Profiles created by this activation; rollback must not delete prior identical entries. */
+  insertedProfileIds: ReadonlySet<string>;
 };
 
 type ManualAuthProfilesReadback = "present" | "absent" | "mismatch" | "unknown";
+
+type ManualAuthPersistenceResult =
+  | { status: "persisted"; receipt: ManualAuthPersistenceReceipt }
+  | { status: "not-persisted" }
+  | { status: "unknown"; receipt: ManualAuthPersistenceReceipt };
 
 function modelSelectionReferencesProfile(value: unknown, profileIds: ReadonlySet<string>): boolean {
   if (typeof value === "string") {
@@ -1548,12 +2283,13 @@ async function persistManualAuthProfiles(params: {
   profiles: ProviderAuthResult["profiles"];
   agentDir: string;
   deps: ActivateSetupInferenceDeps;
-}): Promise<ManualAuthPersistenceReceipt | null> {
+}): Promise<ManualAuthPersistenceResult> {
   const profiles = params.profiles.map((profile) => ({
     profileId: profile.profileId,
     credential: normalizeAuthProfileCredential(profile.credential),
   }));
-  const receipt = { agentDir: params.agentDir, profiles };
+  const insertedProfileIds = new Set<string>();
+  const receipt = { agentDir: params.agentDir, profiles, insertedProfileIds };
   let collision = false;
   const update = params.deps.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
   const updated = await update({
@@ -1569,6 +2305,7 @@ async function persistManualAuthProfiles(params: {
         }
         if (!existing) {
           store.profiles[profile.profileId] = profile.credential;
+          insertedProfileIds.add(profile.profileId);
           changed = true;
         }
       }
@@ -1576,34 +2313,76 @@ async function persistManualAuthProfiles(params: {
     },
   });
   if (collision) {
-    return null;
+    return { status: "not-persisted" };
   }
   // The store helper can report a post-commit chmod failure as null. Read back
   // the exact unique profiles before deciding whether the transaction failed.
-  return updated !== null || manualAuthProfilesPersisted(receipt, params.deps) ? receipt : null;
+  const readback = readManualAuthProfiles(receipt, params.deps);
+  if (updated !== null || readback === "present") {
+    return { status: "persisted", receipt };
+  }
+  return readback === "absent" ? { status: "not-persisted" } : { status: "unknown", receipt };
 }
 
 async function rollbackManualAuthProfiles(
   receipt: ManualAuthPersistenceReceipt,
   deps: ActivateSetupInferenceDeps,
 ): Promise<boolean> {
+  if (receipt.insertedProfileIds.size === 0) {
+    return true;
+  }
   const update = deps.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    await update({
-      agentDir: receipt.agentDir,
-      saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
-      updater: (store) => {
-        let changed = false;
-        for (const profile of receipt.profiles) {
-          if (isDeepStrictEqual(store.profiles[profile.profileId], profile.credential)) {
-            delete store.profiles[profile.profileId];
-            changed = true;
+    let updated: Awaited<ReturnType<typeof update>> = null;
+    try {
+      updated = await update({
+        agentDir: receipt.agentDir,
+        saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+        updater: (store) => {
+          let changed = false;
+          for (const profile of receipt.profiles) {
+            if (!receipt.insertedProfileIds.has(profile.profileId)) {
+              continue;
+            }
+            if (isDeepStrictEqual(store.profiles[profile.profileId], profile.credential)) {
+              delete store.profiles[profile.profileId];
+              changed = true;
+            }
           }
-        }
-        return changed;
-      },
-    });
-    if (readManualAuthProfiles(receipt, deps) === "absent") {
+          return changed;
+        },
+      });
+    } catch {
+      // A thrown write may still have committed. Only readback or a later
+      // locked attempt may prove removal; otherwise the caller reports the
+      // activation as indeterminate.
+    }
+    if (
+      updated &&
+      receipt.profiles.every(
+        (profile) =>
+          !receipt.insertedProfileIds.has(profile.profileId) ||
+          updated.profiles[profile.profileId] === undefined,
+      )
+    ) {
+      return true;
+    }
+    let persistedStore: ReturnType<typeof loadPersistedAuthProfileStore>;
+    try {
+      persistedStore = (deps.loadPersistedAuthProfileStore ?? loadPersistedAuthProfileStore)(
+        receipt.agentDir,
+      );
+    } catch {
+      persistedStore = null;
+    }
+    if (
+      persistedStore &&
+      receipt.profiles.every(
+        (profile) =>
+          !receipt.insertedProfileIds.has(profile.profileId) ||
+          persistedStore.profiles[profile.profileId] === undefined,
+      )
+    ) {
       return true;
     }
   }
@@ -1615,15 +2394,16 @@ async function runSetupInferenceTest(params: {
   tempDir: string;
   deps: ActivateSetupInferenceDeps;
   authProfileStateMode: "read-write" | "read-only";
+  requireExecutionOwner: boolean;
 }): Promise<
-  | { ok: true; latencyMs: number }
+  | { ok: true; latencyMs: number; auth: AgentExecutionAuthBinding }
   | {
       ok: false;
       status: SetupInferenceFailureStatus;
       error: string;
     }
 > {
-  const { plan, tempDir, deps, authProfileStateMode } = params;
+  const { plan, tempDir, deps, authProfileStateMode, requireExecutionOwner } = params;
   // Keep these probe prefixes aligned with logging/subsystem.ts and process/command-queue.ts
   // so expected setup failures stay off the interactive TTY.
   const runId = `probe-setup-inference-${randomUUID()}`;
@@ -1631,6 +2411,7 @@ async function runSetupInferenceTest(params: {
   const sessionFile = path.join(tempDir, "session.jsonl");
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
   const started = Date.now();
+  let successfulAuth: AgentExecutionAuthBinding | undefined;
   try {
     if (plan.runner === "cli") {
       const unsupportedError = resolveToolFreeCliSetupError(plan);
@@ -1670,6 +2451,9 @@ async function runSetupInferenceTest(params: {
         executionMode: "side-question",
         disableTools: true,
         cleanupCliLiveSessionOnRunEnd: true,
+        onSuccessfulAuthBinding: (binding) => {
+          successfulAuth = binding;
+        },
       })) as RunResult;
     } else {
       const runEmbedded =
@@ -1705,6 +2489,9 @@ async function runSetupInferenceTest(params: {
         modelRun: true,
         messageChannel: "crestodian",
         messageProvider: "crestodian",
+        onSuccessfulAuthBinding: (binding) => {
+          successfulAuth = binding;
+        },
       })) as RunResult;
     }
     const terminalError = extractRunTerminalError(result);
@@ -1728,7 +2515,21 @@ async function runSetupInferenceTest(params: {
     if (winnerError) {
       return { ok: false, status: "format", error: winnerError };
     }
-    return { ok: true, latencyMs: Date.now() - started };
+    if (requireExecutionOwner && !successfulAuth) {
+      return {
+        ok: false,
+        status: "unknown",
+        error:
+          "Inference succeeded, but its runtime did not report an owner that Crestodian can safely reuse.",
+      };
+    }
+    return {
+      ok: true,
+      latencyMs: Date.now() - started,
+      auth:
+        successfulAuth ??
+        (!requireExecutionOwner && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
+    };
   } catch (error) {
     const described = describeFailoverError(error);
     return {

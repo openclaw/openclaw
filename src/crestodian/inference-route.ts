@@ -37,11 +37,57 @@ export type DefaultInferenceRouteProjection = {
   models: unknown;
   defaults: unknown;
   agent?: unknown;
+  executionAgent?: unknown;
   env: OpenClawConfig["env"];
   secrets: OpenClawConfig["secrets"];
   plugins: OpenClawConfig["plugins"];
   tools: OpenClawConfig["tools"];
 };
+
+const CRESTODIAN_EXECUTION_AGENT_ID = "crestodian";
+
+function projectCrestodianExecutionConfig(
+  config: OpenClawConfig,
+  routeAgentId: string,
+): OpenClawConfig {
+  const agents = config.agents?.list;
+  if (!agents) {
+    return config;
+  }
+  const routeAgent =
+    routeAgentId === CRESTODIAN_EXECUTION_AGENT_ID
+      ? undefined
+      : agents.find((agent) => normalizeAgentId(agent.id) === routeAgentId);
+  const retainedAgents = agents.filter(
+    (agent) => normalizeAgentId(agent.id) !== CRESTODIAN_EXECUTION_AGENT_ID,
+  );
+  const hasProjectedSettings = routeAgent?.params !== undefined || routeAgent?.tools !== undefined;
+  if (retainedAgents.length === agents.length && !hasProjectedSettings) {
+    return config;
+  }
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      list: [
+        ...retainedAgents,
+        ...(hasProjectedSettings
+          ? [
+              {
+                id: CRESTODIAN_EXECUTION_AGENT_ID,
+                ...(routeAgent?.params !== undefined
+                  ? { params: structuredClone(routeAgent.params) }
+                  : {}),
+                ...(routeAgent?.tools !== undefined
+                  ? { tools: structuredClone(routeAgent.tools) }
+                  : {}),
+              },
+            ]
+          : []),
+      ],
+    },
+  };
+}
 
 /** Return the authored default-agent route; never synthesize the product fallback model. */
 export async function resolveCrestodianConfiguredRoute(
@@ -112,8 +158,9 @@ export async function resolveCrestodianConfiguredRouteFromConfig(
       })
     : undefined;
   const authProfileId = allowCliAuthProfileForwarding ? cliAuthProfileId : selection.profileId;
+  const executionConfig = projectCrestodianExecutionConfig(runConfig, modelOwnerAgentId);
   const base = {
-    runConfig,
+    runConfig: executionConfig,
     modelLabel: `${selection.provider}/${selection.modelId}`,
     provider: executionProvider,
     model: selection.modelId,
@@ -169,6 +216,9 @@ export async function projectDefaultInferenceRoute(
   const route = await resolveCrestodianConfiguredRouteFromConfig(config);
   const list = config.agents?.list ?? [];
   const agent = list.find((entry) => normalizeAgentId(entry.id) === defaultAgentId);
+  const executionAgent = route?.runConfig.agents?.list?.find(
+    (entry) => normalizeAgentId(entry.id) === CRESTODIAN_EXECUTION_AGENT_ID,
+  );
   const defaults = config.agents?.defaults;
   const logicalProvider = normalizeProviderId(route?.modelLabel.split("/", 1)[0] ?? "");
   const providerIds = new Set(
@@ -256,6 +306,15 @@ export async function projectDefaultInferenceRoute(
               rawModel,
             }),
             agentRuntime: structuredClone(agent.agentRuntime),
+          },
+        }
+      : {}),
+    ...(executionAgent
+      ? {
+          executionAgent: {
+            id: CRESTODIAN_EXECUTION_AGENT_ID,
+            params: structuredClone(executionAgent.params),
+            tools: structuredClone(executionAgent.tools),
           },
         }
       : {}),

@@ -780,6 +780,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       url: opts.url,
       token: opts.token,
       password: opts.password,
+      tlsFingerprint: opts.tlsFingerprint,
     });
   }
   const previousConsoleSubsystemFilter = isLocalMode

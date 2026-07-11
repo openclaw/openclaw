@@ -20,6 +20,16 @@ function runtime(): RuntimeEnv {
 
 const tty = { isTTY: true } as unknown as NodeJS.ReadableStream & NodeJS.WritableStream;
 const pipe = { isTTY: false } as unknown as NodeJS.ReadableStream & NodeJS.WritableStream;
+const verifiedInference = { execution: { modelLabel: "openai/gpt-5.5" } } as never;
+
+function workingInference() {
+  return {
+    ok: true as const,
+    modelRef: "openai/gpt-5.5",
+    latencyMs: 100,
+    binding: verifiedInference,
+  };
+}
 
 describe("runCrestodianWithInference", () => {
   beforeEach(() => {
@@ -29,11 +39,7 @@ describe("runCrestodianWithInference", () => {
 
   it("starts Crestodian only after live inference succeeds", async () => {
     const runCrestodian = vi.fn(async () => {});
-    const verifyInference = vi.fn(async () => ({
-      ok: true as const,
-      modelRef: "openai/gpt-5.5",
-      latencyMs: 100,
-    }));
+    const verifyInference = vi.fn(async () => workingInference());
     const currentRuntime = runtime();
 
     await runCrestodianWithInference(
@@ -46,8 +52,14 @@ describe("runCrestodianWithInference", () => {
       },
     );
 
-    expect(verifyInference).toHaveBeenCalledWith({ runtime: currentRuntime });
-    expect(runCrestodian).toHaveBeenCalledOnce();
+    expect(verifyInference).toHaveBeenCalledWith({
+      runtime: currentRuntime,
+      bindSession: true,
+    });
+    expect(runCrestodian).toHaveBeenCalledWith(
+      expect.objectContaining({ verifiedInference }),
+      currentRuntime,
+    );
     expect(verifyInference.mock.invocationCallOrder[0]).toBeLessThan(
       runCrestodian.mock.invocationCallOrder[0]!,
     );
@@ -67,11 +79,7 @@ describe("runCrestodianWithInference", () => {
       currentRuntime,
       {},
       {
-        verifyInference: vi.fn(async () => ({
-          ok: true as const,
-          modelRef: "openai/gpt-5.5",
-          latencyMs: 100,
-        })),
+        verifyInference: vi.fn(async () => workingInference()),
         runCrestodian,
       },
     );
@@ -93,11 +101,7 @@ describe("runCrestodianWithInference", () => {
       currentRuntime,
       {},
       {
-        verifyInference: vi.fn(async () => ({
-          ok: true as const,
-          modelRef: "openai/gpt-5.5",
-          latencyMs: 100,
-        })),
+        verifyInference: vi.fn(async () => workingInference()),
         runCrestodian,
       },
     );
@@ -118,11 +122,7 @@ describe("runCrestodianWithInference", () => {
       currentRuntime,
       {},
       {
-        verifyInference: vi.fn(async () => ({
-          ok: true as const,
-          modelRef: "openai/gpt-5.5",
-          latencyMs: 100,
-        })),
+        verifyInference: vi.fn(async () => workingInference()),
         runCrestodian: vi.fn(async () => {
           throw new Error("operation failed");
         }),
@@ -170,11 +170,7 @@ describe("runCrestodianWithInference", () => {
         currentRuntime,
         {},
         {
-          verifyInference: vi.fn(async () => ({
-            ok: true as const,
-            modelRef: "openai/gpt-5.5",
-            latencyMs: 100,
-          })),
+          verifyInference: vi.fn(async () => workingInference()),
           runCrestodian: vi.fn(async () => {
             throw new Error("interactive operation failed");
           }),

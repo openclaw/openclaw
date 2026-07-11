@@ -1,5 +1,6 @@
 // Applies Crestodian's conversational setup: config, workspace files, gateway.
-import { resolveGatewayPort } from "../config/config.js";
+import { isDeepStrictEqual } from "node:util";
+import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -32,6 +33,11 @@ export type CrestodianSetupApplyParams = {
 export type CrestodianSetupApplyResult = {
   configPath: string;
   lines: string[];
+};
+
+type CrestodianSetupApplyHooks = {
+  /** Host-owned authority seam; called at every persistent setup boundary. */
+  commit<T>(effect: () => Promise<T> | T): Promise<T>;
 };
 
 const CRESTODIAN_AGENT_ID = normalizeAgentId("crestodian");
@@ -229,8 +235,11 @@ export async function applyCrestodianModelSelection(
 
 export async function applyCrestodianSetup(
   params: CrestodianSetupApplyParams,
+  hooks?: CrestodianSetupApplyHooks,
 ): Promise<CrestodianSetupApplyResult> {
   const { workspace, model, surface, runtime } = params;
+  const commit: CrestodianSetupApplyHooks["commit"] =
+    hooks?.commit ?? (async (effect) => await effect());
   const [
     { readSetupConfigFileSnapshot, resolveQuickstartGatewayDefaults, writeWizardConfigFile },
     onboardHelpers,
@@ -243,18 +252,29 @@ export async function applyCrestodianSetup(
 
   let snapshot = await readSetupConfigFileSnapshot();
   let snapshotConfig = requireValidSetupSnapshot(snapshot);
-  const assertVerifiedRoute = async (runtimeConfig: OpenClawConfig) => {
+  const assertVerifiedRoute = async (setupSnapshot: ConfigFileSnapshot) => {
     if (!params.expectedInferenceRoute) {
       return;
     }
-    const currentRoute = await projectDefaultInferenceRoute(runtimeConfig);
-    if (!sameDefaultInferenceRoute(currentRoute, params.expectedInferenceRoute)) {
+    // Setup reads with plugin validation skipped so it can repair broken plugin
+    // config. Compare inference with the fully validated runtime snapshot that
+    // created the proof, binding path, root hash, includes, and resolved env.
+    const verifiedSnapshot = await readConfigFileSnapshot();
+    const currentRoute =
+      verifiedSnapshot.exists &&
+      verifiedSnapshot.valid &&
+      verifiedSnapshot.path === setupSnapshot.path &&
+      verifiedSnapshot.hash === setupSnapshot.hash &&
+      isDeepStrictEqual(verifiedSnapshot.sourceConfig, setupSnapshot.sourceConfig)
+        ? await projectDefaultInferenceRoute(verifiedSnapshot.runtimeConfig)
+        : null;
+    if (!currentRoute || !sameDefaultInferenceRoute(currentRoute, params.expectedInferenceRoute)) {
       throw new Error(
         "The default-agent inference route changed before setup could start, so no workspace or Gateway settings were changed. Retry setup from the current Crestodian session.",
       );
     }
   };
-  await assertVerifiedRoute(snapshotConfig.runtimeConfig);
+  await assertVerifiedRoute(snapshot);
   let baseConfig = snapshotConfig.sourceConfig;
 
   const prompter = createQuickstartNotePrompter(runtime);
@@ -288,11 +308,14 @@ export async function applyCrestodianSetup(
   let setupCandidate = await buildSetupCandidate(baseConfig);
   for (let attempt = 0; ; attempt += 1) {
     try {
-      setupCandidate.nextConfig = await writeWizardConfigFile(setupCandidate.nextConfig, {
-        allowConfigSizeDrop: false,
-        ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
-        migrationBaseConfig: baseConfig,
-      });
+      setupCandidate.nextConfig = await commit(
+        async () =>
+          await writeWizardConfigFile(setupCandidate.nextConfig, {
+            allowConfigSizeDrop: false,
+            ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
+            migrationBaseConfig: baseConfig,
+          }),
+      );
       break;
     } catch (error) {
       if (!(error instanceof ConfigMutationConflictError) || !error.retryable || attempt >= 2) {
@@ -300,7 +323,7 @@ export async function applyCrestodianSetup(
       }
       snapshot = await readSetupConfigFileSnapshot();
       snapshotConfig = requireValidSetupSnapshot(snapshot);
-      await assertVerifiedRoute(snapshotConfig.runtimeConfig);
+      await assertVerifiedRoute(snapshot);
       baseConfig = snapshotConfig.sourceConfig;
       // Rebuild both config and runtime settings from the same fresh snapshot.
       // Otherwise a preserved concurrent Gateway edit could be installed or
@@ -310,29 +333,42 @@ export async function applyCrestodianSetup(
   }
   const { nextConfig, settings } = setupCandidate;
 
-  await onboardHelpers.ensureWorkspaceAndSessions(workspace, runtime, {
-    skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
-    skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+  await commit(async () => {
+    await onboardHelpers.ensureWorkspaceAndSessions(workspace, runtime, {
+      skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+      skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+    });
   });
 
   // The user's explicit setup approval (with the security note shown up
   // front) is the consent for Crestodian's own agent loop to run local model
   // harnesses (Codex app-server needs exec). Scope the grant to the
   // crestodian agent only; regular agents keep the interactive approval flow.
+  let approvalCommitAttempted = false;
+  let approvalEffectStarted = false;
   try {
     const { loadExecApprovals, saveExecApprovals } = await import("../infra/exec-approvals.js");
     const approvals = loadExecApprovals();
     const existing = approvals.agents?.crestodian;
     if (!existing) {
-      saveExecApprovals({
-        ...approvals,
-        agents: {
-          ...approvals.agents,
-          crestodian: { security: "full", ask: "off" },
-        },
+      approvalCommitAttempted = true;
+      await commit(() => {
+        approvalEffectStarted = true;
+        saveExecApprovals({
+          ...approvals,
+          agents: {
+            ...approvals.agents,
+            crestodian: { security: "full", ask: "off" },
+          },
+        });
       });
     }
   } catch (error) {
+    // A failed authority check happens before the effect starts and must abort
+    // setup. Only the approval store's own best-effort failure is recoverable.
+    if (approvalCommitAttempted && !approvalEffectStarted) {
+      throw error;
+    }
     runtime.log(
       `Could not record Crestodian exec approval (${error instanceof Error ? error.message : String(error)}); local model harnesses may ask again.`,
     );
@@ -348,15 +384,18 @@ export async function applyCrestodianSetup(
     // channels and apps have a live gateway. Inside the gateway process
     // (macOS app chat) the app owns the service lifecycle.
     const { ensureGatewayServiceForOnboarding } = await import("../wizard/setup.finalize.js");
-    const { installDaemon } = await ensureGatewayServiceForOnboarding({
-      flow: "quickstart",
-      opts: {},
-      nextConfig,
-      settings,
-      prompter,
-      runtime,
-      loadedAction: "restart",
-    });
+    const { installDaemon } = await commit(
+      async () =>
+        await ensureGatewayServiceForOnboarding({
+          flow: "quickstart",
+          opts: {},
+          nextConfig,
+          settings,
+          prompter,
+          runtime,
+          loadedAction: "restart",
+        }),
+    );
     if (installDaemon) {
       const probeLinks = onboardHelpers.resolveLocalControlUiProbeLinks({
         bind: settings.bind,

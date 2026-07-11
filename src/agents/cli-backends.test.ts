@@ -6,6 +6,7 @@ import type {
   CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgs,
+  CliBackendRuntimeArtifactPolicy,
   CliBundleMcpMode,
 } from "../plugins/types.js";
 import {
@@ -35,6 +36,7 @@ function createBackendEntry(params: {
   ownsNativeCompaction?: boolean;
   prepareExecution?: () => Promise<null>;
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
+  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
   normalizeConfig?: (
     config: CliBackendConfig,
     context?: CliBackendNormalizeConfigContext,
@@ -55,6 +57,7 @@ function createBackendEntry(params: {
       ...(params.ownsNativeCompaction ? { ownsNativeCompaction: params.ownsNativeCompaction } : {}),
       ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
       ...(params.resolveExecutionArgs ? { resolveExecutionArgs: params.resolveExecutionArgs } : {}),
+      ...(params.runtimeArtifact ? { runtimeArtifact: params.runtimeArtifact } : {}),
       ...(params.normalizeConfig ? { normalizeConfig: params.normalizeConfig } : {}),
       liveTest: {
         defaultModelRef:
@@ -440,6 +443,28 @@ beforeEach(() => {
 });
 
 describe("resolveCliBackendConfig reliability merge", () => {
+  it("preserves backend-owned runtime artifacts across command overrides", () => {
+    const runtimeArtifact = {
+      kind: "bundled-package-tree",
+      packageName: "@fixture/cli",
+      entrypoint: "command",
+    } as const;
+    runtimeBackendEntries.unshift(
+      createRuntimeBackendEntry({
+        pluginId: "fixture",
+        id: "fixture-cli",
+        config: { command: "fixture", args: ["run"] },
+        runtimeArtifact,
+      }),
+    );
+
+    const resolved = resolveCliBackendConfig("fixture-cli", {
+      agents: { defaults: { cliBackends: { "fixture-cli": { command: "/opt/fixture" } } } },
+    });
+    expect(resolved?.config.command).toBe("/opt/fixture");
+    expect(resolved?.runtimeArtifact).toEqual(runtimeArtifact);
+  });
+
   it("defaults codex-cli fresh sandboxing and config-pinned resume sandboxing", () => {
     const resolved = requireCliBackendConfig("codex-cli");
 

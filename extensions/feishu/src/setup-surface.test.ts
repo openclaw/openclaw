@@ -152,16 +152,22 @@ describe("feishu setup wizard", () => {
         .mockResolvedValueOnce("lark")
         .mockResolvedValueOnce("open") as never,
     });
+    const beforePersistentEffect = vi.fn(async () => {});
 
     const result = await runSetupWizardConfigure({
       configure: feishuConfigure,
       cfg: {} as never,
       prompter,
       runtime: createNonExitingRuntimeEnv(),
+      options: { beforePersistentEffect },
     });
 
     expect(initAppRegistrationMock).toHaveBeenCalledWith("lark");
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
     expect(beginAppRegistrationMock).toHaveBeenCalledWith("lark");
+    expect(beforePersistentEffect.mock.invocationCallOrder[0]).toBeLessThan(
+      beginAppRegistrationMock.mock.invocationCallOrder[0]!,
+    );
     const [pollOptions] = pollAppRegistrationMock.mock.calls.at(0) ?? [];
     expect(pollOptions?.deviceCode).toBe("device-code");
     expect(pollOptions?.initialDomain).toBe("lark");
@@ -172,6 +178,32 @@ describe("feishu setup wizard", () => {
     expect(feishuConfig?.domain).toBe("lark");
     expect(feishuConfig?.groupPolicy).toBe("open");
     expect(feishuConfig?.requireMention).toBe(true);
+  });
+
+  it("propagates the persistent-effect guard before scan-to-create begins", async () => {
+    initAppRegistrationMock.mockResolvedValueOnce(undefined);
+    const guardError = new Error("verified inference changed");
+    const beforePersistentEffect = vi.fn(async () => {
+      throw guardError;
+    });
+    const prompter = createTestWizardPrompter({
+      select: vi.fn().mockResolvedValueOnce("scan").mockResolvedValueOnce("feishu") as never,
+    });
+
+    await expect(
+      runSetupWizardConfigure({
+        configure: feishuConfigure,
+        cfg: {} as never,
+        prompter,
+        runtime: createNonExitingRuntimeEnv(),
+        options: { beforePersistentEffect },
+      }),
+    ).rejects.toBe(guardError);
+
+    expect(initAppRegistrationMock).toHaveBeenCalledWith("feishu");
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
+    expect(beginAppRegistrationMock).not.toHaveBeenCalled();
+    expect(pollAppRegistrationMock).not.toHaveBeenCalled();
   });
 
   it("falls back to manual credentials when selected scan-to-create is unavailable", async () => {
