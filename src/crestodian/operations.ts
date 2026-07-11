@@ -938,7 +938,7 @@ async function executeSetup(
               surface,
               runtime: ctx.runtime,
             },
-            { commit: ctx.commit },
+            { commit: async (effect) => await ctx.commit(effect) },
           ),
       );
       const after = await readConfigFileSnapshotLazy();

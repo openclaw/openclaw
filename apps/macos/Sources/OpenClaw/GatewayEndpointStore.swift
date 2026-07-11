@@ -62,6 +62,8 @@ actor GatewayEndpointStore {
         let mode: SourceMode
         let token: String?
         let password: String?
+        /// Non-secret route owner for device-scoped credentials.
+        let deviceAuthGatewayID: String?
         let localPort: Int
         let localHost: String
         let scheme: String
@@ -113,99 +115,6 @@ actor GatewayEndpointStore {
 
     static func admitPrimaryAppLaunch() {
         self.primaryAppLaunchAdmitted.withValue { $0 = true }
-    }
-
-    private static func liveSourceSnapshot() async -> SourceSnapshot {
-        // Await MainActor-owned selection facts first, then read config once. No
-        // suspension is allowed after the config read that builds this snapshot.
-        let app = await MainActor.run {
-            (
-                mode: AppStateStore.shared.connectionMode,
-                tailscaleIP: TailscaleService.shared.tailscaleIP)
-        }
-        let root = OpenClawConfigFile.loadDict()
-        let env = ProcessInfo.processInfo.environment
-        let configMode = ConnectionModeResolver.resolve(root: root).mode
-        // App selection is persisted asynchronously. Refuse to resolve either
-        // side while the MainActor selection and canonical config disagree.
-        let mode: AppState.ConnectionMode = configMode == app.mode ? app.mode : .unconfigured
-        let isRemote = mode == .remote
-        let launchdSnapshot = mode == .local ? GatewayLaunchAgentManager.launchdConfigSnapshot() : nil
-        let bindMode = self.resolveGatewayBindMode(root: root, env: env)
-        let customBindHost = self.resolveGatewayCustomBindHost(root: root)
-        let tailscaleIP = bindMode == "tailnet"
-            ? app.tailscaleIP ?? TailscaleService.fallbackTailnetIPv4()
-            : nil
-        let remoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
-        let sshRouteIdentity: SSHRouteIdentity?
-        if mode == .remote, remoteResolution.transport == .ssh {
-            let sshSettings = CommandResolver.connectionSettings(configRoot: root)
-            sshRouteIdentity = SSHRouteIdentity(
-                target: sshSettings.target,
-                identity: sshSettings.identity.trimmingCharacters(in: .whitespacesAndNewlines),
-                hostKeyPolicy: sshSettings.sshHostKeyPolicy.rawValue,
-                configuredRemotePort: GatewayRemoteConfig.resolveRemotePort(root: root),
-                configuredRemoteURL: GatewayRemoteConfig.resolveUrlString(root: root))
-        } else {
-            sshRouteIdentity = nil
-        }
-
-        return SourceSnapshot(
-            mode: SourceMode(mode),
-            token: mode == .unconfigured
-                ? nil
-                : self.resolveGatewayToken(
-                    isRemote: isRemote,
-                    root: root,
-                    env: env,
-                    launchdSnapshot: launchdSnapshot),
-            password: mode == .unconfigured
-                ? nil
-                : self.resolveGatewayPassword(
-                    isRemote: isRemote,
-                    root: root,
-                    env: env,
-                    launchdSnapshot: launchdSnapshot),
-            localPort: self.resolveGatewayPort(root: root, env: env),
-            localHost: self.resolveLocalGatewayHost(
-                bindMode: bindMode,
-                customBindHost: customBindHost,
-                tailscaleIP: tailscaleIP),
-            scheme: self.resolveGatewayScheme(root: root, env: env),
-            bindMode: bindMode,
-            remoteTransport: SourceTransport(remoteResolution.transport),
-            directRemoteURL: remoteResolution.directURL,
-            sshRouteIdentity: sshRouteIdentity)
-    }
-
-    private static func resolveGatewayPort(
-        root: [String: Any],
-        env: [String: String],
-        defaults: UserDefaults = .standard) -> Int
-    {
-        if let raw = env["OPENCLAW_GATEWAY_PORT"],
-           let port = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
-           port > 0
-        {
-            return port
-        }
-        if let gateway = root["gateway"] as? [String: Any] {
-            let port: Int? = switch gateway["port"] {
-            case let value as Int:
-                value
-            case let value as NSNumber:
-                value.intValue
-            case let value as String:
-                Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
-            default:
-                nil
-            }
-            if let port, port > 0 {
-                return port
-            }
-        }
-        let stored = defaults.integer(forKey: "gatewayPort")
-        return stored > 0 ? stored : 18789
     }
 
     private static func resolveGatewayPassword(
@@ -457,6 +366,11 @@ actor GatewayEndpointStore {
             tailscaleIP: nil)
         let token = deps.token()
         let password = deps.password()
+        let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(
+            connectionMode: initialMode,
+            remoteTransport: .ssh,
+            remoteURL: "",
+            remoteTarget: "")
         switch initialMode {
         case .local:
             let url = URL(string: "\(scheme)://\(host):\(port)")!
@@ -469,6 +383,7 @@ actor GatewayEndpointStore {
             self.resolvedEndpoint = GatewayConnection.EndpointSnapshot(
                 config: (url, token, password),
                 routeAuthority: nil,
+                deviceAuthGatewayID: deviceAuthGatewayID,
                 revision: self.endpointRevision)
         case .remote:
             self.state = .connecting(mode: .remote, detail: Self.remoteConnectingDetail)
@@ -551,6 +466,7 @@ actor GatewayEndpointStore {
                 url: URL(string: "\(source.scheme)://\(source.localHost):\(source.localPort)")!,
                 token: source.token,
                 password: source.password,
+                deviceAuthGatewayID: source.deviceAuthGatewayID,
                 routeAuthority: nil)
         case .remote:
             if source.remoteTransport == .direct {
@@ -567,6 +483,7 @@ actor GatewayEndpointStore {
                     url: url,
                     token: source.token,
                     password: source.password,
+                    deviceAuthGatewayID: source.deviceAuthGatewayID,
                     routeAuthority: nil)
                 return
             }
@@ -584,6 +501,7 @@ actor GatewayEndpointStore {
                 url: URL(string: "\(source.scheme)://127.0.0.1:\(Int(route.localPort))")!,
                 token: source.token,
                 password: source.password,
+                deviceAuthGatewayID: source.deviceAuthGatewayID,
                 routeAuthority: route.generation)
         case .unconfigured:
             self.cancelRemoteEnsure()
@@ -728,6 +646,7 @@ actor GatewayEndpointStore {
                 url: url,
                 token: source.token,
                 password: source.password,
+                deviceAuthGatewayID: source.deviceAuthGatewayID,
                 routeAuthority: nil)
         }
 
@@ -791,6 +710,7 @@ actor GatewayEndpointStore {
             url: url,
             token: source.token,
             password: source.password,
+            deviceAuthGatewayID: source.deviceAuthGatewayID,
             routeAuthority: route.generation)
     }
 
@@ -806,6 +726,7 @@ actor GatewayEndpointStore {
               endpoint.config.url == url,
               endpoint.config.token == source.token,
               endpoint.config.password == source.password,
+              endpoint.deviceAuthGatewayID == source.deviceAuthGatewayID,
               endpoint.routeAuthority == route.generation,
               self.state == .ready(
                   mode: .remote,
@@ -858,12 +779,14 @@ actor GatewayEndpointStore {
         url: URL,
         token: String?,
         password: String?,
+        deviceAuthGatewayID: String?,
         routeAuthority: UInt64?) -> GatewayConnection.EndpointSnapshot
     {
         let changed = self.resolvedEndpoint.map { endpoint in
             endpoint.config.url != url ||
                 endpoint.config.token != token ||
                 endpoint.config.password != password ||
+                endpoint.deviceAuthGatewayID != deviceAuthGatewayID ||
                 endpoint.routeAuthority != routeAuthority
         } ?? true
         if changed {
@@ -872,6 +795,7 @@ actor GatewayEndpointStore {
         let endpoint = GatewayConnection.EndpointSnapshot(
             config: (url, token, password),
             routeAuthority: routeAuthority,
+            deviceAuthGatewayID: deviceAuthGatewayID,
             revision: self.endpointRevision)
         self.resolvedEndpoint = endpoint
         self.setState(.ready(mode: mode, url: url, token: token, password: password))
@@ -912,8 +836,112 @@ actor GatewayEndpointStore {
             url: url,
             token: source.token,
             password: source.password,
+            deviceAuthGatewayID: source.deviceAuthGatewayID,
             routeAuthority: nil)
         return self.resolvedEndpoint
+    }
+}
+
+extension GatewayEndpointStore {
+    private static func liveSourceSnapshot() async -> SourceSnapshot {
+        // Await MainActor-owned selection facts first, then read config once. No
+        // suspension is allowed after the config read that builds this snapshot.
+        let app = await MainActor.run {
+            (
+                mode: AppStateStore.shared.connectionMode,
+                tailscaleIP: TailscaleService.shared.tailscaleIP)
+        }
+        let root = OpenClawConfigFile.loadDict()
+        let env = ProcessInfo.processInfo.environment
+        let configMode = ConnectionModeResolver.resolve(root: root).mode
+        // App selection is persisted asynchronously. Refuse to resolve either
+        // side while the MainActor selection and canonical config disagree.
+        let mode: AppState.ConnectionMode = configMode == app.mode ? app.mode : .unconfigured
+        let isRemote = mode == .remote
+        let launchdSnapshot = mode == .local ? GatewayLaunchAgentManager.launchdConfigSnapshot() : nil
+        let bindMode = self.resolveGatewayBindMode(root: root, env: env)
+        let customBindHost = self.resolveGatewayCustomBindHost(root: root)
+        let tailscaleIP = bindMode == "tailnet"
+            ? app.tailscaleIP ?? TailscaleService.fallbackTailnetIPv4()
+            : nil
+        let remoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        let sshRouteIdentity: SSHRouteIdentity?
+        if mode == .remote, remoteResolution.transport == .ssh {
+            let sshSettings = CommandResolver.connectionSettings(configRoot: root)
+            sshRouteIdentity = SSHRouteIdentity(
+                target: sshSettings.target,
+                identity: sshSettings.identity.trimmingCharacters(in: .whitespacesAndNewlines),
+                hostKeyPolicy: sshSettings.sshHostKeyPolicy.rawValue,
+                configuredRemotePort: GatewayRemoteConfig.resolveRemotePort(root: root),
+                configuredRemoteURL: GatewayRemoteConfig.resolveUrlString(root: root))
+        } else {
+            sshRouteIdentity = nil
+        }
+        let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(
+            connectionMode: mode,
+            remoteTransport: remoteResolution.transport,
+            remoteURL: remoteResolution.directURL?.absoluteString
+                ?? GatewayRemoteConfig.resolveUrlString(root: root)
+                ?? "",
+            remoteTarget: sshRouteIdentity?.target ?? "")
+
+        return SourceSnapshot(
+            mode: SourceMode(mode),
+            token: mode == .unconfigured
+                ? nil
+                : self.resolveGatewayToken(
+                    isRemote: isRemote,
+                    root: root,
+                    env: env,
+                    launchdSnapshot: launchdSnapshot),
+            password: mode == .unconfigured
+                ? nil
+                : self.resolveGatewayPassword(
+                    isRemote: isRemote,
+                    root: root,
+                    env: env,
+                    launchdSnapshot: launchdSnapshot),
+            deviceAuthGatewayID: deviceAuthGatewayID,
+            localPort: self.resolveGatewayPort(root: root, env: env),
+            localHost: self.resolveLocalGatewayHost(
+                bindMode: bindMode,
+                customBindHost: customBindHost,
+                tailscaleIP: tailscaleIP),
+            scheme: self.resolveGatewayScheme(root: root, env: env),
+            bindMode: bindMode,
+            remoteTransport: SourceTransport(remoteResolution.transport),
+            directRemoteURL: remoteResolution.directURL,
+            sshRouteIdentity: sshRouteIdentity)
+    }
+
+    private static func resolveGatewayPort(
+        root: [String: Any],
+        env: [String: String],
+        defaults: UserDefaults = .standard) -> Int
+    {
+        if let raw = env["OPENCLAW_GATEWAY_PORT"],
+           let port = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+           port > 0
+        {
+            return port
+        }
+        if let gateway = root["gateway"] as? [String: Any] {
+            let port: Int? = switch gateway["port"] {
+            case let value as Int:
+                value
+            case let value as NSNumber:
+                value.intValue
+            case let value as String:
+                Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
+            default:
+                nil
+            }
+            if let port, port > 0 {
+                return port
+            }
+        }
+        let stored = defaults.integer(forKey: "gatewayPort")
+        return stored > 0 ? stored : 18789
     }
 
     private static func resolveGatewayBindMode(

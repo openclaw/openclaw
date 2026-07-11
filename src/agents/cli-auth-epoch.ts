@@ -365,9 +365,11 @@ export async function resolveCliRuntimeArtifactFingerprint(
   params: CliRuntimeArtifactFingerprintParams,
 ): Promise<string | undefined> {
   const provider = params.provider.trim();
-  const backend = resolveCliBackendConfig(provider, params.config, {
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-  });
+  const backend = resolveCliBackendConfig(
+    provider,
+    params.config,
+    params.agentId ? { agentId: params.agentId } : {},
+  );
   if (!backend) {
     return undefined;
   }
@@ -415,9 +417,11 @@ export async function resolveCliRuntimeOwnerFingerprint(params: {
 }): Promise<string | undefined> {
   const provider = params.provider.trim();
   const authProfileId = normalizeOptionalString(params.authProfileId);
-  const backend = resolveCliBackendConfig(provider, params.config, {
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-  });
+  const backend = resolveCliBackendConfig(
+    provider,
+    params.config,
+    params.agentId ? { agentId: params.agentId } : {},
+  );
   if (!backend || (params.runtimeOwnerId && backend.id !== params.runtimeOwnerId)) {
     return undefined;
   }

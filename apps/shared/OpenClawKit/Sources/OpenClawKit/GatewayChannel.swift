@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OpenClawProtocol
 import OSLog
@@ -78,6 +79,7 @@ public actor GatewayChannelActor {
     private var token: String?
     private var bootstrapToken: String?
     private var password: String?
+    private let authBindingKey: SymmetricKey?
     private let session: WebSocketSessioning
     private var backoffMs: Double = 500
     private var shouldReconnect = true
@@ -85,6 +87,7 @@ public actor GatewayChannelActor {
     private var lastTick: Date?
     private var tickIntervalMs: Double = 30000
     private var lastAuthSource: GatewayAuthSource = .none
+    private var lastAuthBinding: (generation: UInt64, binding: GatewayAuthBinding)?
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     // Remote gateways (tailscale/wan) can take longer to deliver connect.challenge.
@@ -119,6 +122,7 @@ public actor GatewayChannelActor {
         token: String?,
         bootstrapToken: String? = nil,
         password: String? = nil,
+        authBindingKey: SymmetricKey? = nil,
         session: WebSocketSessionBox? = nil,
         connectSnapshotAdmissionHandler: (@Sendable (HelloOk, UInt64) async -> Void)? = nil,
         pushHandler: (@Sendable (GatewayPush, UInt64) async -> Void)? = nil,
@@ -130,6 +134,7 @@ public actor GatewayChannelActor {
         self.token = token
         self.bootstrapToken = bootstrapToken
         self.password = password
+        self.authBindingKey = authBindingKey
         self.extraHeadersProvider = extraHeadersProvider
         self.session = session?.session ?? URLSession(configuration: .default)
         self.connectSnapshotAdmissionHandler = connectSnapshotAdmissionHandler
@@ -141,8 +146,14 @@ public actor GatewayChannelActor {
         }
     }
 
-    public func authSource() -> GatewayAuthSource {
-        self.lastAuthSource
+    public func authSource() -> GatewayAuthSource { self.lastAuthSource }
+
+    public func authBinding(ifCurrentConnectionGeneration expectedGeneration: UInt64) -> GatewayAuthBinding? {
+        guard self.isConnected(connectionGeneration: expectedGeneration),
+              self.task?.state == .running,
+              self.lastAuthBinding?.generation == expectedGeneration
+        else { return nil }
+        return self.lastAuthBinding?.binding
     }
 
     func _test_setConnectTimeoutSeconds(_ seconds: Double) {
@@ -498,7 +509,11 @@ public actor GatewayChannelActor {
         if !options.permissions.isEmpty {
             params["permissions"] = ProtoAnyCodable(options.permissions)
         }
-        self.applyConnectAuth(selectedAuth, to: &params)
+        self.applyConnectAuth(
+            selectedAuth,
+            deviceId: identity?.deviceId,
+            connectionGeneration: connectionGeneration,
+            to: &params)
         let signedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         let connectNonce = try await self.waitForConnectChallenge(task: task, attemptID: attemptID)
         try self.ensureCurrentConnectAttempt(attemptID, task: task)
@@ -595,6 +610,8 @@ extension GatewayChannelActor {
 extension GatewayChannelActor {
     private func applyConnectAuth(
         _ selectedAuth: SelectedConnectAuth,
+        deviceId: String?,
+        connectionGeneration: UInt64,
         to params: inout [String: ProtoAnyCodable])
     {
         if self.pendingDeviceTokenRetry,
@@ -603,6 +620,8 @@ extension GatewayChannelActor {
             self.pendingDeviceTokenRetry = false
         }
         self.lastAuthSource = selectedAuth.authSource
+        let authBinding = selectedAuth.makeAuthBinding(key: self.authBindingKey, deviceId: deviceId)
+        self.lastAuthBinding = (connectionGeneration, authBinding)
         self.logger.info("gateway connect auth=\(selectedAuth.authSource.rawValue, privacy: .public)")
         if let authToken = selectedAuth.authToken {
             var auth: [String: ProtoAnyCodable] = ["token": ProtoAnyCodable(authToken)]

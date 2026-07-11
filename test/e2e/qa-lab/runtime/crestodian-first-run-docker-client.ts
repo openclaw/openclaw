@@ -92,30 +92,43 @@ async function installFakeClaudeCli(
   plannerCommand: string,
 ): Promise<void> {
   await fs.mkdir(fakeBinDir, { recursive: true });
+  const packageRoot = path.dirname(fakeBinDir);
   const scriptPath = path.join(fakeBinDir, "claude");
   const plannerResult = JSON.stringify({
     reply: FAKE_PLANNER_REPLY,
     command: plannerCommand,
   });
-  const plannerEnvelope = `console.log(JSON.stringify({ type: "result", session_id: "fake-claude-session", result: ${JSON.stringify(plannerResult)}, usage: { input_tokens: 1, output_tokens: 1 } }))`;
-  const probeEnvelope =
-    'console.log(JSON.stringify({ type: "result", session_id: "fake-claude-session", result: "OK", usage: { input_tokens: 1, output_tokens: 1 } }))';
+  await fs.writeFile(
+    path.join(packageRoot, "package.json"),
+    `${JSON.stringify({
+      name: "@anthropic-ai/claude-code",
+      version: "99.0.0",
+      private: true,
+      bin: { claude: "bin/claude" },
+    })}\n`,
+  );
   await fs.writeFile(
     scriptPath,
     [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      'if [[ "${1:-}" == "--version" ]]; then',
-      '  echo "claude 99.0.0"',
-      "  exit 0",
-      "fi",
-      "IFS= read -r prompt_line || true",
-      `printf '%s\\n' "$prompt_line" >> ${JSON.stringify(promptLogPath)}`,
-      'if [[ "$prompt_line" == *"User request:"* ]]; then',
-      `  node -e ${JSON.stringify(plannerEnvelope)}`,
-      "else",
-      `  node -e ${JSON.stringify(probeEnvelope)}`,
-      "fi",
+      `#!${process.execPath}`,
+      'const fs = require("node:fs");',
+      'if (process.argv[2] === "--version") {',
+      '  console.log("claude 99.0.0");',
+      "  process.exit(0);",
+      "}",
+      `const promptLogPath = ${JSON.stringify(promptLogPath)};`,
+      `const plannerResult = ${JSON.stringify(plannerResult)};`,
+      'const promptLine = fs.readFileSync(0, "utf8").split(/\\r?\\n/u, 1)[0] ?? "";',
+      'fs.appendFileSync(promptLogPath, `${promptLine}\\n`, "utf8");',
+      'const result = promptLine.includes("User request:") ? plannerResult : "OK";',
+      "console.log(",
+      "  JSON.stringify({",
+      '    type: "result",',
+      '    session_id: "fake-claude-session",',
+      "    result,",
+      "    usage: { input_tokens: 1, output_tokens: 1 },",
+      "  }),",
+      ");",
     ].join("\n"),
     { mode: 0o755 },
   );
@@ -169,7 +182,9 @@ async function main() {
   tempState.registerExitCleanup();
   const stateDir = tempState.stateDir;
   const configPath = process.env.OPENCLAW_CONFIG_PATH ?? path.join(stateDir, "openclaw.json");
-  const fakeBinDir = path.join(stateDir, "fake-bin");
+  // Keep mutable logs/config outside the hashed package tree. Every file below
+  // this root is part of the durable CLI owner checked before persistent setup.
+  const fakeBinDir = path.join(stateDir, "fake-claude-package", "bin");
   const promptLogPath = path.join(stateDir, "fake-claude-prompts.jsonl");
   setEnvValue("OPENCLAW_STATE_DIR", stateDir);
   setEnvValue("OPENCLAW_CONFIG_PATH", configPath);

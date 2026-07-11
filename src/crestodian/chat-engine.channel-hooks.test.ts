@@ -2,9 +2,9 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { CrestodianChatEngine } from "./chat-engine.js";
 import { createCrestodianVerifiedInferenceTestFixture } from "./crestodian.test-helpers.js";
-import {
-  type CrestodianVerifiedInferenceBinding,
-  type CrestodianVerifiedInferenceDeps,
+import type {
+  CrestodianVerifiedInferenceBinding,
+  CrestodianVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
 const verifiedInferenceConfig = {

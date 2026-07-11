@@ -294,6 +294,16 @@ export async function shouldStartOnboardingForFreshInstall(argv: string[]): Prom
 type BareRootLaunchTarget =
   | { kind: "onboarding"; classic?: boolean }
   | {
+      kind: "remote-gateway-inference";
+      target: {
+        config: OpenClawConfig;
+        gatewayUrl: string;
+        token?: string;
+        password?: string;
+        tlsFingerprint?: string;
+      };
+    }
+  | {
       kind: "tui";
       local: boolean;
       gatewayUrl?: string;
@@ -337,6 +347,23 @@ async function resolveConfiguredTuiLaunchTarget(
   if (gatewayResolution.kind === "missing-configured-model") {
     // The connected Gateway is authoritative. Never fall back to a model in
     // this client's local config when that server still needs inference.
+    if (gatewayResolution.gateway.remote) {
+      const target: Extract<BareRootLaunchTarget, { kind: "remote-gateway-inference" }> = {
+        kind: "remote-gateway-inference",
+        target: {
+          config,
+          gatewayUrl: gatewayResolution.gateway.url,
+          ...(gatewayResolution.gateway.token ? { token: gatewayResolution.gateway.token } : {}),
+          ...(gatewayResolution.gateway.password
+            ? { password: gatewayResolution.gateway.password }
+            : {}),
+          ...(gatewayResolution.gateway.tlsFingerprint
+            ? { tlsFingerprint: gatewayResolution.gateway.tlsFingerprint }
+            : {}),
+        },
+      };
+      return target;
+    }
     return { kind: "onboarding" };
   }
   const { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } =
@@ -357,13 +384,16 @@ type GatewayProbeTarget = {
 
 type ReachableGateway = {
   url: string;
+  remote: boolean;
   authSource?: "config";
+  token?: string;
+  password?: string;
   tlsFingerprint?: string;
 };
 
 type GatewayResolution =
   | { kind: "configured"; gateway: ReachableGateway }
-  | { kind: "missing-configured-model" }
+  | { kind: "missing-configured-model"; gateway: ReachableGateway }
   | { kind: "reachable-unverified"; gateway: ReachableGateway }
   | { kind: "unreachable" };
 
@@ -376,7 +406,10 @@ type GatewayProbeAuth = {
 function toReachableGateway(target: GatewayProbeTarget, auth: GatewayProbeAuth): ReachableGateway {
   return {
     url: target.url,
+    remote: target.scope === "remote",
     ...(auth.authSource ? { authSource: auth.authSource } : {}),
+    ...(auth.token ? { token: auth.token } : {}),
+    ...(auth.password ? { password: auth.password } : {}),
     ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
   };
 }
@@ -389,7 +422,7 @@ async function resolveReachableGateway(config: OpenClawConfig): Promise<GatewayR
   const usesRemoteAuth = targets.some((target) => target.auth === "remote");
   const auth = await resolveGatewayProbeAuth(config, usesRemoteAuth ? "remote" : "local");
   const { probeGatewayConfiguredModel } = await import("../commands/onboard-helpers.js");
-  let reachedGatewayWithoutModel = false;
+  let missingModelGateway: ReachableGateway | undefined;
   let reachableUnverifiedGateway: ReachableGateway | undefined;
   for (const target of targets) {
     if (!isSafeGatewayProbeTarget(target)) {
@@ -419,15 +452,15 @@ async function resolveReachableGateway(config: OpenClawConfig): Promise<GatewayR
       return { kind: "configured", gateway: toReachableGateway(target, auth) };
     }
     if (probe.kind === "missing-configured-model") {
-      reachedGatewayWithoutModel = true;
+      missingModelGateway ??= toReachableGateway(target, auth);
       continue;
     }
     if (probe.kind === "reachable-unverified" && !reachableUnverifiedGateway) {
       reachableUnverifiedGateway = toReachableGateway(target, auth);
     }
   }
-  if (reachedGatewayWithoutModel) {
-    return { kind: "missing-configured-model" };
+  if (missingModelGateway) {
+    return { kind: "missing-configured-model", gateway: missingModelGateway };
   }
   if (reachableUnverifiedGateway) {
     return { kind: "reachable-unverified", gateway: reachableUnverifiedGateway };
@@ -1157,6 +1190,19 @@ export async function runCli(argv: string[] = process.argv) {
       : null;
 
     if (bareRootLaunchTarget) {
+      if (bareRootLaunchTarget.kind === "remote-gateway-inference") {
+        if (!process.stdin.isTTY || !process.stdout.isTTY) {
+          console.error(
+            "Remote Gateway inference setup needs an interactive TTY. Re-run `openclaw` in a terminal connected to this Gateway.",
+          );
+          process.exitCode = 1;
+          return;
+        }
+        const { runRemoteGatewayInferenceOnboarding } =
+          await import("../commands/onboard-remote-gateway.js");
+        await runRemoteGatewayInferenceOnboarding(bareRootLaunchTarget.target);
+        return;
+      }
       if (bareRootLaunchTarget.kind === "onboarding") {
         if (!process.stdin.isTTY || !process.stdout.isTTY) {
           console.error(

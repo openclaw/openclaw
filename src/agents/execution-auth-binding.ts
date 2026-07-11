@@ -24,10 +24,15 @@ export type AgentExecutionAuthBinding = {
 
 export type OpaqueRuntimeOwnerKind = "cli-runtime" | "plugin-harness" | "aws-sdk";
 
+// Fingerprints are process-local proofs. Restarting rotates this key and
+// invalidates them instead of leaving a reusable offline digest of a secret.
+const authBindingFingerprintKey = crypto.randomBytes(32);
+
 function hashAuthBinding(value: unknown): string {
-  // This is an in-process change detector, not password storage.
-  // codeql[js/insufficient-password-hash]
-  return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  return crypto
+    .createHmac("sha256", authBindingFingerprintKey)
+    .update(JSON.stringify(value))
+    .digest("hex");
 }
 
 function normalizeIdentity(value: string | undefined, lowercase = false): string | undefined {
@@ -85,6 +90,7 @@ export function fingerprintAuthProfileOwnerShape(params: {
       ]);
     }
   }
+  return undefined;
 }
 
 /** Fingerprint the stable owner boundary of a successful opaque runtime turn. */
@@ -249,6 +255,7 @@ export function fingerprintAuthProfileCredential(params: {
       ]);
     }
   }
+  return undefined;
 }
 
 /** Fingerprint a profile after materializing its selected SecretRef value. */

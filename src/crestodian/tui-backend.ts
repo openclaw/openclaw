@@ -431,7 +431,6 @@ export async function runCrestodianTui(
     // A returned agent request is single-use; a later wizard handoff must not
     // replay it when Crestodian re-enters the chat shell.
     const initialMessage = nextInput;
-    nextInput = undefined;
     const engine = createChatEngine(boundOpts);
     let welcome: string;
     if (welcomeVariant === "onboarding") {

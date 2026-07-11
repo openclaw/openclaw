@@ -410,12 +410,12 @@ final class AppState {
         self.connectionMode = resolvedConnectionMode
 
         let configRemote = (configRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+        let hasConfigRemoteTarget = configRemote?.keys.contains("sshTarget") == true
         let configRemoteTarget = (configRemote?["sshTarget"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let storedRemoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         if resolvedConnectionMode == .remote,
-           !configRemoteTarget.isEmpty,
-           storedRemoteTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+           hasConfigRemoteTarget
         {
             self.remoteTarget = configRemoteTarget
         } else if resolvedConnectionMode == .remote,
@@ -432,9 +432,12 @@ final class AppState {
         self.remoteToken = configRemoteToken.textFieldValue
         self.remoteTokenDirty = false
         self.remoteTokenUnsupported = configRemoteToken.isUnsupportedNonString
-        self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey)?.nonEmpty
-            ?? configRemote?["sshIdentity"] as? String
-            ?? ""
+        let hasConfigRemoteIdentity = configRemote?.keys.contains("sshIdentity") == true
+        let configRemoteIdentity = (configRemote?["sshIdentity"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.remoteIdentity = hasConfigRemoteIdentity
+            ? configRemoteIdentity
+            : UserDefaults.standard.string(forKey: remoteIdentityKey)?.nonEmpty ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
         self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
@@ -461,6 +464,9 @@ final class AppState {
             Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
         }
 
+        if !self.isPreview {
+            self.reconcilePreferredGatewayRouteBinding()
+        }
         self.isInitializing = false
         if !self.isPreview {
             self.scheduleExecApprovalModeReadRetry()
@@ -675,14 +681,22 @@ final class AppState {
 
         let targetMode = desiredMode ?? self.connectionMode
         if targetMode == .remote, remoteTransport != .direct {
+            let hasConfiguredTarget = remote?.keys.contains("sshTarget") == true
             let configuredTarget = Self.sanitizeSSHTarget(remote?["sshTarget"] as? String ?? "")
-            if !configuredTarget.isEmpty, configuredTarget != Self.sanitizeSSHTarget(self.remoteTarget) {
+            if hasConfiguredTarget, configuredTarget != Self.sanitizeSSHTarget(self.remoteTarget) {
                 self.remoteTarget = configuredTarget
-            } else if configuredTarget.isEmpty,
+            } else if !hasConfiguredTarget,
                       let host = AppState.remoteHost(from: remoteUrl),
                       !LoopbackHost.isLoopbackHost(host)
             {
                 self.updateRemoteTarget(host: host)
+            }
+        }
+        if remote?.keys.contains("sshIdentity") == true {
+            let configuredIdentity = (remote?["sshIdentity"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if configuredIdentity != self.remoteIdentity {
+                self.remoteIdentity = configuredIdentity
             }
         }
         if self.gatewaySelectionSnapshot() != previousSelection {
@@ -702,6 +716,16 @@ final class AppState {
             remoteTransport: self.remoteTransport,
             remoteUrl: remoteUrl,
             remoteTarget: Self.sanitizeSSHTarget(self.remoteTarget))
+    }
+
+    @discardableResult
+    private func reconcilePreferredGatewayRouteBinding() -> Bool {
+        let binding = GatewayDiscoveryPreferences.routeBinding(
+            connectionMode: self.connectionMode,
+            remoteTransport: self.remoteTransport,
+            remoteURL: self.remoteUrl,
+            remoteTarget: self.remoteTarget)
+        return GatewayDiscoveryPreferences.clearPreferredStableIDIfRouteBindingMismatch(binding)
     }
 
     private func updateRemoteTarget(host: String) {
@@ -1109,6 +1133,11 @@ extension AppState {
 
     func _testApplyConfigOverrides(_ root: [String: Any]) {
         self.applyConfigOverrides(root)
+    }
+
+    @discardableResult
+    func _testReconcilePreferredGatewayRouteBinding() -> Bool {
+        self.reconcilePreferredGatewayRouteBinding()
     }
 }
 #endif

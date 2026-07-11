@@ -206,8 +206,16 @@ final class MacNodeModeCoordinator: NSObject {
         self.reconnectProbeTask = nil
     }
 
-    func setPreferredGatewayStableID(_ stableID: String?) {
-        GatewayDiscoveryPreferences.setPreferredStableID(stableID)
+    func setPreferredGatewayStableID(
+        _ stableID: String?,
+        state: AppState = AppStateStore.shared)
+    {
+        let routeBinding = stableID == nil ? nil : GatewayDiscoveryPreferences.routeBinding(
+            connectionMode: .remote,
+            remoteTransport: state.remoteTransport,
+            remoteURL: state.remoteUrl,
+            remoteTarget: state.remoteTarget)
+        GatewayDiscoveryPreferences.setPreferredStableID(stableID, routeBinding: routeBinding)
         // Revoke a suspended endpoint attempt before its preference change is
         // reflected back through GatewayEndpointStore's async subscription.
         self.enqueueRouteInvalidation(yieldRefresh: true)

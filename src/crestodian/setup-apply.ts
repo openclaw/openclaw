@@ -279,8 +279,9 @@ export async function applyCrestodianSetup(
     runtime,
   } = params;
   const hasExpectedConfigHash = Object.hasOwn(params, "expectedConfigHash");
-  const commit: CrestodianSetupApplyHooks["commit"] =
-    hooks?.commit ?? (async (effect) => await effect());
+  const commit: CrestodianSetupApplyHooks["commit"] = hooks
+    ? async (effect) => await hooks.commit(effect)
+    : async (effect) => await effect();
   const [
     { readSetupConfigFileSnapshot, resolveQuickstartGatewayDefaults },
     onboardHelpers,

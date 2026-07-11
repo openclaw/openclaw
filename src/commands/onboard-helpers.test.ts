@@ -4,6 +4,7 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -468,6 +469,7 @@ describe("probeGatewayReachable", () => {
     mocks.probeGateway
       .mockResolvedValueOnce({
         ok: true,
+        server: { version: "2026.7.2", connId: "conn-configured" },
         configSnapshot: {
           valid: true,
           config: { agents: { list: [{ id: "work", default: true, model: "openai/gpt-5.5" }] } },
@@ -475,6 +477,7 @@ describe("probeGatewayReachable", () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        server: { version: "2026.7.2", connId: "conn-missing" },
         configSnapshot: { valid: true, config: { gateway: { mode: "local" } } },
       });
 
@@ -502,12 +505,77 @@ describe("probeGatewayReachable", () => {
       connectLatencyMs: 42,
       error: "config.get: unauthorized",
       auth: { role: null, scopes: [], capability: "unknown" },
-      server: { version: null, connId: null },
+      server: { version: "2026.7.2", connId: "conn-1" },
     });
 
     await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
       kind: "reachable-unverified",
       detail: "config.get: unauthorized",
+    });
+  });
+
+  it("keeps typed pre-Hello Gateway auth failures on the reachable path", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      connectLatencyMs: 42,
+      error: "device pairing required",
+      connectErrorDetails: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
+      auth: { role: null, scopes: [], capability: "pairing_pending" },
+      server: { version: null, connId: null },
+    });
+
+    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
+      kind: "reachable-unverified",
+      detail: "device pairing required",
+    });
+  });
+
+  it("does not mistake an arbitrary open WebSocket for a Gateway", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      connectLatencyMs: 42,
+      error: "websocket closed",
+      auth: { role: null, scopes: [], capability: "unknown" },
+      server: { version: null, connId: null },
+    });
+
+    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
+      kind: "unreachable",
+      detail: "websocket closed",
+    });
+  });
+
+  it("does not trust an unrecognized connect error code as Gateway evidence", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      connectLatencyMs: 42,
+      error: "foreign protocol error",
+      connectErrorDetails: { code: "NOT_AN_OPENCLAW_CONNECT_ERROR" },
+      auth: { role: null, scopes: [], capability: "unknown" },
+      server: { version: null, connId: null },
+    });
+
+    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
+      kind: "unreachable",
+      detail: "foreign protocol error",
+    });
+  });
+
+  it("does not trust a config-shaped response without Gateway handshake evidence", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: true,
+      connectLatencyMs: 42,
+      error: null,
+      auth: { role: null, scopes: [], capability: "unknown" },
+      server: { version: "foreign-server", connId: null },
+      configSnapshot: {
+        valid: true,
+        config: { agents: { defaults: { model: "openai/foreign-model" } } },
+      },
+    });
+
+    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
+      kind: "unreachable",
     });
   });
 

@@ -35,23 +35,23 @@ alias for the inference-gated Crestodian assistant and has no `setup` equivalent
 
 ## Options
 
-| Flag                       | Description                                                                                         |
-| -------------------------- | --------------------------------------------------------------------------------------------------- |
+| Flag                       | Description                                                                                           |
+| -------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `--workspace <dir>`        | Workspace proposal in guided mode; persisted directly by baseline, classic, and noninteractive setup. |
-| `--baseline`               | Create baseline config/workspace/session folders without onboarding.                                |
-| `--wizard`                 | Accepted for compatibility; setup runs onboarding by default.                                       |
-| `--non-interactive`        | Run onboarding without prompts.                                                                     |
-| `--accept-risk`            | Acknowledge full-system agent access risk; required with `--non-interactive`.                       |
-| `--mode <mode>`            | Onboarding mode: `local` or `remote`.                                                               |
-| `--flow <flow>`            | Onboard flow: `quickstart`, `advanced`, `manual`, or `import`.                                      |
-| `--reset`                  | Reset config + credentials + sessions before onboarding (workspace only with `--reset-scope full`). |
-| `--reset-scope <scope>`    | Reset scope: `config`, `config+creds+sessions`, or `full`.                                          |
-| `--import-from <provider>` | Migration provider to run during onboarding.                                                        |
-| `--import-source <path>`   | Source agent home for `--import-from`.                                                              |
-| `--import-secrets`         | Import supported secrets during onboarding migration.                                               |
-| `--remote-url <url>`       | Remote Gateway WebSocket URL.                                                                       |
-| `--remote-token <token>`   | Remote Gateway token (optional).                                                                    |
-| `--json`                   | Output a JSON summary.                                                                              |
+| `--baseline`               | Create baseline config/workspace/session folders without onboarding.                                  |
+| `--wizard`                 | Accepted for compatibility; setup runs onboarding by default.                                         |
+| `--non-interactive`        | Run onboarding without prompts.                                                                       |
+| `--accept-risk`            | Acknowledge full-system agent access risk; required with `--non-interactive`.                         |
+| `--mode <mode>`            | Onboarding mode: `local` or `remote`.                                                                 |
+| `--flow <flow>`            | Onboard flow: `quickstart`, `advanced`, `manual`, or `import`.                                        |
+| `--reset`                  | Reset config + credentials + sessions before onboarding (workspace only with `--reset-scope full`).   |
+| `--reset-scope <scope>`    | Reset scope: `config`, `config+creds+sessions`, or `full`.                                            |
+| `--import-from <provider>` | Migration provider to run during onboarding.                                                          |
+| `--import-source <path>`   | Source agent home for `--import-from`.                                                                |
+| `--import-secrets`         | Import supported secrets during onboarding migration.                                                 |
+| `--remote-url <url>`       | Remote Gateway WebSocket URL.                                                                         |
+| `--remote-token <token>`   | Remote Gateway token (optional).                                                                      |
+| `--json`                   | Output a JSON summary.                                                                                |
 
 `--classic` and `--non-interactive` are mutually exclusive: classic opens the
 prompted wizard, while noninteractive setup uses the automation path.

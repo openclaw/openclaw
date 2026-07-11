@@ -406,8 +406,8 @@ async function projectVerifiedExecutionFingerprint(
   return {
     route: projection.route
       ? (() => {
-          const { authProfileId: _authProfileId, ...route } = projection.route;
-          return route;
+          const { authProfileId: _authProfileId, ...routeWithoutAuthProfile } = projection.route;
+          return routeWithoutAuthProfile;
         })()
       : null,
     defaultSelection: projection.defaultSelection,

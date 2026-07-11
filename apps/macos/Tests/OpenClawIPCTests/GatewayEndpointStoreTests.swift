@@ -177,6 +177,7 @@ struct GatewayEndpointStoreTests {
             mode: .init(mode),
             token: token,
             password: password,
+            deviceAuthGatewayID: "test-gateway-route",
             localPort: 18789,
             localHost: localHost,
             scheme: "ws",

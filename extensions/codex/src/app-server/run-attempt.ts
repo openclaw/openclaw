@@ -509,9 +509,9 @@ export async function runCodexAppServerAttempt(
   const attemptClientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
   const runtimeArtifactRequest =
     params.captureRuntimeArtifact || params.expectedRuntimeArtifact
-      ? {
-          ...(params.expectedRuntimeArtifact ? { expected: params.expectedRuntimeArtifact } : {}),
-        }
+      ? params.expectedRuntimeArtifact
+        ? { expected: params.expectedRuntimeArtifact }
+        : {}
       : undefined;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });

@@ -6,6 +6,7 @@ import {
   createTestWizardPrompter,
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FeishuProbeResult } from "./types.js";
 
@@ -45,30 +46,6 @@ import { feishuPlugin } from "./channel.js";
 const baseStatusContext = {
   accountOverrides: {},
 };
-
-async function withEnvVars(values: Record<string, string | undefined>, run: () => Promise<void>) {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(values)) {
-    previous.set(key, process.env[key]);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-
-  try {
-    await run();
-  } finally {
-    for (const [key, prior] of previous.entries()) {
-      if (prior === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = prior;
-      }
-    }
-  }
-}
 
 async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: string }) {
   return await feishuGetStatus({
@@ -488,7 +465,7 @@ describe("feishu setup wizard status", () => {
   it("treats env SecretRef appId as not configured when env var is missing", async () => {
     const appIdKey = "FEISHU_APP_ID_STATUS_MISSING_TEST";
     const appSecretKey = "FEISHU_APP_CREDENTIAL_STATUS_MISSING_TEST"; // pragma: allowlist secret
-    await withEnvVars(
+    await withEnvAsync(
       {
         [appIdKey]: undefined,
         [appSecretKey]: "env-credential-456", // pragma: allowlist secret
@@ -503,7 +480,7 @@ describe("feishu setup wizard status", () => {
   it("treats env SecretRef appId/appSecret as configured in status", async () => {
     const appIdKey = "FEISHU_APP_ID_STATUS_TEST";
     const appSecretKey = "FEISHU_APP_CREDENTIAL_STATUS_TEST"; // pragma: allowlist secret
-    await withEnvVars(
+    await withEnvAsync(
       {
         [appIdKey]: "cli_env_123",
         [appSecretKey]: "env-credential-456", // pragma: allowlist secret

@@ -387,7 +387,7 @@ extension OnboardingView {
         preferredGatewayID = nil
         // The coordinator clears the persisted discovery preference and revokes
         // any suspended attempt before this manual endpoint can become active.
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(nil)
+        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(nil, state: state)
     }
 
     private var shouldShowRemoteConnectionSection: Bool {

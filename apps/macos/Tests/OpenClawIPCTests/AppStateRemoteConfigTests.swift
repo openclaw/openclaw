@@ -2,9 +2,40 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
+private struct StoredGatewayPreference {
+    let stableID: String?
+    let routeBinding: String?
+}
+
+private func captureGatewayPreference() -> StoredGatewayPreference {
+    StoredGatewayPreference(
+        stableID: GatewayDiscoveryPreferences.preferredStableID(),
+        routeBinding: GatewayDiscoveryPreferences.preferredRouteBinding())
+}
+
+private func restoreGatewayPreference(_ preference: StoredGatewayPreference) {
+    GatewayDiscoveryPreferences.setPreferredStableID(
+        preference.stableID,
+        routeBinding: preference.routeBinding)
+}
+
 @Suite(.serialized)
 @MainActor
 struct AppStateRemoteConfigTests {
+    @Test
+    func `unbound discovery selection cannot inherit a prior route binding`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        GatewayDiscoveryPreferences.setPreferredStableID(
+            "gateway-a",
+            routeBinding: "remote:direct:wss://gateway-a.example.test:443")
+
+        GatewayDiscoveryPreferences.setPreferredStableID("gateway-b")
+
+        #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-b")
+        #expect(GatewayDiscoveryPreferences.preferredRouteBinding() == nil)
+    }
+
     @Test
     func `invalid remote drafts cannot be persisted for a configured gateway probe`() {
         let base = AppState.GatewayConfigSyncDraft(
@@ -37,10 +68,10 @@ struct AppStateRemoteConfigTests {
 
     @Test
     func `config watcher endpoint replacement clears and ignores stale discovery identity`() {
-        let previousGatewayID = GatewayDiscoveryPreferences.preferredStableID()
+        let previousGatewayPreference = captureGatewayPreference()
         let previousPending = UserDefaults.standard.object(forKey: onboardingCrestodianPendingKey)
         defer {
-            GatewayDiscoveryPreferences.setPreferredStableID(previousGatewayID)
+            restoreGatewayPreference(previousGatewayPreference)
             if let previousPending {
                 UserDefaults.standard.set(previousPending, forKey: onboardingCrestodianPendingKey)
             } else {
@@ -80,8 +111,8 @@ struct AppStateRemoteConfigTests {
 
     @Test
     func `config watcher explicit ssh target replacement clears stale discovery identity`() {
-        let previousGatewayID = GatewayDiscoveryPreferences.preferredStableID()
-        defer { GatewayDiscoveryPreferences.setPreferredStableID(previousGatewayID) }
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
         let state = AppState(preview: true)
         state.connectionMode = .remote
         state.remoteTransport = .ssh
@@ -105,6 +136,153 @@ struct AppStateRemoteConfigTests {
         #expect(state.remoteTarget == "bob@gateway-b.example.test")
         #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
         #expect(view.effectivePreferredGatewayID == nil)
+    }
+
+    @Test
+    func `config watcher explicit blank SSH fields clear stale defaults`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        let state = AppState(preview: true)
+        state.connectionMode = .remote
+        state.remoteTransport = .ssh
+        state.remoteUrl = "ws://127.0.0.1:18789"
+        state.remoteTarget = "alice@gateway-a.example.test"
+        state.remoteIdentity = "/tmp/gateway-a-id"
+        GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
+
+        state._testApplyConfigOverrides([
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "ssh",
+                    "url": "ws://127.0.0.1:18789",
+                    "sshTarget": "   ",
+                    "sshIdentity": "   ",
+                ],
+            ],
+        ])
+
+        #expect(state.remoteTarget.isEmpty)
+        #expect(state.remoteIdentity.isEmpty)
+        #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
+    }
+
+    @Test
+    func `cold direct config replacement clears the prior discovery owner`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [connectionModeKey: AppState.ConnectionMode.remote.rawValue])
+        {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway-b.example.test",
+                    ],
+                ],
+            ]))
+            let oldBinding = GatewayDiscoveryPreferences.routeBinding(
+                connectionMode: .remote,
+                remoteTransport: .direct,
+                remoteURL: "wss://gateway-a.example.test",
+                remoteTarget: "")
+            GatewayDiscoveryPreferences.setPreferredStableID(
+                "gateway-a",
+                routeBinding: oldBinding)
+
+            let state = AppState(preview: true)
+
+            #expect(state.remoteUrl == "wss://gateway-b.example.test")
+            #expect(state._testReconcilePreferredGatewayRouteBinding())
+            #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
+            #expect(GatewayDiscoveryPreferences.preferredRouteBinding() == nil)
+        }
+    }
+
+    @Test
+    func `cold SSH config replacement overrides stale defaults and clears their owner`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [
+                connectionModeKey: AppState.ConnectionMode.remote.rawValue,
+                remoteTargetKey: "alice@gateway-a.example.test",
+                remoteIdentityKey: "/tmp/gateway-a-id",
+            ]) {
+                #expect(OpenClawConfigFile.saveDict([
+                    "gateway": [
+                        "mode": "remote",
+                        "remote": [
+                            "transport": "ssh",
+                            "url": "ws://127.0.0.1:18789",
+                            "sshTarget": "bob@gateway-b.example.test",
+                            "sshIdentity": "/tmp/gateway-b-id",
+                        ],
+                    ],
+                ]))
+                let oldBinding = GatewayDiscoveryPreferences.routeBinding(
+                    connectionMode: .remote,
+                    remoteTransport: .ssh,
+                    remoteURL: "ws://127.0.0.1:18789",
+                    remoteTarget: "alice@gateway-a.example.test")
+                GatewayDiscoveryPreferences.setPreferredStableID(
+                    "gateway-a",
+                    routeBinding: oldBinding)
+
+                let state = AppState(preview: true)
+                let settings = CommandResolver.connectionSettings()
+
+                #expect(state.remoteTarget == "bob@gateway-b.example.test")
+                #expect(state.remoteIdentity == "/tmp/gateway-b-id")
+                #expect(settings.target == "bob@gateway-b.example.test")
+                #expect(settings.identity == "/tmp/gateway-b-id")
+                #expect(state._testReconcilePreferredGatewayRouteBinding())
+                #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
+                #expect(GatewayDiscoveryPreferences.preferredRouteBinding() == nil)
+            }
+    }
+
+    @Test
+    func `cold explicit blank SSH fields clear stale defaults`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [
+                connectionModeKey: AppState.ConnectionMode.remote.rawValue,
+                remoteTargetKey: "alice@gateway-a.example.test",
+                remoteIdentityKey: "/tmp/gateway-a-id",
+            ]) {
+                #expect(OpenClawConfigFile.saveDict([
+                    "gateway": [
+                        "mode": "remote",
+                        "remote": [
+                            "transport": "ssh",
+                            "url": "ws://127.0.0.1:18789",
+                            "sshTarget": "   ",
+                            "sshIdentity": "   ",
+                        ],
+                    ],
+                ]))
+
+                let state = AppState(preview: true)
+                let settings = CommandResolver.connectionSettings()
+
+                #expect(state.remoteTarget.isEmpty)
+                #expect(state.remoteIdentity.isEmpty)
+                #expect(settings.target.isEmpty)
+                #expect(settings.identity.isEmpty)
+            }
     }
 
     @Test

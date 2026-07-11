@@ -230,7 +230,9 @@ describe("runCrestodianTui", () => {
           backend.onEvent = (event) => events.push(event);
 
           await backend.sendChat({ message: "status please" });
-          await new Promise((resolve) => setTimeout(resolve, 0));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+          });
           return { exitReason: "exit" };
         },
       },
@@ -279,7 +281,9 @@ describe("runCrestodianTui", () => {
           await backend.sendChat({ message: "status please" });
           await backend.sendChat({ message: "config set gateway.port 19001" });
           await requestedExit;
-          await new Promise((resolve) => setTimeout(resolve, 0));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+          });
           return { exitReason: "exit" };
         },
       },

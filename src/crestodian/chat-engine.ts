@@ -821,7 +821,7 @@ export class CrestodianChatEngine {
       binding !== this.verifiedInference ||
       this.agentSession.verifiedInference !== this.verifiedInference
     ) {
-      this.throwInferenceUnavailable();
+      return this.throwInferenceUnavailable();
     }
     try {
       const route = await resolveCrestodianVerifiedInferenceRoute(binding, this.opts.deps);
@@ -829,9 +829,9 @@ export class CrestodianChatEngine {
         return route;
       }
     } catch (error) {
-      this.throwInferenceUnavailable([error]);
+      return this.throwInferenceUnavailable([error]);
     }
-    this.throwInferenceUnavailable();
+    return this.throwInferenceUnavailable();
   }
 
   private async requirePersistentApplyInference(runtime: RuntimeEnv) {
@@ -841,7 +841,7 @@ export class CrestodianChatEngine {
       binding !== this.verifiedInference ||
       this.agentSession.verifiedInference !== this.verifiedInference
     ) {
-      this.throwInferenceUnavailable();
+      return this.throwInferenceUnavailable();
     }
     try {
       const { resolveCrestodianInferenceForPersistentApply } = await import("./setup-inference.js");
@@ -855,11 +855,11 @@ export class CrestodianChatEngine {
       }
     } catch (error) {
       if (isCrestodianInferenceUnavailableError(error)) {
-        this.throwInferenceUnavailable(error.failures, false);
+        return this.throwInferenceUnavailable(error.failures, false);
       }
-      this.throwInferenceUnavailable([error], false);
+      return this.throwInferenceUnavailable([error], false);
     }
-    this.throwInferenceUnavailable([], false);
+    return this.throwInferenceUnavailable([], false);
   }
 
   private throwInferenceUnavailable(failures: readonly unknown[] = [], cancelWizard = true): never {
@@ -876,7 +876,7 @@ export class CrestodianChatEngine {
     this.wizardBridge = null;
     this.lastSensitiveChannel = undefined;
     this.awaitingSetupChannel = false;
-    this.history.splice(0, this.history.length);
+    this.history.splice(0);
     throw new CrestodianInferenceUnavailableError("conversation", failures);
   }
 

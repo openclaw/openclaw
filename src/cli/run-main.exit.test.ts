@@ -75,6 +75,7 @@ const readConfigFileSnapshotMock = vi.hoisted(() =>
   })),
 );
 const setupWizardCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const runRemoteGatewayInferenceOnboardingMock = vi.hoisted(() => vi.fn(async () => {}));
 const launchTuiCliMock = vi.hoisted(() =>
   vi.fn<(opts: unknown, launchOptions?: unknown) => Promise<void>>(async () => {}),
 );
@@ -337,6 +338,10 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../commands/onboard.js", () => ({
   setupWizardCommand: setupWizardCommandMock,
+}));
+
+vi.mock("../commands/onboard-remote-gateway.js", () => ({
+  runRemoteGatewayInferenceOnboarding: runRemoteGatewayInferenceOnboardingMock,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -2765,13 +2770,48 @@ describe("runCli exit behavior", () => {
     );
   });
 
-  it("keeps a reachable Gateway without a default model in inference onboarding", async () => {
+  it("configures missing inference on the selected remote Gateway", async () => {
+    const sourceConfig = {
+      agents: { defaults: { model: { primary: "openai/local-only-model" } } },
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example/ws",
+          token: "remote-token",
+          tlsFingerprint: "sha256:remote",
+        },
+      },
+    };
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig,
+    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
+      kind: "missing-configured-model",
+      detail: "Gateway default agent has no configured model",
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(runRemoteGatewayInferenceOnboardingMock).toHaveBeenCalledWith({
+      config: sourceConfig,
+      gatewayUrl: "wss://gateway.example/ws",
+      token: "remote-token",
+      tlsFingerprint: "sha256:remote",
+    });
+    expect(launchTuiCliMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps missing inference setup local for a local Gateway", async () => {
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       exists: true,
       valid: true,
       sourceConfig: {
-        agents: { defaults: { model: { primary: "openai/local-only-model" } } },
-        gateway: { mode: "remote", remote: { url: "ws://127.0.0.1:18789" } },
+        gateway: { mode: "local" },
       },
     });
     probeGatewayConfiguredModelMock.mockResolvedValueOnce({
@@ -2784,7 +2824,55 @@ describe("runCli exit behavior", () => {
     });
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith({});
+    expect(runRemoteGatewayInferenceOnboardingMock).not.toHaveBeenCalled();
     expect(launchTuiCliMock).not.toHaveBeenCalled();
+  });
+
+  it("does not direct non-interactive remote setup into local onboarding", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "remote",
+          remote: { url: "wss://gateway.example/ws", token: "remote-token" },
+        },
+      },
+    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
+      kind: "missing-configured-model",
+      detail: "Gateway default agent has no configured model",
+    });
+    const previousExitCode = process.exitCode;
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+
+    try {
+      await runCli(["node", "openclaw"]);
+
+      expect(process.exitCode).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        "Remote Gateway inference setup needs an interactive TTY. Re-run `openclaw` in a terminal connected to this Gateway.",
+      );
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+      expect(runRemoteGatewayInferenceOnboardingMock).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      process.exitCode = previousExitCode;
+      if (stdinDescriptor) {
+        Object.defineProperty(process.stdin, "isTTY", stdinDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stdin, "isTTY");
+      }
+      if (stdoutDescriptor) {
+        Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stdout, "isTTY");
+      }
+    }
   });
 
   it("uses the active local gateway lock port for bare root preflight and TUI handoff", async () => {

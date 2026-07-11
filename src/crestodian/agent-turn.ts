@@ -273,19 +273,19 @@ export async function runCrestodianAgentTurnWithDeps(
 ): Promise<CrestodianAgentTurnReply | null> {
   const binding = params.session.verifiedInference;
   if (!binding) {
-    throwCrestodianInferenceUnavailable({ session: params.session });
+    return throwCrestodianInferenceUnavailable({ session: params.session });
   }
   let plan: CrestodianConfiguredRoute | null;
   try {
     plan = await resolveCrestodianVerifiedInferenceRoute(binding, deps);
   } catch (error) {
-    throwCrestodianInferenceUnavailable({
+    return throwCrestodianInferenceUnavailable({
       session: params.session,
       failures: [error],
     });
   }
   if (!plan) {
-    throwCrestodianInferenceUnavailable({ session: params.session });
+    return throwCrestodianInferenceUnavailable({ session: params.session });
   }
   let expectedAgentHarnessRuntimeArtifact: ReturnType<
     typeof resolveCrestodianExpectedAgentHarnessRuntimeArtifact
@@ -294,14 +294,14 @@ export async function runCrestodianAgentTurnWithDeps(
     expectedAgentHarnessRuntimeArtifact =
       resolveCrestodianExpectedAgentHarnessRuntimeArtifact(binding);
   } catch (error) {
-    throwCrestodianInferenceUnavailable({ session: params.session, failures: [error] });
+    return throwCrestodianInferenceUnavailable({ session: params.session, failures: [error] });
   }
   let workspaceDir: string;
   let sessionFile: string;
   try {
     ({ workspaceDir, sessionFile } = await ensureCrestodianDirs(params.session.sessionId));
   } catch (error) {
-    throwCrestodianInferenceUnavailable({
+    return throwCrestodianInferenceUnavailable({
       session: params.session,
       failures: [error],
     });
@@ -424,7 +424,7 @@ export async function runCrestodianAgentTurnWithDeps(
     // before rejecting. Neither is safe to arm or resume on a later attempt.
     const failures =
       error instanceof CrestodianInferenceUnavailableError ? [...error.failures] : [error];
-    throwCrestodianInferenceUnavailable({ session: params.session, failures });
+    return throwCrestodianInferenceUnavailable({ session: params.session, failures });
   }
 }
 

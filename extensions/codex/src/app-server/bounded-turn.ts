@@ -159,10 +159,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   if (remainingRunMs <= 0) {
     abortController.abort("timeout");
   }
-  const timeout = setTimeout(
-    () => abortController.abort("timeout"),
-    Math.max(1, remainingRunMs),
-  );
+  const timeout = setTimeout(() => abortController.abort("timeout"), Math.max(1, remainingRunMs));
   timeout.unref?.();
 
   let retrySelection = false;

@@ -2222,6 +2222,105 @@ struct OnboardingAISetupTests {
             defaults: defaults) == .none)
     }
 
+    @Test func `relaunch cannot reuse a completed receipt after device token rotation`() async throws {
+        let suiteName = "OnboardingDeviceTokenReceiptRotationTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+            let identity = DeviceIdentityStore.loadOrCreate()
+            let deviceAuthGatewayID = "local"
+            let originalToken = "receipt-device-token-a"
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: originalToken,
+                gatewayID: deviceAuthGatewayID)
+            let replacementToken = "receipt-device-token-b"
+            let url = try #require(URL(string: "ws://example.invalid"))
+            let activationBindingKey = SymmetricKey(size: .bits256)
+            let seedSession = GatewayTestWebSocketSession(taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
+                        _ = respondToAISetupHealth(task: task, request: request)
+                    },
+                    receiveHook: { task, receiveIndex in
+                        if receiveIndex == 0 {
+                            return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                        }
+                        let id = task.snapshotConnectRequestID() ?? "connect"
+                        return .data(GatewayWebSocketTestSupport.connectOkData(
+                            id: id,
+                            deviceToken: replacementToken))
+                    })
+            })
+            let seedGateway = GatewayConnection(
+                endpointProvider: {
+                    GatewayConnection.EndpointSnapshot(
+                        config: (url: url, token: nil, password: nil),
+                        routeAuthority: nil,
+                        deviceAuthGatewayID: deviceAuthGatewayID)
+                },
+                activationBindingKeyProvider: { activationBindingKey },
+                sessionBox: WebSocketSessionBox(session: seedSession))
+            let seedLease = try await seedGateway.acquireServerLease()
+            let activationOwner = try OnboardingCrestodianResumeStore.ActivationOwner(
+                id: "completed-device-token-activation",
+                routeFingerprint: #require(await seedGateway.activationOwnershipFingerprint(
+                    ifCurrentServerLease: seedLease)))
+            #expect(await seedGateway.authSource() == .deviceToken)
+            OnboardingCrestodianResumeStore.markPending(
+                routeIdentity: "local",
+                activationOwner: activationOwner,
+                defaults: defaults)
+            #expect(OnboardingCrestodianResumeStore.markCompleted(
+                ifOwnedBy: "local",
+                activationOwner: activationOwner,
+                defaults: defaults))
+            let persistedReceipt = String(describing: defaults.object(forKey: onboardingCrestodianPendingKey))
+            #expect(!persistedReceipt.contains(originalToken))
+            #expect(DeviceAuthStore.loadToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                gatewayID: deviceAuthGatewayID)?.token == replacementToken)
+            await seedGateway.shutdown()
+
+            let recorder = AISetupRequestRecorder()
+            let replacementGateway = GatewayConnection(
+                endpointProvider: {
+                    GatewayConnection.EndpointSnapshot(
+                        config: (url: url, token: nil, password: nil),
+                        routeAuthority: nil,
+                        deviceAuthGatewayID: deviceAuthGatewayID)
+                },
+                activationBindingKeyProvider: { activationBindingKey },
+                sessionBox: WebSocketSessionBox(session: makeAISetupSession(recorder: recorder)))
+            let relaunched = OnboardingAISetupModel(
+                gateway: replacementGateway,
+                defaults: defaults,
+                routeIdentityProvider: { "local" })
+
+            relaunched.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
+            let outcome = await relaunched.verifyPendingConfiguredInference()
+            let requests = await waitForAISetupRequests(recorder, count: 1)
+
+            #expect(outcome == .freshSetupAllowed)
+            #expect(!relaunched.connected)
+            #expect(requests.methods == ["crestodian.setup.detect"])
+            #expect(OnboardingCrestodianResumeStore.pendingState(
+                for: "local",
+                defaults: defaults) == .none)
+            #expect(!String(describing: defaults.object(forKey: onboardingCrestodianPendingKey))
+                .contains(replacementToken))
+            await replacementGateway.shutdown()
+        }
+    }
+
     @Test func `relaunch cannot hand off after completed receipt owner is replaced`() async throws {
         let suiteName = "OnboardingSameModelReplacementOwnerTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

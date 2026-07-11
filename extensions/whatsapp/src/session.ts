@@ -259,11 +259,11 @@ export async function createWaSocket(
     defaultQueryTimeoutMs:
       opts.defaultQueryTimeoutMs ?? DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
   };
-  let sock: ReturnType<typeof makeWASocket> | undefined;
+  const socketRef: { current?: ReturnType<typeof makeWASocket> } = {};
   let pendingSocketAbort: { error: unknown } | undefined;
   const reportCredentialPersistenceError = (error: unknown) => {
-    if (sock) {
-      abortSocketAfterCredentialPersistenceFailure(sock, error);
+    if (socketRef.current) {
+      abortSocketAfterCredentialPersistenceFailure(socketRef.current, error);
     } else {
       pendingSocketAbort = { error };
     }
@@ -323,7 +323,7 @@ export async function createWaSocket(
         return repository;
       }
     : undefined;
-  sock = makeWASocket({
+  const sock = makeWASocket({
     auth: {
       creds: state.creds,
       keys: signalKeys,
@@ -344,6 +344,7 @@ export async function createWaSocket(
     ...(opts.getMessage ? { getMessage: opts.getMessage } : {}),
     ...(opts.cachedGroupMetadata ? { cachedGroupMetadata: opts.cachedGroupMetadata } : {}),
   });
+  socketRef.current = sock;
   if (pendingSocketAbort) {
     abortSocketAfterCredentialPersistenceFailure(sock, pendingSocketAbort.error);
   }

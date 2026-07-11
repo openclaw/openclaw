@@ -168,31 +168,18 @@ extension OnboardingView {
                 connectionMode: expectedMode,
                 attempt: probeAttempt,
                 routeIdentity: expectedRouteIdentity)
-            if let boundRoute = outcome.boundRoute {
-                guard boundRoute.identity == expectedRouteIdentity,
-                      await self.configuredGatewayProbe.isCurrent(boundRoute)
-                else { return }
-            }
-            let currentRouteIdentity = self.aiSetupRouteIdentityProvider()
-            guard self.configuredGatewayProbe.isCurrent(probeAttempt),
-                  Self.isCurrentConfiguredGatewayProbe(
-                      onboardingVisible: knownVisible || self.onboardingVisible,
-                      expectedMode: expectedMode,
-                      currentMode: self.state.connectionMode),
-                  currentRouteIdentity == expectedRouteIdentity
+            guard await self.isCurrentConfiguredGatewayProbeOutcome(
+                outcome,
+                attempt: probeAttempt,
+                expectedMode: expectedMode,
+                expectedRouteIdentity: expectedRouteIdentity,
+                knownVisible: knownVisible)
             else { return }
             let pendingState = OnboardingCrestodianResumeStore.pendingState(
                 for: expectedRouteIdentity,
                 defaults: self.crestodianDefaults)
             let crestodianResumePending = pendingState != .none
-            switch pendingState {
-            case let .activating(deadline), let .verified(deadline):
-                self.configuredGatewayProbe.schedulePendingActivationRecheck(deadline: deadline) {
-                    self.probeConfiguredGatewayForDashboard(startAISetupWhenMissing: true)
-                }
-            case .activationExpired, .completed, .none:
-                break
-            }
+            self.schedulePendingActivationRecheckIfNeeded(pendingState)
 
             switch outcome {
             case let .configured(modelRef, _):
@@ -268,6 +255,40 @@ extension OnboardingView {
             case .superseded:
                 break
             }
+        }
+    }
+
+    private func isCurrentConfiguredGatewayProbeOutcome(
+        _ outcome: OnboardingConfiguredGatewayProbe.Outcome,
+        attempt: OnboardingConfiguredGatewayProbe.Attempt,
+        expectedMode: AppState.ConnectionMode,
+        expectedRouteIdentity: String?,
+        knownVisible: Bool) async -> Bool
+    {
+        if let boundRoute = outcome.boundRoute {
+            guard boundRoute.identity == expectedRouteIdentity,
+                  await self.configuredGatewayProbe.isCurrent(boundRoute)
+            else { return false }
+        }
+        let currentRouteIdentity = self.aiSetupRouteIdentityProvider()
+        return self.configuredGatewayProbe.isCurrent(attempt) &&
+            Self.isCurrentConfiguredGatewayProbe(
+                onboardingVisible: knownVisible || self.onboardingVisible,
+                expectedMode: expectedMode,
+                currentMode: self.state.connectionMode) &&
+            currentRouteIdentity == expectedRouteIdentity
+    }
+
+    private func schedulePendingActivationRecheckIfNeeded(
+        _ pendingState: OnboardingCrestodianResumeStore.PendingState)
+    {
+        switch pendingState {
+        case let .activating(deadline), let .verified(deadline):
+            self.configuredGatewayProbe.schedulePendingActivationRecheck(deadline: deadline) {
+                self.probeConfiguredGatewayForDashboard(startAISetupWhenMissing: true)
+            }
+        case .activationExpired, .completed, .none:
+            break
         }
     }
 

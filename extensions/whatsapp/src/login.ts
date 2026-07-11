@@ -55,9 +55,11 @@ export async function loginWeb(
   };
   const waitForCredentialPersistence = async () => {
     // Baileys schedules the final LID key write on nextTick after reporting open.
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     while (credentialPersistenceTasks.size > 0) {
-      await Promise.allSettled([...credentialPersistenceTasks]);
+      await Promise.allSettled(credentialPersistenceTasks);
     }
   };
   const credentialPersistenceOptions = options?.beforeCredentialPersistence

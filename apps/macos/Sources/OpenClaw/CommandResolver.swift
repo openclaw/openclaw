@@ -276,11 +276,14 @@ enum CommandResolver {
         projectRoot: URL? = nil) -> [String]
     {
         let settings = self.connectionSettings(defaults: defaults, configRoot: configRoot)
-        if settings.mode == .remote, let ssh = sshNodeCommand(
-            subcommand: subcommand,
-            extraArgs: extraArgs,
-            settings: settings)
-        {
+        if settings.mode == .remote, settings.transport == .ssh {
+            guard let ssh = sshNodeCommand(
+                subcommand: subcommand,
+                extraArgs: extraArgs,
+                settings: settings)
+            else {
+                return self.errorCommand(with: "Remote SSH gateway target is missing or invalid.")
+            }
             return ssh
         }
 
@@ -481,6 +484,7 @@ enum CommandResolver {
 
     struct RemoteSettings {
         let mode: AppState.ConnectionMode
+        let transport: AppState.RemoteTransport
         let target: String
         let identity: String
         let projectRoot: String
@@ -494,13 +498,21 @@ enum CommandResolver {
     {
         let root = configRoot ?? OpenClawConfigFile.loadDict()
         let mode = ConnectionModeResolver.resolve(root: root, defaults: defaults).mode
+        let transport = GatewayRemoteConfig.resolveTransport(root: root)
         let remote = (root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+        let hasConfiguredTarget = remote?.keys.contains("sshTarget") == true
         let configuredTarget = self.sanitizedTarget(remote?["sshTarget"] as? String ?? "")
-        let target = self.sanitizedTarget(
-            defaults.string(forKey: remoteTargetKey)?.nonEmpty ?? configuredTarget)
-        let identity = defaults.string(forKey: remoteIdentityKey)?.nonEmpty
-            ?? remote?["sshIdentity"] as? String
-            ?? ""
+        // Canonical config wins after an offline edit. UserDefaults remains the
+        // compatibility fallback for older configs that never stored SSH fields.
+        let target = hasConfiguredTarget
+            ? configuredTarget
+            : self.sanitizedTarget(defaults.string(forKey: remoteTargetKey) ?? "")
+        let hasConfiguredIdentity = remote?.keys.contains("sshIdentity") == true
+        let configuredIdentity = (remote?["sshIdentity"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let identity = hasConfiguredIdentity
+            ? configuredIdentity
+            : defaults.string(forKey: remoteIdentityKey)?.nonEmpty ?? ""
         let projectRoot = defaults.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
         let cliPath = defaults.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
         let rawHostKeyPolicy = remote?["sshHostKeyPolicy"] as? String
@@ -515,6 +527,7 @@ enum CommandResolver {
         }
         return RemoteSettings(
             mode: mode,
+            transport: transport,
             target: target,
             identity: identity,
             projectRoot: projectRoot,

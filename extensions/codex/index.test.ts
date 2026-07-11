@@ -559,7 +559,7 @@ describe("codex plugin", () => {
     });
 
     expect(harness.authBootstrap).toBe("harness");
-    expect(harness.authBinding?.fingerprint).toBeTypeOf("function");
+    expect(typeof harness.authBinding?.fingerprint).toBe("function");
   });
 
   it("passes live Codex plugin config into public Codex app-server attempts", async () => {

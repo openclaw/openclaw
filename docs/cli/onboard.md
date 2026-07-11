@@ -51,9 +51,9 @@ openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 - `--flow manual` (alias `advanced`): opens the classic wizard with full prompts
   for port, bind, and auth.
 - `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`), previews the plan, then applies after confirmation. Import only runs against a fresh OpenClaw setup - reset config, credentials, sessions, and workspace state first if any exist. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.
-- `--modern` is a compatibility alias for the Crestodian conversational
-  setup/repair assistant. It uses the same live-inference gate as `openclaw
-  crestodian` and accepts only `--workspace`, `--accept-risk`,
+- `--modern` is a compatibility alias for the Crestodian conversational setup
+  assistant. It uses the same live-inference gate as `openclaw crestodian` and
+  accepts only `--workspace`, `--accept-risk`,
   `--non-interactive`, and `--json`. Other setup flags are rejected instead of
   being silently ignored.
 

@@ -7,6 +7,10 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
@@ -385,13 +389,19 @@ export type GatewayConfiguredModelProbeResult =
   | { kind: "reachable-unverified"; detail?: string }
   | { kind: "unreachable"; detail?: string };
 
+const RECOGNIZED_GATEWAY_CONNECT_ERROR_CODES: ReadonlySet<string> = new Set(
+  Object.values(ConnectErrorDetailCodes),
+);
+
 function didProbeReachGateway(probe: GatewayProbeResult): boolean {
-  return (
-    probe.connectLatencyMs !== null ||
-    probe.auth.capability !== "unknown" ||
-    probe.server?.connId != null ||
-    probe.server?.version != null
-  );
+  const connectErrorCode = readConnectErrorDetailCode(probe.connectErrorDetails);
+  const recognizedConnectError =
+    connectErrorCode !== null && RECOGNIZED_GATEWAY_CONNECT_ERROR_CODES.has(connectErrorCode);
+  const serverVersion = probe.server?.version?.trim();
+  const serverConnectionId = probe.server?.connId?.trim();
+  // Opening a WebSocket proves only that something is listening. A Gateway is
+  // established by a hello-ok server identity or its typed connect rejection.
+  return recognizedConnectError || Boolean(serverVersion && serverConnectionId);
 }
 
 /** Reads only Gateway config and classifies whether its default agent has inference. */
@@ -404,11 +414,12 @@ export async function probeGatewayConfiguredModel(
   } catch (err) {
     return { kind: "unreachable", detail: summarizeError(err) };
   }
+  const detail = probe.error ?? undefined;
+  if (!didProbeReachGateway(probe)) {
+    return { kind: "unreachable", ...(detail ? { detail } : {}) };
+  }
   if (!probe.ok) {
-    const detail = probe.error ?? undefined;
-    return didProbeReachGateway(probe)
-      ? { kind: "reachable-unverified", detail }
-      : { kind: "unreachable", detail };
+    return { kind: "reachable-unverified", detail };
   }
   const snapshot = probe.configSnapshot as {
     valid?: unknown;

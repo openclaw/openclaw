@@ -44,7 +44,7 @@ extension OnboardingView {
         GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: state)
 
         state.connectionMode = .remote
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)
+        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: state)
         probeConfiguredGatewayForDashboard()
     }
 

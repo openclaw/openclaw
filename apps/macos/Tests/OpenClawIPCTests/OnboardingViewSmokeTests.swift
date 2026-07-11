@@ -7,6 +7,23 @@ import SwiftUI
 import Testing
 @testable import OpenClaw
 
+private struct OnboardingStoredGatewayPreference {
+    let stableID: String?
+    let routeBinding: String?
+}
+
+private func captureOnboardingGatewayPreference() -> OnboardingStoredGatewayPreference {
+    OnboardingStoredGatewayPreference(
+        stableID: GatewayDiscoveryPreferences.preferredStableID(),
+        routeBinding: GatewayDiscoveryPreferences.preferredRouteBinding())
+}
+
+private func restoreOnboardingGatewayPreference(_ preference: OnboardingStoredGatewayPreference) {
+    GatewayDiscoveryPreferences.setPreferredStableID(
+        preference.stableID,
+        routeBinding: preference.routeBinding)
+}
+
 @Suite(.serialized)
 @MainActor
 struct OnboardingViewSmokeTests {
@@ -217,10 +234,10 @@ struct OnboardingViewSmokeTests {
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
             .appendingPathComponent("openclaw.json")
             .path
-        let previousGatewayID = GatewayDiscoveryPreferences.preferredStableID()
+        let previousGatewayPreference = captureOnboardingGatewayPreference()
         let previousPending = UserDefaults.standard.object(forKey: onboardingCrestodianPendingKey)
         defer {
-            GatewayDiscoveryPreferences.setPreferredStableID(previousGatewayID)
+            restoreOnboardingGatewayPreference(previousGatewayPreference)
             if let previousPending {
                 UserDefaults.standard.set(previousPending, forKey: onboardingCrestodianPendingKey)
             } else {
@@ -265,10 +282,10 @@ struct OnboardingViewSmokeTests {
     }
 
     @Test func `manual remote endpoint edit clears stale discovery identity`() throws {
-        let previousGatewayID = GatewayDiscoveryPreferences.preferredStableID()
+        let previousGatewayPreference = captureOnboardingGatewayPreference()
         let previousPending = UserDefaults.standard.object(forKey: onboardingCrestodianPendingKey)
         defer {
-            GatewayDiscoveryPreferences.setPreferredStableID(previousGatewayID)
+            restoreOnboardingGatewayPreference(previousGatewayPreference)
             if let previousPending {
                 UserDefaults.standard.set(previousPending, forKey: onboardingCrestodianPendingKey)
             } else {
@@ -322,10 +339,10 @@ struct OnboardingViewSmokeTests {
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
             .appendingPathComponent("openclaw.json")
             .path
-        let previousGatewayID = GatewayDiscoveryPreferences.preferredStableID()
+        let previousGatewayPreference = captureOnboardingGatewayPreference()
         let previousPending = UserDefaults.standard.object(forKey: onboardingCrestodianPendingKey)
         defer {
-            GatewayDiscoveryPreferences.setPreferredStableID(previousGatewayID)
+            restoreOnboardingGatewayPreference(previousGatewayPreference)
             if let previousPending {
                 UserDefaults.standard.set(previousPending, forKey: onboardingCrestodianPendingKey)
             } else {
@@ -368,10 +385,10 @@ struct OnboardingViewSmokeTests {
     }
 
     @Test func `remote to local selection preserves prior activation lease`() {
-        let previousGatewayID = GatewayDiscoveryPreferences.preferredStableID()
+        let previousGatewayPreference = captureOnboardingGatewayPreference()
         let previousPending = UserDefaults.standard.object(forKey: onboardingCrestodianPendingKey)
         defer {
-            GatewayDiscoveryPreferences.setPreferredStableID(previousGatewayID)
+            restoreOnboardingGatewayPreference(previousGatewayPreference)
             if let previousPending {
                 UserDefaults.standard.set(previousPending, forKey: onboardingCrestodianPendingKey)
             } else {
@@ -398,10 +415,10 @@ struct OnboardingViewSmokeTests {
     }
 
     @Test func `same local selection preserves pending gateway setup state`() {
-        let previousGatewayID = GatewayDiscoveryPreferences.preferredStableID()
+        let previousGatewayPreference = captureOnboardingGatewayPreference()
         let previousPending = UserDefaults.standard.object(forKey: onboardingCrestodianPendingKey)
         defer {
-            GatewayDiscoveryPreferences.setPreferredStableID(previousGatewayID)
+            restoreOnboardingGatewayPreference(previousGatewayPreference)
             if let previousPending {
                 UserDefaults.standard.set(previousPending, forKey: onboardingCrestodianPendingKey)
             } else {
@@ -425,10 +442,10 @@ struct OnboardingViewSmokeTests {
     }
 
     @Test func `configure later preserves in flight activation lease`() {
-        let previousGatewayID = GatewayDiscoveryPreferences.preferredStableID()
+        let previousGatewayPreference = captureOnboardingGatewayPreference()
         let previousPending = UserDefaults.standard.object(forKey: onboardingCrestodianPendingKey)
         defer {
-            GatewayDiscoveryPreferences.setPreferredStableID(previousGatewayID)
+            restoreOnboardingGatewayPreference(previousGatewayPreference)
             if let previousPending {
                 UserDefaults.standard.set(previousPending, forKey: onboardingCrestodianPendingKey)
             } else {

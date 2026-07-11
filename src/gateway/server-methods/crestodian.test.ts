@@ -4,9 +4,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { CrestodianChatEngine } from "../../crestodian/chat-engine.js";
 import { createCrestodianVerifiedInferenceTestFixture } from "../../crestodian/crestodian.test-helpers.js";
 import { CrestodianInferenceUnavailableError } from "../../crestodian/inference-error.js";
-import {
-  type CrestodianVerifiedInferenceBinding,
-  type CrestodianVerifiedInferenceDeps,
+import type {
+  CrestodianVerifiedInferenceBinding,
+  CrestodianVerifiedInferenceDeps,
 } from "../../crestodian/verified-inference.js";
 import {
   getCommandLaneSnapshot,
@@ -285,7 +285,9 @@ describe("crestodian.chat", () => {
     const first = callChat(context, { sessionId: "shared" });
     await started.promise;
     const second = callChat(context, { sessionId: "shared" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     release.resolve();
     const [firstCall, secondCall] = await Promise.all([first, second]);
 
@@ -491,7 +493,7 @@ describe("crestodian.chat", () => {
       return { text: "first setup complete", action: "none" };
     });
     const secondEngine = makeVerifiedEngine();
-    vi.spyOn(secondEngine, "handle").mockImplementation(async () => {
+    const secondHandle = vi.spyOn(secondEngine, "handle").mockImplementation(async () => {
       secondStarted.resolve();
       await releaseSecond.promise;
       return { text: "second setup complete", action: "none" };
@@ -518,12 +520,14 @@ describe("crestodian.chat", () => {
     } as never);
 
     await firstStarted.promise;
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(getCommandLaneSnapshot(CommandLane.Crestodian)).toMatchObject({
       activeCount: 2,
       queuedCount: 0,
     });
-    expect(secondEngine.handle).not.toHaveBeenCalled();
+    expect(secondHandle).not.toHaveBeenCalled();
     releaseFirst.resolve();
     await first;
     await secondStarted.promise;
@@ -553,7 +557,9 @@ describe("crestodian.chat", () => {
     const first = callChat(context, { sessionId: "new-1" });
     const second = callChat(context, { sessionId: "new-2" });
     await evictionStarted.promise;
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     releaseEviction.resolve();
     await Promise.all([first, second]);
 

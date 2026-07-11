@@ -150,7 +150,7 @@ describe("execution auth binding fingerprints", () => {
     expect(fingerprint("access-a", "subject-1")).not.toBe(fingerprint("access-a", "subject-2"));
   });
 
-  it("fingerprints the resolved secret value selected by a provider run", () => {
+  it("keeps resolved credential fingerprints opaque and stable within one process", () => {
     const fingerprint = (apiKey: string) =>
       fingerprintResolvedProviderAuth({
         apiKey,
@@ -159,7 +159,13 @@ describe("execution auth binding fingerprints", () => {
         mode: "api-key",
       });
 
-    expect(fingerprint("first-key")).not.toBe(fingerprint("replacement-key"));
+    const secret = "raw-secret-marker-with-non-hex";
+    const first = fingerprint(secret);
+
+    expect(first).toBe(fingerprint(secret));
+    expect(first).not.toBe(fingerprint("replacement-secret"));
+    expect(first).toMatch(/^[a-f0-9]{64}$/u);
+    expect(first).not.toContain(secret);
   });
 
   it("rejects auth modes without a concrete credential identity", () => {
