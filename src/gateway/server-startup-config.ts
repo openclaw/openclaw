@@ -224,6 +224,7 @@ export function createRuntimeSecretsActivator(params: {
     activationParams: RuntimeSecretsActivationParams,
     options?: {
       activateRuntimeSecretsSnapshot?: (snapshot: PreparedRuntimeSecretsSnapshot) => void;
+      onActivated?: () => void;
     },
   ) => {
     assertRuntimeGatewayAuthNotKnownWeak(prepared.config);
@@ -231,6 +232,9 @@ export function createRuntimeSecretsActivator(params: {
       const activateRuntimeSecretsSnapshot =
         options?.activateRuntimeSecretsSnapshot ?? (await loadActivateRuntimeSecretsSnapshot());
       activateRuntimeSecretsSnapshot(prepared);
+      // Invoke publication at the activation edge so no microtask can replace
+      // the candidate before its runtime commit begins.
+      options?.onActivated?.();
       logGatewayAuthSurfaceDiagnostics(prepared, params.logSecrets);
     }
     for (const warning of prepared.warnings) {
@@ -427,16 +431,28 @@ export function createRuntimeSecretsActivator(params: {
         return null;
       }
       let activated: PreparedRuntimeSecretsSnapshot;
+      let publication: Promise<void> | undefined;
       try {
         activated = await finishPreparedSnapshot(
           snapshot,
           activationParams,
-          activateRuntimeSecretsSnapshot ? { activateRuntimeSecretsSnapshot } : undefined,
+          activateRuntimeSecretsSnapshot
+            ? {
+                activateRuntimeSecretsSnapshot,
+                ...(onActivated
+                  ? {
+                      onActivated: () => {
+                        publication = onActivated();
+                      },
+                    }
+                  : {}),
+              }
+            : undefined,
         );
       } catch (err) {
         return handleSecretsActivationError(err, activationParams, snapshot.sourceConfig);
       }
-      await onActivated?.();
+      await publication;
       return activated;
     });
   };
