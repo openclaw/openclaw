@@ -10,12 +10,17 @@ import {
   CODEX_COMPUTER_USE_CONFIG_KEYS,
   CODEX_PLUGIN_ENTRY_CONFIG_KEYS,
   CODEX_PLUGINS_CONFIG_KEYS,
+  CODEX_SUPERVISION_CONFIG_KEYS,
+  CODEX_SUPERVISION_STDIO_ENDPOINT_CONFIG_KEYS,
+  CODEX_SUPERVISION_WEBSOCKET_ENDPOINT_CONFIG_KEYS,
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexAppServerStartOptionsKey,
   fingerprintCodexAppServerNetworkProxyConfigPatch,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
+  resolveCodexAppServerStartOptionsForAgent,
   resolveCodexAppServerUserHomeDir,
+  resolveCodexSupervisionAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecModeForCodexAppServer,
@@ -542,6 +547,102 @@ describe("Codex app-server config", () => {
     });
   });
 
+  it("does not change ordinary harness connection defaults when supervision is enabled", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: { supervision: { enabled: true } },
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      transport: "stdio",
+      homeScope: "agent",
+    });
+    expect(runtime.start).not.toHaveProperty("url");
+  });
+
+  it("uses shared user-home defaults only for supervision control connections", () => {
+    const runtime = resolveCodexSupervisionAppServerRuntimeOptions({
+      pluginConfig: { supervision: { enabled: true } },
+      env: {},
+      requirementsToml: null,
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      transport: "stdio",
+      homeScope: "user",
+    });
+    expect(runtime.start).not.toHaveProperty("url");
+  });
+
+  it("honors explicit app-server settings for supervision control connections", () => {
+    const runtime = resolveCodexSupervisionAppServerRuntimeOptions({
+      pluginConfig: {
+        supervision: { enabled: true },
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:39175",
+        },
+      },
+      env: {},
+      requirementsToml: null,
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      transport: "websocket",
+      homeScope: "agent",
+      url: "ws://127.0.0.1:39175",
+    });
+  });
+
+  it("honors explicit app-server connection settings when supervision is enabled", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        supervision: { enabled: true },
+        appServer: {
+          transport: "websocket",
+          homeScope: "agent",
+          url: "ws://127.0.0.1:39175",
+        },
+      },
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      transport: "websocket",
+      homeScope: "agent",
+      url: "ws://127.0.0.1:39175",
+    });
+  });
+
+  it("rejects Unix app-server connections outside the shared user home", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "unix",
+            homeScope: "agent",
+          },
+        },
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.appServer.transport=unix requires appServer.homeScope=user",
+    );
+  });
+
+  it("rejects non-Unix URLs for Unix app-server connections", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "unix",
+            homeScope: "user",
+            url: "ws://127.0.0.1:39175",
+          },
+        },
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.appServer.url must use unix:// when appServer.transport is unix",
+    );
+  });
+
   it("resolves opt-in user-home coexistence only for local stdio", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: { appServer: { homeScope: "user" } },
@@ -559,7 +660,7 @@ describe("Codex app-server config", () => {
         },
       }),
     ).toThrow(
-      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio",
+      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio or unix",
     );
   });
 
@@ -1373,7 +1474,33 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
-  it("rejects non-curated native plugin identities", () => {
+  it("parses workspace-directory native plugin identities", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          workspaceData: {
+            marketplaceName: "workspace-directory",
+            pluginName: "workspace-data@workspace-directory",
+            allow_destructive_actions: "ask",
+          },
+        },
+      },
+    });
+
+    expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([
+      {
+        configKey: "workspaceData",
+        marketplaceName: "workspace-directory",
+        pluginName: "workspace-data@workspace-directory",
+        enabled: true,
+        allowDestructiveActions: true,
+        destructiveApprovalMode: "ask",
+      },
+    ]);
+  });
+
+  it("rejects unsupported native plugin identities", () => {
     const config = readCodexPluginConfig({
       codexPlugins: {
         enabled: true,
@@ -1454,6 +1581,145 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     );
   });
 
+  it("uses the pinned managed package for ordinary turns and desktop ownership for Computer Use", () => {
+    expect(resolveRuntimeForTest({ pluginConfig: {} }).start.managedCommandOrder).toBeUndefined();
+    expect(
+      resolveRuntimeForTest({
+        pluginConfig: { appServer: { homeScope: "user" } },
+      }).start.managedCommandOrder,
+    ).toBe("desktop-first");
+    expect(
+      resolveRuntimeForTest({
+        pluginConfig: { computerUse: { enabled: true } },
+      }).start.managedCommandOrder,
+    ).toBe("desktop-first");
+    expect(
+      resolveRuntimeForTest({
+        pluginConfig: {},
+        managedCommandOrder: "desktop-first",
+      }).start.managedCommandOrder,
+    ).toBe("desktop-first");
+    expect(
+      resolveRuntimeForTest({
+        pluginConfig: { appServer: { homeScope: "user" } },
+        managedCommandOrder: "package-first",
+      }).start.managedCommandOrder,
+    ).toBe("package-first");
+  });
+
+  it("reads effective native Computer Use state before managed spawn", () => {
+    const startOptions = resolveRuntimeForTest({ pluginConfig: {} }).start;
+    const resolveForConfig = (codexConfigToml: string) =>
+      resolveCodexAppServerStartOptionsForAgent({
+        startOptions,
+        agentDir: "/tmp/openclaw-agent",
+        codexConfigToml,
+      }).managedCommandOrder;
+
+    expect(
+      resolveForConfig('[plugins."computer-use@openai-bundled"]\nenabled = false\n'),
+    ).toBeUndefined();
+    for (const codexConfigToml of [
+      '[plugins."computer-use@openai-bundled"]\n',
+      'plugins."computer-use@openai-bundled".enabled = true\n',
+      'plugins = { "computer-use@openai-bundled" = { enabled = true } }\n',
+      '["plugins"."computer-use@openai-bundled".mcp_servers.computer_use]\n',
+    ]) {
+      expect(resolveForConfig(codexConfigToml)).toBe("desktop-first");
+    }
+    expect(
+      resolveForConfig(
+        'model_context_window = 9223372036854775807\ndeveloper_instructions = """\n[plugins."computer-use@openai-bundled"]\nenabled = true\n"""\n',
+      ),
+    ).toBeUndefined();
+    expect(resolveForConfig("[plugins.invalid")).toBe("desktop-first");
+
+    const customIdentityStartOptions = resolveRuntimeForTest({
+      pluginConfig: { computerUse: { pluginName: "custom-computer-use" } },
+    }).start;
+    expect(customIdentityStartOptions.managedCommandOrder).toBe("desktop-first");
+    expect(customIdentityStartOptions.managedComputerUsePluginNames).toEqual([
+      "computer-use",
+      "custom-computer-use",
+    ]);
+    expect(
+      resolveCodexAppServerStartOptionsForAgent({
+        startOptions: customIdentityStartOptions,
+        agentDir: "/tmp/openclaw-agent",
+        codexConfigToml: '[plugins."computer-use@openai-bundled"]\nenabled = true\n',
+      }).managedCommandOrder,
+    ).toBe("desktop-first");
+    expect(
+      resolveCodexAppServerStartOptionsForAgent({
+        startOptions: customIdentityStartOptions,
+        agentDir: "/tmp/openclaw-agent",
+        codexConfigToml:
+          '[plugins."computer-use@openai-bundled"]\nenabled = false\n[plugins."custom-computer-use@local"]\nenabled = true\n',
+      }).managedCommandOrder,
+    ).toBe("desktop-first");
+
+    const privateStartOptions = resolveRuntimeForTest({
+      pluginConfig: { appServer: { homeScope: "user" } },
+      managedCommandOrder: "package-first",
+    }).start;
+    expect(
+      resolveCodexAppServerStartOptionsForAgent({
+        startOptions: privateStartOptions,
+        agentDir: "/tmp/openclaw-agent",
+        codexConfigToml: '[plugins."computer-use@openai-bundled"]\nenabled = true\n',
+      }).managedCommandOrder,
+    ).toBe("package-first");
+  });
+
+  it("keeps desktop ownership for Computer Use persisted in an agent Codex home", async () => {
+    await withTempDir("openclaw-codex-agent-home-", async (agentDir) => {
+      const startOptions = resolveRuntimeForTest({ pluginConfig: {} }).start;
+      const codexHome = path.join(agentDir, "codex-home");
+      await fs.mkdir(codexHome);
+      await fs.writeFile(
+        path.join(codexHome, "config.toml"),
+        '[plugins."computer-use@openai-bundled"]\nenabled = true\n',
+      );
+
+      expect(
+        resolveCodexAppServerStartOptionsForAgent({
+          startOptions,
+          agentDir,
+        }).managedCommandOrder,
+      ).toBe("desktop-first");
+    });
+  });
+
+  it("uses desktop-first when persisted Codex state cannot be read", async () => {
+    await withTempDir("openclaw-codex-unreadable-home-", async (agentDir) => {
+      const startOptions = resolveRuntimeForTest({ pluginConfig: {} }).start;
+      await fs.mkdir(path.join(agentDir, "codex-home"), { recursive: true });
+      await fs.mkdir(path.join(agentDir, "codex-home", "config.toml"));
+
+      expect(
+        resolveCodexAppServerStartOptionsForAgent({
+          startOptions,
+          agentDir,
+        }).managedCommandOrder,
+      ).toBe("desktop-first");
+    });
+  });
+
+  it("does not change explicit commands when Computer Use is enabled", () => {
+    const start = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: { command: "/opt/codex/bin/codex" },
+        computerUse: { enabled: true },
+      },
+    }).start;
+
+    expectFields(start, "configured Computer Use start", {
+      command: "/opt/codex/bin/codex",
+      commandSource: "config",
+    });
+    expect(start.managedCommandOrder).toBeUndefined();
+  });
+
   it("rejects Codex app-server command overrides that include inline arguments", () => {
     expect(() =>
       resolveRuntimeForTest({
@@ -1504,6 +1770,13 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       enabled: true,
       autoInstall: true,
       marketplaceDiscoveryTimeoutMs: 60_000,
+      liveTestTimeoutMs: 60_000,
+      toolCallTimeoutMs: 60_000,
+      healthCheckEnabled: false,
+      healthCheckIntervalMinutes: 60,
+      pluginCacheMode: "independent",
+      strictReadiness: false,
+      autoRepair: false,
       pluginName: "env-fallback-plugin",
       mcpServerName: "computer-use",
       marketplaceName: "desktop-tools",
@@ -1524,6 +1797,13 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         enabled: true,
         autoInstall: true,
         marketplaceDiscoveryTimeoutMs: 30_000,
+        liveTestTimeoutMs: 60_000,
+        toolCallTimeoutMs: 60_000,
+        healthCheckEnabled: false,
+        healthCheckIntervalMinutes: 60,
+        pluginCacheMode: "independent",
+        strictReadiness: false,
+        autoRepair: false,
         marketplaceSource: "github:example/plugins",
       },
     );
@@ -1541,9 +1821,73 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         {
           enabled: true,
           marketplaceDiscoveryTimeoutMs: 60_000,
+          liveTestTimeoutMs: 60_000,
+          toolCallTimeoutMs: 60_000,
+          healthCheckEnabled: false,
+          healthCheckIntervalMinutes: 60,
+          pluginCacheMode: "independent",
+          strictReadiness: false,
+          autoRepair: false,
         },
       );
     }
+  });
+
+  it("resolves Computer Use operational policy knobs", () => {
+    expectFields(
+      resolveCodexComputerUseConfig({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            liveTestTimeoutMs: 45_000,
+            toolCallTimeoutMs: 55_000,
+            healthCheckEnabled: true,
+            healthCheckIntervalMinutes: 120,
+            pluginCacheMode: "independent",
+            strictReadiness: true,
+            autoRepair: true,
+          },
+        },
+        env: {
+          OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED: "false",
+          OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES: "240",
+          OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS: "false",
+          OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR: "false",
+        },
+      }),
+      "computer use config",
+      {
+        enabled: true,
+        liveTestTimeoutMs: 45_000,
+        toolCallTimeoutMs: 55_000,
+        healthCheckEnabled: true,
+        healthCheckIntervalMinutes: 120,
+        pluginCacheMode: "independent",
+        strictReadiness: true,
+        autoRepair: true,
+      },
+    );
+
+    expectFields(
+      resolveCodexComputerUseConfig({
+        pluginConfig: { computerUse: { enabled: true } },
+        env: {
+          OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED: "1",
+          OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES: "90",
+          OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS: "true",
+          OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR: "true",
+          OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE: "stale-copy",
+        },
+      }),
+      "computer use config",
+      {
+        healthCheckEnabled: true,
+        healthCheckIntervalMinutes: 60,
+        pluginCacheMode: "independent",
+        strictReadiness: true,
+        autoRepair: true,
+      },
+    );
   });
 
   it("allows plugin config to opt in to guardian-reviewed local execution", () => {
@@ -2535,6 +2879,25 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(second).not.toContain("tok_second");
   });
 
+  it("derives distinct shared-client keys for distinct auth binding fingerprints", () => {
+    const options = {
+      transport: "stdio" as const,
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    };
+    const first = codexAppServerStartOptionsKey(options, {
+      authProfileId: "openai:work",
+      authBindingFingerprint: "auth-fingerprint-a",
+    });
+    const second = codexAppServerStartOptionsKey(options, {
+      authProfileId: "openai:work",
+      authBindingFingerprint: "auth-fingerprint-b",
+    });
+
+    expect(first).not.toEqual(second);
+  });
+
   it("derives distinct shared-client keys for distinct env values without exposing them", () => {
     const first = codexAppServerStartOptionsKey({
       transport: "stdio",
@@ -2563,6 +2926,40 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     ).toEqual(first);
     expect(first).not.toContain("sk-first");
     expect(second).not.toContain("sk-second");
+  });
+
+  it("derives distinct shared-client keys for managed binary order", () => {
+    const packageFirst = codexAppServerStartOptionsKey({
+      transport: "stdio",
+      command: "codex",
+      commandSource: "managed",
+      args: ["app-server"],
+      headers: {},
+    });
+    const desktopFirst = codexAppServerStartOptionsKey({
+      transport: "stdio",
+      command: "codex",
+      commandSource: "managed",
+      managedCommandOrder: "desktop-first",
+      args: ["app-server"],
+      headers: {},
+    });
+
+    expect(packageFirst).not.toEqual(desktopFirst);
+  });
+
+  it("derives distinct shared-client keys for native Computer Use identities", () => {
+    const keyFor = (pluginName: string) =>
+      codexAppServerStartOptionsKey({
+        transport: "stdio",
+        command: "codex",
+        commandSource: "managed",
+        managedComputerUsePluginNames: ["computer-use", pluginName],
+        args: ["app-server"],
+        headers: {},
+      });
+
+    expect(keyFor("custom-a")).not.toEqual(keyFor("custom-b"));
   });
 
   it("derives distinct shared-client keys for distinct headers without exposing them", () => {
@@ -2639,6 +3036,19 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     );
   });
 
+  it("derives distinct shared-client keys for distinct process working directories", () => {
+    const startOptions = {
+      transport: "stdio" as const,
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    };
+
+    expect(codexAppServerStartOptionsKey({ ...startOptions, cwd: "/tmp/project-a" })).not.toEqual(
+      codexAppServerStartOptionsKey({ ...startOptions, cwd: "/tmp/project-b" }),
+    );
+  });
+
   it("keeps runtime config keys aligned with manifest schema and UI hints", async () => {
     const manifest = JSON.parse(
       await fs.readFile(new URL("../../openclaw.plugin.json", import.meta.url), "utf8"),
@@ -2650,6 +3060,9 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           codexPlugins: {
             properties: Record<string, unknown>;
             additionalProperties: boolean;
+          };
+          supervision: {
+            properties: Record<string, unknown>;
           };
         };
       };
@@ -2696,6 +3109,29 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(Object.keys(pluginEntryProperties).toSorted()).toEqual(
       [...CODEX_PLUGIN_ENTRY_CONFIG_KEYS].toSorted(),
     );
+    const supervisionProperties = manifest.configSchema.properties.supervision.properties;
+    expect(Object.keys(supervisionProperties).toSorted()).toEqual(
+      [...CODEX_SUPERVISION_CONFIG_KEYS].toSorted(),
+    );
+    for (const key of CODEX_SUPERVISION_CONFIG_KEYS) {
+      expectUiHintLabel(manifest, `supervision.${key}`);
+    }
+    const supervisionEndpointVariants = (
+      supervisionProperties.endpoints as {
+        items: { oneOf: Array<{ properties: Record<string, unknown> }> };
+      }
+    ).items.oneOf;
+    expect(supervisionEndpointVariants).toHaveLength(2);
+    expect(Object.keys(supervisionEndpointVariants[0]?.properties ?? {}).toSorted()).toEqual(
+      [...CODEX_SUPERVISION_STDIO_ENDPOINT_CONFIG_KEYS].toSorted(),
+    );
+    expect(Object.keys(supervisionEndpointVariants[1]?.properties ?? {}).toSorted()).toEqual(
+      [...CODEX_SUPERVISION_WEBSOCKET_ENDPOINT_CONFIG_KEYS].toSorted(),
+    );
+    expect((pluginEntryProperties.marketplaceName as { enum: string[] }).enum).toStrictEqual([
+      "openai-curated",
+      "workspace-directory",
+    ]);
   });
 
   it("does not schema-default mode-derived policy fields", async () => {

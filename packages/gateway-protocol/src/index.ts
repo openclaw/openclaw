@@ -308,6 +308,14 @@ import {
   ErrorCodes,
   type EnvironmentSummary,
   EnvironmentSummarySchema,
+  type EnvironmentsCreateParams,
+  EnvironmentsCreateParamsSchema,
+  type EnvironmentsCreateResult,
+  EnvironmentsCreateResultSchema,
+  type EnvironmentsDestroyParams,
+  EnvironmentsDestroyParamsSchema,
+  type EnvironmentsDestroyResult,
+  EnvironmentsDestroyResultSchema,
   type EnvironmentsListParams,
   EnvironmentsListParamsSchema,
   type EnvironmentsListResult,
@@ -318,6 +326,14 @@ import {
   EnvironmentsStatusResultSchema,
   type EnvironmentStatus,
   EnvironmentStatusSchema,
+  type WorkerEnvironmentMetadata,
+  WorkerEnvironmentMetadataSchema,
+  type WorkerEnvironmentState,
+  WorkerEnvironmentStateSchema,
+  type WorkerTunnelStatus,
+  WorkerTunnelStatusSchema,
+  type WorkerAdmissionHandshake,
+  WorkerAdmissionHandshakeSchema,
   type SystemInfoParams,
   SystemInfoParamsSchema,
   type SystemInfoResult,
@@ -402,6 +418,14 @@ import {
   NodePairRejectParamsSchema,
   type NodePairRemoveParams,
   NodePairRemoveParamsSchema,
+  type NodePluginToolDescriptor,
+  NodePluginToolDescriptorSchema,
+  type NodePluginToolsUpdateParams,
+  NodePluginToolsUpdateParamsSchema,
+  type NodeSkillDescriptor,
+  NodeSkillDescriptorSchema,
+  type NodeSkillsUpdateParams,
+  NodeSkillsUpdateParamsSchema,
   type NodeRenameParams,
   NodeRenameParamsSchema,
   type PollParams,
@@ -482,6 +506,14 @@ import {
   SessionsGroupsPutParamsSchema,
   type SessionsGroupsRenameParams,
   SessionsGroupsRenameParamsSchema,
+  type SessionDiffFile,
+  SessionDiffFileSchema,
+  type SessionDiffFileStatus,
+  SessionDiffFileStatusSchema,
+  type SessionsDiffParams,
+  SessionsDiffParamsSchema,
+  type SessionsDiffResult,
+  SessionsDiffResultSchema,
   type SessionsFilesGetParams,
   SessionsFilesGetParamsSchema,
   type SessionsFilesGetResult,
@@ -644,6 +676,10 @@ import {
   CrestodianSetupDetectParamsSchema,
   type CrestodianSetupDetectResult,
   CrestodianSetupDetectResultSchema,
+  type CrestodianSetupVerifyParams,
+  CrestodianSetupVerifyParamsSchema,
+  type CrestodianSetupVerifyResult,
+  CrestodianSetupVerifyResultSchema,
   type CrestodianSetupActivateParams,
   CrestodianSetupActivateParamsSchema,
   type CrestodianSetupActivateResult,
@@ -688,6 +724,12 @@ import {
   WorktreeBranchSchema,
   type WorktreesBranchesResult,
   WorktreesBranchesResultSchema,
+  type FsDirEntry,
+  FsDirEntrySchema,
+  type FsListDirParams,
+  FsListDirParamsSchema,
+  type FsListDirResult,
+  FsListDirResultSchema,
 } from "./schema.js";
 
 /** Runtime validator shape shared by gateway clients and server handlers. */
@@ -740,6 +782,9 @@ function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
 // constants so call sites can pair validation with the wire contract directly.
 export const validateCommandsListParams = lazyCompile<CommandsListParams>(CommandsListParamsSchema);
 export const validateConnectParams = lazyCompile<ConnectParams>(ConnectParamsSchema);
+export const validateWorkerAdmissionHandshake = lazyCompile<WorkerAdmissionHandshake>(
+  WorkerAdmissionHandshakeSchema,
+);
 export const validateGatewaySuspendPrepareParams = lazyCompile<GatewaySuspendPrepareParams>(
   GatewaySuspendPrepareParamsSchema,
 );
@@ -787,6 +832,7 @@ export const validateWorktreesGcParams = lazyCompile<WorktreesGcParams>(Worktree
 export const validateWorktreesBranchesParams = lazyCompile<WorktreesBranchesParams>(
   WorktreesBranchesParamsSchema,
 );
+export const validateFsListDirParams = lazyCompile<FsListDirParams>(FsListDirParamsSchema);
 export const validateAgentsCreateParams = lazyCompile<AgentsCreateParams>(AgentsCreateParamsSchema);
 export const validateAgentsUpdateParams = lazyCompile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
 export const validateAgentsDeleteParams = lazyCompile<AgentsDeleteParams>(AgentsDeleteParamsSchema);
@@ -823,6 +869,18 @@ export const validateNodePairRemoveParams = lazyCompile<NodePairRemoveParams>(
 );
 export const validateNodeRenameParams = lazyCompile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = lazyCompile<NodeListParams>(NodeListParamsSchema);
+export const validateNodePluginToolsUpdateParams = lazyCompile<NodePluginToolsUpdateParams>(
+  NodePluginToolsUpdateParamsSchema,
+);
+export const validateNodeSkillsUpdateParams = lazyCompile<NodeSkillsUpdateParams>(
+  NodeSkillsUpdateParamsSchema,
+);
+export const validateEnvironmentsCreateParams = lazyCompile<EnvironmentsCreateParams>(
+  EnvironmentsCreateParamsSchema,
+);
+export const validateEnvironmentsDestroyParams = lazyCompile<EnvironmentsDestroyParams>(
+  EnvironmentsDestroyParamsSchema,
+);
 export const validateEnvironmentsListParams = lazyCompile<EnvironmentsListParams>(
   EnvironmentsListParamsSchema,
 );
@@ -886,6 +944,7 @@ export const validateSessionsFilesListParams = lazyCompile<SessionsFilesListPara
 export const validateSessionsFilesGetParams = lazyCompile<SessionsFilesGetParams>(
   SessionsFilesGetParamsSchema,
 );
+export const validateSessionsDiffParams = lazyCompile<SessionsDiffParams>(SessionsDiffParamsSchema);
 export const validateSessionsCreateParams = lazyCompile<SessionsCreateParams>(
   SessionsCreateParamsSchema,
 );
@@ -967,6 +1026,9 @@ export const validateCrestodianChatParams = lazyCompile<CrestodianChatParams>(
 );
 export const validateCrestodianSetupDetectParams = lazyCompile<CrestodianSetupDetectParams>(
   CrestodianSetupDetectParamsSchema,
+);
+export const validateCrestodianSetupVerifyParams = lazyCompile<CrestodianSetupVerifyParams>(
+  CrestodianSetupVerifyParamsSchema,
 );
 export const validateCrestodianSetupActivateParams = lazyCompile<CrestodianSetupActivateParams>(
   CrestodianSetupActivateParamsSchema,
@@ -1257,8 +1319,16 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
+  WorkerAdmissionHandshakeSchema,
   EnvironmentStatusSchema,
+  WorkerEnvironmentStateSchema,
+  WorkerTunnelStatusSchema,
+  WorkerEnvironmentMetadataSchema,
   EnvironmentSummarySchema,
+  EnvironmentsCreateParamsSchema,
+  EnvironmentsCreateResultSchema,
+  EnvironmentsDestroyParamsSchema,
+  EnvironmentsDestroyResultSchema,
   EnvironmentsListParamsSchema,
   EnvironmentsListResultSchema,
   EnvironmentsStatusParamsSchema,
@@ -1286,6 +1356,10 @@ export {
   NodePairRejectParamsSchema,
   NodePairRemoveParamsSchema,
   NodeListParamsSchema,
+  NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParamsSchema,
+  NodeSkillDescriptorSchema,
+  NodeSkillsUpdateParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
   NodeEventResultSchema,
@@ -1309,6 +1383,10 @@ export {
   SessionsFilesGetResultSchema,
   SessionsFilesListParamsSchema,
   SessionsFilesListResultSchema,
+  SessionDiffFileSchema,
+  SessionDiffFileStatusSchema,
+  SessionsDiffParamsSchema,
+  SessionsDiffResultSchema,
   SessionsCompactionListParamsSchema,
   SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParamsSchema,
@@ -1369,6 +1447,8 @@ export {
   CrestodianChatResultSchema,
   CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResultSchema,
   CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResultSchema,
   WizardStartParamsSchema,
@@ -1544,6 +1624,9 @@ export {
   WorktreesBranchesParamsSchema,
   WorktreeBranchSchema,
   WorktreesBranchesResultSchema,
+  FsDirEntrySchema,
+  FsListDirParamsSchema,
+  FsListDirResultSchema,
   ProtocolSchemas,
   MIN_CLIENT_PROTOCOL_VERSION,
   MIN_NODE_PROTOCOL_VERSION,
@@ -1557,6 +1640,7 @@ export {
 export type {
   GatewayFrame,
   ConnectParams,
+  WorkerAdmissionHandshake,
   GatewaySuspendTaskBlocker,
   GatewaySuspendBlocker,
   GatewaySuspendPrepareParams,
@@ -1599,6 +1683,8 @@ export type {
   CrestodianChatResult,
   CrestodianSetupDetectParams,
   CrestodianSetupDetectResult,
+  CrestodianSetupVerifyParams,
+  CrestodianSetupVerifyResult,
   CrestodianSetupActivateParams,
   CrestodianSetupActivateResult,
   WizardStartParams,
@@ -1673,6 +1759,10 @@ export type {
   SessionsFilesListResult,
   SessionsFilesGetParams,
   SessionsFilesGetResult,
+  SessionDiffFile,
+  SessionDiffFileStatus,
+  SessionsDiffParams,
+  SessionsDiffResult,
   ArtifactSummary,
   ArtifactsListParams,
   ArtifactsListResult,
@@ -1740,7 +1830,14 @@ export type {
   SkillsInstallParams,
   SkillsUpdateParams,
   EnvironmentStatus,
+  WorkerEnvironmentState,
+  WorkerTunnelStatus,
+  WorkerEnvironmentMetadata,
   EnvironmentSummary,
+  EnvironmentsCreateParams,
+  EnvironmentsCreateResult,
+  EnvironmentsDestroyParams,
+  EnvironmentsDestroyResult,
   EnvironmentsListParams,
   EnvironmentsListResult,
   EnvironmentsStatusParams,
@@ -1750,6 +1847,10 @@ export type {
   NodePairRejectParams,
   NodePairRemoveParams,
   NodeListParams,
+  NodePluginToolDescriptor,
+  NodePluginToolsUpdateParams,
+  NodeSkillDescriptor,
+  NodeSkillsUpdateParams,
   NodeInvokeParams,
   NodeInvokeResultParams,
   NodeEventParams,
@@ -1851,6 +1952,9 @@ export type {
   WorktreesBranchesParams,
   WorktreeBranch,
   WorktreesBranchesResult,
+  FsDirEntry,
+  FsListDirParams,
+  FsListDirResult,
   SessionGroup,
   SessionsGroupsListParams,
   SessionsGroupsListResult,
@@ -1879,5 +1983,13 @@ type SessionsPatchResult = {
 type GatewayAgentRuntime = {
   id: string;
   fallback?: "openclaw" | "none";
-  source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session-key";
+  source:
+    | "env"
+    | "agent"
+    | "defaults"
+    | "model"
+    | "provider"
+    | "implicit"
+    | "session"
+    | "session-key";
 };

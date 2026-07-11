@@ -804,10 +804,14 @@ export class GatewayClient {
     if (this.pendingStop?.ws === ws) {
       return this.pendingStop;
     }
-    let resolve!: () => void;
+    const resolvers: Array<() => void> = [];
     const promise = new Promise<void>((res) => {
-      resolve = res;
+      resolvers.push(res);
     });
+    const resolve = resolvers.at(0);
+    if (!resolve) {
+      throw new Error("pending stop promise did not initialize its resolver");
+    }
     this.pendingStop = { ws, promise, resolve };
     return this.pendingStop;
   }
@@ -1537,7 +1541,12 @@ export class GatewayClient {
       if (!this.lastTick) {
         return;
       }
-      if (this.pending.size > 0) {
+      const allPendingRequestsHaveTimeouts =
+        this.pending.size > 0 &&
+        [...this.pending.values()].every((pending) => pending.timeout !== null);
+      // Finite requests own their deadline. One unbounded request keeps the
+      // transport watchdog active so a dead socket cannot strand it forever.
+      if (allPendingRequestsHaveTimeouts) {
         return;
       }
       const gap = Date.now() - this.lastTick;

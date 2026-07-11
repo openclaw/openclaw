@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceListResult } from "../../../api/types.ts";
 import {
@@ -11,6 +12,7 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import {
   scopedAgentParamsForSession,
   type SessionCapability,
@@ -47,6 +49,9 @@ export type SessionWorkspaceProps = {
   onSearch: (search: string) => void;
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
+  onToggleBrowser?: () => void;
+  /** Opens the session diff panel; absent when the gateway lacks sessions.diff. */
+  onOpenDiff?: () => void;
 };
 
 type SessionWorkspaceState = {
@@ -83,6 +88,7 @@ export type SessionWorkspaceHost = {
   connected: boolean;
   hello: GatewayHelloOk | null;
   terminalAvailable?: boolean;
+  browserPanelAvailable?: boolean;
   assistantAgentId?: string | null;
   agentsList?: SessionScopeHost["agentsList"];
   settings?: UiSettings;
@@ -625,6 +631,32 @@ export function createSessionWorkspaceProps(
           );
         }
       : undefined,
+    onToggleBrowser: state.browserPanelAvailable
+      ? () => {
+          window.dispatchEvent(new CustomEvent("openclaw:browser-toggle", {}));
+        }
+      : undefined,
+    onOpenDiff:
+      isGatewayMethodAdvertised(state, "sessions.diff") === true && state.client
+        ? () => state.handleOpenSidebar(buildSessionDiffSidebarContent(state))
+        : undefined,
+  };
+}
+
+/** Sidebar payload whose loader refetches sessions.diff for the pane's session. */
+function buildSessionDiffSidebarContent(state: SessionWorkspaceHost): SidebarContent {
+  const sessionKey = state.sessionKey;
+  return {
+    kind: "session-diff",
+    load: async () => {
+      if (!state.client) {
+        throw new Error(t("chat.sessionDiff.disconnected"));
+      }
+      return await state.client.request<SessionsDiffResult>("sessions.diff", {
+        sessionKey,
+        ...scopedAgentParamsForSession(state, sessionKey),
+      });
+    },
   };
 }
 
@@ -674,7 +706,6 @@ export function sessionWorkspaceModifiedCount(
  * this button is the only pointer affordance (⇧⌘B still works). */
 export function renderSessionWorkspaceToggle(
   sessionWorkspace: SessionWorkspaceProps | undefined,
-  variant: "pane-header" | "floating",
 ): TemplateResult | typeof nothing {
   if (!sessionWorkspace) {
     return nothing;
@@ -685,9 +716,7 @@ export function renderSessionWorkspaceToggle(
   return html`
     <openclaw-tooltip .content=${`${label} (⇧⌘B)`}>
       <button
-        class="${variant === "pane-header"
-          ? "btn btn--ghost btn--icon"
-          : "btn btn--sm btn--icon chat-workspace-open"} chat-workspace-toggle"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-workspace-toggle"
         type="button"
         aria-label=${label}
         aria-keyshortcuts="Meta+Shift+B"
@@ -700,6 +729,29 @@ export function renderSessionWorkspaceToggle(
               >${modifiedCount}</span
             >`
           : nothing}
+      </button>
+    </openclaw-tooltip>
+  `;
+}
+
+/** Session diff button shown beside the workspace toggle; hidden when the
+ * gateway does not advertise sessions.diff. */
+export function renderSessionDiffToggle(
+  sessionWorkspace: SessionWorkspaceProps | undefined,
+): TemplateResult | typeof nothing {
+  if (!sessionWorkspace?.onOpenDiff) {
+    return nothing;
+  }
+  const label = t("chat.sessionDiff.show");
+  return html`
+    <openclaw-tooltip .content=${label}>
+      <button
+        class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle"
+        type="button"
+        aria-label=${label}
+        @click=${sessionWorkspace.onOpenDiff}
+      >
+        ${icons.gitBranch}
       </button>
     </openclaw-tooltip>
   `;
@@ -726,6 +778,34 @@ export function renderSessionWorkspaceRail(
             @click=${sessionWorkspace.onToggleTerminal}
           >
             ${icons.terminal}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const browserButton = sessionWorkspace.onToggleBrowser
+    ? html`
+        <openclaw-tooltip .content=${t("browser.toggle")}>
+          <button
+            type="button"
+            class="chat-workspace-rail__terminal"
+            aria-label=${t("browser.toggle")}
+            @click=${sessionWorkspace.onToggleBrowser}
+          >
+            ${icons.globe}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const diffButton = sessionWorkspace.onOpenDiff
+    ? html`
+        <openclaw-tooltip .content=${t("chat.sessionDiff.show")}>
+          <button
+            type="button"
+            class="chat-workspace-rail__terminal chat-session-diff-toggle"
+            aria-label=${t("chat.sessionDiff.show")}
+            @click=${sessionWorkspace.onOpenDiff}
+          >
+            ${icons.gitBranch}
           </button>
         </openclaw-tooltip>
       `
@@ -1019,7 +1099,7 @@ export function renderSessionWorkspaceRail(
           <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
-          ${terminalButton}
+          ${diffButton} ${terminalButton} ${browserButton}
           ${sessionWorkspace.narrowLayout
             ? nothing
             : html`
