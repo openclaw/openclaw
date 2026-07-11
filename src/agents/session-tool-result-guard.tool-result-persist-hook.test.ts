@@ -363,6 +363,66 @@ describe("tool_result_persist hook", () => {
     expectPersistedToolResultDetailsCapped(sm);
   });
 
+  it("keeps summarized oversized detail strings free of lone surrogates", () => {
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+    } as AgentMessage);
+    appendMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      isError: false,
+      content: [{ type: "text", text: "visible output stays small" }],
+      details: {
+        status: "completed",
+        tail: `${"a".repeat(1_487)}😀${"b".repeat(9_000)}`,
+      },
+    } as any);
+
+    const toolResult = requirePersistedToolResult(sm);
+    const persistedTail = toolResult.details.tail as string;
+    expect(persistedTail).toContain("boundary overlap omitted");
+    expect(persistedTail).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
+  it("keeps redaction scan boundaries free of lone surrogates", () => {
+    const secrets = Array.from({ length: 5 }, () => `ghp_${"a".repeat(140)}`).join(" ");
+    const tail = `${secrets}${"x".repeat(1_999 - secrets.length)}😀${"z".repeat(9_000)}`;
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+    } as AgentMessage);
+    appendMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      isError: false,
+      content: [{ type: "text", text: "visible output stays small" }],
+      details: {
+        status: "completed",
+        tail,
+      },
+    } as any);
+
+    const toolResult = requirePersistedToolResult(sm);
+    const persistedTail = toolResult.details.tail as string;
+    expect(persistedTail).toContain("boundary overlap omitted");
+    expect(persistedTail).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
   it("redacts summarized oversized toolResult details before persistence", () => {
     const tokenValue = "abcdefghijklmnopqrstuvwx1234567890";
     const boundaryGhToken = "ghp_1234567890abcdefghij1234567890abcdef";
