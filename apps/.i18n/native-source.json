@@ -19307,7 +19307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 357,
+      "line": 359,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Layout.swift",
       "source": "Back",
       "surface": "apple",
