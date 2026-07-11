@@ -4088,107 +4088,118 @@ async function dispatchReplyFromConfigInner(
                       }
                       const progressCallbackPolicyResult =
                         await applyOperationalReplyPolicy(payload);
-                      if (!progressCallbackPolicyResult.shouldDeliver) {
-                        return;
-                      }
-                      const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
-                      const isFastModeAutoProgressDelivery =
-                        isFastModeAutoProgress &&
-                        shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
-                      const isForcedToolProgress =
-                        shouldDeliverForcedToolProgressDespiteSourceSuppression();
-                      const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
-                        payload,
-                        isFastModeAutoProgress,
-                      );
-                      if (progressCallbackForwarded) {
-                        await onToolResultFromReplyOptions?.(payload);
-                      }
-                      if (isDispatchOperationAborted()) {
-                        return;
-                      }
-                      if (
-                        isFastModeAutoProgress &&
-                        progressCallbackForwarded &&
-                        onToolResultFromReplyOptions
-                      ) {
+                      let progressCallbackPolicySettled = false;
+                      const settleProgressCallbackPolicy = async (delivered: boolean) => {
+                        progressCallbackPolicySettled = true;
                         await markOperationalReplyPolicyDelivered(
                           progressCallbackPolicyResult,
-                          true,
+                          delivered,
                         );
-                        return;
-                      }
-                      if (sendPolicyDenied) {
-                        return;
-                      }
-                      if (
-                        shouldSuppressProgressDelivery() &&
-                        !isFastModeAutoProgressDelivery &&
-                        !isForcedToolProgress
-                      ) {
-                        return;
-                      }
-                      const visibleToolPayload = isForcedToolProgress
-                        ? payload
-                        : resolveToolDeliveryPayload(payload);
-                      if (!visibleToolPayload) {
-                        return;
-                      }
-                      const ttsPayload = await maybeApplyTtsToReplyPayload({
-                        payload: visibleToolPayload,
-                        cfg,
-                        channel: deliveryChannel,
-                        kind: "tool",
-                        inboundAudio: hasInboundAudioForTts(),
-                        ttsAuto: sessionTtsAuto,
-                        agentId: sessionAgentId,
-                        accountId: replyRoute.accountId,
-                      });
-                      const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
-                      const deliveryPayload = isForcedToolProgress
-                        ? normalizedPayload
-                        : resolveToolDeliveryPayload(normalizedPayload);
-                      if (!deliveryPayload) {
-                        return;
-                      }
-                      if (isDispatchOperationAborted()) {
-                        return;
-                      }
-                      if (
-                        shouldSuppressLateTextOnlyToolProgress(deliveryPayload) &&
-                        !isFastModeAutoProgressPayload(deliveryPayload) &&
-                        !isForcedToolProgress
-                      ) {
-                        return;
-                      }
-                      if (shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
-                        return;
-                      }
-                      if (
-                        shouldSuppressDefaultToolProgressMessages() &&
-                        !isFastModeAutoProgressPayload(deliveryPayload) &&
-                        !isForcedToolProgress
-                      ) {
-                        const hasMedia =
-                          resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
-                        if (!hasMedia && !hasExecApprovalPayload(deliveryPayload)) {
+                      };
+                      try {
+                        if (!progressCallbackPolicyResult.shouldDeliver) {
                           return;
                         }
-                      }
-                      const policyResult = await applyOperationalReplyPolicy(deliveryPayload);
-                      if (!policyResult.shouldDeliver) {
-                        return;
-                      }
-                      if (deliveryPayload.isError === true) {
-                        markVisibleToolErrorProgress();
-                      }
-                      if (shouldRouteToOriginating) {
-                        const delivered = await sendPayloadAsync(deliveryPayload, undefined, false);
-                        await markOperationalReplyPolicyDelivered(policyResult, delivered);
-                      } else {
-                        markInboundDedupeReplayUnsafe();
-                        const delivered = dispatcher.sendToolResult(deliveryPayload);
-                        await markOperationalReplyPolicyDelivered(policyResult, delivered);
+                        const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
+                        const isFastModeAutoProgressDelivery =
+                          isFastModeAutoProgress &&
+                          shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
+                        const isForcedToolProgress =
+                          shouldDeliverForcedToolProgressDespiteSourceSuppression();
+                        const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
+                          payload,
+                          isFastModeAutoProgress,
+                        );
+                        if (progressCallbackForwarded) {
+                          await onToolResultFromReplyOptions?.(payload);
+                        }
+                        if (isDispatchOperationAborted()) {
+                          return;
+                        }
+                        if (
+                          isFastModeAutoProgress &&
+                          progressCallbackForwarded &&
+                          onToolResultFromReplyOptions
+                        ) {
+                          await settleProgressCallbackPolicy(true);
+                          return;
+                        }
+                        if (sendPolicyDenied) {
+                          return;
+                        }
+                        if (
+                          shouldSuppressProgressDelivery() &&
+                          !isFastModeAutoProgressDelivery &&
+                          !isForcedToolProgress
+                        ) {
+                          return;
+                        }
+                        const visibleToolPayload = isForcedToolProgress
+                          ? payload
+                          : resolveToolDeliveryPayload(payload);
+                        if (!visibleToolPayload) {
+                          return;
+                        }
+                        const ttsPayload = await maybeApplyTtsToReplyPayload({
+                          payload: visibleToolPayload,
+                          cfg,
+                          channel: deliveryChannel,
+                          kind: "tool",
+                          inboundAudio: hasInboundAudioForTts(),
+                          ttsAuto: sessionTtsAuto,
+                          agentId: sessionAgentId,
+                          accountId: replyRoute.accountId,
+                        });
+                        const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
+                        const deliveryPayload = isForcedToolProgress
+                          ? normalizedPayload
+                          : resolveToolDeliveryPayload(normalizedPayload);
+                        if (!deliveryPayload) {
+                          return;
+                        }
+                        if (isDispatchOperationAborted()) {
+                          return;
+                        }
+                        if (
+                          shouldSuppressLateTextOnlyToolProgress(deliveryPayload) &&
+                          !isFastModeAutoProgressPayload(deliveryPayload) &&
+                          !isForcedToolProgress
+                        ) {
+                          return;
+                        }
+                        if (shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
+                          return;
+                        }
+                        if (
+                          shouldSuppressDefaultToolProgressMessages() &&
+                          !isFastModeAutoProgressPayload(deliveryPayload) &&
+                          !isForcedToolProgress
+                        ) {
+                          const hasMedia =
+                            resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
+                          if (!hasMedia && !hasExecApprovalPayload(deliveryPayload)) {
+                            return;
+                          }
+                        }
+                        if (deliveryPayload.isError === true) {
+                          markVisibleToolErrorProgress();
+                        }
+                        if (shouldRouteToOriginating) {
+                          const delivered = await sendPayloadAsync(
+                            deliveryPayload,
+                            undefined,
+                            false,
+                          );
+                          await settleProgressCallbackPolicy(delivered);
+                        } else {
+                          markInboundDedupeReplayUnsafe();
+                          const delivered = dispatcher.sendToolResult(deliveryPayload);
+                          await settleProgressCallbackPolicy(delivered);
+                        }
+                      } finally {
+                        if (!progressCallbackPolicySettled) {
+                          await settleProgressCallbackPolicy(false);
+                        }
                       }
                     };
                     return run();
