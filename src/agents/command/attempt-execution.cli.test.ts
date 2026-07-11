@@ -69,10 +69,17 @@ vi.mock("../cli-runner/claude-live-session.js", () => ({
 }));
 
 vi.mock("../model-selection.js", () => ({
-  isCliProvider: (provider: string) =>
-    provider.trim().toLowerCase() === "claude-cli" ||
-    provider.trim().toLowerCase() === "codex-cli" ||
-    provider.trim().toLowerCase() === "google-gemini-cli",
+  isCliProvider: (provider: string, cfg?: OpenClawConfig) => {
+    const normalized = provider.trim().toLowerCase();
+    return (
+      normalized === "claude-cli" ||
+      normalized === "codex-cli" ||
+      normalized === "google-gemini-cli" ||
+      Object.keys(cfg?.agents?.defaults?.cliBackends ?? {}).some(
+        (candidate) => candidate.trim().toLowerCase() === normalized,
+      )
+    );
+  },
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
 }));
 
@@ -1011,6 +1018,7 @@ describe("CLI attempt execution", () => {
         },
       } as OpenClawConfig,
       sessionEntry,
+      agentHarnessRuntimeOverride: "codex",
       sessionId: sessionEntry.sessionId,
       sessionKey,
       sessionAgentId: "main",
@@ -3008,6 +3016,7 @@ describe("embedded attempt harness pinning", () => {
       cfg: {
         agents: {
           defaults: {
+            cliBackends: { codex: { command: "codex" } },
             models: {
               "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             },
@@ -3045,6 +3054,47 @@ describe("embedded attempt harness pinning", () => {
       agentHarnessRuntimeOverride: "codex",
       modelSelectionLocked: true,
     });
+  });
+
+  it("ignores stale session Codex harness pins on non-OpenAI model switches", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "mixed-provider-session",
+      updatedAt: Date.now(),
+      agentHarnessId: "codex",
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "minimax",
+      originalProvider: "minimax",
+      modelOverride: "minimax-m2.7",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "switch to minimax",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-mixed-provider-auto-runtime",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "minimax",
+      sessionHasHistory: true,
+    });
+
+    expectMockArgFields(runEmbeddedAgentMock, { agentHarnessId: undefined });
   });
 
   it("does not leak a persisted CLI harness alias across providers", async () => {

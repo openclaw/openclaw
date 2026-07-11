@@ -1975,15 +1975,24 @@ async function runAgentTurnWithFallbackInternal(
             });
             const { sessionRuntimeOverride, cliExecutionProvider, useCliExecution } =
               agentTurnTiming.measureSync("fallback_resolve_runtime", () => {
+                const activeSessionEntry =
+                  liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry();
                 const resolvedSessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
                   provider,
-                  entry: liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry(),
+                  entry: activeSessionEntry,
                   cfg: runtimeConfig,
                 });
+                // A locked harness owns the transcript. A configured CLI backend with the
+                // same id must not steal dispatch from that persisted harness.
+                const locksPersistedHarness =
+                  activeSessionEntry?.modelSelectionLocked === true &&
+                  normalizeLowercaseStringOrEmpty(activeSessionEntry.agentHarnessId) ===
+                    resolvedSessionRuntimeOverride;
                 const resolvedSelectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
                   config: runtimeConfig,
                 });
                 const pinnedCliRuntime =
+                  !locksPersistedHarness &&
                   resolvedSessionRuntimeOverride &&
                   isCliProvider(resolvedSessionRuntimeOverride, runtimeConfig)
                     ? resolvedSessionRuntimeOverride

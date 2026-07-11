@@ -1249,6 +1249,14 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("pins catalog-adopted direct runs before fallback preflight", async () => {
     setupSingleAttemptFallback();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          models: state.defaultRuntimeConfig.agents.defaults.models,
+          cliBackends: { codex: { command: "codex" } },
+        },
+      },
+    };
     state.sessionEntryMock = {
       sessionId: "session-1",
       updatedAt: 1,
@@ -1272,10 +1280,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(fallbackParams.resolveAgentHarnessRuntimeOverride?.("anthropic", "claude")).toBe(
       "codex",
     );
+    expect(fallbackParams.fallbacksOverride).toEqual([]);
     expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
       providerOverride: "anthropic",
       modelOverride: "claude",
-      sessionEntry: expect.objectContaining({ agentHarnessId: "codex" }),
+      agentHarnessRuntimeOverride: "codex",
+      sessionEntry: expect.objectContaining({
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      }),
     });
   });
 

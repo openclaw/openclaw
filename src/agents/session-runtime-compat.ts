@@ -37,7 +37,6 @@ export function resolvePersistedSessionRuntimeId(
   }
   return harnessRuntime;
 }
-
 /** Resolves a runtime id only when it can serve the selected provider. */
 export function resolveCompatibleAgentRuntimeForProvider(params: {
   provider?: string | null;
@@ -58,7 +57,6 @@ export function resolveCompatibleAgentRuntimeForProvider(params: {
   }
   return isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg }) ? runtime : undefined;
 }
-
 /** Resolves a persisted runtime override only when it can serve the selected provider. */
 export function resolveSessionRuntimeOverrideForProvider(params: {
   provider?: string | null;

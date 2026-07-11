@@ -1346,6 +1346,48 @@ describe("runWithModelFallback", () => {
     expect(result.attempts).toStrictEqual([]);
   });
 
+  it("prefers a prepared harness over a colliding CLI runtime id", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          cliBackends: { codex: { command: "codex" } },
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+      },
+    });
+    const prepareAgentHarnessRuntime = vi.fn(() => {
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          supports: () => ({ supported: true }),
+          runAttempt: vi.fn<AgentHarness["runAttempt"]>(async () => {
+            throw new Error("fallback test should not invoke the harness runtime");
+          }),
+        },
+        { ownerPluginId: "codex-test" },
+      );
+    });
+    const run = vi.fn().mockResolvedValueOnce("native codex ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "codex",
+      model: "gpt-5.5",
+      resolveAgentHarnessRuntimeOverride: () => "codex",
+      prepareAgentHarnessRuntime,
+      run,
+    });
+
+    expect(prepareAgentHarnessRuntime).toHaveBeenCalledWith({
+      provider: "codex",
+      model: "gpt-5.5",
+      agentHarnessRuntimeOverride: "codex",
+    });
+    expect(result.result).toBe("native codex ok");
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it("lets configured CLI runtimes bypass stale provider auth cooldowns", async () => {
     const cfg = makeCfg({
       agents: {
