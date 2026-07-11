@@ -39,6 +39,20 @@ function isJsonObject(value: RuntimeToolInputSchemaJson): value is {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function isNonFiniteNumberValue(value: unknown): boolean {
+  if (typeof value === "number") {
+    return !Number.isFinite(value);
+  }
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    (!(value instanceof Number) && Object.prototype.toString.call(value) !== "[object Number]")
+  ) {
+    return false;
+  }
+  return !Number.isFinite(Number.prototype.valueOf.call(value));
+}
+
 function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInputSchemaProjection {
   const nonFiniteNumber = {
     path: null as string | null,
@@ -57,7 +71,7 @@ function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInpu
             ? `${holderPath}[${key}]`
             : `${holderPath}.${key}`;
       isRoot = false;
-      if (nonFiniteNumber.path === null && typeof entry === "number" && !Number.isFinite(entry)) {
+      if (nonFiniteNumber.path === null && isNonFiniteNumberValue(entry)) {
         nonFiniteNumber.path = entryPath;
       } else if (entry && typeof entry === "object") {
         paths.set(entry, entryPath);
