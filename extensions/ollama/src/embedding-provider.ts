@@ -34,7 +34,6 @@ export type OllamaEmbeddingProvider = {
   embedBatch: (texts: string[], options?: { signal?: AbortSignal }) => Promise<number[][]>;
 };
 
-type OllamaProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
 type MemoryCoreAcquireLocalService = (
   target: {
     providerId: string;
