@@ -57,6 +57,8 @@ export type ChatItem =
   | { kind: "reading-indicator"; key: string };
 
 export const CHAT_HISTORY_RENDER_LIMIT = 100;
+/** Absolute ceiling across paginated loads; char budget still applies. */
+export const CHAT_HISTORY_RENDER_HARD_CAP = 2000;
 export const CHAT_HISTORY_RENDER_CHAR_BUDGET = 240_000;
 
 export type ChatStreamSegment = {

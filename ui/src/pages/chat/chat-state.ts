@@ -57,6 +57,7 @@ import {
 import {
   chatScopedEventSessionMatches,
   loadChatHistory,
+  loadOlderChatHistory,
   type ChatMetadataResult,
   type ChatState,
 } from "./chat-history.ts";
@@ -1263,6 +1264,11 @@ export function createPageState(
     chatSending: false,
     chatMessage: "",
     chatMessages: [] as unknown[],
+    chatHistoryOffset: null as number | null,
+    chatHistoryNextOffset: null as number | null,
+    chatHistoryHasMore: false,
+    chatHistoryTotalMessages: null as number | null,
+    chatHistoryLoadingOlder: false,
     chatToolMessages: [] as Record<string, unknown>[],
     chatThinkingLevel: null,
     chatVerboseLevel: null,

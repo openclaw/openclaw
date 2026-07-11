@@ -1171,6 +1171,25 @@ describe("buildChatItems", () => {
     expect(messageRecord(groups[groups.length - 1]).content).toBe("message 104");
   });
 
+  it("distinguishes server-side older pages from locally hidden loaded messages", () => {
+    const items = buildChatItems(
+      createProps({
+        historyRenderLimit: 30,
+        historyHasMore: true,
+        historyTotalMessages: 250,
+        messages: Array.from({ length: 100 }, (_, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `message ${index}`,
+          timestamp: index,
+        })),
+      }),
+    );
+
+    expect(messageRecord(requireGroup(items[0])).content).toBe(
+      "Showing last 30 of 250 messages (70 loaded but not shown). Older messages are available on the server — scroll up to load more.",
+    );
+  });
+
   it("budgets rendered history by tool-result content size", () => {
     const largeOutput = "x".repeat(100_000);
     const items = buildChatItems(

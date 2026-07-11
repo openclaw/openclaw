@@ -12,6 +12,7 @@ import type {
 } from "../../lib/chat/chat-types.ts";
 import {
   CHAT_HISTORY_RENDER_CHAR_BUDGET,
+  CHAT_HISTORY_RENDER_HARD_CAP,
   CHAT_HISTORY_RENDER_LIMIT,
 } from "../../lib/chat/chat-types.ts";
 import {
@@ -49,6 +50,10 @@ export type BuildChatItemsProps = {
   searchOpen?: boolean;
   searchQuery?: string;
   historyRenderLimit?: number;
+  /** True when older transcript pages remain on the server. */
+  historyHasMore?: boolean;
+  /** Total transcript messages reported by the gateway, when known. */
+  historyTotalMessages?: number | null;
 };
 
 type CachedChatItems = {
@@ -1062,7 +1067,30 @@ function resolveHistoryRenderLimit(limit: number | undefined): number {
   if (typeof limit !== "number" || !Number.isFinite(limit)) {
     return CHAT_HISTORY_RENDER_LIMIT;
   }
-  return Math.max(1, Math.min(CHAT_HISTORY_RENDER_LIMIT, Math.floor(limit)));
+  return Math.max(1, Math.min(CHAT_HISTORY_RENDER_HARD_CAP, Math.floor(limit)));
+}
+
+function formatChatHistoryNotice(params: {
+  visibleHistoryCount: number;
+  hiddenHistoryCount: number;
+  historyHasMore?: boolean;
+  historyTotalMessages?: number | null;
+}): string {
+  const { visibleHistoryCount, hiddenHistoryCount, historyHasMore, historyTotalMessages } = params;
+  const totalLabel =
+    typeof historyTotalMessages === "number" && Number.isFinite(historyTotalMessages)
+      ? ` of ${Math.max(0, Math.floor(historyTotalMessages))}`
+      : "";
+  if (historyHasMore && hiddenHistoryCount > 0) {
+    return `Showing last ${visibleHistoryCount}${totalLabel} messages (${hiddenHistoryCount} loaded but not shown). Older messages are available on the server — scroll up to load more.`;
+  }
+  if (historyHasMore) {
+    return `Showing last ${visibleHistoryCount}${totalLabel} messages. Older messages are available on the server — scroll up to load more.`;
+  }
+  if (hiddenHistoryCount > 0) {
+    return `Showing last ${visibleHistoryCount} messages (${hiddenHistoryCount} hidden).`;
+  }
+  return `Showing last ${visibleHistoryCount} messages.`;
 }
 
 function resolveHistoryStartIndex(
@@ -1116,13 +1144,18 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     history.slice(historyStart),
     props.showToolCalls,
   );
-  if (hiddenHistoryCount > 0) {
+  if (hiddenHistoryCount > 0 || props.historyHasMore) {
     items.push({
       kind: "message",
       key: "chat:history:notice",
       message: {
         role: "system",
-        content: `Showing last ${visibleHistoryCount} messages (${hiddenHistoryCount} hidden).`,
+        content: formatChatHistoryNotice({
+          visibleHistoryCount,
+          hiddenHistoryCount,
+          historyHasMore: props.historyHasMore,
+          historyTotalMessages: props.historyTotalMessages,
+        }),
         timestamp: Date.now(),
       },
     });
@@ -1351,7 +1384,9 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.showToolCalls === next.showToolCalls &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery &&
-    previous.historyRenderLimit === next.historyRenderLimit
+    previous.historyRenderLimit === next.historyRenderLimit &&
+    previous.historyHasMore === next.historyHasMore &&
+    previous.historyTotalMessages === next.historyTotalMessages
   );
 }
 

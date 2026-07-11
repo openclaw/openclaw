@@ -14,7 +14,7 @@ import {
   handleMarkdownCodeBlockCopy,
   markdownFileLinkFromEvent,
 } from "../../../components/markdown.ts";
-import { CHAT_HISTORY_RENDER_LIMIT } from "../../../lib/chat/chat-types.ts";
+import { CHAT_HISTORY_RENDER_HARD_CAP } from "../../../lib/chat/chat-types.ts";
 import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import {
@@ -123,6 +123,12 @@ type ChatThreadProps = {
   onRequestUpdate?: () => void;
   onScrollToBottom?: () => void;
   onChatScroll?: (event: Event) => void;
+  /** Fetch older transcript pages when the local render window is exhausted. */
+  onLoadOlderHistory?: () => void;
+  /** True when older transcript pages remain on the server. */
+  historyHasMore?: boolean;
+  historyTotalMessages?: number | null;
+  historyLoadingOlder?: boolean;
   onDraftChange: (next: string) => void;
   /** Current composer draft; the selection popup preserves it when prefilling. */
   getDraft?: () => string;
@@ -233,7 +239,7 @@ export function resetChatThreadPresentationState(paneId?: string) {
 }
 
 function resolveChatHistoryRenderCap(messageCount: number): number {
-  return Math.min(Math.max(0, messageCount), CHAT_HISTORY_RENDER_LIMIT);
+  return Math.min(Math.max(0, messageCount), CHAT_HISTORY_RENDER_HARD_CAP);
 }
 
 function shouldRenderFullChatHistoryWindow(state: ChatThreadState, messageCount: number): boolean {
@@ -300,6 +306,11 @@ function maybeExpandChatHistoryRenderWindow(
   state: ChatThreadState,
   event: Event,
   requestUpdate: () => void,
+  opts: {
+    historyHasMore?: boolean;
+    historyLoadingOlder?: boolean;
+    onLoadOlderHistory?: () => void;
+  } = {},
 ) {
   const target = event.currentTarget;
   if (!(target instanceof HTMLElement)) {
@@ -321,6 +332,20 @@ function maybeExpandChatHistoryRenderWindow(
   }
   const cap = resolveChatHistoryRenderCap(state.historyRenderMessageCount);
   if (state.historyRenderLimit >= cap) {
+    // Local window already shows every loaded message — fetch an older page
+    // when the gateway says more transcript remains.
+    if (
+      opts.historyHasMore &&
+      !opts.historyLoadingOlder &&
+      typeof opts.onLoadOlderHistory === "function"
+    ) {
+      state.historyRenderAnchorAdjustment = {
+        scrollHeight: target.scrollHeight,
+        scrollTop,
+      };
+      scheduleChatHistoryRenderAnchorPreservation(state, target);
+      opts.onLoadOlderHistory();
+    }
     return;
   }
   state.historyRenderAnchorAdjustment = {
@@ -757,6 +782,8 @@ export function renderChatThread(props: ChatThreadProps) {
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
     historyRenderLimit,
+    historyHasMore: props.historyHasMore,
+    historyTotalMessages: props.historyTotalMessages,
   });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
@@ -788,7 +815,11 @@ export function renderChatThread(props: ChatThreadProps) {
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
   const handleChatThreadScroll = (event: Event) => {
-    maybeExpandChatHistoryRenderWindow(state, event, requestUpdate);
+    maybeExpandChatHistoryRenderWindow(state, event, requestUpdate, {
+      historyHasMore: props.historyHasMore,
+      historyLoadingOlder: props.historyLoadingOlder,
+      onLoadOlderHistory: props.onLoadOlderHistory,
+    });
     props.onChatScroll?.(event);
   };
 

@@ -11,7 +11,12 @@ import {
   handleChatSideResultGatewayEvent,
   type ChatEventPayload,
 } from "./chat-gateway.ts";
-import { GatewayRequestError, loadChatHistory, type ChatState } from "./chat-history.ts";
+import {
+  GatewayRequestError,
+  loadChatHistory,
+  loadOlderChatHistory,
+  type ChatState,
+} from "./chat-history.ts";
 import {
   requestChatSend,
   requestSkillWorkshopRevisionChatSend,
@@ -2137,6 +2142,7 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledWith("chat.startup", {
       sessionKey: "global",
       limit: 100,
+      offset: 0,
     });
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "ready" }] },
@@ -2164,6 +2170,7 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "main",
       limit: 100,
+      offset: 0,
     });
   });
 });
@@ -2626,10 +2633,12 @@ describe("loadChatHistory retry handling", () => {
     expect(request).toHaveBeenNthCalledWith(1, "chat.startup", {
       sessionKey: "main",
       limit: 100,
+      offset: 0,
     });
     expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
       sessionKey: "main",
       limit: 100,
+      offset: 0,
     });
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "fallback" }] },
@@ -2698,6 +2707,7 @@ describe("loadChatHistory retry handling", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "main",
       limit: 100,
+      offset: 0,
     });
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
@@ -3910,5 +3920,105 @@ describe("loadChatHistory retry handling", () => {
       { role: "assistant", content: [{ type: "text", text: "visible old" }] },
     ]);
     expect(state.chatThinkingLevel).toBeNull();
+  });
+});
+
+describe("chat.history offset pagination", () => {
+  it("requests the first page with offset 0 and stores pagination cursors", async () => {
+    const newest = Array.from({ length: 100 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `page1-${index}`,
+      __openclaw: { seq: index + 101 },
+    }));
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({
+        messages: newest,
+        offset: 0,
+        nextOffset: 100,
+        hasMore: true,
+        totalMessages: 250,
+      }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(mockClient.request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.objectContaining({ limit: 100, offset: 0, sessionKey: "main" }),
+    );
+    expect(state.chatMessages).toHaveLength(100);
+    expect(state.chatHistoryHasMore).toBe(true);
+    expect(state.chatHistoryNextOffset).toBe(100);
+    expect(state.chatHistoryTotalMessages).toBe(250);
+    expect(state.chatHistoryOffset).toBe(0);
+  });
+
+  it("loads older pages with nextOffset and prepends without dropping the newest page", async () => {
+    const newest = [
+      { role: "user", content: "newest-user", __openclaw: { seq: 3 } },
+      { role: "assistant", content: "newest-assistant", __openclaw: { seq: 4 } },
+    ];
+    const older = [
+      { role: "user", content: "older-user", __openclaw: { seq: 1 } },
+      { role: "assistant", content: "older-assistant", __openclaw: { seq: 2 } },
+    ];
+    const mockClient = {
+      request: vi
+        .fn()
+        .mockResolvedValueOnce({
+          messages: newest,
+          offset: 0,
+          nextOffset: 2,
+          hasMore: true,
+          totalMessages: 4,
+        })
+        .mockResolvedValueOnce({
+          messages: older,
+          offset: 2,
+          hasMore: false,
+          totalMessages: 4,
+        }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+    await loadOlderChatHistory(state);
+
+    expect(mockClient.request).toHaveBeenNthCalledWith(
+      2,
+      "chat.history",
+      expect.objectContaining({ limit: 100, offset: 2, sessionKey: "main" }),
+    );
+    expect(state.chatMessages).toEqual([...older, ...newest]);
+    expect(state.chatHistoryHasMore).toBe(false);
+    expect(state.chatHistoryNextOffset).toBeNull();
+    expect(state.chatHistoryLoadingOlder).toBe(false);
+  });
+
+  it("does not request an older page when hasMore is false", async () => {
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({
+        messages: [{ role: "user", content: "only" }],
+        offset: 0,
+        hasMore: false,
+        totalMessages: 1,
+      }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+    await loadOlderChatHistory(state);
+
+    expect(mockClient.request).toHaveBeenCalledTimes(1);
   });
 });

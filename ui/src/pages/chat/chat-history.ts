@@ -439,6 +439,16 @@ export type ChatState = {
   chatLoading: boolean;
   chatMessages: unknown[];
   chatMessagesBySession?: ChatMessageCache;
+  /** Offset cursor from the last successful chat.history / chat.startup page. */
+  chatHistoryOffset?: number | null;
+  /** Next older-page offset from the gateway; null when no further pages. */
+  chatHistoryNextOffset?: number | null;
+  /** True when older transcript pages remain on the server. */
+  chatHistoryHasMore?: boolean;
+  /** Total transcript messages reported by the gateway for the selected session. */
+  chatHistoryTotalMessages?: number | null;
+  /** True while an older-page fetch is in flight. */
+  chatHistoryLoadingOlder?: boolean;
   chatThinkingLevel: string | null;
   chatVerboseLevel: string | null;
   chatSending: boolean;
@@ -486,6 +496,14 @@ export type ChatHistoryResult = {
   sessionInfo?: GatewaySessionRow;
   agentsList?: AgentsListResult;
   metadata?: ChatMetadataResult;
+  /** Absolute transcript offset for this page when offset pagination is active. */
+  offset?: number;
+  /** Older-page cursor; omitted/null when hasMore is false. */
+  nextOffset?: number | null;
+  /** True when older messages remain beyond this page. */
+  hasMore?: boolean;
+  /** Total transcript message count for the session. */
+  totalMessages?: number;
 };
 
 export type ChatMetadataResult = CommandsListResult & {
@@ -506,6 +524,89 @@ export type ChatEventPayload = {
 function setChatError(state: ChatState, error: string | null) {
   state.lastError = error;
   state.chatError = error;
+}
+
+function resetChatHistoryPagination(state: ChatState) {
+  state.chatHistoryOffset = null;
+  state.chatHistoryNextOffset = null;
+  state.chatHistoryHasMore = false;
+  state.chatHistoryTotalMessages = null;
+  state.chatHistoryLoadingOlder = false;
+}
+
+function applyChatHistoryPagination(state: ChatState, res: ChatHistoryResult) {
+  const offset =
+    typeof res.offset === "number" && Number.isFinite(res.offset)
+      ? Math.max(0, Math.floor(res.offset))
+      : null;
+  const totalMessages =
+    typeof res.totalMessages === "number" && Number.isFinite(res.totalMessages)
+      ? Math.max(0, Math.floor(res.totalMessages))
+      : null;
+  const nextOffset =
+    typeof res.nextOffset === "number" && Number.isFinite(res.nextOffset)
+      ? Math.max(0, Math.floor(res.nextOffset))
+      : null;
+  const hasMore =
+    typeof res.hasMore === "boolean"
+      ? res.hasMore
+      : nextOffset !== null && totalMessages !== null
+        ? nextOffset < totalMessages
+        : false;
+  state.chatHistoryOffset = offset;
+  state.chatHistoryNextOffset = hasMore ? nextOffset : null;
+  state.chatHistoryHasMore = hasMore;
+  state.chatHistoryTotalMessages = totalMessages;
+}
+
+function readChatHistoryMessageIdentity(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const record = message as Record<string, unknown>;
+  const openclaw = record.__openclaw;
+  if (openclaw && typeof openclaw === "object") {
+    const meta = openclaw as Record<string, unknown>;
+    if (typeof meta.seq === "number" && Number.isSafeInteger(meta.seq) && meta.seq > 0) {
+      return `seq:${meta.seq}`;
+    }
+    if (typeof meta.id === "string" && meta.id.trim()) {
+      return `id:${meta.id.trim()}`;
+    }
+  }
+  if (typeof record.id === "string" && record.id.trim()) {
+    return `id:${record.id.trim()}`;
+  }
+  const role = typeof record.role === "string" ? record.role : "";
+  const timestamp =
+    typeof record.timestamp === "number"
+      ? String(record.timestamp)
+      : typeof record.timestamp === "string"
+        ? record.timestamp
+        : "";
+  if (!role && !timestamp) {
+    return null;
+  }
+  return `rt:${role}:${timestamp}:${extractText(message) ?? ""}`;
+}
+
+function prependOlderChatHistoryMessages(existing: unknown[], olderPage: unknown[]): unknown[] {
+  if (olderPage.length === 0) {
+    return existing;
+  }
+  const existingIds = new Set(
+    existing
+      .map((message) => readChatHistoryMessageIdentity(message))
+      .filter((id): id is string => Boolean(id)),
+  );
+  const uniqueOlder = olderPage.filter((message) => {
+    const id = readChatHistoryMessageIdentity(message);
+    return !id || !existingIds.has(id);
+  });
+  if (uniqueOlder.length === 0) {
+    return existing;
+  }
+  return [...uniqueOlder, ...existing];
 }
 
 function chatScopedEventAgentScopeMatches(
@@ -963,6 +1064,7 @@ async function loadChatHistoryUncached(
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
+  state.chatHistoryLoadingOlder = false;
   setChatError(state, null);
   try {
     let res: ChatHistoryResult;
@@ -972,6 +1074,9 @@ async function loadChatHistoryUncached(
           sessionKey,
           ...(requestAgentId ? { agentId: requestAgentId } : {}),
           limit: CHAT_HISTORY_REQUEST_LIMIT,
+          // Offset pagination is opt-in on the gateway: omitting offset skips
+          // hasMore/nextOffset metadata, so first-page loads must pass 0.
+          offset: 0,
         });
         break;
       } catch (err) {
@@ -991,6 +1096,7 @@ async function loadChatHistoryUncached(
             sessionKey,
             ...(requestAgentId ? { agentId: requestAgentId } : {}),
             limit: CHAT_HISTORY_REQUEST_LIMIT,
+            offset: 0,
           });
           break;
         }
@@ -1015,6 +1121,7 @@ async function loadChatHistoryUncached(
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
     applyChatAgentsList(state, res.agentsList, client);
+    applyChatHistoryPagination(state, res);
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     const lateOptimisticTail = collectLateOptimisticTailMessages(
       previousMessages,
@@ -1138,6 +1245,7 @@ async function loadChatHistoryUncached(
       state.chatMessages = [];
       state.chatThinkingLevel = null;
       state.chatVerboseLevel = null;
+      resetChatHistoryPagination(state);
       setChatError(state, formatMissingOperatorReadScopeMessage("existing chat history"));
     } else {
       setChatError(state, String(err));
@@ -1148,4 +1256,68 @@ async function loadChatHistoryUncached(
     }
   }
   return undefined;
+}
+
+/**
+ * Fetch the next older chat.history page and prepend it into the selected
+ * transcript. No-ops when pagination says there is nothing left, or when a
+ * full history reload / older-page fetch is already in flight.
+ */
+export async function loadOlderChatHistory(
+  state: ChatState,
+): Promise<ChatHistoryResult | undefined> {
+  if (!state.client || !state.connected) {
+    return undefined;
+  }
+  if (state.chatLoading || state.chatHistoryLoadingOlder) {
+    return undefined;
+  }
+  if (!state.chatHistoryHasMore) {
+    return undefined;
+  }
+  const nextOffset = state.chatHistoryNextOffset;
+  if (typeof nextOffset !== "number" || !Number.isFinite(nextOffset)) {
+    return undefined;
+  }
+  const sessionKey = state.sessionKey;
+  const requestAgentId = isUiSelectedGlobalSessionKey(sessionKey)
+    ? resolveUiSelectedSessionAgentId(state)
+    : undefined;
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
+  const ownership = beginChatHistoryRequest(
+    state,
+    client,
+    connectionEpoch,
+    sessionKey,
+    requestAgentId,
+  );
+  state.chatHistoryLoadingOlder = true;
+  try {
+    const res = await client.request<ChatHistoryResult>("chat.history", {
+      sessionKey,
+      ...(requestAgentId ? { agentId: requestAgentId } : {}),
+      limit: CHAT_HISTORY_REQUEST_LIMIT,
+      offset: Math.max(0, Math.floor(nextOffset)),
+    });
+    if (!shouldApplyChatHistoryResult(state, ownership)) {
+      return undefined;
+    }
+    const messages = Array.isArray(res.messages) ? res.messages : [];
+    const visibleOlder = messages.filter((message) => !shouldHideHistoryMessage(message));
+    state.chatMessages = prependOlderChatHistoryMessages(state.chatMessages, visibleOlder);
+    replaceCachedChatMessages(state, sessionKey, state.chatMessages, requestAgentId);
+    applyChatHistoryPagination(state, res);
+    return res;
+  } catch (err) {
+    if (!shouldApplyChatHistoryResult(state, ownership)) {
+      return undefined;
+    }
+    setChatError(state, String(err));
+    return undefined;
+  } finally {
+    if (ownsChatHistoryRequest(state, ownership)) {
+      state.chatHistoryLoadingOlder = false;
+    }
+  }
 }

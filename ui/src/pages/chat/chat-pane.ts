@@ -1319,6 +1319,12 @@ class ChatPane extends OpenClawLightDomElement {
       streamSegments: state.chatStreamSegments,
       stream: state.chatStream,
       streamStartedAt: state.chatStreamStartedAt,
+      historyHasMore: Boolean(state.chatHistoryHasMore),
+      historyTotalMessages: state.chatHistoryTotalMessages ?? null,
+      historyLoadingOlder: Boolean(state.chatHistoryLoadingOlder),
+      onLoadOlderHistory: () => {
+        void loadOlderChatHistory(state).finally(() => state.requestUpdate?.());
+      },
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       draft: state.chatMessage,

@@ -159,6 +159,10 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  historyHasMore?: boolean;
+  historyTotalMessages?: number | null;
+  historyLoadingOlder?: boolean;
+  onLoadOlderHistory?: () => void;
   basePath?: string;
   composerControls?: TemplateResult | typeof nothing;
   replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
@@ -238,6 +242,10 @@ export function renderChat(props: ChatProps) {
     onRequestUpdate: requestUpdate,
     onScrollToBottom: props.onScrollToBottom,
     onChatScroll: props.onChatScroll,
+    historyHasMore: props.historyHasMore,
+    historyTotalMessages: props.historyTotalMessages,
+    historyLoadingOlder: props.historyLoadingOlder,
+    onLoadOlderHistory: props.onLoadOlderHistory,
     onDraftChange: props.onDraftChange,
     getDraft: props.getDraft,
     onSend: props.onSend,
