@@ -1231,6 +1231,129 @@ describe("handleLineWebhookEvents", () => {
     expect(pendingMediaQueues.has("group-flush")).toBe(false);
   });
 
+  it("does not flush queued pending media into a control-command that only bypassed requireMention (no real mention)", async () => {
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockImplementation(async () => ({
+      path: "/media/bypass-1.jpg",
+      contentType: "image/jpeg",
+    }));
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      groupAllowFrom: ["accessGroup:line-operators"],
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaQueues,
+      accessGroups: {
+        "line-operators": {
+          type: "message.senders",
+          members: { line: ["user-bypass"] },
+        },
+      },
+    });
+
+    // First, an unmentioned image from an allowed sender gets queued (group is
+    // "open" so any sender can post, but requireMention blocks dispatch).
+    const skippedEvent = createTestMessageEvent({
+      message: {
+        id: "m-bypass-img",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-bypass-img",
+      },
+      source: { type: "group", groupId: "group-bypass", userId: "user-bypass" },
+      webhookEventId: "evt-bypass-img",
+    });
+    await handleLineWebhookEvents([skippedEvent], context);
+    expect(pendingMediaQueues.get("group-bypass")).toHaveLength(1);
+
+    // Then a control command with no actual @mention arrives from an
+    // authorized sender. requireMention is bypassed for control-command
+    // authorization, but that bypass must not also flush someone else's
+    // queued media into this command's context (PR #103761 review Bug 2).
+    const controlCommandEvent = createTestMessageEvent({
+      message: { id: "m-bypass-cmd", type: "text", text: "!status", quoteToken: "q-bypass-cmd" },
+      source: { type: "group", groupId: "group-bypass", userId: "user-bypass" },
+      webhookEventId: "evt-bypass-cmd",
+    });
+    await handleLineWebhookEvents([controlCommandEvent], context);
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allMedia: [] }),
+    );
+    // The queued media must survive untouched since it was never flushed.
+    expect(pendingMediaQueues.get("group-bypass")).toHaveLength(1);
+  });
+
+  it("keeps queued pending media when processMessage fails, so it can be retried", async () => {
+    const processMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("downstream processing failed"))
+      .mockResolvedValueOnce(undefined);
+    downloadLineMediaMock.mockImplementation(async () => ({
+      path: "/media/retry-1.jpg",
+      contentType: "image/jpeg",
+    }));
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaQueues,
+    });
+
+    const skippedEvent = createTestMessageEvent({
+      message: {
+        id: "m-retry-img",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-retry-img",
+      },
+      source: { type: "group", groupId: "group-retry-media", userId: "user-retry-media" },
+      webhookEventId: "evt-retry-img",
+    });
+    await handleLineWebhookEvents([skippedEvent], context);
+    expect(pendingMediaQueues.get("group-retry-media")).toHaveLength(1);
+
+    const mentionedEvent = createTestMessageEvent({
+      message: {
+        id: "m-retry-text",
+        type: "text",
+        text: "@bot check this out",
+        mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+      } as unknown as MessageEvent["message"],
+      source: { type: "group", groupId: "group-retry-media", userId: "user-retry-media" },
+      webhookEventId: "evt-retry-text",
+    });
+
+    // First attempt: processMessage throws. The queue must be preserved so a
+    // LINE webhook retry can recover the media (PR #103761 review Bug 1).
+    await expect(handleLineWebhookEvents([mentionedEvent], context)).rejects.toThrow(
+      "downstream processing failed",
+    );
+    expect(pendingMediaQueues.get("group-retry-media")).toHaveLength(1);
+
+    // Retry (same webhookEventId reused conceptually as a distinct retry event):
+    // second attempt succeeds and the queue is now cleared.
+    const retryEvent = createTestMessageEvent({
+      message: mentionedEvent.message,
+      source: mentionedEvent.source,
+      webhookEventId: "evt-retry-text-2",
+    });
+    await handleLineWebhookEvents([retryEvent], context);
+
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(buildLineMessageContextMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        allMedia: [{ path: "/media/retry-1.jpg", contentType: "image/jpeg" }],
+      }),
+    );
+    expect(pendingMediaQueues.has("group-retry-media")).toBe(false);
+  });
+
   it("defaults pendingMediaLimit to 3 when unset", async () => {
     const processMessage = vi.fn();
     let counter = 0;

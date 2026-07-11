@@ -523,14 +523,27 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
 
   const allMedia: MediaRef[] = [];
   let mediaUnavailable = false;
+  // Only clear the pending-media queue once processMessage has completed
+  // successfully; keeping the key around until then means a webhook retry
+  // (or any failure before dispatch) can still recover the queued media
+  // instead of losing it. See PR #103761 review Bug 1.
+  let pendingMediaKeyToClear: string | undefined;
 
-  if (isGroup && context.pendingMediaQueues) {
+  if (
+    isGroup &&
+    context.pendingMediaQueues &&
+    // Only flush queued media when this event was actually triggered by a
+    // real @mention. A control-command that merely bypassed requireMention
+    // (shouldBypassMention === true) must not pull in media someone else
+    // posted earlier for this group. See PR #103761 review Bug 2.
+    decision.activationAccess.shouldBypassMention !== true
+  ) {
     const pendingKey = groupId ?? roomId;
     if (pendingKey) {
       const pending = context.pendingMediaQueues.get(pendingKey);
       if (pending && pending.length > 0) {
         allMedia.push(...pending);
-        context.pendingMediaQueues.delete(pendingKey);
+        pendingMediaKeyToClear = pendingKey;
       }
     }
   }
@@ -574,6 +587,13 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   }
 
   await processMessage(messageContext);
+
+  // Only clear the pending-media queue after processMessage has resolved
+  // successfully (an exception above skips this and preserves the queue for
+  // retry). See PR #103761 review Bug 1.
+  if (pendingMediaKeyToClear && context.pendingMediaQueues) {
+    context.pendingMediaQueues.delete(pendingMediaKeyToClear);
+  }
 
   if (isGroup && context.groupHistories) {
     const historyKey = groupId ?? roomId;
