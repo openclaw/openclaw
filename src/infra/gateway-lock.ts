@@ -1,5 +1,6 @@
 // Coordinates gateway lock files, ports, and stale owner detection.
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
@@ -23,6 +24,7 @@ const DEFAULT_STALE_MS = 30_000;
 const DEFAULT_PORT_PROBE_TIMEOUT_MS = 1000;
 
 type LockPayload = {
+  ownerId?: string;
   pid: number;
   createdAt: string;
   configPath: string;
@@ -31,6 +33,7 @@ type LockPayload = {
 };
 
 const LockPayloadSchema = z.object({
+  ownerId: z.string().uuid().optional(),
   pid: z.number(),
   createdAt: z.string(),
   configPath: z.string(),
@@ -176,17 +179,11 @@ async function resolveGatewayOwnerStatus(
   readCmdline?: (pid: number) => string[] | null,
   opts: { trustUnknownCmdlineOwner?: boolean } = {},
 ): Promise<LockOwnerStatus> {
-  if (port != null) {
-    const portFree = await checkPortFree(port);
-    if (portFree) {
-      return "dead";
-    }
-  }
-
   if (!isPidAlive(pid)) {
     return "dead";
   }
 
+  let ownerStatus: LockOwnerStatus;
   // On Linux, an extra start-time comparison catches PID recycling even when
   // the replacement process also looks like a gateway (same argv shape).
   if (platform === "linux") {
@@ -196,22 +193,39 @@ async function resolveGatewayOwnerStatus(
       if (currentStartTime == null) {
         return "unknown";
       }
-      return currentStartTime === payloadStartTime ? "alive" : "dead";
+      ownerStatus = currentStartTime === payloadStartTime ? "alive" : "dead";
+    } else {
+      ownerStatus = "unknown";
+    }
+  } else {
+    ownerStatus = "unknown";
+  }
+
+  if (ownerStatus === "unknown") {
+    const readFn = readCmdline ?? ((p: number) => defaultReadProcessCmdline(p, platform));
+    const args = readFn(pid);
+    if (!args) {
+      // Cmdline reader unavailable or failed. On Linux legacy locks (no
+      // start-time), "unknown" lets the stale-lock heuristic eventually reclaim
+      // very old locks. A configured port supplies the same conservative fallback
+      // on other platforms: busy means alive, free remains unknown until stale.
+      ownerStatus =
+        platform === "linux" || opts.trustUnknownCmdlineOwner === false || port != null
+          ? "unknown"
+          : "alive";
+    } else {
+      // Long-running gateways retitle themselves so macOS/BSD process inspection
+      // can identify the owner after the original argv is no longer available.
+      ownerStatus = isGatewayArgv(args, { allowGatewayBinary: true }) ? "alive" : "dead";
     }
   }
 
-  const readFn = readCmdline ?? ((p: number) => defaultReadProcessCmdline(p, platform));
-  const args = readFn(pid);
-  if (!args) {
-    // Cmdline reader unavailable or failed. On Linux legacy locks (no
-    // start-time), "unknown" lets the stale-lock heuristic eventually reclaim
-    // very old locks. On win32/darwin/other, conservatively assume "alive" to
-    // preserve single-instance guarantees when wmic/ps is unavailable.
-    return platform === "linux" || opts.trustUnknownCmdlineOwner === false ? "unknown" : "alive";
+  if (ownerStatus !== "unknown" || port == null) {
+    return ownerStatus;
   }
-  // Long-running gateways retitle themselves so macOS/BSD process inspection
-  // can identify the owner after the original argv is no longer available.
-  return isGatewayArgv(args, { allowGatewayBinary: true }) ? "alive" : "dead";
+  // A busy configured port is conservative evidence for an owner whose process
+  // identity cannot be read. A free port never overrides a verified live owner.
+  return (await checkPortFree(port)) ? "unknown" : "alive";
 }
 
 async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
@@ -287,9 +301,11 @@ export async function acquireGatewayLock(
   while (now() - startedAt < timeoutMs) {
     try {
       const handle = await fs.open(lockPath, "wx");
+      const ownerId = randomUUID();
       try {
         const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
         const payload: LockPayload = {
+          ownerId,
           pid: process.pid,
           createdAt: resolveTimestampMsToIsoString(now()),
           configPath,
@@ -313,6 +329,11 @@ export async function acquireGatewayLock(
         configPath,
         release: async () => {
           await handle.close().catch(() => undefined);
+          const currentPayload = await readLockPayload(lockPath);
+          // A stale handle must not unlink a successor that reclaimed the same path.
+          if (currentPayload?.ownerId !== ownerId) {
+            return;
+          }
           await fs.rm(lockPath, { force: true });
         },
       };
