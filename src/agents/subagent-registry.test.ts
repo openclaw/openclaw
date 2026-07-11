@@ -5117,6 +5117,43 @@ describe("subagent registry seam flow", () => {
     );
   });
 
+  it("resumes stale keep-mode cleanup during sweep", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    const runId = "run-sweep-resume-cleanup";
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "resume stale cleanup",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      createdAt: now - 120_000,
+      startedAt: now - 119_000,
+      endedAt: now - 90_000,
+      outcome: { status: "ok" },
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      completion: { required: true, resultText: "finished", capturedAt: now - 90_000 },
+      delivery: { status: "delivered", deliveredAt: now - 89_000, announcedAt: now - 89_000 },
+      execution: {
+        status: "terminal",
+        startedAt: now - 119_000,
+        endedAt: now - 90_000,
+        outcome: { status: "ok" },
+      },
+    });
+
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === runId);
+      expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+    });
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
   it("suspends retry-budgeted successful keep-mode completion deliveries during resume", async () => {
     mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
       runs: Map<string, unknown>;

@@ -1202,6 +1202,15 @@ async function sweepSubagentRuns() {
         resumeSubagentRun(runId);
         continue;
       }
+      if (
+        deliveryHealth.status === "cleanup_pending" &&
+        deliveryHealth.nextAction === "resume_cleanup" &&
+        entry.cleanup === "keep" &&
+        !entry.archiveAtMs
+      ) {
+        resumeSubagentRun(runId);
+        continue;
+      }
       if (typeof entry.endedAt !== "number") {
         const hasLiveRunContext = Boolean(getAgentRunContext(runId));
         const activeAgeMs = now - (entry.startedAt ?? entry.createdAt);
