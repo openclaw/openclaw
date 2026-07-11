@@ -10,6 +10,8 @@ title: "Fleet"
 
 `openclaw fleet` manages complete OpenClaw instances called **cells**. Each cell has its own Gateway, state, credentials, channel accounts, container, and loopback-only host port. Use one cell for each tenant trust boundary; do not use one shared Gateway as a hostile multi-tenant boundary.
 
+Fleet is **experimental**. Command names, flags, output shapes, and the container profile can change between releases without a deprecation window while the surface settles.
+
 Fleet supports Docker and Podman. The default image is `ghcr.io/openclaw/openclaw:latest`.
 
 ## Quick start

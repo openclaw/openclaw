@@ -36,7 +36,9 @@ function parseCpus(value: string): string {
 }
 
 export function registerFleetCli(program: Command): void {
-  const fleet = program.command("fleet").description("Provision and manage isolated tenant cells");
+  const fleet = program
+    .command("fleet")
+    .description("Provision and manage isolated tenant cells (experimental)");
 
   fleet
     .command("create")

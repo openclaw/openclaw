@@ -12,6 +12,8 @@ OpenClaw's default security model is one trusted operator boundary per Gateway, 
 
 `openclaw fleet` calls each isolated instance a **cell**. A cell is a full Gateway in a hardened container with its own state, credentials, workspace, channel accounts, token, and loopback-only host port.
 
+Fleet is **experimental**: its commands, flags, and container profile can change between releases without a deprecation window while the surface settles.
+
 ## Why each tenant needs a cell
 
 An authenticated operator inside one Gateway has a trusted control-plane role. Session IDs select routing; they do not authorize one tenant against another. Agent sandboxing can reduce the effect of untrusted content and tool execution, but it does not turn one shared Gateway into a tenant authorization boundary.
@@ -91,7 +93,7 @@ The first Fleet release deliberately leaves these surfaces to later designs:
 - Remote cell hosts managed by one supervisor
 - A tenant self-service portal, billing plane, or delegated administration UI
 
-These features need explicit identity, routing, authorization, and failure-domain contracts. They should not be approximated by sharing one Gateway or its credentials across tenants.
+These features need explicit identity, routing, authorization, and failure-domain contracts. They should not be approximated by sharing one Gateway or its credentials across tenants. They are also not Fleet's lane: Fleet stays a single-host lifecycle supervisor, and multi-machine, identity-governed fleets belong to a dedicated control-plane layer above it.
 
 ## Related
 

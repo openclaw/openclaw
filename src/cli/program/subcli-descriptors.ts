@@ -83,7 +83,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "fleet",
-    description: "Provision and manage isolated tenant cells",
+    description: "Provision and manage isolated tenant cells (experimental)",
     hasSubcommands: true,
   },
   {
