@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { escapeRegExp } from "../../shared/regexp.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import {
@@ -65,14 +66,39 @@ export function normalizeReplyPayload(
     text = "";
   }
   // Strip NO_REPLY from mixed-content messages (e.g. "😄 NO_REPLY") so the
-  // token never leaks to end users.  If stripping leaves nothing, treat it as
-  // silent just like the exact-match path above.  (#30916, #30955)
+  // token never leaks to end users. If stripping leaves nothing, treat it as
+  // silent just like the exact-match path above. (#30916, #30955)
+  //
+  // Also strip a leading token that is separated by newlines
+  // (e.g. "NO_REPLY\n\nWait..."). The startsWithSilentToken check only matches
+  // when the token is glued directly to the following text, leaving the
+  // newline-separated case to fall through. Detect this case by checking if
+  // the text starts with the token followed by a newline, then strip it.
+  // See: https://github.com/openclaw/openclaw/issues/103735
   if (text && !isSilentReplyText(text, silentToken)) {
     const hasLeadingSilentToken = startsWithSilentToken(text, silentToken);
-    if (hasLeadingSilentToken) {
+    // Detect newline-separated leading tokens: "NO_REPLY\n\nWait..." or "NO_REPLY\nWait..."
+    // The token must be at the start, followed by a newline, then content.
+    // When the token is newline-separated, the interstitial reasoning paragraph
+    // between the token and the actual reply must also be stripped — removing
+    // only the token would still expose the reasoning to end users.
+    const escapedToken = escapeRegExp(silentToken);
+    const newlineSeparatedMatch = text.match(
+      new RegExp(`^\\s*${escapedToken}\\s*\\r?\\n([\\s\\S]*?)(?:\\n\\s*\\n|[\\s\\S]*$)`, "i"),
+    );
+    if (newlineSeparatedMatch) {
+      // The token was separated by a newline; strip the token + interstitial
+      // reasoning paragraph (everything up to the first blank line, which is
+      // where the actual user-facing reply typically starts).
+      const afterBlankLine = text.match(
+        new RegExp(`^\\s*${escapedToken}\\s*\\r?\\n[\\s\\S]*?\\n\\s*\\n([\\s\\S]*)$`, "i"),
+      );
+      text = afterBlankLine ? afterBlankLine[1].trimStart() : "";
+    } else if (hasLeadingSilentToken) {
       text = stripLeadingSilentToken(text, silentToken);
     }
-    if (hasLeadingSilentToken || text.toLowerCase().includes(silentToken.toLowerCase())) {
+    const hasLeadingToken = hasLeadingSilentToken || Boolean(newlineSeparatedMatch);
+    if (hasLeadingToken || text.toLowerCase().includes(silentToken.toLowerCase())) {
       text = stripSilentToken(text, silentToken);
       if (!hasContent(text)) {
         opts.onSkip?.("silent");
