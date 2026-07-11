@@ -44,6 +44,7 @@ vi.mock("./sessions-helpers.js", async (importActual) => {
 
 type SessionsListDetails = {
   sessions?: Array<{
+    channel?: string;
     deliveryContext?: {
       accountId?: string;
       channel?: string;
@@ -200,6 +201,31 @@ describe("sessions-list-tool", () => {
       accountId: "acct-1",
       threadId: 99,
     });
+  });
+
+  it("derives channel from agent-scoped group session keys", async () => {
+    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "agent:main:slack:channel:C123:thread:1710000000.000100",
+              kind: "group",
+              sessionId: "sess-slack-thread",
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    const tool = createSessionsListTool({ config: {} as never });
+
+    const result = await tool.execute("call-agent-scoped-channel", {});
+    const details = getSessionsListDetails(result);
+
+    expect(details.sessions?.[0]?.channel).toBe("slack");
   });
 
   it("keeps live session setting metadata in sessions_list results", async () => {
