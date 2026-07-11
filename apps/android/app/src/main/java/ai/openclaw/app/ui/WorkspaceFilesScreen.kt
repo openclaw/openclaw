@@ -56,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -262,7 +263,7 @@ private fun WorkspaceEntryRow(
       modifier = Modifier.size(20.dp),
     )
     Column(modifier = Modifier.weight(1f)) {
-      Text(text = entry.name, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
+      Text(text = entry.name, style = ClawTheme.type.body.copy(lineBreak = LineBreak.Heading), color = ClawTheme.colors.text)
       workspaceEntryDetail(context, entry)?.let { detail ->
         Text(text = detail, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
       }
@@ -316,9 +317,8 @@ private fun WorkspaceFilePreview(
         ClawPlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", onClick = onBack)
         Text(
           text = path.substringAfterLast('/'),
-          style = ClawTheme.type.display.copy(fontSize = 20.sp, lineHeight = 24.sp),
+          style = ClawTheme.type.display.copy(fontSize = 20.sp, lineHeight = 24.sp, lineBreak = LineBreak.Heading),
           color = ClawTheme.colors.text,
-          maxLines = 1,
           modifier = Modifier.weight(1f),
         )
         file?.let { loaded ->
