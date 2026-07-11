@@ -6,6 +6,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   NATIVE_APPROVAL_CHANNELS,
+  isEphemeralGatewayClient,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
   isNativeApprovalChannel,
@@ -60,6 +61,15 @@ describe("message-channel", () => {
     expect(resolveGatewayMessageChannel(" imsg ")).toBe("imessage");
     expect(resolveGatewayMessageChannel("web")).toBeUndefined();
     expect(resolveGatewayMessageChannel("nope")).toBeUndefined();
+  });
+
+  it("classifies ephemeral Gateway client modes", () => {
+    for (const mode of ["cli", "backend", "probe", "test", " CLI "]) {
+      expect(isEphemeralGatewayClient({ mode })).toBe(true);
+    }
+    for (const mode of ["ui", "webchat", "node", "unknown", undefined]) {
+      expect(isEphemeralGatewayClient({ mode })).toBe(false);
+    }
   });
 
   it("normalizes plugin aliases when registered", () => {

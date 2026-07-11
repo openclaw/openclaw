@@ -50,6 +50,17 @@ export function isGatewayCliClient(client?: GatewayClientInfoLike | null): boole
   return normalizeGatewayClientMode(client?.mode) === GATEWAY_CLIENT_MODES.CLI;
 }
 
+/** Return whether a Gateway client is an ephemeral control-plane connection. */
+export function isEphemeralGatewayClient(client?: GatewayClientInfoLike | null): boolean {
+  const mode = normalizeGatewayClientMode(client?.mode);
+  return (
+    mode === GATEWAY_CLIENT_MODES.CLI ||
+    mode === GATEWAY_CLIENT_MODES.BACKEND ||
+    mode === GATEWAY_CLIENT_MODES.PROBE ||
+    mode === GATEWAY_CLIENT_MODES.TEST
+  );
+}
+
 /** Return whether a client is one of the operator UI clients. */
 export function isOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
   const clientId = normalizeGatewayClientName(client?.id);
