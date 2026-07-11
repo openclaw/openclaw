@@ -131,14 +131,14 @@ describe("security audit gateway HTTP tool findings", () => {
     });
   });
 
-  // PR #85664 [P1] regression: `dangerous_allow` suppression for `read` is
-  // source-aware. Suppress ONLY when the `hostFsRead` class opt-in is active
-  // (then the more specific `host_read_allow` finding fires instead). Without
-  // the opt-in, `allow: ["read"]` still removes `read` from the HTTP deny list,
-  // which can make a same-named PLUGIN tool reachable while the built-in stays
-  // unmaterialized — so the generic warning MUST fire.
+  // PR #85664 [P2] regression: `read` never triggers the generic `dangerous_allow`
+  // warning. With the `hostFsRead` opt-in active the dedicated `host_read_allow`
+  // finding fires instead; without it, an allow-only `read` is inert — the built-in
+  // stays unmaterialized and a same-named PLUGIN tool is reachable regardless of the
+  // allow entry (the resolver preserves it source-aware), so the generic warning
+  // would be a false positive.
   describe("dangerous_allow source-aware suppression for read", () => {
-    it("fires dangerous_allow when only allow:['read'] is set (no hostFsRead opt-in)", () => {
+    it("does NOT fire dangerous_allow for an allow-only read (inert; no false warning)", () => {
       const cfg: OpenClawConfig = {
         gateway: {
           bind: "lan",
@@ -147,7 +147,7 @@ describe("security audit gateway HTTP tool findings", () => {
         },
       };
       const findings = collectGatewayConfigFindings(cfg, cfg, {});
-      expect(hasFinding(findings, "gateway.tools_invoke_http.dangerous_allow")).toBe(true);
+      expect(hasFinding(findings, "gateway.tools_invoke_http.dangerous_allow")).toBe(false);
     });
 
     it("does NOT fire dangerous_allow when allow:['read'] AND hostFsRead opt-in is set", () => {

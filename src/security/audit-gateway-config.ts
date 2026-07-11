@@ -13,7 +13,10 @@ import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-sou
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
-import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
+import {
+  DEFAULT_GATEWAY_HTTP_TOOL_DENY,
+  HOST_FS_BUILTIN_CODING_DENY_NAMES,
+} from "./dangerous-tools.js";
 
 type CollectDangerousConfigFlags = (cfg: OpenClawConfig) => string[];
 
@@ -100,18 +103,17 @@ export function collectGatewayConfigFindings(
   const gatewayToolsAllow = new Set(
     gatewayToolsAllowRaw.map((v) => normalizeOptionalLowercaseString(v) ?? "").filter(Boolean),
   );
-  // Suppress `dangerous_allow` for a dual-key gated tool ONLY while its class
-  // opt-in is active — then the more specific `host_read_allow` finding fires
-  // instead. When the opt-in is INACTIVE, `allow: ["read"]` still removes
-  // `read` from the HTTP deny list, which can make a same-named plugin tool
-  // reachable over `/tools/invoke` while the built-in stays unmaterialized; in
-  // that case `dangerous_allow` must fire so the exposure is visible. See
-  // ClawSweeper [P1] on PR #85664: "Preserve auditing for same-named plugin
-  // tools".
+  // The host-FS coding name `read` never triggers the generic `dangerous_allow`
+  // warning. When the class opt-in is ACTIVE the dedicated `host_read_allow`
+  // finding fires instead; when it is INACTIVE an allow-only `read` is inert for
+  // reachability — the built-in stays unmaterialized (it needs the opt-in) and a
+  // same-named plugin tool is reachable regardless of the allow entry (the
+  // resolver preserves it source-aware), so `allow: ["read"]` grants nothing new
+  // and a generic warning would be a false positive. ClawSweeper [P2] on PR #85664.
   const hostFsReadOptIn = cfg.gateway?.tools?.directInvoke?.hostFsRead === true;
-  const classOptInActiveForTool = new Set<string>(hostFsReadOptIn ? ["read"] : []);
+  const hostFsCodingNames = new Set<string>(HOST_FS_BUILTIN_CODING_DENY_NAMES);
   const reenabledOverHttp = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
-    (name) => gatewayToolsAllow.has(name) && !classOptInActiveForTool.has(name),
+    (name) => gatewayToolsAllow.has(name) && !hostFsCodingNames.has(name),
   );
   if (reenabledOverHttp.length > 0) {
     const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
