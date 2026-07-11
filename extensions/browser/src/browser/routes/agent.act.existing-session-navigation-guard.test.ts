@@ -150,6 +150,43 @@ describe("existing-session interaction navigation guard", () => {
     expectNavigationProbeUrls(Array.from({ length: 8 }, () => "https://example.com"));
   });
 
+  it("resolves current target after guarded non-click interactions", async () => {
+    const guardedActions = [
+      { kind: "hover", ref: "btn-1" },
+      { kind: "scrollIntoView", ref: "btn-1" },
+      { kind: "drag", startRef: "item-1", endRef: "slot-1" },
+      { kind: "select", ref: "menu-1", values: ["alpha"] },
+      { kind: "fill", fields: [{ ref: "input-1", value: "Ada" }] },
+    ] as const;
+
+    for (const [index, body] of guardedActions.entries()) {
+      const nextTargetId = `new-${index}`;
+      routeState.profileCtx.listTabs
+        .mockResolvedValueOnce([
+          {
+            targetId: "7",
+            url: "https://example.com",
+          },
+        ])
+        .mockResolvedValue([
+          {
+            targetId: nextTargetId,
+            url: "https://example.com",
+          },
+        ]);
+
+      const response = await runAction(body);
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toMatchObject({
+        ok: true,
+        targetId: nextTargetId,
+        url: "https://example.com",
+      });
+      routeState.profileCtx.listTabs.mockReset();
+    }
+  });
+
   it("threads one request budget through coordinate actions and navigation probes", async () => {
     const handler = getActPostHandler();
     const response = createBrowserRouteResponse();
