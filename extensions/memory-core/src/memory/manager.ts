@@ -877,7 +877,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           a.startLine - b.startLine ||
           a.id.localeCompare(b.id),
       )
-      .map((entry) => (entry.exactPathSpecificity > 0 ? { ...entry, score: 1 } : entry));
+      .map((entry) =>
+        entry.exactPathSpecificity > 0 ? Object.assign(entry, { score: 1 }) : entry,
+      );
   }
 
   private hasIndexedContent(): boolean {

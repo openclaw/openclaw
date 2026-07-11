@@ -87,10 +87,17 @@ function escapeLikePattern(term: string): string {
   return term.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
 }
 
+function isAscii(value: string): boolean {
+  for (const codePoint of value) {
+    if ((codePoint.codePointAt(0) ?? 0) > 0x7f) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function resolveUnicodeCandidateAnchors(value: string): string[] {
-  const firstNonAsciiCodePoint = Array.from(value).find((codePoint) =>
-    /[^\x00-\x7f]/u.test(codePoint),
-  );
+  const firstNonAsciiCodePoint = Array.from(value).find((codePoint) => !isAscii(codePoint));
   if (!firstNonAsciiCodePoint) {
     return [];
   }
@@ -174,7 +181,7 @@ function buildPathSubstringFilter(params: {
   const normalizedClauses: string[] = [];
   const normalizedParams: string[] = [];
   for (const term of params.terms) {
-    if (/^[\x00-\x7f]*$/u.test(term)) {
+    if (isAscii(term)) {
       candidateClauses.push(`${params.candidatePathColumn} LIKE ? ESCAPE '\\'`);
       candidateParams.push(`%${escapeLikePattern(term)}%`);
       continue;
@@ -205,9 +212,10 @@ function buildExactPathCandidatePatterns(query: string): string[] {
   if (!normalized || normalized === ".") {
     return [];
   }
-  const forms = new Set([normalized.normalize("NFC"), normalized.normalize("NFD")]);
-  if (/[^\x00-\x7f]/u.test(normalized)) {
-    for (const form of [...forms]) {
+  const canonicalForms = [normalized.normalize("NFC"), normalized.normalize("NFD")];
+  const forms = new Set(canonicalForms);
+  if (!isAscii(normalized)) {
+    for (const form of canonicalForms) {
       forms.add(form.toLowerCase());
       forms.add(form.toUpperCase());
     }
@@ -224,7 +232,7 @@ function buildExactPathCandidatePatterns(query: string): string[] {
     patterns.add(`%/${escaped}`);
     patterns.add(`%/${escaped}.%`);
   }
-  if (/[^\x00-\x7f]/u.test(normalized)) {
+  if (!isAscii(normalized)) {
     const asciiAnchor = normalized
       .normalize("NFD")
       .toLowerCase()
@@ -733,8 +741,7 @@ export async function searchPathKeyword(params: {
       .all(...candidateParams, params.query, params.limit) as ExactPathRow[];
   };
   const useLexicalExactCandidates =
-    /^[\x00-\x7f]*$/u.test(params.query) &&
-    (plan.matchQuery !== null || plan.substringTerms.length > 0);
+    isAscii(params.query) && (plan.matchQuery !== null || plan.substringTerms.length > 0);
   let exactRows: ExactPathRow[] = [];
   if (exactCandidatePatterns.length > 0) {
     try {

@@ -157,13 +157,15 @@ export async function mergeHybridResults(params: {
     workspaceDir: params.workspaceDir,
     nowMs: params.nowMs,
   });
-  const rankable = decayed.map((entry) => ({
-    ...entry,
+  const rankable = decayed.map((entry) => {
     // Specificity owns cross-tier precedence. Keep the decayed weighted score
     // separately for within-tier ranking while exact public scores stay at 1.
-    exactPathTieScore: entry.score,
-    score: entry.exactPathSpecificity > 0 ? 1 : entry.score,
-  }));
+    const exactPathTieScore = entry.score;
+    return Object.assign(entry, {
+      exactPathTieScore,
+      score: entry.exactPathSpecificity > 0 ? 1 : entry.score,
+    });
+  });
   const nonExact = rankable
     .filter((entry) => entry.exactPathSpecificity === 0)
     .toSorted((a, b) => b.score - a.score);
@@ -178,9 +180,9 @@ export async function mergeHybridResults(params: {
       return tier;
     }
     return applyMMRToHybridResults(
-      tier.map((entry) => ({ ...entry, score: entry.exactPathTieScore })),
+      tier.map((entry) => Object.assign(entry, { score: entry.exactPathTieScore })),
       mmrConfig,
-    ).map((entry) => ({ ...entry, score: 1 }));
+    ).map((entry) => Object.assign(entry, { score: 1 }));
   });
   const ranked = [
     ...exact,
