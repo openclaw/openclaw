@@ -4,9 +4,7 @@ import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { icons } from "../../components/icons.ts";
 import "../../components/resizable-divider.ts";
-import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
@@ -63,6 +61,7 @@ export class ChatPage extends OpenClawLightDomElement {
   private dragDepth = 0;
   private dragFrame = 0;
   private pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
+  private consumedDraftData: ChatRouteData | null = null;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -92,8 +91,24 @@ export class ChatPage extends OpenClawLightDomElement {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown>) {
+    const data = this.data;
+    const activePane = this.layout ? findPane(this.layout, this.layout.activePaneId)?.pane : null;
+    const routeDraftWasRendered =
+      Boolean(data?.draft) &&
+      this.consumedDraftData !== data &&
+      (!this.layout || activePane?.sessionKey === data.sessionKey);
     if (changedProperties.has("data")) {
       this.syncRouteToActivePane();
+    }
+    if (data && routeDraftWasRendered) {
+      // Let the matching child process the route-provided draft once, then stop
+      // later focus changes from handing the same draft to another split pane.
+      queueMicrotask(() => {
+        if (this.isConnected && this.data === data && this.consumedDraftData !== data) {
+          this.consumedDraftData = data;
+          this.requestUpdate();
+        }
+      });
     }
   }
 
@@ -376,6 +391,16 @@ export class ChatPage extends OpenClawLightDomElement {
     }
   };
 
+  private routeDraftForActivePane(sessionKey = this.data?.sessionKey): string | undefined {
+    const data = this.data;
+    // Route data can render before the split layout catches up. Never hand the
+    // new route's draft to the previously active pane during that transition.
+    if (!data || sessionKey !== data.sessionKey || this.consumedDraftData === data) {
+      return undefined;
+    }
+    return data.draft;
+  }
+
   /** Header + pane travel together so each pane owns its title bar in-flow —
    * no fixed toolbar layer mirroring the split geometry. The pane renders its
    * own header so the workspace toggle can read per-pane workspace state. */
@@ -397,7 +422,7 @@ export class ChatPage extends OpenClawLightDomElement {
           .paneId=${pane.id}
           .sessionKey=${pane.sessionKey}
           .active=${active}
-          .draft=${active ? this.data?.draft : undefined}
+          .draft=${active ? this.routeDraftForActivePane(pane.sessionKey) : undefined}
           .showPaneHeader=${true}
           .paneTitle=${title}
           .narrow=${this.narrow}
@@ -498,26 +523,13 @@ export class ChatPage extends OpenClawLightDomElement {
                 .paneId=${"single"}
                 .sessionKey=${this.data?.sessionKey ?? ""}
                 .active=${true}
-                .draft=${this.data?.draft}
+                .draft=${this.routeDraftForActivePane()}
                 .showPaneHeader=${false}
                 .onFocusPane=${this.handleFocusPane}
                 .onPaneSessionChange=${this.handlePaneSessionChange}
+                .onOpenSplitView=${this.narrow ? undefined : this.openSplitView}
               ></openclaw-chat-pane>
             `}
-        ${!this.layout && !this.narrow
-          ? html`
-              <openclaw-tooltip .content=${t("chat.splitView.open")}>
-                <button
-                  class="btn btn--sm btn--icon chat-open-split-view"
-                  type="button"
-                  aria-label=${t("chat.splitView.open")}
-                  @click=${this.openSplitView}
-                >
-                  ${icons.panelRightOpen}
-                </button>
-              </openclaw-tooltip>
-            `
-          : nothing}
         ${indicator
           ? html`<div
               class="chat-split-view__drop-indicator ${indicator.zone.kind === "center"

@@ -64,6 +64,14 @@ actor GatewayConnection {
         }
     }
 
+    /// One connected Gateway server, not merely an endpoint configuration.
+    /// A reconnect at the same URL creates a different lease.
+    struct ServerLease {
+        fileprivate let route: Route
+        fileprivate let socketGeneration: UInt64
+        fileprivate let client: GatewayChannelActor
+    }
+
     struct SessionRoutingIdentity: Equatable {
         let defaultAgentID: String
         let contract: String
@@ -325,6 +333,31 @@ actor GatewayConnection {
         return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
     }
 
+    /// Server-bound requests never reconfigure, reconnect, or cross onto a
+    /// replacement socket at the same endpoint.
+    func request(
+        method: String,
+        params: [String: AnyCodable]?,
+        timeoutMs: Double? = nil,
+        ifCurrentServerLease lease: ServerLease) async throws -> Data
+    {
+        guard await self.isCurrentServerLease(lease) else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        do {
+            return try await lease.client.request(
+                method: method,
+                params: params,
+                timeoutMs: timeoutMs,
+                ifCurrentConnectionGeneration: lease.socketGeneration)
+        } catch is CancellationError {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+    }
+
     func requestRaw(
         method: Method,
         params: [String: AnyCodable]? = nil,
@@ -392,6 +425,75 @@ actor GatewayConnection {
         }
     }
 
+    /// Connect and bind subsequent work to the hello snapshot's physical
+    /// socket. The read-only health preflight intentionally uses the ordinary
+    /// recovery path so a fresh local Gateway can start and a remote tunnel can
+    /// recover before onboarding freezes the successful physical connection.
+    func acquireServerLease() async throws -> ServerLease {
+        try await self.acquireServerLease(timeoutMs: 15000, retryTransportFailures: true)
+    }
+
+    private func acquireServerLease(
+        timeoutMs: Double,
+        retryTransportFailures: Bool) async throws -> ServerLease
+    {
+        let shutdownGeneration = self.shutdownGeneration
+        _ = try await self.request(
+            method: Method.health.rawValue,
+            params: nil,
+            timeoutMs: timeoutMs,
+            retryTransportFailures: retryTransportFailures)
+        try self.requireCurrentShutdownGeneration(shutdownGeneration)
+        let cfg = try await configProvider()
+        guard let client = self.configuredClient(
+            url: cfg.url,
+            token: cfg.token,
+            password: cfg.password,
+            shutdownGeneration: shutdownGeneration)
+        else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        guard let socketGeneration = await client.currentConnectionGeneration() else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        let lease = ServerLease(
+            route: Route(
+                generation: self.routeGeneration,
+                url: cfg.url,
+                token: cfg.token,
+                password: cfg.password),
+            socketGeneration: socketGeneration,
+            client: client)
+        guard await self.isCurrentServerLease(lease) else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        return lease
+    }
+
+    /// Reconnect one physical socket without crossing the route that owned the
+    /// original request. Endpoint or credential changes must start fresh work.
+    func acquireServerLease(
+        ifSameRouteAs previous: ServerLease,
+        timeoutMs: Double) async throws -> ServerLease
+    {
+        guard await self.isCurrentRoute(previous.route) else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        // Restart reconciliation owns its overall deadline. One short, non-retrying
+        // health request keeps a failed attempt from consuming the whole budget.
+        let replacement = try await self.acquireServerLease(
+            timeoutMs: timeoutMs,
+            retryTransportFailures: false)
+        guard replacement.route.generation == previous.route.generation,
+              replacement.route.url == previous.route.url,
+              replacement.route.token == previous.route.token,
+              replacement.route.password == previous.route.password
+        else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        return replacement
+    }
+
     func isCurrentRoute(_ route: Route) async -> Bool {
         guard let cfg = try? await configProvider() else { return false }
         return route.generation == self.routeGeneration &&
@@ -414,6 +516,37 @@ actor GatewayConnection {
               let snapshot = lastSnapshot
         else { return nil }
         return snapshot.supportsServerCapability(capability)
+    }
+
+    func supportsServerCapability(
+        _ capability: GatewayServerCapability,
+        ifCurrentServerLease lease: ServerLease) async -> Bool?
+    {
+        guard await self.isCurrentServerLease(lease),
+              self.serverLeaseMatchesCurrentState(lease),
+              let snapshot = self.lastSnapshot
+        else { return nil }
+        return snapshot.supportsServerCapability(capability)
+    }
+
+    func isCurrentServerLease(_ lease: ServerLease) async -> Bool {
+        guard let cfg = try? await configProvider(),
+              self.serverLeaseMatchesCurrentState(lease),
+              lease.route.matches(cfg),
+              await lease.client.currentConnectionGeneration() == lease.socketGeneration,
+              self.serverLeaseMatchesCurrentState(lease)
+        else { return false }
+        return true
+    }
+
+    private func serverLeaseMatchesCurrentState(_ lease: ServerLease) -> Bool {
+        lease.route.generation == self.routeGeneration &&
+            lease.route.url == self.configuredURL &&
+            lease.route.token == self.configuredToken &&
+            lease.route.password == self.configuredPassword &&
+            self.client === lease.client &&
+            self.activeSocketGeneration == lease.socketGeneration &&
+            self.lastSnapshot != nil
     }
 
     func sessionRoutingIdentity(ifCurrentRoute route: Route) async throws -> SessionRoutingIdentity {
@@ -492,16 +625,12 @@ actor GatewayConnection {
         }
         if let deviceToken = lastSnapshot?.auth["deviceToken"]?.value as? String {
             let trimmed = deviceToken.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return trimmed
-            }
+            if !trimmed.isEmpty { return trimmed }
         }
         let identity = DeviceIdentityStore.loadOrCreate()
         if let entry = DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator") {
             let trimmed = entry.token.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return trimmed
-            }
+            if !trimmed.isEmpty { return trimmed }
         }
         return nil
     }
@@ -631,6 +760,12 @@ actor GatewayConnection {
             token: token,
             password: password,
             session: self.sessionBox,
+            connectSnapshotAdmissionHandler: { [weak self] snapshot, socketGeneration in
+                await self?.admitConnectSnapshot(
+                    snapshot,
+                    routeGeneration: configuredRouteGeneration,
+                    socketGeneration: socketGeneration)
+            },
             pushHandler: { [weak self] push, socketGeneration in
                 await self?.handle(
                     push: push,
@@ -679,6 +814,19 @@ actor GatewayConnection {
               self.admitSocketGeneration(socketGeneration)
         else { return }
         self.broadcast(push)
+    }
+
+    /// Short connect-path admission only. Subscriber delivery stays on the
+    /// ordinary push task so connect never waits on downstream UI work.
+    private func admitConnectSnapshot(
+        _ snapshot: HelloOk,
+        routeGeneration: UInt64,
+        socketGeneration: UInt64)
+    {
+        guard routeGeneration == self.routeGeneration,
+              self.admitSocketGeneration(socketGeneration)
+        else { return }
+        self.lastSnapshot = snapshot
     }
 
     private func handleDisconnect(routeGeneration: UInt64, socketGeneration: UInt64) {
@@ -880,9 +1028,7 @@ extension GatewayConnection {
 
     func healthSnapshot(timeoutMs: Double? = nil) async throws -> HealthSnapshot {
         let data = try await requestRaw(method: .health, timeoutMs: timeoutMs)
-        if let snap = decodeHealthSnapshot(from: data) {
-            return snap
-        }
+        if let snap = decodeHealthSnapshot(from: data) { return snap }
         throw GatewayDecodingError(method: Method.health.rawValue, message: "failed to decode health snapshot")
     }
 
@@ -925,15 +1071,9 @@ extension GatewayConnection {
         var params: [String: AnyCodable] = [
             "skillKey": AnyCodable(skillKey),
         ]
-        if let enabled {
-            params["enabled"] = AnyCodable(enabled)
-        }
-        if let apiKey {
-            params["apiKey"] = AnyCodable(apiKey)
-        }
-        if let env, !env.isEmpty {
-            params["env"] = AnyCodable(env)
-        }
+        if let enabled { params["enabled"] = AnyCodable(enabled) }
+        if let apiKey { params["apiKey"] = AnyCodable(apiKey) }
+        if let env, !env.isEmpty { params["env"] = AnyCodable(env) }
         return try await self.requestDecoded(method: .skillsUpdate, params: params)
     }
 
@@ -952,12 +1092,8 @@ extension GatewayConnection {
             return OpenClawSessionsPreviewPayload(ts: 0, previews: [])
         }
         var params: [String: AnyCodable] = ["keys": AnyCodable(resolvedKeys)]
-        if let limit {
-            params["limit"] = AnyCodable(limit)
-        }
-        if let maxChars {
-            params["maxChars"] = AnyCodable(maxChars)
-        }
+        if let limit { params["limit"] = AnyCodable(limit) }
+        if let maxChars { params["maxChars"] = AnyCodable(maxChars) }
         let timeout = timeoutMs.map { Double($0) }
         return try await self.requestDecoded(
             method: .sessionsPreview,
@@ -980,12 +1116,8 @@ extension GatewayConnection {
         if let agentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines), !agentID.isEmpty {
             params["agentId"] = AnyCodable(agentID)
         }
-        if let limit {
-            params["limit"] = AnyCodable(limit)
-        }
-        if let maxChars {
-            params["maxChars"] = AnyCodable(maxChars)
-        }
+        if let limit { params["limit"] = AnyCodable(limit) }
+        if let maxChars { params["maxChars"] = AnyCodable(maxChars) }
         let timeout = timeoutMs.map { Double($0) }
         if let route {
             let data = try await request(
@@ -1070,9 +1202,7 @@ extension GatewayConnection {
 
     func talkMode(enabled: Bool, phase: String? = nil) async {
         var params: [String: AnyCodable] = ["enabled": AnyCodable(enabled)]
-        if let phase {
-            params["phase"] = AnyCodable(phase)
-        }
+        if let phase { params["phase"] = AnyCodable(phase) }
         try? await self.requestVoid(method: .talkMode, params: params)
     }
 

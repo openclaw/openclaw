@@ -482,7 +482,13 @@ describe("gateway broadcaster", () => {
     broadcast("health", { ok: true });
     broadcast("tick", { ts: 2 });
     broadcast("shutdown", { reason: "restart" });
-    broadcast("update.available", { updateAvailable: { version: "2026.4.20" } });
+    broadcast("update.available", {
+      updateAvailable: {
+        currentVersion: "2026.4.19",
+        latestVersion: "2026.4.20",
+        channel: "stable",
+      },
+    });
     broadcast("unknown.future.event", { hidden: true });
 
     expectSentEvents(pairingSocket, [
@@ -943,6 +949,11 @@ describe("normalizeVoiceWakeTriggers", () => {
   test("trims and limits entries", () => {
     const result = normalizeVoiceWakeTriggers(["  hello  ", "", "world"]);
     expect(result).toEqual(["hello", "world"]);
+  });
+
+  test("does not split surrogate pairs at the length limit", () => {
+    const prefix = "x".repeat(63);
+    expect(normalizeVoiceWakeTriggers([`${prefix}\u{1f600}`])).toEqual([prefix]);
   });
 });
 

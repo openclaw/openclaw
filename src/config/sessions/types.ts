@@ -246,6 +246,8 @@ export type SessionEntry = {
   heartbeatTaskState?: Record<string, number>;
   /** Plugin-owned session state, grouped by plugin id then extension namespace. */
   pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
+  /** Trusted session initialization is incomplete; all work admission stays blocked. */
+  initializationPending?: true;
   /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
   pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
   /** Durable one-shot prompt additions drained before the next agent turn. */
@@ -276,6 +278,11 @@ export type SessionEntry = {
   spawnedWorkspaceDir?: string;
   /** Task working directory inherited by spawned sessions and reused on later turns. */
   spawnedCwd?: string;
+  /**
+   * Managed worktree bound to this session; set with spawnedCwd at worktree
+   * creation and cleared together when a plain New Chat detaches the checkout.
+   */
+  worktree?: { id: string; branch: string; repoRoot: string };
   /** Explicit parent session linkage for dashboard-created child sessions. */
   parentSessionKey?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */
@@ -430,6 +437,11 @@ export type SessionEntry = {
   cacheWrite?: number;
   modelProvider?: string;
   model?: string;
+  /**
+   * Prevents OpenClaw model changes and automatic maintenance eviction until
+   * the owning harness explicitly retires the session.
+   */
+  modelSelectionLocked?: boolean;
   /**
    * Embedded agent harness selected for this session id.
    * Prevents config/env changes from moving an existing transcript between

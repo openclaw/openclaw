@@ -100,6 +100,9 @@ type ModelFallbackParams = {
 type EmbeddedAgentParams = {
   provider?: string;
   model?: string;
+  thinkLevel?: string;
+  agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
   authProfileId?: unknown;
   authProfileIdSource?: unknown;
   prompt?: string;
@@ -115,6 +118,7 @@ type EmbeddedAgentParams = {
 
 type CompactEmbeddedAgentSessionParams = {
   agentId?: string;
+  agentHarnessId?: string;
   authProfileId?: string;
   contextTokenBudget?: number;
   sessionKey?: string;
@@ -123,6 +127,7 @@ type CompactEmbeddedAgentSessionParams = {
   cwd?: string;
   force?: boolean;
   forcePreflight?: boolean;
+  modelSelectionLocked?: boolean;
   preflightRequired?: boolean;
   preflightCompactionTrigger?: string;
   sessionFile?: string;
@@ -324,6 +329,123 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.main.compactionCount).toBe(2);
     expect(persisted.main.memoryFlushCompactionCount).toBe(1);
     expect(persisted.main.memoryFlushAt).toBe(1_700_000_000_000);
+  });
+
+  it("revalidates immutable Ultra for each memory-flush fallback candidate", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      thinkingLevel: "ultra",
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await params.run("openai", "gpt-5.6-sol");
+        return {
+          result: await params.run("demo", "basic"),
+          provider: "demo",
+          model: "basic",
+          attempts: [],
+        };
+      },
+    );
+    const followupRun = createTestFollowupRun();
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.6-sol";
+    followupRun.run.thinkLevel = "ultra";
+
+    await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: { memoryFlush: {} },
+            models: {
+              "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      },
+      followupRun,
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "openai/gpt-5.6-sol",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
+      "ultra",
+      "high",
+    ]);
+    expect(followupRun.run.thinkLevel).toBe("ultra");
+  });
+
+  it("keeps catalog-adopted sessions on Codex for memory flush turns", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "catalog-adopted-session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "claude-cli",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        codex: {
+          supervision: {
+            sourceThreadId: "019f-codex-thread",
+            modelLocked: true,
+          },
+        },
+      },
+    };
+
+    const result = await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+            compaction: { memoryFlush: {} },
+            models: {
+              "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        sessionId: sessionEntry.sessionId,
+        sessionKey: "main",
+      }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(requireEmbeddedAgentCall()).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
+    });
   });
 
   it("counts resolved error payloads as failed memory flushes", async () => {
@@ -910,6 +1032,7 @@ describe("runMemoryFlushIfNeeded", () => {
       modelId: "gpt-5.4",
       agentId: "main",
       sessionKey: runtimePolicySessionKey,
+      agentHarnessId: "codex",
       agentHarnessRuntimeOverride: "codex",
       workspaceDir: "/workspace",
     });
@@ -1081,6 +1204,8 @@ describe("runMemoryFlushIfNeeded", () => {
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
     };
     const onCompactionNotice = vi.fn();
 
@@ -1112,6 +1237,8 @@ describe("runMemoryFlushIfNeeded", () => {
       preflightCompactionTrigger: "tokens",
       deferOwningContextEngineCompaction: false,
       contextTokenBudget: 100,
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
     });
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
     expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
@@ -1702,7 +1829,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
   });
 
-  it("skips OpenClaw preflight compaction for persisted Codex runtime sessions", async () => {
+  it("skips OpenClaw preflight compaction for explicit Codex runtime overrides", async () => {
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
@@ -1716,7 +1843,8 @@ describe("runMemoryFlushIfNeeded", () => {
       updatedAt: Date.now(),
       totalTokens: 347_000,
       totalTokensFresh: false,
-      agentHarnessId: "codex",
+      agentRuntimeOverride: "codex",
+      agentHarnessId: "openclaw",
     };
 
     const entry = await runPreflightCompactionIfNeeded({
@@ -1747,7 +1875,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
-  it("skips fresh persisted token totals for persisted Codex runtime sessions", async () => {
+  it("skips fresh persisted token totals for explicit Codex runtime overrides", async () => {
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
@@ -1761,7 +1889,8 @@ describe("runMemoryFlushIfNeeded", () => {
       updatedAt: Date.now(),
       totalTokens: 347_000,
       totalTokensFresh: true,
-      agentHarnessId: "codex",
+      agentRuntimeOverride: "codex",
+      agentHarnessId: "openclaw",
     };
 
     const entry = await runPreflightCompactionIfNeeded({

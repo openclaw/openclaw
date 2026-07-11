@@ -12,6 +12,7 @@ import {
   rotateAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { AgentInternalEvent } from "../internal-events.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
@@ -314,6 +315,44 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       requestedModelId: "hook-selected-model",
       fallbackActive: false,
       fallbackReason: null,
+    });
+  });
+
+  it("revalidates Ultra after a model hook replaces the selected model", async () => {
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName) => hookName === "before_model_resolve",
+    );
+    mockedGlobalHookRunner.runBeforeModelResolve.mockResolvedValueOnce({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+    });
+    mockedResolveModelAsync.mockResolvedValueOnce({
+      model: {
+        id: "gpt-5.5",
+        provider: "openai",
+        contextWindow: 200000,
+        api: "openai-responses",
+        reasoning: true,
+      },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      thinkLevel: "ultra",
+      agentHarnessRuntimeOverride: "openclaw",
+      runId: "run-before-model-resolve-thinking-revalidation",
+    });
+
+    expectMockCallFields(mockedRunEmbeddedAttempt, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      thinkLevel: "xhigh",
     });
   });
 
@@ -928,6 +967,25 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     const attemptParams = mockCallArg(mockedRunEmbeddedAttempt) as EmbeddedRunAttemptParams;
     expect(attemptParams?.runtimePlan).toBe(runtimePlan);
     expect(attemptParams?.internalEvents).toBe(internalEvents);
+    expect(attemptParams?.agentHarnessId).toBe("openclaw");
+    expect(attemptParams?.agentHarnessRuntimeOverride).toBe("openclaw");
+  });
+
+  it("keeps Ultra logical for the attempt and maps the runtime plan to max", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "ultra-runtime-plan-boundary",
+      thinkLevel: "ultra",
+    });
+
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledWith(
+      expect.objectContaining({ thinkingLevel: "max" }),
+    );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ thinkLevel: "ultra" }),
+    );
   });
 
   it("keeps an explicitly captured lifecycle generation across the embedded attempt", async () => {
@@ -987,6 +1045,65 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       lifecycleGeneration: currentLifecycleGeneration,
     });
     resetAgentRunContextForTest();
+  });
+
+  it("revalidates reserved harness ownership after the global queue wait", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-admission-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "native-session";
+    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf8",
+    );
+
+    let enqueueCount = 0;
+    let runQueuedTask: (() => void) | undefined;
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName) => hookName === "before_model_resolve",
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    try {
+      const runPromise = runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        agentHarnessId: "codex",
+        config: { session: { store: storePath } } as RunEmbeddedAgentParams["config"],
+        modelSelectionLocked: true,
+        runId: "queued-harness-admission",
+        sessionId,
+        sessionKey,
+        enqueue: async (task) => {
+          enqueueCount += 1;
+          if (enqueueCount === 1) {
+            return await task();
+          }
+          return await new Promise((resolve, reject) => {
+            runQueuedTask = () => {
+              void Promise.resolve().then(task).then(resolve, reject);
+            };
+          });
+        },
+      });
+      await vi.waitFor(() => expect(runQueuedTask).toBeTypeOf("function"));
+
+      await fs.writeFile(storePath, "{}", "utf8");
+      runQueuedTask?.();
+
+      await expect(runPromise).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+      expect(mockedGlobalHookRunner.runBeforeModelResolve).not.toHaveBeenCalled();
+      expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("rejects background work queued across lifecycle rotation", async () => {
@@ -2267,6 +2384,32 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expectRecordFields(compactParams.runtimeContext, {
       trigger: "overflow",
       authProfileId: "test-profile",
+    });
+  });
+
+  it("preserves a locked OpenClaw model in overflow compaction context", async () => {
+    mockOverflowRetrySuccess({
+      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+      compactDirect: mockedCompactDirect,
+    });
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
+      config: {
+        agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
+      },
+    });
+
+    const compactParams = expectMockCallFields(mockedCompactDirect, {});
+    expectRecordFields(compactParams.runtimeContext, {
+      trigger: "overflow",
+      modelSelectionLocked: true,
+      provider: "openai",
+      model: "gpt-5.5",
     });
   });
 

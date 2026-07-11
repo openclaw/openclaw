@@ -655,6 +655,24 @@ describe("runCliAgent spawn path", () => {
     expect(requireArgAfter(input.argv, "--effort")).toBe("high");
   });
 
+  it("maps Ultra to the strongest generic CLI backend level", async () => {
+    mockSuccessfulClaudeJsonlRun();
+    const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-ultra-args",
+        thinkLevel: "ultra",
+        resolveExecutionArgs,
+      }),
+    );
+
+    const resolveArgsInput = requireRecord(mockCallArg(resolveExecutionArgs), "resolved args");
+    expect(resolveArgsInput.thinkingLevel).toBe("max");
+  });
+
   it("passes prepared backend env to the spawned CLI process", async () => {
     mockSuccessfulCliRun();
 
@@ -3739,6 +3757,42 @@ ${JSON.stringify({
     expect(parsed.response.response.toolUseID).toBe("tool-permmode-allow-1");
     const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
     expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("bypassPermissions");
+  });
+
+  it("cleans live-turn resources when capture activation fails before spawn", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "sonnet",
+      runId: "run-live-capture-activation-failure",
+      mcpDeliveryCapture: true,
+    });
+
+    await expect(
+      runClaudeLiveSessionTurn({
+        context,
+        args: [],
+        env: {},
+        prompt: "hi",
+        useResume: false,
+        noOutputTimeoutMs: 1_000,
+        getProcessSupervisor: () => ({
+          spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+            supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+          cancel: vi.fn(),
+          cancelScope: vi.fn(),
+          getRecord: vi.fn(),
+        }),
+        onAssistantDelta: () => {},
+        onMcpCaptureReady: () => {
+          throw new Error("grant activation failed");
+        },
+        cleanup,
+      }),
+    ).rejects.toThrow("grant activation failed");
+
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(supervisorSpawnMock).not.toHaveBeenCalled();
   });
 
   it("uses a fresh Claude live process and capture key for every captured turn", async () => {

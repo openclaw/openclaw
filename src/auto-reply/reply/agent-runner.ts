@@ -1274,6 +1274,7 @@ export async function runReplyAgent(params: {
     }
   };
 
+  let shouldQueueAfterSteerRejection = false;
   if (effectiveShouldSteer && isActive) {
     const activeReplyOperation =
       providedReplyOperation ?? (sessionKey ? replyRunRegistry.get(sessionKey) : undefined);
@@ -1283,6 +1284,7 @@ export async function runReplyAgent(params: {
       followupRun.prompt,
       {
         steeringMode: "all",
+        ...(opts?.onTurnAdopted ? { waitForTranscriptCommit: true } : {}),
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
         ...(followupRun.run.sourceReplyDeliveryMode
           ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
@@ -1295,6 +1297,17 @@ export async function runReplyAgent(params: {
     );
     if (steerOutcome.queued) {
       activeReplyOperation?.recordActivity();
+      try {
+        await opts?.onTurnAdopted?.();
+      } catch (error) {
+        // Transcript-backed steering is already irrevocably queued here.
+        // Replaying ingress would duplicate the injected user turn.
+        logVerbose(
+          `queue: active session ${steerSessionId} adoption finalizer failed after transcript commit: ${String(
+            error,
+          )}`,
+        );
+      }
       if (followupRun.currentInboundAudio === true) {
         activeReplyOperation?.markAcceptedSteeredInboundAudio();
       }
@@ -1302,6 +1315,9 @@ export async function runReplyAgent(params: {
       typing.cleanup();
       return undefined;
     }
+    // The active runtime still owns the turn but cannot prove transcript adoption.
+    // Keep the inbound message queued so ingress can finalize after a later run.
+    shouldQueueAfterSteerRejection = steerOutcome.reason === "transcript_commit_wait_unsupported";
     const summary = formatEmbeddedAgentQueueFailureSummary(steerOutcome);
     logVerbose(`queue: active session ${steerSessionId} rejected steering injection: ${summary}`);
   }
@@ -1309,7 +1325,7 @@ export async function runReplyAgent(params: {
   const activeRunQueueAction = resolveActiveRunQueueAction({
     isActive,
     isHeartbeat,
-    shouldFollowup: effectiveShouldFollowup,
+    shouldFollowup: effectiveShouldFollowup || shouldQueueAfterSteerRejection,
     queueMode: activeRunQueueMode,
     resetTriggered: effectiveResetTriggered,
   });

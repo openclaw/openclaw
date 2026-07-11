@@ -1,13 +1,14 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./app-host.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
-import "./app-host.ts";
 
 type AppLifecycleState = {
   loginToken: string;
@@ -28,6 +29,13 @@ type ShellInitializationState = {
     snapshot: { client: GatewayBrowserClient | null; connected: boolean },
     runtimeConfig: ApplicationContext["runtimeConfig"],
   ) => void;
+};
+
+type ShellKeyboardState = {
+  runtime: {
+    context: ApplicationContext;
+  };
+  handleDocumentKeydown: (event: KeyboardEvent) => void;
 };
 
 type ShellEpochState = {
@@ -161,5 +169,100 @@ describe("OpenClaw shell source initialization", () => {
     expect(secondAgents.ensureList).toHaveBeenCalledOnce();
     expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
     expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+  });
+});
+
+describe("OpenClaw shell keyboard shortcuts", () => {
+  it("opens Settings with Shift-Command-Comma", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    shell.runtime = {
+      context: {
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+    const event = new KeyboardEvent("keydown", {
+      key: "<",
+      code: "Comma",
+      metaKey: true,
+      shiftKey: true,
+      cancelable: true,
+    });
+
+    shell.handleDocumentKeydown(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith("config", undefined);
+  });
+
+  it("leaves plain Command-Comma to the browser", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    shell.runtime = {
+      context: {
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+    const event = new KeyboardEvent("keydown", {
+      key: ",",
+      code: "Comma",
+      metaKey: true,
+      cancelable: true,
+    });
+
+    shell.handleDocumentKeydown(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe("OpenClaw shell update affordance", () => {
+  it("renders a floating card only while desktop navigation is collapsed", () => {
+    const container = document.createElement("div");
+    const updateAvailable = {
+      currentVersion: "2026.7.1",
+      latestVersion: "2026.7.2",
+      channel: "stable",
+    };
+    const shared = {
+      onboarding: false,
+      updateAvailable,
+      updateRunning: false,
+      onUpdate: vi.fn(),
+    };
+
+    const collapsed = navigationSurfaceIsHidden({
+      navCollapsed: true,
+      navDrawerOpen: false,
+      mobileNavLayout: false,
+    });
+    render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden: collapsed }), container);
+    expect(container.querySelector("openclaw-sidebar-update-card")).not.toBeNull();
+
+    const visible = navigationSurfaceIsHidden({
+      navCollapsed: false,
+      navDrawerOpen: false,
+      mobileNavLayout: false,
+    });
+    render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden: visible }), container);
+    expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
+  });
+
+  it("treats the mobile navigation surface as hidden while its drawer is closed", () => {
+    expect(
+      navigationSurfaceIsHidden({
+        navCollapsed: false,
+        navDrawerOpen: false,
+        mobileNavLayout: true,
+      }),
+    ).toBe(true);
+    expect(
+      navigationSurfaceIsHidden({
+        navCollapsed: false,
+        navDrawerOpen: true,
+        mobileNavLayout: true,
+      }),
+    ).toBe(false);
   });
 });

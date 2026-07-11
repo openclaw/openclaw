@@ -80,12 +80,28 @@ describe("OpenClaw performance workflow", () => {
     expect(workflow).toContain("Optional parent workflow dispatch identifier");
   });
 
-  it("pins the Kova evaluator that reads agent payloads", () => {
+  it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const kovaRef = "a2dd84e7d65507e614afaff850d3932d18c859b6";
+    const kovaRef = "790f0b28229cb60a60c289ef8c250d76c639f48f";
+    const install = findStep("Install OCM and Kova");
+    const installRun = install.run ?? "";
 
     expect(workflow).toContain(`default: ${kovaRef}`);
     expect(workflow).toContain(`inputs.kova_ref || '${kovaRef}'`);
+    expect(installRun).toContain(
+      'npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund',
+    );
+    expect(installRun).toContain('require.resolve("mock-ai-provider/package.json", {');
+    expect(installRun).toContain('packageJson.bin?.["mock-ai-provider"]');
+    expect(installRun).toContain('path.join(root, "node_modules", ".bin", "mock-ai-provider")');
+    expect(installRun).toContain("fs.constants.X_OK");
+    expect(installRun).toContain('require.resolve("zod", { paths: [root] })');
+    expect(installRun).not.toContain('require.resolve("mock-ai-provider",');
+    expect(
+      installRun.indexOf('npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund'),
+    ).toBeLessThan(installRun.indexOf('cat > "$HOME/.local/bin/kova"'));
+    expect(workflow).toContain("PERFORMANCE_MODEL_ID: gpt-5.6");
+    expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
   });
 
   it("resolves each target once before benchmark and publication fan out", () => {
@@ -111,6 +127,18 @@ describe("OpenClaw performance workflow", () => {
         .flatMap((job) => job.steps ?? [])
         .filter((step) => step.name === "Resolve OpenClaw target ref"),
     ).toHaveLength(1);
+  });
+
+  it("passes the requested model through Kova live auth without rewriting Kova source", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+    const run = findStep("Run Kova").run ?? "";
+
+    expect(workflow).not.toContain("Pin Kova OpenAI model to GPT 5.6");
+    expect(run).toContain('if [[ "$AUTH_MODE" == "live" ]]; then');
+    expect(run).toContain('args+=(--model "$PERFORMANCE_MODEL_ID")');
+    expect(run.indexOf('if [[ "$AUTH_MODE" == "live" ]]; then')).toBeLessThan(
+      run.indexOf('args+=(--model "$PERFORMANCE_MODEL_ID")'),
+    );
   });
 
   it("fetches the public clawgrit baseline without publisher credentials", () => {
@@ -144,7 +172,7 @@ describe("OpenClaw performance workflow", () => {
 
     expect(publisher?.needs).toEqual(["resolve_target", "kova"]);
     expect(publisher?.if).toBe(
-      "${{ always() && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' }}",
+      "${{ always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' }}",
     );
     expect(publisher?.["runs-on"]).toBe("ubuntu-24.04");
     expect(publisher?.permissions?.actions).toBe("read");
@@ -158,6 +186,32 @@ describe("OpenClaw performance workflow", () => {
     expect(prepareIndex).toBeGreaterThan(downloadIndex);
     expect(appTokenIndex).toBeGreaterThan(prepareIndex);
     expect(pushIndex).toBeGreaterThan(appTokenIndex);
+  });
+
+  it("keeps report publication opt-out artifact-only for final release validation", () => {
+    const workflowText = readFileSync(WORKFLOW, "utf8");
+    const fullReleaseText = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
+    const publisher = readWorkflow().jobs?.publish;
+
+    expect(workflowText).toContain("publish_reports:");
+    expect(workflowText).toContain("default: true");
+    expect(publisher?.if).toContain("inputs.publish_reports == true");
+    expect(fullReleaseText).toContain("-f publish_reports=false");
+    expect(fullReleaseText).toContain("Report publication: disabled (artifacts only)");
+  });
+
+  it("fails closed when artifact-only mode does not keep the publisher skipped", () => {
+    const guard = readWorkflow().jobs?.artifact_only_guard;
+    const verify = findStep("Verify report publisher stayed disabled", "artifact_only_guard");
+
+    expect(guard?.needs).toEqual(["resolve_target", "kova", "publish"]);
+    expect(guard?.if).toBe(
+      "${{ always() && github.event_name == 'workflow_dispatch' && inputs.publish_reports != true }}",
+    );
+    expect(guard?.permissions?.contents).toBe("read");
+    expect(verify.env?.PUBLISH_RESULT).toBe("${{ needs.publish.result }}");
+    expect(verify.run).toContain('[[ "$PUBLISH_RESULT" != "skipped" ]]');
+    expect(verify.run).toContain("Artifact-only performance mode requires");
   });
 
   it("mints only a short-lived repo-scoped ClawSweeper app token", () => {
@@ -281,6 +335,37 @@ describe("OpenClaw performance workflow", () => {
     expect(publish.run).toContain('git_local cherry-pick -X theirs "$report_commit"');
     expect(publish.run).toContain('report_commit="$(git_local rev-parse HEAD)"');
     expect(publish.run).not.toContain("rebase FETCH_HEAD");
+  });
+
+  it("publishes bounded bundle metadata while retaining full diagnostics as an artifact", () => {
+    const workflow = readWorkflow();
+    const publisher = workflow.jobs?.publish;
+    const helper = findStep("Checkout performance publisher helper", "publish");
+    const prepare = findStep("Prepare clawgrit report commit", "publish");
+    const upload = findStep("Upload Kova artifacts");
+
+    expect(publisher?.env?.PUBLISHED_REPORT_MAX_FILE_BYTES).toBe("50000000");
+    expect(publisher?.env?.PERFORMANCE_PUBLISHER_HELPER).toContain(
+      "scripts/lib/kova-report-publish-files.mjs",
+    );
+    expect(publisher?.env?.PERFORMANCE_REPORT_SELECTOR).toContain(
+      "scripts/lib/kova-report-selector.mjs",
+    );
+    expect(helper.with).toMatchObject({
+      ref: "${{ github.sha }}",
+      path: ".artifacts/performance-publisher",
+      "sparse-checkout":
+        "scripts/lib/kova-report-publish-files.mjs\nscripts/lib/kova-report-selector.mjs\n",
+      "sparse-checkout-cone-mode": false,
+      "persist-credentials": false,
+    });
+    expect(upload.with?.path).toContain(".artifacts/kova/bundles/${{ matrix.lane }}");
+    expect(prepare.env?.ARTIFACT_ID).toBe("${{ steps.artifact.outputs.id }}");
+    expect(prepare.run).toContain('node "$PERFORMANCE_PUBLISHER_HELPER"');
+    expect(prepare.run).toContain('--bundle-destination "$dest/bundles"');
+    expect(prepare.run).toContain('--max-file-bytes "$PUBLISHED_REPORT_MAX_FILE_BYTES"');
+    expect(prepare.run).toContain("The complete Kova bundle remains in [Actions artifact");
+    expect(prepare.run).not.toContain('cp -R "$bundle"/. "$dest/bundles/"');
   });
 
   it("reuses the producing artifact when only publisher jobs rerun", () => {
@@ -581,25 +666,34 @@ esac
     expect(sanity.run).not.toContain("--include scenario:fresh-install");
   });
 
-  it("makes the live lane use live auth through the OpenClaw runtime", () => {
-    const override = findStep("Prepare live OpenAI candidate state");
+  it("uses Kova's explicit live auth contract without rewriting its state registry", () => {
+    const workflow = readWorkflow();
+    const stepNames = workflow.jobs?.kova?.steps?.map((step) => step.name) ?? [];
+    const runKova = findStep("Run Kova");
 
-    expect(override.if).toContain("matrix.live == 'true'");
-    expect(override.run).toContain("states/mock-openai-provider.json");
-    expect(override.run).toContain('state.auth?.mode !== "mock"');
-    expect(override.run).toContain('state.auth.mode = "default"');
-    expect(override.run).toContain(
-      "This ephemeral checkout must honor the lane's explicit --auth live selection.",
+    expect(stepNames).not.toContain("Prepare live OpenAI candidate state");
+    expect(runKova.run).toContain('--auth "$AUTH_MODE"');
+    expect(runKova.run).toContain('args+=(--model "$PERFORMANCE_MODEL_ID")');
+    expect(JSON.stringify(workflow)).not.toContain("states/mock-openai-provider.json");
+  });
+
+  it("finalizes Kova artifacts before failing evidence integrity", () => {
+    const run = findStep("Run Kova").run ?? "";
+    const evidence = run.indexOf("scripts/lib/kova-workflow-evidence.mjs");
+    const bundle = run.indexOf('kova report bundle "$report_json"');
+    const summary = run.indexOf("scripts/kova-ci-summary.mjs");
+    const integrityExit = run.indexOf(
+      'if [[ "$evidence_status" != "0" || "$bundle_status" != "0" || "$summary_status" != "0" ]]',
     );
-    expect(override.run).toContain(
-      'state.auth.reason = "Honor the workflow lane\'s explicit run-level auth selection."',
-    );
-    expect(override.run).toContain('id: "force-openclaw-agent-runtime"');
-    expect(override.run).toContain('afterPhase: "provision"');
-    expect(override.run).toContain(
-      "ocm @{env} -- config set models.providers.openai.agentRuntime.id openclaw",
-    );
-    expect(override.run).not.toContain("agents.defaults.agentRuntime");
+
+    expect(evidence).toBeGreaterThan(-1);
+    expect(bundle).toBeGreaterThan(evidence);
+    expect(summary).toBeGreaterThan(bundle);
+    expect(integrityExit).toBeGreaterThan(summary);
+    expect(run).toContain("evidence_status=$?");
+    expect(run).toContain("bundle_status=${PIPESTATUS[0]}");
+    expect(run).toContain("summary_status=$?");
+    expect(run).toContain("Summary generation failed with status ${summary_status}");
   });
 
   it("runs the trusted lane evidence validator before tolerating gate failures", () => {
@@ -617,6 +711,21 @@ esac
     expect(run).toContain('--repeat "$repeat"');
     expect(run).toContain('--include "$INCLUDE_FILTERS"');
     expect(run).toContain('--auth "$AUTH_MODE"');
+    expect(run).toContain('--model "$PERFORMANCE_MODEL_ID"');
+  });
+
+  it("selects exactly one full Kova report across producer and publisher paths", () => {
+    const runKova = findStep("Run Kova");
+    const validate = findStep("Validate Kova evidence");
+    const publish = findStep("Prepare clawgrit report commit", "publish");
+
+    expect(runKova.run).toContain('kova-report-selector.mjs" --report-dir "$REPORT_DIR"');
+    expect(validate.run).toContain('kova-report-selector.mjs" --report-dir "$REPORT_DIR"');
+    expect(publish.run).toContain(
+      'node "$PERFORMANCE_REPORT_SELECTOR" --report-dir "${report_dirs[0]}"',
+    );
+    expect(runKova.run).not.toContain("tail -n 1");
+    expect(publish.run).not.toContain("report_jsons");
   });
 
   it("installs local workspace packages beside the OCM root tarball", () => {
@@ -653,7 +762,7 @@ esac
 
     expect(validateEvidence.if).toContain("always()");
     expect(validateEvidence.if).toContain("steps.lane.outputs.run == 'true'");
-    expect(validateEvidence.run).toContain('"$REPORT_DIR" -maxdepth 1 -type f -name');
+    expect(validateEvidence.run).toContain('kova-report-selector.mjs" --report-dir "$REPORT_DIR"');
     expect(validateEvidence.run).toContain('"$BUNDLE_DIR/bundle.json"');
     expect(validateEvidence.run).toContain('"$SUMMARY_DIR/${LANE_ID}.md"');
     expect(validateEvidence.run).toContain("exit 1");

@@ -73,7 +73,10 @@ type SettingsNavigationGroup = {
 export const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["profile", "config", "appearance"] },
   { labelKey: "nav.settingsGroupConnections", routes: ["channels", "communications"] },
-  { labelKey: "nav.settingsGroupAgents", routes: ["ai-agents", "automation", "mcp"] },
+  {
+    labelKey: "nav.settingsGroupAgents",
+    routes: ["ai-agents", "model-providers", "automation", "mcp"],
+  },
   {
     labelKey: "nav.settingsGroupSystem",
     routes: ["infrastructure", "worktrees", "debug", "logs", "about"],
@@ -109,10 +112,12 @@ const NAVIGATION_ICONS: NavigationItem = {
   infrastructure: "globe",
   about: "fileText",
   "ai-agents": "brain",
+  "model-providers": "plug",
   debug: "bug",
   logs: "scrollText",
   dreams: "moon",
   plugin: "puzzle",
+  "new-session": "plus",
 };
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
@@ -203,10 +208,15 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
   about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
+  "model-providers": {
+    titleKey: "tabs.modelProviders",
+    subtitleKey: "subtitles.modelProviders",
+  },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
   dreams: { titleKey: "tabs.dreams", subtitleKey: "subtitles.dreams" },
   plugin: { titleKey: "tabs.plugin", subtitleKey: "subtitles.plugin" },
+  "new-session": { titleKey: "newSession.title", subtitleKey: "newSession.hint" },
 };
 
 export function titleForRoute(routeId: NavigationRouteId): string {

@@ -23,6 +23,7 @@ type RenderedPane = HTMLElement & {
   showPaneHeader: boolean;
   paneTitle: string;
   narrow: boolean;
+  onOpenSplitView?: () => void;
 };
 
 function setLayout(page: ChatPage, layout: ChatSplitLayout | undefined) {
@@ -31,6 +32,14 @@ function setLayout(page: ChatPage, layout: ChatSplitLayout | undefined) {
 
 function getLayout(page: ChatPage): ChatSplitLayout | undefined {
   return (page as unknown as { layout: ChatSplitLayout | undefined }).layout;
+}
+
+function getRouteDraftForActivePane(page: ChatPage): string | undefined {
+  return (
+    page as unknown as {
+      routeDraftForActivePane: () => string | undefined;
+    }
+  ).routeDraftForActivePane();
 }
 
 function applySessionDrop(page: ChatPage, sessionKey: string, paneId: string, zone: SplitDropZone) {
@@ -111,7 +120,36 @@ describe("chat page split layout host", () => {
     expect(panes[0].active).toBe(true);
     expect(panes[0].showPaneHeader).toBe(false);
     expect(page.querySelector("resizable-divider")).toBeNull();
-    expect(page.querySelector(".chat-open-split-view")).toBeInstanceOf(HTMLButtonElement);
+    // The pane renders the opener in its floating toggle cluster; the page
+    // only hands down the callback on wide single-pane layouts.
+    expect(typeof panes[0].onOpenSplitView).toBe("function");
+  });
+
+  it("withholds the split-view opener on narrow single-pane viewports", async () => {
+    stubMatchMedia(true);
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    await page.updateComplete;
+
+    const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
+    expect(pane?.onOpenSplitView).toBeUndefined();
+  });
+
+  it("hands each route-provided draft to the active pane only once", async () => {
+    const page = new ChatPage();
+    const firstRouteData = { sessionKey: "main", draft: "one-shot draft" };
+    page.data = firstRouteData;
+    expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
+
+    document.body.append(page);
+    await page.updateComplete;
+    await Promise.resolve();
+    await page.updateComplete;
+
+    expect(getRouteDraftForActivePane(page)).toBeUndefined();
+    page.data = { ...firstRouteData };
+    expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
   });
 
   it("passes an empty session key while route data is still unresolved", async () => {
@@ -142,7 +180,7 @@ describe("chat page split layout host", () => {
     expect(page.querySelector(".chat-split-view__cell--active")?.contains(panes[1])).toBe(true);
     // Panes own their in-flow header row (title + workspace/split/close).
     expect(panes.map((pane) => pane.showPaneHeader)).toEqual([true, true]);
-    expect(page.querySelector(".chat-open-split-view")).toBeNull();
+    expect(panes.every((pane) => pane.onOpenSplitView === undefined)).toBe(true);
   });
 
   it("renders only the active pane from a preserved split on narrow viewports", async () => {
