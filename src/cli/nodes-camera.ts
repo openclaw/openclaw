@@ -216,12 +216,12 @@ export async function writeBase64ToFile(
   opts: { maxBytes?: number } = {},
 ) {
   const maxBytes = opts.maxBytes ?? MAX_CAMERA_BASE64_BYTES;
+  if (estimateDecodedBase64Bytes(base64) > maxBytes) {
+    throw new Error(`writeBase64ToFile: decoded payload exceeds max ${maxBytes}`);
+  }
   const canonicalBase64 = canonicalizeBase64(base64);
   if (!canonicalBase64) {
     throw new Error("writeBase64ToFile: invalid base64 payload");
-  }
-  if (estimateDecodedBase64Bytes(canonicalBase64) > maxBytes) {
-    throw new Error(`writeBase64ToFile: decoded payload exceeds max ${maxBytes}`);
   }
   const buf = Buffer.from(canonicalBase64, "base64");
   if (buf.length > maxBytes) {
