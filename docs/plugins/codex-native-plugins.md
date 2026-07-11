@@ -125,8 +125,9 @@ OpenClaw does not call `plugin/install` or start authentication for a
 `workspace-directory` plugin. Install, enable, and authenticate it in Codex
 before adding or enabling the OpenClaw policy. OpenClaw keeps apps hidden when
 the response omits the exact marketplace, plugin ID, detail ID, or app-readiness
-evidence. App servers that reject `marketplaceKinds` are incompatible and can
-prevent Codex thread setup.
+evidence. If Codex rejects the explicit workspace `plugin/list` request,
+OpenClaw reports `marketplace_missing` for each enabled workspace plugin and
+keeps any independently discovered curated plugins available.
 
 After a `codexPlugins` change, new Codex conversations pick up the updated
 app set automatically. Run `/new` or `/reset` to refresh the current
@@ -209,9 +210,10 @@ current conversation.
   builds whose `plugin/list` implements `marketplaceKinds` and returns
   `remotePluginId` for pathless workspace summaries. These entries must use
   their exact marketplace-qualified `summary.id` and must already be installed,
-  enabled, and app-accessible. A rejected workspace list request can prevent
-  Codex thread setup; missing marketplace, plugin, detail, or app evidence
-  exposes no app.
+  enabled, and app-accessible. A rejected workspace list request produces the
+  existing per-plugin `marketplace_missing` diagnostic; missing marketplace,
+  plugin, detail, or app evidence exposes no workspace app. Curated inventory
+  from the default list request remains usable.
 - App-backed source plugins must pass the migration-time subscription gate.
   `--verify-plugin-apps` adds the source app-inventory gate. Subscription-gated
   accounts, and in verification mode inaccessible/disabled/missing source
@@ -338,7 +340,7 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
 | `app_inventory_unavailable`                       | Strict source app verification was requested but the source Codex app inventory refresh failed.                                      | Fix source Codex app-server access, or retry without `--verify-plugin-apps` to accept the faster account-gated plan.   |
 | `codex_subscription_required`                     | The source Codex app-server account was not a ChatGPT subscription account.                                                          | Log in to the Codex app with subscription auth, then rerun migration.                                                  |
 | `codex_account_unavailable`                       | The source Codex app-server account could not be read.                                                                               | Fix source Codex app-server auth, or rerun with `--verify-plugin-apps` to let source app inventory decide eligibility. |
-| `marketplace_missing`, `plugin_missing`           | The target Codex app-server cannot see the configured marketplace or exact plugin ID.                                                | Verify the compatible app-server contract and exact ID described below.                                                |
+| `marketplace_missing`, `plugin_missing`           | Marketplace or exact plugin unavailable; the explicit workspace catalog request may have been rejected; workspace apps fail closed.  | Verify the compatible app-server contract and exact ID described below.                                                |
 | `plugin_detail_unavailable`                       | OpenClaw could not read plugin ownership details.                                                                                    | Inspect the target app-server's `plugin/list` and `plugin/read` responses.                                             |
 | `plugin_disabled`                                 | Codex reports the plugin installed but disabled.                                                                                     | Curated activation may repair it; enable a workspace plugin in Codex before retrying.                                  |
 | `plugin_activation_failed`                        | Plugin activation did not complete.                                                                                                  | Use the attached diagnostic to distinguish marketplace, auth, refresh, or workspace-readiness failures.                |
@@ -352,6 +354,9 @@ account. OpenClaw can enable an accessible app for the thread even when the
 account inventory currently reports that app disabled. If you changed that state after the gateway cached app
 inventory, wait for the one-hour cache refresh or restart the gateway, then use
 `/new` or `/reset`. OpenClaw does not repair or authenticate workspace plugins.
+If the explicit workspace list request is rejected, each enabled workspace
+entry reports `marketplace_missing`; unrelated curated entries still proceed
+from the default list response.
 
 For `plugin_detail_unavailable`, a pathless workspace summary must include
 `remotePluginId`; OpenClaw keeps owned apps hidden when that selector or the

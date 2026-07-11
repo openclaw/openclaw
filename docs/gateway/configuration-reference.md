@@ -343,9 +343,12 @@ configured reviewer, so mixed plugin policies do not inherit `"ask"` behavior.
 entries written by migration are the durable curated install and repair
 eligibility set. Manually configured `workspace-directory` entries must already
 be installed and enabled, and their owned apps must be accessible; OpenClaw
-does not install or authenticate them. `plugins["*"]` is not supported, there is no
-`install` switch, and local `marketplacePath` values are intentionally not
-config fields because they are host-specific. See
+does not install or authenticate them. If Codex rejects the explicit workspace
+catalog request, enabled workspace entries fail closed with
+`marketplace_missing` while curated entries from the default catalog remain
+available. `plugins["*"]` is not supported, there is no `install` switch, and
+local `marketplacePath` values are intentionally not config fields because they
+are host-specific. See
 [Native Codex plugins](/plugins/codex-native-plugins) for app-server version and
 readiness requirements.
 

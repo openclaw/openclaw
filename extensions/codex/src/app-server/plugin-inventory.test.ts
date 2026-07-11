@@ -1,6 +1,7 @@
 // Codex tests cover plugin inventory plugin behavior.
 import { describe, expect, it } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
+import { CodexAppServerRpcError } from "./client.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
@@ -387,6 +388,101 @@ describe("Codex plugin inventory", () => {
         plugin: { configKey: "workspaceData" },
       },
     ]);
+  });
+
+  it("keeps curated records and diagnoses each workspace plugin when its explicit list is rejected", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const inventory = await readCodexPluginInventory({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            github: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "github",
+            },
+            workspaceData: {
+              marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+              pluginName: "workspace-data@workspace-directory",
+            },
+            workspaceMetrics: {
+              marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+              pluginName: "workspace-metrics@workspace-directory",
+            },
+          },
+        },
+      },
+      readPluginDetails: false,
+      request: async (method, params) => {
+        calls.push({ method, params });
+        if (method !== "plugin/list") {
+          throw new Error(`unexpected request ${method}`);
+        }
+        if ((params as v2.PluginListParams).marketplaceKinds) {
+          throw new CodexAppServerRpcError(
+            { code: -32_603, message: "list remote plugin catalog failed" },
+            method,
+          );
+        }
+        return pluginList([pluginSummary("github", { installed: true, enabled: true })]);
+      },
+    });
+
+    expect(calls).toStrictEqual([
+      { method: "plugin/list", params: { cwds: [] } },
+      {
+        method: "plugin/list",
+        params: { cwds: [], marketplaceKinds: [CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME] },
+      },
+    ]);
+    expect(inventory.records.map((record) => record.policy.configKey)).toStrictEqual(["github"]);
+    expect(
+      inventory.diagnostics.map((diagnostic) => ({
+        code: diagnostic.code,
+        configKey: diagnostic.plugin?.configKey,
+        message: diagnostic.message,
+      })),
+    ).toStrictEqual([
+      {
+        code: "marketplace_missing",
+        configKey: "workspaceData",
+        message: "Codex marketplace workspace-directory was not found.",
+      },
+      {
+        code: "marketplace_missing",
+        configKey: "workspaceMetrics",
+        message: "Codex marketplace workspace-directory was not found.",
+      },
+    ]);
+  });
+
+  it("does not hide non-RPC failures from the explicit workspace list", async () => {
+    const failure = new Error("workspace plugin/list transport closed");
+    await expect(
+      readCodexPluginInventory({
+        pluginConfig: {
+          codexPlugins: {
+            enabled: true,
+            plugins: {
+              workspaceData: {
+                marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+                pluginName: "workspace-data@workspace-directory",
+              },
+            },
+          },
+        },
+        readPluginDetails: false,
+        request: async (method, params) => {
+          if (method !== "plugin/list") {
+            throw new Error(`unexpected request ${method}`);
+          }
+          if ((params as v2.PluginListParams).marketplaceKinds) {
+            throw failure;
+          }
+          return pluginList([]);
+        },
+      }),
+    ).rejects.toBe(failure);
   });
 
   it("fails closed when plugin detail apps are absent from app inventory", async () => {

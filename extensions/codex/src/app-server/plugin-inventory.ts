@@ -8,6 +8,7 @@ import type {
   CodexAppInventoryCacheRead,
   CodexAppInventoryRequest,
 } from "./app-inventory-cache.js";
+import { CodexAppServerRpcError } from "./client.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
@@ -22,6 +23,10 @@ const CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME = `${CODEX_PLUGINS_MARKETPLACE_NAME}
 
 /** Request callback used to call Codex app-server plugin/app methods. */
 export type CodexPluginRuntimeRequest = (method: string, params?: unknown) => Promise<unknown>;
+
+type CodexWorkspacePluginListResult =
+  | { kind: "listed"; response: v2.PluginListResponse }
+  | { kind: "rejected" };
 
 /** Stable reference to a supported Codex plugin marketplace. */
 export type CodexPluginMarketplaceRef = {
@@ -111,16 +116,28 @@ export async function readCodexPluginInventory(
   const curatedListed = (await params.request("plugin/list", {
     cwds: [],
   } satisfies v2.PluginListParams)) as v2.PluginListResponse;
-  const workspaceListed = policy.pluginPolicies.some(
+  const shouldListWorkspacePlugins = policy.pluginPolicies.some(
     (pluginPolicy) =>
       pluginPolicy.enabled &&
       pluginPolicy.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
-  )
-    ? ((await params.request("plugin/list", {
-        cwds: [],
-        marketplaceKinds: [CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME],
-      } satisfies v2.PluginListParams)) as v2.PluginListResponse)
-    : undefined;
+  );
+  let workspaceListResult: CodexWorkspacePluginListResult | undefined;
+  if (shouldListWorkspacePlugins) {
+    try {
+      workspaceListResult = {
+        kind: "listed",
+        response: (await params.request("plugin/list", {
+          cwds: [],
+          marketplaceKinds: [CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME],
+        } satisfies v2.PluginListParams)) as v2.PluginListResponse,
+      };
+    } catch (error) {
+      if (!(error instanceof CodexAppServerRpcError)) {
+        throw error;
+      }
+      workspaceListResult = { kind: "rejected" };
+    }
+  }
 
   const diagnostics: CodexPluginInventoryDiagnostic[] = [];
   const records: CodexPluginInventoryRecord[] = [];
@@ -142,7 +159,9 @@ export async function readCodexPluginInventory(
     }
     const listed =
       pluginPolicy.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
-        ? workspaceListed
+        ? workspaceListResult?.kind === "listed"
+          ? workspaceListResult.response
+          : undefined
         : curatedListed;
     const hasMarketplace =
       pluginPolicy.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
