@@ -676,7 +676,12 @@ jobs:
             exit 0
           fi
 
-          pnpm build
+          # target_ref may predate the dedicated profile; preserve the historical full build there.
+          if node -e "import('./scripts/build-all.mjs').then((module) => process.exit(module.BUILD_ALL_PROFILES?.sourcePerformance ? 0 : 1)).catch(() => process.exit(1))"; then
+            OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs sourcePerformance
+          else
+            pnpm build
+          fi
 
           pnpm test:gateway:cpu-scenarios \
             --output-dir "$SOURCE_PERF_DIR/gateway-cpu" \
