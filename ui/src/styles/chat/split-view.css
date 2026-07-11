@@ -159,16 +159,8 @@ openclaw-chat-pane {
 .chat-pane__actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  /* Boxed .chat-icon-btn buttons need more breathing room than the old
+     borderless icons; matches the .chat-floating-toggles row gap. */
+  gap: 6px;
   flex: 0 0 auto;
-}
-
-.chat-pane__actions .btn--icon {
-  width: 28px;
-  /* .btn--icon's min-width: 36px otherwise wins over width and stretches
-     these into 36x28 pills. */
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 5px;
 }

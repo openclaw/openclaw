@@ -62,12 +62,10 @@
   gap: 6px;
 }
 
-.chat-workspace-open,
-.chat-tasks-open,
-.chat-diff-open,
-.chat-open-split-view {
-  /* Match the 28px pane-header/split-view openers; .btn--icon's
-     min-width/height of 36px would win otherwise. */
+/* Compact icon button shared by the split-pane header actions and the
+   floating toggles above: one 28px boxed design so both surfaces match.
+   .btn--icon's 36px min-width/height would win otherwise. */
+.chat-icon-btn {
   width: 28px;
   min-width: 28px;
   height: 28px;
@@ -86,8 +84,7 @@
    side-dock only, so its toggles still hide on narrow viewports until it
    grows a narrow presentation. */
 @media (max-width: 1120px) {
-  .chat-tasks-open,
-  .chat-pane__actions .chat-tasks-toggle {
+  .chat-tasks-toggle {
     display: none;
   }
 }
@@ -1745,7 +1742,7 @@
 /* ── Session diff panel (sessions.diff sidebar content) ── */
 
 /* The floating diff opener sits in the .chat-floating-toggles row and shares
-   the .chat-workspace-open sizing/chrome rules near the top of this file. */
+   the .chat-icon-btn sizing/chrome rules near the top of this file. */
 
 .session-diff {
   display: flex;
