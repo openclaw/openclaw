@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
+import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import {
   emitAgentEvent,
@@ -591,6 +592,47 @@ describe("task-registry", () => {
     });
   });
 
+  it("persists an ACP producer timestamp across lifecycle projection and SQLite reload", async () => {
+    await withTaskRegistryTempDir(
+      async () => {
+        resetTaskRegistryForTests({ persist: false });
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          requesterSessionKey: "agent:main:main",
+          runId: "run-reused-lifecycle",
+          task: "Reuse a persisted task row",
+          status: "queued",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+          startedAt: 1_000,
+          lastEventAt: 1_000,
+        });
+
+        emitAcpLifecycleStart({
+          runId: "run-reused-lifecycle",
+          startedAt: 2_000,
+        });
+        emitAgentEvent({
+          runId: "run-reused-lifecycle",
+          stream: "lifecycle",
+          data: { phase: "end", endedAt: 2_500 },
+        });
+
+        resetTaskRegistryForTests({ persist: false });
+        reloadTaskRegistryFromStore();
+
+        expectRecordFields(requireTaskByRunId("run-reused-lifecycle"), {
+          status: "succeeded",
+          startedAt: 2_000,
+          endedAt: 2_500,
+        });
+      },
+      { durableStore: true },
+    );
+  });
+
   it("tracks tool activity from tool-start events", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
@@ -633,7 +675,7 @@ describe("task-registry", () => {
         toolUseCount: 2,
         lastToolName: "exec",
       });
-      });
+    });
   });
 
   it("keeps subagent abort lifecycle projections provisional", async () => {

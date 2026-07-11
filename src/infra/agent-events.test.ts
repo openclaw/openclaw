@@ -445,6 +445,30 @@ describe("agent-events sequencing", () => {
     expect(seen.find((evt) => evt.stream === "item")?.sessionId).toBeUndefined();
   });
 
+  test("rejects lifecycle starts without a finite producer timestamp", () => {
+    const seen: unknown[] = [];
+    const stop = onAgentEvent((evt) => seen.push(evt));
+
+    emitAgentEvent({ runId: "missing", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentEvent({
+      runId: "invalid",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: Number.NaN },
+    });
+    emitAgentEvent({
+      runId: "valid",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_234 },
+    });
+    stop();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      runId: "valid",
+      data: { phase: "start", startedAt: 1_234 },
+    });
+  });
+
   test("rejects old runs after restart and stamps the new generation", () => {
     const oldGeneration = getAgentEventLifecycleGeneration();
     registerAgentRunContext("old-run", { sessionKey: "main" });
@@ -461,7 +485,11 @@ describe("agent-events sequencing", () => {
     });
 
     emitAgentEvent({ runId: "old-run", stream: "lifecycle", data: { phase: "end" } });
-    emitAgentEvent({ runId: "new-run", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentEvent({
+      runId: "new-run",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_234 },
+    });
     stop();
 
     expect(newGeneration).not.toBe(oldGeneration);

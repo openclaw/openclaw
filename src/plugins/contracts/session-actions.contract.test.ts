@@ -748,6 +748,23 @@ describe("plugin session actions", () => {
         }),
       ).toEqual({ emitted: true, stream: "approval" });
       expect(
+        bundledApi?.agent?.events.emitAgentEvent({
+          runId: "run-emit",
+          stream: "lifecycle",
+          data: { phase: "start" },
+        }),
+      ).toEqual({
+        emitted: false,
+        reason: "lifecycle start requires a finite startedAt timestamp",
+      });
+      expect(
+        bundledApi?.agent?.events.emitAgentEvent({
+          runId: "run-emit",
+          stream: "lifecycle",
+          data: { phase: "start", startedAt: 1_234 },
+        }),
+      ).toEqual({ emitted: true, stream: "lifecycle" });
+      expect(
         workspaceApi?.emitAgentEvent({
           runId: "run-emit",
           stream: "lifecycle",

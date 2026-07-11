@@ -1808,11 +1808,7 @@ function ensureListener() {
       if (evt.stream === "lifecycle") {
         const phase = typeof evt.data?.phase === "string" ? evt.data.phase : undefined;
         const startedAt =
-          typeof evt.data?.startedAt === "number"
-            ? evt.data.startedAt
-            : phase === "start"
-              ? now
-              : current.startedAt;
+          typeof evt.data?.startedAt === "number" ? evt.data.startedAt : current.startedAt;
         const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : undefined;
         if (startedAt) {
           patch.startedAt = startedAt;

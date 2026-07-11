@@ -641,6 +641,13 @@ function enrichAgentEvent(
   if (ownedLifecycleGeneration && ownedLifecycleGeneration !== state.lifecycleGeneration) {
     return undefined;
   }
+  if (
+    event.stream === "lifecycle" &&
+    event.data.phase === "start" &&
+    (typeof event.data.startedAt !== "number" || !Number.isFinite(event.data.startedAt))
+  ) {
+    return undefined;
+  }
   const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;
   state.seqByRun.set(event.runId, nextSeq);
   if (context) {
