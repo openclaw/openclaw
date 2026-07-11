@@ -70,7 +70,7 @@ const SYSTEM_CHROMIUM_EXECUTABLE_CANDIDATES = [
 function appendDiagnostic(diagnostics: QaWebDiagnosticEntry[], entry: QaWebDiagnosticEntry): void {
   diagnostics.push({
     kind: entry.kind,
-    text: entry.text.slice(0, MAX_DIAGNOSTIC_TEXT_CHARS),
+    text: truncateUtf16Safe(entry.text, MAX_DIAGNOSTIC_TEXT_CHARS),
   });
   if (diagnostics.length > MAX_DIAGNOSTIC_ENTRIES) {
     diagnostics.splice(0, diagnostics.length - MAX_DIAGNOSTIC_ENTRIES);

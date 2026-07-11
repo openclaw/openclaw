@@ -13,6 +13,7 @@ const {
   locatorFill,
   locatorPress,
   locatorWaitFor,
+  pageOn,
   pageEvaluate,
   pageTitle,
   pageUrl,
@@ -33,6 +34,7 @@ const {
   locatorFill: vi.fn(async () => undefined),
   locatorPress: vi.fn(async () => undefined),
   locatorWaitFor: vi.fn(async () => undefined),
+  pageOn: vi.fn(),
   pageEvaluate: vi.fn(async () => "ok"),
   pageTitle: vi.fn(async () => "QA"),
   pageUrl: vi.fn(() => "http://127.0.0.1:3000/chat"),
@@ -67,7 +69,7 @@ import {
 
 beforeEach(async () => {
   const page = {
-    on: vi.fn(),
+    on: pageOn,
     goto,
     title: pageTitle,
     url: pageUrl,
@@ -157,13 +159,24 @@ describe("qa web runtime", () => {
     expect(browserClose).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps bounded snapshot text on UTF-16 boundaries", async () => {
+  it("keeps bounded web text on UTF-16 boundaries", async () => {
     bodyLocator.textContent.mockResolvedValueOnce(`${"a".repeat(1999)}😀tail`);
     const opened = await qaWebOpenPage({ url: "http://127.0.0.1:3000/chat" });
+    const consoleHandler = pageOn.mock.calls.find(([event]) => event === "console")?.[1] as
+      | ((message: { type: () => string; text: () => string }) => void)
+      | undefined;
+    if (!consoleHandler) {
+      throw new Error("expected console handler");
+    }
+    consoleHandler({
+      type: () => "log",
+      text: () => `${"a".repeat(1993)}😀tail`,
+    });
 
     const snapshot = await qaWebSnapshot({ pageId: opened.pageId, maxChars: 2000 });
 
     expect(snapshot.text).toBe("a".repeat(1999));
+    expect(snapshot.diagnostics).toEqual([{ kind: "console", text: `[log] ${"a".repeat(1993)}` }]);
     await closeQaWebSessions();
   });
 
