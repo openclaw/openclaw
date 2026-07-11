@@ -161,7 +161,6 @@
   color: color-mix(in srgb, var(--muted) 85%, var(--text) 15%);
 }
 
-
 .chat-tool-row__verb {
   flex-shrink: 0;
   font-weight: 500;

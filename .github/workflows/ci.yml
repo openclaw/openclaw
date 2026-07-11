@@ -1335,6 +1335,7 @@ jobs:
               ;;
             lint)
               pnpm lint --threads=8
+              pnpm format:check
               ;;
             dependencies)
               if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then

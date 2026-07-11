@@ -401,9 +401,8 @@ export function resolveSession(opts: {
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !requestedSessionId;
-  const resolvedSessionEntry = isNewSession && sessionEntry
-    ? clearRotatedSessionMetadata(sessionEntry)
-    : sessionEntry;
+  const resolvedSessionEntry =
+    isNewSession && sessionEntry ? clearRotatedSessionMetadata(sessionEntry) : sessionEntry;
 
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,

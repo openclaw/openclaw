@@ -1354,23 +1354,18 @@ describe("scripts/changed-lanes", () => {
       "config:docs:check",
       "deps:root-ownership:check",
     ]);
-    expect(plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args).toEqual([
-      "release-metadata:check",
-      "--staged",
-    ]);
+    expect(
+      plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
+    ).toEqual(["release-metadata:check", "--staged"]);
   });
 
   it("passes release metadata base and head refs as options", () => {
     const result = detectChangedLanes(["CHANGELOG.md"]);
     const plan = createChangedCheckPlan(result, { base: "main", head: "feature" });
 
-    expect(plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args).toEqual([
-      "release-metadata:check",
-      "--base",
-      "main",
-      "--head",
-      "feature",
-    ]);
+    expect(
+      plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
+    ).toEqual(["release-metadata:check", "--base", "main", "--head", "feature"]);
   });
 
   it("keeps docs plus changelog entries on the docs-only changed gate", () => {
