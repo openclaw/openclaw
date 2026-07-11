@@ -514,6 +514,58 @@ describe("truncateToolResultMessage", () => {
     // Physical keep should track ~estimated/4, not the unclamped 2000 floor.
     expect(kept.length).toBeLessThanOrEqual(1_200);
   });
+
+  it("charges intact short ASCII siblings against shared dual budgets with dense CJK", async () => {
+    // Short marker stays intact; dense CJK must absorb only the *remaining*
+    // estimated/physical budgets so the completed message stays under cap.
+    const marker = "Image reading is disabled.";
+    const cjkText = "你".repeat(8_000);
+    const msg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [
+        { type: "text", text: marker },
+        { type: "text", text: cjkText },
+      ],
+      isError: false,
+      timestamp: nextTimestamp(),
+    };
+    const estimatedBudget = 16_000;
+    const physicalBudget = 64_000;
+    const result = truncateToolResultMessage(
+      msg,
+      { estimatedMaxChars: estimatedBudget, physicalMaxChars: physicalBudget },
+      {
+        suffix: "\n\n[persist-truncated]",
+        minKeepChars: 500,
+      },
+    );
+    expect(result.role).toBe("toolResult");
+    if (result.role !== "toolResult") {
+      throw new Error("expected toolResult");
+    }
+    const blocks = result.content as Array<{ type: string; text: string }>;
+    expect(blocks[0].text).toBe(marker);
+    expect(blocks[1].text.length).toBeLessThan(cjkText.length);
+    expect(blocks[1].text).toContain("[persist-truncated]");
+
+    const { estimateStringChars } = await import("../../utils/cjk-chars.js");
+    const totalEstimated =
+      estimateStringChars(blocks[0].text) + estimateStringChars(blocks[1].text);
+    const totalPhysical = blocks[0].text.length + blocks[1].text.length;
+    // Intact sibling cost is reserved first; completed message must not exceed
+    // the shared estimated token-share budget (allow tiny floor/suffix slack).
+    expect(totalEstimated).toBeLessThanOrEqual(estimatedBudget + 64);
+    expect(totalPhysical).toBeLessThanOrEqual(physicalBudget);
+
+    // Regression vs old allocator: if CJK still received the full budget while
+    // the marker rode free, estimated would overshoot by ~marker size * 1.
+    // Kept CJK estimated share must be strictly below full estimated budget.
+    expect(estimateStringChars(blocks[1].text)).toBeLessThanOrEqual(
+      estimatedBudget - estimateStringChars(marker),
+    );
+  });
 });
 
 describe("calculateMaxToolResultChars", () => {

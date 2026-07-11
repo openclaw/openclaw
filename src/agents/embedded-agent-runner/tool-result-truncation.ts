@@ -460,10 +460,81 @@ export function truncateToolResultMessage(
     return msg;
   }
 
-  // Distribute budgets proportionally, then convert estimated shares to physical
-  // UTF-16 slice budgets. Clamp min-keep to each block's adjusted allocation so
-  // dense CJK under small caps cannot retain more estimated chars than budgeted.
-  const newContent = content.map((block: unknown) => {
+  // First pass: measure text blocks and classify short siblings that stay intact.
+  // Intact blocks must reserve both estimated and physical capacity before the
+  // remaining shared budgets are distributed; otherwise a short ASCII marker
+  // rides free on top of a dense CJK block's full-budget allocation and the
+  // completed message can exceed the token-share cap.
+  type TextBlockPlan = {
+    index: number;
+    text: string;
+    estimatedChars: number;
+    physicalChars: number;
+    keepIntact: boolean;
+  };
+  const textPlans: TextBlockPlan[] = [];
+  for (let index = 0; index < content.length; index += 1) {
+    const block = content[index];
+    if (!isToolResultTextBlock(block)) {
+      continue;
+    }
+    const text = block.text;
+    if (typeof text !== "string" || text.length === 0) {
+      continue;
+    }
+    const estimatedChars = estimateStringChars(text);
+    const physicalChars = text.length;
+    textPlans.push({
+      index,
+      text,
+      estimatedChars,
+      physicalChars,
+      keepIntact: false,
+    });
+  }
+
+  let reservedEstimated = 0;
+  let reservedPhysical = 0;
+  for (const plan of textPlans) {
+    const estimatedShare = totalEstimatedChars > 0 ? plan.estimatedChars / totalEstimatedChars : 0;
+    const physicalShare = totalPhysicalChars > 0 ? plan.physicalChars / totalPhysicalChars : 0;
+    const physicalFromCap = Math.floor(physicalMaxChars * physicalShare);
+    // Keep short marker/status blocks intact; large siblings absorb the cut.
+    // Flooring proportional shares otherwise shreds e.g. "Image reading is disabled."
+    // next to a multi-KB payload under a shared estimated budget.
+    const isSmallSiblingBlock =
+      plan.physicalChars <= 512 &&
+      totalEstimatedChars > 0 &&
+      estimatedShare <= 0.05 &&
+      plan.physicalChars <= physicalFromCap &&
+      reservedEstimated + plan.estimatedChars <= estimatedMaxChars &&
+      reservedPhysical + plan.physicalChars <= physicalMaxChars;
+    if (isSmallSiblingBlock) {
+      plan.keepIntact = true;
+      reservedEstimated += plan.estimatedChars;
+      reservedPhysical += plan.physicalChars;
+    }
+  }
+
+  const remainingEstimatedBudget = Math.max(0, estimatedMaxChars - reservedEstimated);
+  const remainingPhysicalBudget = Math.max(0, physicalMaxChars - reservedPhysical);
+  let truncatableEstimatedTotal = 0;
+  let truncatablePhysicalTotal = 0;
+  for (const plan of textPlans) {
+    if (plan.keepIntact) {
+      continue;
+    }
+    truncatableEstimatedTotal += plan.estimatedChars;
+    truncatablePhysicalTotal += plan.physicalChars;
+  }
+
+  const planByIndex = new Map(textPlans.map((plan) => [plan.index, plan]));
+
+  // Distribute remaining budgets proportionally among truncatable blocks, then
+  // convert estimated shares to physical UTF-16 slice budgets. Clamp min-keep
+  // to each block's adjusted allocation so dense CJK under small caps cannot
+  // retain more estimated chars than budgeted.
+  const newContent = content.map((block: unknown, index: number) => {
     if (!isToolResultTextBlock(block)) {
       return block; // Keep non-text blocks (images) as-is
     }
@@ -471,38 +542,33 @@ export function truncateToolResultMessage(
     if (typeof textBlock.text !== "string" || textBlock.text.length === 0) {
       return block;
     }
-    const blockEstimatedChars = estimateStringChars(textBlock.text);
-    const blockPhysicalChars = textBlock.text.length;
-    const estimatedShare = totalEstimatedChars > 0 ? blockEstimatedChars / totalEstimatedChars : 0;
-    const physicalShare = totalPhysicalChars > 0 ? blockPhysicalChars / totalPhysicalChars : 0;
-    const inflationRatio = blockEstimatedChars / Math.max(1, blockPhysicalChars);
-    const proportionalEstimatedBudget = Math.floor(estimatedMaxChars * estimatedShare);
+    const plan = planByIndex.get(index);
+    if (!plan) {
+      return block;
+    }
+    if (plan.keepIntact) {
+      return block;
+    }
+    const estimatedShare =
+      truncatableEstimatedTotal > 0 ? plan.estimatedChars / truncatableEstimatedTotal : 0;
+    const physicalShare =
+      truncatablePhysicalTotal > 0 ? plan.physicalChars / truncatablePhysicalTotal : 0;
+    const inflationRatio = plan.estimatedChars / Math.max(1, plan.physicalChars);
+    const proportionalEstimatedBudget = Math.floor(remainingEstimatedBudget * estimatedShare);
     const physicalFromEstimated = Math.floor(
       proportionalEstimatedBudget / Math.max(1, inflationRatio),
     );
-    const physicalFromCap = Math.floor(physicalMaxChars * physicalShare);
-    // Keep short marker/status blocks intact; large siblings absorb the cut.
-    // Flooring proportional shares otherwise shreds e.g. "Image reading is disabled."
-    // next to a multi-KB payload under a shared estimated budget.
-    const isSmallSiblingBlock =
-      blockPhysicalChars <= 512 &&
-      totalEstimatedChars > 0 &&
-      blockEstimatedChars / totalEstimatedChars <= 0.05 &&
-      blockPhysicalChars <= physicalFromCap;
-    if (isSmallSiblingBlock) {
-      return block;
-    }
+    const physicalFromCap = Math.floor(remainingPhysicalBudget * physicalShare);
     const rawPhysicalBudget = Math.max(
       1,
-      Math.min(blockPhysicalChars, physicalFromEstimated, physicalFromCap),
+      Math.min(plan.physicalChars, physicalFromEstimated, physicalFromCap),
     );
     const effectiveMinKeep = resolveEffectiveMinKeepChars({
       maxChars: rawPhysicalBudget,
       minKeepChars: Math.min(requestedMinKeep, minKeepReference, rawPhysicalBudget),
       suffixFactory,
     });
-    const blockBudget = rawPhysicalBudget;
-    const truncatedText = truncateToolResultText(textBlock.text, blockBudget, {
+    const truncatedText = truncateToolResultText(textBlock.text, rawPhysicalBudget, {
       suffix: suffixFactory,
       minKeepChars: effectiveMinKeep,
     });
