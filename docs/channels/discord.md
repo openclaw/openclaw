@@ -1706,6 +1706,7 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 
 - Treat bot tokens as secrets (`DISCORD_BOT_TOKEN` preferred in supervised environments).
 - Grant least-privilege Discord permissions.
+- To hide synthesized `⚠️` tool-error warnings in Discord replies, use the shared message policy `messages.suppressToolErrors: true`. The agent still sees tool failures in context, and diagnostics remain available in logs and transcripts.
 - If command deploy/state is stale, restart the gateway and re-check with `openclaw channels status --probe`.
 
 ## Related

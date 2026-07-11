@@ -166,6 +166,7 @@ type DispatchInboundParams = {
       status?: string;
       exitCode?: number | null;
     }) => Promise<false | void> | false | void;
+    suppressToolErrorWarnings?: boolean;
     onPatchSummary?: (payload: {
       phase?: string;
       summary?: string;
@@ -2330,6 +2331,18 @@ describe("processDiscordMessage draft streaming", () => {
 
     expect(callbackResult).toBe(false);
     expect(draftStream.update).not.toHaveBeenCalled();
+  });
+
+  it("leaves shared tool-error warning policy to message config", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async () => createNoQueuedDispatchResult());
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getLastDispatchReplyOptions()?.suppressToolErrorWarnings).toBeUndefined();
   });
 
   it("counts window thinking bursts closed by a tool call when no end event fires", async () => {
