@@ -46,7 +46,7 @@ const nestedGitEnvKeys = [
 ] as const;
 
 function createNestedGitEnv(): NodeJS.ProcessEnv {
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",
@@ -547,6 +547,12 @@ describe("scripts/changed-lanes", () => {
     expect(result.lanes.all).toBe(false);
   });
 
+  it("routes a subagent-announce-only Docker diff through the live Docker lane", () => {
+    const result = detectChangedLanes(["scripts/test-live-subagent-announce-docker.sh"]);
+
+    expectLanes(result.lanes, { liveDockerTooling: true });
+  });
+
   it("exposes the shared changed-lane test path classifier", () => {
     expect(isChangedLaneTestPath("src/shared/string-normalization.test.ts")).toBe(true);
     expect(isChangedLaneTestPath("packages/foo/__tests__/helper.ts")).toBe(true);
@@ -591,6 +597,39 @@ describe("scripts/changed-lanes", () => {
       },
     });
   });
+
+  it.each([
+    "scripts/control-ui-i18n.ts",
+    "scripts/lib/example.ts",
+    "scripts/lib/example.d.mts",
+    "tsconfig.scripts.json",
+  ])("routes %s to the scripts typecheck lane", (changedPath) => {
+    const result = detectChangedLanes([changedPath]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes.scripts).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:scripts");
+  });
+
+  it.each([
+    ["test/vitest/foo.config.ts", true, true],
+    ["test/vitest/vitest-runtime-helper.d.mts", true, true],
+    ["test/fixtures/foo.ts", false, true],
+    ["test/foo.mjs", false, true],
+    ["test/tsconfig/tsconfig.test.root.json", true, true],
+  ])(
+    "routes %s to testRoot=%s and tooling=%s",
+    (changedPath, expectedTestRoot, expectedTooling) => {
+      const result = detectChangedLanes([changedPath]);
+      const plan = createChangedCheckPlan(result);
+
+      expect(result.lanes.testRoot).toBe(expectedTestRoot);
+      expect(result.lanes.tooling).toBe(expectedTooling);
+      expect(plan.commands.map((command) => command.args[0]).includes("tsgo:test:root")).toBe(
+        expectedTestRoot,
+      );
+    },
+  );
 
   it("falls back to full core lint for broad core diffs", () => {
     const targets = Array.from({ length: 9 }, (_, index) => `src/shared/file-${index}.ts`);
@@ -745,7 +784,7 @@ describe("scripts/changed-lanes", () => {
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
       { CI: "1", PATH: "/usr/bin" },
     );
-    const [shimDir] = String(command.env?.PATH ?? "").split(path.delimiter);
+    const [shimDir] = (command.env?.PATH ?? "").split(path.delimiter);
 
     expect(path.basename(shimDir)).toMatch(/^openclaw-corepack-pnpm-/u);
     expect(existsSync(path.join(shimDir, "pnpm"))).toBe(true);
@@ -1354,23 +1393,18 @@ describe("scripts/changed-lanes", () => {
       "config:docs:check",
       "deps:root-ownership:check",
     ]);
-    expect(plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args).toEqual([
-      "release-metadata:check",
-      "--staged",
-    ]);
+    expect(
+      plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
+    ).toEqual(["release-metadata:check", "--staged"]);
   });
 
   it("passes release metadata base and head refs as options", () => {
     const result = detectChangedLanes(["CHANGELOG.md"]);
     const plan = createChangedCheckPlan(result, { base: "main", head: "feature" });
 
-    expect(plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args).toEqual([
-      "release-metadata:check",
-      "--base",
-      "main",
-      "--head",
-      "feature",
-    ]);
+    expect(
+      plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
+    ).toEqual(["release-metadata:check", "--base", "main", "--head", "feature"]);
   });
 
   it("keeps docs plus changelog entries on the docs-only changed gate", () => {
@@ -1546,6 +1580,7 @@ describe("scripts/changed-lanes", () => {
     const plan = createChangedCheckPlan(result);
 
     expectLanes(result.lanes, {
+      testRoot: true,
       tooling: true,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
@@ -1616,6 +1651,7 @@ describe("scripts/changed-lanes", () => {
       });
 
       expectLanes(result.lanes, {
+        testRoot: changedPath.endsWith(".ts"),
         tooling: true,
       });
       expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
@@ -1817,6 +1853,8 @@ describe("scripts/changed-lanes", () => {
       coreTests: false,
       extensions: false,
       extensionTests: false,
+      scripts: false,
+      testRoot: false,
       apps: false,
       docs: false,
       tooling: false,

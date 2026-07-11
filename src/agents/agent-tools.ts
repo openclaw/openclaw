@@ -64,6 +64,7 @@ import {
   resolveConversationCapabilityProfile,
   type ResolvedConversationCapabilityProfile,
 } from "./conversation-capability-profile.js";
+import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { createLazyExecTool, resolveExecToolConfig } from "./lazy-exec-tool.js";
 import {
@@ -107,6 +108,7 @@ import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
 } from "./tools/cron-tool.js";
+import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
@@ -304,14 +306,6 @@ export const testing = {
   applyModelProviderToolPolicy,
 } as const;
 
-export type OpenClawCodingToolConstructionPlan = {
-  includeBaseCodingTools: boolean;
-  includeShellTools: boolean;
-  includeChannelTools: boolean;
-  includeOpenClawTools: boolean;
-  includePluginTools: boolean;
-};
-
 /** Build the runtime tool list for one agent run. */
 export function createOpenClawCodingTools(options?: {
   agentId?: string;
@@ -328,6 +322,10 @@ export function createOpenClawCodingTools(options?: {
   agentAccountId?: string;
   messageTo?: string;
   messageThreadId?: string | number;
+  /** Trusted platform-native conversation id for the active inbound turn. */
+  nativeChannelId?: string;
+  /** Opaque host-issued capability for current-turn channel message actions. */
+  messageActionTurnCapability?: string;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
   /**
@@ -842,16 +840,33 @@ export function createOpenClawCodingTools(options?: {
   );
   // Plugin-only plans bypass createOpenClawTools, so the capability gate must
   // apply here too or narrow allowlists leak gated tools onto capless surfaces.
+  const pluginToolCallerIdentity =
+    agentId && options?.sessionKey?.trim()
+      ? {
+          agentId,
+          sessionKey: options.sessionKey.trim(),
+          turnSourceChannel: resolveGatewayMessageChannel(
+            options.messageChannel ?? options.messageProvider,
+          ),
+          turnSourceTo:
+            options.currentMessagingTarget ?? options.currentChannelId ?? options.messageTo,
+          turnSourceAccountId: options.agentAccountId,
+          turnSourceThreadId: options.currentThreadTs ?? options.messageThreadId,
+        }
+      : undefined;
   const pluginToolsOnly = filterToolsByClientCaps(
     includeOpenClawTools || !includePluginTools
       ? []
       : resolveOpenClawPluginToolsForOptions({
           options: {
             agentSessionKey: options?.sessionKey,
-            agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
+            agentChannel: resolveGatewayMessageChannel(
+              options?.messageChannel ?? options?.messageProvider,
+            ),
             agentAccountId: options?.agentAccountId,
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,
+            nativeChannelId: options?.nativeChannelId,
             agentDir: options?.agentDir,
             workspaceDir: workspaceRoot,
             config: options?.config,
@@ -881,7 +896,7 @@ export function createOpenClawCodingTools(options?: {
           resolvedConfig: options?.config,
         }),
     options?.clientCaps,
-  );
+  ).map((tool) => wrapToolWithGatewayCallerIdentity(tool, pluginToolCallerIdentity));
   const toolSearchTools = toolSearchControlsEnabled
     ? createToolSearchTools({
         config: options?.config,
@@ -934,10 +949,14 @@ export function createOpenClawCodingTools(options?: {
           agentSessionKey: options?.sessionKey,
           runId: options?.runId,
           runSessionKey: options?.runSessionKey,
-          agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
+          agentChannel: resolveGatewayMessageChannel(
+            options?.messageChannel ?? options?.messageProvider,
+          ),
           agentAccountId: options?.agentAccountId,
           agentTo: options?.messageTo,
           agentThreadId: options?.messageThreadId,
+          nativeChannelId: options?.nativeChannelId,
+          messageActionTurnCapability: options?.messageActionTurnCapability,
           agentGroupId: options?.groupId ?? null,
           agentGroupChannel: options?.groupChannel ?? null,
           agentGroupSpace: options?.groupSpace ?? null,
@@ -963,6 +982,7 @@ export function createOpenClawCodingTools(options?: {
             ? cronCreatorToolAllowlist
             : undefined,
           currentChannelId: options?.currentChannelId,
+          currentChatType: options?.chatType,
           currentMessagingTarget: options?.currentMessagingTarget,
           currentThreadTs: options?.currentThreadTs,
           currentMessageId: options?.currentMessageId,

@@ -60,6 +60,7 @@ import {
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrent,
+  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
   releaseLeasedSharedCodexAppServerClient,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
@@ -104,7 +105,7 @@ export async function startCodexAttemptThread(params: {
   appServer: CodexAppServerRuntimeOptions;
   pluginConfig: CodexPluginConfig;
   computerUseConfig: CodexComputerUseConfig;
-  startupAuthProfileId: string | undefined;
+  startupAuthProfileId: string | null | undefined;
   startupAuthAccountCacheKey: string | undefined;
   startupEnvApiKeyCacheKey: string | undefined;
   agentDir: string;
@@ -132,6 +133,7 @@ export async function startCodexAttemptThread(params: {
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
 }): Promise<StartCodexAttemptThreadResult> {
   let pluginAppServer = params.appServer;
+  const startupRuntimeAuthProfileId = params.startupAuthProfileId ?? undefined;
   let releaseSharedClientLease: (() => void) | undefined;
   let startupClientForAbandonedRequestCleanup: CodexAppServerClient | undefined;
   let releaseStartupResourcesOnTimeout: (() => Promise<void>) | undefined;
@@ -170,8 +172,7 @@ export async function startCodexAttemptThread(params: {
           : undefined;
         const computerUseMcpElicitationDelegationRequired = params.computerUseConfig.enabled;
         const mcpElicitationDelegationRequired =
-          resolvedPluginPolicy?.enabled === true ||
-          computerUseMcpElicitationDelegationRequired;
+          resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
         const enabledPluginConfigKeys = resolvedPluginPolicy
           ? resolvedPluginPolicy.pluginPolicies
               .filter((plugin) => plugin.enabled)
@@ -206,6 +207,7 @@ export async function startCodexAttemptThread(params: {
                 }
               },
               abandonSignal: startupAbandonController.signal,
+              timeoutMs: params.appServer.requestTimeoutMs,
             });
             const activeStartupClient = startupClient;
             let startupClientLeaseReleased = false;
@@ -227,7 +229,7 @@ export async function startCodexAttemptThread(params: {
             }
             ensureCodexAppServerClientRuntime(activeStartupClient, {
               agentDir: params.agentDir,
-              authProfileId: params.startupAuthProfileId,
+              authProfileId: startupRuntimeAuthProfileId,
               config: params.config,
             });
             const turnRouter = getCodexAppServerTurnRouter(activeStartupClient);
@@ -241,7 +243,7 @@ export async function startCodexAttemptThread(params: {
             const pluginAppCacheKey = buildCodexPluginAppCacheKey({
               appServer: params.appServer,
               agentDir: params.agentDir,
-              authProfileId: params.startupAuthProfileId,
+              authProfileId: startupRuntimeAuthProfileId,
               accountId: params.startupAuthAccountCacheKey,
               envApiKeyFingerprint: params.startupEnvApiKeyCacheKey,
               appServerVersion: activeStartupClient.getServerVersion(),
@@ -268,7 +270,7 @@ export async function startCodexAttemptThread(params: {
                 resolvedPluginPolicy,
                 enabledPluginConfigKeys,
                 pluginAppCacheKey,
-                startupAuthProfileId: params.startupAuthProfileId,
+                startupAuthProfileId: startupRuntimeAuthProfileId,
                 appServer: params.appServer,
               }),
             );
@@ -455,6 +457,16 @@ export async function startCodexAttemptThread(params: {
             }
           } catch (error) {
             startupAttemptError = error;
+            if (!startupAbandoned && !params.signal.aborted && !startupClient) {
+              const sharedClient = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
+                startupClientForAbandonedRequestCleanup,
+              );
+              if (sharedClient.found && !sharedClient.closed) {
+                // Shared acquisition already released this caller. A peer still
+                // owns the client, so outer cleanup must not retire it.
+                startupClientForAbandonedRequestCleanup = undefined;
+              }
+            }
             throw error;
           } finally {
             if (!startupAttemptSucceeded) {
@@ -491,7 +503,11 @@ export async function startCodexAttemptThread(params: {
           try {
             return await startupAttempt();
           } catch (error) {
-            if (params.signal.aborted || !isCodexAppServerConnectionClosedError(error)) {
+            if (
+              startupAbandoned ||
+              params.signal.aborted ||
+              !isCodexAppServerConnectionClosedError(error)
+            ) {
               throw error;
             }
             const failedClient = attemptedClient;

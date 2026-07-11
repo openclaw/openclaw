@@ -78,6 +78,11 @@ struct OpenClawApp: App {
         }
         .onChange(of: self.controlChannel.state) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
+            if self.controlChannel.state == .connected {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    BrowserProfileImportPrompter.shared.checkAndPromptIfNeeded()
+                }
+            }
         }
         .onChange(of: self.gatewayManager.status) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
@@ -105,6 +110,17 @@ struct OpenClawApp: App {
                 .keyboardShortcut(",", modifiers: .command)
             }
             SidebarCommands()
+            CommandMenu("Navigate") {
+                Button("Back") {
+                    DashboardManager.shared.navigateBack()
+                }
+                .keyboardShortcut("[", modifiers: .command)
+
+                Button("Forward") {
+                    DashboardManager.shared.navigateForward()
+                }
+                .keyboardShortcut("]", modifiers: .command)
+            }
         }
         .onChange(of: self.isMenuPresented) { _, _ in
             self.updateStatusHighlight()
@@ -288,6 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationCleanupFinished = false
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     var nodeTerminationCleanup: @MainActor () async -> Void = {
+        await TalkMLXSpeechSynthesizer.shared.shutdown()
         await MacNodeModeCoordinator.shared.stopAndWait()
     }
 
@@ -301,6 +318,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
     let updaterController: UpdaterProviding = makeUpdaterController()
+
+    func applicationWillFinishLaunching(_: Notification) {
+        // URL/reopen callbacks can create the dashboard before didFinishLaunching.
+        DashboardManager.shared.configure(updater: self.updaterController)
+    }
 
     func applicationDockMenu(_: NSApplication) -> NSMenu? {
         let menu = NSMenu()
@@ -422,6 +444,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+            BrowserProfileImportPrompter.shared.checkAndPromptIfNeeded()
         }
 
         #if DEBUG
@@ -664,7 +689,20 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
     }
 }
 
-extension SparkleUpdaterController: SPUUpdaterDelegate {}
+func allowedSparkleChannels(forGatewayUpdateChannel channel: String?) -> Set<String> {
+    switch channel {
+    case "beta", "dev":
+        ["beta"]
+    default:
+        []
+    }
+}
+
+extension SparkleUpdaterController: SPUUpdaterDelegate {
+    func allowedChannels(for _: SPUUpdater) -> Set<String> {
+        allowedSparkleChannels(forGatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel())
+    }
+}
 
 private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
     var staticCode: SecStaticCode?

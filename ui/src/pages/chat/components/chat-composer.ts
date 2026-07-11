@@ -20,7 +20,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import type { ChatSideResult } from "../../../lib/chat/side-result.ts";
+import type { ChatSideResult, ChatSideResultPending } from "../../../lib/chat/side-result.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
 import {
@@ -92,6 +92,7 @@ type ChatComposerProps = {
   messages: unknown[];
   stream: string | null;
   sideResult?: ChatSideResult | null;
+  sideResultPending?: ChatSideResultPending | null;
   queue: ChatQueueItem[];
   draft: string;
   sessions: SessionsListResult | null;
@@ -951,88 +952,121 @@ export function renderChatQueue(props: ChatQueueProps) {
   }
   return html`
     <div class="chat-queue" role="status" aria-live="polite">
-      <div class="chat-queue__title">Queued (${visibleQueue.length})</div>
-      <div class="chat-queue__list">
-        ${visibleQueue.map((item) => {
-          const stateLabel = sendStateLabel(item);
-          return html`
-            <div
-              class="chat-queue__item ${item.kind === "steered" ? "chat-queue__item--steered" : ""}"
-            >
-              <div class="chat-queue__main">
-                ${item.kind === "steered"
-                  ? html`<span class="chat-queue__badge">Steered</span>`
-                  : nothing}
-                ${stateLabel ? html`<span class="chat-queue__badge">${stateLabel}</span>` : nothing}
-                <div class="chat-queue__text">
-                  ${item.text ||
-                  (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
-                </div>
-                ${item.sendError
-                  ? html`<div class="chat-queue__error">${item.sendError}</div>`
-                  : nothing}
-              </div>
-              <div class="chat-queue__actions">
-                ${(item.sendState === "failed" || item.sendState === "unconfirmed") &&
-                props.onQueueRetry
-                  ? html`
-                      <button
-                        class="btn chat-queue__retry"
-                        type="button"
-                        aria-label=${t("chat.queue.retryQueuedMessage")}
-                        @click=${() => props.onQueueRetry?.(item.id)}
-                      >
-                        ${icons.refresh}
-                        <span>${t("chat.queue.retry")}</span>
-                      </button>
-                    `
-                  : nothing}
-                ${props.canAbort &&
-                props.onQueueSteer &&
-                item.kind !== "steered" &&
-                (item.sendState === undefined || item.sendState === "waiting-idle") &&
-                !item.localCommandName
-                  ? html`
-                      <button
-                        class="btn chat-queue__steer"
-                        type="button"
-                        aria-label="Steer queued message"
-                        @click=${() => props.onQueueSteer?.(item.id)}
-                      >
-                        ${icons.cornerDownRight}
-                        <span>Steer</span>
-                      </button>
-                    `
-                  : nothing}
-                ${item.sendState === "executing-command" || item.sendState === "steering"
-                  ? nothing
-                  : html`
-                      <openclaw-tooltip content="Remove queued message">
-                        <button
-                          class="btn chat-queue__remove"
-                          type="button"
-                          aria-label="Remove queued message"
-                          @click=${() => props.onQueueRemove(item.id)}
-                        >
-                          ${icons.x}
-                        </button>
-                      </openclaw-tooltip>
-                    `}
-              </div>
-            </div>
-          `;
-        })}
-      </div>
+      ${visibleQueue.map((item) => renderChatQueueItem(item, props))}
+    </div>
+  `;
+}
+
+function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
+  const stateLabel = sendStateLabel(item);
+  const steered = item.kind === "steered";
+  const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
+  const busy = item.sendState === "executing-command" || item.sendState === "steering";
+  const canSteer =
+    Boolean(props.canAbort && props.onQueueSteer) &&
+    !steered &&
+    (item.sendState === undefined || item.sendState === "waiting-idle") &&
+    !item.localCommandName;
+  const text = item.text || (item.attachments?.length ? `Image (${item.attachments.length})` : "");
+  const itemClass = `chat-queue__item${steered ? " chat-queue__item--steered" : ""}${
+    failed ? " chat-queue__item--failed" : ""
+  }`;
+  // Row order keeps the actions on the first flex line; the error wraps below
+  // them via flex-basis so failed rows grow by one line instead of a card.
+  return html`
+    <div class=${itemClass}>
+      <span class="chat-queue__icon" aria-hidden="true">
+        ${failed ? icons.alertTriangle : icons.clock}
+      </span>
+      ${steered
+        ? html`<span class="chat-queue__badge chat-queue__badge--steered">Steered</span>`
+        : nothing}
+      ${stateLabel ? html`<span class="chat-queue__badge">${stateLabel}</span>` : nothing}
+      <span class="chat-queue__text" title=${text}>${text}</span>
+      <span class="chat-queue__actions">
+        ${failed && props.onQueueRetry
+          ? html`
+              <button
+                class="chat-queue__retry"
+                type="button"
+                aria-label=${t("chat.queue.retryQueuedMessage")}
+                @click=${() => props.onQueueRetry?.(item.id)}
+              >
+                ${icons.refresh}
+                <span>${t("chat.queue.retry")}</span>
+              </button>
+            `
+          : nothing}
+        ${canSteer
+          ? html`
+              <button
+                class="chat-queue__steer"
+                type="button"
+                aria-label="Steer queued message"
+                @click=${() => props.onQueueSteer?.(item.id)}
+              >
+                ${icons.cornerDownRight}
+                <span>Steer</span>
+              </button>
+            `
+          : nothing}
+        ${busy
+          ? nothing
+          : html`
+              <openclaw-tooltip content="Remove queued message">
+                <button
+                  class="chat-queue__remove"
+                  type="button"
+                  aria-label="Remove queued message"
+                  @click=${() => props.onQueueRemove(item.id)}
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>
+            `}
+      </span>
+      ${item.sendError ? html`<span class="chat-queue__error">${item.sendError}</span>` : nothing}
     </div>
   `;
 }
 
 export function renderSideResult(
   sideResult: ChatSideResult | null | undefined,
+  pending?: ChatSideResultPending | null,
   onDismiss?: () => void,
 ): TemplateResult | typeof nothing {
   if (!sideResult) {
-    return nothing;
+    // A fresh side result always supersedes the pending placeholder; the
+    // pending card only bridges the gap until chat.side_result arrives.
+    if (!pending) {
+      return nothing;
+    }
+    return html`
+      <section
+        class="chat-side-result chat-side-result--pending"
+        role="status"
+        aria-live="polite"
+        aria-label="BTW side question pending"
+      >
+        <div class="chat-side-result__header">
+          <div class="chat-side-result__label-row">
+            <span class="chat-side-result__label">BTW</span>
+            <span class="chat-side-result__meta">Thinking…</span>
+          </div>
+          <openclaw-tooltip content="Dismiss">
+            <button
+              class="btn chat-side-result__dismiss"
+              type="button"
+              aria-label="Dismiss BTW question"
+              @click=${() => onDismiss?.()}
+            >
+              ${icons.x}
+            </button>
+          </openclaw-tooltip>
+        </div>
+        <div class="chat-side-result__question">${pending.question}</div>
+      </section>
+    `;
   }
   return html`
     <section
@@ -2410,7 +2444,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
       onQueueRemove: props.onQueueRemove,
     })}
-    ${renderSideResult(props.sideResult, props.onDismissSideResult)}
+    ${renderSideResult(props.sideResult, props.sideResultPending, props.onDismissSideResult)}
     ${props.showNewMessages
       ? html`
           <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>

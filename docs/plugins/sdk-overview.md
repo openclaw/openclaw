@@ -91,6 +91,7 @@ methods:
 | Method                                           | What it registers                                                                 |
 | ------------------------------------------------ | --------------------------------------------------------------------------------- |
 | `api.registerProvider(...)`                      | Text inference (LLM)                                                              |
+| `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                     |
 | `api.registerModelCatalogProvider(...)`          | Model catalog rows for text and media generation                                  |
 | `api.registerAgentHarness(...)`                  | [Experimental](/plugins/sdk-agent-harness) native agent executor (Codex, Copilot) |
 | `api.registerCliBackend(...)`                    | Local CLI inference backend                                                       |
@@ -107,6 +108,12 @@ methods:
 | `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider                                                       |
 | `api.registerWebSearchProvider(...)`             | Web search                                                                        |
 | `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                           |
+
+Worker providers must also declare their id in `contracts.workerProviders`.
+Core persists durable intent before `provision(profile, operationId)`. Providers validate settings before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats.
+Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material.
+Providers with renewable leases can also implement `renew(leaseId)`.
+`inspect` must throw on transient or indeterminate failures; return `unknown` only for authoritative absence. Core marks an active local record orphaned, or treats the absence as teardown completion after a persisted destroy request.
 
 Embedding providers registered with `api.registerEmbeddingProvider(...)` must
 also be listed in `contracts.embeddingProviders` in the plugin manifest. This
@@ -492,21 +499,23 @@ cover CLI and Gateway-backed install or update paths.
 - `message_sending`: returning `{ cancel: false }` is treated as no decision (same as omitting `cancel`), not as an override.
 - `message_received`: use the typed `threadId` field when you need inbound thread/topic routing. Keep `metadata` for channel-specific extras.
 - `message_sending`: use typed `replyToId` / `threadId` routing fields before falling back to channel-specific `metadata`.
-- `gateway_start`: use `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for gateway-owned startup state instead of relying on internal `gateway:startup` hooks.
-- `cron_changed`: observe gateway-owned cron lifecycle changes. A `scheduled` event is a post-commit reconciliation hint for an existing job's durable next wake, not an ordered delta log. Its `event.nextRunAtMs` is absent when the job has no next wake.
+- `gateway_start`: use `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for gateway-owned startup state instead of relying on internal `gateway:startup` hooks. Cron may still be loading at this point.
+- `cron_reconciled`: rebuild a full external cron projection after startup or scheduler reload. It includes `reason` and the effective `enabled` state, including `enabled: false`, while `ctx.getCron?.()` returns the exact reconciled scheduler. Pass `ctx.abortSignal` into durable projection work; it aborts when that scheduler snapshot is superseded or the Gateway closes.
+- `cron_changed`: observe gateway-owned cron lifecycle changes. `scheduled` and `removed` events are post-commit reconciliation hints, not an ordered delta log. A scheduled event's `event.nextRunAtMs` is absent when the job has no next wake; a removed event still carries the deleted job snapshot.
 
-External wake schedulers should debounce or coalesce `cron_changed` events by
-`jobId`, then reconcile the full durable view:
+External wake schedulers should debounce or coalesce `cron_changed` events,
+then reread the full durable view from the scheduler last captured by
+`cron_reconciled`. Do not adopt the scheduler from a `cron_changed` context: a
+detached hint from an older scheduler can overlap a later reload.
 
-```typescript
-const jobs = await ctx.getCron?.()?.list({ includeDisabled: true });
-```
+Use `cron_reconciled` as the full-snapshot trigger for durable state loaded at
+Gateway startup or scheduler replacement. It is not replayed for a plugin-only
+hot reload. Observation handlers run in parallel, and fire-and-forget
+dispatches can overlap, so consumers must not depend on event completion order.
+Keep OpenClaw as the source of truth for due checks and execution.
 
-Perform the same full reconciliation from `gateway_start` to recover changes
-made while the plugin was offline. Observation handlers run in parallel, and
-fire-and-forget dispatches can overlap, so consumers must not depend on event
-completion order. Keep OpenClaw as the source of truth for due checks and
-execution.
+For a single-flight adapter with durable replacement, retry/backoff, and clean
+shutdown, see [Safe external cron projection](/plugins/hooks#safe-external-cron-projection).
 
 ### API object fields
 

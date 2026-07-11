@@ -19,6 +19,7 @@ import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import { ChannelsSchema } from "./zod-schema.channels-config.js";
+import { CloudWorkersConfigSchema } from "./zod-schema.cloud-workers.js";
 import {
   HexColorSchema,
   ModelsConfigSchema,
@@ -1398,6 +1399,19 @@ export const OpenClawSchema = z
             pairing: z
               .object({
                 autoApproveCidrs: z.array(z.string()).optional(),
+                sshVerify: z
+                  .union([
+                    z.boolean(),
+                    z
+                      .object({
+                        user: z.string().optional(),
+                        identity: z.string().optional(),
+                        timeoutMs: z.number().int().positive().optional(),
+                        cidrs: z.array(z.string()).optional(),
+                      })
+                      .strict(),
+                  ])
+                  .optional(),
               })
               .strict()
               .optional(),
@@ -1424,6 +1438,7 @@ export const OpenClawSchema = z
         }
       })
       .optional(),
+    cloudWorkers: CloudWorkersConfigSchema,
     memory: MemorySchema,
     mcp: McpConfigSchema,
     skills: z

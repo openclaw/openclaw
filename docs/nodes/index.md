@@ -191,20 +191,32 @@ Related:
 
 A desktop or server node can expose chat-capable models from an Ollama server running on that node. Agents use the Ollama plugin's `node_inference` tool to discover installed models and run a bounded prompt remotely; the Gateway does not need direct network access to Ollama. See [Ollama node-local inference](/providers/ollama#node-local-inference) for setup, model filtering, and direct verification commands.
 
-### Codex session catalog
+### Codex sessions and transcripts
 
-The opt-in `codex-supervisor` plugin lets a headless node host or the native
-macOS node expose metadata for its local interactive Codex sessions. Enable the
-plugin independently in the node's local config and on the Gateway. The node
-setting is local consent; enabling only the Gateway cannot read another
-computer's Codex state.
+The official `codex` plugin can expose non-archived Codex sessions
+on a headless node host or native macOS node.
+Enable `plugins.entries.codex.config.supervision.enabled` independently in the
+node's local config and on the Gateway. The node setting is local consent;
+enabling only the Gateway cannot read another computer's Codex state.
 
 The node advertises the versioned read-only
-`codex.appServer.threads.list.v1` command. Approve the node pairing upgrade when
-that command first appears. The Gateway invokes it through the normal plugin
-node policy and isolates failures by host. See the [Codex Supervisor plugin
-reference](/plugins/reference/codex-supervisor) for configuration, CLI and
-Control UI use, pagination, and the metadata security boundary.
+`codex.appServer.threads.list.v1` and
+`codex.appServer.thread.turns.list.v1` commands. Approve the node pairing
+upgrade when those commands first appear. The Gateway invokes them through the
+normal plugin node policy and isolates failures by host.
+
+Paired-node rows appear in the main sidebar and **Codex Sessions**. Selecting a
+row reads its persisted transcript through bounded, cursor-paginated
+`thread/turns/list` calls with full item projection. The node invoke transport is request/response only and cannot
+carry the streaming turns, live events, or approvals required to continue a
+native thread through the Codex harness. **Continue** and **Archive** are
+therefore unavailable for remote rows. On the Gateway computer, stored and idle
+rows can start a distinct model-locked Chat branch. Either can be archived only
+after the operator confirms that no other Codex client is using it; a stored
+row's live activity remains unknown. Active rows cannot branch or archive.
+
+See [Supervise Codex sessions](/plugins/codex-supervision) for setup,
+pagination, local continuation, and the metadata security boundary.
 
 ## Invoking commands
 
@@ -261,6 +273,9 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
       // with no requested scopes; does not auto-approve upgrades.
       pairing: {
         autoApproveCidrs: ["192.168.1.0/24"],
+        // SSH-verified auto-approval (default: enabled). Approves first-time
+        // node pairing on an exact device-key match read back over SSH.
+        sshVerify: true,
       },
       // Opt into dangerous/privacy-heavy node commands (camera.snap, etc.).
       allowCommands: ["camera.snap", "screen.record"],

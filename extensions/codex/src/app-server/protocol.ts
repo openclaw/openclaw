@@ -156,9 +156,22 @@ export type CodexThreadStartResponse = {
   modelProvider?: string | null;
 };
 
-export type CodexThreadForkParams = CodexThreadStartParams & {
+export type CodexThreadForkParams = JsonObject & {
   threadId: string;
+  lastTurnId?: string | null;
+  path?: string | null;
+  model?: string | null;
+  modelProvider?: string | null;
+  serviceTier?: CodexServiceTier | null;
+  cwd?: string | null;
+  runtimeWorkspaceRoots?: string[] | null;
+  approvalPolicy?: CodexApprovalPolicy | null;
+  approvalsReviewer?: CodexApprovalsReviewer | null;
+  sandbox?: CodexSandboxMode | null;
+  permissions?: string | null;
+  config?: JsonObject | null;
   baseInstructions?: string;
+  developerInstructions?: string;
   ephemeral?: boolean;
   threadSource?: string | null;
   excludeTurns?: boolean;
@@ -186,8 +199,12 @@ export type CodexThreadListParams = JsonObject & {
   sortKey?: "created_at" | "updated_at" | "recency_at" | null;
   sortDirection?: "asc" | "desc" | null;
   archived?: boolean | null;
+  cwd?: string | string[] | null;
+  useStateDbOnly?: boolean;
   searchTerm?: string | null;
   sourceKinds?: CodexThreadSourceKind[] | null;
+  parentThreadId?: string | null;
+  ancestorThreadId?: string | null;
 };
 
 export type CodexThreadListResponse = {
@@ -203,6 +220,20 @@ export type CodexThreadReadParams = JsonObject & {
 
 export type CodexThreadReadResponse = {
   thread: CodexThread;
+};
+
+export type CodexThreadTurnsListParams = JsonObject & {
+  threadId: string;
+  cursor?: string | null;
+  limit?: number | null;
+  sortDirection?: "asc" | "desc" | null;
+  itemsView?: "notLoaded" | "summary" | "full" | null;
+};
+
+export type CodexThreadTurnsListResponse = {
+  data: CodexTurn[];
+  nextCursor?: string | null;
+  backwardsCursor?: string | null;
 };
 
 export type CodexThreadSetNameParams = JsonObject & {
@@ -297,6 +328,7 @@ export type CodexThread = {
   createdAt?: number | null;
   updatedAt?: number | null;
   status?: CodexThreadStatus | null;
+  modelProvider?: string | null;
   cwd?: string | null;
   source?: CodexSessionSource | null;
   threadSource?: string | null;
@@ -646,6 +678,7 @@ type CodexAppServerRequestParamsOverride = {
   "thread/archive": CodexThreadArchiveParams;
   "thread/inject_items": CodexThreadInjectItemsParams;
   "thread/list": CodexThreadListParams;
+  "thread/turns/list": CodexThreadTurnsListParams;
   "thread/name/set": CodexThreadSetNameParams;
   "thread/read": CodexThreadReadParams;
   "thread/start": CodexThreadStartParams;
@@ -680,6 +713,7 @@ type CodexAppServerRequestResultMap = {
   "thread/fork": CodexThreadForkResponse;
   "thread/inject_items": JsonValue;
   "thread/list": CodexThreadListResponse;
+  "thread/turns/list": CodexThreadTurnsListResponse;
   "thread/name/set": JsonValue;
   "thread/read": CodexThreadReadResponse;
   "thread/resume": CodexThreadResumeResponse;

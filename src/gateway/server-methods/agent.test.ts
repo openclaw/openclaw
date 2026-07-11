@@ -28,6 +28,11 @@ import {
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import {
+  resetGatewaySuspendCoordinatorForTest,
+  resumeGatewaySuspend,
+} from "../../infra/gateway-suspend-coordinator.js";
+import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -45,10 +50,11 @@ import {
 } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
-import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
+import { setGatewayDedupeEntry } from "./agent-job.js";
 import { agentHandlers } from "./agent.js";
 import { chatHandlers } from "./chat.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
+import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -223,6 +229,7 @@ vi.mock("../../infra/agent-events.js", () => ({
   clearAgentRunContext: mocks.clearAgentRunContext,
   emitAgentEvent: mocks.emitAgentEvent,
   getAgentEventLifecycleGeneration: () => mocks.lifecycleGeneration,
+  getAgentRunContext: vi.fn(() => undefined),
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
 }));
@@ -612,6 +619,26 @@ function setupCronContinuationReleaseFixture() {
     sessionKey,
     store: { [sessionKey]: structuredClone(entry) } as Record<string, SessionEntry>,
   };
+}
+
+async function invokeGatewaySuspendPrepare(context: GatewayRequestContext, requestId: string) {
+  const respond = vi.fn();
+  await suspendHandlers["gateway.suspend.prepare"]({
+    params: { requestId },
+    respond: respond as never,
+    context: {
+      ...context,
+      cron: {
+        pauseScheduling: vi.fn(),
+        resumeScheduling: vi.fn(),
+        getSuspensionBlockerCount: () => 0,
+      },
+    } as unknown as GatewayRequestContext,
+    req: { type: "req", id: requestId, method: "gateway.suspend.prepare" },
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return respond;
 }
 
 // Operator-write client that is NOT the in-process backend ACP spawn caller:
@@ -1100,6 +1127,156 @@ describe("gateway agent handler", () => {
     });
     expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
     expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects agent RPC creation in an agent harness-owned namespace", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
+    const runId = "agent-harness-reserved";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: undefined,
+      canonicalKey: sessionKey,
+    });
+    mocks.agentCommand.mockClear();
+    const context = makeContext();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "claim reserved session",
+        agentId: "main",
+        sessionKey,
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "Session key namespace is reserved for agent harness-owned sessions.",
+    });
+    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it.each(["agent:main:harness:codex:supervision:native-thread", "agent:main:ordinary-locked"])(
+    "rejects agent RPC session-id rotation for locked session %s",
+    async (sessionKey) => {
+      const runId = "agent-harness-session-id-rotation";
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        entry: {
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+          sessionId: "native-session",
+        },
+        canonicalKey: sessionKey,
+      });
+      mocks.agentCommand.mockClear();
+      const updateSessionStoreCallsBefore = mocks.updateSessionStore.mock.calls.length;
+      const context = makeContext();
+      const respond = vi.fn();
+
+      await invokeAgent(
+        {
+          message: "replace native transcript identity",
+          agentId: "main",
+          sessionKey,
+          sessionId: "replacement-session",
+          idempotencyKey: runId,
+        },
+        { context, respond, reqId: runId, flushDispatch: false },
+      );
+
+      expectRespondError(respond, {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "Agent harness-owned session identity is locked and cannot be replaced or shared.",
+      });
+      expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+      expect(mocks.updateSessionStore).toHaveBeenCalledTimes(updateSessionStoreCallsBefore);
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects one-shot model runs against harness-owned sessions", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
+    const runId = "agent-harness-model-run";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        sessionId: "native-session",
+      },
+      canonicalKey: sessionKey,
+    });
+    mocks.agentCommand.mockClear();
+    const context = makeContext();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "run through another model",
+        agentId: "main",
+        sessionKey,
+        modelRun: true,
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "Agent harness-owned sessions cannot be used for one-shot model runs.",
+    });
+    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("allows raw model runs against grandfathered unlocked harness-prefixed sessions", async () => {
+    const sessionKey = "agent:main:harness:notes";
+    const runId = "legacy-harness-model-run";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        agentHarnessId: "codex",
+        modelSelectionLocked: false,
+        sessionId: "legacy-session",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: sessionKey,
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "pong" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "Reply exactly: pong",
+        agentId: "main",
+        sessionKey,
+        modelRun: true,
+        promptMode: "none",
+        idempotencyKey: runId,
+      },
+      {
+        reqId: runId,
+        client: operatorWriteCliClient(),
+      },
+    );
+
+    expectRecordFields(await waitForAgentCommandCall(), {
+      modelRun: true,
+      promptMode: "none",
+      sessionEffects: "internal",
+      sessionId: "legacy-session",
+      sessionKey,
+    });
   });
 
   it("uses single-entry persistence for ordinary gateway admission touches", async () => {
@@ -3634,6 +3811,7 @@ describe("gateway agent handler", () => {
 
   it("recovers a continuation release after reporting a durable write failure", async () => {
     vi.useFakeTimers();
+    resetGatewayWorkAdmission();
     try {
       mocks.agentCommand.mockClear();
       const { sessionKey, store } = setupCronContinuationReleaseFixture();
@@ -3678,6 +3856,15 @@ describe("gateway agent handler", () => {
         expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
         expect.objectContaining({ runId: "cron-media-release-fails" }),
       );
+      const busyPrepare = await invokeGatewaySuspendPrepare(context, "cron-media-release-backoff");
+      expect(busyPrepare).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          status: "busy",
+          reason: "active-work",
+          blockers: expect.arrayContaining([expect.objectContaining({ kind: "root-request" })]),
+        }),
+      );
 
       await vi.advanceTimersByTimeAsync(250);
 
@@ -3686,6 +3873,18 @@ describe("gateway agent handler", () => {
         lifecycleRevision: "revision-1",
         phase: "ready",
         basePersisted: true,
+      });
+      const readyPrepare = await invokeGatewaySuspendPrepare(
+        context,
+        "cron-media-release-recovered",
+      );
+      const readyPayload = readyPrepare.mock.calls.at(-1)?.[1] as
+        | { status?: string; suspensionId?: string }
+        | undefined;
+      expect(readyPayload).toMatchObject({ status: "ready" });
+      expect(resumeGatewaySuspend(readyPayload?.suspensionId ?? "missing")).toMatchObject({
+        ok: true,
+        status: "running",
       });
       const retryRespond = await invokeAgent(request, {
         reqId: "cron-media-release-retry",
@@ -3700,14 +3899,90 @@ describe("gateway agent handler", () => {
       );
       expect(mocks.agentCommand).toHaveBeenCalledOnce();
     } finally {
+      resetGatewaySuspendCoordinatorForTest();
+      resetGatewayWorkAdmission();
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases suspension admission after continuation recovery exhausts", async () => {
+    vi.useFakeTimers();
+    resetGatewayWorkAdmission();
+    try {
+      const { sessionKey, store } = setupCronContinuationReleaseFixture();
+      const context = makeContext();
+      let releaseAttempts = 0;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        if (store[sessionKey].cronRunContinuation?.phase === "continuing") {
+          releaseAttempts += 1;
+          throw new Error("disk unavailable");
+        }
+        return await updater(store);
+      });
+      mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "continued" }], meta: {} });
+
+      await invokeAgent(
+        {
+          message: "media completion",
+          sessionKey,
+          internalEvents: [cronMediaCompletionEvent()],
+          idempotencyKey: "cron-media-release-exhausts",
+        },
+        {
+          reqId: "cron-media-release-exhausts",
+          client: cronContinuationGatewayClient(),
+          context,
+          flushDispatch: false,
+        },
+      );
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(releaseAttempts).toBe(3);
+      const busyPrepare = await invokeGatewaySuspendPrepare(
+        context,
+        "cron-media-release-exhaustion-backoff",
+      );
+      expect(busyPrepare).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          status: "busy",
+          blockers: expect.arrayContaining([expect.objectContaining({ kind: "root-request" })]),
+        }),
+      );
+
+      for (const delayMs of [250, 1_000, 4_000, 15_000]) {
+        await vi.advanceTimersByTimeAsync(delayMs);
+      }
+
+      expect(releaseAttempts).toBe(15);
+      expect(context.logGateway.warn).toHaveBeenCalledWith(
+        "cron continuation release recovery exhausted for cron-media-release-exhausts",
+      );
+      const readyPrepare = await invokeGatewaySuspendPrepare(
+        context,
+        "cron-media-release-exhausted",
+      );
+      const readyPayload = readyPrepare.mock.calls.at(-1)?.[1] as
+        | { status?: string; suspensionId?: string }
+        | undefined;
+      expect(readyPayload).toMatchObject({ status: "ready" });
+      expect(resumeGatewaySuspend(readyPayload?.suspensionId ?? "missing")).toMatchObject({
+        ok: true,
+        status: "running",
+      });
+    } finally {
+      resetGatewaySuspendCoordinatorForTest();
+      resetGatewayWorkAdmission();
       vi.useRealTimers();
     }
   });
 
   it("stops continuation release recovery after gateway generation rotation", async () => {
     vi.useFakeTimers();
+    resetGatewayWorkAdmission();
     try {
       const { sessionKey, store } = setupCronContinuationReleaseFixture();
+      const context = makeContext();
       let releaseAttempts = 0;
       mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
         if (store[sessionKey].cronRunContinuation?.phase === "continuing") {
@@ -3728,11 +4003,20 @@ describe("gateway agent handler", () => {
         {
           reqId: "cron-media-release-rotates",
           client: cronContinuationGatewayClient(),
+          context,
           flushDispatch: false,
         },
       );
       await vi.advanceTimersByTimeAsync(10);
       expect(releaseAttempts).toBe(3);
+      const busyPrepare = await invokeGatewaySuspendPrepare(context, "cron-media-release-rotating");
+      expect(busyPrepare).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          status: "busy",
+          blockers: expect.arrayContaining([expect.objectContaining({ kind: "root-request" })]),
+        }),
+      );
 
       mocks.lifecycleGeneration = "post-restart-generation";
       await vi.advanceTimersByTimeAsync(250);
@@ -3742,7 +4026,21 @@ describe("gateway agent handler", () => {
         phase: "continuing",
         ownerRunId: "cron-media-release-rotates",
       });
+      const readyPrepare = await invokeGatewaySuspendPrepare(
+        context,
+        "cron-media-release-rotation-complete",
+      );
+      const readyPayload = readyPrepare.mock.calls.at(-1)?.[1] as
+        | { status?: string; suspensionId?: string }
+        | undefined;
+      expect(readyPayload).toMatchObject({ status: "ready" });
+      expect(resumeGatewaySuspend(readyPayload?.suspensionId ?? "missing")).toMatchObject({
+        ok: true,
+        status: "running",
+      });
     } finally {
+      resetGatewaySuspendCoordinatorForTest();
+      resetGatewayWorkAdmission();
       vi.useRealTimers();
     }
   });
@@ -4101,6 +4399,29 @@ describe("gateway agent handler", () => {
     expect(callArgs.message).not.toContain("[Inter-session message]");
 
     resetTimeConfig();
+  });
+
+  it("rejects promptMode none without the stateless model-run contract", async () => {
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "unsafe raw run",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        promptMode: "none",
+        idempotencyKey: "test-raw-run-with-visible-session-effects",
+      },
+      { reqId: "raw-run-with-visible-session-effects", flushDispatch: false },
+    );
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message:
+        'promptMode="none" requires modelRun=true so the run cannot mutate a durable session.',
+    });
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
   it("keeps CLI model runs out of durable and visible gateway state", async () => {
@@ -5849,6 +6170,70 @@ describe("gateway agent handler", () => {
         "claude-cli": { sessionId: "claude-cli-conversation-123" },
       });
       expect(mocks.emitGatewaySessionEndPluginHook).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a model-locked session across configured gateway expiry", async () => {
+    const now = Date.parse("2026-04-25T12:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
+      mockMainSessionEntry(
+        {
+          sessionId: "model-locked-session-id",
+          updatedAt: now,
+          sessionStartedAt: now - 25 * 60 * 60_000,
+          lastInteractionAt: now - 25 * 60 * 60_000,
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+        },
+        {
+          session: {
+            reset: {
+              mode: "daily",
+              atHour: 4,
+            },
+          },
+        },
+      );
+      const loaded = mocks.loadSessionEntry();
+      let capturedEntry: Record<string, unknown> | undefined;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store: Record<string, unknown> = {
+          [loaded.canonicalKey]: structuredClone(loaded.entry),
+        };
+        const result = await updater(store);
+        capturedEntry = result as Record<string, unknown>;
+        return result;
+      });
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+
+      await invokeAgent(
+        {
+          message: "model-locked daily boundary",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "model-locked-daily-boundary",
+        },
+        { reqId: "model-locked-daily-boundary" },
+      );
+
+      const call = await waitForAgentCommandCall<{
+        sessionId?: string;
+        sessionKey?: string;
+      }>();
+      expect(call.sessionKey).toBe("agent:main:main");
+      expect(call.sessionId).toBe("model-locked-session-id");
+      expect(capturedEntry?.sessionStartedAt).toBe(now - 25 * 60 * 60_000);
+      expect(capturedEntry?.modelSelectionLocked).toBe(true);
+      expect(mocks.emitGatewaySessionEndPluginHook).not.toHaveBeenCalled();
+      expect(mocks.emitGatewaySessionStartPluginHook).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

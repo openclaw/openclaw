@@ -564,6 +564,12 @@ See [Inferred commitments](/concepts/commitments).
       pairing: {
         // Optional. Default unset/disabled.
         autoApproveCidrs: ["192.168.1.0/24", "fd00:1234:5678::/64"],
+        // SSH-verified auto-approval. Default: enabled (true).
+        // Set false to disable SSH verification only; this does not affect
+        // autoApproveCidrs above. For manual-only node pairing, set false AND
+        // unset autoApproveCidrs. Pass an object to tune: { user, identity,
+        // timeoutMs, cidrs }.
+        sshVerify: true,
       },
       allowCommands: ["canvas.navigate"],
       denyCommands: ["system.run"],
@@ -642,6 +648,7 @@ See [Inferred commitments](/concepts/commitments).
 - `trustedProxies`: reverse proxy IPs that terminate TLS or inject forwarded-client headers. Only list proxies you control. Loopback entries are still valid for same-host proxy/local-detection setups (for example Tailscale Serve or a local reverse proxy), but they do **not** make loopback requests eligible for `gateway.auth.mode: "trusted-proxy"`.
 - `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false` for fail-closed behavior.
 - `gateway.nodes.pairing.autoApproveCidrs`: optional CIDR/IP allowlist for auto-approving first-time node device pairing with no requested scopes. It is disabled when unset. This does not auto-approve operator/browser/Control UI/WebChat pairing, and it does not auto-approve role, scope, metadata, or public-key upgrades.
+- `gateway.nodes.pairing.sshVerify`: SSH-verified auto-approval for first-time node device pairing (default: enabled). The gateway SSHes back to the pairing host (BatchMode, strict host keys) and approves only on an exact `openclaw node identity` device-key match. Same eligibility floor as `autoApproveCidrs`; probes are limited to private/CGNAT source addresses unless `cidrs` overrides them. Set `false` to disable, or `{ user, identity, timeoutMs, cidrs }` to tune. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
 - `gateway.nodes.allowCommands` / `gateway.nodes.denyCommands`: global allow/deny shaping for declared node commands after pairing and platform allowlist evaluation. Use `allowCommands` to opt into dangerous node commands such as `camera.snap`, `camera.clip`, `screen.record`, `sms.search`, and `sms.send`; `denyCommands` removes a command even if a platform default or explicit allow would otherwise include it. Android SMS permission and Gateway command authorization are independent. After a node changes its declared command list, reject and re-approve that device pairing so the gateway stores the updated command snapshot.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
 - `gateway.tools.allow`: remove tool names from the default HTTP deny list for
@@ -722,6 +729,95 @@ See [Multiple Gateways](/gateway/multiple-gateways).
   - `"hybrid"` (default): try hot reload first; fall back to restart if required.
 - `debounceMs`: debounce window in ms before config changes are applied (non-negative integer; default: `300`).
 - `deferralTimeoutMs`: optional maximum time in ms to wait for in-flight operations before forcing a restart or channel hot reload. Omit it to use the default bounded wait (`300000`); set `0` to wait indefinitely and log periodic still-pending warnings.
+
+---
+
+## Cloud worker environments
+
+Cloud workers are opt-in. If `cloudWorkers` is absent, or `profiles` is empty, OpenClaw accepts no new worker creation. Durable records created earlier still reconcile and remain visible; the existing gateway/node projection is unchanged.
+
+### Crabbox profile
+
+The bundled `crabbox` provider provisions an SSH-capable lease through the local Crabbox CLI. The inner `settings.provider` selects the Crabbox backend; it is separate from the outer OpenClaw provider id.
+
+```json5
+{
+  cloudWorkers: {
+    profiles: {
+      production: {
+        provider: "crabbox",
+        settings: {
+          provider: "aws",
+          class: "standard",
+          ttl: "24h",
+          idleTimeout: "60m",
+          // Optional absolute path. Default: sibling ../crabbox/bin/crabbox, then PATH.
+          binary: "/usr/local/bin/crabbox",
+        },
+        lifetime: {
+          idleTimeoutMinutes: 60,
+          maxLifetimeMinutes: 1440,
+        },
+      },
+    },
+  },
+}
+```
+
+- `settings.provider` (required): Crabbox backend passed through `--provider`. Use a backend whose inspect output includes an SSH endpoint; `aws` selects the direct AWS backend.
+- `settings.class` (required): Crabbox machine class passed to `--class`.
+- `settings.ttl` and `settings.idleTimeout` (required): positive Go duration strings passed to `--ttl` and `--idle-timeout`. These provider-side failsafes are distinct from OpenClaw's stored `lifetime` policy below.
+- `settings.binary`: optional absolute Crabbox executable path. Without it, OpenClaw checks the sibling Crabbox checkout, then executable entries on `PATH`, and finally invokes `crabbox` so a missing CLI remains a visible provider error.
+
+Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop`.
+
+<Warning>
+  This milestone surfaces the SSH endpoint and a file `SecretRef`, but the current generic file-secret contract does not resolve Crabbox's dynamic key path, and Crabbox `inspect` does not expose host-key material. The later tunnel milestone must define direct-file key resolution and host-key pinning before connecting; this profile alone is not yet a complete SSH trust boundary.
+</Warning>
+
+### Static SSH development profile
+
+```json5
+{
+  cloudWorkers: {
+    profiles: {
+      development: {
+        provider: "static-ssh",
+        settings: {
+          host: "worker.example.test",
+          port: 22,
+          user: "openclaw",
+          keyRef: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_WORKER_SSH_KEY",
+          },
+        },
+        lifetime: {
+          idleTimeoutMinutes: 60,
+          maxLifetimeMinutes: 1440,
+        },
+      },
+    },
+  },
+}
+```
+
+- `profiles`: named worker profiles with non-empty, whitespace-trimmed ids. Each profile selects a provider registered by a plugin.
+- `provider`: non-empty worker provider id. The examples use the bundled `crabbox` provider and the QA Lab `static-ssh` provider.
+- Bundled provider plugins are selected automatically when configured, but explicit disables and `plugins.allow` still apply. Include the provider id (for example, `crabbox`) when an allowlist is configured. External provider plugins must also be installed and explicitly enabled.
+- `settings`: provider-owned bounded JSON. The selected plugin defines and validates its keys; use [SecretRef objects](/gateway/secrets) for secret-bearing values. The static SSH provider requires `host`, `user`, and `keyRef`; `port` defaults to `22`.
+- `lifetime.idleTimeoutMinutes`: positive integer minutes stored for later idle-reclamation policy.
+- `lifetime.maxLifetimeMinutes`: positive integer minutes stored for later lifecycle policy.
+
+Each durable environment record retains its validated provider settings snapshot for later inspection and destruction. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with their creation-time settings, provided the owning plugin remains available.
+
+Lifetime values are data only in the first cloud-worker release; automatic enforcement lands with later lifecycle work. Profile changes require a gateway restart.
+
+<Warning>
+  The `static-ssh` provider is a source-tree QA Lab development harness and is excluded from packaged distributions. A worker running on its shared host can read unrelated host data, so do not use this provider as a production isolation boundary.
+  Destroying its lease only releases OpenClaw's logical record; it does not stop or clean the host.
+</Warning>
 
 ---
 

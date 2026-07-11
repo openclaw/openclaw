@@ -3,10 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
-import {
-  clearUsageBarTemplateCacheForTest,
-  loadUsageBarTemplate,
-} from "./template.js";
+import { clearUsageBarTemplateCacheForTest, loadUsageBarTemplate } from "./template.js";
 
 const warnSpy = vi.hoisted(() => vi.fn());
 
