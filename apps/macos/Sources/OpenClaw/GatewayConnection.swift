@@ -359,7 +359,7 @@ actor GatewayConnection {
     }
 
     /// Cancel on the socket that created the wizard, or a replacement socket on
-    /// the same route. Never cross an endpoint or credential change.
+    /// the same route. Returns true only when no server session remains.
     @discardableResult
     func cancelWizardSession(_ sessionID: String, on lease: ServerLease) async -> Bool {
         if await self.sendWizardCancellation(sessionID, on: lease) {
@@ -382,8 +382,15 @@ actor GatewayConnection {
             let status = try self.decoder.decode(WizardCancellationStatus.self, from: data)
             return status.status == "cancelled"
         } catch {
-            return false
+            return Self.wizardCancellationMeansSessionEnded(error)
         }
+    }
+
+    static func wizardCancellationMeansSessionEnded(_ error: Error) -> Bool {
+        guard let response = error as? GatewayResponseError else { return false }
+        return response.method == "wizard.cancel" &&
+            response.code == "INVALID_REQUEST" &&
+            response.message == "wizard not found"
     }
 
     private struct WizardCancellationStatus: Decodable {

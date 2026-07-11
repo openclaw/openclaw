@@ -232,6 +232,23 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
 }
 
 @Suite(.serialized) struct GatewayConnectionControlTests {
+    @Test func `wizard not found means cancellation already reached a terminal session`() {
+        let notFound = GatewayResponseError(
+            method: "wizard.cancel",
+            code: "INVALID_REQUEST",
+            message: "wizard not found",
+            details: nil)
+        let locked = GatewayResponseError(
+            method: "wizard.cancel",
+            code: "INVALID_REQUEST",
+            message: "wizard cancellation is locked",
+            details: nil)
+
+        #expect(GatewayConnection.wizardCancellationMeansSessionEnded(notFound))
+        #expect(!GatewayConnection.wizardCancellationMeansSessionEnded(locked))
+        #expect(!GatewayConnection.wizardCancellationMeansSessionEnded(URLError(.timedOut)))
+    }
+
     @Test func `retired socket callbacks cannot mutate cache or subscribers`() async {
         let (connection, _) = makeTestGatewayConnection()
         let routeGeneration = await connection._test_routeGeneration()

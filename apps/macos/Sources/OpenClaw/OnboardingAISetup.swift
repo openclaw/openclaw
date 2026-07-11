@@ -18,8 +18,8 @@ import SwiftUI
 @MainActor
 @Observable
 final class OnboardingAISetupModel {
-    // Device-code providers advertise windows up to 15 minutes. Keep transport
-    // alive long enough for approval plus the post-login inference probe.
+    /// Device-code providers advertise windows up to 15 minutes. Keep transport
+    /// alive long enough for approval plus the post-login inference probe.
     static let providerAuthRequestTimeoutMs: Double = 1_200_000
 
     struct Candidate: Identifiable, Equatable {
@@ -170,8 +170,7 @@ final class OnboardingAISetupModel {
         var persistedActivationState: PersistedActivationState {
             PersistedActivationState(
                 setupComplete: self.setupComplete,
-                configuredModel: self.configuredModel
-            )
+                configuredModel: self.configuredModel)
         }
     }
 
@@ -254,8 +253,7 @@ final class OnboardingAISetupModel {
                 method: "crestodian.setup.detect",
                 params: [:],
                 timeoutMs: 20000,
-                ifCurrentServerLease: lease
-            )
+                ifCurrentServerLease: lease)
             guard token == self.attemptToken else { return }
             let result = try JSONDecoder().decode(DetectResult.self, from: data)
             self.lastDetectedActivationState = result.persistedActivationState
@@ -268,8 +266,7 @@ final class OnboardingAISetupModel {
                     label: detected.label,
                     detail: detected.detail,
                     modelRef: detected.modelRef,
-                    credentials: detected.credentials
-                )
+                    credentials: detected.credentials)
             }
             self.manualProviders = manualProviders
             self.authOptions = authOptions
@@ -289,8 +286,7 @@ final class OnboardingAISetupModel {
             if Self.canAcceptProviderAuthReconciliation(
                 pending: providerAuthReconciliationPending,
                 setupComplete: result.setupComplete,
-                configuredModel: result.configuredModel
-            ),
+                configuredModel: result.configuredModel),
                 let configuredModel = result.configuredModel
             {
                 self.finishConnected(
@@ -301,9 +297,7 @@ final class OnboardingAISetupModel {
                         latencyMs: nil,
                         lines: nil,
                         status: nil,
-                        error: nil
-                    )
-                )
+                        error: nil))
                 return
             }
             if let first = autoCandidateAfter(kind: nil) {
@@ -324,8 +318,8 @@ final class OnboardingAISetupModel {
     static func canAcceptProviderAuthReconciliation(
         pending: Bool,
         setupComplete: Bool,
-        configuredModel: String?
-    ) -> Bool {
+        configuredModel: String?) -> Bool
+    {
         pending && setupComplete && configuredModel?.isEmpty == false
     }
 
@@ -342,8 +336,8 @@ final class OnboardingAISetupModel {
 
     static func activationRequestTimeoutMs(
         for kind: String,
-        provisionsCodexSupervision: Bool = false
-    ) -> Double {
+        provisionsCodexSupervision: Bool = false) -> Double
+    {
         // Codex can spend 305s installing its runtime plugin before the 90s live probe.
         // Keep a bounded client deadline with room for registry refresh and finalization.
         kind == "codex-cli" || provisionsCodexSupervision ? 480_000 : 150_000
@@ -351,21 +345,20 @@ final class OnboardingAISetupModel {
 
     static func activationOutcomeDeadlineMs(
         for kind: String,
-        provisionsCodexSupervision: Bool = false
-    ) -> Double {
+        provisionsCodexSupervision: Bool = false) -> Double
+    {
         // A request timeout removes only the client waiter. Keep a short final window
         // to observe config that the still-running Gateway operation just persisted.
         self.activationRequestTimeoutMs(
             for: kind,
-            provisionsCodexSupervision: provisionsCodexSupervision
-        ) + 30000
+            provisionsCodexSupervision: provisionsCodexSupervision) + 30000
     }
 
     static func activationTransitionWasPersisted(
         expectedModel: String,
         before: PersistedActivationState?,
-        after: PersistedActivationState
-    ) -> Bool {
+        after: PersistedActivationState) -> Bool
+    {
         guard let before else { return false }
         let wasAlreadyPersisted = before.setupComplete && before.configuredModel == expectedModel
         return !wasAlreadyPersisted && after.setupComplete && after.configuredModel == expectedModel
@@ -416,8 +409,8 @@ final class OnboardingAISetupModel {
     static func activationParams(
         kind: String,
         modelRef: String,
-        supportsExactModel: Bool
-    ) -> [String: AnyCodable] {
+        supportsExactModel: Bool) -> [String: AnyCodable]
+    {
         var params = ["kind": AnyCodable(kind)]
         if supportsExactModel {
             params["modelRef"] = AnyCodable(modelRef)
@@ -432,20 +425,17 @@ final class OnboardingAISetupModel {
         let clock = ContinuousClock()
         let requestTimeoutMs = Self.activationRequestTimeoutMs(
             for: kind,
-            provisionsCodexSupervision: self.codexAppServerDetected
-        )
+            provisionsCodexSupervision: self.codexAppServerDetected)
         let outcomeDeadlineMs = Self.activationOutcomeDeadlineMs(
             for: kind,
-            provisionsCodexSupervision: self.codexAppServerDetected
-        )
+            provisionsCodexSupervision: self.codexAppServerDetected)
         let reconciliationDeadline = clock.now.advanced(by: .milliseconds(Int64(outcomeDeadlineMs)))
         self.selectedKind = kind
         self.phase = .testing
         self.statuses[kind] = .testing
         guard let serverLease else {
             self.statuses[kind] = .failed(Self.transportFailure(
-                OpenClawChatTransportSendError.notDispatched.localizedDescription
-            ))
+                OpenClawChatTransportSendError.notDispatched.localizedDescription))
             self.phase = .ready
             return
         }
@@ -456,20 +446,17 @@ final class OnboardingAISetupModel {
             // Older gateways keep the legacy kind-only request shape.
             guard let supportsExactModel = await connection.supportsServerCapability(
                 .crestodianSetupModelRef,
-                ifCurrentServerLease: serverLease
-            )
+                ifCurrentServerLease: serverLease)
             else { throw OpenClawChatTransportSendError.notDispatched }
             let params = Self.activationParams(
                 kind: kind,
                 modelRef: candidate.modelRef,
-                supportsExactModel: supportsExactModel
-            )
+                supportsExactModel: supportsExactModel)
             let data = try await connection.request(
                 method: "crestodian.setup.activate",
                 params: params,
                 timeoutMs: requestTimeoutMs,
-                ifCurrentServerLease: serverLease
-            )
+                ifCurrentServerLease: serverLease)
             guard token == self.attemptToken else { return }
             let result = try JSONDecoder().decode(ActivateResult.self, from: data)
             if result.ok {
@@ -478,8 +465,7 @@ final class OnboardingAISetupModel {
                 self.statuses[kind] = .failed(Self.failure(
                     label: self.candidates.first { $0.kind == kind }?.label ?? kind,
                     status: result.status,
-                    error: result.error
-                ))
+                    error: result.error))
                 await self.tryNextAfterFailure(of: kind)
             }
         } catch {
@@ -495,8 +481,8 @@ final class OnboardingAISetupModel {
                     kind: kind,
                     token: token,
                     before: persistedStateBeforeActivation,
-                    serverLease: serverLease
-                ) {
+                    serverLease: serverLease)
+                {
                     return
                 }
             case .polling:
@@ -505,8 +491,8 @@ final class OnboardingAISetupModel {
                     token: token,
                     before: persistedStateBeforeActivation,
                     deadline: reconciliationDeadline,
-                    serverLease: serverLease
-                ) {
+                    serverLease: serverLease)
+                {
                     return
                 }
             }
@@ -520,8 +506,8 @@ final class OnboardingAISetupModel {
                         kind: kind,
                         token: token,
                         before: persistedStateBeforeActivation,
-                        originalServerLease: serverLease
-                    ) {
+                        originalServerLease: serverLease)
+                    {
                         return
                     }
                 }
@@ -544,8 +530,8 @@ final class OnboardingAISetupModel {
         token: UUID,
         before: PersistedActivationState?,
         deadline: ContinuousClock.Instant,
-        serverLease: GatewayConnection.ServerLease
-    ) async -> Bool {
+        serverLease: GatewayConnection.ServerLease) async -> Bool
+    {
         let clock = ContinuousClock()
         var delayMs: UInt64 = 2000
         while clock.now < deadline {
@@ -561,8 +547,8 @@ final class OnboardingAISetupModel {
                 kind: kind,
                 token: token,
                 before: before,
-                serverLease: serverLease
-            ) {
+                serverLease: serverLease)
+            {
                 return true
             }
             // A healthy detect can race the still-running activation; keep polling
@@ -575,8 +561,8 @@ final class OnboardingAISetupModel {
         kind: String,
         token: UUID,
         before: PersistedActivationState?,
-        originalServerLease: GatewayConnection.ServerLease
-    ) async -> Bool {
+        originalServerLease: GatewayConnection.ServerLease) async -> Bool
+    {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(30))
         var delayMs: UInt64 = 250
@@ -585,13 +571,11 @@ final class OnboardingAISetupModel {
             let leaseTimeoutMs = Self.remainingMilliseconds(
                 until: deadline,
                 clock: clock,
-                cappedAt: 3000
-            )
+                cappedAt: 3000)
             guard leaseTimeoutMs > 0 else { return false }
             if let replacementLease = try? await GatewayConnection.shared.acquireServerLease(
                 ifSameRouteAs: originalServerLease,
-                timeoutMs: Double(leaseTimeoutMs)
-            ),
+                timeoutMs: Double(leaseTimeoutMs)),
                 await reconcilePersistedActivation(
                     kind: kind,
                     token: token,
@@ -600,9 +584,7 @@ final class OnboardingAISetupModel {
                     timeoutMs: Self.remainingMilliseconds(
                         until: deadline,
                         clock: clock,
-                        cappedAt: 10000
-                    )
-                )
+                        cappedAt: 10000))
             {
                 self.serverLease = replacementLease
                 return true
@@ -610,8 +592,7 @@ final class OnboardingAISetupModel {
             let remainingSleepMs = Self.remainingMilliseconds(
                 until: deadline,
                 clock: clock,
-                cappedAt: Int(delayMs)
-            )
+                cappedAt: Int(delayMs))
             guard remainingSleepMs > 0 else { return false }
             do {
                 try await Task.sleep(nanoseconds: UInt64(remainingSleepMs) * 1_000_000)
@@ -628,23 +609,21 @@ final class OnboardingAISetupModel {
         token: UUID,
         before: PersistedActivationState?,
         serverLease: GatewayConnection.ServerLease,
-        timeoutMs: Int = 10000
-    ) async -> Bool {
+        timeoutMs: Int = 10000) async -> Bool
+    {
         guard timeoutMs > 0 else { return false }
         guard let expected = candidates.first(where: { $0.kind == kind })?.modelRef,
               let data = try? await GatewayConnection.shared.request(
                   method: "crestodian.setup.detect",
                   params: [:],
                   timeoutMs: Double(timeoutMs),
-                  ifCurrentServerLease: serverLease
-              ),
+                  ifCurrentServerLease: serverLease),
               token == attemptToken,
               let result = try? JSONDecoder().decode(DetectResult.self, from: data),
               Self.activationTransitionWasPersisted(
                   expectedModel: expected,
                   before: before,
-                  after: result.persistedActivationState
-              )
+                  after: result.persistedActivationState)
         else {
             return false
         }
@@ -656,17 +635,15 @@ final class OnboardingAISetupModel {
                 latencyMs: nil,
                 lines: nil,
                 status: nil,
-                error: nil
-            )
-        )
+                error: nil))
         return true
     }
 
     private static func remainingMilliseconds(
         until deadline: ContinuousClock.Instant,
         clock: ContinuousClock,
-        cappedAt capMs: Int
-    ) -> Int {
+        cappedAt capMs: Int) -> Int
+    {
         let components = clock.now.duration(to: deadline).components
         let milliseconds = components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
         return max(0, min(capMs, Int(milliseconds)))
@@ -694,16 +671,14 @@ final class OnboardingAISetupModel {
                         "authChoice": AnyCodable(option.id),
                     ],
                     timeoutMs: 600_000,
-                    ifCurrentServerLease: serverLease
-                )
+                    ifCurrentServerLease: serverLease)
                 let result = try JSONDecoder().decode(WizardStartResult.self, from: data)
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else {
                     // A route reset can race the start response. Cancel the
                     // decoded server session so the discarded flow cannot commit.
                     await GatewayConnection.shared.cancelWizardSession(
                         result.sessionid,
-                        on: serverLease
-                    )
+                        on: serverLease)
                     return
                 }
                 guard result.sessionid == authSessionID else {
@@ -718,23 +693,24 @@ final class OnboardingAISetupModel {
                     done: result.done,
                     step: result.step,
                     status: wizardStatusString(result.status),
-                    error: result.error
-                )
+                    error: result.error)
             } catch {
                 // The Gateway session survives socket loss; cancel by its known
                 // id before reporting failure so it cannot persist config later.
-                let cancellationConfirmed = await GatewayConnection.shared.cancelWizardSession(
+                let sessionEnded = await GatewayConnection.shared.cancelWizardSession(
                     authSessionID,
-                    on: serverLease
-                )
+                    on: serverLease)
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
-                if !cancellationConfirmed,
+                if !sessionEnded,
                    await self.reconcileProviderAuthAfterUnknownOutcome(
                        token: token,
                        before: self.lastDetectedActivationState,
                        originalServerLease: serverLease)
                 {
                     return
+                }
+                if sessionEnded {
+                    self.authSessionID = nil
                 }
                 self.authBusy = false
                 self.authError = Self.transportFailure(error.localizedDescription)
@@ -765,12 +741,11 @@ final class OnboardingAISetupModel {
         let authAttemptID = self.authAttemptID
         self.authBusy = true
         Task {
-            let cancelled = await GatewayConnection.shared.cancelWizardSession(
+            let sessionEnded = await GatewayConnection.shared.cancelWizardSession(
                 sessionID,
-                on: authServerLease
-            )
+                on: authServerLease)
             guard authAttemptID == self.authAttemptID else { return }
-            if cancelled {
+            if sessionEnded {
                 self.authAttemptID = UUID()
                 self.providerAuthReconciliationPending = false
                 self.clearProviderAuth()
@@ -808,29 +783,29 @@ final class OnboardingAISetupModel {
                     method: "wizard.next",
                     params: params,
                     timeoutMs: Self.providerAuthRequestTimeoutMs,
-                    ifCurrentServerLease: serverLease
-                )
+                    ifCurrentServerLease: serverLease)
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
                 let result = try JSONDecoder().decode(WizardNextResult.self, from: data)
                 self.applyAuthWizardResult(
                     done: result.done,
                     step: result.step,
                     status: wizardStatusString(result.status),
-                    error: result.error
-                )
+                    error: result.error)
             } catch {
-                let cancellationConfirmed = await GatewayConnection.shared.cancelWizardSession(
+                let sessionEnded = await GatewayConnection.shared.cancelWizardSession(
                     sessionID,
-                    on: serverLease
-                )
+                    on: serverLease)
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
-                if !cancellationConfirmed,
+                if !sessionEnded,
                    await self.reconcileProviderAuthAfterUnknownOutcome(
                        token: token,
                        before: self.lastDetectedActivationState,
                        originalServerLease: serverLease)
                 {
                     return
+                }
+                if sessionEnded {
+                    self.authSessionID = nil
                 }
                 self.authBusy = false
                 self.authError = Self.transportFailure(error.localizedDescription)
@@ -842,8 +817,8 @@ final class OnboardingAISetupModel {
         done: Bool,
         step: WizardStep?,
         status: String?,
-        error: String?
-    ) {
+        error: String?)
+    {
         self.authBusy = false
         let validationError = !done && status == "running" && error?.isEmpty == false
         let preserveEnteredValue = validationError && self.authStep?.id == step?.id
@@ -855,8 +830,7 @@ final class OnboardingAISetupModel {
             self.authError = Self.failure(
                 label: self.activeAuthOption?.label ?? "Provider login",
                 status: "unavailable",
-                error: error
-            )
+                error: error)
             return
         }
         if status == "cancelled" {
@@ -874,8 +848,7 @@ final class OnboardingAISetupModel {
             self.authError = Self.failure(
                 label: self.activeAuthOption?.label ?? "Provider login",
                 status: "format",
-                error: error
-            )
+                error: error)
         }
         if !preserveEnteredValue {
             self.authText = anyCodableString(step?.initialvalue)
@@ -890,8 +863,8 @@ final class OnboardingAISetupModel {
     private func reconcileProviderAuthAfterUnknownOutcome(
         token: UUID,
         before: PersistedActivationState?,
-        originalServerLease: GatewayConnection.ServerLease
-    ) async -> Bool {
+        originalServerLease: GatewayConnection.ServerLease) async -> Bool
+    {
         guard let before else { return false }
         let connection = GatewayConnection.shared
         let lease: GatewayConnection.ServerLease
@@ -908,8 +881,7 @@ final class OnboardingAISetupModel {
             method: "crestodian.setup.detect",
             params: [:],
             timeoutMs: 10000,
-            ifCurrentServerLease: lease
-        ),
+            ifCurrentServerLease: lease),
             token == self.attemptToken,
             let result = try? JSONDecoder().decode(DetectResult.self, from: data),
             let configuredModel = result.configuredModel,
@@ -967,10 +939,8 @@ final class OnboardingAISetupModel {
                     ],
                     timeoutMs: Self.activationRequestTimeoutMs(
                         for: "api-key",
-                        provisionsCodexSupervision: self.codexAppServerDetected
-                    ),
-                    ifCurrentServerLease: serverLease
-                )
+                        provisionsCodexSupervision: self.codexAppServerDetected),
+                    ifCurrentServerLease: serverLease)
                 guard token == self.attemptToken else { return }
                 let result = try JSONDecoder().decode(ActivateResult.self, from: data)
                 if result.ok {
@@ -980,8 +950,7 @@ final class OnboardingAISetupModel {
                     self.manualError = Self.failure(
                         label: provider.label,
                         status: result.status,
-                        error: result.error
-                    )
+                        error: result.error)
                 }
             } catch {
                 guard token == self.attemptToken else { return }
@@ -1040,16 +1009,14 @@ final class OnboardingAISetupModel {
         let detail = error?.trimmingCharacters(in: .whitespacesAndNewlines)
         return Failure(
             summary: self.friendlyFailure(label: label, status: status, error: detail),
-            detail: detail?.isEmpty == false ? detail : nil
-        )
+            detail: detail?.isEmpty == false ? detail : nil)
     }
 
     static func transportFailure(_ raw: String) -> Failure {
         let detail = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return Failure(
             summary: self.friendlyTransportError(detail),
-            detail: detail.isEmpty ? nil : detail
-        )
+            detail: detail.isEmpty ? nil : detail)
     }
 
     /// One friendly sentence per failure bucket.
@@ -1092,21 +1059,23 @@ final class OnboardingAISetupModel {
     }
 
     #if DEBUG
-        func _test_setConnectedSetupLines(_ lines: [String]?) {
-            self.connectedSetupLines = Self.normalizedSetupLines(lines)
-        }
+    func _test_setConnectedSetupLines(_ lines: [String]?) {
+        self.connectedSetupLines = Self.normalizedSetupLines(lines)
+    }
 
-        func _test_setProviderAuth(option: AuthOption, sessionID: String) {
-            self.activeAuthOption = option
-            self.authSessionID = sessionID
-            self.authBusy = true
-        }
+    func _test_setProviderAuth(option: AuthOption, sessionID: String) {
+        self.activeAuthOption = option
+        self.authSessionID = sessionID
+        self.authBusy = true
+    }
 
-        func _test_applyAuthWizardResult(done: Bool, status: String?, error: String?) {
-            self.applyAuthWizardResult(done: done, step: nil, status: status, error: error)
-        }
+    func _test_applyAuthWizardResult(done: Bool, status: String?, error: String?) {
+        self.applyAuthWizardResult(done: done, step: nil, status: status, error: error)
+    }
 
-        var _test_authSessionID: String? { self.authSessionID }
+    var _test_authSessionID: String? {
+        self.authSessionID
+    }
     #endif
 }
 
@@ -1130,8 +1099,7 @@ enum OnboardingProviderIcon {
         return self.resourceBundle?.url(
             forResource: name,
             withExtension: "svg",
-            subdirectory: "ProviderIcons"
-        )
+            subdirectory: "ProviderIcons")
     }
 
     static func image(for kind: String) -> NSImage? {
@@ -1169,8 +1137,7 @@ enum OnboardingProviderIcon {
         bundle.url(
             forResource: "ProviderIcon-claude",
             withExtension: "svg",
-            subdirectory: "ProviderIcons"
-        ) != nil
+            subdirectory: "ProviderIcons") != nil
     }
 }
 
@@ -1198,9 +1165,8 @@ struct OnboardingAISetupView: View {
                 if !$0 {
                     self.model.cancelProviderAuth()
                 }
-            }
-        )) {
-            self.providerAuthSheet
+            })) {
+                self.providerAuthSheet
         }
     }
 
@@ -1245,8 +1211,8 @@ struct OnboardingAISetupView: View {
                 message: detectError.summary,
                 details: detectError.detail,
                 docsSlug: "start/onboarding",
-                retryTitle: "Try again"
-            ) {
+                retryTitle: "Try again")
+            {
                 self.model.retryFromScratch()
             }
         }
@@ -1256,8 +1222,8 @@ struct OnboardingAISetupView: View {
                 title: "Couldn’t load the full provider list",
                 message: providerCatalogError,
                 docsSlug: "start/onboarding",
-                retryTitle: "Try again"
-            ) {
+                retryTitle: "Try again")
+            {
                 self.model.retryFromScratch()
             }
         }
@@ -1270,8 +1236,8 @@ struct OnboardingAISetupView: View {
                 You can fix the login and retry, or connect with an API key or token below.
                 """,
                 docsSlug: "concepts/model-providers",
-                retryTitle: "Check again"
-            ) {
+                retryTitle: "Check again")
+            {
                 self.model.retryFromScratch()
             }
         }
@@ -1337,8 +1303,7 @@ struct OnboardingAISetupView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.green.opacity(0.12))
-        )
+                .fill(Color.green.opacity(0.12)))
     }
 
     private var noCandidatesIntro: some View {
@@ -1348,11 +1313,10 @@ struct OnboardingAISetupView: View {
             Text(
                 "That’s fine — you can connect one with an API key or token. " +
                     "If you use Claude Code, Codex, or the Gemini CLI on this Mac, " +
-                    "sign in there first and hit “Check again”."
-            )
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+                    "sign in there first and hit “Check again”.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Button("Check again") {
                 self.model.retryFromScratch()
             }
@@ -1417,8 +1381,8 @@ struct OnboardingAISetupView: View {
 
     private func subtitle(
         for candidate: OnboardingAISetupModel.Candidate,
-        status: OnboardingAISetupModel.CandidateStatus
-    ) -> String {
+        status: OnboardingAISetupModel.CandidateStatus) -> String
+    {
         switch status {
         case .testing:
             "Testing — asking \(candidate.modelRef) for a quick reply…"
@@ -1432,8 +1396,8 @@ struct OnboardingAISetupView: View {
     }
 
     private func subtitleStyle(
-        for status: OnboardingAISetupModel.CandidateStatus
-    ) -> Color {
+        for status: OnboardingAISetupModel.CandidateStatus) -> Color
+    {
         if case .failed = status {
             return .orange
         }
@@ -1443,8 +1407,8 @@ struct OnboardingAISetupView: View {
     @ViewBuilder
     private func trailingIndicator(
         status: OnboardingAISetupModel.CandidateStatus,
-        selected: Bool
-    ) -> some View {
+        selected: Bool) -> some View
+    {
         switch status {
         case .testing:
             ProgressView()
@@ -1485,8 +1449,8 @@ struct OnboardingAISetupView: View {
                     title: "No key-based providers are available",
                     message: "Enable or install a text-inference provider plugin on this Gateway, then check again.",
                     docsSlug: "concepts/model-providers",
-                    retryTitle: "Check again"
-                ) {
+                    retryTitle: "Check again")
+                {
                     self.model.retryFromScratch()
                 }
             }
@@ -1517,11 +1481,10 @@ struct OnboardingAISetupView: View {
                 Text("Sign in with a provider")
                     .font(.headline)
                 Text(
-                    "Use an existing subscription or provider account. OpenClaw opens the provider’s own sign-in flow, then verifies it with a real reply."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                    "Use an existing subscription or provider account. OpenClaw opens the provider’s own sign-in flow, then verifies it with a real reply.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 let featured = self.model.authOptions.filter(\.featured)
                 let more = self.model.authOptions.filter { !$0.featured }
                 ForEach(featured) { option in
@@ -1543,8 +1506,7 @@ struct OnboardingAISetupView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(NSColor.controlBackgroundColor))
-            )
+                    .fill(Color(NSColor.controlBackgroundColor)))
         }
     }
 
@@ -1618,8 +1580,7 @@ struct OnboardingAISetupView: View {
                     details: error.detail,
                     docsSlug: "concepts/model-providers",
                     retryTitle: nil,
-                    retry: nil
-                )
+                    retry: nil)
             }
 
             Spacer(minLength: 0)
@@ -1710,16 +1671,14 @@ struct OnboardingAISetupView: View {
                     details: manualError.detail,
                     docsSlug: "concepts/model-providers",
                     retryTitle: nil,
-                    retry: nil
-                )
+                    retry: nil)
             }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(NSColor.controlBackgroundColor))
-        )
+                .fill(Color(NSColor.controlBackgroundColor)))
     }
 
     private var manualProviderHelp: String {
@@ -1765,8 +1724,8 @@ struct OnboardingErrorCard: View {
         details: String? = nil,
         docsSlug: String,
         retryTitle: String? = nil,
-        retry: (() -> Void)? = nil
-    ) {
+        retry: (() -> Void)? = nil)
+    {
         self.title = title
         self.message = message
         self.details = details
@@ -1820,8 +1779,7 @@ struct OnboardingErrorCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.orange.opacity(0.10))
-        )
+                .fill(Color.orange.opacity(0.10)))
     }
 }
 
@@ -1838,8 +1796,7 @@ private struct OnboardingErrorDetails: View {
             } label: {
                 Label(
                     self.expanded ? "Hide details" : "Show details",
-                    systemImage: self.expanded ? "chevron.down" : "chevron.right"
-                )
+                    systemImage: self.expanded ? "chevron.down" : "chevron.right")
             }
             .buttonStyle(.link)
             .font(.caption)
@@ -1857,8 +1814,7 @@ private struct OnboardingErrorDetails: View {
                 .frame(maxHeight: 180)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.primary.opacity(0.05))
-                )
+                        .fill(Color.primary.opacity(0.05)))
                 Button {
                     Self.copy(self.text)
                 } label: {

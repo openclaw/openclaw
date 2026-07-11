@@ -1,9 +1,9 @@
 import Foundation
-@testable import OpenClaw
 import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import Testing
+@testable import OpenClaw
 
 @Suite(.serialized)
 @MainActor
@@ -12,8 +12,7 @@ struct OnboardingAISetupTests {
         let failure = OnboardingAISetupModel.failure(
             label: "Codex CLI",
             status: "auth",
-            error: "Codex login expired (request 42)"
-        )
+            error: "Codex login expired (request 42)")
 
         #expect(failure.summary == "Codex CLI is installed, but the login didn’t work. Sign in again, then retry.")
         #expect(failure.detail == "Codex login expired (request 42)")
@@ -24,8 +23,7 @@ struct OnboardingAISetupTests {
         let failure = OnboardingAISetupModel.failure(
             label: "Codex CLI",
             status: "timeout",
-            error: "  "
-        )
+            error: "  ")
 
         #expect(failure.summary == "Codex CLI didn’t answer in time.")
         #expect(failure.detail == nil)
@@ -34,8 +32,7 @@ struct OnboardingAISetupTests {
 
     @Test func `transport failure preserves original detail`() {
         let failure = OnboardingAISetupModel.transportFailure(
-            "Gateway request failed: connection reset"
-        )
+            "Gateway request failed: connection reset")
 
         #expect(failure.summary == "The Gateway setup request failed. Show details to inspect or copy the error.")
         #expect(failure.detail == "Gateway request failed: connection reset")
@@ -46,8 +43,7 @@ struct OnboardingAISetupTests {
         let failure = OnboardingAISetupModel.failure(
             label: "Codex CLI",
             status: "unavailable",
-            error: rawDetail
-        )
+            error: rawDetail)
 
         #expect(failure.summary == "Codex CLI couldn’t complete the test. Show details to inspect or copy the error.")
         #expect(failure.detail == rawDetail.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -68,8 +64,7 @@ struct OnboardingAISetupTests {
         #expect(OnboardingAISetupModel.activationRequestTimeoutMs(for: "claude-cli") == 150_000)
         #expect(OnboardingAISetupModel.activationRequestTimeoutMs(
             for: "api-key",
-            provisionsCodexSupervision: true
-        ) == 480_000)
+            provisionsCodexSupervision: true) == 480_000)
         #expect(OnboardingAISetupModel.activationRequestTimeoutMs(for: "codex-cli") >= (305 + 90) * 1000)
         #expect(OnboardingAISetupModel.activationOutcomeDeadlineMs(for: "codex-cli") == 510_000)
     }
@@ -86,15 +81,13 @@ struct OnboardingAISetupTests {
             hint: nil,
             groupLabel: "OpenAI",
             kind: "oauth",
-            featured: true
-        )
+            featured: true)
         model._test_setProviderAuth(option: option, sessionID: "finished-session")
 
         model._test_applyAuthWizardResult(
             done: true,
             status: "error",
-            error: "The authorization request was denied."
-        )
+            error: "The authorization request was denied.")
 
         #expect(model.activeAuthOption?.id == option.id)
         #expect(model.authError?.copyText == "The authorization request was denied.")
@@ -110,13 +103,11 @@ struct OnboardingAISetupTests {
         let legacy = OnboardingAISetupModel.activationParams(
             kind: "codex-cli",
             modelRef: "openai/gpt-5.5",
-            supportsExactModel: false
-        )
+            supportsExactModel: false)
         let capable = OnboardingAISetupModel.activationParams(
             kind: "codex-cli",
             modelRef: "openai/gpt-5.5",
-            supportsExactModel: true
-        )
+            supportsExactModel: true)
 
         #expect(legacy["kind"]?.value as? String == "codex-cli")
         #expect(legacy["modelRef"] == nil)
@@ -131,8 +122,7 @@ struct OnboardingAISetupTests {
               "Model: openai/gpt-5.5","  Plugin registry refresh failed: offline  ",""
             ]}
             """#
-            .utf8
-        )
+                .utf8)
         let result = try JSONDecoder().decode(OnboardingAISetupModel.ActivateResult.self, from: data)
         let model = OnboardingAISetupModel()
 
@@ -160,8 +150,7 @@ struct OnboardingAISetupTests {
                          "stateVersion":{"presence":0,"health":0},"uptimeMs":0},
              "auth":{},"policy":{}}
             """#
-            .utf8
-        )
+                .utf8)
         let hello = try JSONDecoder().decode(HelloOk.self, from: data)
 
         #expect(hello.supportsServerCapability(.crestodianSetupModelRef))
@@ -170,46 +159,38 @@ struct OnboardingAISetupTests {
     @Test func `reconciliation requires setup state to transition after activation`() {
         let missing = OnboardingAISetupModel.PersistedActivationState(
             setupComplete: false,
-            configuredModel: nil
-        )
+            configuredModel: nil)
         let persisted = OnboardingAISetupModel.PersistedActivationState(
             setupComplete: true,
-            configuredModel: "openai/gpt-5.5"
-        )
+            configuredModel: "openai/gpt-5.5")
 
         #expect(OnboardingAISetupModel.activationTransitionWasPersisted(
             expectedModel: "openai/gpt-5.5",
             before: missing,
-            after: persisted
-        ))
+            after: persisted))
         #expect(!OnboardingAISetupModel.activationTransitionWasPersisted(
             expectedModel: "openai/gpt-5.5",
             before: persisted,
-            after: persisted
-        ))
+            after: persisted))
         #expect(!OnboardingAISetupModel.activationTransitionWasPersisted(
             expectedModel: "openai/gpt-5.5",
             before: nil,
-            after: persisted
-        ))
+            after: persisted))
     }
 
     @Test func `provider auth reconciliation only trusts its own completed flow`() {
         #expect(!OnboardingAISetupModel.canAcceptProviderAuthReconciliation(
             pending: false,
             setupComplete: true,
-            configuredModel: "openai/gpt-5.5"
-        ))
+            configuredModel: "openai/gpt-5.5"))
         #expect(!OnboardingAISetupModel.canAcceptProviderAuthReconciliation(
             pending: true,
             setupComplete: false,
-            configuredModel: "openai/gpt-5.5"
-        ))
+            configuredModel: "openai/gpt-5.5"))
         #expect(OnboardingAISetupModel.canAcceptProviderAuthReconciliation(
             pending: true,
             setupComplete: true,
-            configuredModel: "openai/gpt-5.5"
-        ))
+            configuredModel: "openai/gpt-5.5"))
     }
 
     @Test func `definitive gateway response does not enter reconciliation`() {
@@ -217,22 +198,18 @@ struct OnboardingAISetupTests {
             method: "crestodian.setup.activate",
             code: "UNKNOWN_METHOD",
             message: "unknown method",
-            details: nil
-        )
+            details: nil)
         let timeout = NSError(
             domain: "Gateway",
             code: 5,
-            userInfo: [NSLocalizedDescriptionKey: "gateway request timed out"]
-        )
+            userInfo: [NSLocalizedDescriptionKey: "gateway request timed out"])
         let decodeError = DecodingError.dataCorrupted(.init(
             codingPath: [],
-            debugDescription: "invalid activation response"
-        ))
+            debugDescription: "invalid activation response"))
 
         #expect(OnboardingAISetupModel.activationReconciliationMode(after: responseError) == .none)
         #expect(OnboardingAISetupModel.activationReconciliationMode(
-            after: OpenClawChatTransportSendError.notDispatched
-        ) == .none)
+            after: OpenClawChatTransportSendError.notDispatched) == .none)
         #expect(OnboardingAISetupModel.activationReconciliationMode(after: decodeError) == .immediate)
         #expect(OnboardingAISetupModel.activationReconciliationMode(after: timeout) == .polling)
     }
