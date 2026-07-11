@@ -782,7 +782,10 @@ describe("direct thread avatar mode", () => {
     const aliasedGlobal = renderChatView({
       sessionKey: "agent:work:main",
       sessions: sessionsListWithKind("global", "global"),
-      sessionHost: { agentsList: { defaultId: "work", mainKey: "main" }, hello: null },
+      sessionHost: {
+        agentsList: { defaultId: "work", mainKey: "main", scope: "global" },
+        hello: null,
+      },
       messages: [{ role: "user", content: "hi", timestamp: 1 }],
     });
     expect(
@@ -792,6 +795,25 @@ describe("direct thread avatar mode", () => {
     ).toBe(false);
   });
 
+  it("ignores stray global rows for main aliases outside global scope", () => {
+    // per-sender scope: a listed global row must not reclassify a direct main
+    // thread whose exact row is missing from the capped list.
+    const direct = renderChatView({
+      sessionKey: "agent:work:main",
+      sessions: sessionsListWithKind("global", "global"),
+      sessionHost: {
+        agentsList: { defaultId: "work", mainKey: "main", scope: "per-sender" },
+        hello: null,
+      },
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(direct, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
+  });
+
   it("prefers the equivalent direct row over a global row for main aliases", () => {
     const sessions = {
       ts: 0,
@@ -799,14 +821,17 @@ describe("direct thread avatar mode", () => {
       count: 2,
       defaults: { modelProvider: "openai", model: "gpt-5.5", contextTokens: 200_000 },
       sessions: [
-        { key: "global", kind: "global", updatedAt: 2 },
-        { key: "agent:work:main", kind: "direct", updatedAt: 1 },
+        { key: "global", kind: "global" as const, updatedAt: 2 },
+        { key: "agent:work:main", kind: "direct" as const, updatedAt: 1 },
       ],
     };
     const direct = renderChatView({
       sessionKey: "agent:work:main",
       sessions,
-      sessionHost: { agentsList: { defaultId: "work", mainKey: "main" }, hello: null },
+      sessionHost: {
+        agentsList: { defaultId: "work", mainKey: "main", scope: "global" },
+        hello: null,
+      },
       messages: [{ role: "user", content: "hi", timestamp: 1 }],
     });
     expect(

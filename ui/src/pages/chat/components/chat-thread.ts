@@ -19,6 +19,7 @@ import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import {
   areUiSessionKeysEquivalent,
+  isUiGlobalScopeConfigured,
   isUiGlobalSessionKey,
   parseAgentSessionKey,
   resolveUiGlobalAliasAgentId,
@@ -694,14 +695,15 @@ export function renderChatThread(props: ChatThreadProps) {
     areUiSessionKeysEquivalent(row.key, props.sessionKey),
   );
   // Kind-only fallback: global-scope fleets select the canonical "global" row
-  // via alias keys (agent:<id>:global, or the configured main alias while the
-  // global row exists); strict opts mirror chat-history's subscription
-  // matching. Kept separate from activeSession because the shared sessions
-  // list can belong to another agent's scope — the kind is safe to borrow,
-  // reasoning/context metadata is not.
+  // via alias keys (agent:<id>:global, or the configured main alias); strict
+  // opts mirror chat-history's subscription matching. Gated on configured
+  // global scope because stray global rows can coexist with per-sender
+  // sessions, and kept separate from activeSession because the shared
+  // sessions list can belong to another agent's scope — the kind is safe to
+  // borrow, reasoning/context metadata is not.
   const sessionKindRow =
     activeSession ??
-    (sessionHost
+    (sessionHost && isUiGlobalScopeConfigured(sessionHost)
       ? props.sessions?.sessions?.find(
           (row) =>
             isUiGlobalSessionKey(row.key) &&
