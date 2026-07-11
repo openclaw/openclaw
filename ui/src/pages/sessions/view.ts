@@ -855,7 +855,7 @@ function renderOverrideSelect(params: {
       <select
         class="session-override-field__control"
         ?disabled=${params.disabled}
-        aria-label=${ifDefined(params.tooltip)}
+        aria-description=${ifDefined(params.tooltip)}
         @change=${(e: Event) => params.onChange((e.target as HTMLSelectElement).value)}
       >
         ${params.options.map(

@@ -1012,13 +1012,15 @@ describe("sessions view", () => {
     const thinkingField = fieldByLabel("Thinking");
     const reasoningField = fieldByLabel("Reasoning");
     expect(thinkingField?.getAttribute("title")).toContain("thinking level override");
-    expect(thinkingField?.querySelector("select")?.getAttribute("aria-label")).toContain(
-      "provider profile",
-    );
+    // The wrapping label stays the accessible NAME; the tooltip is exposed as
+    // the accessible DESCRIPTION so screen readers keep the short control name.
+    const thinkingSelect = thinkingField?.querySelector("select");
+    expect(thinkingSelect?.hasAttribute("aria-label")).toBe(false);
+    expect(thinkingSelect?.getAttribute("aria-description")).toContain("provider profile");
+    const reasoningSelect = reasoningField?.querySelector("select");
     expect(reasoningField?.getAttribute("title")).toContain("display");
-    expect(reasoningField?.querySelector("select")?.getAttribute("aria-label")).toContain(
-      "display",
-    );
+    expect(reasoningSelect?.hasAttribute("aria-label")).toBe(false);
+    expect(reasoningSelect?.getAttribute("aria-description")).toContain("display");
     // Fields without a tooltip stay untitled.
     expect(fieldByLabel("Fast")?.hasAttribute("title")).toBe(false);
   });
