@@ -802,9 +802,15 @@ describe("secrets audit", () => {
     ).toBe(true);
   });
 
-  it("scans .env in legacy .clawdbot state directory", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-audit-legacy-"));
-    const legacyStateDir = path.join(rootDir, ".clawdbot");
+  it("scans .env in legacy .clawdbot state directory via automatic fallback", async () => {
+    // Do NOT set OPENCLAW_STATE_DIR or OPENCLAW_CONFIG_PATH — rely on
+    // resolveStateDir's automatic legacy-directory fallback. A controlled
+    // HOME that contains only .clawdbot (no .openclaw) exercises the exact
+    // path the old resolveConfigDir call could not reach: resolveConfigDir
+    // always returns $HOME/.openclaw, so it would miss the .env inside
+    // .clawdbot.  resolveStateDir finds .clawdbot via its legacy-dir scan.
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-audit-legacy-"));
+    const legacyStateDir = path.join(homeDir, ".clawdbot");
     const configPath = path.join(legacyStateDir, "openclaw.json");
     const envPath = path.join(legacyStateDir, ".env");
     const agentDir = path.join(legacyStateDir, "agents", "main", "agent");
@@ -812,8 +818,7 @@ describe("secrets audit", () => {
     await fs.mkdir(agentDir, { recursive: true });
 
     const env = {
-      OPENCLAW_STATE_DIR: legacyStateDir,
-      OPENCLAW_CONFIG_PATH: configPath,
+      HOME: homeDir,
       OPENAI_API_KEY: "env-openai-key", // pragma: allowlist secret
       PATH: resolveRuntimePathEnv(),
     };
@@ -840,14 +845,14 @@ describe("secrets audit", () => {
     try {
       const report = await runSecretsAudit({ env });
       // Config-based key is ref'd from env, so no plaintext finding for config;
-      // but the .env file should be scanned and reported.
+      // but the .env file should be scanned and reported via the legacy fallback.
       expect(report.status).toBe("findings");
       expect(report.findings.some((f) => f.code === "PLAINTEXT_FOUND" && f.file === envPath)).toBe(
         true,
       );
     } finally {
       closeOpenClawAgentDatabasesForTest();
-      await fs.rm(rootDir, { recursive: true, force: true });
+      await fs.rm(homeDir, { recursive: true, force: true });
     }
   });
 });

@@ -1576,6 +1576,63 @@ describe("secrets apply", () => {
     );
   });
 
+  it("scrubs .env in legacy .clawdbot state directory via automatic fallback", async () => {
+    // Do NOT set OPENCLAW_STATE_DIR — rely on resolveStateDir's automatic
+    // legacy-directory fallback. A controlled HOME that contains only
+    // .clawdbot (no .openclaw) exercises the scrub path so the old
+    // resolveConfigDir call (which always returns $HOME/.openclaw) would
+    // miss the .env inside .clawdbot.
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-apply-legacy-"));
+    const legacyStateDir = path.join(homeDir, ".clawdbot");
+    const configPath = path.join(legacyStateDir, "openclaw.json");
+    const agentDir = path.join(legacyStateDir, "agents", "main", "agent");
+    const envPath = path.join(legacyStateDir, ".env");
+    const authStorePath = resolveAuthProfileDatabasePath(agentDir);
+
+    await fs.mkdir(agentDir, { recursive: true });
+
+    const env = {
+      HOME: homeDir,
+      OPENAI_API_KEY: "sk-openai-plaintext", // pragma: allowlist secret
+    };
+
+    await writeJsonFile(configPath, {
+      models: {
+        providers: {
+          openai: createOpenAiProviderConfig(),
+        },
+      },
+    });
+    await writeJsonFile(authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(
+      envPath,
+      "OPENAI_API_KEY=sk-openai-plaintext\nUNRELATED=value\n", // pragma: allowlist secret
+      "utf8",
+    );
+
+    try {
+      const plan = createPlan({
+        targets: [createOpenAiProviderTarget()],
+        options: createOneWayScrubOptions(),
+      });
+
+      const applied = await runSecretsApply({ plan, env, write: true });
+      expect(applied.mode).toBe("write");
+      expect(applied.changed).toBe(true);
+
+      const nextEnv = await fs.readFile(envPath, "utf8");
+      expect(nextEnv).not.toContain("sk-openai-plaintext");
+      expect(nextEnv).toContain("UNRELATED=value");
+    } finally {
+      clearSecretsRuntimeSnapshot();
+      closeOpenClawAgentDatabasesForTest();
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("preserves normalized restrictive plugin allowlist entries for plugin-managed exec provider upserts", async () => {
     await writeJsonFile(fixture.configPath, {
       plugins: {
