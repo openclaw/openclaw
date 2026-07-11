@@ -1,4 +1,4 @@
-import { isFailoverError } from "./failover-error.js";
+import { isFailoverError, isTimeoutError } from "./failover-error.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 
 /**
@@ -123,4 +123,27 @@ export function isAbortedAgentStopReason(
   value: unknown,
 ): value is typeof AGENT_RUN_ABORTED_STOP_REASON | typeof AGENT_RUN_RESTART_ABORT_STOP_REASON {
   return value === AGENT_RUN_ABORTED_STOP_REASON || value === AGENT_RUN_RESTART_ABORT_STOP_REASON;
+}
+
+/**
+ * CLI tool terminal reason for one-shot and live runners.
+ * Abort-signal lifecycle is authoritative so a timeout abort stays timed_out
+ * even when the delivered error is a generic AbortError.
+ */
+export function resolveCliToolTerminalReason(params: {
+  error?: unknown;
+  abortSignal?: AbortSignal;
+}): "timed_out" | "cancelled" | "failed" {
+  const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
+  if (abortFields.aborted) {
+    return abortFields.stopReason === "timeout" ? "timed_out" : "cancelled";
+  }
+  const { error } = params;
+  if (isTimeoutError(error) || (isFailoverError(error) && error.reason === "timeout")) {
+    return "timed_out";
+  }
+  if (error instanceof Error && error.name === "AbortError") {
+    return "cancelled";
+  }
+  return "failed";
 }
