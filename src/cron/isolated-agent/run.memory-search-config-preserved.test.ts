@@ -28,7 +28,7 @@ describe("runCronIsolatedAgentTurn memory search config preserved", () => {
     } satisfies MemorySearchConfig;
     const agentDefaults = buildCronAgentDefaultsConfig({
       defaults: { memorySearch: defaultMemorySearch },
-      agentConfigOverride: { id: "main", memorySearch: agentMemorySearch },
+      agentConfigOverride: { memorySearch: agentMemorySearch },
     });
     const runCfg: OpenClawConfig = {
       plugins: { enabled: false },
