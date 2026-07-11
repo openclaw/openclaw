@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
+@Suite(.serialized)
 struct MacNodeCodexThreadCatalogTests {
     private struct FakeCodex {
         var directory: URL
