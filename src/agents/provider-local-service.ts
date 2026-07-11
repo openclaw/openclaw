@@ -434,6 +434,8 @@ async function startAndWaitForLocalService(params: {
       chunk,
       service.env,
       process.env,
+      service.args,
+      healthHeaders,
     );
   };
   const captureStderr = (chunk: Buffer | string) => {
@@ -442,6 +444,8 @@ async function startAndWaitForLocalService(params: {
       chunk,
       service.env,
       process.env,
+      service.args,
+      healthHeaders,
     );
   };
   child.stdout?.on("data", captureStdout);
@@ -504,6 +508,8 @@ function appendLocalServiceOutputTail(
   chunk: Buffer | string,
   serviceEnv: Record<string, string> | undefined,
   inheritedEnv: NodeJS.ProcessEnv,
+  serviceArgs: string[] | undefined,
+  healthHeaders: HeadersInit | undefined,
 ): string {
   let redacted = redactSensitiveText(`${current}${chunk.toString()}`, { mode: "tools" });
   for (const value of Object.values(serviceEnv ?? {})) {
@@ -513,6 +519,16 @@ function appendLocalServiceOutputTail(
   }
   for (const [key, value] of Object.entries(inheritedEnv)) {
     if (value && isSensitiveFieldKey(key)) {
+      redacted = redacted.replaceAll(value, "[redacted]");
+    }
+  }
+  for (const value of serviceArgs ?? []) {
+    if (value) {
+      redacted = redacted.replaceAll(value, "[redacted]");
+    }
+  }
+  for (const [, value] of new Headers(healthHeaders)) {
+    if (value) {
       redacted = redacted.replaceAll(value, "[redacted]");
     }
   }

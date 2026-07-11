@@ -762,6 +762,8 @@ describe("provider local service", () => {
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const diagnosticSecret = "local-service-diagnostic-secret";
     const inheritedDiagnosticSecret = "inherited-local-service-diagnostic-secret";
+    const headerDiagnosticSecret = "header-local-service-diagnostic-secret";
+    const argumentDiagnosticSecret = "argument-local-service-diagnostic-secret";
     let startupError: Error | undefined;
     vi.stubEnv("INHERITED_DIAGNOSTIC_TOKEN", inheritedDiagnosticSecret);
 
@@ -769,11 +771,15 @@ describe("provider local service", () => {
       await ensureProviderLocalService({
         providerId: "local-diagnostics",
         baseUrl: `http://127.0.0.1:${port}/v1`,
+        headers: {
+          Authorization: `Bearer ${headerDiagnosticSecret}`,
+        },
         service: {
           command: process.execPath,
           args: [
             "-e",
-            `const noise="x".repeat(9000);process.stderr.write(noise+" "+process.env.DIAGNOSTIC_SECRET+" "+process.env.INHERITED_DIAGNOSTIC_TOKEN);process.exit(17);`,
+            `const http=require("node:http");const noise="x".repeat(9000);const server=http.createServer((req,res)=>{process.stderr.write(noise+" "+process.env.DIAGNOSTIC_SECRET+" "+process.env.INHERITED_DIAGNOSTIC_TOKEN+" "+process.argv[1]+" "+req.headers.authorization);res.writeHead(503,{"connection":"close"});res.end("not ready");server.close();setTimeout(()=>process.exit(17),20);});server.listen(${port},"127.0.0.1");`,
+            argumentDiagnosticSecret,
           ],
           env: { DIAGNOSTIC_SECRET: diagnosticSecret },
           healthUrl,
@@ -793,6 +799,8 @@ describe("provider local service", () => {
     expect(startupError?.message).toContain("[redacted]");
     expect(startupError?.message).not.toContain(diagnosticSecret);
     expect(startupError?.message).not.toContain(inheritedDiagnosticSecret);
+    expect(startupError?.message).not.toContain(headerDiagnosticSecret);
+    expect(startupError?.message).not.toContain(argumentDiagnosticSecret);
     expect(Buffer.byteLength(startupError?.message ?? "")).toBeLessThanOrEqual(8 * 1024 + 256);
     expect(getManagedProviderLocalServiceDiagnosticsForTest()).toEqual([]);
   });
