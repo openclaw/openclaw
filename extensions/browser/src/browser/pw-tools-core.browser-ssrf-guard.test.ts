@@ -19,7 +19,7 @@ const sessionMocks = vi.hoisted(() => ({
   }),
   gotoPageWithNavigationGuard: vi.fn(async () => null),
   isBrowserObservedDialogBlockedError: vi.fn(() => false),
-  isPolicyDenyNavigationError: vi.fn(() => false),
+  isPolicyDenyNavigationError: vi.fn((_err: unknown) => false),
   markObservedDialogsHandledRemotelyForPage: vi.fn(() => ({})),
   quarantineBlockedNavigationTarget: vi.fn(async () => {}),
   refLocator: vi.fn(() => {
@@ -30,7 +30,7 @@ const sessionMocks = vi.hoisted(() => ({
   }),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   storeRoleRefsForTarget: vi.fn(() => {}),
-  wasBrowserNavigationRequestBlockedBeforeDispatch: vi.fn(() => false),
+  wasBrowserNavigationRequestBlockedBeforeDispatch: vi.fn((_err: unknown) => false),
   withPageNavigationRequestGuard: vi.fn(
     async ({
       action,

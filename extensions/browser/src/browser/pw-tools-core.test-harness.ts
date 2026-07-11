@@ -84,7 +84,7 @@ const sessionMocks = vi.hoisted(() => ({
     cleanup: vi.fn(() => {}),
   })),
   isBrowserObservedDialogBlockedError: vi.fn(() => false),
-  quarantineBlockedNavigationTarget: vi.fn(async () => {}),
+  quarantineBlockedNavigationTarget: vi.fn(async (_opts: unknown) => {}),
   storeRoleRefsForTarget: vi.fn(() => {}),
   refLocator: vi.fn(() => {
     if (!currentRefLocator) {
