@@ -202,11 +202,23 @@ function isPersistentBrowserProxyMutation(method: string, path: string): boolean
   const normalizedPath = normalizeBrowserProxyPath(path);
   if (
     method === "POST" &&
-    (normalizedPath === "/profiles/create" || normalizedPath === "/reset-profile")
+    (normalizedPath === "/profiles/create" ||
+      normalizedPath === "/profiles/import" ||
+      normalizedPath === "/reset-profile")
   ) {
     return true;
   }
   return method === "DELETE" && /^\/profiles\/[^/]+$/.test(normalizedPath);
+}
+
+function isBrowserProxyHostLocalRoute(method: string, path: string): boolean {
+  const normalizedPath = normalizeBrowserProxyPath(path);
+  return (
+    (method === "GET" &&
+      (normalizedPath === "/system-profiles" ||
+        normalizedPath === "/system-profile-import/status")) ||
+    (method === "POST" && normalizedPath === "/system-profile-import/dismiss")
+  );
 }
 
 function isForbiddenBrowserProxyMutation(params: unknown): boolean {
@@ -217,6 +229,16 @@ function isForbiddenBrowserProxyMutation(params: unknown): boolean {
   const method = (normalizeOptionalString(candidate.method) ?? "").toUpperCase();
   const path = normalizeOptionalString(candidate.path) ?? "";
   return Boolean(method && path && isPersistentBrowserProxyMutation(method, path));
+}
+
+function isForbiddenBrowserProxyHostLocalRoute(params: unknown): boolean {
+  if (!params || typeof params !== "object") {
+    return false;
+  }
+  const candidate = params as { method?: unknown; path?: unknown };
+  const method = (normalizeOptionalString(candidate.method) ?? "").toUpperCase();
+  const path = normalizeOptionalString(candidate.path) ?? "";
+  return Boolean(method && path && isBrowserProxyHostLocalRoute(method, path));
 }
 
 function clientHasOperatorAdminScope(client: GatewayClient | null): boolean {
@@ -1259,6 +1281,18 @@ export const nodeHandlers: GatewayRequestHandlers = {
         errorShape(
           ErrorCodes.INVALID_REQUEST,
           "node.invoke cannot mutate persistent browser profiles via browser.proxy",
+          { details: { command } },
+        ),
+      );
+      return;
+    }
+    if (command === "browser.proxy" && isForbiddenBrowserProxyHostLocalRoute(p.params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "node.invoke cannot run host-local browser routes via browser.proxy",
           { details: { command } },
         ),
       );

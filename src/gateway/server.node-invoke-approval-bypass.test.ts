@@ -583,6 +583,71 @@ describe("node.invoke approval bypass", () => {
     }
   });
 
+  test("rejects browser.proxy /profiles/import mutations before forwarding", async () => {
+    let sawInvoke = false;
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      undefined,
+      ["browser.proxy"],
+    );
+    const ws = await connectOperator(["operator.write"]);
+    try {
+      const nodeId = await getConnectedNodeIdForTest(ws);
+      const res = await rpcReq(ws, "node.invoke", {
+        nodeId,
+        command: "browser.proxy",
+        params: {
+          method: "POST",
+          path: "/profiles/import",
+          body: { profile: "default" },
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain(
+        "node.invoke cannot mutate persistent browser profiles via browser.proxy",
+      );
+      await expectNoForwardedInvoke(() => sawInvoke);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
+  test("rejects browser.proxy host-local routes before forwarding", async () => {
+    let sawInvoke = false;
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      undefined,
+      ["browser.proxy"],
+    );
+    const ws = await connectOperator(["operator.write"]);
+    try {
+      const nodeId = await getConnectedNodeIdForTest(ws);
+      const res = await rpcReq(ws, "node.invoke", {
+        nodeId,
+        command: "browser.proxy",
+        params: {
+          method: "GET",
+          path: "/system-profiles",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain(
+        "node.invoke cannot run host-local browser routes via browser.proxy",
+      );
+      await expectNoForwardedInvoke(() => sawInvoke);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
   test("requires admin scope for direct browser.proxy node.invoke", async () => {
     let sawInvoke = false;
     const nodeIdentity = createDeviceIdentity();
