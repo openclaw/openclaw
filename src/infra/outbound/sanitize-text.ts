@@ -7,6 +7,10 @@ export { stripInternalRuntimeScaffolding };
 
 const HTML_TAG_RE = /<\/?[a-z][a-z0-9_-]*\b[^>]*>/gi;
 
+// Quoted attribute values may contain `>`; consume them atomically so tag text never leaks.
+const CONVERTIBLE_HTML_OPEN_TAG_RE =
+  /<(b|strong|i|em|s|strike|del|code|h[1-6]|li)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
+
 function stripRemainingHtmlTags(text: string): string {
   let previous: string;
   let current = text;
@@ -29,22 +33,24 @@ export function sanitizeForPlainText(text: string): string {
   const converted = stripInternalRuntimeScaffolding(text)
     // Preserve angle-bracket autolinks as plain URLs before tag stripping.
     .replace(/<((?:https?:\/\/|mailto:)[^<>\s]+)>/gi, "$1")
+    // Normalize attributes once; conversions below only need exact bare tag names.
+    .replace(CONVERTIBLE_HTML_OPEN_TAG_RE, "<$1>")
     // Line breaks
     .replace(/<br\s*\/?>/gi, "\n")
     // Block elements → newlines
     .replace(/<\/?(p|div)>/gi, "\n")
     // Bold → WhatsApp/Signal bold
-    .replace(/<(b|strong)(?:\s[^>]*)?>(.*?)<\/\1>/gi, "*$2*")
+    .replace(/<(b|strong)>(.*?)<\/\1>/gi, "*$2*")
     // Italic → WhatsApp/Signal italic
-    .replace(/<(i|em)(?:\s[^>]*)?>(.*?)<\/\1>/gi, "_$2_")
+    .replace(/<(i|em)>(.*?)<\/\1>/gi, "_$2_")
     // Strikethrough → WhatsApp/Signal strikethrough
-    .replace(/<(s|strike|del)(?:\s[^>]*)?>(.*?)<\/\1>/gi, "~$2~")
+    .replace(/<(s|strike|del)>(.*?)<\/\1>/gi, "~$2~")
     // Inline code
-    .replace(/<code(?:\s[^>]*)?>(.*?)<\/code>/gi, "`$1`")
+    .replace(/<code>(.*?)<\/code>/gi, "`$1`")
     // Headings → bold text with newline
-    .replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi, "\n*$1*\n")
+    .replace(/<h[1-6]>(.*?)<\/h[1-6]>/gi, "\n*$1*\n")
     // List items → bullet points
-    .replace(/<li[^>]*>(.*?)<\/li>/gi, "• $1\n");
+    .replace(/<li>(.*?)<\/li>/gi, "• $1\n");
 
   return stripRemainingHtmlTags(converted).replace(/\n{3,}/g, "\n\n");
 }

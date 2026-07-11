@@ -43,11 +43,12 @@ describe("sanitizeForPlainText", () => {
   });
 
   it("converts attributed inline tags without matching tag-name prefixes", () => {
-    const attributed =
-      '<strong class="b"><em id="i"><del title="s"><code class="c">x</code></del></em></strong>';
+    const attributed = `<strong title="b>"><em title='i>'><del data-note="s>"><code class='c>'>x</code></del></em></strong>`;
     expect(sanitizeForPlainText(attributed)).toBe("*_~`x`~_*");
     expect(
-      sanitizeForPlainText("<bold>b</bold><strikeout>s</strikeout><codebase>c</codebase>"),
+      sanitizeForPlainText(
+        '<bold title="b">b</bold><strikeout title="s">s</strikeout><codebase>c</codebase>',
+      ),
     ).toBe("bsc");
   });
 
