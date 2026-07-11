@@ -1010,21 +1010,30 @@ describe("WorkboardStore", () => {
 
   it("reports already claimed instead of dependency error for a claimed dependency-backed card", async () => {
     const store = new WorkboardStore(createMemoryStore());
-    const parent = await store.create({ title: "Parent", status: "done" });
-    const child = await store.create({
-      title: "Child",
-      status: "ready",
-      metadata: {
-        links: [{ id: "link-1", type: "parent", targetCardId: parent.id, createdAt: Date.now() }],
-      },
-    });
+    const parent = await store.create({ title: "Parent", status: "todo" });
+    const child = await store.create({ title: "Child", status: "todo" });
+    // Parent/child dependencies must be built via linkCards; raw metadata.links
+    // of type "parent" are stripped on create, so a hand-built link leaves the
+    // child parentless and never exercises the dependency guard this test covers.
+    await store.linkCards(parent.id, child.id);
+    await store.update(parent.id, { status: "done" });
+    await store.promoteReady();
 
-    // First claim succeeds.
+    // Guard: the dependency is real and the child promoted, otherwise a repeat
+    // claim would never reach the misordered dependency guard.
+    const linked = await store.get(child.id);
+    expect(
+      linked?.metadata?.links?.some((l) => l.type === "parent" && l.targetCardId === parent.id),
+    ).toBe(true);
+    expect(linked?.status).toBe("ready");
+
+    // First claim succeeds and moves the dependency-backed card to running.
     const first = await store.claim(child.id, { ownerId: "main", ttlSeconds: 60 });
     expect(first.card.status).toBe("running");
     expect(first.card.metadata?.claim?.ownerId).toBe("main");
 
-    // Second claim must report "already claimed", not "dependencies not done".
+    // A running card still has an unfinished-by-status parent, so the second
+    // claim must report "already claimed", not "dependencies not done".
     await expect(store.claim(child.id, { ownerId: "other" })).rejects.toThrow(/already claimed/);
   });
 
