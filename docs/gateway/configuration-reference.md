@@ -736,6 +736,8 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 
 Cloud workers are opt-in. If `cloudWorkers` is absent, or `profiles` is empty, OpenClaw accepts no new worker creation. Durable records created earlier still reconcile and remain visible; the existing gateway/node projection is unchanged.
 
+Every worker provider must return an SSH `hostKey` from trusted provisioning output. Bootstrap writes that key to an isolated `known_hosts` file, uses `StrictHostKeyChecking=yes`, and fails before opening a connection when the provider omits it. There is no trust-on-first-use fallback.
+
 ### Crabbox profile
 
 The bundled `crabbox` provider provisions an SSH-capable lease through the local Crabbox CLI. The inner `settings.provider` selects the Crabbox backend; it is separate from the outer OpenClaw provider id.
@@ -773,7 +775,7 @@ The bundled `crabbox` provider provisions an SSH-capable lease through the local
 Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop`.
 
 <Warning>
-  Worker bootstrap resolves standard `SecretRef` identities, but the current generic file-secret contract does not resolve Crabbox's dynamic key path. Crabbox `inspect` also does not expose host-key material, so bootstrap temporarily uses OpenSSH `accept-new` when no pin is available. The tunnel milestone must add the Crabbox-owned direct-file resolver and require host-key pinning; until then, this profile cannot complete bootstrap and is not a complete SSH trust boundary.
+  Worker bootstrap requires a provider-supplied pinned SSH host key and never uses trust on first use. Crabbox `inspect` exposes a dynamic private-key path that the generic `SecretRef` resolver cannot resolve, but it does not expose host-key material. Crabbox profiles therefore fail closed before bootstrap until cloud-worker PR 4 adds host-key exposure and Crabbox-owned key-path resolution.
 </Warning>
 
 ### Static SSH development profile
@@ -788,6 +790,7 @@ Unknown settings are rejected. Crabbox credentials and backend-specific account 
           host: "worker.example.test",
           port: 22,
           user: "openclaw",
+          hostKey: "ssh-ed25519 <base64-public-host-key>",
           keyRef: {
             source: "env",
             provider: "default",
@@ -808,7 +811,7 @@ Unknown settings are rejected. Crabbox credentials and backend-specific account 
 - `provider`: non-empty worker provider id. The examples use the bundled `crabbox` provider and the QA Lab `static-ssh` provider.
 - `install`: worker installation method. `"bundle"` (default) transfers a content-hashed bundle of the gateway's installed build and supports released, development, and unreleased versions. `"npm"` is an opt-in optimization for an unmodified packaged release; it installs `openclaw@<exact gateway version>` from the public npm registry and never installs `latest`.
 - Bundled provider plugins are selected automatically when configured, but explicit disables and `plugins.allow` still apply. Include the provider id (for example, `crabbox`) when an allowlist is configured. External provider plugins must also be installed and explicitly enabled.
-- `settings`: provider-owned bounded JSON. The selected plugin defines and validates its keys; use [SecretRef objects](/gateway/secrets) for secret-bearing values. The static SSH provider requires `host`, `user`, and `keyRef`; `port` defaults to `22`.
+- `settings`: provider-owned bounded JSON. The selected plugin defines and validates its keys; use [SecretRef objects](/gateway/secrets) for secret-bearing values. The static SSH provider requires `host`, `user`, `hostKey`, and `keyRef`; `port` defaults to `22`. `hostKey` must be one OpenSSH public host-key line (`algorithm base64`) obtained from the known host or another trusted channel, with no options prefix.
 - `lifetime.idleTimeoutMinutes`: positive integer minutes stored for later idle-reclamation policy.
 - `lifetime.maxLifetimeMinutes`: positive integer minutes stored for later lifecycle policy.
 
@@ -822,6 +825,7 @@ Lifetime values are data only in the first cloud-worker release; automatic enfor
 
 <Warning>
   The `static-ssh` provider is a source-tree QA Lab development harness and is excluded from packaged distributions. A worker running on its shared host can read unrelated host data, so do not use this provider as a production isolation boundary.
+  Its operator must supply the expected `hostKey`; OpenClaw will not learn or accept a key from the first connection.
   Destroying its lease only releases OpenClaw's logical record; it does not stop or clean the host.
 </Warning>
 

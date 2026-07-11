@@ -69,11 +69,38 @@ type TransitionInput = {
 };
 const TERMINAL_STATES: WorkerEnvironmentState[] = ["destroyed", "failed", "orphaned"];
 const WORKER_BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
+const MAX_HOST_KEY_LENGTH = 16_384;
+const OPENSSH_HOST_KEY_TYPE_PATTERN =
+  /^(?:ssh|ecdsa-sha2|sk-(?:ssh|ecdsa-sha2))-[A-Za-z0-9@._+-]+$/u;
+const OPENSSH_HOST_KEY_DATA_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/u;
 function required(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`Worker environment ${field} must be a non-empty string`);
   }
   return value.trim();
+}
+function normalizeOpenSshHostKey(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length > MAX_HOST_KEY_LENGTH ||
+    value.includes("\n") ||
+    value.includes("\r")
+  ) {
+    throw new Error("Worker environment SSH host key must be one OpenSSH public-key line");
+  }
+  const tokens = value.trim().split(/\s+/u);
+  const [algorithm, encodedKey] = tokens;
+  if (
+    tokens.length !== 2 ||
+    !algorithm ||
+    !encodedKey ||
+    !OPENSSH_HOST_KEY_TYPE_PATTERN.test(algorithm) ||
+    !OPENSSH_HOST_KEY_DATA_PATTERN.test(encodedKey) ||
+    encodedKey.length % 4 !== 0
+  ) {
+    throw new Error("Worker environment SSH host key must use OpenSSH public-key format");
+  }
+  return `${algorithm} ${encodedKey}`;
 }
 function teardownTerminalStateFrom(
   value: string | null,
@@ -104,23 +131,31 @@ function normalizeBootstrapReceipt(value: {
 export function normalizeWorkerSshEndpoint(value: Ssh): Ssh {
   const host = required(value.host, "SSH host");
   const user = required(value.user, "SSH user");
+  const hostKey = normalizeOpenSshHostKey(value.hostKey);
   if (!Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65_535) {
     throw new Error("Worker environment SSH port must be an integer from 1 through 65535");
   }
   if (!isValidSecretRef(value.keyRef)) {
     throw new Error("Worker environment SSH key must be a canonical SecretRef");
   }
-  return { host, port: value.port, user, keyRef: { ...value.keyRef } };
+  return { host, port: value.port, user, hostKey, keyRef: { ...value.keyRef } };
 }
 function endpointFrom(row: Row): Ssh | null {
-  const { ssh_host: host, ssh_port: port, ssh_user: user, ssh_key_ref_json: encoded } = row;
-  if (host === null || port === null || user === null || encoded === null) {
+  const {
+    ssh_host: host,
+    ssh_port: port,
+    ssh_user: user,
+    ssh_host_key: hostKey,
+    ssh_key_ref_json: encoded,
+  } = row;
+  if (host === null || port === null || user === null || hostKey === null || encoded === null) {
     return null;
   }
   return normalizeWorkerSshEndpoint({
     host,
     port,
     user,
+    hostKey,
     keyRef: JSON.parse(encoded) as Ssh["keyRef"],
   });
 }
@@ -270,6 +305,7 @@ export function createWorkerEnvironmentStore(
               ssh_host: null,
               ssh_port: null,
               ssh_user: null,
+              ssh_host_key: null,
               ssh_key_ref_json: null,
               bootstrap_bundle_hash: null,
               bootstrap_openclaw_version: null,
@@ -392,6 +428,7 @@ export function createWorkerEnvironmentStore(
           ssh_host: sshEndpoint?.host ?? null,
           ssh_port: sshEndpoint?.port ?? null,
           ssh_user: sshEndpoint?.user ?? null,
+          ssh_host_key: sshEndpoint?.hostKey ?? null,
           ssh_key_ref_json: sshEndpoint ? json(sshEndpoint.keyRef) : null,
           bootstrap_bundle_hash: bootstrapReceipt?.bundleHash ?? null,
           bootstrap_openclaw_version: bootstrapReceipt?.openclawVersion ?? null,

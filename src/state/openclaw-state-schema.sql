@@ -1342,6 +1342,7 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   ssh_host TEXT,
   ssh_port INTEGER CHECK (ssh_port IS NULL OR (ssh_port >= 1 AND ssh_port <= 65535)),
   ssh_user TEXT,
+  ssh_host_key TEXT,
   ssh_key_ref_json TEXT,
   state TEXT NOT NULL CHECK (
     state IN (

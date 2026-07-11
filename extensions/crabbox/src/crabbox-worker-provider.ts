@@ -496,14 +496,7 @@ function statusFromInspect(inspect: ParsedInspect): WorkerLeaseStatus {
   return { status: "active" };
 }
 
-function toSecretRefId(filePath: string): string {
-  if (!path.isAbsolute(filePath) && !path.win32.isAbsolute(filePath)) {
-    throw new Error("Crabbox inspect returned a non-absolute SSH key path");
-  }
-  return `/${filePath.replace(/~/gu, "~0").replace(/\//gu, "~1")}`;
-}
-
-function leaseFromInspect(inspect: ParsedInspect): WorkerLease {
+function leaseFromInspect(inspect: ParsedInspect): never {
   if (isTerminalState(inspect.state)) {
     throw new Error("Crabbox operation lease is no longer active");
   }
@@ -515,23 +508,11 @@ function leaseFromInspect(inspect: ParsedInspect): WorkerLease {
       "Crabbox profile provider does not expose a complete SSH worker endpoint",
     );
   }
-
-  return {
-    leaseId: inspect.id,
-    ssh: {
-      host: inspect.host,
-      port: inspect.sshPort,
-      user: inspect.sshUser,
-      // Inspect exposes the private-key path but no host-key material yet; the tunnel
-      // milestone (docs/plan/cloud-workers.md, PR 4) owns dynamic file-key resolution
-      // and host-key pinning for this SecretRef.
-      keyRef: {
-        source: "file",
-        provider: CRABBOX_WORKER_PROVIDER_ID,
-        id: toSecretRefId(inspect.sshKey),
-      },
-    },
-  };
+  // Crabbox inspect exposes the private-key path but no host-key material. PR 4 must add
+  // host-key exposure and the Crabbox-owned key-path resolver; bootstrap pin enforcement exists.
+  throw new WorkerProviderError(
+    "Crabbox inspect does not expose the SSH host key required by the worker provider contract",
+  );
 }
 
 async function leaseFromProvisionInspect(params: {

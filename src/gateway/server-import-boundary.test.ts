@@ -72,6 +72,9 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl.slice(0, prepareStart)).not.toContain(runtimeLoad);
     expect(serverImpl.slice(prepareStart, serviceStart)).toContain(runtimeLoad);
     expect(serverImpl.slice(bootstrapStart, loggerStart)).toContain(runtimeLoad);
+    expect(serverImpl.slice(bootstrapStart, loggerStart)).toContain(
+      "pinnedHostKey: sshEndpoint.hostKey",
+    );
     expect(serverImpl.match(/await loadWorkerEnvironmentRuntimeModule\(\)/gu)).toHaveLength(2);
   });
 

@@ -32,6 +32,10 @@ const NPM_MISSING_MARKER = "OPENCLAW_WORKER_NPM_MISSING";
 const BOOTSTRAP_OUTPUT_TAG = "OPENCLAW_WORKER_BOOTSTRAP_V1";
 const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const NPM_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
+const MAX_HOST_KEY_LENGTH = 16_384;
+const OPENSSH_HOST_KEY_TYPE_PATTERN =
+  /^(?:ssh|ecdsa-sha2|sk-(?:ssh|ecdsa-sha2))-[A-Za-z0-9@._+-]+$/u;
+const OPENSSH_HOST_KEY_DATA_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/u;
 
 // Keep these boundaries aligned with package.json engines.node and infra/runtime-guard.ts.
 const NODE_VERSION_CHECK_JS = String.raw`const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(process.versions.node);
@@ -481,7 +485,7 @@ export type WorkerBootstrapCommandRunner = (
 export type WorkerBootstrapRequest = {
   ssh: WorkerSshEndpoint;
   artifact: WorkerInstallationArtifact;
-  /** OpenSSH public host-key material, for example `ssh-ed25519 AAAA...`. */
+  /** Provider endpoint host key copied by the gateway bootstrap adapter. */
   pinnedHostKey?: string;
 };
 
@@ -498,7 +502,6 @@ type PreparedSsh = {
   port: number;
   identityPath: string;
   knownHostsPath: string;
-  strictHostKeyChecking: "accept-new" | "yes";
 };
 
 function shellEscape(value: string): string {
@@ -604,16 +607,23 @@ function pinnedKnownHostsLine(params: {
   port: number;
   pinnedHostKey: string;
 }): string {
-  const trimmed = params.pinnedHostKey.trim();
-  if (trimmed.includes("\n") || trimmed.includes("\r")) {
+  if (
+    params.pinnedHostKey.length > MAX_HOST_KEY_LENGTH ||
+    params.pinnedHostKey.includes("\n") ||
+    params.pinnedHostKey.includes("\r")
+  ) {
     throw new Error("Pinned worker SSH host key must contain exactly one public key");
   }
-  const [algorithm, encodedKey] = trimmed.split(/\s+/u);
+  const trimmed = params.pinnedHostKey.trim();
+  const tokens = trimmed.split(/\s+/u);
+  const [algorithm, encodedKey] = tokens;
   if (
+    tokens.length !== 2 ||
     !algorithm ||
     !encodedKey ||
-    !/^[A-Za-z0-9@._+-]+$/u.test(algorithm) ||
-    !/^[A-Za-z0-9+/]+={0,3}$/u.test(encodedKey)
+    !OPENSSH_HOST_KEY_TYPE_PATTERN.test(algorithm) ||
+    !OPENSSH_HOST_KEY_DATA_PATTERN.test(encodedKey) ||
+    encodedKey.length % 4 !== 0
   ) {
     throw new Error("Pinned worker SSH host key must use OpenSSH public-key format");
   }
@@ -627,7 +637,17 @@ async function prepareSsh(params: {
   temporaryDir: string;
   resolveIdentity: WorkerBootstrapDependencies["resolveIdentity"];
 }): Promise<PreparedSsh> {
+  if (params.pinnedHostKey === undefined) {
+    throw new Error(
+      "Worker bootstrap is missing pinnedHostKey; WorkerProvider.provision() must return ssh.hostKey",
+    );
+  }
   const endpoint = normalizeEndpoint(params.ssh);
+  const knownHosts = pinnedKnownHostsLine({
+    host: endpoint.host,
+    port: endpoint.port,
+    pinnedHostKey: params.pinnedHostKey,
+  });
   const identity = await params.resolveIdentity(params.ssh.keyRef);
   let identityPath: string;
   if (identity.kind === "path") {
@@ -651,23 +671,13 @@ async function prepareSsh(params: {
   }
 
   const knownHostsPath = path.join(params.temporaryDir, "known_hosts");
-  const hasPinnedHostKey = params.pinnedHostKey !== undefined;
-  const knownHosts = hasPinnedHostKey
-    ? pinnedKnownHostsLine({
-        host: endpoint.host,
-        port: endpoint.port,
-        pinnedHostKey: params.pinnedHostKey ?? "",
-      })
-    : "";
+  // This isolated file contains only trusted provisioning output. Bootstrap never learns a
+  // worker identity from the first connection.
   await fs.writeFile(knownHostsPath, knownHosts, { mode: 0o600 });
   return {
     ...endpoint,
     identityPath,
     knownHostsPath,
-    // accept-new is a temporary trust-on-first-use fallback; the tunnel milestone
-    // (docs/plan/cloud-workers.md, PR 4) requires provider-supplied host-key material
-    // and makes pinned "yes" the only mode.
-    strictHostKeyChecking: hasPinnedHostKey ? "yes" : "accept-new",
   };
 }
 
@@ -684,7 +694,7 @@ function commonSshOptions(prepared: PreparedSsh): string[] {
     "-o",
     "PreferredAuthentications=publickey",
     "-o",
-    `StrictHostKeyChecking=${prepared.strictHostKeyChecking}`,
+    "StrictHostKeyChecking=yes",
     "-o",
     `UserKnownHostsFile=${prepared.knownHostsPath}`,
     "-o",

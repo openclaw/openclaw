@@ -21,10 +21,12 @@ import {
 } from "./service.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 
+const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
 const SSH_ENDPOINT: WorkerSshEndpoint = {
   host: "worker.example.test",
   port: 22,
   user: "openclaw",
+  hostKey: HOST_KEY,
   keyRef: { source: "file", provider: "worker-keys", id: "/development-key" },
 };
 const BUNDLE_HASH = "a".repeat(64);

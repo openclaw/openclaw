@@ -777,7 +777,11 @@ export async function startGatewayServer(
           bootstrapWorker: async ({ sshEndpoint, installation, signal }) => {
             const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
             return await workerEnvironmentRuntime.bootstrapWorker(
-              { ssh: sshEndpoint, artifact: installation },
+              {
+                ssh: sshEndpoint,
+                artifact: installation,
+                pinnedHostKey: sshEndpoint.hostKey,
+              },
               {
                 signal,
                 resolveIdentity: async (keyRef) => ({

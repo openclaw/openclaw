@@ -15,10 +15,12 @@ import {
   type WorkerEnvironmentStore,
 } from "./store.js";
 
+const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
 const SSH_ENDPOINT: WorkerEnvironmentSshEndpoint = {
   host: "worker.example.test",
   port: 22,
   user: "openclaw",
+  hostKey: HOST_KEY,
   keyRef: {
     source: "file",
     provider: "worker-keys",
@@ -149,9 +151,12 @@ describe("worker environment store", () => {
     closeOpenClawStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerEnvironmentStore({ database, now: () => nowMs });
-    expect(store.get("worker-1")?.bootstrapReceipt).toEqual({
-      ...BOOTSTRAP_RECEIPT,
-      protocolFeatures: ["model-proxy-v1", "workspace-sync-v1"],
+    expect(store.get("worker-1")).toMatchObject({
+      sshEndpoint: SSH_ENDPOINT,
+      bootstrapReceipt: {
+        ...BOOTSTRAP_RECEIPT,
+        protocolFeatures: ["model-proxy-v1", "workspace-sync-v1"],
+      },
     });
     nowMs = 1_040;
     expect(
@@ -423,5 +428,24 @@ describe("worker environment store", () => {
         }),
       ).toThrow("SSH key must be a canonical SecretRef");
     }
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["multiple lines", `${HOST_KEY}\n${HOST_KEY}`],
+    ["extra fields", [HOST_KEY, "comment"].join(" ")],
+  ])("rejects %s persisted SSH host-key material", (_label, hostKey) => {
+    createIntent();
+    store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
+    const sshEndpoint = { ...SSH_ENDPOINT, hostKey } as unknown as WorkerEnvironmentSshEndpoint;
+
+    expect(() =>
+      store.transition({
+        environmentId: "worker-1",
+        from: "provisioning",
+        to: "bootstrapping",
+        patch: { leaseId: "lease-1", sshEndpoint },
+      }),
+    ).toThrow("SSH host key");
   });
 });

@@ -4,7 +4,12 @@ import { describe, expect, it } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import { bootstrapWorker, type WorkerBootstrapCommandRunner } from "./bootstrap.js";
+import {
+  bootstrapWorker as bootstrapWorkerCore,
+  type WorkerBootstrapCommandRunner,
+  type WorkerBootstrapDependencies,
+  type WorkerBootstrapRequest,
+} from "./bootstrap.js";
 import { createWorkerBundleProducer, type WorkerInstallationArtifact } from "./bundle.js";
 
 const BUNDLE_HASH = "a".repeat(64);
@@ -13,6 +18,7 @@ const VERSION = "2026.7.11";
 const NPM_INTEGRITY = `sha512-${Buffer.alloc(64).toString("base64")}`;
 const OUTPUT_TAG = "OPENCLAW_WORKER_BOOTSTRAP_V1";
 const REMOTE_TARBALL = `/home/worker/.openclaw-worker/.incoming/${BUNDLE_HASH}.tgz.ABCDEFGH`;
+const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
 const RECEIPT_JSON = JSON.stringify({
   bundleHash: BUNDLE_HASH,
   openclawVersion: VERSION,
@@ -23,6 +29,7 @@ const SSH: WorkerSshEndpoint = {
   host: "worker.example.com",
   port: 2222,
   user: "worker",
+  hostKey: HOST_KEY,
   keyRef: { source: "file", provider: "worker-keys", id: "/development-key" },
 };
 
@@ -51,13 +58,20 @@ function result(overrides: Partial<SpawnResult> = {}): SpawnResult {
   };
 }
 
-function fakeRunner(responses: SpawnResult[]) {
+function fakeRunner(
+  responses: SpawnResult[],
+  inspectCall?: (
+    argv: string[],
+    options: Parameters<WorkerBootstrapCommandRunner>[1],
+  ) => void | Promise<void>,
+) {
   const calls: Array<{
     argv: string[];
     options: Parameters<WorkerBootstrapCommandRunner>[1];
   }> = [];
   const runCommand: WorkerBootstrapCommandRunner = async (argv, options) => {
     calls.push({ argv, options });
+    await inspectCall?.(argv, options);
     const response = responses.shift();
     if (!response) {
       throw new Error("unexpected bootstrap command");
@@ -68,20 +82,30 @@ function fakeRunner(responses: SpawnResult[]) {
 }
 
 const resolveIdentity = async () => ({ kind: "path", path: "/keys/worker" }) as const;
+const bootstrapWorker = (
+  request: WorkerBootstrapRequest,
+  dependencies: WorkerBootstrapDependencies,
+) => bootstrapWorkerCore({ pinnedHostKey: request.ssh.hostKey, ...request }, dependencies);
 
 describe("bootstrapWorker", () => {
   it("skips a matching installed bundle and uses the pinned host key", async () => {
-    const runner = fakeRunner([
-      result({ stdout: `shell banner\n${tagged("current", RECEIPT_JSON)}login footer\n` }),
-    ]);
+    let knownHosts = "";
+    const runner = fakeRunner(
+      [result({ stdout: `shell banner\n${tagged("current", RECEIPT_JSON)}login footer\n` })],
+      async (argv) => {
+        const option = argv.find((value) => value.startsWith("UserKnownHostsFile="));
+        if (!option) {
+          throw new Error("missing known-hosts option");
+        }
+        knownHosts = await fs.readFile(option.slice("UserKnownHostsFile=".length), "utf8");
+      },
+    );
 
     await expect(
       bootstrapWorker(
         {
           ssh: SSH,
           artifact: BUNDLE,
-          // Assembled via join so review-bundle secret scanners do not flag a key-shaped literal.
-          pinnedHostKey: ["ssh-ed25519", "AAAAC3NzaC1lZDI1NTE5AAAAITestKey"].join(" "),
         },
         { resolveIdentity, runCommand: runner.runCommand },
       ),
@@ -94,10 +118,31 @@ describe("bootstrapWorker", () => {
     expect(runner.calls).toHaveLength(1);
     expect(runner.calls[0]?.argv[0]).toBe("ssh");
     expect(runner.calls[0]?.argv).toContain("StrictHostKeyChecking=yes");
-    expect(runner.calls[0]?.argv).not.toContain("StrictHostKeyChecking=accept-new");
     expect(runner.calls[0]?.options.input).toContain("actual.openclawVersion");
     expect(runner.calls[0]?.options.input).toContain("openclaw-worker-bundle-v1");
     expect(runner.calls[0]?.options.input).not.toContain("$root/current");
+    expect(knownHosts).toBe(`[worker.example.com]:2222 ${HOST_KEY}\n`);
+  });
+
+  it("fails before resolving identity or opening SSH when the host-key pin is missing", async () => {
+    const runner = fakeRunner([]);
+    let identityResolutionCount = 0;
+
+    await expect(
+      bootstrapWorkerCore(
+        { ssh: SSH, artifact: BUNDLE },
+        {
+          resolveIdentity: async () => {
+            identityResolutionCount += 1;
+            return { kind: "path", path: "/keys/worker" };
+          },
+          runCommand: runner.runCommand,
+        },
+      ),
+    ).rejects.toThrow("WorkerProvider.provision() must return ssh.hostKey");
+
+    expect(identityResolutionCount).toBe(0);
+    expect(runner.calls).toHaveLength(0);
   });
 
   it("transfers and installs a fresh bundle with a receipt", async () => {
@@ -119,7 +164,7 @@ describe("bootstrapWorker", () => {
     });
 
     expect(runner.calls.map((call) => call.argv[0])).toEqual(["ssh", "scp", "ssh"]);
-    expect(runner.calls[0]?.argv).toContain("StrictHostKeyChecking=accept-new");
+    expect(runner.calls[0]?.argv).toContain("StrictHostKeyChecking=yes");
     expect(runner.calls.flatMap((call) => call.argv)).not.toContain("StrictHostKeyChecking=no");
     expect(runner.calls[1]?.argv).toContain(BUNDLE.tarballPath);
     expect(runner.calls[1]?.argv).toContain(`worker@worker.example.com:${REMOTE_TARBALL}`);

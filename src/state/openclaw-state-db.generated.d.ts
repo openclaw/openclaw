@@ -1017,6 +1017,7 @@ export interface WorkerEnvironments {
   provider_id: string;
   provision_operation_id: string;
   ssh_host: string | null;
+  ssh_host_key: string | null;
   ssh_key_ref_json: string | null;
   ssh_port: number | null;
   ssh_user: string | null;
