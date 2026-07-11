@@ -143,7 +143,7 @@ describe("provider local service", () => {
 
     const lease = await acquire({
       providerId: "gpu-spark",
-      baseUrl: `http://127.0.0.1:${port}/v1`,
+      baseUrl: `http://127.0.0.1:${port}`,
       service: { command: "caller-controlled" },
     } as Parameters<typeof acquire>[0]);
 
@@ -151,6 +151,30 @@ describe("provider local service", () => {
     expect((await fetch(healthUrl)).ok).toBe(true);
     lease?.release();
     await waitForProbeFailure(healthUrl);
+  });
+
+  it("rejects plugin-selected local service probe hosts", async () => {
+    const acquire = createConfiguredProviderLocalServiceAcquirer(() => ({
+      models: {
+        providers: {
+          "gpu-spark": {
+            baseUrl: "http://127.0.0.1:11434/v1",
+            models: [],
+            localService: {
+              command: process.execPath,
+              args: ["--version"],
+            },
+          },
+        },
+      },
+    }));
+
+    await expect(
+      acquire({
+        providerId: "gpu-spark",
+        baseUrl: "http://169.254.169.254/latest/meta-data",
+      }),
+    ).rejects.toThrow("must match models.providers.gpu-spark.baseUrl");
   });
 
   it("caps oversized local service idle stop timers", async () => {

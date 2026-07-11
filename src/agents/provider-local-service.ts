@@ -92,9 +92,46 @@ export function createConfiguredProviderLocalServiceAcquirer(
   getConfig: () => OpenClawConfig,
 ): AcquireConfiguredProviderLocalService {
   return async (target, signal) => {
-    const service = getConfig().models?.providers?.[target.providerId]?.localService;
+    const provider = getConfig().models?.providers?.[target.providerId];
+    const service = provider?.localService;
+    if (!service) {
+      return undefined;
+    }
+    if (!isConfiguredProviderBaseUrl(target.baseUrl, provider.baseUrl)) {
+      throw new Error(
+        `Local service target must match models.providers.${target.providerId}.baseUrl`,
+      );
+    }
     return await ensureProviderLocalService({ ...target, service }, signal);
   };
+}
+
+function normalizeProviderBaseUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    url.search = "";
+    url.hash = "";
+    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
+    return url.toString().replace(/\/$/u, "");
+  } catch {
+    return undefined;
+  }
+}
+
+function configuredProviderBaseUrlVariants(value: string): Set<string> {
+  const normalized = normalizeProviderBaseUrl(value);
+  if (!normalized) {
+    return new Set();
+  }
+  const withoutOpenAiPath = normalized.replace(/\/v1$/iu, "");
+  return new Set([normalized, withoutOpenAiPath, `${withoutOpenAiPath}/v1`]);
+}
+
+function isConfiguredProviderBaseUrl(targetBaseUrl: string, configuredBaseUrl?: string): boolean {
+  const target = normalizeProviderBaseUrl(targetBaseUrl);
+  return Boolean(
+    target && configuredBaseUrl && configuredProviderBaseUrlVariants(configuredBaseUrl).has(target),
+  );
 }
 
 /** Attach local-service startup metadata to a model without mutating the original object. */

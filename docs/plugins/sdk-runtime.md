@@ -247,7 +247,9 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     Pass the exact configured provider id and resolved request base URL. Do not
     replace aliases with an adapter id: separate aliases can point at separate
-    local GPU hosts. The host owns startup serialization, readiness probes,
+    local GPU hosts. The host rejects endpoints that do not match the configured
+    provider base URL, apart from the `/v1` normalization used by Ollama and LM
+    Studio adapters. The host owns startup serialization, readiness probes,
     request leases, abort handling, and idle shutdown.
 
     The helper uses the same simple-completion preparation path as OpenClaw's
