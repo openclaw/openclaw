@@ -332,7 +332,7 @@ type CodexAppServerBindingMutation =
       kind: "clear";
       threadId?: string;
       /** Only failed creation may clear the exact provisional supervision owner. */
-      pendingSupervisionSourceThreadId?: string;
+      expectedPendingSupervisionBranch?: CodexAppServerPendingSupervisionBranch;
     };
 
 export type CodexSessionGenerationAdoptionResult = "adopted" | "current" | "absent" | "conflict";
@@ -422,7 +422,7 @@ export function createStoredCodexAppServerBinding(
 
 type BindingStateStore = Pick<
   PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-  "lookup" | "update"
+  "entries" | "lookup" | "update"
 >;
 
 type BindingLeaseOwner = {
@@ -436,6 +436,10 @@ function bindingLeaseLostError(key: string, cause?: unknown): Error {
 
 export type CodexAppServerBindingStore = {
   read(identity: CodexAppServerBindingIdentity): Promise<CodexAppServerThreadBinding | undefined>;
+  hasOtherThreadOwner(
+    threadId: string,
+    currentIdentity?: CodexAppServerBindingIdentity,
+  ): Promise<boolean>;
   mutate(
     identity: CodexAppServerBindingIdentity,
     mutation: CodexAppServerBindingMutation,
@@ -450,6 +454,7 @@ export type CodexAppServerBindingStore = {
   retireSessionGeneration(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
   ): Promise<CodexSessionGenerationRetirementResult>;
+  withThreadArchiveFence<T>(run: () => Promise<T>): Promise<T>;
   withLease<T>(identity: CodexAppServerBindingIdentity, run: () => Promise<T>): Promise<T>;
 };
 
@@ -502,6 +507,44 @@ export function createCodexAppServerBindingStore(
     throw new Error("Codex app-server bindings require atomic plugin-state updates");
   }
   const leaseContext = new AsyncLocalStorage<Map<string, BindingLeaseOwner>>();
+  const archiveContext = new AsyncLocalStorage<boolean>();
+  let activeBindingMutations = 0;
+  let pendingArchives = 0;
+  let archiveTail = Promise.resolve();
+  let bindingMutationsDrained: (() => void)[] = [];
+
+  const waitForBindingMutations = async (): Promise<void> => {
+    if (activeBindingMutations === 0) {
+      return;
+    }
+    await new Promise<void>((resolve) => bindingMutationsDrained.push(resolve));
+  };
+
+  const runBindingMutation = async <T>(run: () => Promise<T>): Promise<T> => {
+    if (archiveContext.getStore() === true) {
+      return await run();
+    }
+    // Archive validates the complete native subtree against one stable ownership
+    // snapshot. Reject late mutations so a stale caller cannot attach after archive.
+    if (pendingArchives > 0) {
+      throw new Error(
+        "Codex binding mutation blocked while a native archive is in progress; retry",
+      );
+    }
+    activeBindingMutations += 1;
+    try {
+      return await run();
+    } finally {
+      activeBindingMutations -= 1;
+      if (activeBindingMutations === 0) {
+        const drained = bindingMutationsDrained;
+        bindingMutationsDrained = [];
+        for (const resolve of drained) {
+          resolve();
+        }
+      }
+    }
+  };
 
   const renewLease = (key: string, owner: BindingLeaseOwner): void => {
     if (owner.failure) {
@@ -610,6 +653,25 @@ export function createCodexAppServerBindingStore(
         : undefined;
     },
 
+    async hasOtherThreadOwner(threadId, currentIdentity) {
+      const currentKey = currentIdentity ? bindingStoreKey(currentIdentity) : undefined;
+      return state.entries().some(({ key, value }) => {
+        const stored = readStoredCodexAppServerBinding(value);
+        if (!stored) {
+          throw new Error(`Invalid Codex app-server binding row: ${key}`);
+        }
+        const isCurrentOwner =
+          currentIdentity !== undefined &&
+          key === currentKey &&
+          (currentIdentity.kind === "conversation" ||
+            stored.sessionId === currentIdentity.sessionId.trim());
+        if (stored.state !== "active" || stored.binding.threadId !== threadId || isCurrentOwner) {
+          return false;
+        }
+        return true;
+      });
+    },
+
     async prepareSessionGenerationReclaim(identity) {
       const key = bindingStoreKey(identity);
       const raw = state.lookup(key);
@@ -631,196 +693,220 @@ export function createCodexAppServerBindingStore(
     },
 
     async mutate(identity, mutation) {
-      const key = bindingStoreKey(identity);
-      // A retained legacy sidecar may be revisited by doctor after runtime
-      // clear. Keep provenance so migration cannot resurrect its stale thread.
-      const retainLegacyClear = mutation.kind === "clear" && key.startsWith("conversation:legacy-");
-      return await transactKey(
-        key,
-        (current, leaseToken) => {
-          const ownsGeneration = ownsStoredSessionGeneration(identity, current);
-          const ownedLease =
-            current?.lease && current.lease.token === leaseToken ? { lease: current.lease } : {};
-          if (mutation.kind === "reclaim-generation") {
-            if (identity.kind !== "session" || !identity.sessionKey?.trim()) {
-              return { result: false };
-            }
-            if (!current) {
-              return { result: true };
-            }
-            if (ownsGeneration) {
+      return await runBindingMutation(async () => {
+        const key = bindingStoreKey(identity);
+        // A retained legacy sidecar may be revisited by doctor after runtime
+        // clear. Keep provenance so migration cannot resurrect its stale thread.
+        const retainLegacyClear =
+          mutation.kind === "clear" && key.startsWith("conversation:legacy-");
+        return await transactKey(
+          key,
+          (current, leaseToken) => {
+            const ownsGeneration = ownsStoredSessionGeneration(identity, current);
+            const ownedLease =
+              current?.lease && current.lease.token === leaseToken ? { lease: current.lease } : {};
+            if (mutation.kind === "reclaim-generation") {
+              if (identity.kind !== "session" || !identity.sessionKey?.trim()) {
+                return { result: false };
+              }
+              if (!current) {
+                return { result: true };
+              }
+              if (ownsGeneration) {
+                return {
+                  result: current.state !== "cleared" || current.retired !== true,
+                };
+              }
+              if (current.sessionId !== mutation.expectedPreviousSessionId) {
+                return { result: false };
+              }
+              // A stale physical generation must never turn private user-home ownership into
+              // an ordinary empty binding. Supervision adoption has an explicit generation
+              // transfer path; every other successor fails closed and preserves this owner.
+              if (current.state === "active" && current.binding.connectionScope === "supervision") {
+                return { result: false };
+              }
               return {
-                result: current.state !== "cleared" || current.retired !== true,
+                result: true,
+                next: {
+                  version: 1,
+                  state: "cleared",
+                  sessionId: identity.sessionId,
+                  ...ownedLease,
+                },
               };
             }
-            if (current.sessionId !== mutation.expectedPreviousSessionId) {
+            const storedActive = current?.state === "active" ? current : undefined;
+            const active = ownsGeneration ? storedActive : undefined;
+            const retiredGeneration =
+              current?.state === "cleared" && current.retired === true && ownsGeneration;
+            const preservesSupervisionOwner =
+              mutation.kind === "set" &&
+              active?.binding.connectionScope === "supervision" &&
+              isSameSupervisionOwner(active.binding, mutation.binding);
+            const clearsPendingSupervisionOwner =
+              mutation.kind === "clear" &&
+              active?.binding.connectionScope === "supervision" &&
+              matchesPendingSupervisionClear(
+                active.binding,
+                mutation.threadId,
+                mutation.expectedPendingSupervisionBranch,
+              );
+            if (
+              (mutation.kind === "set" &&
+                ((mutation.if?.kind === "absent" && storedActive) ||
+                  (current !== undefined && !ownsGeneration) ||
+                  retiredGeneration ||
+                  (active?.binding.connectionScope === "supervision" &&
+                    !preservesSupervisionOwner))) ||
+              (mutation.kind === "patch" && active?.binding.threadId !== mutation.threadId) ||
+              ((mutation.kind === "patch-pending-supervision-branch" ||
+                mutation.kind === "commit-pending-supervision-branch") &&
+                !matchesPendingSupervisionBranch(active?.binding, mutation.expected)) ||
+              (mutation.kind === "clear" &&
+                ((mutation.threadId !== undefined &&
+                  active?.binding.threadId !== mutation.threadId) ||
+                  !ownsGeneration ||
+                  (active?.binding.connectionScope === "supervision" &&
+                    !clearsPendingSupervisionOwner)))
+            ) {
               return { result: false };
             }
-            // A stale physical generation must never turn private user-home ownership into
-            // an ordinary empty binding. Supervision adoption has an explicit generation
-            // transfer path; every other successor fails closed and preserves this owner.
-            if (current.state === "active" && current.binding.connectionScope === "supervision") {
-              return { result: false };
+            if (mutation.kind === "clear" && retiredGeneration) {
+              return { result: true };
+            }
+            if (mutation.kind === "clear") {
+              return {
+                result: true,
+                next: {
+                  version: 1,
+                  state: "cleared",
+                  ...storedSessionGeneration(identity, current),
+                  ...ownedLease,
+                },
+              };
+            }
+            let binding: CodexAppServerThreadBinding;
+            if (mutation.kind === "set") {
+              binding = validateBindingForWrite(mutation.binding);
+            } else if (mutation.kind === "patch-pending-supervision-branch") {
+              binding = validateBindingForWrite({
+                ...active!.binding,
+                pendingSupervisionBranch: mutation.pending,
+              });
+            } else if (mutation.kind === "commit-pending-supervision-branch") {
+              binding = validateBindingForWrite({
+                ...active!.binding,
+                ...mutation.patch,
+                threadId: mutation.threadId,
+                pendingSupervisionBranch: undefined,
+              });
+            } else {
+              binding = validateBindingForWrite({
+                ...active!.binding,
+                ...mutation.patch,
+                threadId: mutation.threadId,
+              });
             }
             return {
               result: true,
               next: {
                 version: 1,
-                state: "cleared",
-                sessionId: identity.sessionId,
-                ...ownedLease,
-              },
-            };
-          }
-          const storedActive = current?.state === "active" ? current : undefined;
-          const active = ownsGeneration ? storedActive : undefined;
-          const retiredGeneration =
-            current?.state === "cleared" && current.retired === true && ownsGeneration;
-          const preservesSupervisionOwner =
-            mutation.kind === "set" &&
-            active?.binding.connectionScope === "supervision" &&
-            isSameSupervisionOwner(active.binding, mutation.binding);
-          const clearsPendingSupervisionOwner =
-            mutation.kind === "clear" &&
-            active?.binding.connectionScope === "supervision" &&
-            matchesPendingSupervisionClear(
-              active.binding,
-              mutation.threadId,
-              mutation.pendingSupervisionSourceThreadId,
-            );
-          if (
-            (mutation.kind === "set" &&
-              ((mutation.if?.kind === "absent" && storedActive) ||
-                (current !== undefined && !ownsGeneration) ||
-                retiredGeneration ||
-                (active?.binding.connectionScope === "supervision" &&
-                  !preservesSupervisionOwner))) ||
-            (mutation.kind === "patch" && active?.binding.threadId !== mutation.threadId) ||
-            ((mutation.kind === "patch-pending-supervision-branch" ||
-              mutation.kind === "commit-pending-supervision-branch") &&
-              !matchesPendingSupervisionBranch(active?.binding, mutation.expected)) ||
-            (mutation.kind === "clear" &&
-              ((mutation.threadId !== undefined &&
-                active?.binding.threadId !== mutation.threadId) ||
-                !ownsGeneration ||
-                (active?.binding.connectionScope === "supervision" &&
-                  !clearsPendingSupervisionOwner)))
-          ) {
-            return { result: false };
-          }
-          if (mutation.kind === "clear" && retiredGeneration) {
-            return { result: true };
-          }
-          if (mutation.kind === "clear") {
-            return {
-              result: true,
-              next: {
-                version: 1,
-                state: "cleared",
+                state: "active",
+                binding,
                 ...storedSessionGeneration(identity, current),
                 ...ownedLease,
               },
             };
-          }
-          let binding: CodexAppServerThreadBinding;
-          if (mutation.kind === "set") {
-            binding = validateBindingForWrite(mutation.binding);
-          } else if (mutation.kind === "patch-pending-supervision-branch") {
-            binding = validateBindingForWrite({
-              ...active!.binding,
-              pendingSupervisionBranch: mutation.pending,
-            });
-          } else if (mutation.kind === "commit-pending-supervision-branch") {
-            binding = validateBindingForWrite({
-              ...active!.binding,
-              ...mutation.patch,
-              threadId: mutation.threadId,
-              pendingSupervisionBranch: undefined,
-            });
-          } else {
-            binding = validateBindingForWrite({
-              ...active!.binding,
-              ...mutation.patch,
-              threadId: mutation.threadId,
-            });
-          }
-          return {
-            result: true,
-            next: {
-              version: 1,
-              state: "active",
-              binding,
-              ...storedSessionGeneration(identity, current),
-              ...ownedLease,
-            },
-          };
-        },
-        // Plain clears may expire immediately: a stale generation that re-sets
-        // the key afterwards is fenced by ownsStoredSessionGeneration on read
-        // and displaced via reclaim-generation; durable stable-key fences come
-        // from retireSessionGeneration, not runtime clears.
-        mutation.kind === "clear" && !retainLegacyClear && !leaseContext.getStore()?.has(key)
-          ? 1
-          : undefined,
-      );
+          },
+          // Plain clears may expire immediately: a stale generation that re-sets
+          // the key afterwards is fenced by ownsStoredSessionGeneration on read
+          // and displaced via reclaim-generation; durable stable-key fences come
+          // from retireSessionGeneration, not runtime clears.
+          mutation.kind === "clear" && !retainLegacyClear && !leaseContext.getStore()?.has(key)
+            ? 1
+            : undefined,
+        );
+      });
     },
 
     async adoptSessionGeneration(identity, expectedPreviousSessionId) {
-      const key = bindingStoreKey(identity);
-      const expectedSessionId = expectedPreviousSessionId.trim();
-      const targetSessionId = identity.sessionId.trim();
-      if (!expectedSessionId) {
-        throw new Error("Codex session generation adoption requires the previous session id");
-      }
-      // Context-engine compaction rotates the physical OpenClaw session before
-      // secondary native compaction. Compare both generations so a delayed hook
-      // cannot move a newer binding back to its stale predecessor.
-      return await transactKey(key, (current) => {
-        if (current?.state !== "active") {
-          return { result: "absent" as const };
+      return await runBindingMutation(async () => {
+        const key = bindingStoreKey(identity);
+        const expectedSessionId = expectedPreviousSessionId.trim();
+        const targetSessionId = identity.sessionId.trim();
+        if (!expectedSessionId) {
+          throw new Error("Codex session generation adoption requires the previous session id");
         }
-        if (current.sessionId === targetSessionId) {
-          return { result: "current" as const };
-        }
-        if (current.sessionId !== expectedSessionId) {
-          return { result: "conflict" as const };
-        }
-        return {
-          result: "adopted" as const,
-          next: { ...current, sessionId: targetSessionId },
-        };
+        // Context-engine compaction rotates the physical OpenClaw session before
+        // secondary native compaction. Compare both generations so a delayed hook
+        // cannot move a newer binding back to its stale predecessor.
+        return await transactKey(key, (current) => {
+          if (current?.state !== "active") {
+            return { result: "absent" as const };
+          }
+          if (current.sessionId === targetSessionId) {
+            return { result: "current" as const };
+          }
+          if (current.sessionId !== expectedSessionId) {
+            return { result: "conflict" as const };
+          }
+          return {
+            result: "adopted" as const,
+            next: { ...current, sessionId: targetSessionId },
+          };
+        });
       });
     },
 
     async retireSessionGeneration(identity) {
-      const key = bindingStoreKey(identity);
-      return await transactKey(
-        key,
-        (current, leaseToken) => {
-          if (!current) {
-            return { result: "absent" as const };
-          }
-          if (!ownsStoredSessionGeneration(identity, current)) {
-            return { result: "conflict" as const };
-          }
-          if (current.state === "cleared" && current.retired === true) {
-            return { result: "applied" as const };
-          }
-          return {
-            result: "applied" as const,
-            next: {
-              version: 1,
-              state: "cleared",
-              retired: true,
-              ...storedSessionGeneration(identity, current),
-              ...(current.lease && current.lease.token === leaseToken
-                ? { lease: current.lease }
-                : {}),
-            },
-          };
-        },
-        identity.sessionKey?.trim() ? undefined : PHYSICAL_SESSION_RETIRE_TTL_MS,
+      return await runBindingMutation(async () => {
+        const key = bindingStoreKey(identity);
+        return await transactKey(
+          key,
+          (current, leaseToken) => {
+            if (!current) {
+              return { result: "absent" as const };
+            }
+            if (!ownsStoredSessionGeneration(identity, current)) {
+              return { result: "conflict" as const };
+            }
+            if (current.state === "cleared" && current.retired === true) {
+              return { result: "applied" as const };
+            }
+            return {
+              result: "applied" as const,
+              next: {
+                version: 1,
+                state: "cleared",
+                retired: true,
+                ...storedSessionGeneration(identity, current),
+                ...(current.lease && current.lease.token === leaseToken
+                  ? { lease: current.lease }
+                  : {}),
+              },
+            };
+          },
+          identity.sessionKey?.trim() ? undefined : PHYSICAL_SESSION_RETIRE_TTL_MS,
+        );
+      });
+    },
+
+    async withThreadArchiveFence(run) {
+      pendingArchives += 1;
+      const operation = archiveTail.then(async () => {
+        await waitForBindingMutations();
+        return await archiveContext.run(true, run);
+      });
+      archiveTail = operation.then(
+        () => undefined,
+        () => undefined,
       );
+      try {
+        return await operation;
+      } finally {
+        pendingArchives -= 1;
+      }
     },
 
     async withLease(identity, run) {
@@ -967,14 +1053,16 @@ function isSameSupervisionOwner(
 function matchesPendingSupervisionClear(
   binding: CodexAppServerThreadBinding,
   threadId: string | undefined,
-  sourceThreadId: string | undefined,
+  expected: CodexAppServerPendingSupervisionBranch | undefined,
 ): boolean {
+  if (!expected) {
+    return false;
+  }
+  const sourceThreadId = expected.sourceThreadId;
   return (
-    Boolean(sourceThreadId) &&
     threadId === sourceThreadId &&
-    binding.threadId === sourceThreadId &&
     binding.supervisionSourceThreadId === sourceThreadId &&
-    binding.pendingSupervisionBranch?.sourceThreadId === sourceThreadId
+    matchesPendingSupervisionBranch(binding, expected)
   );
 }
 

@@ -94,6 +94,111 @@ describe("Codex app-server binding store", () => {
     });
   });
 
+  it("does not report the exact session or conversation binding owner as another owner", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const sessionIdentity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-current",
+    };
+    await store.mutate(sessionIdentity, {
+      kind: "set",
+      binding: { threadId: "thread-session", cwd: "/repo" },
+    });
+
+    await expect(store.hasOtherThreadOwner("thread-session", sessionIdentity)).resolves.toBe(false);
+
+    const conversationIdentity = { kind: "conversation" as const, bindingId: "conversation-1" };
+    await store.mutate(conversationIdentity, {
+      kind: "set",
+      binding: { threadId: "thread-conversation", cwd: "/repo" },
+    });
+    await expect(
+      store.hasOtherThreadOwner("thread-conversation", conversationIdentity),
+    ).resolves.toBe(false);
+  });
+
+  it("reports a different valid active binding owner", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const currentIdentity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-current",
+    };
+    await store.mutate(
+      { kind: "conversation", bindingId: "conversation-owner" },
+      {
+        kind: "set",
+        binding: { threadId: "thread-owned", cwd: "/repo" },
+      },
+    );
+
+    await expect(store.hasOtherThreadOwner("thread-owned", currentIdentity)).resolves.toBe(true);
+  });
+
+  it.each([
+    { name: "a different generation", storedSessionId: "session-previous" },
+    { name: "a missing generation", storedSessionId: undefined },
+  ])("treats $name under the same stable key as another owner", async ({ storedSessionId }) => {
+    const { state, values } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const currentIdentity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-current",
+      sessionKey: "agent:main:stable",
+    };
+    values.set(bindingStoreKey(currentIdentity), {
+      version: 1,
+      state: "active",
+      binding: { threadId: "thread-stale-generation", cwd: "/repo" },
+      ...(storedSessionId ? { sessionId: storedSessionId } : {}),
+    });
+
+    await expect(
+      store.hasOtherThreadOwner("thread-stale-generation", currentIdentity),
+    ).resolves.toBe(true);
+  });
+
+  it("fails closed on a malformed row during reverse ownership scans", async () => {
+    const { state, values } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const currentIdentity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-current",
+    };
+    values.set("conversation:invalid", {
+      version: 1,
+      state: "active",
+      binding: { threadId: "", cwd: "/repo" },
+    } as never);
+
+    await expect(store.hasOtherThreadOwner("thread-unowned", currentIdentity)).rejects.toThrow(
+      "Invalid Codex app-server binding row: conversation:invalid",
+    );
+  });
+
+  it("ignores stale cleared rows during reverse ownership scans", async () => {
+    const { state, values } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const currentIdentity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-current",
+    };
+    values.set("conversation:cleared", {
+      version: 1,
+      state: "cleared",
+      retired: true,
+      binding: { threadId: "thread-unowned", cwd: "/repo" },
+    } as never);
+
+    await expect(store.hasOtherThreadOwner("thread-unowned", currentIdentity)).resolves.toBe(false);
+  });
+
   it("fails closed on malformed pending supervision state", async () => {
     expect(
       readCodexAppServerThreadBinding({
@@ -806,6 +911,55 @@ describe("Codex app-server binding store", () => {
       }),
     ).resolves.toBe(true);
     await expect(store.read(current)).resolves.toMatchObject({ threadId: "thread-new" });
+  });
+
+  it("drains an in-flight ownership mutation and rejects late attachment during archive", async () => {
+    const fixture = createStateStore();
+    const originalUpdate = fixture.state.update.bind(fixture.state);
+    let startArchive: (() => void) | undefined;
+    fixture.state.update = (...args) => {
+      startArchive?.();
+      startArchive = undefined;
+      return originalUpdate(...args);
+    };
+    const store = createCodexAppServerBindingStore(fixture.state);
+    const firstIdentity = { kind: "conversation" as const, bindingId: "first" };
+    const lateIdentity = { kind: "conversation" as const, bindingId: "late" };
+    let releaseArchive!: () => void;
+    const archiveReleased = new Promise<void>((resolve) => {
+      releaseArchive = resolve;
+    });
+    let archive!: Promise<void>;
+    startArchive = () => {
+      archive = store.withThreadArchiveFence(async () => {
+        await expect(
+          store.mutate(firstIdentity, {
+            kind: "patch",
+            threadId: "thread-before-archive",
+            patch: { cwd: "/updated" },
+          }),
+        ).resolves.toBe(true);
+        await archiveReleased;
+      });
+    };
+
+    await expect(
+      store.mutate(firstIdentity, {
+        kind: "set",
+        binding: { threadId: "thread-before-archive", cwd: "/repo" },
+      }),
+    ).resolves.toBe(true);
+    await Promise.resolve();
+    await expect(
+      store.mutate(lateIdentity, {
+        kind: "set",
+        binding: { threadId: "thread-late", cwd: "/repo" },
+      }),
+    ).rejects.toThrow("native archive is in progress");
+    releaseArchive();
+    await expect(archive).resolves.toBeUndefined();
+    await expect(store.read(firstIdentity)).resolves.toMatchObject({ cwd: "/updated" });
+    await expect(store.read(lateIdentity)).resolves.toBeUndefined();
   });
 
   it("hashes stable session keys and keeps agent ownership distinct", () => {
