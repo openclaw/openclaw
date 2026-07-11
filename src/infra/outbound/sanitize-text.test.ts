@@ -42,6 +42,11 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("<code>foo()</code>")).toBe("`foo()`");
   });
 
+  it("converts <code> with attributes to backtick wrapping", () => {
+    expect(sanitizeForPlainText('<code class="language-ts">foo()</code>')).toBe("`foo()`");
+    expect(sanitizeForPlainText('<code id="x" class="y">bar()</code>')).toBe("`bar()`");
+  });
+
   // --- block elements -----------------------------------------------------
 
   it("converts <p> and <div> to newlines", () => {
