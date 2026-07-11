@@ -143,8 +143,9 @@ export type ChatProps = {
   onGoalCommand?: (command: string) => void;
   /** Sends a detached /btw side question (selection popup or side-chat
    * follow-up). `displayQuestion` overrides the pending-turn display when the
-   * command embeds carried follow-up context. */
-  onSideQuestion?: (command: string, displayQuestion?: string) => void;
+   * command embeds carried follow-up context; `onSendRejected` lets the panel
+   * restore its typed follow-up when the detached send is not accepted. */
+  onSideQuestion?: (command: string, displayQuestion?: string, onSendRejected?: () => void) => void;
   /** Hides the side-chat panel; the conversation (and a pending run) survives. */
   onSideChatClose?: () => void;
   /** Discards the side-chat conversation and retires any pending run. */
@@ -511,7 +512,10 @@ export function renderChat(props: ChatProps) {
               ${scrollToBottomButton} ${chatColumnFooter}
               ${renderSideChatPanel({
                 ...sideChatProps,
-                canFollowUp: canCompose && typeof props.onSideQuestion === "function",
+                // Detached slash sends are refused while disconnected (see
+                // canSubmitDraft); hide the input instead of eating drafts.
+                canFollowUp:
+                  canCompose && props.connected && typeof props.onSideQuestion === "function",
                 onFollowUp: props.onSideQuestion,
                 onClose: props.onSideChatClose,
                 onClear: props.onSideChatClear,

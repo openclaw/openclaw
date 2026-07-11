@@ -134,9 +134,21 @@ describe("side chat panel render", () => {
     expect(onFollowUp).toHaveBeenCalledWith(
       '/btw Context — the previous side question "what changed?" was answered: "First answer.". Follow-up question: tell me more',
       "tell me more",
+      expect.any(Function),
     );
     expect(input!.value).toBe("");
 
+    // A rejected detached send restores the typed follow-up.
+    const onSendRejected = onFollowUp.mock.calls[0]?.[2] as () => void;
+    onSendRejected();
+    expect(input!.value).toBe("tell me more");
+
+    // ...unless the user already typed something new.
+    input!.value = "different draft";
+    onSendRejected();
+    expect(input!.value).toBe("different draft");
+
+    input!.value = "";
     // Empty input must not send.
     input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(onFollowUp).toHaveBeenCalledTimes(1);

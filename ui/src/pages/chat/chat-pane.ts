@@ -1484,11 +1484,11 @@ class ChatPane extends OpenClawLightDomElement {
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
-      onSideQuestion: (command, displayQuestion) =>
-        void state.handleSendChat(
-          command,
-          displayQuestion ? { sideQuestionDisplayText: displayQuestion } : undefined,
-        ),
+      onSideQuestion: (command, displayQuestion, onSendRejected) =>
+        void state.handleSendChat(command, {
+          ...(displayQuestion ? { sideQuestionDisplayText: displayQuestion } : {}),
+          ...(onSendRejected ? { onSideQuestionSendRejected: onSendRejected } : {}),
+        }),
       onSideChatClose: () => {
         // Hide only: a pending run keeps going and its arriving answer (or a
         // new question) reopens the panel with the conversation intact.
@@ -1496,11 +1496,24 @@ class ChatPane extends OpenClawLightDomElement {
         state.requestUpdate?.();
       },
       onSideChatClear: () => {
+        const pendingRunId = state.chatSideResultPending?.runId;
         state.chatSideChatTurns = [];
         state.chatSideChatHidden = false;
         // Retire (not just clear) so a discarded question's still-running
         // detached run cannot leak its late reply into the transcript.
         retirePendingChatSideQuestion(state);
+        // Best-effort targeted abort: trash means "stop the pending side
+        // question", not just hide it. The retire above already suppresses
+        // the run's late events, so a failed abort needs no fallback.
+        if (pendingRunId && state.client && state.connected) {
+          state.client
+            .request("chat.abort", {
+              sessionKey: state.sessionKey,
+              ...scopedAgentParamsForSession(state, state.sessionKey),
+              runId: pendingRunId,
+            })
+            .catch(() => {});
+        }
         state.requestUpdate?.();
       },
       replyTarget: state.chatReplyTarget ?? null,

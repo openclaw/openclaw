@@ -200,6 +200,9 @@ type ChatSendOptions = {
   /** Side-chat follow-ups embed prior-turn context in the /btw command; the
    * pending turn must display the user's typed question instead. */
   sideQuestionDisplayText?: string;
+  /** Lets the side-chat panel restore its typed follow-up when the detached
+   * send is not accepted (the panel input is not a managed draft). */
+  onSideQuestionSendRejected?: () => void;
 };
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
@@ -2227,6 +2230,7 @@ export async function handleSendChat(
           !isAcceptedChatSendAck(ack)
         ) {
           host.chatSideResultPending = null;
+          opts?.onSideQuestionSendRejected?.();
           host.requestUpdate?.();
         }
       });

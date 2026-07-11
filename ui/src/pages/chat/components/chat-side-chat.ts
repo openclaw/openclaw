@@ -19,8 +19,9 @@ export type SideChatPanelProps = {
   /** Archived/non-composable sessions render the transcript without the follow-up input. */
   canFollowUp: boolean;
   /** `question` is the user's typed follow-up for the pending-turn display;
-   * `command` embeds prior-turn context and is never parsed back apart. */
-  onFollowUp?: (command: string, question: string) => void;
+   * `command` embeds prior-turn context and is never parsed back apart.
+   * `onSendRejected` fires when the detached send is not accepted. */
+  onFollowUp?: (command: string, question: string, onSendRejected?: () => void) => void;
   onClose?: () => void;
   onClear?: () => void;
 };
@@ -82,7 +83,13 @@ export function renderSideChatPanel(props: SideChatPanelProps): TemplateResult |
     if (!followUp || !props.onFollowUp) {
       return;
     }
-    props.onFollowUp(followUp.command, followUp.question);
+    props.onFollowUp(followUp.command, followUp.question, () => {
+      // A rejected detached send must not eat the typed follow-up; restore it
+      // unless the user already typed something new.
+      if (input.isConnected && !input.value) {
+        input.value = followUp.question;
+      }
+    });
     input.value = "";
   };
   return html`
