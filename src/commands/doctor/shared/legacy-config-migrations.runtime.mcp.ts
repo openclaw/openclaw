@@ -19,8 +19,47 @@ const MCP_SERVER_TYPE_RULE: LegacyConfigRule = {
     Object.values(value).some((server) => isRecord(server) && isKnownCliMcpTypeAlias(server.type)),
 };
 
+const MCP_SERVER_DISABLED_RULE: LegacyConfigRule = {
+  path: ["mcp", "servers"],
+  message:
+    'mcp.servers uses the unsupported "disabled" key; use "enabled: false" instead. Run "openclaw doctor --fix" to migrate it.',
+  match: (value) =>
+    isRecord(value) &&
+    Object.values(value).some((server) => isRecord(server) && typeof server.disabled === "boolean"),
+};
+
 /** Legacy config migration specs for MCP server config compatibility. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "mcp.servers.disabled->enabled",
+    describe: "Move unsupported MCP disabled flags to canonical enabled flags",
+    legacyRules: [MCP_SERVER_DISABLED_RULE],
+    apply: (raw, changes) => {
+      const mcp = isRecord(raw.mcp) ? raw.mcp : undefined;
+      const servers = isRecord(mcp?.servers) ? mcp?.servers : undefined;
+      if (!servers) {
+        return;
+      }
+
+      for (const [serverName, rawServer] of Object.entries(servers)) {
+        if (!isRecord(rawServer) || typeof rawServer.disabled !== "boolean") {
+          continue;
+        }
+        const disabled = rawServer.disabled;
+        if (typeof rawServer.enabled !== "boolean") {
+          rawServer.enabled = !disabled;
+          changes.push(
+            `Moved mcp.servers.${serverName}.disabled ${disabled} → enabled ${!disabled}.`,
+          );
+        } else {
+          changes.push(
+            `Removed mcp.servers.${serverName}.disabled ${disabled} because enabled is already set to ${rawServer.enabled}.`,
+          );
+        }
+        delete rawServer.disabled;
+      }
+    },
+  }),
   defineLegacyConfigMigration({
     id: "mcp.servers.type->transport",
     describe: "Move CLI-native MCP server type aliases to OpenClaw transport",

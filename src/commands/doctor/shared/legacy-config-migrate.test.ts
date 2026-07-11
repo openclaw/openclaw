@@ -72,6 +72,46 @@ describe("compatibility binding repair migrate", () => {
   });
 });
 
+describe("legacy MCP server config migrate", () => {
+  it("moves disabled to the inverse canonical enabled value", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          disabled: { command: "example-mcp", disabled: true },
+          enabled: { command: "example-mcp", disabled: false },
+        },
+      },
+    });
+
+    expect(res.config?.mcp?.servers).toEqual({
+      disabled: { command: "example-mcp", enabled: false },
+      enabled: { command: "example-mcp", enabled: true },
+    });
+    expect(res.changes).toEqual([
+      "Moved mcp.servers.disabled.disabled true → enabled false.",
+      "Moved mcp.servers.enabled.disabled false → enabled true.",
+    ]);
+  });
+
+  it("keeps explicit enabled when removing disabled", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          example: { command: "example-mcp", disabled: true, enabled: true },
+        },
+      },
+    });
+
+    expect(res.config?.mcp?.servers?.example).toEqual({
+      command: "example-mcp",
+      enabled: true,
+    });
+    expect(res.changes).toEqual([
+      "Removed mcp.servers.example.disabled true because enabled is already set to true.",
+    ]);
+  });
+});
+
 describe("legacy memory search config migrate", () => {
   it("removes sidecar memory search index paths", () => {
     const res = migrateLegacyConfigForTest({

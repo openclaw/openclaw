@@ -413,6 +413,14 @@ const McpServerSchema = z
       .optional(),
   })
   .superRefine((data, ctx) => {
+    if (Object.hasOwn(data, "disabled")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'unsupported key "disabled"; use "enabled: false" instead, then run "openclaw doctor --fix" to migrate existing config',
+        path: ["disabled"],
+      });
+    }
     // transport "stdio" requires a non-empty command — URL-only servers must use "sse" or "streamable-http"
     if (
       data.transport === "stdio" &&
