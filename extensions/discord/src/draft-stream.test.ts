@@ -223,7 +223,7 @@ describe("createDiscordDraftStream", () => {
     expect(stream.messageId()).toBe("m2");
   });
 
-  it("preserves a queued-turn update while rotating an in-flight create", async () => {
+  it("preserves an in-flight block while starting the next block", async () => {
     let finishFirstCreate: ((value: { id: string }) => void) | undefined;
     const firstCreate = new Promise<{ id: string }>((resolve) => {
       finishFirstCreate = resolve;
@@ -242,6 +242,37 @@ describe("createDiscordDraftStream", () => {
     stream.update("old turn draft");
     await vi.waitFor(() => expect(rest.post).toHaveBeenCalledTimes(1));
     stream.forceNewMessage();
+    stream.update("queued turn draft");
+    finishFirstCreate?.({ id: "m1" });
+    await stream.flush();
+
+    expect(rest.post).toHaveBeenCalledTimes(2);
+    expect(rest.post.mock.calls[1]?.[1]).toMatchObject({
+      body: { content: "queued turn draft" },
+    });
+    expect(rest.delete).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBe("m2");
+  });
+
+  it("discards an in-flight progress draft while starting the queued turn", async () => {
+    let finishFirstCreate: ((value: { id: string }) => void) | undefined;
+    const firstCreate = new Promise<{ id: string }>((resolve) => {
+      finishFirstCreate = resolve;
+    });
+    const rest = {
+      post: vi.fn().mockReturnValueOnce(firstCreate).mockResolvedValueOnce({ id: "m2" }),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "c1",
+      throttleMs: 250,
+    });
+
+    stream.update("old progress draft");
+    await vi.waitFor(() => expect(rest.post).toHaveBeenCalledTimes(1));
+    stream.forceNewMessage("discard");
     stream.update("queued turn draft");
     finishFirstCreate?.({ id: "m1" });
     await stream.flush();
@@ -272,7 +303,7 @@ describe("createDiscordDraftStream", () => {
 
     stream.update("stale turn draft");
     await vi.waitFor(() => expect(rest.post).toHaveBeenCalledTimes(1));
-    stream.forceNewMessage();
+    stream.forceNewMessage("discard");
     stream.update("queued turn draft");
     failFirstCreate?.(new Error("send failed"));
     await stream.flush();

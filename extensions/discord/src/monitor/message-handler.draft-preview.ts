@@ -294,7 +294,7 @@ export function createDiscordDraftPreviewController(params: {
       }
       if (discordStreamMode === "progress") {
         if (beganNewTurn) {
-          draftStream?.forceNewMessage();
+          draftStream?.forceNewMessage("discard");
         }
         return beganNewTurn;
       }
