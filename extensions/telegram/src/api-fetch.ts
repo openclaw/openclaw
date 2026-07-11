@@ -1,5 +1,6 @@
 // Telegram plugin module implements api fetch behavior.
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
@@ -11,34 +12,6 @@ type TelegramGetChatResponse = {
   ok?: boolean;
   result?: { id?: number | string };
 };
-
-function buildTelegramGetChatLookupSignal(params: { signal?: AbortSignal; timeoutMs?: number }): {
-  signal?: AbortSignal;
-  cleanup: () => void;
-} {
-  if (!params.timeoutMs) {
-    return { signal: params.signal, cleanup: () => {} };
-  }
-  const timeoutMs = params.timeoutMs;
-  const controller = new AbortController();
-  const onAbort = () => controller.abort(params.signal?.reason);
-  if (params.signal?.aborted) {
-    controller.abort(params.signal.reason);
-  } else {
-    params.signal?.addEventListener("abort", onAbort, { once: true });
-  }
-  const timeout = setTimeout(() => {
-    controller.abort(new Error(`Telegram getChat lookup timed out after ${timeoutMs}ms`));
-  }, timeoutMs);
-  timeout.unref?.();
-  return {
-    signal: controller.signal,
-    cleanup: () => {
-      clearTimeout(timeout);
-      params.signal?.removeEventListener("abort", onAbort);
-    },
-  };
-}
 
 export function resolveTelegramChatLookupFetch(params?: {
   proxyUrl?: string;
@@ -82,9 +55,11 @@ export async function fetchTelegramChatId(params: {
   const apiBase = resolveTelegramApiBase(params.apiRoot);
   const url = `${apiBase}/bot${params.token}/getChat?chat_id=${encodeURIComponent(params.chatId)}`;
   const fetchImpl = params.fetchImpl ?? fetch;
-  const timeout = buildTelegramGetChatLookupSignal({
+  const timeout = buildTimeoutAbortSignal({
     signal: params.signal,
     timeoutMs: resolveTelegramRequestTimeoutMs("getchat", params.timeoutSeconds),
+    operation: "telegram-getchat-lookup",
+    url,
   });
   try {
     const res = await fetchImpl(url, timeout.signal ? { signal: timeout.signal } : undefined);

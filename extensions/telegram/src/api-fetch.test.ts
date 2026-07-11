@@ -213,7 +213,8 @@ describe("fetchTelegramChatId", () => {
     expect(observedSignal).toBeInstanceOf(AbortSignal);
     expect(observedSignal?.aborted).toBe(true);
     expect(abortReason).toBeInstanceOf(Error);
-    expect((abortReason as Error).message).toBe("Telegram getChat lookup timed out after 15000ms");
+    expect((abortReason as Error).name).toBe("TimeoutError");
+    expect((abortReason as Error).message).toBe("request timed out");
   });
 });
 
