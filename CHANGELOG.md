@@ -28,6 +28,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **iOS Share Extension drafts:** preserve legitimate shared text beginning with scaffold-like prefixes, remove only exact legacy scaffold lines, avoid treating scheme-like prose as a URL, and deduplicate host-mirrored content. (#103453) Thanks @lin-hongkuan.
+- **Telegram reasoning previews:** reposition split reasoning previews through deferred deletion so prior preview messages do not remain stale while preserving client scroll position. (#97828) Thanks @ly-wang19.
+- **Feishu native-card threading:** normalize whitespace reply targets once and reuse the shared reply mode for card and media parts so native-card topic replies stay in their thread. (#102804) Thanks @sunlit-deng.
 - **Plain-text XML tool calls:** repair zero-argument calls and keep byte/character-bounded stream normalization from leaking incomplete or oversized tool syntax while preserving visible suffix text. (#98984, #102240, #102933, #102975, #103220, #103585) Thanks @wangyan2026, @qingminglong, @wuqxuan, and @ZOOWH.
 - **QQBot token requests:** bound token acquisition with the shared 30-second guarded-fetch deadline so stalled singleflight callers fail together, clean up, and can retry. (#102897) Thanks @maweibin.
 - **Canvas A2UI validation:** reject malformed or unsupported JSONL at CLI, agent-tool, and final node-invoke boundaries while preserving native v0.8 dispatch. (#103713) Thanks @qingminglong.

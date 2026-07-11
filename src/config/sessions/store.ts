@@ -67,6 +67,7 @@ import {
   applyFileBackedSessionStoreMaintenance,
   type SessionMaintenanceApplyReport,
 } from "./store-maintenance-operations.js";
+import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -1557,6 +1558,7 @@ export async function applySessionEntryLifecycleMutation(params: {
   activeSessionKey?: string;
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
   skipMaintenance?: boolean;
+  preserveActiveWork?: boolean;
   archiveReason?: "deleted" | "reset";
   restrictArchivedTranscriptsToStoreDir?: boolean;
   cleanupArchivedTranscripts?: {
@@ -1580,9 +1582,13 @@ export async function applySessionEntryLifecycleMutation(params: {
 
   await runExclusiveSessionStoreWrite(storePath, async () => {
     const store = loadMutableSessionStoreForWriter(storePath);
+    const activeWorkKeys =
+      params.preserveActiveWork === true
+        ? collectActiveSessionWorkAdmissionKeys({ storePath, store })
+        : undefined;
     for (const removal of params.removals ?? []) {
       const sessionKey = removal.sessionKey.trim();
-      if (!sessionKey) {
+      if (!sessionKey || activeWorkKeys?.has(sessionKey)) {
         continue;
       }
       const entry = store[sessionKey];

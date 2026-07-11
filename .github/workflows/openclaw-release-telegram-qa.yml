@@ -1046,6 +1046,16 @@ jobs:
           CANDIDATE_ROOT="$candidate_runtime_root"
           sudo install -d -o root -g root -m 0755 "$runtime_root"
           sudo install -d -o "$runner_uid" -g "$runner_gid" -m 0711 "$runtime_root/tmp"
+          # Frozen candidates prefer /tmp/openclaw before TMPDIR. Make that shared path
+          # unavailable to the runner so they use the isolated runtime fallback instead.
+          sudo rm -rf -- /tmp/openclaw
+          sudo install -d -o root -g root -m 0700 /tmp/openclaw
+          sudo install \
+            -d \
+            -o "$runner_uid" \
+            -g "$runner_gid" \
+            -m 0711 \
+            "${runtime_root}/tmp/openclaw-${runner_uid}"
           sudo chown -R root:root "$CANDIDATE_ROOT"
           sudo chmod -R go-w "$CANDIDATE_ROOT"
           sudo chmod -R a+rX "$CANDIDATE_ROOT"
@@ -1137,7 +1147,9 @@ jobs:
 
           sudo tee "$launcher" >/dev/null <<'LAUNCHER'
           #!/bin/bash
-          set -euo pipefail
+          set -Eeuo pipefail
+          launcher_stage=entry
+          trap 'exit_status=$?; trap - ERR; printf "Telegram SUT launcher failed: stage=%s line=%s status=%s\n" "$launcher_stage" "$LINENO" "$exit_status" >&2; exit "$exit_status"' ERR
 
           transport_keys=(
             HOME
@@ -1183,7 +1195,8 @@ jobs:
             source /etc/openclaw-telegram-sut.conf
             identity_file="$(realpath -e "$1")"
             case "$identity_file" in
-              "$RUNTIME_ROOT"/tmp/openclaw-qa-suite-*/process-boundary/identity-*.json) ;;
+              "$RUNTIME_ROOT"/tmp/openclaw-qa-suite-*/process-boundary/identity-*.json | \
+              "$RUNTIME_ROOT"/tmp/openclaw-"$RUNNER_UID"/openclaw-qa-suite-*/process-boundary/identity-*.json) ;;
               *) echo "Telegram SUT identity escaped the runtime root." >&2; exit 1 ;;
             esac
             [[ "$(stat -c '%F:%a:%u:%g' "$identity_file")" == "regular file:640:0:${RUNNER_GID}" ]]
@@ -1514,6 +1527,7 @@ jobs:
             exec sudo "${sudo_args[@]}" -- "$0" --root-run "$@"
           fi
           shift
+          launcher_stage=root-run-setup
           [[ "$EUID" == "0" ]]
           source /etc/openclaw-telegram-sut.conf
 
@@ -1531,7 +1545,8 @@ jobs:
 
           temp_root="$(realpath -e "${OPENCLAW_QA_TEMP_ROOT:?}")"
           case "$temp_root" in
-            "$RUNTIME_ROOT"/tmp/openclaw-qa-suite-*) ;;
+            "$RUNTIME_ROOT"/tmp/openclaw-qa-suite-* | \
+            "$RUNTIME_ROOT"/tmp/openclaw-"$RUNNER_UID"/openclaw-qa-suite-*) ;;
             *) echo "SUT temp root escaped the workflow runtime root." >&2; exit 1 ;;
           esac
           config_path="${temp_root}/openclaw.json"
@@ -1635,11 +1650,14 @@ jobs:
           export boundary_mode generation command_file identity_file sandbox_file
           export command_sha256 expected_env_keys_b64 sandbox_payload_b64
 
-          exec /usr/bin/unshare \
+          launcher_stage=enter-mount-namespace
+          /usr/bin/unshare \
             --mount \
             --fork \
             --propagation private \
             /bin/bash -ceu '
+              launcher_stage=mask-host-paths
+              trap "exit_status=\$?; trap - ERR; printf \"Telegram SUT launcher failed: stage=%s line=%s status=%s\\n\" \"\$launcher_stage\" \"\$LINENO\" \"\$exit_status\" >&2; exit \"\$exit_status\"" ERR
               for masked_path in "$RUNNER_HOME" /tmp /var/tmp /dev/shm; do
                 [[ -d "$masked_path" ]]
                 mount \
@@ -1648,8 +1666,10 @@ jobs:
                   openclaw-telegram-mask \
                   "$masked_path"
               done
+              launcher_stage=mount-proc
               mount -t proc proc /proc -o nosuid,nodev,noexec,hidepid=2
               if [[ "$boundary_mode" == "true" ]]; then
+                launcher_stage=write-identity
                 pid="$$"
                 proc_stat="$(cat "/proc/${pid}/stat")"
                 proc_tail="${proc_stat##*) }"

@@ -9,6 +9,10 @@ import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
+import {
+  normalizeConversationReadInvocationOrigin,
+  type ConversationReadInvocationOrigin,
+} from "../channels/plugins/conversation-read-origin.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -162,9 +166,13 @@ export async function invokeGatewayTool(params: {
   agentThreadId?: string;
   senderIsOwner?: boolean;
   clientCaps?: string[];
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
 }): Promise<ToolsInvokeOutcome> {
+  const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
+    params.conversationReadOrigin,
+  );
   const toolName = normalizeOptionalString(params.input.name ?? params.input.tool) ?? "";
   if (!toolName) {
     return {
@@ -230,6 +238,7 @@ export async function invokeGatewayTool(params: {
       agentThreadId: params.agentThreadId,
       senderIsOwner: params.senderIsOwner,
       clientCaps: params.clientCaps,
+      conversationReadOrigin,
       allowGatewaySubagentBinding: true,
       allowMediaInvokeCommands: true,
       surface: "http",
@@ -267,8 +276,8 @@ export async function invokeGatewayTool(params: {
     const gatewayTool: AnyAgentTool = tool;
     const idempotencyKey = normalizeOptionalString(params.input.idempotencyKey);
     const toolCallId = idempotencyKey
-      ? `${params.toolCallIdPrefix}-${idempotencyKey}`
-      : `${params.toolCallIdPrefix}-${Date.now()}`;
+      ? `${params.toolCallIdPrefix}-${conversationReadOrigin}-${idempotencyKey}`
+      : `${params.toolCallIdPrefix}-${conversationReadOrigin}-${Date.now()}`;
     const toolArgs = mergeActionIntoArgsIfSupported({
       toolSchema: gatewayTool.parameters,
       action,

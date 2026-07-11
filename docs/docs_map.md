@@ -4124,6 +4124,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /
 - Headings:
   - H1: OpenClaw 🦞
+  - H2: Browse docs
   - H2: What is OpenClaw?
   - H2: How it works
   - H2: Key capabilities

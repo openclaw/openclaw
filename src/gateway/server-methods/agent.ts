@@ -2210,7 +2210,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         resolvedSessionKey === "global"
           ? (resolvedSessionAgentId ?? agentId ?? resolveDefaultAgentId(cfgForAgent ?? cfg))
           : undefined;
-      const assertGatewayWorkAdmissionAllowed = () => {
+      const assertGatewayWorkAdmissionAllowed = (commitOutcome = true) => {
         const latestPreRegistrationAbort = readGatewayDedupeEntry({
           dedupe: context.dedupe,
           keys: agentDedupeKeys,
@@ -2223,38 +2223,46 @@ export const agentHandlers: GatewayRequestHandlers = {
             alternateSessionKeys: [preAcceptedReservedSessionKey, requestedSessionKey],
           })
         ) {
-          postAdmissionAbort = latestPreRegistrationAbort;
+          if (commitOutcome) {
+            postAdmissionAbort = latestPreRegistrationAbort;
+          }
           return;
         }
         if (agentDedupeReserved) {
           if (!latestPreRegistrationAbort) {
-            postAdmissionTimeout = {
-              runId,
-              status: "timeout",
-              summary: "aborted",
-              stopReason: "timeout",
-              timeoutPhase: "queue",
-              providerStarted: false,
-            };
-            setAbortedAgentDedupeEntries({
-              dedupe: context.dedupe,
-              keys: agentDedupeKeys,
-              agentId: admissionAgentId(),
-              sessionKey: resolvedSessionKey,
-              runId,
-              stopReason: "timeout",
-            });
+            if (commitOutcome) {
+              postAdmissionTimeout = {
+                runId,
+                status: "timeout",
+                summary: "aborted",
+                stopReason: "timeout",
+                timeoutPhase: "queue",
+                providerStarted: false,
+              };
+              setAbortedAgentDedupeEntries({
+                dedupe: context.dedupe,
+                keys: agentDedupeKeys,
+                agentId: admissionAgentId(),
+                sessionKey: resolvedSessionKey,
+                runId,
+                stopReason: "timeout",
+              });
+            }
             return;
           }
           if (
             !latestPreRegistrationAbort.ok ||
             !isAcceptedAgentDedupePayload(latestPreRegistrationAbort.payload)
           ) {
-            postAdmissionAbort = latestPreRegistrationAbort;
+            if (commitOutcome) {
+              postAdmissionAbort = latestPreRegistrationAbort;
+            }
             return;
           }
           if (latestPreRegistrationAbort.payload.reservationId !== agentReservationId) {
-            postAdmissionSuperseded = true;
+            if (commitOutcome) {
+              postAdmissionSuperseded = true;
+            }
             return;
           }
           if (
@@ -2262,30 +2270,37 @@ export const agentHandlers: GatewayRequestHandlers = {
               nowMs: Date.now(),
             })
           ) {
-            postAdmissionTimeout = {
-              runId,
-              status: "timeout",
-              summary: "aborted",
-              stopReason: "timeout",
-              timeoutPhase: "queue",
-              providerStarted: false,
-            };
-            setAbortedAgentDedupeEntries({
-              dedupe: context.dedupe,
-              keys: agentDedupeKeys,
-              agentId: admissionAgentId(),
-              sessionKey: resolvedSessionKey,
-              runId,
-              stopReason: "timeout",
-            });
+            if (commitOutcome) {
+              postAdmissionTimeout = {
+                runId,
+                status: "timeout",
+                summary: "aborted",
+                stopReason: "timeout",
+                timeoutPhase: "queue",
+                providerStarted: false,
+              };
+              setAbortedAgentDedupeEntries({
+                dedupe: context.dedupe,
+                keys: agentDedupeKeys,
+                agentId: admissionAgentId(),
+                sessionKey: resolvedSessionKey,
+                runId,
+                stopReason: "timeout",
+              });
+            }
             return;
           }
         }
-        lifecycleRotatedDuringAdmission = abortForLifecycleRotation({
-          sessionKey: resolvedSessionKey,
-          agentId: admissionAgentId(),
-        });
-        if (lifecycleRotatedDuringAdmission || !resolvedSessionKey) {
+        if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+          if (commitOutcome) {
+            lifecycleRotatedDuringAdmission = abortForLifecycleRotation({
+              sessionKey: resolvedSessionKey,
+              agentId: admissionAgentId(),
+            });
+          }
+          return;
+        }
+        if (!resolvedSessionKey) {
           return;
         }
         let latestEntry = loadSessionEntry(resolvedSessionKey, {
@@ -2307,7 +2322,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         if (archivedError) {
           throw new Error(archivedError);
         }
-        if (latestEntry?.sessionId && latestEntry.sessionId !== supersededSessionId) {
+        if (
+          commitOutcome &&
+          latestEntry?.sessionId &&
+          latestEntry.sessionId !== supersededSessionId
+        ) {
           admittedSessionId = latestEntry.sessionId;
         }
       };
@@ -2345,7 +2364,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         gatewayWorkAdmission = await beginSessionWorkAdmission({
           scope,
           identities: [resolvedSessionKey, resolvedSessionId],
-          assertAllowed: assertGatewayWorkAdmissionAllowed,
+          assertAllowed: () => assertGatewayWorkAdmissionAllowed(false),
+          revalidateAllowed: assertGatewayWorkAdmissionAllowed,
           onInterrupt: interruptGatewayWorkAdmission,
         });
       };

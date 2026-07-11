@@ -14,6 +14,7 @@ import {
 
 const repo = "openclaw/openclaw";
 const githubSnapshotSchemaVersion = 1;
+const githubSnapshotCheckpointInterval = 25;
 const commitAssociationQueryBatchSize = 20;
 const excludedHandles = new Set(["openclaw", "clawsweeper", "claude", "codex", "steipete"]);
 const nonEditorialTypes = new Set([
@@ -182,10 +183,10 @@ function parseArgs(argv) {
   return options;
 }
 
-function run(command, args) {
+function run(command, args, options = {}) {
   return execFileSync(command, args, {
     encoding: "utf8",
-    env: { ...process.env, NO_COLOR: "1" },
+    env: { ...process.env, NO_COLOR: "1", ...options.env },
     maxBuffer: 16 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -220,7 +221,12 @@ function gitIsAncestor(base, target) {
 
 function fetchGithubApi(args) {
   try {
-    return JSON.parse(run("ghx", ["api", ...args]).replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, ""));
+    return JSON.parse(
+      run("ghx", ["api", ...args], { env: { GHX_NO_CACHE: "1" } }).replace(
+        /\u001B\[[0-?]*[ -/]*[@-~]/g,
+        "",
+      ),
+    );
   } catch (error) {
     if (typeof error.stdout === "string" && error.stdout.trim() !== "") {
       return JSON.parse(error.stdout.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, ""));
@@ -231,11 +237,15 @@ function fetchGithubApi(args) {
 
 export function createGithubSnapshotState({
   base,
+  checkpointEvery = githubSnapshotCheckpointInterval,
   filePath,
   refresh = false,
   repository = repo,
   target,
 }) {
+  if (!Number.isSafeInteger(checkpointEvery) || checkpointEvery < 1) {
+    fail("GitHub snapshot checkpoint interval must be a positive integer");
+  }
   let responses = {};
   if (!refresh && existsSync(filePath)) {
     let parsed;
@@ -265,6 +275,7 @@ export function createGithubSnapshotState({
   }
   return {
     base,
+    checkpointEvery,
     dirty: refresh && existsSync(filePath),
     filePath,
     hits: 0,
@@ -272,6 +283,7 @@ export function createGithubSnapshotState({
     repository,
     responses,
     target,
+    writesSincePersist: 0,
   };
 }
 
@@ -298,6 +310,10 @@ export function githubApiWithSnapshot(args, fetchApi, snapshotState) {
   }
   snapshotState.responses[key] = structuredClone(response);
   snapshotState.dirty = true;
+  snapshotState.writesSincePersist += 1;
+  if (snapshotState.writesSincePersist >= snapshotState.checkpointEvery) {
+    persistGithubSnapshot(snapshotState);
+  }
   return response;
 }
 
@@ -322,6 +338,7 @@ export function persistGithubSnapshot(snapshotState) {
     writeFileSync(tempPath, output);
     renameSync(tempPath, snapshotState.filePath);
     snapshotState.dirty = false;
+    snapshotState.writesSincePersist = 0;
   } finally {
     rmSync(tempPath, { force: true });
   }
@@ -331,16 +348,20 @@ function githubApi(args) {
   return githubApiWithSnapshot(args, fetchGithubApi, githubSnapshotState);
 }
 
+export function defaultGithubSnapshotPath(base, target, gitCommonDir) {
+  const defaultName = `verify-release-notes-${base}-${target}.json`;
+  return path.resolve(gitCommonDir, "openclaw-release-cache", defaultName);
+}
+
 function initializeGithubSnapshot(options) {
   if (options.noGithubSnapshot) {
     return undefined;
   }
   const base = git(["rev-parse", `${options.base}^{commit}`]);
   const target = git(["rev-parse", `${options.target}^{commit}`]);
-  const defaultName = `verify-release-notes-${base}-${target}.json`;
   const filePath = path.resolve(
     options.githubSnapshotPath ??
-      git(["rev-parse", "--git-path", `openclaw-release-cache/${defaultName}`]),
+      defaultGithubSnapshotPath(base, target, git(["rev-parse", "--git-common-dir"])),
   );
   const state = createGithubSnapshotState({
     base,
