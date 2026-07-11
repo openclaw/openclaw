@@ -778,8 +778,3 @@ export function createCrabboxWorkerProvider(
     },
   };
 }
-
-export const testing = {
-  commandDetail,
-};
-export { testing as __testing };

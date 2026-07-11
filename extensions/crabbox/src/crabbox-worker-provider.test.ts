@@ -7,7 +7,6 @@ import {
   type CrabboxCommandRunner,
   resolveCrabboxBinary,
   resolveOpenClawRoot,
-  testing,
 } from "./crabbox-worker-provider.js";
 
 const LEASE_ID = "cbx_012345abcdef";
@@ -18,6 +17,7 @@ const HOST_KEY_ERROR =
   "Crabbox inspect does not expose the SSH host key required by the worker provider contract";
 const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
 const SIBLING_BINARY = path.resolve(OPENCLAW_ROOT, "../crabbox/bin/crabbox");
+const INSPECT_FAILURE_PREFIX = "Crabbox inspect failed with exit code 2: ";
 const PROFILE = {
   provider: "aws",
   class: "standard",
@@ -62,6 +62,24 @@ function providerWithRunner(runCommand: CrabboxCommandRunner) {
     pathEnv: "",
     isExecutable: (candidate) => candidate === SIBLING_BINARY,
   });
+}
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        index += 1;
+        continue;
+      }
+      return true;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 describe("Crabbox worker provider", () => {
@@ -633,22 +651,22 @@ describe("Crabbox worker provider", () => {
   it("bounds and redacts CLI failure details", async () => {
     const secret = ["sk", "abcdefghijklmnop"].join("-");
     const provider = providerWithRunner(async () =>
-      commandResult({ code: 2, stderr: `${secret} ${"failure ".repeat(200)}` }),
+      commandResult({
+        code: 2,
+        stderr: `${secret} ${"failure ".repeat(200)}`,
+        stdout: "stdout must not replace stderr",
+      }),
     );
 
     const error = await provider.inspect(lifecycleLease()).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     const message = error instanceof Error ? error.message : "";
     expect(message).not.toContain(secret);
-    expect(message.length).toBeLessThan(600);
+    expect(message).not.toContain("stdout must not replace stderr");
+    expect(message).toHaveLength(INSPECT_FAILURE_PREFIX.length + 512);
   });
 
-  it("preserves well-formed UTF-16 through the provider boundary when inspect stderr crosses the truncation limit", async () => {
-    // 511 ASCII code units + emoji: the emoji surrogate pair spans
-    // indices [511, 512].  The provider path (inspect → commandError →
-    // commandDetail → truncateUtf16Safe) must not leave a lone surrogate
-    // in the error message.  Current main splits the pair, leaving a
-    // lone high surrogate (U+D83D) at the boundary.
+  it("preserves UTF-16 boundaries in provider failure details", async () => {
     const prefix = "x".repeat(511);
     const provider = providerWithRunner(async () =>
       commandResult({ code: 2, stderr: `${prefix}😀after` }),
@@ -657,31 +675,21 @@ describe("Crabbox worker provider", () => {
     const error = await provider.inspect(lifecycleLease()).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     const message = error instanceof Error ? error.message : "";
-    for (const lone of ["\ud83d", "\ude00"]) {
-      expect(message).not.toContain(lone);
-    }
-    expect(message).not.toContain("�");
-    expect(message).toContain(`: ${prefix}`);
-    // must not contain the low-surrogate-only tail
-    expect(message).not.toContain("\ude00after");
+    expect(message).toBe(`${INSPECT_FAILURE_PREFIX}${prefix}`);
+    expect(hasLoneSurrogate(message)).toBe(false);
   });
 
-  it("preserves well-formed UTF-16 when CLI failure detail reaches the boundary limit", () => {
-    // 511 ASCII code units + emoji: the emoji surrogate pair spans
-    // indices [511, 512].  raw .slice(0, 512) keeps only the high
-    // surrogate (U+D83D) — current main produces a malformed string.
-    // truncateUtf16Safe detects the split pair and backs up to 511
-    // so the result is well-formed with no lone surrogates.
-    const prefix = "x".repeat(511);
-    const detail = testing.commandDetail(commandResult({ stderr: `${prefix}😀after` }));
-    // must not contain a lone high surrogate without its pair
-    for (const lone of ["\ud83d", "\ude00"]) {
-      expect(detail).not.toContain(lone);
-    }
-    expect(detail).not.toContain("�");
-    // truncateUtf16Safe backs up: ": " + 511 ASCII chars = 513 code units
-    expect(detail).toBe(`: ${prefix}`);
-    expect(detail.length).toBe(513);
+  it("keeps a complete boundary pair when falling back to stdout", async () => {
+    const detail = `${"x".repeat(510)}😀`;
+    const provider = providerWithRunner(async () =>
+      commandResult({ code: 2, stdout: `${detail}after` }),
+    );
+
+    const error = await provider.inspect(lifecycleLease()).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    const message = error instanceof Error ? error.message : "";
+    expect(message).toBe(`${INSPECT_FAILURE_PREFIX}${detail}`);
+    expect(hasLoneSurrogate(message)).toBe(false);
   });
 
   it("destroys absent and already-stopped leases idempotently", async () => {
