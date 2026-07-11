@@ -2,34 +2,31 @@
 // These tests do not require a real macOS log(1) binary; they verify that the
 // script reaches the expected code paths before any platform-specific command.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = fileURLToPath(new URL("../../scripts/clawlog.sh", import.meta.url));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runClawlog(args: string[] = []) {
-  const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-clawlog-test-"));
+  const cwd = tempDirs.make("openclaw-clawlog-test-");
   const binDir = path.join(cwd, "bin");
   mkdirSync(binDir);
   const sudoPath = path.join(binDir, "sudo");
   writeFileSync(sudoPath, "#!/bin/sh\nexit 0\n");
   chmodSync(sudoPath, 0o755);
 
-  try {
-    return spawnSync("bash", [SCRIPT_PATH, ...args], {
-      cwd,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
-    });
-  } finally {
-    rmSync(cwd, { recursive: true, force: true });
-  }
+  return spawnSync("bash", [SCRIPT_PATH, ...args], {
+    cwd,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+  });
 }
 
 describe("clawlog.sh argument parsing", () => {
