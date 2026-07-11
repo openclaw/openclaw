@@ -103,6 +103,9 @@ export function resolveStatusChannelFeatureLine(params: {
     : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
 }
 
+// In-memory module-load retry caches (never persisted; no schema). A rejected
+// dynamic import resets the promise to null so the next call retries instead of
+// caching the failure (issue #94626).
 let agentHarnessSelectionRuntimePromise: Promise<
   typeof import("../agents/harness/selection.js") | undefined
 > | null = null;

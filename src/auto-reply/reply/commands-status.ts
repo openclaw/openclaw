@@ -8,6 +8,11 @@ import { requireCommandFlagEnabled } from "./command-gates.js";
 import type { CommandContext } from "./commands-types.js";
 export { buildStatusText } from "../../status/status-text.js";
 
+// Hard ceiling on /status render time. Deliberate UX guard: a slow or hung
+// status assembly must never block the chat turn, so buildStatusReply races it
+// and falls back to a short message instead of hanging the reply.
+const STATUS_RENDER_TIMEOUT_MS = 10_000;
+
 type BuildStatusReplyParams = Omit<BuildStatusTextParams, "statusChannel"> & {
   command: CommandContext;
 };
@@ -26,7 +31,7 @@ export async function buildStatusReply(
     const statusText = await new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
         reject(new Error("Status render timeout"));
-      }, 10_000);
+      }, STATUS_RENDER_TIMEOUT_MS);
       buildStatusText({
         ...params,
         statusChannel: command.channel,
