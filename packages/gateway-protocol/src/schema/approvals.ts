@@ -1,5 +1,6 @@
 // Gateway Protocol schema module defines durable cross-surface approval shapes.
 import { Type } from "typebox";
+import type { Static } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
 const APPROVAL_ID_WELL_FORMED_UNICODE_PATTERN =
@@ -225,3 +226,25 @@ export const ApprovalResolveResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// These types are plugin-SDK-reachable through approval presentation. Export
+// them from the owner module so public declarations do not retain ProtocolSchemas.
+export type ApprovalKind = Static<typeof ApprovalKindSchema>;
+export type ApprovalDecision = Static<typeof ApprovalDecisionSchema>;
+export type ApprovalAllowDecision = Static<typeof ApprovalAllowDecisionSchema>;
+export type ApprovalTerminalReason = Static<typeof ApprovalTerminalReasonSchema>;
+export type PluginApprovalSeverity = Static<typeof PluginApprovalSeveritySchema>;
+export type ExecApprovalPresentation = Static<typeof ExecApprovalPresentationSchema>;
+export type PluginApprovalPresentation = Static<typeof PluginApprovalPresentationSchema>;
+export type ApprovalPresentation = Static<typeof ApprovalPresentationSchema>;
+export type PendingApprovalSnapshot = Static<typeof PendingApprovalSnapshotSchema>;
+export type AllowedApprovalSnapshot = Static<typeof AllowedApprovalSnapshotSchema>;
+export type DeniedApprovalSnapshot = Static<typeof DeniedApprovalSnapshotSchema>;
+export type ExpiredApprovalSnapshot = Static<typeof ExpiredApprovalSnapshotSchema>;
+export type CancelledApprovalSnapshot = Static<typeof CancelledApprovalSnapshotSchema>;
+export type ApprovalSnapshot = Static<typeof ApprovalSnapshotSchema>;
+export type TerminalApprovalSnapshot = Static<typeof TerminalApprovalSnapshotSchema>;
+export type ApprovalGetParams = Static<typeof ApprovalGetParamsSchema>;
+export type ApprovalGetResult = Static<typeof ApprovalGetResultSchema>;
+export type ApprovalResolveParams = Static<typeof ApprovalResolveParamsSchema>;
+export type ApprovalResolveResult = Static<typeof ApprovalResolveResultSchema>;

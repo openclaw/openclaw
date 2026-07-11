@@ -4,7 +4,7 @@ import type {
   ApprovalDecision,
   ApprovalKind,
   ApprovalPresentation,
-} from "../../packages/gateway-protocol/src/index.js";
+} from "../../packages/gateway-protocol/src/schema/approvals.js";
 import {
   resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,

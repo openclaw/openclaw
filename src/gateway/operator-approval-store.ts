@@ -1,10 +1,11 @@
 // Persistent operator approval lifecycle and first-answer-wins transitions.
 import type { Selectable } from "kysely";
+import { Value } from "typebox/value";
 import {
+  ApprovalPresentationSchema,
   type ApprovalPresentation,
   isWellFormedApprovalId,
-  validateApprovalPresentation,
-} from "../../packages/gateway-protocol/src/index.js";
+} from "../../packages/gateway-protocol/src/schema/approvals.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -168,7 +169,7 @@ const OPERATOR_APPROVAL_RESOLVER_KINDS = new Set<OperatorApprovalResolverKind>([
 function parseApprovalPresentation(raw: string): ApprovalPresentation | null {
   try {
     const value: unknown = JSON.parse(raw);
-    return validateApprovalPresentation(value) ? value : null;
+    return Value.Check(ApprovalPresentationSchema, value) ? value : null;
   } catch {
     return null;
   }
@@ -221,7 +222,7 @@ function normalizeStringArray(values: readonly string[] | undefined): string[] {
 }
 
 function stringifyPresentation(presentation: ApprovalPresentation): string {
-  if (!validateApprovalPresentation(presentation)) {
+  if (!Value.Check(ApprovalPresentationSchema, presentation)) {
     throw new Error("operator approval presentation must match the safe protocol schema");
   }
   let raw: string;
