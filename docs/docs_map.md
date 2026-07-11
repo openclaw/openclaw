@@ -4680,6 +4680,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Provider-only (SenseAudio)
   - H3: Echo transcript to chat (opt-in)
   - H2: Notes and limits
+  - H3: Resident local STT
   - H3: Proxy environment support
   - H2: Mention detection in groups
   - H2: Gotchas
@@ -5564,6 +5565,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Message hooks
   - H2: Install hooks
   - H2: Gateway lifecycle
+  - H3: Safe external cron projection
   - H2: Upcoming deprecations
   - H2: Related
 

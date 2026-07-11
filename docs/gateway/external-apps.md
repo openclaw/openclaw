@@ -6,6 +6,7 @@ read_when:
   - You are building an external app, script, dashboard, CI job, or IDE extension that talks to OpenClaw
   - You are choosing between Gateway RPC and the Plugin SDK
   - You are integrating with Gateway agent runs, sessions, events, approvals, models, or tools
+  - You are pairing a hosting controller with an external wake scheduler
 ---
 
 External apps talk to OpenClaw through the Gateway protocol: WebSocket
@@ -142,6 +143,14 @@ remain active.
 The hosting platform must freeze or snapshot the full process tree and its
 filesystem consistently; unregistered work cannot be proven idle by this first
 contract.
+
+<Tip>
+  For host wake scheduling, keep the OpenClaw-facing part in an in-process
+  plugin and project idempotent full snapshots to the external host adapter.
+  The hosting controller should not import the Plugin SDK or reconstruct cron
+  state from event deltas. See [Safe external cron
+  projection](/plugins/hooks#safe-external-cron-projection).
+</Tip>
 
 ## App code vs plugin code
 
