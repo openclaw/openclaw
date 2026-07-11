@@ -418,12 +418,18 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         activeProgressBox.x + activeProgressBox.width - 1,
       );
       // The opener lives in the floating toggle cluster pinned to the
-      // top-right corner of the chat area.
+      // top-right corner of the chat area. The cluster's right edge hugs the
+      // corner; the opener itself is the leftmost button in the row.
+      const toggleClusterBox = await page.locator(".chat-floating-toggles").boundingBox();
+      expect(toggleClusterBox).not.toBeNull();
+      if (!toggleClusterBox) {
+        throw new Error("expected the floating toggle cluster to have a layout box");
+      }
       expect(
         Math.abs(
           activeChatContentBox.x +
             activeChatContentBox.width -
-            (activeSplitViewBox.x + activeSplitViewBox.width),
+            (toggleClusterBox.x + toggleClusterBox.width),
         ),
       ).toBeLessThanOrEqual(24);
       expect(Math.abs(activeSplitViewBox.y - activeChatContentBox.y)).toBeLessThanOrEqual(24);
