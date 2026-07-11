@@ -52,6 +52,11 @@
           - "extensions/workboard/**"
           - "docs/plugins/workboard.md"
           - "docs/plugins/reference/workboard.md"
+"plugin: workspaces":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/workspaces/**"
+          - "docs/web/workspaces.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:
@@ -220,6 +225,14 @@
           - "src/daemon/**"
           - "docs/gateway/**"
 
+"fleet":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/fleet/**"
+          - "src/cli/fleet-cli/**"
+          - "docs/gateway/multi-tenant-hosting.md"
+          - "docs/cli/fleet.md"
+
 "docs":
   - changed-files:
       - any-glob-to-any-file:
@@ -375,6 +388,10 @@
       - any-glob-to-any-file:
           - "extensions/clawrouter/**"
           - "docs/providers/clawrouter.md"
+"extensions: crabbox":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/crabbox/**"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:
@@ -406,6 +423,8 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/anthropic/**"
+          - "docs/providers/anthropic.md"
+          - "docs/plugins/reference/anthropic.md"
 "extensions: cloudflare-ai-gateway":
   - changed-files:
       - any-glob-to-any-file:
@@ -444,12 +463,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/codex/**"
-"extensions: codex-supervisor":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/codex-supervisor/**"
-          - "docs/plugins/reference/codex-supervisor.md"
-          - "docs/specs/claw-supervisor.md"
+          - "docs/plugins/codex-harness.md"
+          - "docs/plugins/codex-harness-reference.md"
+          - "docs/plugins/codex-harness-runtime.md"
+          - "docs/plugins/codex-supervision.md"
+          - "docs/specs/codex-supervision.md"
 "extensions: copilot":
   - changed-files:
       - any-glob-to-any-file:

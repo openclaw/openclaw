@@ -3,7 +3,6 @@ import type { Block, KnownBlock } from "@slack/web-api";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   reduceInteractiveReply,
-  renderMessagePresentationChartFallbackText,
   resolveMessagePresentationControlValue,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type {
@@ -14,12 +13,20 @@ import type {
   MessagePresentationSelectBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import {
+  buildSlackDataTableBlock,
+  countSlackDataTableBlocksCellCharacters,
+  countSlackDataTableCellCharacters,
+  SLACK_DATA_TABLE_CELL_CHARACTERS_MAX,
+} from "./data-table.js";
 import {
   buildSlackDataVisualizationBlock,
   canRenderSlackDataVisualization,
   hasSlackDataVisualizationBlock,
   SLACK_DATA_VISUALIZATION_BLOCKS_MAX,
 } from "./data-visualization.js";
+import { renderSlackMessagePresentationChartFallbackText } from "./presentation-fallback.js";
 import {
   SLACK_ACTION_BLOCK_ELEMENTS_MAX,
   SLACK_ACTION_LABEL_MAX,
@@ -40,8 +47,9 @@ const SLACK_BUTTON_URL_MAX = 3000;
 
 export type SlackBlock = Block | KnownBlock;
 
-type SlackBlockRenderOptions = {
+export type SlackBlockRenderOptions = {
   buttonIndexOffset?: number;
+  dataTableCellCharacterCountOffset?: number;
   dataVisualizationCountOffset?: number;
   selectIndexOffset?: number;
 };
@@ -109,9 +117,11 @@ function readSlackOpenClawBlockIndex(blockId: string, prefix: string): number | 
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-/** Resolve existing Block Kit indexes and native chart count before appending portable blocks. */
+/** Resolve existing Block Kit indexes and native-data budgets before appending portable blocks. */
 export function resolveSlackBlockOffsets(blocks?: readonly SlackBlock[]): SlackBlockRenderOptions {
   let buttonIndexOffset = 0;
+  const dataTableCellCharacterCountOffset =
+    countSlackDataTableBlocksCellCharacters(blocks) ?? SLACK_DATA_TABLE_CELL_CHARACTERS_MAX + 1;
   let dataVisualizationCountOffset = 0;
   let selectIndexOffset = 0;
   for (const block of blocks ?? []) {
@@ -131,7 +141,12 @@ export function resolveSlackBlockOffsets(blocks?: readonly SlackBlock[]): SlackB
       readSlackOpenClawBlockIndex(blockId, "openclaw_reply_select_") ?? 0,
     );
   }
-  return { buttonIndexOffset, dataVisualizationCountOffset, selectIndexOffset };
+  return {
+    buttonIndexOffset,
+    dataTableCellCharacterCountOffset,
+    dataVisualizationCountOffset,
+    selectIndexOffset,
+  };
 }
 
 /**
@@ -254,6 +269,7 @@ export function buildSlackPresentationBlocks(
   if (!presentation) {
     return [];
   }
+  const renderTablesNatively = canRenderSlackPresentationTables(presentation, options);
   const blocks: SlackBlock[] = [];
   if (presentation.title) {
     blocks.push({
@@ -266,6 +282,7 @@ export function buildSlackPresentationBlocks(
     });
   }
   let buttonIndex = options.buttonIndexOffset ?? 0;
+  let dataTableCellCharacterCount = options.dataTableCellCharacterCountOffset ?? 0;
   let dataVisualizationCount = options.dataVisualizationCountOffset ?? 0;
   let selectIndex = options.selectIndexOffset ?? 0;
   for (const block of presentation.blocks) {
@@ -277,7 +294,13 @@ export function buildSlackPresentationBlocks(
       if (block.type === "context") {
         blocks.push({
           type: "context",
-          elements: [{ type: "mrkdwn", text: truncateSlackText(text, SLACK_SECTION_TEXT_MAX) }],
+          elements: [
+            {
+              type: "mrkdwn",
+              text: truncateSlackText(text, SLACK_SECTION_TEXT_MAX),
+              verbatim: true,
+            },
+          ],
         });
       } else {
         blocks.push({
@@ -308,18 +331,28 @@ export function buildSlackPresentationBlocks(
         dataVisualizationCount += 1;
         blocks.push(rendered);
       } else {
-        blocks.push({
-          type: "context",
-          elements: [
-            {
-              type: "mrkdwn",
-              text: truncateSlackText(
-                renderMessagePresentationChartFallbackText(block),
-                SLACK_SECTION_TEXT_MAX,
-              ),
-            },
-          ],
-        });
+        const fallback = renderSlackMessagePresentationChartFallbackText(block);
+        blocks.push(
+          ...chunkTextForOutbound(fallback, SLACK_SECTION_TEXT_MAX).map(
+            (text): SlackBlock => ({
+              type: "context",
+              elements: [{ type: "mrkdwn", text, verbatim: true }],
+            }),
+          ),
+        );
+      }
+      continue;
+    }
+    if (block.type === "table") {
+      if (!renderTablesNatively) {
+        continue;
+      }
+      const rendered = buildSlackDataTableBlock(block, {
+        cellCharacterCountOffset: dataTableCellCharacterCount,
+      });
+      if (rendered) {
+        dataTableCellCharacterCount += countSlackDataTableCellCharacters(rendered);
+        blocks.push(rendered);
       }
       continue;
     }
@@ -391,37 +424,106 @@ function resolveSlackPresentationButtonTarget(
   return url ? { url } : value ? { value } : undefined;
 }
 
+/** True when every portable table fits Slack's native per-message table budget. */
+export function canRenderSlackPresentationTables(
+  presentation: MessagePresentation,
+  options: SlackBlockRenderOptions = {},
+): boolean {
+  let cellCharacterCount = options.dataTableCellCharacterCountOffset ?? 0;
+  for (const block of presentation.blocks) {
+    if (block.type !== "table") {
+      continue;
+    }
+    const rendered = buildSlackDataTableBlock(block, {
+      cellCharacterCountOffset: cellCharacterCount,
+    });
+    if (!rendered) {
+      return false;
+    }
+    cellCharacterCount += countSlackDataTableCellCharacters(rendered);
+  }
+  return true;
+}
+
 /** True when native Slack rendering preserves every portable control. */
-export function canRenderSlackPresentation(presentation: MessagePresentation): boolean {
+export function canRenderSlackPresentation(
+  presentation: MessagePresentation,
+  options: SlackBlockRenderOptions = {},
+): boolean {
   if (presentation.title && !isWithinSlackLimit(presentation.title.trim(), SLACK_HEADER_TEXT_MAX)) {
     return false;
   }
-  return presentation.blocks.every((block) => {
+  if (!canRenderSlackPresentationTables(presentation, options)) {
+    return false;
+  }
+  let dataVisualizationCount = options.dataVisualizationCountOffset ?? 0;
+  for (const block of presentation.blocks) {
     if (block.type === "text" || block.type === "context") {
-      return isWithinSlackLimit(block.text.trim(), SLACK_SECTION_TEXT_MAX);
+      if (!isWithinSlackLimit(block.text.trim(), SLACK_SECTION_TEXT_MAX)) {
+        return false;
+      }
+      continue;
     }
     if (block.type === "buttons") {
-      return (
+      const allButtonsRenderable =
         block.buttons.length <= SLACK_ACTION_BLOCK_ELEMENTS_MAX &&
-        block.buttons.every((button) => resolveSlackPresentationButtonTarget(button) !== undefined)
-      );
+        block.buttons.every(
+          (button) =>
+            isWithinSlackLimit(button.label, SLACK_ACTION_LABEL_MAX) &&
+            resolveSlackPresentationButtonTarget(button) !== undefined,
+        );
+      if (!allButtonsRenderable) {
+        return false;
+      }
+      continue;
     }
     if (block.type === "select") {
-      return (
+      const placeholder = normalizeOptionalString(block.placeholder) ?? "Choose an option";
+      const allOptionsRenderable =
+        isWithinSlackLimit(placeholder, SLACK_ACTION_LABEL_MAX) &&
         block.options.length <= SLACK_STATIC_SELECT_OPTIONS_MAX &&
-        block.options.every((option) =>
-          isRenderableSlackOption({
-            label: option.label,
-            value: resolveSlackControlValue(option),
-          }),
-        )
-      );
+        block.options.every(
+          (option) =>
+            isWithinSlackLimit(option.label, SLACK_ACTION_LABEL_MAX) &&
+            isRenderableSlackOption({
+              label: option.label,
+              value: resolveSlackControlValue(option),
+            }),
+        );
+      if (!allOptionsRenderable) {
+        return false;
+      }
+      continue;
     }
     if (block.type === "chart") {
-      return canRenderSlackDataVisualization(block);
+      if (
+        dataVisualizationCount >= SLACK_DATA_VISUALIZATION_BLOCKS_MAX ||
+        !canRenderSlackDataVisualization(block)
+      ) {
+        return false;
+      }
+      dataVisualizationCount += 1;
+      continue;
     }
-    return true;
-  });
+    if (block.type === "table") {
+      continue;
+    }
+  }
+  return true;
+}
+
+/** True when every non-table block survives while tables use text fallback. */
+export function canRenderSlackPresentationWithoutTables(
+  presentation: MessagePresentation,
+  options: SlackBlockRenderOptions = {},
+): boolean {
+  return canRenderSlackPresentation(
+    {
+      ...presentation,
+      blocks: presentation.blocks.filter((block) => block.type !== "table"),
+    },
+    options,
+  );
 }
 
 function buildSlackPresentationSelectBlock(
