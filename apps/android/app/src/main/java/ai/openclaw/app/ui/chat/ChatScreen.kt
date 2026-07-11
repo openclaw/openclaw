@@ -29,6 +29,7 @@ import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -158,6 +159,7 @@ fun ChatScreen(
   val sessions by viewModel.chatSessions.collectAsState()
   val chatCommands by viewModel.chatCommands.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
+  val chatShareDraft by viewModel.chatShareDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
   val assistantAutoSendInFlight by viewModel.assistantAutoSendInFlight.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
@@ -267,6 +269,35 @@ fun ChatScreen(
     viewModel.clearChatDraft()
   }
 
+  LaunchedEffect(chatShareDraft?.id) {
+    val share = chatShareDraft ?: return@LaunchedEffect
+    val attachmentSnapshot = attachments.toList()
+    val staged =
+      withContext(Dispatchers.IO) {
+        stageChatShareDraft(share, currentAttachments = attachmentSnapshot) { uri ->
+          loadSizedImageAttachment(resolver, uri)
+        }
+      }
+    val merged =
+      mergeStagedChatShare(
+        staged = staged,
+        currentInput = input,
+        currentAttachments = attachments,
+      )
+    if (!canCommitStagedChatShare(stagedId = share.id, currentHead = viewModel.chatShareDraft.value)) {
+      return@LaunchedEffect
+    }
+    // Keep the head pending through both mutations: Send stays gated until text and images
+    // have been merged together, and disposal before this point leaves the head for retry.
+    input = merged.input
+    attachments.clear()
+    attachments.addAll(merged.attachments)
+    if (merged.failedImageCount + merged.droppedImageCount > 0) {
+      Toast.makeText(context, "Some shared images were omitted or could not be added.", Toast.LENGTH_SHORT).show()
+    }
+    viewModel.acknowledgeChatShareDraft(share.id)
+  }
+
   LaunchedEffect(gatewayConnectionDisplay.isConnected) {
     if (!gatewayConnectionDisplay.isConnected) {
       showModelPicker = false
@@ -374,6 +405,7 @@ fun ChatScreen(
       gatewayOffline = gatewayOffline,
       offlineStatus = offlineStatus,
       pendingRunCount = pendingRunCount,
+      shareStaging = chatShareDraft != null,
       commands = chatCommands,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
       onOpenModelPicker = { showModelPicker = true },
@@ -398,6 +430,8 @@ fun ChatScreen(
       },
       onAbort = viewModel::abortChat,
       onSend = {
+        // Re-read the ViewModel so a stale click callback cannot beat StateFlow recomposition.
+        if (viewModel.chatShareDraft.value != null) return@ChatComposer
         val message = input.trim()
         if (message.isEmpty() && attachments.isEmpty()) return@ChatComposer
         val outgoing = attachments.map(PendingAttachment::toOutgoingAttachment)
@@ -1122,6 +1156,7 @@ private fun ChatComposer(
   gatewayOffline: Boolean,
   offlineStatus: String,
   pendingRunCount: Int,
+  shareStaging: Boolean,
   commands: List<ChatCommandEntry>,
   onThinkingLevelChange: (String) -> Unit,
   onOpenModelPicker: () -> Unit,
@@ -1152,10 +1187,12 @@ private fun ChatComposer(
   // Offline sends queue durably too (text, images, and voice notes), so the gate is identical
   // to the connected one; admission errors keep the draft when the durable queue refuses it.
   val sendEnabled =
-    voiceNoteState !is VoiceNoteRecorderState.Recording &&
-      voiceNoteState !is VoiceNoteRecorderState.Preparing &&
-      pendingRunCount == 0 &&
-      (value.trim().isNotEmpty() || attachments.isNotEmpty())
+    chatComposerSendEnabled(
+      voiceNoteState = voiceNoteState,
+      pendingRunCount = pendingRunCount,
+      hasContent = value.trim().isNotEmpty() || attachments.isNotEmpty(),
+      shareStaging = shareStaging,
+    )
 
   Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
     if (attachments.isNotEmpty()) {
