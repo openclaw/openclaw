@@ -18,7 +18,6 @@ type MSTeamsSdkReferenceSource = {
   activityId?: string;
   user?: MSTeamsAccountRef;
   agent?: MSTeamsAccountRef | null;
-  bot?: MSTeamsAccountRef | null;
   conversation: { id: string; conversationType?: string; tenantId?: string };
   channelId?: string;
   serviceUrl?: string;
@@ -93,7 +92,7 @@ function buildSdkConversationReference(
   source: MSTeamsSdkReferenceSource,
   options?: MSTeamsProactiveOptions,
 ): MSTeamsSdkConversationReference {
-  const bot = source.agent ?? source.bot ?? undefined;
+  const bot = source.agent ?? undefined;
   if (!bot?.id) {
     throw new Error("Invalid stored reference: missing agent.id");
   }
