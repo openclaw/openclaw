@@ -93,6 +93,37 @@ export function claimTrajectoryPathIncarnation(
 }
 
 /**
+ * Retires canonicalPath for a disposal turn and returns a rollback that
+ * restores the pre-retire entry VERBATIM. The retire must precede the runtime
+ * archive rename so a flush turn queued behind this disposal observes "retired"
+ * and no-ops instead of recreating the file being archived away (F1/F2/F5).
+ * When that rename fails the disposal never committed: rollback re-installs the
+ * exact prior entry (same incarnation and owner, not a fresh incarnation, which
+ * would strand a still-live writer whose lease matches the old incarnation) so
+ * the path stays fully live and a later disposal pass retries it cleanly.
+ * Must only be called from inside a withTrajectoryPathLock(canonicalPath, ...) turn.
+ */
+export function retireTrajectoryPathForDisposal(
+  canonicalPath: string,
+  ownerSessionId: string,
+): { rollback: () => void } {
+  // Snapshot the exact prior entry object. claimTrajectoryPathIncarnation
+  // replaces the map value with a fresh object rather than mutating this one,
+  // so restoring it on failure is a true rollback to the pre-retire state.
+  const previous = registry.get(canonicalPath);
+  claimTrajectoryPathIncarnation(canonicalPath, { ownerSessionId, retired: true });
+  return {
+    rollback: () => {
+      if (previous) {
+        registry.set(canonicalPath, previous);
+      } else {
+        registry.delete(canonicalPath);
+      }
+    },
+  };
+}
+
+/**
  * Resolves a candidate path to its registered filePath/incarnation, disambiguating
  * a sanitized-name collision against a different live/retired owner. Runs entirely
  * inside withTrajectoryPathLock so a claim can never interleave with a concurrent

@@ -17,10 +17,10 @@ import {
 } from "./paths.js";
 import {
   canonicalizeTrajectoryPath as canonicalizePathForComparison,
-  claimTrajectoryPathIncarnation,
   findTrajectoryPathOwnedBySession,
   mayTrajectoryPathBeRemovedBySession,
   reassignTrajectoryPathOwner,
+  retireTrajectoryPathForDisposal,
   withTrajectoryPathLock,
 } from "./writer-lifecycle.js";
 
@@ -149,13 +149,23 @@ function tombstoneSuffix(reason: TrajectoryTombstoneReason, nowMs?: number): str
   return `.${reason}.${formatSessionArchiveTimestamp(nowMs)}`;
 }
 
+// "absent" (nothing on the live path) is deliberately distinct from "failed"
+// (the artifact is there but its rename/unlink threw): the disposal commit
+// ordering in removeSessionTrajectoryArtifacts keys retirement + pointer
+// disposal off "failed" alone, since a runtime that was never there strands
+// nothing, whereas one whose move failed is still live and must not be orphaned.
+type TrajectoryDisposalOutcome =
+  | { status: "absent" }
+  | { status: "failed" }
+  | { status: "disposed"; artifact: RemovedTrajectoryArtifact };
+
 async function disposeRegularFile(
   filePath: string,
   disposal: TrajectoryArtifactDisposal,
   kind: RemovedTrajectoryArtifact["kind"],
-): Promise<RemovedTrajectoryArtifact | null> {
+): Promise<TrajectoryDisposalOutcome> {
   if (!isRegularNonSymlinkFile(filePath)) {
-    return null;
+    return { status: "absent" };
   }
   if (disposal.mode === "delete") {
     try {
@@ -163,9 +173,9 @@ async function disposeRegularFile(
     } catch {
       // Best-effort: a transiently busy/locked artifact should not block
       // removal of the remaining candidates (runtime file vs. pointer).
-      return null;
+      return { status: "failed" };
     }
-    return { kind, path: path.resolve(filePath) };
+    return { status: "disposed", artifact: { kind, path: path.resolve(filePath) } };
   }
   const suffix = tombstoneSuffix(disposal.reason, disposal.nowMs);
   const archivedPath = `${filePath}${suffix}`;
@@ -181,9 +191,9 @@ async function disposeRegularFile(
   } catch {
     // Best-effort: a transiently busy/locked artifact should not block
     // archiving of the remaining candidates (runtime file vs. pointer).
-    return null;
+    return { status: "failed" };
   }
-  return { kind, path: archivedPath };
+  return { status: "disposed", artifact: { kind, path: archivedPath } };
 }
 
 function resolveRemovedSessionFile(params: {
@@ -349,15 +359,31 @@ export async function removeSessionTrajectoryArtifacts(params: {
       // about to archive away (F1/F2/F5). Acquisition shares this same lock
       // (writer-lifecycle.ts), so no concurrent claim can slip in between the
       // retire and the rename either (P1-A).
-      claimTrajectoryPathIncarnation(canonicalRuntimePath, {
-        ownerSessionId: params.sessionId,
-        retired: true,
-      });
+      const disposalTurn = retireTrajectoryPathForDisposal(canonicalRuntimePath, params.sessionId);
       const runtime = await disposeRegularFile(runtimePath, params.disposal, "runtime");
+      if (runtime.status === "failed") {
+        // The runtime rename is the disposal's commit point. It did not move
+        // (transient busy/locked rename), so roll the retirement back to fully
+        // live and leave the pointer untouched: a still-live, still-owned path
+        // whose discovery pointer is intact is retried cleanly by a later
+        // delete/reset/maintenance pass, whereas retiring ownership and
+        // disposing the pointer now would strand the live runtime file as a
+        // harder-to-find orphan than the one this cleanup exists to prevent
+        // (round 6 P1).
+        disposalTurn.rollback();
+        return { runtime: null, pointer: null };
+      }
+      // Runtime committed (archived) or was verifiably absent — a runtime that
+      // never existed strands nothing, so disposing its pointer stays valid.
+      // Either way the canonical path is clear; retire the pointer in this same
+      // turn so the pair stays coupled (round 4/5 P1).
       const pointerRemoved = removePointerHere
         ? await disposeRegularFile(pointerPath, params.disposal, "pointer")
         : null;
-      return { runtime, pointer: pointerRemoved };
+      return {
+        runtime: runtime.status === "disposed" ? runtime.artifact : null,
+        pointer: pointerRemoved?.status === "disposed" ? pointerRemoved.artifact : null,
+      };
     });
     if (result.runtime) {
       removed.push(result.runtime);
@@ -375,8 +401,8 @@ export async function removeSessionTrajectoryArtifacts(params: {
     const deletedPointer = await withTrajectoryPathLock(primaryCanonicalPath, () =>
       disposeRegularFile(pointerPath, params.disposal, "pointer"),
     );
-    if (deletedPointer) {
-      removed.push(deletedPointer);
+    if (deletedPointer.status === "disposed") {
+      removed.push(deletedPointer.artifact);
     }
   }
 
