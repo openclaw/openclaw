@@ -2230,6 +2230,79 @@ describe("registerSlackInteractionEvents", () => {
     });
   });
 
+  it("removes legacy bare bulk rows when the last individual Slack control is selected", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, app, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      body: {
+        user: { id: "U446" },
+        channel: { id: "C6" },
+        message: {
+          ts: "446.557",
+          text: "fallback",
+          blocks: [
+            { type: "divider" },
+            {
+              type: "actions",
+              block_id: "legacy_bulk_row",
+              elements: [
+                { type: "button", action_id: "select_all", text: { type: "plain_text", text: "All" } },
+                {
+                  type: "button",
+                  action_id: "deselect_all",
+                  text: { type: "plain_text", text: "None" },
+                },
+              ],
+            },
+            { type: "divider" },
+            {
+              type: "actions",
+              block_id: "approve_row",
+              elements: [
+                {
+                  type: "button",
+                  action_id: "approve_selected",
+                  text: { type: "plain_text", text: "Approve" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "approve_selected",
+        block_id: "approve_row",
+        value: "go",
+        text: { type: "plain_text", text: "Approve" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+    expectRecordFields(chatUpdateCall(app), {
+      channel: "C6",
+      ts: "446.557",
+      blocks: [
+        { type: "divider" },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: ":white_check_mark: *Approve* selected by <@U446>",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("keeps non-bulk deploy_all_services rows while another individual control remains", async () => {
     enqueueSystemEventMock.mockClear();
     const { ctx, app, getHandler } = createContext();

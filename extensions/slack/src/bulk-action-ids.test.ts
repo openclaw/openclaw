@@ -4,20 +4,13 @@ import {
   buildOpenClawBulkActionsBlock,
   isOpenClawBulkActionId,
   isOpenClawBulkActionsBlock,
-  OPENCLAW_SLACK_BULK_ACTION_IDS,
+  isSlackBulkActionsBlock,
   SLACK_BULK_ACTIONS_BLOCK_ID_PREFIX,
   SLACK_BULK_DESELECT_ALL_ACTION_ID,
   SLACK_BULK_SELECT_ALL_ACTION_ID,
 } from "./bulk-action-ids.js";
 
 describe("OpenClaw bulk action contract", () => {
-  it("defines a closed OpenClaw-owned action-id set", () => {
-    expect([...OPENCLAW_SLACK_BULK_ACTION_IDS]).toEqual([
-      SLACK_BULK_SELECT_ALL_ACTION_ID,
-      SLACK_BULK_DESELECT_ALL_ACTION_ID,
-    ]);
-  });
-
   it.each([
     { actionId: SLACK_BULK_SELECT_ALL_ACTION_ID, expected: true },
     { actionId: SLACK_BULK_DESELECT_ALL_ACTION_ID, expected: true },
@@ -39,11 +32,25 @@ describe("OpenClaw bulk action contract", () => {
       SLACK_BULK_DESELECT_ALL_ACTION_ID,
     ]);
     expect(isOpenClawBulkActionsBlock(block)).toBe(true);
+    expect(isSlackBulkActionsBlock(block)).toBe(true);
+  });
+
+  it("recognizes legacy bare select_all/deselect_all rows", () => {
+    expect(
+      isSlackBulkActionsBlock({
+        type: "actions",
+        block_id: "legacy_bulk_row",
+        elements: [
+          { action_id: "select_all" },
+          { action_id: "deselect_all" },
+        ],
+      }),
+    ).toBe(true);
   });
 
   it("rejects generic rows even when action IDs end with _all", () => {
     expect(
-      isOpenClawBulkActionsBlock({
+      isSlackBulkActionsBlock({
         type: "actions",
         block_id: "custom_bulk_row",
         elements: [{ action_id: "archive_all" }, { action_id: "restore_all" }],
@@ -53,10 +60,20 @@ describe("OpenClaw bulk action contract", () => {
 
   it("rejects rows with the marker but non-OpenClaw action IDs", () => {
     expect(
-      isOpenClawBulkActionsBlock({
+      isSlackBulkActionsBlock({
         type: "actions",
         block_id: `${SLACK_BULK_ACTIONS_BLOCK_ID_PREFIX}actions`,
         elements: [{ action_id: "select_all" }, { action_id: "deselect_all" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("does not treat deploy_all_services rows as legacy bulk", () => {
+    expect(
+      isSlackBulkActionsBlock({
+        type: "actions",
+        block_id: "deploy_row",
+        elements: [{ action_id: "deploy_all_services" }],
       }),
     ).toBe(false);
   });

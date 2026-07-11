@@ -7,10 +7,13 @@ export const SLACK_BULK_ACTIONS_BLOCK_ID_PREFIX = "openclaw:bulk:";
 export const SLACK_BULK_SELECT_ALL_ACTION_ID = "openclaw:bulk:select_all";
 export const SLACK_BULK_DESELECT_ALL_ACTION_ID = "openclaw:bulk:deselect_all";
 
-export const OPENCLAW_SLACK_BULK_ACTION_IDS = new Set<string>([
+const OPENCLAW_SLACK_BULK_ACTION_IDS = Object.freeze([
   SLACK_BULK_SELECT_ALL_ACTION_ID,
   SLACK_BULK_DESELECT_ALL_ACTION_ID,
-]);
+] as const);
+
+/** Legacy bare IDs emitted before the OpenClaw marker contract. */
+const LEGACY_SLACK_BULK_ACTION_IDS = Object.freeze(["select_all", "deselect_all"] as const);
 
 type SlackBulkActionElement = {
   type: "button";
@@ -26,7 +29,11 @@ type SlackBulkActionsBlock = {
 };
 
 export function isOpenClawBulkActionId(actionId: string): boolean {
-  return OPENCLAW_SLACK_BULK_ACTION_IDS.has(actionId);
+  return (OPENCLAW_SLACK_BULK_ACTION_IDS as readonly string[]).includes(actionId);
+}
+
+function isLegacySlackBulkActionId(actionId: string): boolean {
+  return (LEGACY_SLACK_BULK_ACTION_IDS as readonly string[]).includes(actionId);
 }
 
 export function isOpenClawBulkActionsBlock(block: {
@@ -45,6 +52,33 @@ export function isOpenClawBulkActionsBlock(block: {
     (element) =>
       typeof element.action_id === "string" && isOpenClawBulkActionId(element.action_id),
   );
+}
+
+function isLegacySlackBulkActionsBlock(block: {
+  type?: string;
+  block_id?: string;
+  elements?: Array<{ action_id?: string }>;
+}): boolean {
+  if (block.type !== "actions" || !Array.isArray(block.elements) || block.elements.length === 0) {
+    return false;
+  }
+  const blockId = typeof block.block_id === "string" ? block.block_id : "";
+  if (blockId.startsWith(SLACK_BULK_ACTIONS_BLOCK_ID_PREFIX)) {
+    return false;
+  }
+  return block.elements.every(
+    (element) =>
+      typeof element.action_id === "string" && isLegacySlackBulkActionId(element.action_id),
+  );
+}
+
+/** Classify bulk rows for confirmation cleanup (OpenClaw marker or legacy bare IDs). */
+export function isSlackBulkActionsBlock(block: {
+  type?: string;
+  block_id?: string;
+  elements?: Array<{ action_id?: string }>;
+}): boolean {
+  return isOpenClawBulkActionsBlock(block) || isLegacySlackBulkActionsBlock(block);
 }
 
 export function buildOpenClawBulkActionsBlock(params?: {
