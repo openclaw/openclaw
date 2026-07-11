@@ -1,6 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForFollowupQueueDrain } from "./drain-all.js";
 import { FOLLOWUP_QUEUES, getFollowupQueue } from "./state.js";
+
+beforeEach(() => {
+  FOLLOWUP_QUEUES.clear();
+});
 
 afterEach(() => {
   FOLLOWUP_QUEUES.clear();
