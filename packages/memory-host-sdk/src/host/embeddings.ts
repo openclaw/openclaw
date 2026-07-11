@@ -150,7 +150,10 @@ export async function createLocalEmbeddingProviderInProcess(
             logLevel: LlamaLogLevel.error,
           });
           llama = await disposeAndThrowIfClosed(nextLlama);
-          runtimeFacts = await readLlamaRuntimeFacts(llama);
+          runtimeFacts = {
+            ...(await readLlamaRuntimeFacts(llama)),
+            context: { requestedSize: contextSize },
+          };
         }
         if (!embeddingModel) {
           const resolved = await resolveModelFile(modelPath, {
@@ -211,6 +214,7 @@ export async function createLocalEmbeddingProviderInProcess(
           ...runtimeFacts,
           engine: "llama.cpp",
           state: "failed",
+          context: { requestedSize: contextSize },
           loadError: formatRuntimeLoadError(err),
         };
         initPromise = null;

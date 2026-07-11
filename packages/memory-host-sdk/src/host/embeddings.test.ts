@@ -302,7 +302,37 @@ describe("local embedding provider", () => {
       backend: "metal",
       buildType: "prebuilt",
       deviceNames: ["Apple M4 Max"],
+      context: {
+        requestedSize: 4096,
+      },
       loadError: "GGUF load failed",
+    });
+  });
+
+  it("retains requested context when llama runtime initialization fails", async () => {
+    const runtime = mockLocalEmbeddingRuntime();
+    runtime.getLlama.mockRejectedValueOnce(new Error("No compatible llama.cpp backend"));
+    const provider = await createLocalEmbeddingProviderInProcess({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+      local: {
+        contextSize: 2048,
+      },
+    });
+
+    await expect(provider.embedQuery("runtime failure")).rejects.toThrow(
+      "No compatible llama.cpp backend",
+    );
+
+    expect(getLocalEmbeddingRuntimeFacts(provider)).toEqual({
+      engine: "llama.cpp",
+      state: "failed",
+      context: {
+        requestedSize: 2048,
+      },
+      loadError: "No compatible llama.cpp backend",
     });
   });
 
