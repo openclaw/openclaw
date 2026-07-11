@@ -38,6 +38,7 @@ import {
   type MatrixIdbSnapshotRecord,
   type MatrixLegacyCryptoMigrationState,
 } from "./src/matrix/crypto-state-store.js";
+import { matrixInboundDedupeStateMigration } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import { readLegacyMatrixIdbSnapshotState } from "./src/matrix/sdk/idb-persistence.js";
 import type { MatrixStoredRecoveryKey } from "./src/matrix/sdk/types.js";
 
@@ -137,6 +138,7 @@ async function archiveLegacyMatrixStateFile(params: {
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
+  matrixInboundDedupeStateMigration,
   {
     id: "matrix-storage-meta-json-to-plugin-state",
     label: "Matrix storage metadata",
