@@ -1551,6 +1551,9 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Check formatting
+        run: pnpm format:check
+
       - name: Checkout ClawHub docs source
         run: |
           set -euo pipefail
@@ -1596,9 +1599,7 @@ jobs:
       - name: Check docs
         env:
           OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: ${{ github.workspace }}/clawhub-source
-        run: |
-          pnpm check:docs
-          pnpm format:check
+        run: pnpm check:docs
 
   skills-python:
     permissions:
