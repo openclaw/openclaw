@@ -489,6 +489,21 @@ describe("plugin registry runtime config scope", () => {
       }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
     await expect(
+      otherApi.runtime.agent.runEmbeddedAgent({
+        ...runParams,
+        agentId: "main",
+        sessionId: ordinaryEntry.sessionId,
+        sessionKey: ordinaryKey,
+        sessionFile: reservedEntry.sessionFile,
+        sessionTarget: {
+          agentId: "main",
+          sessionId: ordinaryEntry.sessionId,
+          sessionKey: ordinaryKey,
+          storePath: "/tmp/unrelated-sessions.json",
+        },
+      }),
+    ).rejects.toThrow("only with its exact session target identity");
+    await expect(
       otherApi.runtime.subagent.run({ sessionKey: reservedKey, message: "continue" }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
     await expect(

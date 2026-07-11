@@ -2940,6 +2940,26 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             ...(storePath ? { storePath } : {}),
           })
         : undefined;
+      const targetSessionId = normalizeOptionalString(target?.sessionId);
+      const targetAgentId = normalizeOptionalString(target?.agentId);
+      const directSessionId = normalizeOptionalString(params.sessionId);
+      const directAgentId = normalizeOptionalString(params.agentId);
+      const sessionFile = normalizeOptionalString(params.sessionFile);
+      if (target) {
+        const targetIdentityMatches =
+          targetSessionKey === sessionKey &&
+          Boolean(storePath) &&
+          Boolean(entry) &&
+          targetSessionId === entry?.sessionId &&
+          directSessionId === entry?.sessionId &&
+          targetAgentId === directAgentId &&
+          (!sessionFile || sessionFile === entry?.sessionFile);
+        if (!targetIdentityMatches) {
+          throw new Error(
+            `Plugin "${pluginId}" may execute a persisted session only with its exact session target identity.`,
+          );
+        }
+      }
       const locked =
         sessionKey && entry
           ? resolveLockedSessionHarnessRegistration(sessionKey, entry, "run")
@@ -2949,21 +2969,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         if (!locked.registration.harness.delegatedExecutionPluginIds?.includes(pluginId)) {
           assertLockedSessionEntryOwned(sessionKey, entry, "run");
         }
-        const targetSessionId = normalizeOptionalString(target?.sessionId);
-        const targetAgentId = normalizeOptionalString(target?.agentId);
-        const directAgentId = normalizeOptionalString(params.agentId);
         const requestedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
         const requestedRuntimeOverride = normalizeOptionalAgentRuntimeId(
           params.agentHarnessRuntimeOverride,
         );
-        const sessionFile = normalizeOptionalString(params.sessionFile);
         const identityMatches =
-          targetSessionKey === sessionKey &&
-          Boolean(storePath) &&
+          Boolean(target) &&
           targetSessionId === entry.sessionId &&
-          params.sessionId === entry.sessionId &&
-          (!targetAgentId || !directAgentId || targetAgentId === directAgentId) &&
-          (!sessionFile || sessionFile === entry.sessionFile);
+          directSessionId === entry.sessionId;
         const harnessMatches =
           params.modelSelectionLocked === true &&
           requestedHarnessId === locked.harnessId &&
