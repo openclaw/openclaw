@@ -687,7 +687,7 @@ describe("chat compaction divider", () => {
 });
 
 describe("direct thread avatar mode", () => {
-  function sessionsListWithKind(sessionKey: string, kind: "direct" | "group") {
+  function sessionsListWithKind(sessionKey: string, kind: "direct" | "group" | "global") {
     return {
       ts: 0,
       path: "",
@@ -771,6 +771,58 @@ describe("direct thread avatar mode", () => {
     });
     expect(
       requireElement(group, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps avatars when a main alias selects the canonical global row", () => {
+    // scope=global: sessions.list only carries the literal "global" row while
+    // the pane navigates via agent:<id>:main; the host resolves the alias.
+    const aliasedGlobal = renderChatView({
+      sessionKey: "agent:work:main",
+      sessions: sessionsListWithKind("global", "global"),
+      sessionHost: { agentsList: { defaultId: "work", mainKey: "main" }, hello: null },
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(aliasedGlobal, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
+  it("prefers the equivalent direct row over a global row for main aliases", () => {
+    const sessions = {
+      ts: 0,
+      path: "",
+      count: 2,
+      defaults: { modelProvider: "openai", model: "gpt-5.5", contextTokens: 200_000 },
+      sessions: [
+        { key: "global", kind: "global", updatedAt: 2 },
+        { key: "agent:work:main", kind: "direct", updatedAt: 1 },
+      ],
+    };
+    const direct = renderChatView({
+      sessionKey: "agent:work:main",
+      sessions,
+      sessionHost: { agentsList: { defaultId: "work", mainKey: "main" }, hello: null },
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(direct, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats explicit agent global keys as global even without a session row", () => {
+    const globalAlias = renderChatView({
+      sessionKey: "agent:work:global",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(globalAlias, ".chat-thread", "chat thread").classList.contains(
         "chat-thread--direct",
       ),
     ).toBe(false);
