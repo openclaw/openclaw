@@ -124,64 +124,88 @@ export function retireTrajectoryPathForDisposal(
 }
 
 /**
- * Resolves a candidate path to its registered filePath/incarnation, disambiguating
- * a sanitized-name collision against a different live/retired owner. Runs entirely
- * inside withTrajectoryPathLock so a claim can never interleave with a concurrent
+ * The lease a writer holds over a canonical trajectory path. "retired" carries no
+ * path: it is a closed signal that the claim was rejected because the path is
+ * tombstoned and the caller must NOT create any artifact (see the retired branch
+ * in acquireTrajectoryWriterLease).
+ */
+export type TrajectoryWriterLeaseResult =
+  | { status: "acquired"; filePath: string; incarnation: number }
+  | { status: "retired" };
+
+/**
+ * Resolves a candidate path to a lease. Three outcomes: a fresh/live-reconnect
+ * claim ("acquired"); a same-owner claim on a RETIRED path, which is rejected
+ * outright ("retired", see below); or a different-owner sanitized-name collision,
+ * which disambiguates to a hash-suffixed sibling and retries. Runs entirely inside
+ * withTrajectoryPathLock so a claim can never interleave with a concurrent
  * delete/retire turn for the same canonical path (P1-A) — including the awaited
  * archive rename inside that turn, since the whole turn (bump + rename) shares
  * one lock admission and this claim queues behind it rather than racing it.
  *
- * onClaimed, when provided, runs INSIDE the same locked turn immediately after a
- * successful (non-collision) claim — before the lock releases. The runtime file
- * and its discovery pointer are one incarnation-owned artifact pair; publishing
- * the pointer here (rather than after acquireTrajectoryWriterLease returns) closes
- * the window where a concurrent delete could retire the path between the claim
- * and the publish, which would otherwise either leave a pointer-only orphan (the
- * publish lands after delete already ran) or let delete's own pointer removal
- * clobber a freshly published pointer for a still-live claim (round 4 P1).
+ * onClaimed, when provided, runs INSIDE the same locked turn immediately after an
+ * "acquired" claim — before the lock releases, and never for a rejected retired
+ * claim. The runtime file and its discovery pointer are one incarnation-owned
+ * artifact pair; publishing the pointer here (rather than after
+ * acquireTrajectoryWriterLease returns) closes the window where a concurrent
+ * delete could retire the path between the claim and the publish, which would
+ * otherwise either leave a pointer-only orphan (the publish lands after delete
+ * already ran) or let delete's own pointer removal clobber a freshly published
+ * pointer for a still-live claim (round 4 P1).
  */
 export async function acquireTrajectoryWriterLease(params: {
   sessionId: string;
   candidatePath: string;
   onClaimed?: (claim: { filePath: string; incarnation: number }) => void;
-}): Promise<{ filePath: string; incarnation: number }> {
+}): Promise<TrajectoryWriterLeaseResult> {
   let candidatePath = params.candidatePath;
   for (;;) {
     const canonicalPath = canonicalizeTrajectoryPath(candidatePath);
-    const claim = await withTrajectoryPathLock(canonicalPath, () => {
+    const outcome = await withTrajectoryPathLock(canonicalPath, () => {
       const existing = registry.get(canonicalPath);
-      const claimed = (incarnation: number) => {
+      const acquired = (incarnation: number) => {
         params.onClaimed?.({ filePath: candidatePath, incarnation });
-        return { collision: false as const, incarnation };
+        return { kind: "acquired" as const, incarnation };
       };
       if (!existing) {
-        return claimed(
+        return acquired(
           claimTrajectoryPathIncarnation(canonicalPath, {
             ownerSessionId: params.sessionId,
             retired: false,
           }),
         );
       }
-      if (existing.ownerSessionId === params.sessionId && !existing.retired) {
-        // Same live owner reconnecting (process restart, or a fresh writer
-        // object requested after writers-Map eviction while the session is
-        // still active) — reuse the existing incarnation unchanged.
-        return claimed(existing.incarnation);
+      if (existing.ownerSessionId === params.sessionId) {
+        if (!existing.retired) {
+          // Same live owner reconnecting (process restart, or a fresh writer
+          // object requested after writers-Map eviction while the session is
+          // still active) — reuse the existing incarnation unchanged.
+          return acquired(existing.incarnation);
+        }
+        // Same owner, but the path was already RETIRED by an explicit
+        // reset/delete disposal (retired is set exclusively there, cleanup.ts).
+        // Every reset mints a NEW session id for the continuation while the old
+        // id's path is tombstoned, so a same-owner claim on a retired path is
+        // never a legitimate continuation — it is a late straggler (async
+        // post-turn hook, or an in-flight run reaching recorder creation) racing
+        // the disposal of the very session it belongs to. Reject it: creating a
+        // fresh disambiguated pair here would resurrect a deleted session as a
+        // live, bare artifact pair AFTER its deletion. No pointer, no runtime
+        // file, no registry mutation — the tombstoned path stays dead.
+        log.debug(
+          `rejected straggler trajectory claim on retired path ${canonicalPath} (session ${params.sessionId})`,
+        );
+        return { kind: "retired" as const };
       }
-      // Either a different owner already holds this canonical path (F4/F6),
-      // or this owner's own path was already retired by an explicit
-      // reset/delete disposal. retired is set exclusively by that disposal
-      // (cleanup.ts), so a same-owner claim reaching here is never a
-      // legitimate new session reusing an old id (session ids are random
-      // UUIDs) — it is a late straggler write racing the disposal (e.g. an
-      // async post-turn hook still finishing against the session that was
-      // just reset/deleted). Disambiguating it to a fresh sibling path,
-      // exactly like a cross-owner collision, keeps the tombstoned canonical
-      // path permanently dead instead of letting the straggler resurrect it.
-      return { collision: true as const };
+      // A DIFFERENT owner holds this canonical path (sanitized-name collision,
+      // F4/F6): disambiguate to a hash-suffixed sibling and retry.
+      return { kind: "collision" as const };
     });
-    if (!claim.collision) {
-      return { filePath: candidatePath, incarnation: claim.incarnation };
+    if (outcome.kind === "acquired") {
+      return { status: "acquired", filePath: candidatePath, incarnation: outcome.incarnation };
+    }
+    if (outcome.kind === "retired") {
+      return { status: "retired" };
     }
     candidatePath = disambiguateTrajectoryCandidatePath(candidatePath, params.sessionId);
   }

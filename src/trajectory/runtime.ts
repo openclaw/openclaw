@@ -528,6 +528,13 @@ export async function createTrajectoryRuntimeRecorder(
       });
     },
   });
+  if (lease.status === "retired") {
+    // The path was tombstoned by a reset/delete disposal for this same session:
+    // this recorder belongs to a late straggler racing that disposal. Disabling
+    // it (no writer, no runtime file) is what keeps the deletion final — see the
+    // retired branch in acquireTrajectoryWriterLease.
+    return null;
+  }
   const filePath = lease.filePath;
   const maxRuntimeFileBytes = Math.max(
     1,
