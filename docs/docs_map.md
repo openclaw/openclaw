@@ -1498,6 +1498,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Enablement And Storage
   - H2: Environment Variables
   - H2: Retention And Privacy
+  - H2: Durable Wake Queue And Attention Obligations
   - H2: Related
 
 ## cli/flows.md
