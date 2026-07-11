@@ -2,6 +2,9 @@ import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+export const SUBAGENT_HEALTH_STALE_AFTER_MS =
+  process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 60_000;
+
 export type SubagentHealthStatus =
   | "active"
   | "stale"

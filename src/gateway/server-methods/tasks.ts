@@ -12,6 +12,7 @@ import {
   validateTasksListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { createSubagentHealthResolver } from "../../agents/subagent-registry-read.js";
 import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js";
 import { getTaskById, listTaskRecordsUnsorted } from "../../tasks/runtime-internal.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
@@ -131,8 +132,9 @@ export const tasksHandlers: GatewayRequestHandlers = {
       });
     const page = filtered.slice(cursor, cursor + limit);
     const nextOffset = cursor + page.length;
+    const resolveSubagentHealth = createSubagentHealthResolver();
     respond(true, {
-      tasks: page.map((task) => mapTaskSummary(task)),
+      tasks: page.map((task) => mapTaskSummary(task, { resolveSubagentHealth })),
       ...(nextOffset < filtered.length ? { nextCursor: String(nextOffset) } : {}),
     });
   },

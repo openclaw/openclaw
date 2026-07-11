@@ -1,6 +1,10 @@
 // Public task summaries keep task-registry internals and unbounded status text
 // out of gateway responses and events.
 import type { TaskSummary } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  createSubagentHealthResolver,
+  resolveSubagentHealthForTask,
+} from "../../agents/subagent-registry-read.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import {
   TASK_STATUS_DETAIL_MAX_CHARS,
@@ -9,6 +13,9 @@ import {
 } from "../../tasks/task-status.js";
 
 type TaskLedgerStatus = TaskSummary["status"];
+type MapTaskSummaryOptions = {
+  resolveSubagentHealth?: ReturnType<typeof createSubagentHealthResolver>;
+};
 
 const TASK_STATUS_TO_LEDGER_STATUS: Record<TaskStatus, TaskLedgerStatus> = {
   queued: "queued",
@@ -40,10 +47,12 @@ function sanitizeOptionalTaskText(
   return sanitized || undefined;
 }
 
-export function mapTaskSummary(task: TaskRecord): TaskSummary {
+export function mapTaskSummary(task: TaskRecord, options: MapTaskSummaryOptions = {}): TaskSummary {
   const progressSummary = sanitizeOptionalTaskText(task.progressSummary);
   const terminalSummary = sanitizeOptionalTaskText(task.terminalSummary, { errorContext: true });
   const error = sanitizeOptionalTaskText(task.error, { errorContext: true });
+  const subagentHealth =
+    options.resolveSubagentHealth?.(task) ?? resolveSubagentHealthForTask(task);
   return {
     id: task.taskId,
     taskId: task.taskId,
@@ -66,5 +75,6 @@ export function mapTaskSummary(task: TaskRecord): TaskSummary {
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),
+    ...(subagentHealth ? { subagentHealth } : {}),
   };
 }

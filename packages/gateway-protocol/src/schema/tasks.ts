@@ -20,6 +20,37 @@ export const TaskLedgerStatusSchema = Type.Union([
 
 const TimestampSchema = Type.Union([Type.String(), Type.Integer({ minimum: 0 })]);
 
+export const SubagentHealthStatusSchema = Type.Union([
+  Type.Literal("active"),
+  Type.Literal("stale"),
+  Type.Literal("timed_out"),
+  Type.Literal("delivery_pending"),
+  Type.Literal("delivery_failed"),
+  Type.Literal("cleanup_pending"),
+  Type.Literal("orphaned"),
+  Type.Literal("cancel_reconciling"),
+  Type.Literal("terminal"),
+]);
+
+export const SubagentHealthNextActionSchema = Type.Union([
+  Type.Literal("none"),
+  Type.Literal("recover_orphan"),
+  Type.Literal("finalize_timeout"),
+  Type.Literal("retry_delivery"),
+  Type.Literal("resume_cleanup"),
+  Type.Literal("wait_cancel_reconciliation"),
+]);
+
+export const SubagentHealthSchema = Type.Object(
+  {
+    status: SubagentHealthStatusSchema,
+    nextAction: SubagentHealthNextActionSchema,
+    retryable: Type.Boolean(),
+    reason: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 /** Public task summary returned by task list/get/cancel responses. */
 export const TaskSummarySchema = Type.Object(
   {
@@ -44,6 +75,7 @@ export const TaskSummarySchema = Type.Object(
     progressSummary: Type.Optional(Type.String()),
     terminalSummary: Type.Optional(Type.String()),
     error: Type.Optional(Type.String()),
+    subagentHealth: Type.Optional(SubagentHealthSchema),
   },
   { additionalProperties: false },
 );

@@ -18,6 +18,10 @@ import {
 import { saveTaskRegistryStateToSqlite } from "../../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "../../agents/subagent-registry.js";
 import { tasksHandlers } from "./tasks.js";
 import type { RespondFn } from "./types.js";
 
@@ -59,6 +63,7 @@ beforeEach(async () => {
 afterEach(async () => {
   resetTaskRegistryControlRuntimeForTests();
   resetTaskRegistryForTests();
+  resetSubagentRegistryForTests({ persist: false });
   stateDirEnvSnapshot.restore();
   await fs.rm(stateDir, { recursive: true, force: true });
 });
@@ -263,6 +268,48 @@ describe("tasks gateway handlers", () => {
 
     const workerView = await runTaskHandler("tasks.list", { agentId: "worker" });
     expect(workerView.payload?.tasks?.map((task) => task.taskId)).toEqual([workerTask.taskId]);
+  });
+
+  it("includes subagent health in task list and get summaries", async () => {
+    const now = Date.now();
+    const task = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:child-health",
+      runId: "run-health-visible",
+      task: "Observe subagent health",
+      status: "running",
+      deliveryStatus: "pending",
+      lastEventAt: now - 120_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-health-visible",
+      childSessionKey: "agent:main:subagent:child-health",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "Observe subagent health",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      startedAt: now - 119_000,
+      execution: { status: "running" },
+    });
+
+    const list = await runTaskHandler("tasks.list", { agentId: "main" });
+    const listedTask = list.payload?.tasks?.find((item) => item.taskId === task.taskId);
+    expect(listedTask?.subagentHealth).toMatchObject({
+      status: "stale",
+      retryable: true,
+      nextAction: "recover_orphan",
+    });
+
+    const { payload } = await getTaskPayload(task.taskId);
+    expect(payload?.task?.subagentHealth).toMatchObject({
+      status: "stale",
+      retryable: true,
+      nextAction: "recover_orphan",
+    });
   });
 
   it("gets completed tasks with stable completed status", async () => {

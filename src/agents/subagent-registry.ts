@@ -58,7 +58,11 @@ import {
   emitSubagentEndedHookOnce,
   resolveLifecycleOutcomeFromRunOutcome,
 } from "./subagent-registry-completion.js";
-import { classifySubagentHealth, type SubagentHealth } from "./subagent-health.js";
+import {
+  SUBAGENT_HEALTH_STALE_AFTER_MS,
+  classifySubagentHealth,
+  type SubagentHealth,
+} from "./subagent-health.js";
 import {
   ANNOUNCE_EXPIRY_MS,
   MAX_ANNOUNCE_RETRY_COUNT,
@@ -249,7 +253,7 @@ const SESSION_RUN_TTL_MS = 5 * 60_000; // 5 minutes
 /** Absolute TTL for orphaned pendingLifecycleError / pendingLifecycleTimeout entries. */
 const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000; // 5 minutes
 /** Grace period before treating a "running" subagent without a live run context as stale. */
-const STALE_ACTIVE_SUBAGENT_GRACE_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 60_000;
+const STALE_ACTIVE_SUBAGENT_GRACE_MS = SUBAGENT_HEALTH_STALE_AFTER_MS;
 const SUSPENDED_DELIVERY_CRON_EXPIRY_MS = 2 * 60 * 60_000;
 const SUSPENDED_DELIVERY_SUBAGENT_EXPIRY_MS = 6 * 60 * 60_000;
 const SUSPENDED_DELIVERY_INTERACTIVE_EXPIRY_MS = 24 * 60 * 60_000;

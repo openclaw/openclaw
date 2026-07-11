@@ -4,6 +4,7 @@
  * Combines persisted snapshots with in-memory live runs for UI, announce, control, and recovery paths.
  */
 import { getAgentRunContext } from "../infra/agent-events.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildSubagentRunReadIndexFromRuns,
@@ -15,6 +16,11 @@ import {
 } from "./subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  SUBAGENT_HEALTH_STALE_AFTER_MS,
+  classifySubagentHealth,
+  type SubagentHealth,
+} from "./subagent-health.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 export {
@@ -113,6 +119,50 @@ export function getSessionDisplaySubagentRunByChildSessionKey(
   }
 
   return getSubagentRunByChildSessionKey(key);
+}
+
+function getSubagentRunForTask(
+  task: TaskRecord,
+  runs: Map<string, SubagentRunRecord> = getSubagentRunsSnapshotForRead(subagentRuns),
+): SubagentRunRecord | null {
+  if (task.runtime !== "subagent") {
+    return null;
+  }
+  if (task.runId) {
+    const exact = runs.get(task.runId);
+    if (exact) {
+      return exact;
+    }
+  }
+  return task.childSessionKey
+    ? getSubagentRunByChildSessionKeyFromRuns(runs, task.childSessionKey)
+    : null;
+}
+
+export function createSubagentHealthResolver(
+  now = Date.now(),
+): (task: TaskRecord) => SubagentHealth | undefined {
+  const runs = getSubagentRunsSnapshotForRead(subagentRuns);
+  return (task) => {
+    const run = getSubagentRunForTask(task, runs);
+    if (!run) {
+      return undefined;
+    }
+    return classifySubagentHealth({
+      run,
+      task,
+      now,
+      staleAfterMs: SUBAGENT_HEALTH_STALE_AFTER_MS,
+    });
+  };
+}
+
+/** Returns the current diagnostic health for a subagent-backed task. */
+export function resolveSubagentHealthForTask(
+  task: TaskRecord,
+  now = Date.now(),
+): SubagentHealth | undefined {
+  return createSubagentHealthResolver(now)(task);
 }
 
 /** Returns the most recently created run for a child session from readable registry state. */
