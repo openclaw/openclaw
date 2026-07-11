@@ -162,7 +162,9 @@ describe("buildOpenAIProvider", () => {
       groupLabel: "OpenAI",
       groupHint: "ChatGPT/Codex sign-in or API key",
     });
-    expect(apiKey?.starterModel).toBe("openai/gpt-5.6");
+    // extended-stable predates #101132, so the auth method carries no
+    // starterModel field; the GPT-5.6 API-key default is covered by the
+    // auth contract test and the preserve-selection test below.
   });
 
   it("preserves existing model selection during non-interactive API key setup", async () => {
