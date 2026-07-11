@@ -21,6 +21,7 @@ import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js"
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { TaskSystemAuditCode, TaskSystemAuditSeverity } from "./tasks-audit-system.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
@@ -220,6 +221,27 @@ describe("tasks commands", () => {
         runtime: null,
         status: null,
         tasks: [jsonRoundTrip(task)],
+      });
+    });
+  });
+
+  it("reports blank audit filters as absent in command JSON output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const runtime = createRuntime();
+      await tasksAuditCommand(
+        {
+          json: true,
+          severity: "  " as TaskSystemAuditSeverity,
+          code: "\t" as TaskSystemAuditCode,
+        },
+        runtime,
+      );
+
+      expect(readFirstJsonLog(runtime)).toMatchObject({
+        filters: {
+          severity: null,
+          code: null,
+        },
       });
     });
   });
