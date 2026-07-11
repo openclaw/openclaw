@@ -483,18 +483,30 @@ function envProvider() {
   return "";
 }
 
-function configProvider() {
-  try {
-    const config = readFileSync(resolve(repoRoot, ".crabbox.yaml"), "utf8");
-    const match = config.match(/^provider:\s*([^\s#]+)/m);
-    return match?.[1] ?? "aws";
-  } catch {
-    return "aws";
+function effectiveConfigProvider() {
+  const config = checkedOutput(binary, ["config", "show", "--json"]);
+  if (config.status !== 0) {
+    console.error(
+      "[crabbox] could not resolve the effective provider from `crabbox config show --json`; fix the Crabbox config or select --provider explicitly",
+    );
+    process.exit(2);
   }
+  try {
+    const provider = JSON.parse(config.stdout || config.text)?.provider;
+    if (typeof provider === "string" && provider.trim()) {
+      return provider.trim();
+    }
+  } catch {
+    // Provider-specific wrapper behavior must not guess when Crabbox config is unreadable.
+  }
+  console.error(
+    "[crabbox] effective Crabbox config did not contain a valid provider; fix the config or select --provider explicitly",
+  );
+  process.exit(2);
 }
 
 function configuredProvider() {
-  return envProvider() || configProvider();
+  return envProvider() || effectiveConfigProvider();
 }
 
 const runValueOptions = new Set([
@@ -682,6 +694,9 @@ function selectedProvider(commandArgs, advertisedProviders = []) {
   const explicitProvider = commandProvider(commandArgs);
   if (explicitProvider) {
     return explicitProvider;
+  }
+  if (commandArgs.length === 0 || commandArgs[0].startsWith("-")) {
+    return "";
   }
   if (shouldPreferAzureForWindows(commandArgs, advertisedProviders)) {
     return "azure";
