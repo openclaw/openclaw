@@ -792,8 +792,8 @@ async function processDiscordMessageInner(
       draftStream &&
       isFinal &&
       draftPreview.isProgressMode &&
-      draftPreview.hasProgressDraftStarted &&
-      !deliverablePayload.isError;
+      !deliverablePayload.isError &&
+      draftPreview.consumeProgressDraftCollapse();
     if (shouldCollapseProgressDraft && draftStream) {
       await draftPreview.flush();
       // The activity receipt rides on the final answer and the working draft

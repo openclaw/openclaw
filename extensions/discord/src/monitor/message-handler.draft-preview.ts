@@ -76,16 +76,10 @@ export function createDiscordDraftPreviewController(params: {
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
   let finalReplyDelivered = false;
-  // Gate cancellation (e.g. on abort) can clear hasStarted before the collapse
-  // check in shouldCollapseProgressDraft, causing a stuck progress bar when the
-  // draft was actually started. Snapshot hasStarted at markFinalReplyStarted so
-  // collapse eligibility survives gate cancellation.
+  // Final delivery can cancel the gate before Discord consumes collapse
+  // eligibility, so keep the pre-final state until that transition occurs.
   let progressDraftStartedBeforeFinal = false;
-  // Prevent re-collapse after markPreviewFinalized has already turned the
-  // draft into a summary. Without this guard a subsequent final-payload
-  // delivery in the same turn would re-trigger collapse on the now-cleaned
-  // stream (because the gate is still active), corrupting downstream delivery.
-  let progressDraftCollapsed = false;
+  let progressDraftCollapseConsumed = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
   const narrationProgressEnabled =
@@ -161,10 +155,18 @@ export function createDiscordDraftPreviewController(params: {
     get isProgressMode() {
       return discordStreamMode === "progress";
     },
-    get hasProgressDraftStarted() {
-      return (
-        !progressDraftCollapsed && (progressDraft.hasStarted || progressDraftStartedBeforeFinal)
-      );
+    consumeProgressDraftCollapse() {
+      if (
+        progressDraftCollapseConsumed ||
+        (!progressDraft.hasStarted && !progressDraftStartedBeforeFinal)
+      ) {
+        return false;
+      }
+      // One final owns the receipt-and-clear transition. Later final payloads
+      // must not reuse the sticky pre-final latch after the draft is gone.
+      progressDraftCollapseConsumed = true;
+      progressDraftStartedBeforeFinal = false;
+      return true;
     },
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
@@ -178,8 +180,6 @@ export function createDiscordDraftPreviewController(params: {
       progressDraft.markFinalReplyDelivered();
     },
     markPreviewFinalized() {
-      progressDraftCollapsed = true;
-      progressDraftStartedBeforeFinal = false;
       finalizedViaPreviewMessage = true;
     },
     disableBlockStreamingForDraft: draftStream ? true : undefined,
@@ -289,8 +289,10 @@ export function createDiscordDraftPreviewController(params: {
     },
     handleAssistantMessageBoundary() {
       // Queued/followup turns need a fresh progress draft after the primary final.
-      progressDraftCollapsed = false;
-      progressDraft.beginNewTurn();
+      if (progressDraft.beginNewTurn()) {
+        progressDraftCollapseConsumed = false;
+        progressDraftStartedBeforeFinal = false;
+      }
       if (discordStreamMode === "progress") {
         return;
       }

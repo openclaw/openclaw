@@ -733,13 +733,20 @@ function createMockDraftStreamForTest() {
   return draftStream;
 }
 
+function getDeliveredFinalTexts(): string[] {
+  return deliverDiscordReply.mock.calls.flatMap((call) => {
+    const params = requireRecord(call[0], "deliverDiscordReply params");
+    if (params.kind !== "final") {
+      return [];
+    }
+    return ((params as { replies?: Array<{ text?: string }> }).replies ?? []).flatMap((reply) =>
+      typeof reply.text === "string" ? [reply.text] : [],
+    );
+  });
+}
+
 function expectFinalWithProgressReceipt(answer: string, ...parts: string[]) {
-  const finalParams = deliverDiscordReply.mock.calls
-    .map((call) => requireRecord(call[0], "deliverDiscordReply params"))
-    .find((params) => params.kind === "final");
-  expect(finalParams).toBeDefined();
-  const replies = (finalParams as { replies?: Array<{ text?: string }> }).replies;
-  const text = replies?.[0]?.text ?? "";
+  const text = getDeliveredFinalTexts()[0] ?? "";
   const receiptStart = text.lastIndexOf("\n-# ");
   expect(receiptStart).toBeGreaterThan(-1);
   expect(text.slice(0, receiptStart)).toBe(answer);
@@ -3352,6 +3359,67 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.messageId()).toBeUndefined();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
     expectFinalWithProgressReceipt("delivery survived", "🛠️ 1 tool call");
+  });
+
+  it("consumes a progress draft once across repeated final payloads", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
+      await params?.dispatcher.sendFinalReply({ text: "first answer" });
+      await params?.dispatcher.waitForIdle();
+      await params?.dispatcher.sendFinalReply({ text: "second answer" });
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { label: "Shelling" } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    const finals = getDeliveredFinalTexts();
+    expect(finals).toHaveLength(2);
+    expect(finals[0]).toMatch(/^first answer\n-# .*🛠️ 1 tool call/);
+    expect(finals[1]).toBe("second answer");
+  });
+
+  it("re-arms progress collapse for a queued assistant turn", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "first tool done" });
+      await params?.dispatcher.sendFinalReply({ text: "first answer" });
+      await params?.dispatcher.waitForIdle();
+      await params?.replyOptions?.onAssistantMessageStart?.();
+      await params?.replyOptions?.onToolStart?.({ name: "read", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "second tool done" });
+      await params?.dispatcher.sendFinalReply({ text: "second answer" });
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { label: "Shelling" } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.flush).toHaveBeenCalledTimes(2);
+    expect(draftStream.clear).toHaveBeenCalledTimes(2);
+    const finals = getDeliveredFinalTexts();
+    expect(finals).toHaveLength(2);
+    expect(finals[0]).toMatch(/^first answer\n-# /);
+    expect(finals[1]).toMatch(/^second answer\n-# /);
   });
 
   it("uses raw tool-progress detail in Discord progress drafts", async () => {
