@@ -52,7 +52,7 @@ export function sanitizeTransportPayloadText(text: string): string {
   // Strip known provider-injected SSE framing markers that leak into text
   // content. MiniMax's Anthropic-compat endpoint injects `[e~[` as a stream
   // boundary sentinel inside content_block_delta text fields (#104403).
-  let result = text.replace(/\[e~\[/g, "");
+  const result = text.replace(/\[e~\[/g, "");
   return sanitizeSurrogates(result);
 }
 
