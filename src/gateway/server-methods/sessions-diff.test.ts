@@ -217,6 +217,38 @@ describe("loadSessionDiff", () => {
     expect(tracked?.patch).toContain("+two");
   });
 
+  it("withholds patch content for hardlinked files pointing outside the checkout", async () => {
+    const secretDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-secret-")));
+    const secretFile = path.join(secretDir, "secret.txt");
+    fs.writeFileSync(secretFile, "TOP SECRET VALUE\n");
+    try {
+      initRepo(repoRoot);
+      fs.writeFileSync(path.join(repoRoot, "seed.txt"), "seed\n");
+      git(repoRoot, "add", ".");
+      git(repoRoot, "commit", "-qm", "init");
+      // Untracked hardlink to an out-of-tree secret: same inode, in-tree name.
+      fs.linkSync(secretFile, path.join(repoRoot, "leak.txt"));
+      // Tracked file replaced by a hardlink to the same secret after commit.
+      fs.writeFileSync(path.join(repoRoot, "tracked.txt"), "original\n");
+      git(repoRoot, "add", "tracked.txt");
+      git(repoRoot, "commit", "-qm", "add tracked");
+      fs.rmSync(path.join(repoRoot, "tracked.txt"));
+      fs.linkSync(secretFile, path.join(repoRoot, "tracked.txt"));
+      mockSession(repoRoot);
+
+      const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+      expect(JSON.stringify(result)).not.toContain("TOP SECRET VALUE");
+      for (const name of ["leak.txt", "tracked.txt"]) {
+        const file = result.files.find((entry) => entry.path === name);
+        expect(file?.patch).toBeUndefined();
+        expect(file?.truncated).toBe(true);
+      }
+    } finally {
+      fs.rmSync(secretDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects invalid params through the handler", async () => {
     const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
     await sessionsDiffHandlers["sessions.diff"]?.({

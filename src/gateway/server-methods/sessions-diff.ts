@@ -1,6 +1,8 @@
 // Session checkout diff for operator clients: branch + working-tree changes
 // against the checkout's default-branch merge base, structured per file so the
 // Control UI diff panel can render without shelling out client-side.
+import fs from "node:fs/promises";
+import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   validateSessionsDiffParams,
@@ -159,6 +161,30 @@ function countPatchAdditions(chunk: string): number {
   return additions;
 }
 
+/**
+ * A patch-producing `git diff` reads working-tree file contents, so a
+ * checkout-planted hardlink to an out-of-tree secret would otherwise leak
+ * through this read-scoped RPC (same threat the fs-safe workspace readers
+ * reject). Content is only emitted for a real, single-linked regular file
+ * whose realpath stays inside the checkout. Deleted files are exempt: git
+ * reads their content from the object DB, never the filesystem.
+ */
+async function isPatchableWorkingTreePath(realRoot: string, relPath: string): Promise<boolean> {
+  const abs = nodePath.resolve(realRoot, relPath);
+  try {
+    const info = await fs.lstat(abs);
+    // Symlinks never leak file contents (git diff shows the link target text,
+    // not the pointee), but a hardlink is a second name for another inode.
+    if (!info.isFile() || info.nlink !== 1) {
+      return false;
+    }
+    const resolved = await fs.realpath(abs);
+    return resolved === realRoot || resolved.startsWith(realRoot + nodePath.sep);
+  } catch {
+    return false;
+  }
+}
+
 type PatchBudget = { remaining: number };
 
 function takePatch(
@@ -212,13 +238,26 @@ async function resolveDiffBase(
 
 async function collectUntrackedFiles(
   root: string,
+  realRoot: string,
   budget: PatchBudget,
 ): Promise<{ files: SessionDiffFile[]; truncated: boolean }> {
   const listing = await gitOut(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
   const paths = (listing ?? "").split("\0").filter(Boolean);
   const truncated = paths.length > MAX_UNTRACKED_FILES;
   const files: SessionDiffFile[] = [];
-  for (const path of paths.slice(0, MAX_UNTRACKED_FILES)) {
+  for (const filePath of paths.slice(0, MAX_UNTRACKED_FILES)) {
+    // Hardlink/escape guard before git reads the file contents.
+    if (!(await isPatchableWorkingTreePath(realRoot, filePath))) {
+      files.push({
+        path: filePath,
+        status: "added",
+        additions: 0,
+        deletions: 0,
+        untracked: true,
+        truncated: true,
+      });
+      continue;
+    }
     // Exit code 1 is git's "files differ" for --no-index, not a failure.
     // --no-textconv: checkout-configurable textconv drivers must never run
     // from this read-scoped RPC (same reason as --no-ext-diff).
@@ -232,13 +271,13 @@ async function collectUntrackedFiles(
         "--no-index",
         "--",
         "/dev/null",
-        path,
+        filePath,
       ],
       [0, 1],
     );
     if (patch === null) {
       files.push({
-        path,
+        path: filePath,
         status: "added",
         additions: 0,
         deletions: 0,
@@ -249,7 +288,7 @@ async function collectUntrackedFiles(
     }
     if (isBinaryChunk(patch)) {
       files.push({
-        path,
+        path: filePath,
         status: "added",
         additions: 0,
         deletions: 0,
@@ -260,7 +299,7 @@ async function collectUntrackedFiles(
     }
     const additions = countPatchAdditions(patch);
     files.push({
-      path,
+      path: filePath,
       status: "added",
       additions,
       deletions: 0,
@@ -273,6 +312,7 @@ async function collectUntrackedFiles(
 
 async function collectTrackedFiles(
   root: string,
+  realRoot: string,
   base: string,
   budget: PatchBudget,
 ): Promise<{ files: SessionDiffFile[]; truncated: boolean }> {
@@ -305,7 +345,8 @@ async function collectTrackedFiles(
         ]);
   const chunks = patchText === null ? new Map<string, string>() : splitPatchByFile(patchText);
   const truncated = entries.length > MAX_FILES;
-  const files = entries.slice(0, MAX_FILES).map((entry): SessionDiffFile => {
+  const files: SessionDiffFile[] = [];
+  for (const entry of entries.slice(0, MAX_FILES)) {
     const stat = numstat.get(entry.path);
     const chunk = chunks.get(entry.path);
     const binary = stat?.binary === true || (chunk !== undefined && isBinaryChunk(chunk));
@@ -320,7 +361,18 @@ async function collectTrackedFiles(
     }
     if (binary) {
       file.binary = true;
-      return file;
+      files.push(file);
+      continue;
+    }
+    // Deleted files diff against the object DB (no filesystem read); every
+    // other status reads the working-tree file, so hardlink-guard it before
+    // returning content the bulk diff already buffered server-side.
+    const safe =
+      entry.status === "deleted" || (await isPatchableWorkingTreePath(realRoot, entry.path));
+    if (!safe) {
+      file.truncated = true;
+      files.push(file);
+      continue;
     }
     const taken = takePatch(chunk, budget);
     if (taken.patch !== undefined) {
@@ -329,8 +381,8 @@ async function collectTrackedFiles(
     if (taken.truncated) {
       file.truncated = true;
     }
-    return file;
-  });
+    files.push(file);
+  }
   return { files, truncated };
 }
 
@@ -371,6 +423,9 @@ export async function loadSessionDiff(params: SessionsDiffParams): Promise<Sessi
   if (!root) {
     return empty("not_git");
   }
+  // Canonical root for the hardlink/escape guard: show-toplevel can contain
+  // symlinked path segments, and containment is compared against realpaths.
+  const realRoot = await fs.realpath(root).catch(() => root);
   const branchOut = (await gitOut(root, ["rev-parse", "--abbrev-ref", "HEAD"]))?.trim();
   const branch = branchOut && branchOut !== "HEAD" ? branchOut : undefined;
   const budget: PatchBudget = { remaining: MAX_TOTAL_PATCH_BYTES };
@@ -379,9 +434,9 @@ export async function loadSessionDiff(params: SessionsDiffParams): Promise<Sessi
   const hasHead = (await gitOut(root, ["rev-parse", "--verify", "--quiet", "HEAD"])) !== null;
   const baseInfo = hasHead ? await resolveDiffBase(root, branch) : null;
   const tracked = baseInfo
-    ? await collectTrackedFiles(root, baseInfo.base, budget)
+    ? await collectTrackedFiles(root, realRoot, baseInfo.base, budget)
     : { files: [], truncated: false };
-  const untracked = await collectUntrackedFiles(root, budget);
+  const untracked = await collectUntrackedFiles(root, realRoot, budget);
   const files = [...tracked.files, ...untracked.files].toSorted((a, b) =>
     a.path.localeCompare(b.path),
   );
