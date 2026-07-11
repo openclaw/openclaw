@@ -630,58 +630,55 @@ describe("file-transfer node invoke policy", () => {
     },
   );
 
-  testUnlessWindows(
-    "audits dir.fetch archive bytes after a successful transfer",
-    async () => {
-      const policy = createFileTransferNodeInvokePolicy();
-      const tarBase64 = tarEntries({
-        "a.txt": "a",
-      });
-      const tarBytes = Buffer.from(tarBase64, "base64").byteLength;
-      const sha256 = "c".repeat(64);
-      const { ctx } = createCtx({
-        command: "dir.fetch",
-        params: { path: "/tmp/project" },
-      });
-      const invokeNode = vi.mocked(ctx.invokeNode);
-      invokeNode
-        .mockResolvedValueOnce({
+  testUnlessWindows("audits dir.fetch archive bytes after a successful transfer", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const tarBase64 = tarEntries({
+      "a.txt": "a",
+    });
+    const tarBytes = Buffer.from(tarBase64, "base64").byteLength;
+    const sha256 = "c".repeat(64);
+    const { ctx } = createCtx({
+      command: "dir.fetch",
+      params: { path: "/tmp/project" },
+    });
+    const invokeNode = vi.mocked(ctx.invokeNode);
+    invokeNode
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
           ok: true,
-          payload: {
-            ok: true,
-            path: "/tmp/project",
-            entries: ["a.txt"],
-            fileCount: 1,
-            preflightOnly: true,
-          },
-        })
-        .mockResolvedValueOnce({
+          path: "/tmp/project",
+          entries: ["a.txt"],
+          fileCount: 1,
+          preflightOnly: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
           ok: true,
-          payload: {
-            ok: true,
-            path: "/tmp/project",
-            tarBase64,
-            tarBytes,
-            sha256,
-            fileCount: 1,
-          },
-        });
-
-      const result = await policy.handle(ctx);
-
-      expectResultFields(result, { ok: true });
-      expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          op: "dir.fetch",
-          requestedPath: "/tmp/project",
-          canonicalPath: "/tmp/project",
-          decision: "allowed",
-          sizeBytes: tarBytes,
+          path: "/tmp/project",
+          tarBase64,
+          tarBytes,
           sha256,
-        }),
-      );
-    },
-  );
+          fileCount: 1,
+        },
+      });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, { ok: true });
+    expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        op: "dir.fetch",
+        requestedPath: "/tmp/project",
+        canonicalPath: "/tmp/project",
+        decision: "allowed",
+        sizeBytes: tarBytes,
+        sha256,
+      }),
+    );
+  });
 
   testUnlessWindows(
     "checks final dir.fetch archive entries before returning the archive",
