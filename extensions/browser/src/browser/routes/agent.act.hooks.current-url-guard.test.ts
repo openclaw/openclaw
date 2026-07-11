@@ -13,7 +13,9 @@ const navigationGuardMocks = vi.hoisted(() => ({
   withBrowserNavigationPolicy: vi.fn(
     (ssrfPolicy?: unknown, opts?: { browserProxyMode?: string }) => ({
       ...(ssrfPolicy ? { ssrfPolicy } : {}),
-      ...(opts?.browserProxyMode ? { browserProxyMode: opts.browserProxyMode } : {}),
+      ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
+        ? { browserProxyMode: opts.browserProxyMode }
+        : {}),
     }),
   ),
 }));
