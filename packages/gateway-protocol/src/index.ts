@@ -418,6 +418,14 @@ import {
   NodePairRejectParamsSchema,
   type NodePairRemoveParams,
   NodePairRemoveParamsSchema,
+  type NodePluginToolDescriptor,
+  NodePluginToolDescriptorSchema,
+  type NodePluginToolsUpdateParams,
+  NodePluginToolsUpdateParamsSchema,
+  type NodeSkillDescriptor,
+  NodeSkillDescriptorSchema,
+  type NodeSkillsUpdateParams,
+  NodeSkillsUpdateParamsSchema,
   type NodeRenameParams,
   NodeRenameParamsSchema,
   type PollParams,
@@ -668,6 +676,10 @@ import {
   CrestodianSetupDetectParamsSchema,
   type CrestodianSetupDetectResult,
   CrestodianSetupDetectResultSchema,
+  type CrestodianSetupVerifyParams,
+  CrestodianSetupVerifyParamsSchema,
+  type CrestodianSetupVerifyResult,
+  CrestodianSetupVerifyResultSchema,
   type CrestodianSetupActivateParams,
   CrestodianSetupActivateParamsSchema,
   type CrestodianSetupActivateResult,
@@ -857,6 +869,12 @@ export const validateNodePairRemoveParams = lazyCompile<NodePairRemoveParams>(
 );
 export const validateNodeRenameParams = lazyCompile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = lazyCompile<NodeListParams>(NodeListParamsSchema);
+export const validateNodePluginToolsUpdateParams = lazyCompile<NodePluginToolsUpdateParams>(
+  NodePluginToolsUpdateParamsSchema,
+);
+export const validateNodeSkillsUpdateParams = lazyCompile<NodeSkillsUpdateParams>(
+  NodeSkillsUpdateParamsSchema,
+);
 export const validateEnvironmentsCreateParams = lazyCompile<EnvironmentsCreateParams>(
   EnvironmentsCreateParamsSchema,
 );
@@ -1008,6 +1026,9 @@ export const validateCrestodianChatParams = lazyCompile<CrestodianChatParams>(
 );
 export const validateCrestodianSetupDetectParams = lazyCompile<CrestodianSetupDetectParams>(
   CrestodianSetupDetectParamsSchema,
+);
+export const validateCrestodianSetupVerifyParams = lazyCompile<CrestodianSetupVerifyParams>(
+  CrestodianSetupVerifyParamsSchema,
 );
 export const validateCrestodianSetupActivateParams = lazyCompile<CrestodianSetupActivateParams>(
   CrestodianSetupActivateParamsSchema,
@@ -1335,6 +1356,10 @@ export {
   NodePairRejectParamsSchema,
   NodePairRemoveParamsSchema,
   NodeListParamsSchema,
+  NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParamsSchema,
+  NodeSkillDescriptorSchema,
+  NodeSkillsUpdateParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
   NodeEventResultSchema,
@@ -1422,6 +1447,8 @@ export {
   CrestodianChatResultSchema,
   CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResultSchema,
   CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResultSchema,
   WizardStartParamsSchema,
@@ -1656,6 +1683,8 @@ export type {
   CrestodianChatResult,
   CrestodianSetupDetectParams,
   CrestodianSetupDetectResult,
+  CrestodianSetupVerifyParams,
+  CrestodianSetupVerifyResult,
   CrestodianSetupActivateParams,
   CrestodianSetupActivateResult,
   WizardStartParams,
@@ -1818,6 +1847,10 @@ export type {
   NodePairRejectParams,
   NodePairRemoveParams,
   NodeListParams,
+  NodePluginToolDescriptor,
+  NodePluginToolsUpdateParams,
+  NodeSkillDescriptor,
+  NodeSkillsUpdateParams,
   NodeInvokeParams,
   NodeInvokeResultParams,
   NodeEventParams,

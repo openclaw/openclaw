@@ -924,10 +924,7 @@ export async function startGatewayServer(
 
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
-  const crestodianSessions = new Map<
-    string,
-    import("./server-methods/crestodian.js").CrestodianChatSession
-  >();
+  const crestodianSessions: GatewayRequestContext["crestodianSessions"] = new Map();
 
   const deps = createDefaultDeps();
   let runtimeState: GatewayServerLiveState | null = null;
@@ -1049,7 +1046,12 @@ export async function startGatewayServer(
     nodeUnsubscribeAll,
     broadcastVoiceWakeChanged,
     hasTalkNodeConnected,
-  } = createGatewayNodeSessionRuntime({ broadcast });
+  } = createGatewayNodeSessionRuntime({
+    broadcast,
+    listRegisteredNodePluginToolCommands: () => pluginRegistry.nodeHostCommands,
+    nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
+    nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.skills?.enabled !== false,
+  });
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
     nodeRegistry,
@@ -1075,6 +1077,7 @@ export async function startGatewayServer(
       incrementPresenceVersion();
       recordRemoteNodeInfo({
         nodeId: session.nodeId,
+        connId: session.connId,
         displayName: session.displayName,
         platform: session.platform,
         deviceFamily: session.deviceFamily,
@@ -1455,6 +1458,7 @@ export async function startGatewayServer(
       pinActivePluginHttpRouteRegistry(pluginRegistry);
       pinActivePluginSessionExtensionRegistry(pluginRegistry);
       pinActivePluginChannelRegistry(pluginRegistry);
+      nodeRegistry.refreshNodePluginTools();
     };
     const refreshAttachedGatewayDiscovery = async (nextPluginRegistry: typeof pluginRegistry) => {
       if (minimalTestGateway) {

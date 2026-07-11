@@ -163,6 +163,8 @@ import {
   CrestodianSetupActivateResultSchema,
   CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResultSchema,
 } from "./crestodian.js";
 import {
   CronAddParamsSchema,
@@ -280,6 +282,10 @@ import {
   NodePairListParamsSchema,
   NodePairRemoveParamsSchema,
   NodePairRejectParamsSchema,
+  NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParamsSchema,
+  NodeSkillDescriptorSchema,
+  NodeSkillsUpdateParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
 import {
@@ -511,6 +517,10 @@ export const ProtocolSchemas = {
   NodePairRemoveParams: NodePairRemoveParamsSchema,
   NodeRenameParams: NodeRenameParamsSchema,
   NodeListParams: NodeListParamsSchema,
+  NodePluginToolDescriptor: NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParams: NodePluginToolsUpdateParamsSchema,
+  NodeSkillDescriptor: NodeSkillDescriptorSchema,
+  NodeSkillsUpdateParams: NodeSkillsUpdateParamsSchema,
   NodePendingAckParams: NodePendingAckParamsSchema,
   NodeDescribeParams: NodeDescribeParamsSchema,
   NodeInvokeParams: NodeInvokeParamsSchema,
@@ -618,6 +628,8 @@ export const ProtocolSchemas = {
   CrestodianChatResult: CrestodianChatResultSchema,
   CrestodianSetupDetectParams: CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResult: CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParams: CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResult: CrestodianSetupVerifyResultSchema,
   CrestodianSetupActivateParams: CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResult: CrestodianSetupActivateResultSchema,
   WizardStartParams: WizardStartParamsSchema,
