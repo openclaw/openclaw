@@ -1287,15 +1287,17 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 
 /* Selection is a filled neutral pill (hover fill, one step stronger), not an
    accent border: 1px accent outlines read as focus/error chrome on the
-   red-leaning themes. Derive from --text so it holds in light + dark. */
-.sidebar-recent-session--active {
+   red-leaning themes. Derive from --text so it holds in light + dark.
+   Doubled class outranks .sidebar-recent-session:hover so the selection fill
+   does not degrade to the weaker hover fill while the row is under pointer. */
+.sidebar-recent-session.sidebar-recent-session--active {
   background: color-mix(in srgb, var(--text) 10%, transparent);
   color: var(--text-strong);
 }
 
 /* Multi-select is an accent wash so it stays distinguishable by hue from the
    neutral --active fill when a selection includes the active row. */
-.sidebar-recent-session--selected {
+.sidebar-recent-session.sidebar-recent-session--selected {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--text-strong);
 }
