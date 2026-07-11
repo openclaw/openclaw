@@ -17,6 +17,19 @@ layout cannot diverge. Each accepted write bumps a version and broadcasts
 `plugin.dashboard.changed`, so an agent's edit appears in an already-open browser without
 a reload.
 
+## Enable Workspaces
+
+The bundled Dashboard plugin is disabled by default. In the Control UI, open **Plugins**,
+find **Dashboard**, and select **Enable**. You can also enable it from the CLI:
+
+```sh
+openclaw plugins enable dashboard
+```
+
+Enabling the plugin adds the **Workspaces** tab and makes the `openclaw workspaces` CLI
+and `dashboard_*` agent tools available. Disabling it removes those surfaces without
+deleting the workspace database or widget assets.
+
 ## The default workspace
 
 On first load you get an **Overview** workspace: cost and token cards, instance health,
