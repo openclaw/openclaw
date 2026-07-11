@@ -57,6 +57,7 @@ import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/ex
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import {
   appendAssistantMessageToSessionTranscript,
@@ -144,7 +145,6 @@ import {
   loadSessionStoreEntry,
   resolveStorePath,
   triggerInternalHook,
-  updateSessionStoreEntry,
 } from "./dispatch-from-config.runtime.js";
 import type {
   DispatchFromConfigParams,
@@ -1065,12 +1065,9 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
   if (!params.storePath || !params.sessionKey || !identity?.present) {
     return;
   }
-  await updateSessionStoreEntry({
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-    skipMaintenance: true,
-    takeCacheOwnership: true,
-    update: async (entry) => {
+  await updateSessionEntry(
+    { storePath: params.storePath, sessionKey: params.sessionKey },
+    async (entry) => {
       if (!matchesPendingFinalDeliveryIdentity(entry, identity)) {
         return null;
       }
@@ -1089,7 +1086,8 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
         updatedAt: Date.now(),
       };
     },
-  });
+    { skipMaintenance: true, takeCacheOwnership: true },
+  );
 }
 
 type SettledFinalDelivery = {
@@ -1113,7 +1111,12 @@ function capturePendingFinalDeliveryIdentity(params: {
     return undefined;
   }
   try {
-    const entry = readSessionEntry(params.storePath, params.sessionKey);
+    const entry = loadSessionEntry({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+    });
     if (
       params.intentId &&
       normalizeOptionalString(entry?.pendingFinalDeliveryIntentId) !== params.intentId
@@ -1211,12 +1214,9 @@ async function reconcilePendingFinalDeliveryAfterSettlement(params: {
   if (!params.storePath || !params.sessionKey || !identity?.present) {
     return;
   }
-  await updateSessionStoreEntry({
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-    skipMaintenance: true,
-    takeCacheOwnership: true,
-    update: async (entry) => {
+  await updateSessionEntry(
+    { storePath: params.storePath, sessionKey: params.sessionKey },
+    async (entry) => {
       if (!matchesPendingFinalDeliveryIdentity(entry, identity)) {
         return null;
       }
@@ -1271,7 +1271,8 @@ async function reconcilePendingFinalDeliveryAfterSettlement(params: {
         updatedAt: Date.now(),
       };
     },
-  });
+    { skipMaintenance: true, takeCacheOwnership: true },
+  );
 }
 
 async function mirrorDeliveredReplyToTranscript(params: {

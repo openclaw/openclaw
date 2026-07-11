@@ -115,7 +115,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       .mockImplementation(() => sessionStoreMocks.currentEntry);
     sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
     sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
-    sessionStoreMocks.updateSessionStoreEntry.mockClear();
+    sessionStoreMocks.updateSessionEntry.mockClear();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
     acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
       resolveSession: () => ({ kind: "none" as const }),
@@ -232,7 +232,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
     await dispatcher.waitForIdle();
     await vi.waitFor(() => {
-      expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
+      expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
     });
 
     expect(result.queuedFinal).toBe(true);
@@ -302,7 +302,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
     expect(deliver).toHaveBeenCalledOnce();
     expect(result.queuedFinal).toBe(false);
-    expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
+    expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
@@ -335,7 +335,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
 
     expect(result.queuedFinal).toBe(false);
-    expect(sessionStoreMocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+    expect(sessionStoreMocks.updateSessionEntry).not.toHaveBeenCalled();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);
@@ -382,7 +382,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       expect(result.queuedFinal).toBe(true);
       expect(deliver).not.toHaveBeenCalled();
       expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
-      expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
+      expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
       expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
       expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toEqual({
@@ -709,7 +709,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
 
     expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
-    expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
+    expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
   });
@@ -739,7 +739,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
     await dispatcher.waitForIdle();
     await vi.waitFor(() => {
-      expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
+      expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
     });
 
     expect(result.queuedFinal).toBe(true);
