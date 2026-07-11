@@ -730,8 +730,8 @@ function createChatContext(): Pick<
       mockState.modelCatalog ?? [
         {
           provider: "openai",
-          id: "gpt-5.5",
-          name: "GPT-5.5",
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
           input: ["text", "image"],
         },
         {
