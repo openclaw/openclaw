@@ -801,6 +801,31 @@ describe("pw-session selected-page interaction request guard", () => {
     expect(pageUnroute).not.toHaveBeenCalled();
   });
 
+  it("fails closed before dispatch when strict policy uses an explicit browser proxy", async () => {
+    const { getRouteHandler, mainFrame, page } = installBrowserMocks();
+    const documentRoute = createMockRoute();
+
+    await expect(
+      withPageNavigationRequestGuard({
+        page,
+        ssrfPolicy: strictPolicy,
+        browserProxyMode: "explicit-browser-proxy",
+        action: async () => {
+          await dispatchMockNavigation({
+            getRouteHandler,
+            mainFrame,
+            url: "https://93.184.216.34/public",
+            route: documentRoute,
+          });
+          return "unsafe";
+        },
+      }),
+    ).rejects.toThrow("strict browser SSRF policy cannot be enforced");
+
+    expect(documentRoute.fallback).not.toHaveBeenCalled();
+    expect(documentRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
+  });
+
   it("revalidates the current URL after route setup before starting the action", async () => {
     const { page, pageRoute, pageUnroute, pageUrl } = installBrowserMocks();
     const installRoute = pageRoute.getMockImplementation();

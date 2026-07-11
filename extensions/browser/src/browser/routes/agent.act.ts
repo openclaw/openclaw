@@ -39,6 +39,7 @@ import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
 import { type ActKind, isActKind } from "./agent.act.shared.js";
 import {
+  browserNavigationPolicyForProfile,
   readBody,
   requirePwAi,
   resolveTargetIdFromBody,
@@ -392,7 +393,8 @@ export function registerBrowserAgentActRoutes(
         enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
         run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
           const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
-          const ssrfPolicy = ctx.state().resolved.ssrfPolicy;
+          const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
+          const { ssrfPolicy } = navigationPolicy;
           const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
           const requestedTimeoutMs =
             "timeoutMs" in action && typeof action.timeoutMs === "number"
@@ -403,7 +405,7 @@ export function registerBrowserAgentActRoutes(
             signal: req.signal,
           };
           const hasNavigationResultPolicy = Boolean(
-            withBrowserNavigationPolicy(ssrfPolicy).ssrfPolicy,
+            navigationPolicy.ssrfPolicy || navigationPolicy.browserProxyMode,
           );
           const jsonOk = async (
             extra?: Record<string, unknown>,
@@ -645,7 +647,7 @@ export function registerBrowserAgentActRoutes(
             action,
             targetId: tab.targetId,
             evaluateEnabled,
-            ssrfPolicy,
+            ...navigationPolicy,
             signal: req.signal,
           });
           if (result.blockedByDialog) {

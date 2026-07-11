@@ -134,6 +134,7 @@ describe("batchViaPlaywright", () => {
       targetId: "tab-1",
       actions: [action],
       ssrfPolicy,
+      browserProxyMode: "explicit-browser-proxy",
     });
 
     expect(result).toEqual({ results: [{ ok: true }] });
@@ -143,6 +144,7 @@ describe("batchViaPlaywright", () => {
       onPolicyDenied: expect.any(Function),
       page,
       ssrfPolicy,
+      browserProxyMode: "explicit-browser-proxy",
     });
   });
 });

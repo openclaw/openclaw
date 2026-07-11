@@ -1392,22 +1392,25 @@ export function wasBrowserNavigationRequestBlockedBeforeDispatch(err: unknown): 
 }
 
 /** Run one selected-page action while guarding document requests. */
-export async function withPageNavigationRequestGuard<T>(opts: {
-  action: (baselineUrl: string) => Promise<T>;
-  onPolicyCheckStarted?: (check: Promise<void>) => void;
-  onPolicyDenied?: (
-    event:
-      | { state: "detected"; error: unknown }
-      | { state: "handled"; error: unknown; sourcePreserved: boolean },
-  ) => void;
-  page: Page;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<T> {
-  if (!opts.ssrfPolicy) {
+export async function withPageNavigationRequestGuard<T>(
+  opts: {
+    action: (baselineUrl: string) => Promise<T>;
+    onPolicyCheckStarted?: (check: Promise<void>) => void;
+    onPolicyDenied?: (
+      event:
+        | { state: "detected"; error: unknown }
+        | { state: "handled"; error: unknown; sourcePreserved: boolean },
+    ) => void;
+    page: Page;
+  } & BrowserNavigationPolicyOptions,
+): Promise<T> {
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
+  if (!navigationPolicy.ssrfPolicy && !navigationPolicy.browserProxyMode) {
     return await opts.action(opts.page.url());
   }
 
-  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy);
   const inFlight = new Set<Promise<void>>();
   let hasGuardError = false;
   let firstGuardError: unknown;

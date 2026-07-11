@@ -103,6 +103,7 @@ describe("pw-tools-core browser SSRF guards", () => {
           targetId: "tab-1",
           ref: "1",
           ssrfPolicy: { allowPrivateNetwork: false },
+          browserProxyMode: "explicit-browser-proxy",
         }),
     },
     {
@@ -115,6 +116,7 @@ describe("pw-tools-core browser SSRF guards", () => {
           startRef: "1",
           endRef: "2",
           ssrfPolicy: { allowPrivateNetwork: false },
+          browserProxyMode: "explicit-browser-proxy",
         }),
     },
     {
@@ -126,6 +128,7 @@ describe("pw-tools-core browser SSRF guards", () => {
           targetId: "tab-1",
           ref: "1",
           ssrfPolicy: { allowPrivateNetwork: false },
+          browserProxyMode: "explicit-browser-proxy",
         }),
     },
   ])(
@@ -147,12 +150,14 @@ describe("pw-tools-core browser SSRF guards", () => {
         onPolicyDenied: expect.any(Function),
         page: pageState.page,
         ssrfPolicy: { allowPrivateNetwork: false },
+        browserProxyMode: "explicit-browser-proxy",
       });
       expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
         cdpUrl: "http://127.0.0.1:18792",
         page: pageState.page,
         response: null,
         ssrfPolicy: { allowPrivateNetwork: false },
+        browserProxyMode: "explicit-browser-proxy",
         targetId: "tab-1",
       });
     },
