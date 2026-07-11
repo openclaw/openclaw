@@ -64,10 +64,11 @@ describe("message-channel", () => {
   });
 
   it("classifies ephemeral Gateway client modes", () => {
-    for (const mode of ["cli", "backend", "probe", "test", " CLI "]) {
+    for (const mode of ["cli", "backend", "probe", " CLI "]) {
       expect(isEphemeralGatewayClient({ mode })).toBe(true);
     }
-    for (const mode of ["ui", "webchat", "node", "unknown", undefined]) {
+    // "test" stays tracked: suites use test-mode clients as real-client stand-ins.
+    for (const mode of ["ui", "webchat", "node", "test", "unknown", undefined]) {
       expect(isEphemeralGatewayClient({ mode })).toBe(false);
     }
   });

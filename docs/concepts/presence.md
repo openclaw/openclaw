@@ -46,9 +46,10 @@ Gateway upserts a presence entry for that connection.
 
 #### Why ephemeral control-plane connections do not show up
 
-CLI commands, backend RPC clients, probes, and tests often connect briefly. To
-avoid retaining that churn for the full presence TTL, clients in `cli`,
-`backend`, `probe`, or `test` mode are **not** turned into presence entries.
+CLI commands, backend RPC clients, and probes often connect briefly. To avoid
+retaining that churn for the full presence TTL, clients in `cli`, `backend`,
+or `probe` mode are **not** turned into presence entries. Test-mode clients
+stay tracked because test suites use them as stand-ins for real clients.
 
 ### 3) `system-event` beacons
 
