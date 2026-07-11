@@ -187,7 +187,7 @@ enum MacNodeCodexThreadCatalog {
 
     static func shouldAdvertise(root: [String: Any]? = nil) -> Bool {
         let root = root ?? OpenClawConfigFile.loadDict()
-        guard OpenClawConfigFile.explicitlyEnabledPlugin(
+        guard OpenClawConfigFile.configuredBundledPluginAllowed(
             MacNodeCodexThreadCatalogContract.pluginId,
             root: root)
         else { return false }

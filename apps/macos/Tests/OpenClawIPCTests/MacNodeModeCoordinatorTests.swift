@@ -502,6 +502,20 @@ struct MacNodeModeCoordinatorTests {
             root: enabled))
         #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: enabled))
 
+        let enabledByConfigPath: [String: Any] = [
+            "plugins": [
+                "entries": [
+                    "codex": [
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                ],
+            ],
+        ]
+        #expect(OpenClawConfigFile.configuredBundledPluginAllowed(
+            "codex",
+            root: enabledByConfigPath))
+        #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: enabledByConfigPath))
+
         let numericPluginEnable: [String: Any] = [
             "plugins": [
                 "entries": [
@@ -595,6 +609,21 @@ struct MacNodeModeCoordinatorTests {
             path: ["supervision", "enabled"],
             root: supervisionDisabled))
 
+        let pluginDisabled: [String: Any] = [
+            "plugins": [
+                "entries": [
+                    "codex": [
+                        "enabled": false,
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                ],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.configuredBundledPluginAllowed(
+            "codex",
+            root: pluginDisabled))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: pluginDisabled))
+
         let denied: [String: Any] = [
             "plugins": [
                 "deny": ["codex"],
@@ -622,10 +651,10 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
+        #expect(OpenClawConfigFile.configuredBundledPluginAllowed(
             "codex",
-            path: ["supervision", "enabled"],
             root: omittedByAllowlist))
+        #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: omittedByAllowlist))
 
         let paddedIds: [String: Any] = [
             "plugins": [

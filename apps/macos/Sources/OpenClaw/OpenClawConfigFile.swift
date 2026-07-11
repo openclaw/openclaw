@@ -207,7 +207,9 @@ enum OpenClawConfigFile {
         let browser = root["browser"] as? [String: Any]
         return browser?["enabled"] as? Bool ?? defaultValue
     }
+}
 
+extension OpenClawConfigFile {
     private static func normalizedPluginConfigId(_ value: Any?) -> String? {
         guard let value = value as? String else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -253,6 +255,28 @@ enum OpenClawConfigFile {
         let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
         if !allow.isEmpty, !allow.contains(pluginId) { return false }
         return true
+    }
+
+    /// Mirrors configured-root activation for bundled plugins: a declared config path may
+    /// activate the plugin unless global policy, an entry opt-out, or deny disables it.
+    static func configuredBundledPluginAllowed(
+        _ pluginId: String,
+        root: [String: Any]? = nil) -> Bool
+    {
+        let root = root ?? self.loadDict()
+        guard let pluginId = normalizedPluginConfigId(pluginId),
+              let plugins = root["plugins"] as? [String: Any],
+              let entry = pluginEntry(pluginId, root: root)
+        else { return false }
+        if let enabled = plugins["enabled"], literalBoolean(enabled) != true {
+            return false
+        }
+        if let enabled = entry["enabled"], literalBoolean(enabled) != true {
+            return false
+        }
+
+        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        return !deny.contains(pluginId)
     }
 
     static func explicitlyEnabledPluginConfigFlag(
