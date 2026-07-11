@@ -42,7 +42,7 @@ export const CRON_SUGGESTIONS: CronSuggestion[] = [
   suggestion("standupGhostwriter", "👻", "weekdays", "notify"),
   suggestion("hackerNewsScout", "🔭", "every-morning", "notify"),
   suggestion("dependencyRadar", "🛰️", "weekly", "notify"),
-  suggestion("nightWatch", "🦉", "hourly", "isolated"),
+  suggestion("watchdog", "🦉", "hourly", "notify"),
   suggestion("polyglotMinute", "🗣️", "every-morning", "notify"),
 ];
 

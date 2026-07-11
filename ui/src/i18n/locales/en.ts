@@ -2500,11 +2500,11 @@ export const en: TranslationMap = {
           prompt:
             "Check my main project for outdated or vulnerable dependencies. List the notable updates with a one-line risk note each, and draft the upgrade command.",
         },
-        nightWatch: {
+        watchdog: {
           name: "Night watch",
-          tagline: "Quiet hourly health check — speaks up only when something breaks.",
+          tagline: "Hourly health check with a one-line verdict.",
           prompt:
-            "Check that my services and gateway are healthy: scan recent logs for new errors, restarts, or unusual load. Stay quiet if everything is fine; if something looks broken, message me what failed and where to start looking.",
+            "Check that my services and gateway are healthy: scan recent logs for new errors, restarts, or unusual load. Reply with a single short all-clear line when everything is fine; if something looks broken, report what failed and where to start looking.",
         },
         polyglotMinute: {
           name: "Polyglot minute",
