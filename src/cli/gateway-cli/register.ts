@@ -22,6 +22,7 @@ import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { formatHelpExamples } from "../help-format.js";
+import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import type { GatewayRpcOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import { addGatewayRunCommand } from "./run-command.js";
@@ -51,9 +52,9 @@ const daemonStatusGatherModuleLoader = createLazyImportLoader(
   () => import("../daemon-cli/status.gather.js"),
 );
 
+const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
 const USAGE_COST_SETTLE_INITIAL_POLL_MS = 250;
 const USAGE_COST_SETTLE_MAX_POLL_MS = 5_000;
-const USAGE_COST_SETTLE_TIMEOUT_MS = 5 * 60_000;
 
 function loadConfigModule() {
   return configModuleLoader.load();
@@ -100,7 +101,7 @@ function gatewayCallOpts(cmd: Command): Command {
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
-    .option("--timeout <ms>", "Timeout in ms", "10000")
+    .option("--timeout <ms>", "Timeout in ms", String(DEFAULT_GATEWAY_RPC_TIMEOUT_MS))
     .option("--expect-final", "Wait for final response (agent)", false)
     .option("--json", "Output JSON", false);
 }
@@ -114,28 +115,42 @@ async function loadSettledCostUsageSummary(
   rpcOpts: GatewayRpcOpts,
   params: { days: number; agentId?: string; agentScope?: "all" },
 ): Promise<CostUsageSummary> {
-  const startedAt = Date.now();
+  const timeoutMs = parseTimeoutMsWithFallback(rpcOpts.timeout, DEFAULT_GATEWAY_RPC_TIMEOUT_MS, {
+    invalidType: "error",
+  });
+  const deadline = Date.now() + timeoutMs;
+  let lastSummary: CostUsageSummary | undefined;
   let pollMs = USAGE_COST_SETTLE_INITIAL_POLL_MS;
   for (;;) {
-    const summary = (await callGatewayCli("usage.cost", rpcOpts, params)) as CostUsageSummary;
+    const remainingBeforeCallMs = deadline - Date.now();
+    if (remainingBeforeCallMs <= 0) {
+      throw createUsageCostSettleTimeoutError(lastSummary);
+    }
+    const callOpts = { ...rpcOpts, timeout: String(remainingBeforeCallMs) };
+    const summary = (await callGatewayCli("usage.cost", callOpts, params)) as CostUsageSummary;
+    lastSummary = summary;
     const status = summary.cacheStatus?.status;
     if (status !== "refreshing" && status !== "partial") {
       return summary;
     }
 
-    const remainingMs = USAGE_COST_SETTLE_TIMEOUT_MS - (Date.now() - startedAt);
+    const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
-      const cachedFiles = summary.cacheStatus?.cachedFiles ?? 0;
-      const pendingFiles = summary.cacheStatus?.pendingFiles ?? 0;
-      throw new Error(
-        `Timed out waiting for usage cost cache refresh (${cachedFiles} cached, ${pendingFiles} pending)`,
-      );
+      throw createUsageCostSettleTimeoutError(summary);
     }
-    // Keep large cache rebuilds in the Gateway background; this explicit audit
-    // command waits with backoff so it never presents a refreshing zero as final.
+    // The existing RPC timeout is the whole command budget. Giving each retry a
+    // fresh timeout would let a short bounded audit keep running for minutes.
     await sleep(Math.min(pollMs, remainingMs));
     pollMs = Math.min(pollMs * 2, USAGE_COST_SETTLE_MAX_POLL_MS);
   }
+}
+
+function createUsageCostSettleTimeoutError(summary?: CostUsageSummary): Error {
+  const cachedFiles = summary?.cacheStatus?.cachedFiles ?? 0;
+  const pendingFiles = summary?.cacheStatus?.pendingFiles ?? 0;
+  return new Error(
+    `Timed out waiting for usage cost cache refresh (${cachedFiles} cached, ${pendingFiles} pending)`,
+  );
 }
 
 async function runGatewayCommand(
