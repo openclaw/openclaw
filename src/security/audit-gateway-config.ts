@@ -13,7 +13,10 @@ import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-sou
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
-import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
+import {
+  DEFAULT_GATEWAY_HTTP_TOOL_DENY,
+  HOST_FS_BUILTIN_CODING_DENY_NAMES,
+} from "./dangerous-tools.js";
 
 type CollectDangerousConfigFlags = (cfg: OpenClawConfig) => string[];
 
@@ -100,8 +103,17 @@ export function collectGatewayConfigFindings(
   const gatewayToolsAllow = new Set(
     gatewayToolsAllowRaw.map((v) => normalizeOptionalLowercaseString(v) ?? "").filter(Boolean),
   );
-  const reenabledOverHttp = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) =>
-    gatewayToolsAllow.has(name),
+  // The host-FS coding name `read` never triggers the generic `dangerous_allow`
+  // warning. When the class opt-in is ACTIVE the dedicated `host_read_allow`
+  // finding fires instead; when it is INACTIVE an allow-only `read` is inert for
+  // reachability — the built-in stays unmaterialized (it needs the opt-in) and a
+  // same-named plugin tool is reachable regardless of the allow entry (the
+  // resolver preserves it source-aware), so `allow: ["read"]` grants nothing new
+  // and a generic warning would be a false positive. ClawSweeper [P2] on PR #85664.
+  const hostFsReadOptIn = cfg.gateway?.tools?.directInvoke?.hostFsRead === true;
+  const hostFsCodingNames = new Set<string>(HOST_FS_BUILTIN_CODING_DENY_NAMES);
+  const reenabledOverHttp = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
+    (name) => gatewayToolsAllow.has(name) && !hostFsCodingNames.has(name),
   );
   if (reenabledOverHttp.length > 0) {
     const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
@@ -115,6 +127,29 @@ export function collectGatewayConfigFindings(
       remediation:
         "Remove these entries from gateway.tools.allow (recommended). " +
         "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
+    });
+  }
+
+  // Host-FS read opt-in finding: only fires when BOTH gates are set
+  // (`directInvoke.hostFsRead: true` AND `tools.allow` includes "read"). With
+  // the opt-in active the built-in `read` is materialized (see
+  // `tool-resolution.ts` dual-key gating); this is the specific exposure
+  // finding that supersedes the generic `dangerous_allow` warning above.
+  if (hostFsReadOptIn && gatewayToolsAllow.has("read")) {
+    const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
+    findings.push({
+      checkId: "gateway.tools_invoke_http.host_read_allow",
+      severity: extraRisk ? "critical" : "warn",
+      title: "Gateway HTTP /tools/invoke exposes host filesystem reads",
+      detail:
+        "gateway.tools.directInvoke.hostFsRead is true and gateway.tools.allow includes 'read', " +
+        "which exposes the `read` coding tool over both HTTP `POST /tools/invoke` and SDK RPC `tools.invoke`. " +
+        "Without `tools.fs.workspaceOnly: true`, this grants reads of any file the gateway process can open " +
+        "(outside the configured workspace).",
+      remediation:
+        "Confine reads to the workspace by setting `tools.fs.workspaceOnly: true` (recommended). " +
+        "Or remove `gateway.tools.directInvoke.hostFsRead` to disable host-FS read over direct-invoke entirely. " +
+        "If you keep host-FS read enabled, keep gateway.bind loopback-only (or tailnet-only) and restrict network exposure.",
     });
   }
   if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {
