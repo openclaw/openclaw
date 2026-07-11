@@ -2681,7 +2681,7 @@ describe("anthropic transport stream", () => {
     ]);
   });
 
-  it("drops completed Fable thinking while preserving the visible tool turn", async () => {
+  it("drops corrupted completed Fable thinking while preserving the visible tool turn", async () => {
     const highSurrogate = String.fromCharCode(0xd83d);
     const signedThinking = `keep${highSurrogate}signed`;
     await runTransportStream(
@@ -2703,7 +2703,7 @@ describe("anthropic transport stream", () => {
               {
                 type: "thinking",
                 thinking: signedThinking,
-                thinkingSignature: "sig_1",
+                thinkingSignature: "opaque…corrupted",
               },
               {
                 type: "thinking",

@@ -568,7 +568,7 @@ describe("Anthropic provider", () => {
     expect(result.usage.contextUsage).toEqual({ state: "unavailable" });
   });
 
-  it("drops completed Fable thinking while preserving the visible tool turn", async () => {
+  it("drops corrupted completed Fable thinking while preserving the visible tool turn", async () => {
     const highSurrogate = String.fromCharCode(0xd83d);
     const signedThinking = `keep${highSurrogate}signed`;
     let capturedPayload: unknown;
@@ -625,7 +625,7 @@ describe("Anthropic provider", () => {
               {
                 type: "thinking",
                 thinking: signedThinking,
-                thinkingSignature: "sig_1",
+                thinkingSignature: "opaque…corrupted",
               },
               {
                 type: "thinking",
