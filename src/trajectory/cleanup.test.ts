@@ -412,10 +412,14 @@ describe("trajectory cleanup", () => {
         const [, lease] = await Promise.all([deletePromise, acquirePromise]);
 
         expect(order.indexOf("archive-done")).toBeLessThan(order.indexOf("acquire-done"));
-        expect(lease.filePath).toBe(runtimeFile);
         // The claim was only admitted after delete's archive rename fully
-        // committed, so it cannot have reactivated or recreated the tombstoned
-        // artifact — the original path is free and a fresh tombstone exists.
+        // committed and observed the path retired — it disambiguates to a
+        // fresh sibling path rather than reclaiming the tombstoned canonical
+        // one (same-owner reclaim of a *retired* path is never admitted at
+        // the original path: retired is set exclusively by disposal, so this
+        // claim is indistinguishable at the registry from a late straggler
+        // write racing that exact disposal, not a legitimate continuation).
+        expect(lease.filePath).not.toBe(runtimeFile);
         await expectTombstoned(runtimeFile, "deleted");
       } finally {
         renameSpy.mockRestore();
