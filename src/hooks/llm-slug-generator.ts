@@ -13,7 +13,6 @@ import {
   resolveAgentDir,
 } from "../agents/agent-scope.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -74,9 +73,7 @@ function isErrorSlugPayload(payload: { text?: string; isError?: boolean } | unde
 export async function generateSlugViaLLM(params: {
   sessionContent: string;
   cfg: OpenClawConfig;
-  /** Optional hook-level model override. When set, only the model is overridden;
-   *  provider resolution stays with the agent default so alias/ref resolution
-   *  flows through runEmbeddedAgent's built-in model-resolution chain. */
+  /** Optional hook-level override; the embedded runner owns model resolution. */
   model?: string;
 }): Promise<string | null> {
   let tempSessionFile: string | null = null;
@@ -97,17 +94,6 @@ ${truncateUtf16Safe(params.sessionContent, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
-    const configuredDefault = resolveDefaultModelForAgent({
-      cfg: params.cfg,
-      agentId,
-    });
-    // When the hook provides an explicit model, only pass that model (omit
-    // provider) so runEmbeddedAgent's built-in resolveInitialEmbeddedRunModel
-    // chain handles alias, provider-qualified ref, and bare-name resolution
-    // through a single source of truth. Passing both provider + model would
-    // short-circuit that path and skip alias resolution.
-    const provider = params.model ? undefined : configuredDefault.provider;
-    const model = params.model ?? configuredDefault.model;
     const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
     const result = await runEmbeddedAgent({
@@ -119,8 +105,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       agentDir,
       config: params.cfg,
       prompt,
-      provider,
-      model,
+      model: params.model,
       timeoutMs,
       runId: `slug-gen-${Date.now()}`,
       cleanupBundleMcpOnRunEnd: true,

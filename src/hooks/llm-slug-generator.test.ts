@@ -8,13 +8,6 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: vi.fn(() => "main"),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-agent"),
   resolveAgentDir: vi.fn(() => "/tmp/openclaw-agent/.openclaw-agent"),
-  resolveAgentEffectiveModelPrimary: vi.fn((cfg: OpenClawConfig) => {
-    const model = cfg.agents?.defaults?.model;
-    if (typeof model === "string") {
-      return model;
-    }
-    return model?.primary;
-  }),
 }));
 
 vi.mock("../agents/embedded-agent.js", () => ({
@@ -81,7 +74,7 @@ describe("generateSlugViaLLM", () => {
     expect(requireFirstRunOptions().timeoutMs).toBe(500_000);
   });
 
-  it("infers provider metadata for bare configured agent models", async () => {
+  it("delegates default model resolution to the embedded runner", async () => {
     await generateSlugViaLLM({
       sessionContent: "hello",
       cfg: {
@@ -90,77 +83,30 @@ describe("generateSlugViaLLM", () => {
             model: { primary: "gpt-5.5" },
           },
         },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://chatgpt.com/backend-api/codex",
-              models: [
-                {
-                  id: "gpt-5.5",
-                  name: "GPT 5.5",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 200_000,
-                  maxTokens: 128_000,
-                },
-              ],
-            },
-          },
-        },
       } as OpenClawConfig,
     });
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     const options = requireFirstRunOptions();
-    expect(options.provider).toBe("openai");
-    expect(options.model).toBe("gpt-5.5");
-  });
-
-  it("passes hook-level bare model name without a provider so the runner resolves both through its alias chain", async () => {
-    await generateSlugViaLLM({
-      sessionContent: "hello",
-      cfg: {} as OpenClawConfig,
-      model: "gpt-5.5",
-    });
-
-    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    const options = requireFirstRunOptions();
     expect(options.provider).toBeUndefined();
-    expect(options.model).toBe("gpt-5.5");
+    expect(options.model).toBeUndefined();
   });
 
-  it("passes hook-level provider-qualified ref without a separate provider, letting the runner extract it", async () => {
-    await generateSlugViaLLM({
-      sessionContent: "hello",
-      cfg: {} as OpenClawConfig,
-      model: "anthropic/claude-sonnet-4-6",
-    });
+  it.each(["gpt-5.5", "anthropic/claude-sonnet-4-6"])(
+    "passes hook-level model %s to the embedded runner without a provider",
+    async (model) => {
+      await generateSlugViaLLM({
+        sessionContent: "hello",
+        cfg: {} as OpenClawConfig,
+        model,
+      });
 
-    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    const options = requireFirstRunOptions();
-    expect(options.provider).toBeUndefined();
-    expect(options.model).toBe("anthropic/claude-sonnet-4-6");
-  });
-
-  it("uses the agent default model when no hook model override is provided", async () => {
-    await generateSlugViaLLM({
-      sessionContent: "hello",
-      cfg: {
-        agents: {
-          defaults: {
-            model: { primary: "gemini-pro" },
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    const options = requireFirstRunOptions();
-    // Default behavior: provider resolved from config
-    expect(options.provider).toBeDefined();
-    expect(options.model).toBe("gemini-pro");
-  });
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      const options = requireFirstRunOptions();
+      expect(options.provider).toBeUndefined();
+      expect(options.model).toBe(model);
+    },
+  );
 
   it("rejects error payloads before slugifying them into memory filenames", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({

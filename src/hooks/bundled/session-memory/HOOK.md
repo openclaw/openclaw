@@ -61,11 +61,11 @@ When `llmSlug` is enabled, the hook uses your configured LLM provider to generat
 
 The hook supports optional configuration:
 
-| Option     | Type    | Default           | Description                                                                                 |
-| ---------- | ------- | ----------------- | ------------------------------------------------------------------------------------------- |
-| `messages` | number  | 15                | Number of user/assistant messages to include in the memory file                             |
-| `llmSlug`  | boolean | false             | Use your configured model to generate descriptive filename slugs instead of timestamp slugs |
-| `model`    | string  | (agent default)   | Model name or provider-qualified ref to use for LLM slug generation. Supports bare names (`gpt-5.5`), aliases (`claude-sonnet-4-6`), and provider-qualified refs (`anthropic/claude-sonnet-4-6`). When omitted, the agent's default model is used. |
+| Option     | Type    | Default       | Description                                                                                 |
+| ---------- | ------- | ------------- | ------------------------------------------------------------------------------------------- |
+| `messages` | number  | 15            | Number of user/assistant messages to include in the memory file                             |
+| `llmSlug`  | boolean | false         | Use your configured model to generate descriptive filename slugs instead of timestamp slugs |
+| `model`    | string  | agent default | Configured alias, bare model ID on the default provider, or `provider/model` override       |
 
 Example configuration:
 
@@ -77,7 +77,8 @@ Example configuration:
         "session-memory": {
           "enabled": true,
           "messages": 25,
-          "llmSlug": true
+          "llmSlug": true,
+          "model": "sonnet"
         }
       }
     }
@@ -91,6 +92,7 @@ The hook automatically:
 - Uses timestamp slugs by default so `/new` and `/reset` stay fast on message channels
 - Runs memory capture in the background so reset acknowledgements can return immediately
 - Uses your configured LLM for slug generation only when `llmSlug` is `true`
+- Resolves configured aliases such as `sonnet`; bare model IDs use the agent's default provider, while `provider/model` selects another provider
 - Falls back to timestamp slugs if LLM slug generation is unavailable
 
 ## Disabling
