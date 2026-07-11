@@ -1365,4 +1365,15 @@ describe("telegram live qa runtime", () => {
     expect(message).toContain("Phase: unknown");
     expect(message).toContain("boom");
   });
+
+  it("keeps bounded telegram QA progress details on UTF-16 boundaries", () => {
+    // Regression: progress detail truncation used .slice(0, limit - 3),
+    // which can split an emoji surrogate pair and render as �.
+    const prefix = "a".repeat(237);
+    const details = testing.formatTelegramQaProgressDetails(`${prefix}😀after`);
+
+    expect(details).toBe(`${prefix}...`);
+    expect(details).not.toContain("�");
+    expect(details.length).toBe(240);
+  });
 });
