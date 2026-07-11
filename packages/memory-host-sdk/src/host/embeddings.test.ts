@@ -247,7 +247,7 @@ describe("local embedding provider", () => {
     );
   });
 
-  it("reports selected backend, memory, offload, and effective context facts", async () => {
+  it("reports selected backend, memory, offload, and requested context facts", async () => {
     mockLocalEmbeddingRuntime();
     const provider = await createLocalEmbeddingProviderInProcess({
       config: {} as never,
