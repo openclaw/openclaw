@@ -68,6 +68,52 @@ describe("reconcileOrphanedRun", () => {
     expect(runs.has(entry.runId)).toBe(false);
     expect(resumedRuns.has(entry.runId)).toBe(false);
   });
+
+  it("is a safe no-op when invoked twice for the same run (concurrent resume + sweep triggers)", () => {
+    // The registry has no lock around orphan reconciliation: the sweep loop's
+    // inline orphan check and a directly-triggered resumeSubagentRun() call
+    // can both observe the same live entry reference and independently
+    // decide to reconcile it before either has run. Pin down that a second
+    // call — same object reference, same reason, later timestamp — does not
+    // re-stamp timing/outcome or throw, and leaves the map/set state stable.
+    vi.useFakeTimers();
+    vi.setSystemTime(4_000);
+    const entry = createRunEntry();
+    const runs = new Map([[entry.runId, entry]]);
+    const resumedRuns = new Set([entry.runId]);
+
+    const firstResult = reconcileOrphanedRun({
+      runId: entry.runId,
+      entry,
+      reason: "missing-session-id",
+      source: "resume",
+      runs,
+      resumedRuns,
+    });
+    expect(firstResult).toBe(true);
+    const outcomeAfterFirstCall = { ...entry.outcome };
+    const endedAtAfterFirstCall = entry.endedAt;
+
+    vi.setSystemTime(9_000);
+    resumedRuns.add(entry.runId);
+    let secondResult: boolean | undefined;
+    expect(() => {
+      secondResult = reconcileOrphanedRun({
+        runId: entry.runId,
+        entry,
+        reason: "missing-session-id",
+        source: "resume",
+        runs,
+        resumedRuns,
+      });
+    }).not.toThrow();
+
+    expect(secondResult).toBe(false);
+    expect(entry.endedAt).toBe(endedAtAfterFirstCall);
+    expect(entry.outcome).toEqual(outcomeAfterFirstCall);
+    expect(runs.has(entry.runId)).toBe(false);
+    expect(resumedRuns.has(entry.runId)).toBe(false);
+  });
 });
 
 describe("logAnnounceGiveUp", () => {
