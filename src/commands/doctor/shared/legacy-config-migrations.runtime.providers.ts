@@ -16,6 +16,10 @@ const OPENAI_PLUGIN_ID = "openai";
 const LEGACY_CODEX_SUPERVISOR_PLUGIN_ID = "codex-supervisor";
 const CODEX_PLUGIN_ID = "codex";
 
+function normalizePluginIdForMigration(value: unknown): string | undefined {
+  return typeof value === "string" ? value.trim().toLowerCase() : undefined;
+}
+
 const BUNDLED_DISCOVERY_COMPAT_RULE: LegacyConfigRule = {
   path: ["plugins", "allow"],
   message:
@@ -56,20 +60,22 @@ function rewritePluginIdList(
   const seen = new Set<string>();
   const next: unknown[] = [];
   for (const entry of value) {
-    if (entry === legacyPluginId && replacementPluginId === undefined) {
+    const matchesLegacy = normalizePluginIdForMigration(entry) === legacyPluginId;
+    if (matchesLegacy && replacementPluginId === undefined) {
       changed = true;
       continue;
     }
-    const replacement = entry === legacyPluginId ? replacementPluginId : entry;
+    const replacement = matchesLegacy ? replacementPluginId : entry;
     if (replacement !== entry) {
       changed = true;
     }
     if (typeof replacement === "string") {
-      if (seen.has(replacement)) {
+      const normalizedReplacement = normalizePluginIdForMigration(replacement) ?? replacement;
+      if (seen.has(normalizedReplacement)) {
         changed = true;
         continue;
       }
-      seen.add(replacement);
+      seen.add(normalizedReplacement);
     }
     next.push(replacement);
   }
@@ -131,13 +137,16 @@ function migrateLegacyCodexSupervisorEntry(
   entries: Record<string, unknown>,
   legacySupervisorDenied: boolean,
 ): "migrated" | "removed-invalid" | null {
-  if (!Object.hasOwn(entries, LEGACY_CODEX_SUPERVISOR_PLUGIN_ID)) {
+  const legacyEntryKey = Object.keys(entries).find(
+    (key) => normalizePluginIdForMigration(key) === LEGACY_CODEX_SUPERVISOR_PLUGIN_ID,
+  );
+  if (!legacyEntryKey) {
     return null;
   }
 
-  const rawLegacyEntry = entries[LEGACY_CODEX_SUPERVISOR_PLUGIN_ID];
+  const rawLegacyEntry = entries[legacyEntryKey];
   if (!isRecord(rawLegacyEntry)) {
-    delete entries[LEGACY_CODEX_SUPERVISOR_PLUGIN_ID];
+    delete entries[legacyEntryKey];
     return "removed-invalid";
   }
   const legacyEntry = rawLegacyEntry;
@@ -177,7 +186,7 @@ function migrateLegacyCodexSupervisorEntry(
   }
   mergeMissing(supervision, migratedSupervision);
 
-  delete entries[LEGACY_CODEX_SUPERVISOR_PLUGIN_ID];
+  delete entries[legacyEntryKey];
   return "migrated";
 }
 
@@ -189,7 +198,10 @@ function migrateLegacyCodexSupervisorPlugin(raw: Record<string, unknown>): strin
 
   const changes: string[] = [];
   const legacySupervisorDenied =
-    Array.isArray(plugins.deny) && plugins.deny.includes(LEGACY_CODEX_SUPERVISOR_PLUGIN_ID);
+    Array.isArray(plugins.deny) &&
+    plugins.deny.some(
+      (entry) => normalizePluginIdForMigration(entry) === LEGACY_CODEX_SUPERVISOR_PLUGIN_ID,
+    );
   const entries = isRecord(plugins.entries) ? plugins.entries : undefined;
   const entryMigration = entries
     ? migrateLegacyCodexSupervisorEntry(entries, legacySupervisorDenied)

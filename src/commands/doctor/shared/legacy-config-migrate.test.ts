@@ -1975,6 +1975,29 @@ describe("legacy migrate x_search auth", () => {
 });
 
 describe("legacy Codex Supervisor config migrate", () => {
+  it("normalizes padded legacy plugin ids during migration", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        allow: [" CODEX-SUPERVISOR ", "codex"],
+        deny: [" codex-supervisor "],
+        entries: {
+          " CODEX-SUPERVISOR ": {
+            enabled: true,
+            config: { allowWriteControls: true },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.plugins?.allow).toEqual(["codex"]);
+    expect(res.config?.plugins?.deny).toEqual([]);
+    expect(res.config?.plugins?.entries).not.toHaveProperty(" CODEX-SUPERVISOR ");
+    expect(res.config?.plugins?.entries?.codex?.config?.supervision).toEqual({
+      enabled: false,
+      allowWriteControls: true,
+    });
+  });
+
   it("moves active Supervisor config into Codex supervision and rewrites the allowlist", () => {
     const raw = {
       plugins: {

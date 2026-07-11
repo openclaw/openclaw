@@ -651,10 +651,10 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(OpenClawConfigFile.configuredBundledPluginAllowed(
+        #expect(!OpenClawConfigFile.configuredBundledPluginAllowed(
             "codex",
             root: omittedByAllowlist))
-        #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: omittedByAllowlist))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: omittedByAllowlist))
 
         let paddedIds: [String: Any] = [
             "plugins": [

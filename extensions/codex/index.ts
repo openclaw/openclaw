@@ -71,20 +71,22 @@ export default definePluginEntry({
       if (!liveConfig) {
         return api.pluginConfig;
       }
+      const livePluginConfig = resolveLivePluginConfigObject(
+        () => liveConfig,
+        "codex",
+        api.pluginConfig as Record<string, unknown>,
+      );
       const enabled = resolveEffectiveEnableState({
         id: "codex",
         origin: "bundled",
         config: normalizePluginsConfig(liveConfig.plugins),
         rootConfig: liveConfig,
+        enabledByDefault: readCodexPluginConfig(livePluginConfig).supervision?.enabled === true,
       }).enabled;
       if (!enabled) {
         return undefined;
       }
-      return resolveLivePluginConfigObject(
-        () => liveConfig,
-        "codex",
-        api.pluginConfig as Record<string, unknown>,
-      );
+      return livePluginConfig;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
     const bindingStore = createLazyCodexAppServerBindingStore(

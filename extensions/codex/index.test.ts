@@ -171,7 +171,7 @@ describe("codex plugin", () => {
     expect(registration?.[0]({})).toEqual([]);
   });
 
-  it("reads live supervision config through a normalized Codex entry id", () => {
+  it("activates from live supervision config through a normalized Codex entry id", () => {
     const registerTool = vi.fn();
     plugin.register(
       createTestPluginApi({
@@ -184,7 +184,6 @@ describe("codex plugin", () => {
           plugins: {
             entries: {
               " CODEX ": {
-                enabled: true,
                 config: { supervision: { enabled: true } },
               },
             },
