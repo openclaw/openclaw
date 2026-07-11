@@ -1,6 +1,7 @@
 // Xai tests cover tts plugin behavior.
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import type { RawData } from "ws";
 import {
   assertXaiNativeTtsStreamEndpoint,
   decodeWebSocketTextMessage,
@@ -139,14 +140,16 @@ describe("xai tts", () => {
 
   describe("decodeWebSocketTextMessage", () => {
     it("decodes supported WebSocket payload shapes", () => {
-      expect(decodeWebSocketTextMessage('{"type":"audio.done"}')).toBe('{"type":"audio.done"}');
+      expect(decodeWebSocketTextMessage(Buffer.from('{"type":"audio.done"}'))).toBe(
+        '{"type":"audio.done"}',
+      );
       expect(decodeWebSocketTextMessage(Buffer.from("buf", "utf8"))).toBe("buf");
       expect(decodeWebSocketTextMessage(new TextEncoder().encode("view").buffer)).toBe("view");
       expect(decodeWebSocketTextMessage([Buffer.from("a"), Buffer.from("b")])).toBe("ab");
     });
 
     it("rejects unsupported WebSocket payload shapes", () => {
-      expect(() => decodeWebSocketTextMessage(42 as unknown as string)).toThrow(
+      expect(() => decodeWebSocketTextMessage(42 as unknown as RawData)).toThrow(
         "unsupported WebSocket message payload",
       );
     });
@@ -159,7 +162,7 @@ describe("xai tts", () => {
 
     it("rejects the native host over HTTP", () => {
       expect(() => assertXaiNativeTtsStreamEndpoint("http://api.x.ai/v1")).toThrow(
-        "only supports HTTPS for the native api.x.ai endpoint; got protocol \"http:\"",
+        'only supports HTTPS for the native api.x.ai endpoint; got protocol "http:"',
       );
     });
 
@@ -385,7 +388,9 @@ describe("xai tts", () => {
       expect(deltas.join("")).toBe(text);
       for (const delta of deltas) {
         expect(delta.length).toBeLessThanOrEqual(15_000);
-        expect(delta).not.toMatch(/(?:[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF])/u);
+        expect(delta).not.toMatch(
+          /(?:[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF])/u,
+        );
       }
 
       ws?.emit("message", JSON.stringify({ type: "audio.done" }));

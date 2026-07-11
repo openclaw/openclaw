@@ -46,6 +46,7 @@ type XaiTtsProviderOverrides = {
   voiceId?: string;
   language?: string;
   speed?: number;
+  responseFormat?: XaiSpeechResponseFormat;
 };
 
 function normalizeXaiSpeechSpeed(value: unknown): number | undefined {
@@ -131,6 +132,7 @@ function readXaiOverrides(overrides: SpeechProviderOverrides | undefined): XaiTt
     voiceId: trimToUndefined(overrides.voiceId ?? overrides.voice),
     language: normalizeXaiLanguageCode(trimToUndefined(overrides.language)),
     speed: normalizeXaiSpeechSpeed(overrides.speed),
+    responseFormat: normalizeXaiSpeechResponseFormat(overrides.responseFormat),
   };
 }
 
@@ -244,7 +246,10 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
       const config = readXaiProviderConfig(req.providerConfig);
       const overrides = readXaiOverrides(req.providerOverrides);
       const apiKey = await resolveXaiAudioApiKey(config.apiKey, req.cfg);
-      const responseFormat = resolveSpeechResponseFormat(req.target, config.responseFormat);
+      const responseFormat = resolveSpeechResponseFormat(
+        req.target,
+        overrides.responseFormat ?? config.responseFormat,
+      );
       const audioBuffer = await xaiTTS({
         text: req.text,
         apiKey,
@@ -266,8 +271,11 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
     streamSynthesize: async (req) => {
       const config = readXaiProviderConfig(req.providerConfig);
       const overrides = readXaiOverrides(req.providerOverrides);
+      const responseFormat = resolveSpeechResponseFormat(
+        req.target,
+        overrides.responseFormat ?? config.responseFormat,
+      );
       const apiKey = await resolveXaiAudioApiKey(config.apiKey, req.cfg);
-      const responseFormat = resolveSpeechResponseFormat(req.target, config.responseFormat);
       const stream = await xaiTTSStream({
         text: req.text,
         apiKey,

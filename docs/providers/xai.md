@@ -349,7 +349,9 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     `wss://api.x.ai/v1/tts` for streaming synthesis. Streaming is restricted to
     the native `api.x.ai` host, so custom `baseUrl` values are rejected on this
     path. It uses the existing language, voice, codec, and speed controls; xAI
-    defaults apply to sample rate and bit rate. The stream sends `text.delta` then
+    defaults apply to sample rate and bit rate. Discord voice requests MP3 for
+    streaming playback while preserving the configured format for buffered
+    fallback. The stream sends `text.delta` then
     `text.done`, receives `audio.delta`, `audio.done`, or `error`, and applies an
     idle `timeoutMs` that refreshes for every audio chunk. It is separate from
     realtime voice sessions. See xAI's [Streaming TTS (WebSocket)](https://docs.x.ai/docs/guides/voice#streaming-tts-websocket) contract.

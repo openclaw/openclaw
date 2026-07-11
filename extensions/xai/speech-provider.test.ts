@@ -77,6 +77,8 @@ function requireLastTtsCall(): {
 
 describe("xai speech provider", () => {
   afterEach(() => {
+    xaiTTSMock.mockClear();
+    xaiTTSStreamMock.mockClear();
     isProviderAuthProfileConfiguredMock.mockReset();
     isProviderAuthProfileConfiguredMock.mockReturnValue(false);
     resolveApiKeyForProviderMock.mockReset();
@@ -123,6 +125,30 @@ describe("xai speech provider", () => {
     });
     await result?.release?.();
   });
+
+  it.each(["wav", "pcm", "mulaw", "alaw"] as const)(
+    "streams %s when requested by a compatible caller",
+    async (responseFormat) => {
+      const provider = buildXaiSpeechProvider();
+
+      const result = await provider.streamSynthesize?.({
+        text: "hello",
+        cfg: {},
+        providerConfig: {
+          apiKey: "xai-key",
+          responseFormat,
+        },
+        target: "audio-file",
+        timeoutMs: 5_000,
+      });
+      expect(result?.outputFormat).toBe(responseFormat);
+      const streamParams = (
+        xaiTTSStreamMock.mock.calls as unknown as Array<[Record<string, unknown>]>
+      ).at(-1)?.[0];
+      expect(streamParams?.responseFormat).toBe(responseFormat);
+      await result?.release?.();
+    },
+  );
 
   it("synthesizes mp3 audio and does not claim native voice-note compatibility", async () => {
     const provider = buildXaiSpeechProvider();
