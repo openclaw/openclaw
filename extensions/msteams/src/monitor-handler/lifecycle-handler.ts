@@ -123,6 +123,12 @@ function hasMSTeamsProviderBinding(entry: MSTeamsResetCandidateEntry): boolean {
   );
 }
 
+function needsMSTeamsLifecycleRotation(entry: MSTeamsResetCandidateEntry): boolean {
+  // Discord-style stale markers only set updatedAt to 0. Teams lifecycle resets
+  // also need to clear provider binding metadata that can survive older resets.
+  return entry.updatedAt !== 0 || hasMSTeamsProviderBinding(entry);
+}
+
 export async function rotateMSTeamsSessions(params: {
   deps: MSTeamsMessageHandlerDeps;
   routeSessionKey: string;
@@ -142,7 +148,7 @@ export async function rotateMSTeamsSessions(params: {
         routeSessionKey: params.routeSessionKey,
         includeChannelThreads: params.includeChannelThreads,
       }) ||
-      (entry.updatedAt === 0 && !hasMSTeamsProviderBinding(entry))
+      !needsMSTeamsLifecycleRotation(entry)
     ) {
       continue;
     }
@@ -156,7 +162,7 @@ export async function rotateMSTeamsSessions(params: {
         if (current.updatedAt !== entry.updatedAt || current.sessionId !== entry.sessionId) {
           return null;
         }
-        if (current.updatedAt === 0 && !hasMSTeamsProviderBinding(current)) {
+        if (!needsMSTeamsLifecycleRotation(current)) {
           return null;
         }
         resetEntry = true;

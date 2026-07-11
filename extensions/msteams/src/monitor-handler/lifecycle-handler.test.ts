@@ -140,6 +140,8 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(store["msteams:direct:user-aad"].route).toBeUndefined();
     expect(store["msteams:direct:user-aad"].deliveryContext).toBeUndefined();
     expect(store["msteams:direct:user-aad"].lastChannel).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].lastTo).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].lastAccountId).toBeUndefined();
     expect(store["msteams:direct:user-aad"].origin).toBeUndefined();
     expect(store["msteams:direct:other-user"].updatedAt).toBe(2_000);
   });
