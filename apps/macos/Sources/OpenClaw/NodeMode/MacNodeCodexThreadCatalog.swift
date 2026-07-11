@@ -322,7 +322,7 @@ extension MacNodeCodexThreadCatalog {
         guard self.supportsConfiguredHomeScope(appServer) else {
             throw CatalogError.unsupportedAppServerHomeScope
         }
-        let configuredCommand = appServer?.command
+        let configuredCommand = self.nonEmptyString(appServer?.command)
         let environmentCommand = self.nonEmptyString(environment[self.commandEnvironmentKey])
         let customCommand = configuredCommand ?? environmentCommand
         let rawCommand = customCommand ?? "codex"

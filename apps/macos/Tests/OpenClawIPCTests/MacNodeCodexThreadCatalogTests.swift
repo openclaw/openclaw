@@ -269,6 +269,29 @@ struct MacNodeCodexThreadCatalogTests {
         #expect(resolved.executable == configured.executable.path)
     }
 
+    @Test func `blank configured command falls back to the environment command`() throws {
+        let fallback = try makeFakeCodex("#!/bin/sh\nexit 0\n")
+        defer { try? FileManager.default.removeItem(at: fallback.directory) }
+        let root: [String: Any] = [
+            "plugins": [
+                "entries": [
+                    "codex": [
+                        "config": [
+                            "appServer": ["command": "  \n "],
+                        ],
+                    ],
+                ],
+            ],
+        ]
+
+        let resolved = try MacNodeCodexThreadCatalog.resolveInvocation(
+            root: root,
+            environment: ["OPENCLAW_CODEX_APP_SERVER_BIN": fallback.executable.path],
+            searchPaths: [])
+
+        #expect(resolved.executable == fallback.executable.path)
+    }
+
     @Test func `complete official plugin config remains eligible for the catalog`() throws {
         let app = try makeFakeCodex("#!/bin/sh\nexit 0\n")
         defer { try? FileManager.default.removeItem(at: app.directory) }
@@ -511,6 +534,22 @@ struct MacNodeCodexThreadCatalogTests {
 
         #expect(loadCount == 1)
         #expect((response["sessions"] as? [Any])?.isEmpty == true)
+    }
+
+    @Test func `does not advertise when the plugin allowlist excludes Codex`() {
+        let root: [String: Any] = [
+            "plugins": [
+                "allow": ["discord"],
+                "entries": [
+                    "codex": [
+                        "enabled": true,
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                ],
+            ],
+        ]
+
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: root))
     }
 
     @Test func `rejects agent home scope instead of exposing the user Codex home`() throws {

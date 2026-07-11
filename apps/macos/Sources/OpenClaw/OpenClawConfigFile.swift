@@ -276,7 +276,10 @@ extension OpenClawConfigFile {
         }
 
         let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
-        return !deny.contains(pluginId)
+        if deny.contains(pluginId) { return false }
+
+        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        return allow.isEmpty || allow.contains(pluginId)
     }
 
     static func explicitlyEnabledPluginConfigFlag(

@@ -126,6 +126,15 @@ describe("Codex app-server websocket transport", () => {
       }),
     ).toBe("/tmp/custom-codex-home/app-server-control/app-server-control.sock");
   });
+
+  it("rejects unix URLs unless the unix transport is explicit", () => {
+    expect(() =>
+      resolveCodexAppServerUnixSocketPath({
+        transport: "websocket",
+        url: "unix://",
+      }),
+    ).toThrow("codex app-server unix URL requires unix transport");
+  });
 });
 
 function rawDataToText(data: RawData): string {

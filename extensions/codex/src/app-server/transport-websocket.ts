@@ -111,7 +111,10 @@ export function connectCodexAppServerUnixSocket(socketPath: string): net.Socket 
 export function resolveCodexAppServerUnixSocketPath(
   options: Pick<CodexAppServerStartOptions, "env" | "transport" | "url">,
 ): string | undefined {
-  if (options.transport !== "unix" && !options.url?.startsWith("unix://")) {
+  if (options.transport !== "unix") {
+    if (options.url?.startsWith("unix://")) {
+      throw new Error("codex app-server unix URL requires unix transport");
+    }
     return undefined;
   }
   const url = options.url ?? "unix://";
