@@ -1009,6 +1009,7 @@ describe("resolvePinnedClientMetadata", () => {
   it.each([
     ["node-host", "macOS 26.5.2", "macOS 26.5.1"],
     ["openclaw-macos", "macOS anything", "macOS previous"],
+    ["openclaw-macos", "macOS", "macOS 26.5.1"],
   ])(
     "keeps non-version macOS platform changes approval-bound for %s",
     (clientId, claimed, paired) => {

@@ -443,7 +443,10 @@ function resolvePinnedClientMetadata(params: {
     }
   }
 
-  function normalizeNativeAppPlatformPin(clientId: string | undefined, value: string): string {
+  function resolveNativeAppPlatformFamily(
+    clientId: string | undefined,
+    value: string,
+  ): string | undefined {
     if (clientId === GATEWAY_CLIENT_IDS.IOS_APP && /^(?:ios|ipados)(?:\s|$)/.test(value)) {
       return "ios-family";
     }
@@ -453,7 +456,7 @@ function resolvePinnedClientMetadata(params: {
     if (clientId === GATEWAY_CLIENT_IDS.MACOS_APP && /^macos \d+(?:\.\d+){0,2}$/.test(value)) {
       return "macos";
     }
-    return value;
+    return undefined;
   }
 
   const claimedPlatform = normalizeDeviceMetadataForAuth(params.claimedPlatform);
@@ -469,12 +472,20 @@ function resolvePinnedClientMetadata(params: {
     claimedPlatform !== "" &&
     normalizeLegacyNodeHostPlatformPin(claimedPlatform) ===
       normalizeLegacyNodeHostPlatformPin(pairedPlatform);
+  const claimedNativeAppPlatformFamily = resolveNativeAppPlatformFamily(
+    params.clientId,
+    claimedPlatform,
+  );
+  const pairedNativeAppPlatformFamily = resolveNativeAppPlatformFamily(
+    params.clientId,
+    pairedPlatform,
+  );
   const isNativeAppPlatformVersionRefresh =
     hasPinnedPlatform &&
     claimedPlatform !== "" &&
     claimedPlatform !== pairedPlatform &&
-    normalizeNativeAppPlatformPin(params.clientId, claimedPlatform) ===
-      normalizeNativeAppPlatformPin(params.clientId, pairedPlatform);
+    claimedNativeAppPlatformFamily !== undefined &&
+    claimedNativeAppPlatformFamily === pairedNativeAppPlatformFamily;
   const platformMismatch =
     hasPinnedPlatform &&
     claimedPlatform !== pairedPlatform &&
