@@ -9,6 +9,7 @@ const MAX_ACTIVATION_ID_BYTES = 256;
 const CONTROL_HOST = "127.0.0.1";
 const SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
 type ShutdownSignal = (typeof SIGNALS)[number];
+type DefaultExitSignal = "SIGTERM" | "SIGINT";
 
 type ProcessEnv = Record<string, string | undefined>;
 
@@ -61,6 +62,13 @@ function parseActivationId(value: unknown): string {
   return activationId;
 }
 
+function parseControlToken(value: string): string {
+  if (value.trim().length === 0) {
+    throw new Error("deferred activation control token must be non-empty");
+  }
+  return value;
+}
+
 function parseControlPort(value: string): number {
   if (!/^\d+$/.test(value)) {
     throw new Error("invalid deferred activation control port");
@@ -101,15 +109,16 @@ async function waitForDeferredGatewayActivationOnce(
 ): Promise<DeferredActivationResult> {
   const env = params.env ?? process.env;
   const controlPortValue = env[CONTROL_PORT_ENV];
-  const controlToken = env[CONTROL_TOKEN_ENV];
+  const controlTokenValue = env[CONTROL_TOKEN_ENV];
 
-  if (controlPortValue === undefined && controlToken === undefined) {
+  if (controlPortValue === undefined && controlTokenValue === undefined) {
     return { mode: "disabled" };
   }
-  if (controlPortValue === undefined || controlToken === undefined) {
+  if (controlPortValue === undefined || controlTokenValue === undefined) {
     throw new Error("control port and token must be configured together");
   }
 
+  const controlToken = parseControlToken(controlTokenValue);
   const controlPort = parseControlPort(controlPortValue);
   await params.preload?.();
 
@@ -154,20 +163,58 @@ async function waitForDeferredGatewayActivationOnce(
     });
     activeServer = server;
 
-    const closeServerAndReject = (error: Error) => {
+    const closeServer = (onClosed: (error: Error | null) => void) => {
+      if (!server.listening) {
+        if (activeServer === server) {
+          activeServer = null;
+        }
+        onClosed(null);
+        return;
+      }
+      server.close((closeError) => {
+        if (activeServer === server) {
+          activeServer = null;
+        }
+        onClosed(closeError ?? null);
+      });
+      server.closeAllConnections();
+    };
+
+    const closeServerAndResolve = (result: DeferredActivationResult) => {
       if (state === "settled") {
         return;
       }
       state = "closing";
       cleanupSignalHandlers();
-      if (!server.listening) {
-        activeServer = null;
-        settleReject(error);
+      closeServer((closeError) => {
+        if (closeError) {
+          settleReject(closeError);
+        } else {
+          settleResolve(result);
+        }
+      });
+    };
+
+    const closeServerAndReject = (error: Error, resignal?: DefaultExitSignal) => {
+      if (state === "settled") {
         return;
       }
-      server.close((closeError) => {
-        activeServer = null;
-        settleReject(closeError ?? error);
+      state = "closing";
+      cleanupSignalHandlers();
+      closeServer((closeError) => {
+        const finalError = closeError ?? error;
+        if (resignal) {
+          // Re-emit default-exit signals only after the parked listener is closed
+          // so this helper does not turn a normal signal exit into code 1.
+          try {
+            process.kill(process.pid, resignal);
+          } catch (killError) {
+            const reason = killError instanceof Error ? killError : new Error(String(killError));
+            settleReject(reason);
+            return;
+          }
+        }
+        settleReject(finalError);
       });
     };
 
@@ -175,7 +222,10 @@ async function waitForDeferredGatewayActivationOnce(
       if (state !== "open") {
         return;
       }
-      closeServerAndReject(new Error(`deferred activation interrupted by ${signal}`));
+      closeServerAndReject(
+        new Error(`deferred activation interrupted by ${signal}`),
+        signal === "SIGTERM" || signal === "SIGINT" ? signal : undefined,
+      );
     };
 
     for (const signal of SIGNALS) {
@@ -262,15 +312,8 @@ async function waitForDeferredGatewayActivationOnce(
         state = "accepted";
         response.writeHead(202, { "content-type": "application/json" });
         response.end(JSON.stringify({ status: "accepted", activationId }), () => {
-          cleanupSignalHandlers();
-          server.close((error) => {
-            activeServer = null;
-            if (error) {
-              settleReject(error);
-            } else {
-              settleResolve({ mode: "activated", activationId });
-            }
-          });
+          // Let the accepted 202 body flush before forcing all parked sockets closed.
+          closeServerAndResolve({ mode: "activated", activationId });
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "invalid activation request";
@@ -294,5 +337,6 @@ export async function resetDeferredGatewayActivationForTest(): Promise<void> {
   }
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
+    server.closeAllConnections();
   });
 }
