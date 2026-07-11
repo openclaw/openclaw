@@ -1,6 +1,6 @@
 import { ChannelType } from "discord-api-types/v10";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
-import type { ConversationReadInvocationOrigin } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 // Discord plugin module implements runtime.messaging.shared behavior.
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { mergeDiscordAccountConfig, resolveDefaultDiscordAccountId } from "../accounts.js";
@@ -22,6 +22,10 @@ import {
 import type { DiscordReactOpts } from "../send.types.js";
 import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 import { createDiscordActionOptions } from "./runtime.shared.js";
+
+type ConversationReadInvocationOrigin = NonNullable<
+  ChannelMessageActionContext["conversationReadOrigin"]
+>;
 
 export type DiscordMessagingActionOptions = {
   mediaAccess?: {

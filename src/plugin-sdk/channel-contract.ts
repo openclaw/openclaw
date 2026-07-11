@@ -20,7 +20,6 @@ export type {
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
   ChannelMeta,
-  ConversationReadInvocationOrigin,
   ChannelStructuredComponents,
   ChannelStatusIssue,
   ChannelThreadingContext,

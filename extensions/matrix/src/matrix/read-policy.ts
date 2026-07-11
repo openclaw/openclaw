@@ -1,5 +1,5 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { ConversationReadInvocationOrigin } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -20,6 +20,10 @@ import { resolveMatrixRoomConfig } from "./monitor/rooms.js";
 import type { MatrixClient } from "./sdk.js";
 import { resolveMatrixRoomId } from "./send/targets.js";
 import { normalizeMatrixResolvableTarget } from "./target-ids.js";
+
+type ConversationReadInvocationOrigin = NonNullable<
+  ChannelMessageActionContext["conversationReadOrigin"]
+>;
 
 export type MatrixReadContext = {
   accountId?: string | null;

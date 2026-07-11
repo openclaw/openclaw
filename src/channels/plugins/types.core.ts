@@ -21,8 +21,6 @@ import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { ChannelId } from "./channel-id.types.js";
 import type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
-
-export type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type { ChannelId } from "./channel-id.types.js";

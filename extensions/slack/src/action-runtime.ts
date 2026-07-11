@@ -2,7 +2,7 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
-import type { ConversationReadInvocationOrigin } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
@@ -23,6 +23,10 @@ import {
   withNormalizedTimestamp,
 } from "./runtime-api.js";
 import { parseSlackTarget, resolveSlackChannelId, slackContextTargetsMatch } from "./targets.js";
+
+type ConversationReadInvocationOrigin = NonNullable<
+  ChannelMessageActionContext["conversationReadOrigin"]
+>;
 
 const messagingActions = new Set([
   "sendMessage",

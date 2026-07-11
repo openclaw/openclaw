@@ -870,6 +870,7 @@ public struct MessageActionParams: Codable, Sendable {
     public let inboundturnkind: String?
     public let agentid: String?
     public let toolcontext: [String: AnyCodable]?
+    public let conversationreadorigin: String?
     public let idempotencykey: String
 
     public init(
@@ -885,6 +886,7 @@ public struct MessageActionParams: Codable, Sendable {
         inboundturnkind: String? = nil,
         agentid: String? = nil,
         toolcontext: [String: AnyCodable]? = nil,
+        conversationreadorigin: String? = nil,
         idempotencykey: String)
     {
         self.channel = channel
@@ -899,6 +901,7 @@ public struct MessageActionParams: Codable, Sendable {
         self.inboundturnkind = inboundturnkind
         self.agentid = agentid
         self.toolcontext = toolcontext
+        self.conversationreadorigin = conversationreadorigin
         self.idempotencykey = idempotencykey
     }
 
@@ -915,6 +918,7 @@ public struct MessageActionParams: Codable, Sendable {
         case inboundturnkind = "inboundTurnKind"
         case agentid = "agentId"
         case toolcontext = "toolContext"
+        case conversationreadorigin = "conversationReadOrigin"
         case idempotencykey = "idempotencyKey"
     }
 }
@@ -6742,6 +6746,7 @@ public struct ToolsInvokeParams: Codable, Sendable {
     public let agentid: String?
     public let confirm: Bool?
     public let idempotencykey: String?
+    public let conversationreadorigin: String?
 
     public init(
         name: String,
@@ -6749,7 +6754,8 @@ public struct ToolsInvokeParams: Codable, Sendable {
         sessionkey: String? = nil,
         agentid: String? = nil,
         confirm: Bool? = nil,
-        idempotencykey: String? = nil)
+        idempotencykey: String? = nil,
+        conversationreadorigin: String? = nil)
     {
         self.name = name
         self.args = args
@@ -6757,6 +6763,7 @@ public struct ToolsInvokeParams: Codable, Sendable {
         self.agentid = agentid
         self.confirm = confirm
         self.idempotencykey = idempotencykey
+        self.conversationreadorigin = conversationreadorigin
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6766,6 +6773,7 @@ public struct ToolsInvokeParams: Codable, Sendable {
         case agentid = "agentId"
         case confirm
         case idempotencykey = "idempotencyKey"
+        case conversationreadorigin = "conversationReadOrigin"
     }
 }
 
