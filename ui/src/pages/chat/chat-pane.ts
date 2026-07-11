@@ -87,7 +87,6 @@ import {
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
 import { chatAttachmentFromDataUrl } from "./components/chat-composer.ts";
-import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import {
   chatPullRequestId,
@@ -120,6 +119,7 @@ import {
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
+import { configureToolTitleFetcher } from "./tool-titles.ts";
 
 type ChatPageContext = ApplicationContext;
 type PaneSessionChangeOptions = { replace?: boolean };
