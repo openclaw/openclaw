@@ -248,6 +248,35 @@ describe("resolveShellFromPath", () => {
   });
 
   if (isWin) {
+    it("finds a `name.exe` shell on PATH when a bare `name` is absent", () => {
+      const binDir = createTempCommandDir(tempDirs, [{ name: "pwsh.exe" }]);
+      process.env.PATH = binDir;
+      expect(resolveShellFromPath("pwsh")).toBe(path.join(binDir, "pwsh.exe"));
+    });
+
+    it("prefers a bare `name` match over `name.exe` when both exist", () => {
+      const plainDir = createTempCommandDir(tempDirs, [{ name: "pwsh" }]);
+      const exeDir = createTempCommandDir(tempDirs, [{ name: "pwsh.exe" }]);
+      process.env.PATH = [plainDir, exeDir].join(path.delimiter);
+      expect(resolveShellFromPath("pwsh")).toBe(path.join(plainDir, "pwsh"));
+    });
+
+    it("resolves pwsh on PATH so resolvePowerShellPath prefers it over 5.1", () => {
+      const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pfiles-"));
+      const binDir = createTempCommandDir(tempDirs, [{ name: "pwsh.exe" }]);
+      const sysRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sysroot-"));
+      const ps51Dir = path.join(sysRoot, "System32", "WindowsPowerShell", "v1.0");
+      fs.mkdirSync(ps51Dir, { recursive: true });
+      fs.writeFileSync(path.join(ps51Dir, "powershell.exe"), "");
+      tempDirs.push(programFiles, sysRoot);
+      process.env.ProgramFiles = programFiles;
+      process.env.SystemRoot = sysRoot;
+      process.env.PATH = binDir;
+      delete process.env.ProgramW6432;
+      delete process.env.WINDIR;
+      expect(resolvePowerShellPath()).toBe(path.join(binDir, "pwsh.exe"));
+    });
+
     return;
   }
 

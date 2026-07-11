@@ -173,13 +173,28 @@ export function resolveShellFromPath(
     return undefined;
   }
   const entries = envPath.split(path.delimiter).filter(Boolean);
+  // On Windows, PowerShell 7 delivered via the Microsoft Store / App Execution
+  // Alias (and most portable installs) ships as `pwsh.exe`. resolvePowerShellPath()
+  // step 3 only probed a bare `pwsh`, so fs.accessSync missed the real binary and
+  // discovery fell through to Windows PowerShell 5.1.
+  //
+  // Probe `.exe` as well, mirroring the existing pattern in resolveWindowsBashPath
+  // ("bash.exe" / "bash"). Only `.exe` is added: `.cmd`/`.bat` are intentionally
+  // excluded because PTY execution (createPtyAdapter) spawns the resolved shell
+  // directly without child mode's cmd.exe wrapping, so a `pwsh.cmd` here could
+  // be selected and then fail in PTY mode. `.exe` is directly executable in both
+  // modes. Non-Windows behavior is unchanged.
+  const executableExtensions = process.platform === "win32" ? [".exe"] : [];
   for (const entry of entries) {
-    const candidate = path.join(entry, name);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      // ignore missing or non-executable entries
+    const base = path.join(entry, name);
+    const candidates = [base, ...executableExtensions.map((ext) => base + ext)];
+    for (const candidate of candidates) {
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      } catch {
+        // ignore missing or non-executable entries
+      }
     }
   }
   return undefined;
