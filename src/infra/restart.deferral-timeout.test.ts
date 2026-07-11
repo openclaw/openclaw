@@ -4,6 +4,8 @@ import {
   testing,
   consumeGatewaySigusr1RestartIntent,
   deferGatewayRestartUntilIdle,
+  scheduleGatewaySigusr1Restart,
+  setPreRestartDeferralCheck,
   type RestartDeferralHooks,
 } from "./restart.js";
 
@@ -160,5 +162,39 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
 
     expect(hooks.onCheckError).toHaveBeenCalledOnce();
     expect(hooks.onReady).not.toHaveBeenCalled();
+  });
+});
+
+describe("scheduleGatewaySigusr1Restart background-exec deferral", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    testing.resetSigusr1State();
+    // Ensure emit mode uses process.emit rather than process.kill.
+    process.on("SIGUSR1", () => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    testing.resetSigusr1State();
+    process.removeAllListeners("SIGUSR1");
+  });
+
+  it("withholds SIGUSR1 while background exec sessions are running and emits after they exit", () => {
+    const emitSpy = vi.spyOn(process, "emit").mockReturnValue(true);
+    let backgroundExecCount = 1;
+    setPreRestartDeferralCheck(() => backgroundExecCount);
+
+    scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "test.background-exec" });
+
+    // Let the initial timeout fire and begin deferral polling.
+    vi.advanceTimersByTime(0);
+    expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+
+    // Simulate the background exec session exiting.
+    backgroundExecCount = 0;
+    vi.advanceTimersByTime(1_000);
+
+    expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
   });
 });

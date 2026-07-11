@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 // and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { countRunningBackgroundSessions } from "../agents/bash-process-registry.js";
 import {
   getActiveEmbeddedRunCount,
   resolveActiveEmbeddedRunSessionId,
@@ -651,7 +652,8 @@ export async function startGatewayServer(
       getTotalPendingReplies() +
       getActiveEmbeddedRunCount() +
       getActiveCronJobCount() +
-      getActiveTaskCount(),
+      getActiveTaskCount() +
+      countRunningBackgroundSessions(),
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
   // non-loopback installs that upgraded to v2026.2.26+ without required origins.
