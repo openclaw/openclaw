@@ -960,6 +960,20 @@ describe("finalizeSetupWizard", () => {
     expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);
   });
 
+  it("shows gateway install warnings when planning fails", async () => {
+    const prompter = createLaterPrompter();
+    buildGatewayInstallPlan.mockImplementationOnce(async (params) => {
+      params?.warn?.("Gateway install warning", "Gateway service");
+      throw new Error("plan failed");
+    });
+
+    await finalizeSetupWizard(createAdvancedFinalizeArgs({ installDaemon: true, prompter }));
+
+    expect(prompter.note).toHaveBeenCalledWith("Gateway install warning", "Gateway service");
+    expectNoteContains(prompter, "plan failed", "Gateway");
+    expect(gatewayServiceInstall).not.toHaveBeenCalled();
+  });
+
   it("suppresses token-bearing onboarding output when requested", async () => {
     const prompter = createLaterPrompter();
 

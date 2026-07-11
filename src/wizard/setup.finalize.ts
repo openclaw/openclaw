@@ -339,6 +339,15 @@ export async function ensureGatewayServiceForOnboarding(params: {
     ) {
       const progress = prompter.progress(t("wizard.finalize.gatewayService"));
       let installError: string | null = null;
+      const installWarnings: Array<{ message: string; title?: string }> = [];
+      let nextInstallWarning = 0;
+      const flushInstallWarnings = async () => {
+        while (nextInstallWarning < installWarnings.length) {
+          const warning = installWarnings[nextInstallWarning];
+          nextInstallWarning += 1;
+          await prompter.note(warning.message, warning.title);
+        }
+      };
       try {
         progress.update(t("wizard.finalize.gatewayServicePreparing"));
         const tokenResolution = await resolveGatewayInstallToken({
@@ -355,7 +364,6 @@ export async function ensureGatewayServiceForOnboarding(params: {
             t("wizard.finalize.gatewayInstallFixAuth"),
           ].join(" ");
         } else {
-          const installWarnings: Array<{ message: string; title?: string }> = [];
           const { programArguments, workingDirectory, environment, environmentValueSources } =
             await buildGatewayInstallPlan({
               env: process.env,
@@ -366,9 +374,7 @@ export async function ensureGatewayServiceForOnboarding(params: {
               },
               config: nextConfig,
             });
-          for (const warning of installWarnings) {
-            await prompter.note(warning.message, warning.title);
-          }
+          await flushInstallWarnings();
 
           progress.update(t("wizard.finalize.gatewayServiceInstalling"));
           await service.install({
@@ -381,6 +387,7 @@ export async function ensureGatewayServiceForOnboarding(params: {
           });
         }
       } catch (err) {
+        await flushInstallWarnings();
         installError = formatErrorMessage(err);
       } finally {
         progress.stop(
