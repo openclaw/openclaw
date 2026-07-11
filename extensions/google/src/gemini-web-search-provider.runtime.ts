@@ -11,10 +11,9 @@ import {
   MAX_SEARCH_COUNT,
   parseWebSearchTimeFilters,
   readCachedSearchPayload,
-  readConfiguredSecretString,
   readPositiveIntegerParam,
-  readProviderEnvValue,
   readStringParam,
+  resolveWebSearchProviderCredential,
   resolveCitationRedirectUrl,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
@@ -24,6 +23,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleApiClientHeaders } from "../google-api-client-header.js";
 import {
@@ -171,11 +171,20 @@ function resolveGeminiTimeRangeFilter(
 }
 
 function resolveGeminiRuntimeApiKey(gemini?: GeminiConfig): string | undefined {
-  return (
-    readConfiguredSecretString(gemini?.apiKey, "plugins.entries.google.config.webSearch.apiKey") ??
-    readProviderEnvValue(["GEMINI_API_KEY"]) ??
-    readConfiguredSecretString(gemini?.providerApiKey, "models.providers.google.apiKey")
-  );
+  const searchApiKey = resolveWebSearchProviderCredential({
+    credentialValue: gemini?.apiKey,
+    path: "plugins.entries.google.config.webSearch.apiKey",
+    envVars: ["GEMINI_API_KEY"],
+  });
+  if (searchApiKey || coerceSecretRef(gemini?.apiKey) !== null) {
+    return searchApiKey;
+  }
+
+  return resolveWebSearchProviderCredential({
+    credentialValue: gemini?.providerApiKey,
+    path: "models.providers.google.apiKey",
+    envVars: [],
+  });
 }
 
 async function runGeminiSearch(params: {
