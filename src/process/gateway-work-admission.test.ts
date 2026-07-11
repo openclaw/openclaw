@@ -161,6 +161,28 @@ it("preserves required ownership for a parentless continuation admitted before r
   expect(getActiveGatewayRootWorkCount()).toBe(0);
 });
 
+it("lets a reserved required continuation finish through a pending restart signal", async () => {
+  let releaseContinuation = () => {};
+  const continuationGate = new Promise<void>((resolve) => {
+    releaseContinuation = resolve;
+  });
+  let subordinateAdmissionClosed: boolean | undefined;
+  const continuation = runWithGatewayIndependentRootWorkContinuation(async () => {
+    await continuationGate;
+    subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+  });
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+  const pendingSignal = beginGatewayRestartSignalAdmission();
+  expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+  releaseContinuation();
+  await continuation;
+
+  expect(subordinateAdmissionClosed).toBe(false);
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  expect(pendingSignal.rollback()).toBe(true);
+});
+
 it("does not admit an unrelated continuation through restart drain", async () => {
   markGatewayRestartDraining();
   const ran = vi.fn();

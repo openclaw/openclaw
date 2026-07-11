@@ -132,13 +132,14 @@ export function isGatewaySubordinateWorkAdmissionClosed(): boolean {
     GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
     GATEWAY_WORK_ADMISSION_STATE.restartSignalPending
   ) {
-    const requiredContinuationIsDraining =
+    const requiredContinuationMayFinish =
       current?.requiredContinuation === true &&
-      (GATEWAY_WORK_ADMISSION_STATE.restartDrainContinuationDepth ?? 0) > 0;
+      (GATEWAY_WORK_ADMISSION_STATE.restartSignalPending ||
+        (GATEWAY_WORK_ADMISSION_STATE.restartDrainContinuationDepth ?? 0) > 0);
     return (
       !current ||
       current.released ||
-      (!current.allowSubordinateRestartWork && !requiredContinuationIsDraining)
+      (!current.allowSubordinateRestartWork && !requiredContinuationMayFinish)
     );
   }
   if (current) {
