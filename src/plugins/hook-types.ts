@@ -411,9 +411,11 @@ export type PluginHookAgentEndEvent = {
    * (sender labels, message annotations), buildInboundUserContextPrefix()
    * metadata, and before_prompt_build hook injections.
    *
-   * Undefined when the run originates from CLI, heartbeat, cron, or
-   * other non-channel sources. Plugins should fall back to extracting
-   * from messages content when absent.
+   * Present for direct end-user channel turns regardless of the selected
+   * runtime (embedded agent or a CLI-backed harness). Undefined for local
+   * `openclaw` CLI invocations, heartbeat, cron, and other non-channel
+   * sources. Plugins should fall back to extracting from messages content
+   * when absent.
    */
   rawBody?: string;
 };
