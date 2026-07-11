@@ -137,6 +137,8 @@ type RegisteredHandler = (args: {
     channel?: { id?: string };
     container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
     message?: { ts?: string; thread_ts?: string; text?: string; blocks?: unknown[] };
+    view?: { callback_id?: string };
+    state?: { values?: Record<string, Record<string, Record<string, unknown>>> };
   };
   action: Record<string, unknown>;
   respond?: (payload: { text: string; response_type: string }) => Promise<void>;
@@ -188,6 +190,8 @@ type RegisteredShortcutHandler = (
 function createContext(overrides?: {
   dmEnabled?: boolean;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
+  groupDmEnabled?: boolean;
+  groupDmChannels?: string[];
   allowFrom?: string[];
   allowNameMatching?: boolean;
   useAccessGroups?: boolean;
@@ -227,6 +231,17 @@ function createContext(overrides?: {
     client: {
       chat: {
         update: vi.fn().mockResolvedValue(undefined),
+        postMessage: vi.fn().mockResolvedValue({ ok: true, ts: "300.400" }),
+      },
+      conversations: {
+        open: vi.fn().mockResolvedValue({
+          ok: true,
+          already_open: false,
+          channel: { id: "G123" },
+        }),
+      },
+      views: {
+        publish: vi.fn().mockResolvedValue({ ok: true }),
       },
     },
   };
@@ -257,6 +272,9 @@ function createContext(overrides?: {
   const ctx = {
     app,
     accountId: "default",
+    botToken: "xoxb-test",
+    botUserId: "U_BOT",
+    teamId: "T9",
     cfg: overrides?.cfg ?? {
       channels: {
         slack: {
@@ -271,6 +289,8 @@ function createContext(overrides?: {
     runtime: { log: runtimeLog },
     dmEnabled: overrides?.dmEnabled ?? true,
     dmPolicy: overrides?.dmPolicy ?? ("open" as const),
+    groupDmEnabled: overrides?.groupDmEnabled ?? false,
+    groupDmChannels: overrides?.groupDmChannels ?? [],
     allowFrom: overrides?.allowFrom ?? ["*"],
     allowNameMatching: overrides?.allowNameMatching ?? false,
     useAccessGroups: overrides?.useAccessGroups ?? true,
@@ -682,6 +702,51 @@ describe("registerSlackInteractionEvents", () => {
         },
       ],
     });
+  });
+
+  it("handles the App Home group DM control without routing it to the agent", async () => {
+    const { ctx, app, getHandler } = createContext({ groupDmEnabled: true });
+    const trackEvent = vi.fn();
+    registerSlackInteractionEvents({ ctx: ctx as never, trackEvent });
+    const ack = vi.fn().mockResolvedValue(undefined);
+
+    await getHandler()({
+      ack,
+      body: {
+        user: { id: "U123" },
+        team: { id: "T9" },
+        view: { callback_id: "openclaw:home" },
+        state: {
+          values: {
+            "openclaw:home:group-members": {
+              "openclaw:home:group-members": {
+                type: "multi_users_select",
+                selected_users: ["U456"],
+              },
+            },
+          },
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:home:open-group-dm",
+        block_id: "openclaw:home:group-actions",
+        text: { type: "plain_text", text: "Open group DM" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(trackEvent).toHaveBeenCalledOnce();
+    expect(app.client.conversations.open).toHaveBeenCalledWith({
+      token: "xoxb-test",
+      users: "U123,U456",
+      return_im: true,
+    });
+    expect(app.client.chat.postMessage).toHaveBeenCalledOnce();
+    expect(app.client.views.publish).toHaveBeenCalledOnce();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
+    expect(app.client.chat.update).not.toHaveBeenCalled();
   });
 
   it("registers a matcher that accepts plugin action ids beyond the OpenClaw prefix", () => {

@@ -36,6 +36,7 @@ import {
   resolvePluginConversationBindingApproval,
 } from "../conversation.runtime.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
+import { handleSlackHomeBlockAction } from "./home.js";
 
 type InteractionMessageBlock = {
   type?: string;
@@ -893,6 +894,16 @@ async function handleSlackBlockAction(params: {
     return;
   }
   params.trackEvent?.();
+  // Bolt runs overlapping action listeners, so Home actions stay in this catch-all
+  // to preserve one acknowledgement and avoid also waking the agent.
+  const handledHomeAction = await handleSlackHomeBlockAction({
+    ctx: params.ctx,
+    actionId: parsed.actionId,
+    body,
+  });
+  if (handledHomeAction) {
+    return;
+  }
   const pluginInteractionData = buildSlackPluginInteractionData({
     actionId: parsed.actionId,
     summary: parsed.actionSummary,

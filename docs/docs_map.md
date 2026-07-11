@@ -845,6 +845,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Socket Mode transport tuning
   - H2: Manifest and scope checklist
   - H3: Additional manifest settings
+  - H3: Open a group DM from App Home
   - H2: Token model
   - H2: Actions and gates
   - H2: Access control and routing

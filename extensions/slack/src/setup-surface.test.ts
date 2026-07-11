@@ -182,6 +182,9 @@ describe("slackSetupWizard.prepare", () => {
       },
       settings: {
         socket_mode_enabled: true,
+        interactivity: {
+          is_enabled: true,
+        },
         event_subscriptions: {
           bot_events: [
             "app_home_opened",

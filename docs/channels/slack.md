@@ -365,6 +365,7 @@ Enterprise Grid organization installation, use the dedicated
   },
   "settings": {
     "socket_mode_enabled": true,
+    "interactivity": { "is_enabled": true },
     "event_subscriptions": {
       "bot_events": [
         "app_home_opened",
@@ -440,6 +441,7 @@ Enterprise Grid organization installation, use the dedicated
   },
   "settings": {
     "socket_mode_enabled": true,
+    "interactivity": { "is_enabled": true },
     "event_subscriptions": {
       "bot_events": [
         "app_home_opened",
@@ -841,6 +843,7 @@ Base manifest (Socket Mode default):
   },
   "settings": {
     "socket_mode_enabled": true,
+    "interactivity": { "is_enabled": true },
     "event_subscriptions": {
       "bot_events": [
         "app_home_opened",
@@ -912,7 +915,25 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
 
 Surface different features that extend the above defaults.
 
-The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. The **Messages** tab remains enabled for Slack DMs. The manifest also enables Slack assistant threads with `features.assistant_view`, `assistant:write`, `assistant_thread_started`, and `assistant_thread_context_changed`; assistant threads route to their own OpenClaw thread sessions and keep Slack-provided thread context available to the agent.
+The default manifest enables the Slack App Home **Home** tab, Slack interactivity, and the `app_home_opened` event. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. The **Messages** tab remains enabled for Slack DMs. The manifest also enables Slack assistant threads with `features.assistant_view`, `assistant:write`, `assistant_thread_started`, and `assistant_thread_context_changed`; assistant threads route to their own OpenClaw thread sessions and keep Slack-provided thread context available to the agent.
+
+### Open a group DM from App Home
+
+OpenClaw can open or resume a bot-inclusive Slack group DM from its App Home:
+
+1. Set `channels.slack.dm.groupEnabled: true`.
+2. Omit `dm.groupChannels`, leave it empty, or include `"*"`. A concrete-only MPIM allowlist hides the control because a new conversation ID is not known yet.
+3. Restart the Gateway, then open **Apps → OpenClaw → Home** in Slack.
+4. Under **Who else?**, choose one to seven people and select **Open group DM**. OpenClaw includes you automatically; Slack includes the bot.
+5. Follow the App Home link to the ready conversation.
+
+Slack resumes an existing bot-inclusive MPIM when the exact participant set already exists. Otherwise it opens a separate MPIM and OpenClaw posts one starter message. The person clicking the control must pass `dm.enabled`, `dmPolicy`, `allowFrom`, and pairing; with the default pairing policy, an unpaired creator sees pairing instructions in App Home and must be approved before retrying. After the MPIM opens, every selected member can interact with OpenClaw in that conversation. `dm.groupEnabled` and `dm.groupChannels` govern the group rather than applying the creator's DM allowlist to each member. Enabling this control therefore lets any DM-authorized creator grant group-scoped access to the people they select.
+
+<Warning>
+  This does not add OpenClaw to the original people-only group DM and does not copy that conversation's messages or files. A newly opened MPIM starts with its own history. If retaining the original history matters, [convert that DM to a private channel](https://slack.com/help/articles/217555437-Convert-a-group-direct-message-to-a-private-channel) and invite OpenClaw there instead; Slack keeps the original messages and files visible.
+</Warning>
+
+The recommended manifest already enables App Home and interactivity and requests `mpim:write`, `mpim:read`, `mpim:history`, `chat:write`, `app_home_opened`, and `message.mpim`. Custom or minimal apps need those capabilities; reinstall the app after adding scopes. The App Home flow works in Socket Mode and HTTP Request URLs mode. Relay mode currently forwards messages, not App Home or block-action payloads.
 
 <AccordionGroup>
   <Accordion title="Optional native slash commands">
@@ -1859,6 +1880,20 @@ openclaw doctor
 ```bash
 openclaw pairing list slack
 ```
+
+  </Accordion>
+
+  <Accordion title="App Home group DM control missing or failing">
+    Check, in order:
+
+    - `channels.slack.dm.enabled` and `channels.slack.dm.groupEnabled`
+    - `dm.groupChannels` is omitted, empty, or contains `"*"`
+    - the user is approved by `dmPolicy`, `allowFrom`, or pairing
+    - the Slack app has App Home and Interactivity enabled
+    - the bot token has `mpim:write`, `mpim:read`, `mpim:history`, and `chat:write`; reinstall the app after adding scopes
+    - `app_home_opened` and `message.mpim` are subscribed
+
+    For Slack Connect, an `invalid_user_combination` error means all selected external people must already share at least one channel. Missing history from the people-only DM is expected; the App Home flow opens a separate bot-inclusive MPIM.
 
   </Accordion>
 

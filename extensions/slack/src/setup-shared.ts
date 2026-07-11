@@ -82,6 +82,9 @@ export function buildSlackManifest(botName = "OpenClaw") {
     },
     settings: {
       socket_mode_enabled: true,
+      interactivity: {
+        is_enabled: true,
+      },
       event_subscriptions: {
         bot_events: [
           "app_home_opened",
@@ -112,7 +115,8 @@ export function buildSlackSetupLines(): string[] {
     "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
     "3) Install App to workspace to get the xoxb- bot token",
     "4) Enable Event Subscriptions (socket) for message, App Home, and assistant events",
-    "5) App Home -> enable the Home tab, Messages tab for DMs, and AI assistant view",
+    "5) Enable Interactivity & Shortcuts (no Request URL in Socket Mode)",
+    "6) App Home -> enable the Home tab, Messages tab for DMs, and AI assistant view",
     "Manifest JSON follows as plain text for copy/paste.",
     "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
     `Docs: ${formatDocsLink("/slack", "slack")}`,
