@@ -147,6 +147,7 @@ extension OnboardingView {
                     .multilineTextAlignment(.center)
             }
         }
+        .disabled(self.installingCLI)
         .onChange(of: self.state.connectionMode) { _, newValue in
             guard Self.shouldResetRemoteProbeFeedback(
                 for: newValue,
@@ -729,7 +730,11 @@ extension OnboardingView {
                         docsSlug: "platforms/mac/bundled-gateway",
                         retryTitle: "Try again")
                     {
-                        self.startCLIInstall()
+                        if self.cliExecutableReady {
+                            self.startExistingCLIActivationIfNeeded()
+                        } else {
+                            self.startCLIInstall()
+                        }
                     }
                 } else if let cliStatus, !self.cliInstalled {
                     Text(cliStatus)
