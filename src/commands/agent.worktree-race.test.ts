@@ -9,6 +9,7 @@ import "./agent-command.test-mocks.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { upsertSqliteSessionEntry } from "../config/sessions/session-accessor.sqlite.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -80,17 +81,14 @@ async function seedSession(
   spawnedCwd: string,
   worktree?: { id: string; branch: string; repoRoot: string },
 ): Promise<void> {
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(
-    storePath,
-    JSON.stringify({
-      [sessionKey]: {
-        sessionId: "session-worktree-race",
-        updatedAt: Date.now(),
-        spawnedCwd,
-        ...(worktree ? { worktree } : {}),
-      },
-    }),
+  await upsertSqliteSessionEntry(
+    { agentId: "main", sessionKey, storePath },
+    {
+      sessionId: "session-worktree-race",
+      updatedAt: Date.now(),
+      spawnedCwd,
+      ...(worktree ? { worktree } : {}),
+    },
   );
 }
 
