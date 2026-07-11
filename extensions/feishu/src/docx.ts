@@ -11,6 +11,7 @@ import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
+import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
 import { BATCH_SIZE, insertBlocksInBatches } from "./docx-batch-insert.js";
 import { updateColorText } from "./docx-color-text.js";
@@ -508,16 +509,30 @@ async function uploadImageToDocx(
 }
 
 async function downloadImage(url: string, maxBytes: number): Promise<Buffer> {
-  const fetched = await getFeishuRuntime().channel.media.readRemoteMediaBuffer({ url, maxBytes });
+  const fetched = await readRemoteDocxImage(url, maxBytes);
   return fetched.buffer;
+}
+
+async function readRemoteDocxImage(url: string, maxBytes: number) {
+  return await getFeishuRuntime().channel.media.readRemoteMediaBuffer({
+    url,
+    maxBytes,
+    timeoutMs: FEISHU_HTTP_TIMEOUT_MS,
+    readIdleTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
+  });
+}
+
+async function readRemoteDocxFile(url: string, maxBytes: number) {
+  return await getFeishuRuntime().channel.media.readRemoteMediaBuffer({ url, maxBytes });
 }
 
 async function resolveUploadInput(
   url: string | undefined,
   filePath: string | undefined,
   maxBytes: number,
-  localRoots?: readonly string[],
-  explicitFileName?: string,
+  localRoots: readonly string[] | undefined,
+  explicitFileName: string | undefined,
+  readRemoteUrl: (url: string, maxBytes: number) => Promise<{ buffer: Buffer }>,
   imageInput?: string, // data URI, plain base64, or local path
 ): Promise<{ buffer: Buffer; fileName: string }> {
   // Enforce mutual exclusivity: exactly one input source must be provided.
@@ -633,7 +648,7 @@ async function resolveUploadInput(
   }
 
   if (url) {
-    const fetched = await getFeishuRuntime().channel.media.readRemoteMediaBuffer({ url, maxBytes });
+    const fetched = await readRemoteUrl(url, maxBytes);
     const urlPath = new URL(url).pathname;
     const guessed = urlPath.split("/").pop() || "upload.bin";
     return {
@@ -733,6 +748,7 @@ async function uploadImageBlock(
     maxBytes,
     localRoots,
     filename,
+    readRemoteDocxImage,
     imageInput,
   );
   const fileToken = await uploadImageToDocx(
@@ -776,7 +792,14 @@ async function uploadFileBlock(
   // Feishu API does not allow creating empty file blocks (block_type 23).
   // Workaround: create a placeholder text block, then replace it with file content.
   // Actually, file blocks need a different approach: use markdown link as placeholder.
-  const upload = await resolveUploadInput(url, filePath, maxBytes, localRoots, filename);
+  const upload = await resolveUploadInput(
+    url,
+    filePath,
+    maxBytes,
+    localRoots,
+    filename,
+    readRemoteDocxFile,
+  );
 
   // Create a placeholder text block first
   const placeholderMd = `[${upload.fileName}](https://example.com/placeholder)`;

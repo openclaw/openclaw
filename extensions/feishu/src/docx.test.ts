@@ -2,6 +2,7 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { createToolFactoryHarness, type ToolLike } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -405,6 +406,40 @@ describe("feishu_doc image fetch hardening", () => {
     });
 
     expect(readRemoteMediaBufferMock).toHaveBeenCalled();
+    expect(readRemoteMediaBufferMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: FEISHU_HTTP_TIMEOUT_MS,
+        readIdleTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
+      }),
+    );
+    expect(driveUploadAllMock).not.toHaveBeenCalled();
+    expect(blockPatchMock).not.toHaveBeenCalled();
+    expect(result.details.images_processed).toBe(0);
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("degrades stalled markdown image URL reads through the docx image timeout", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    readRemoteMediaBufferMock.mockRejectedValueOnce(
+      new Error(`response body idle timeout after ${FEISHU_HTTP_TIMEOUT_MS}ms`),
+    );
+
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "write",
+      doc_token: "doc_1",
+      content: "![x](https://x.test/stalled.png)",
+    });
+
+    expect(readRemoteMediaBufferMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://x.test/stalled.png",
+        timeoutMs: FEISHU_HTTP_TIMEOUT_MS,
+        readIdleTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
+      }),
+    );
     expect(driveUploadAllMock).not.toHaveBeenCalled();
     expect(blockPatchMock).not.toHaveBeenCalled();
     expect(result.details.images_processed).toBe(0);
@@ -598,6 +633,30 @@ describe("feishu_doc image fetch hardening", () => {
     });
 
     expectLoadWebMediaCall("test-local.png", [WORKSPACE_ROOT]);
+  });
+
+  it("passes docx image read timeouts when upload_image reads a remote URL", async () => {
+    readRemoteMediaBufferMock.mockResolvedValueOnce({
+      buffer: Buffer.from("remote image", "utf8"),
+      fileName: "remote.png",
+    });
+
+    const feishuDocTool = resolveFeishuDocTool();
+
+    await executeFeishuDocTool(feishuDocTool, {
+      action: "upload_image",
+      doc_token: "doc_1",
+      url: "https://x.test/remote.png",
+      filename: "remote.png",
+    });
+
+    expect(readRemoteMediaBufferMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://x.test/remote.png",
+        timeoutMs: FEISHU_HTTP_TIMEOUT_MS,
+        readIdleTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
+      }),
+    );
   });
 
   it("passes workspace localRoots for upload_image absolute local paths when workspace-only policy is active", async () => {
