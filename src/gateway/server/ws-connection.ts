@@ -297,6 +297,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     let lastFrameType: string | undefined;
     let lastFrameMethod: string | undefined;
     let lastFrameId: string | undefined;
+    let hasReceivedPreauthFrame = false;
+
+    socket.once("message", () => {
+      hasReceivedPreauthFrame = true;
+    });
 
     const advanceHandshakePhase = (next: WsHandshakePhase) => {
       if (WS_HANDSHAKE_PHASES.indexOf(next) > WS_HANDSHAKE_PHASES.indexOf(lastHandshakePhase)) {
@@ -426,6 +431,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       openedDuringStartup &&
       code === 1006 &&
       lastHandshakePhase === "ws_upgrade_started" &&
+      !hasReceivedPreauthFrame &&
       lastFrameType === undefined &&
       normalizeLowercaseStringOrEmpty(requestUserAgent).startsWith("openclaw/") &&
       isLoopbackAddress(remoteAddr);

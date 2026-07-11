@@ -301,6 +301,28 @@ describe("attachGatewayWsConnectionHandler", () => {
     );
   });
 
+  it("keeps queued local app startup frames at warning level", async () => {
+    const logWsControl = createGatewayWsTestLogger();
+    const { socket } = attachGatewayWsForTest({
+      attach: attachGatewayWsConnectionHandler,
+      headers: { "user-agent": "OpenClaw/2607000290 CFNetwork/3860 Darwin/25" },
+      options: { isStartupPending: () => true, logWsControl: logWsControl as never },
+    });
+
+    socket.emit("message", Buffer.from('{"type":"req","id":"queued"}'));
+    socket.emit("close", 1006, Buffer.alloc(0));
+    await waitForLazyMessageHandler();
+
+    expect(logWsControl.warn).toHaveBeenCalledWith(
+      expect.stringContaining("closed before connect"),
+      expect.objectContaining({ phase: "ws_upgrade_started" }),
+    );
+    expect(logWsControl.debug).not.toHaveBeenCalledWith(
+      expect.stringContaining("closed before connect"),
+      expect.anything(),
+    );
+  });
+
   it("includes the last completed handshake phase on preauth timeout logs", async () => {
     vi.useFakeTimers();
     const { logWsControl } = await connectTestWs({
