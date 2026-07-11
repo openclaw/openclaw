@@ -80,6 +80,7 @@ vi.mock("./streaming-card.js", () => {
     mergeStreamingText,
     FeishuStreamingSession: class {
       active = false;
+      credentials: unknown;
       start = vi.fn(async () => {
         this.active = true;
       });
