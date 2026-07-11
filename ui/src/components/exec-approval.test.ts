@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
+import { html, nothing, render, type LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
@@ -24,7 +24,7 @@ function createExecRequest(overrides: Partial<ExecApprovalRequest> = {}): ExecAp
   };
 }
 
-function renderApproval(request: ExecApprovalRequest) {
+async function renderApproval(request: ExecApprovalRequest) {
   render(
     html`<openclaw-exec-approval
       .props=${{
@@ -36,6 +36,11 @@ function renderApproval(request: ExecApprovalRequest) {
     ></openclaw-exec-approval>`,
     container,
   );
+  const approval = container.querySelector<LitElement>("openclaw-exec-approval");
+  if (!approval) {
+    throw new Error("Expected exec approval");
+  }
+  await approval.updateComplete;
 }
 
 describe("openclaw-exec-approval", () => {
@@ -55,7 +60,7 @@ describe("openclaw-exec-approval", () => {
   });
 
   it("uses neutral unavailable copy for exec allow-always decisions", async () => {
-    renderApproval(
+    await renderApproval(
       createExecRequest({
         request: {
           command: "echo hello",
@@ -78,7 +83,7 @@ describe("openclaw-exec-approval", () => {
   });
 
   it("does not show exec unavailable copy for restricted plugin approvals", async () => {
-    renderApproval(
+    await renderApproval(
       createExecRequest({
         id: "plugin-approval-1",
         kind: "plugin",
