@@ -188,7 +188,7 @@ openclaw-logs-page {
 }
 
 .qs-card__title {
-  font-size: 0.8125rem;
+  font-size: calc(0.8125rem * var(--control-ui-text-scale));
   font-weight: 650;
   letter-spacing: -0.01em;
   margin: 0;
@@ -220,7 +220,7 @@ openclaw-logs-page {
   gap: 8px;
   min-width: 0;
   flex: 1 1 auto;
-  font-size: 0.8125rem;
+  font-size: calc(0.8125rem * var(--control-ui-text-scale));
   font-weight: 450;
   color: var(--text);
   white-space: nowrap;
@@ -232,7 +232,7 @@ openclaw-logs-page {
   justify-content: flex-end;
   gap: 8px;
   min-width: 0;
-  font-size: 0.8125rem;
+  font-size: calc(0.8125rem * var(--control-ui-text-scale));
   color: var(--muted);
   text-align: right;
 }
@@ -247,7 +247,7 @@ openclaw-logs-page {
     border-color var(--duration-fast) var(--ease-out);
   color: var(--text);
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: calc(0.8125rem * var(--control-ui-text-scale));
 }
 
 .qs-row__value--action:hover {
@@ -280,7 +280,7 @@ openclaw-logs-page {
 
 .qs-row__value--action code {
   font-family: var(--mono);
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   color: var(--accent);
 }
 
@@ -337,7 +337,7 @@ openclaw-logs-page {
   background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
   color: var(--text);
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: calc(0.8125rem * var(--control-ui-text-scale));
   padding: 8px 10px;
 }
 
@@ -371,7 +371,7 @@ openclaw-logs-page {
 
 .qs-identity-card__eyebrow {
   margin-bottom: 2px;
-  font-size: 0.65rem;
+  font-size: calc(0.65rem * var(--control-ui-text-scale));
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -380,7 +380,7 @@ openclaw-logs-page {
 
 .qs-identity-card__title {
   color: var(--text-strong);
-  font-size: 0.95rem;
+  font-size: calc(0.95rem * var(--control-ui-text-scale));
   font-weight: 650;
   line-height: 1.2;
   overflow-wrap: anywhere;
@@ -389,7 +389,7 @@ openclaw-logs-page {
 .qs-identity-card__sub {
   margin-top: 4px;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   line-height: 1.35;
 }
 
@@ -400,7 +400,7 @@ openclaw-logs-page {
   padding-top: 9px;
   border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
   color: var(--muted);
-  font-size: 0.64rem;
+  font-size: calc(0.64rem * var(--control-ui-text-scale));
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
@@ -408,7 +408,7 @@ openclaw-logs-page {
 .qs-identity-card__source code {
   color: var(--text);
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--control-ui-text-scale));
   font-weight: 650;
   letter-spacing: normal;
   text-transform: none;
@@ -425,7 +425,7 @@ openclaw-logs-page {
   border-radius: 999px;
   background: color-mix(in srgb, var(--warning, #f7b955) 10%, transparent);
   color: color-mix(in srgb, var(--warning, #f7b955) 82%, var(--text) 18%);
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--control-ui-text-scale));
   font-weight: 650;
   line-height: 1.2;
 }
@@ -445,7 +445,7 @@ openclaw-logs-page {
 }
 
 .qs-identity-card__repair .qs-row__label {
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--control-ui-text-scale));
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -453,7 +453,7 @@ openclaw-logs-page {
 }
 
 .qs-identity-card__repair .qs-field__input {
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--control-ui-text-scale));
   padding: 6px 9px;
 }
 
@@ -464,14 +464,14 @@ openclaw-logs-page {
 }
 
 .qs-identity-card__repair .muted {
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--control-ui-text-scale));
   line-height: 1.35;
 }
 
 .qs-identity-card__error {
   margin-top: 8px;
   color: var(--danger, #ff6b78);
-  font-size: 0.7rem;
+  font-size: calc(0.7rem * var(--control-ui-text-scale));
   line-height: 1.35;
 }
 
@@ -494,7 +494,7 @@ openclaw-logs-page {
   place-items: center;
   background: var(--accent-subtle);
   color: var(--accent);
-  font-size: 0.875rem;
+  font-size: calc(0.875rem * var(--control-ui-text-scale));
   font-weight: 650;
 }
 
@@ -531,7 +531,7 @@ openclaw-logs-page {
 }
 
 .qs-segmented__btn {
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   font-weight: 550;
   padding: 4px 12px;
   border: none;
@@ -618,7 +618,7 @@ openclaw-logs-page {
 }
 
 .qs-toggle__hint {
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   color: var(--muted);
 }
 
@@ -627,7 +627,7 @@ openclaw-logs-page {
 .qs-badge {
   display: inline-flex;
   align-items: center;
-  font-size: 0.6875rem;
+  font-size: calc(0.6875rem * var(--control-ui-text-scale));
   font-weight: 600;
   padding: 3px 9px;
   border-radius: var(--radius-full);
@@ -667,7 +667,7 @@ openclaw-logs-page {
 
 .qs-masked {
   font-family: var(--mono);
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   letter-spacing: 1.5px;
   color: var(--muted);
 }
@@ -675,7 +675,7 @@ openclaw-logs-page {
 /* ── Link button ── */
 
 .qs-link-btn {
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   font-weight: 600;
   color: var(--accent);
   background: none;
@@ -703,7 +703,7 @@ openclaw-logs-page {
 
 .qs-empty {
   padding: 14px 16px;
-  font-size: 0.8125rem;
+  font-size: calc(0.8125rem * var(--control-ui-text-scale));
   color: var(--muted);
 }
 
@@ -734,7 +734,7 @@ openclaw-logs-page {
 }
 
 .qs-system__meta {
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   line-height: 1.4;
   color: var(--muted);
 }
@@ -749,7 +749,7 @@ openclaw-logs-page {
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   color: var(--text);
   font-family: var(--mono);
-  font-size: 0.7rem;
+  font-size: calc(0.7rem * var(--control-ui-text-scale));
   overflow-wrap: anywhere;
 }
 
@@ -771,7 +771,7 @@ openclaw-logs-page {
 }
 
 .qs-stat__label {
-  font-size: 0.65rem;
+  font-size: calc(0.65rem * var(--control-ui-text-scale));
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -791,14 +791,14 @@ openclaw-logs-page {
 }
 
 .qs-stat__unit {
-  font-size: 0.7rem;
+  font-size: calc(0.7rem * var(--control-ui-text-scale));
   font-weight: 550;
   letter-spacing: 0;
   color: var(--muted);
 }
 
 .qs-stat__detail {
-  font-size: 0.7rem;
+  font-size: calc(0.7rem * var(--control-ui-text-scale));
   line-height: 1.35;
   color: var(--muted);
   overflow-wrap: anywhere;
@@ -839,7 +839,7 @@ openclaw-logs-page {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   color: var(--muted);
 }
 
@@ -867,7 +867,7 @@ openclaw-logs-page {
   gap: 10px;
   width: 100%;
   padding: 12px 16px;
-  font-size: 0.8125rem;
+  font-size: calc(0.8125rem * var(--control-ui-text-scale));
   font-weight: 650;
   letter-spacing: -0.01em;
   color: var(--text-strong);
@@ -918,7 +918,7 @@ openclaw-logs-page {
   gap: 8px;
   width: 100%;
   padding: 9px 16px 9px 40px;
-  font-size: 0.8125rem;
+  font-size: calc(0.8125rem * var(--control-ui-text-scale));
   font-weight: 450;
   color: var(--muted);
   background: none;
@@ -972,7 +972,7 @@ openclaw-logs-page {
 }
 
 .qs-pending__hint {
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   line-height: 1.4;
 }
 

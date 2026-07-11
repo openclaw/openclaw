@@ -59,7 +59,7 @@ function controlsHtml() {
   `;
 }
 
-async function openMobileFixture(): Promise<MobileFixture> {
+async function openMobileFixture(textScale = 1): Promise<MobileFixture> {
   const browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
   let page: Page | undefined;
   try {
@@ -69,7 +69,7 @@ async function openMobileFixture(): Promise<MobileFixture> {
       viewport: { width: 390, height: 844 },
     });
     await page.setContent(
-      `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>${controlsHtml()}</body></html>`,
+      `<!doctype html><html data-theme-mode="light" style="--control-ui-text-scale: ${textScale};"><head><style>${readUiCss()}</style></head><body>${controlsHtml()}</body></html>`,
     );
     return { browser, page };
   } catch (error) {
@@ -86,7 +86,7 @@ async function closeMobileFixture(fixture: MobileFixture): Promise<void> {
 
 describeBrowserLayout("touch-primary form controls", () => {
   it("keeps text-entry controls large enough to avoid mobile focus zoom", async () => {
-    const fixture = await openMobileFixture();
+    const fixture = await openMobileFixture(0.9);
     const { page } = fixture;
     try {
       const metrics = await page.evaluate(() => {

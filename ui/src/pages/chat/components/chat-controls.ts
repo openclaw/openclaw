@@ -148,7 +148,7 @@ function renderCronFilterIcon(hiddenCount: number) {
               background: var(--color-accent, #6366f1);
               color: #fff;
               border-radius: var(--radius-full);
-              font-size: 9px;
+              font-size: calc(9px * var(--control-ui-text-scale));
               line-height: 1;
               padding: 1px 3px;
               pointer-events: none;

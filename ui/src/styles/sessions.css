@@ -27,7 +27,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 650;
   line-height: 1.5;
   cursor: default;
@@ -93,7 +93,7 @@
 .sessions-overview__label {
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.05em;
   text-overflow: ellipsis;
@@ -194,7 +194,7 @@
 .session-filter-label,
 .session-filter-check__label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
@@ -210,7 +210,7 @@
   border: none;
   border-radius: calc(var(--radius-sm) - 2px);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   text-align: right;
   outline: none;
   transition: opacity var(--duration-fast) ease;
@@ -305,7 +305,7 @@
 
 .session-groupby__label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: nowrap;
 }
 
@@ -316,7 +316,7 @@
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 /* --- Table --- */
@@ -470,7 +470,7 @@
 .session-key-display-name {
   min-width: 0;
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -485,7 +485,7 @@
   color: var(--accent-2);
   background: var(--accent-2-subtle);
   border-radius: var(--radius-full);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -496,7 +496,7 @@
   display: inline-block;
   padding: 2px 8px;
   border-radius: var(--radius-full);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   letter-spacing: 0.02em;
   white-space: nowrap;
@@ -548,7 +548,7 @@
   gap: 7px;
   max-width: 116px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   letter-spacing: 0.02em;
   line-height: 1.2;
@@ -615,7 +615,7 @@
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.2;
 }
 
@@ -729,7 +729,7 @@
 .session-token-cell {
   min-width: 96px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: nowrap;
 }
 
@@ -741,7 +741,7 @@
 
 .session-tokens__value {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: nowrap;
 }
 
@@ -896,7 +896,7 @@
   background: var(--accent-2-subtle);
   border-radius: var(--radius-full);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   line-height: 1.6;
 }
@@ -913,7 +913,7 @@
   align-items: center;
   gap: 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 700;
   letter-spacing: 0.02em;
 }
@@ -940,7 +940,7 @@
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
 }
 
 /* --- Row drawer: overrides, stats, compaction history --- */
@@ -978,7 +978,7 @@
 .session-details-panel__eyebrow {
   margin-bottom: 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -987,7 +987,7 @@
 .session-details-panel__title {
   max-width: min(720px, 72vw);
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -995,7 +995,7 @@
 
 .session-details-panel__subtitle {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .session-details-section {
@@ -1015,7 +1015,7 @@
 }
 
 .session-details-section__title {
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 700;
 }
 
@@ -1033,7 +1033,7 @@
 
 .session-override-field__label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1048,7 +1048,7 @@
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   transition: border-color var(--duration-fast) ease;
 }
 
@@ -1079,7 +1079,7 @@ input.session-override-field__control {
 .session-detail-stat__label {
   margin-bottom: 5px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 650;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -1088,7 +1088,7 @@ input.session-override-field__control {
 .session-detail-stat__value {
   min-width: 0;
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -1097,7 +1097,7 @@ input.session-override-field__control {
 
 .session-details-empty {
   padding: 4px 0;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .session-checkpoint-list {
@@ -1132,7 +1132,7 @@ input.session-override-field__control {
 
 .session-checkpoint-card__delta {
   flex: 0 1 auto;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .session-checkpoint-card__summary {

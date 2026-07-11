@@ -135,7 +135,7 @@ export function renderNostrCard(params: {
                 <button
                   class="btn btn--sm"
                   @click=${onEditProfile}
-                  style="font-size: 12px; padding: 4px 8px;"
+                  style="font-size: var(--control-ui-text-sm); padding: 4px 8px;"
                 >
                   ${t("channels.nostr.editProfile")}
                 </button>
@@ -184,7 +184,7 @@ export function renderNostrCard(params: {
               </div>
             `
           : html`
-              <div style="color: var(--text-muted); font-size: 13px">
+              <div style="color: var(--text-muted); font-size: var(--control-ui-text-compact)">
                 ${t("channels.nostr.noProfile")} ${t("channels.nostr.noProfileHint")}
               </div>
             `}

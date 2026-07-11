@@ -110,12 +110,16 @@ export function renderNostrProfileForm(params: {
             ?disabled=${state.saving}
           ></textarea>
           ${help
-            ? html`<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+            ? html`<div
+                style="font-size: var(--control-ui-text-sm); color: var(--text-muted); margin-top: 2px;"
+              >
                 ${help}
               </div>`
             : nothing}
           ${error
-            ? html`<div style="font-size: 12px; color: var(--danger-color); margin-top: 2px;">
+            ? html`<div
+                style="font-size: var(--control-ui-text-sm); color: var(--danger-color); margin-top: 2px;"
+              >
                 ${error}
               </div>`
             : nothing}
@@ -142,12 +146,16 @@ export function renderNostrProfileForm(params: {
           ?disabled=${state.saving}
         />
         ${help
-          ? html`<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+          ? html`<div
+              style="font-size: var(--control-ui-text-sm); color: var(--text-muted); margin-top: 2px;"
+            >
               ${help}
             </div>`
           : nothing}
         ${error
-          ? html`<div style="font-size: 12px; color: var(--danger-color); margin-top: 2px;">
+          ? html`<div
+              style="font-size: var(--control-ui-text-sm); color: var(--danger-color); margin-top: 2px;"
+            >
               ${error}
             </div>`
           : nothing}
@@ -188,8 +196,10 @@ export function renderNostrProfileForm(params: {
       <div
         style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;"
       >
-        <div style="font-weight: 600; font-size: 16px;">${t("channels.nostr.editProfile")}</div>
-        <div style="font-size: 12px; color: var(--text-muted);">
+        <div style="font-weight: 600; font-size: var(--control-ui-text-lg);">
+          ${t("channels.nostr.editProfile")}
+        </div>
+        <div style="font-size: var(--control-ui-text-sm); color: var(--text-muted);">
           ${t("channels.nostr.account")}: ${accountId}
         </div>
       </div>
@@ -281,7 +291,9 @@ export function renderNostrProfileForm(params: {
 
       ${isDirty
         ? html`
-            <div style="font-size: 12px; color: var(--warning-color); margin-top: 8px">
+            <div
+              style="font-size: var(--control-ui-text-sm); color: var(--warning-color); margin-top: 8px"
+            >
               ${t("common.unsavedChanges")}
             </div>
           `

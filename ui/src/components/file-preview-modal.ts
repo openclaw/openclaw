@@ -99,7 +99,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
 
     .search-icon {
       color: var(--muted);
-      font-size: 18px;
+      font-size: calc(18px * var(--control-ui-text-scale));
     }
 
     .search {
@@ -109,7 +109,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       outline: none;
       color: var(--text-strong);
       font: inherit;
-      font-size: 18px;
+      font-size: calc(18px * var(--control-ui-text-scale));
       font-weight: 400;
       padding: 4px 0;
     }
@@ -129,7 +129,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      font-size: 12px;
+      font-size: var(--control-ui-text-sm);
       color: var(--muted);
       padding: 5px 10px;
       border: 1px solid var(--border);
@@ -160,7 +160,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     }
 
     .list-section {
-      font-size: 11px;
+      font-size: var(--control-ui-text-xs);
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--muted);
@@ -225,7 +225,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
 
     .item-name {
       font-family: var(--mono);
-      font-size: 14px;
+      font-size: var(--control-ui-text-md);
       color: var(--text);
       overflow: hidden;
       text-overflow: ellipsis;
@@ -234,12 +234,12 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
 
     .item-meta {
       color: var(--muted);
-      font-size: 12px;
+      font-size: var(--control-ui-text-sm);
     }
 
     .empty-list {
       color: var(--muted);
-      font-size: 13px;
+      font-size: var(--control-ui-text-compact);
       padding: 12px;
     }
 
@@ -274,7 +274,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       min-width: 0;
       margin: 0;
       font-family: var(--mono);
-      font-size: 22px;
+      font-size: var(--control-ui-text-2xl);
       color: var(--text-strong);
       font-weight: 700;
       letter-spacing: -0.01em;
@@ -371,7 +371,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       align-items: center;
       padding: 3px 10px;
       border-radius: 999px;
-      font-size: 11.5px;
+      font-size: calc(11.5px * var(--control-ui-text-scale));
       background: var(--bg-elevated);
       border: 1px solid var(--border);
       color: var(--muted);
@@ -404,7 +404,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       margin: 0;
       min-width: 0;
       font-family: var(--mono);
-      font-size: 13px;
+      font-size: var(--control-ui-text-compact);
       line-height: 1.7;
       color: var(--text);
       white-space: pre-wrap;
@@ -420,7 +420,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       padding: 12px 20px;
       border-top: 1px solid var(--border);
       background: var(--bg);
-      font-size: 12px;
+      font-size: var(--control-ui-text-sm);
       color: var(--muted);
     }
 
@@ -431,7 +431,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     }
 
     .kbd {
-      font-size: 10.5px;
+      font-size: calc(10.5px * var(--control-ui-text-scale));
       padding: 2px 6px;
       border-radius: 4px;
       background: var(--bg-elevated);
@@ -458,7 +458,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     }
 
     .empty-title {
-      font-size: 16px;
+      font-size: var(--control-ui-text-lg);
       font-weight: 600;
       color: var(--text-strong);
       margin: 0 0 8px;
@@ -466,7 +466,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
 
     .empty-subtitle {
       margin: 0;
-      font-size: 13px;
+      font-size: var(--control-ui-text-compact);
       color: var(--muted);
       max-width: 380px;
     }

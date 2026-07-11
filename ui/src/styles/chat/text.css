@@ -37,7 +37,7 @@
   border-collapse: collapse;
   width: 100%;
   max-width: 100%;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   display: block;
   overflow-x: auto;
 }
@@ -143,7 +143,7 @@
 .chat-text :where(pre code) {
   background: none;
   padding: 0;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: pre;
 }
 
@@ -153,7 +153,7 @@
   width: max-content;
   color: var(--text);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-variant-ligatures: none;
   letter-spacing: 0;
   line-height: 0.86;
@@ -236,7 +236,7 @@
 
 @media (max-width: 640px) {
   .chat-text :where(pre) {
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 
   .chat-text :where(.markdown-inline-image) {

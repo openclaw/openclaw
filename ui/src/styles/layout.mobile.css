@@ -227,7 +227,7 @@
     margin: 0;
     min-height: 40px;
     padding: 0 12px;
-    font-size: 13px;
+    font-size: var(--control-ui-text-compact);
     border-radius: var(--radius-md);
     white-space: nowrap;
     flex: 0 0 auto;
@@ -328,7 +328,7 @@
   }
 
   .nav-item {
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 
   /* Content */
@@ -429,7 +429,7 @@
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
     min-height: 44px;
     padding: 10px 12px;
-    font-size: 14px;
+    font-size: var(--control-ui-text-md);
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
@@ -441,7 +441,7 @@
     width: 100%;
     max-width: none;
     min-height: 44px;
-    font-size: 14px;
+    font-size: var(--control-ui-text-md);
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__inline-select-menu {
@@ -453,14 +453,14 @@
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select,
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
     width: 100%;
-    font-size: 14px;
+    font-size: var(--control-ui-text-md);
     min-height: 44px;
     padding: 10px 12px;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__agent select {
     width: 100%;
-    font-size: 14px;
+    font-size: var(--control-ui-text-md);
     min-height: 44px;
     padding: 10px 12px;
   }
@@ -493,7 +493,7 @@
   }
 
   .card-title {
-    font-size: 13px;
+    font-size: var(--control-ui-text-compact);
   }
 
   /* Stats */
@@ -508,11 +508,11 @@
   }
 
   .stat-label {
-    font-size: 12px; /* was 11px */
+    font-size: var(--control-ui-text-sm);
   }
 
   .stat-value {
-    font-size: 18px;
+    font-size: calc(18px * var(--control-ui-text-scale));
   }
 
   /* Notes */
@@ -532,19 +532,19 @@
   .field select {
     padding: 8px 10px;
     border-radius: var(--radius-md);
-    font-size: 14px;
+    font-size: var(--control-ui-text-md);
   }
 
   /* Buttons */
   .btn {
     padding: 8px 12px;
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 
   /* Pills */
   .pill {
     padding: 4px 10px;
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 
   /* Chat */
@@ -649,19 +649,19 @@
   }
 
   .log-time {
-    font-size: 12px; /* was 10px */
+    font-size: var(--control-ui-text-sm);
   }
 
   .log-level {
-    font-size: 12px; /* was 9px */
+    font-size: var(--control-ui-text-sm);
   }
 
   .log-subsystem {
-    font-size: 12px; /* was 11px */
+    font-size: var(--control-ui-text-sm);
   }
 
   .log-message {
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 
   /* Lists */
@@ -671,18 +671,18 @@
   }
 
   .list-title {
-    font-size: 13px;
+    font-size: var(--control-ui-text-compact);
   }
 
   .list-sub {
-    font-size: 12px; /* was 11px */
+    font-size: var(--control-ui-text-sm);
   }
 
   /* Code blocks */
   .code-block {
     padding: 8px;
     border-radius: var(--radius-md);
-    font-size: 12px; /* was 11px */
+    font-size: var(--control-ui-text-sm);
   }
 }
 
@@ -697,12 +697,12 @@
   }
 
   .brand-title {
-    font-size: 13px;
+    font-size: var(--control-ui-text-compact);
   }
 
   .nav-item {
     padding: 6px 8px;
-    font-size: 12px; /* was 11px */
+    font-size: var(--control-ui-text-sm);
   }
 
   .content {
@@ -719,7 +719,7 @@
   }
 
   .stat-value {
-    font-size: 16px;
+    font-size: var(--control-ui-text-lg);
   }
 
   .chat-bubble {
@@ -728,7 +728,7 @@
 
   .btn {
     padding: 6px 10px;
-    font-size: 12px; /* was 11px */
+    font-size: var(--control-ui-text-sm);
   }
 }
 
@@ -766,7 +766,7 @@
   .data-table th,
   .data-table td {
     padding: 8px 6px;
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 
   .data-table-pagination {
@@ -785,7 +785,7 @@
   }
 
   .data-table-search input {
-    font-size: 14px;
+    font-size: var(--control-ui-text-md);
     padding: 8px 10px;
   }
 
@@ -880,7 +880,7 @@
   .data-table th,
   .data-table td {
     padding: 6px 4px;
-    font-size: 12px; /* was 11px */
+    font-size: var(--control-ui-text-sm);
   }
 
   .session-key-cell {
