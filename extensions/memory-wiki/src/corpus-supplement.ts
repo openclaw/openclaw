@@ -14,6 +14,7 @@ export function createWikiCorpusSupplement(params: {
       agentId?: string;
       agentSessionKey?: string;
       sandboxed?: boolean;
+      signal?: AbortSignal;
     }) => {
       const appConfig = params.getAppConfig();
       const config = params.resolveConfig(input.agentId, appConfig);
@@ -27,6 +28,8 @@ export function createWikiCorpusSupplement(params: {
         maxResults: input.maxResults,
         searchBackend: "local",
         searchCorpus: "wiki",
+        signal: input.signal,
+        exhaustiveFallback: false,
       });
     },
     get: async (input: {

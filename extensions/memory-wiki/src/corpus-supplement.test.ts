@@ -72,6 +72,7 @@ describe("memory-wiki corpus supplement", () => {
       maxResults: 4,
       searchBackend: "local",
       searchCorpus: "wiki",
+      exhaustiveFallback: false,
     });
     expect(queryMocks.getMemoryWikiPage).toHaveBeenCalledWith({
       config: expect.objectContaining({

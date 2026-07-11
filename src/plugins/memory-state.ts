@@ -54,6 +54,11 @@ export type MemoryCorpusSupplement = {
     agentId?: string;
     agentSessionKey?: string;
     sandboxed?: boolean;
+    /** Optional abort signal from the caller's deadline. When provided, the
+     *  supplement should check the signal at cancellation points (before or
+     *  during large I/O operations) and return partial results if the signal
+     *  fires before search completes. */
+    signal?: AbortSignal;
   }): Promise<MemoryCorpusSearchResult[]>;
   get(params: {
     lookup: string;

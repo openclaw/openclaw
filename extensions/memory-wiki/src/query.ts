@@ -1406,6 +1406,8 @@ async function searchWikiCorpus(params: {
   query: string;
   maxResults: number;
   mode: WikiSearchMode;
+  signal?: AbortSignal;
+  exhaustiveFallback?: boolean;
 }): Promise<WikiSearchResult[]> {
   const digest = await readQueryDigestBundle(params.rootDir);
   const candidatePaths = digest
@@ -1416,6 +1418,20 @@ async function searchWikiCorpus(params: {
         mode: params.mode,
       })
     : [];
+
+  // When exhaustive fallback is disabled and there are no digest-routed
+  // candidates, skip full-vault enumeration entirely. Supplement searches
+  // use digest-only routing; direct wiki_search retains full-vault fallback.
+  if (candidatePaths.length === 0 && params.exhaustiveFallback === false) {
+    return [];
+  }
+
+  // Check signal before reading candidate pages; if already aborted return
+  // partial results immediately rather than starting new I/O.
+  if (params.signal?.aborted) {
+    return [];
+  }
+
   const seenPaths = new Set<string>();
   const candidatePages =
     candidatePaths.length > 0
@@ -1428,7 +1444,17 @@ async function searchWikiCorpus(params: {
   const results = candidatePages
     .map((page) => toWikiSearchResult(page, params.query, params.mode))
     .filter((page) => page.score > 0);
-  if (candidatePaths.length === 0 || results.length >= params.maxResults) {
+  if (
+    candidatePaths.length === 0 ||
+    results.length >= params.maxResults ||
+    params.exhaustiveFallback === false ||
+    params.signal?.aborted
+  ) {
+    return results;
+  }
+
+  // Re-check signal before the expensive exhaustive-fallback file listing.
+  if (params.signal?.aborted) {
     return results;
   }
 
@@ -1478,6 +1504,8 @@ export async function searchMemoryWiki(params: {
   searchBackend?: WikiSearchBackend;
   searchCorpus?: WikiSearchCorpus;
   mode?: WikiSearchMode;
+  signal?: AbortSignal;
+  exhaustiveFallback?: boolean;
 }): Promise<WikiSearchResult[]> {
   const effectiveConfig = applySearchOverrides(params.config, params);
   assertSessionVisibilityAppConfig({
@@ -1498,6 +1526,8 @@ export async function searchMemoryWiki(params: {
         query: params.query,
         maxResults,
         mode,
+        signal: params.signal,
+        exhaustiveFallback: params.exhaustiveFallback,
       })
     : [];
 
