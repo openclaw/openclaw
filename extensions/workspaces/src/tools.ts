@@ -56,8 +56,8 @@ const TOOL_DESCRIPTION_SUFFIX = " Call workspace_get first when you need the cur
 const WIDGET_KIND_DESCRIPTION = [
   `Widget kind: custom:<name>, or one of ${BUILTIN_WIDGET_KINDS.join(", ")}.`,
   "builtin:stat-card (big number; props {label?, format?: usd|percent|int}; binding id `value`),",
-  "builtin:markdown (props {content} or a file binding of a .md file),",
-  "builtin:table (binding id `rows`; props {columns: [{key,label}]}),",
+  "builtin:markdown (props {markdown} or {text}, or a file binding of a .md file),",
+  "builtin:table (binding id `rows`; props {columns: string[]}),",
   "builtin:iframe-embed (props {url}),",
   "builtin:sessions, builtin:usage, builtin:cron, builtin:instances, builtin:activity",
   "(each reads its own rpc binding; see workspace_get for a worked example).",

@@ -73,6 +73,18 @@ describe("createWidgetBridge accept filter", () => {
 });
 
 describe("getData binding gating", () => {
+  it("denies data access when data:read was not approved", async () => {
+    const resolveBinding = vi.fn(async () => ({ ok: true }));
+    const { bridge, posted } = makeBridge({
+      manifest: manifest({ capabilities: [] }),
+      resolveBinding,
+    });
+    bridge.handleMessage({ v: 1, type: "workspace:getData", requestId: "r1", bindingId: "value" });
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toMatchObject({ type: "workspace:error", code: "capability_denied" });
+    expect(resolveBinding).not.toHaveBeenCalled();
+  });
+
   it("resolves a declared binding and posts data", async () => {
     const { bridge, posted } = makeBridge({ resolveBinding: async () => ({ revenue: 42 }) });
     bridge.handleMessage({ v: 1, type: "workspace:getData", requestId: "r1", bindingId: "value" });
@@ -238,6 +250,17 @@ describe("push", () => {
     const { bridge, posted } = makeBridge();
     await bridge.push("secret");
     expect(posted).toHaveLength(0);
+  });
+
+  it("ignores a push when data:read was not approved", async () => {
+    const resolveBinding = vi.fn(async () => 7);
+    const { bridge, posted } = makeBridge({
+      manifest: manifest({ capabilities: [] }),
+      resolveBinding,
+    });
+    await bridge.push("value");
+    expect(posted).toHaveLength(0);
+    expect(resolveBinding).not.toHaveBeenCalled();
   });
 });
 

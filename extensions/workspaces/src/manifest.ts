@@ -13,7 +13,7 @@ import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtim
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeWorkspaceDataLogicalPath } from "./binding-contract.js";
 
-export const CUSTOM_WIDGET_NAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+export const CUSTOM_WIDGET_NAME_PATTERN = /^(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
 
 /**
  * Content types the widget route will serve, keyed by lowercase extension. Owned
@@ -199,7 +199,7 @@ export function matchesApprovedFile(
   const expected = approvedFiles?.[logicalPath];
   return expected !== undefined && expected === hashBytes(bytes);
 }
-const BINDING_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+const BINDING_ID_PATTERN = /^(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
 export const WIDGET_CAPABILITIES = ["data:read", "prompt:send"] as const;
 
 export type WidgetCapability = (typeof WIDGET_CAPABILITIES)[number];

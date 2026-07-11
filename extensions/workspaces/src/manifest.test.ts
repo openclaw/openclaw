@@ -52,6 +52,18 @@ describe("validateWidgetManifest", () => {
     );
   });
 
+  it("rejects prototype-setter widget and binding names", () => {
+    expect(() => validateWidgetManifest({ ...VALID_MANIFEST, name: "__proto__" })).toThrow(
+      /name is invalid/,
+    );
+    expect(() =>
+      validateWidgetManifest({
+        ...VALID_MANIFEST,
+        bindings: [{ id: "__proto__", source: "static", value: 1 }],
+      }),
+    ).toThrow(/id is invalid/);
+  });
+
   it("rejects rpc bindings for custom code", () => {
     expect(() =>
       validateWidgetManifest({

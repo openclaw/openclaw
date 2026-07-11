@@ -20,7 +20,7 @@ export const BUILTIN_WIDGET_RENDERERS: Record<string, BuiltinWidgetRenderer> = {
   markdown: (widget, value) => renderMarkdown(widget, value),
   table: (widget, value) => renderTable(widget, value),
   "iframe-embed": renderIframeEmbed,
-  sessions: (widget, value) => renderSessions(widget, value),
+  sessions: (widget, value, context) => renderSessions(widget, value, context.basePath),
   usage: (widget, value) => renderUsage(widget, value),
   cron: (widget, value) => renderCron(widget, value),
   instances: (widget, value) => renderInstances(widget, value),

@@ -42,6 +42,12 @@ describe("Workspaces document schema", () => {
     }, "widgets[0].kind");
   });
 
+  it("rejects a prototype-setter custom widget kind", () => {
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.kind = "custom:__proto__";
+    }, "widgets[0].kind");
+  });
+
   it("rejects invalid binding unions", () => {
     expectInvalid((doc) => {
       doc.tabs[0]!.widgets[0]!.bindings = {
@@ -69,6 +75,20 @@ describe("Workspaces document schema", () => {
       method: "sessions.get",
       params: { key: "agent:main:main" },
     });
+  });
+
+  it("rejects prototype-setter binding and widget names", () => {
+    const doc = validDoc();
+    doc.tabs[0]!.widgets[0]!.bindings = JSON.parse(
+      '{"__proto__":{"source":"static","value":1}}',
+    ) as WorkspaceDoc["tabs"][number]["widgets"][number]["bindings"];
+    expect(() => validateWorkspaceDoc(doc)).toThrow("binding id is invalid");
+
+    doc.tabs[0]!.widgets[0]!.bindings = {};
+    doc.widgetsRegistry = JSON.parse(
+      '{"__proto__":{"status":"pending","createdBy":"agent:main"}}',
+    ) as WorkspaceDoc["widgetsRegistry"];
+    expect(() => validateWorkspaceDoc(doc)).toThrow("name is invalid");
   });
 
   it("rejects non-object and oversized rpc parameters", () => {

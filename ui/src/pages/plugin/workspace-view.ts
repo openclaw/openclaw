@@ -569,7 +569,10 @@ function renderGrid(
     `;
   }
   const callbacks = makeCallbacks(props, state, viewState, tab);
-  const builtinContext: BuiltinWidgetContext = { embed: props.embed ?? DEFAULT_EMBED_CONTEXT };
+  const builtinContext: BuiltinWidgetContext = {
+    basePath: props.basePath ?? "",
+    embed: props.embed ?? DEFAULT_EMBED_CONTEXT,
+  };
   const rows = gridRowCount(tab.widgets);
   const minHeight = rows * WORKSPACE_ROW_HEIGHT + Math.max(0, rows - 1) * WORKSPACE_GRID_GAP;
   return html`

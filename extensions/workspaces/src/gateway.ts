@@ -25,7 +25,7 @@ const WRITE_SCOPE = "operator.write" as const;
 const APPROVE_SCOPE = "operator.approvals" as const;
 const TAB_SLUG_PATTERN = /^[a-z0-9-]{1,40}$/;
 const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,48}$/;
-const CUSTOM_WIDGET_NAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+const CUSTOM_WIDGET_NAME_PATTERN = /^(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
 
 type GatewayMethodContext = Parameters<
   Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]

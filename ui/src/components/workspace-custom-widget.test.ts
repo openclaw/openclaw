@@ -91,7 +91,7 @@ describe("loadWidgetManifestView", () => {
     expect(await loadWidgetManifestView({ request } as never, "revenue-chart")).toBeNull();
   });
 
-  it("represents schema-valid binding ids without prototype collisions", async () => {
+  it("drops prototype-setter binding ids", async () => {
     const request = vi.fn(async () => ({
       frameToken: BRIDGE_TOKEN,
       frameExpiresAt: FRAME_EXPIRES_AT,
@@ -103,11 +103,7 @@ describe("loadWidgetManifestView", () => {
     }));
 
     const view = await loadWidgetManifestView({ request } as never, "revenue-chart");
-    expect(Object.keys(view?.bindings ?? {})).toEqual(["__proto__"]);
-    expect(Reflect.get(view?.bindings ?? {}, "__proto__")).toEqual({
-      source: "static",
-      value: 1,
-    });
+    expect(Object.keys(view?.bindings ?? {})).toEqual([]);
   });
 });
 

@@ -25,7 +25,7 @@ export type WorkspaceScaffoldResult = {
   readmePath: string;
 };
 
-const CUSTOM_WIDGET_NAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+const CUSTOM_WIDGET_NAME_PATTERN = /^(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
 
 function scaffoldTitle(name: string, title: string | undefined): string {
   if (title?.trim()) {

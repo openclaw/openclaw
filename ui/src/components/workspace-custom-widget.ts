@@ -107,7 +107,7 @@ function parseManifestBinding(value: unknown): { id: string; binding: WorkspaceB
   }
   const record = value as Record<string, unknown>;
   const id = record.id;
-  if (typeof id !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(id)) {
+  if (typeof id !== "string" || id === "__proto__" || !/^[A-Za-z0-9._-]{1,64}$/.test(id)) {
     return null;
   }
   if (record.source === "static" && Object.hasOwn(record, "value")) {
@@ -150,8 +150,7 @@ export async function loadWidgetManifestView(
     }
     const record = manifest as Record<string, unknown>;
     const manifestBindings = Array.isArray(record.bindings) ? record.bindings : [];
-    // Binding ids may legally be `__proto__`; a null-prototype record represents
-    // every allowed id without invoking Object.prototype's legacy setter.
+    // A null-prototype record keeps every accepted manifest id as data.
     const bindings = Object.create(null) as Record<string, WorkspaceBinding>;
     for (const value of manifestBindings) {
       const parsedBinding = parseManifestBinding(value);

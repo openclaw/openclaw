@@ -202,6 +202,10 @@ export function createWidgetBridge(deps: WidgetBridgeDeps): WidgetBridge {
   }
 
   async function handleGetData(requestId: string, bindingId: string): Promise<void> {
+    if (!capabilities.has("data:read")) {
+      error("capability_denied", "widget lacks the data:read capability", requestId);
+      return;
+    }
     if (!declaredBindingIds.has(bindingId)) {
       // A widget cannot request a binding the operator did not approve.
       error("binding_denied", `binding not declared in manifest: ${bindingId}`, requestId);
@@ -332,7 +336,12 @@ export function createWidgetBridge(deps: WidgetBridgeDeps): WidgetBridge {
   }
 
   async function push(bindingId: string): Promise<void> {
-    if (disposed || !declaredBindingIds.has(bindingId) || deps.assertBindingAllowed?.(bindingId)) {
+    if (
+      disposed ||
+      !capabilities.has("data:read") ||
+      !declaredBindingIds.has(bindingId) ||
+      deps.assertBindingAllowed?.(bindingId)
+    ) {
       // A disallowed binding is never pushed (same gate as getData; silent for push).
       return;
     }

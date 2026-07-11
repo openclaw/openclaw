@@ -34,6 +34,7 @@ function renderToContainer(template: unknown): HTMLElement {
 }
 
 const STRICT_EMBED: BuiltinWidgetContext = {
+  basePath: "",
   embed: { embedSandboxMode: "strict", allowExternalEmbedUrls: false },
 };
 
@@ -137,9 +138,11 @@ describe("sessions mapping", () => {
 
   it("renders a link per session and an empty state", () => {
     const populated = renderToContainer(
-      renderSessions(widget(), { sessions: [{ key: "main:1", displayName: "One" }] }),
+      renderSessions(widget(), { sessions: [{ key: "main:1", displayName: "One" }] }, "/openclaw"),
     );
-    expect(populated.querySelector(".workspace-list__link")).not.toBeNull();
+    expect(populated.querySelector(".workspace-list__link")?.getAttribute("href")).toBe(
+      "/openclaw/chat?session=main%3A1",
+    );
     const empty = renderToContainer(renderSessions(widget(), { sessions: [] }));
     expect(empty.querySelector(".workspace-widget__placeholder")).not.toBeNull();
   });

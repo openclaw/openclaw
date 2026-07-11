@@ -59,14 +59,18 @@ export function mapSessions(widget: WorkspaceWidget, value: unknown): SessionsMo
   return { rows, total: records.length };
 }
 
-export function renderSessions(widget: WorkspaceWidget, value: unknown): TemplateResult {
+export function renderSessions(
+  widget: WorkspaceWidget,
+  value: unknown,
+  basePath = "",
+): TemplateResult {
   const model = mapSessions(widget, value);
   if (model.rows.length === 0) {
     return html`<div class="workspace-widget__placeholder">
       ${t("workspaces.widget.sessions.empty")}
     </div>`;
   }
-  const chatPath = pathForRoute("chat");
+  const chatPath = pathForRoute("chat", basePath);
   return html`
     <ul class="workspace-list workspace-sessions" data-test-id="workspace-sessions">
       ${model.rows.map(

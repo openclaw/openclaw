@@ -15,6 +15,8 @@ import type { WorkspaceWidget } from "../types.ts";
 
 /** Ambient context a builtin may need beyond its own binding value. */
 export type BuiltinWidgetContext = {
+  /** Control UI mount path used by builtins that link to another app route. */
+  basePath: string;
   /** Control UI embed policy — only the iframe-embed widget consumes it. */
   embed: Pick<
     ApplicationConfigCapability["current"],

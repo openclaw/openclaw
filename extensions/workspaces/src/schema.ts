@@ -73,8 +73,8 @@ export const BUILTIN_WIDGET_KINDS = [
 ] as const;
 
 const BUILTIN_KINDS = new Set<string>(BUILTIN_WIDGET_KINDS);
-const CUSTOM_KIND_PATTERN = /^custom:[A-Za-z0-9._-]{1,64}$/;
-const CUSTOM_WIDGET_NAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+const CUSTOM_KIND_PATTERN = /^custom:(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
+const CUSTOM_WIDGET_NAME_PATTERN = /^(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
 const MAX_STATIC_BINDING_BYTES = 8 * 1024;
 const MAX_RPC_BINDING_PARAMS_BYTES = 8 * 1024;
 
@@ -241,14 +241,14 @@ function validateBinding(value: unknown, path: string): WorkspaceBinding {
 
 function validateBindingRecord(value: unknown, path: string): Record<string, WorkspaceBinding> {
   const record = assertRecord(value, path);
-  const bindings: Record<string, WorkspaceBinding> = {};
-  for (const [key, entry] of Object.entries(record)) {
-    if (!/^[A-Za-z0-9._-]{1,64}$/.test(key)) {
-      throw new Error(`${path}.${key} binding id is invalid`);
-    }
-    bindings[key] = validateBinding(entry, `${path}.${key}`);
-  }
-  return bindings;
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => {
+      if (key === "__proto__" || !/^[A-Za-z0-9._-]{1,64}$/.test(key)) {
+        throw new Error(`${path}.${key} binding id is invalid`);
+      }
+      return [key, validateBinding(entry, `${path}.${key}`)];
+    }),
+  );
 }
 
 function validateWidget(value: unknown, path: string): WorkspaceWidget {
@@ -371,14 +371,14 @@ function validateRegistryEntry(value: unknown, path: string): WorkspaceWidgetReg
 
 function validateWidgetsRegistry(value: unknown): Record<string, WorkspaceWidgetRegistryEntry> {
   const record = assertRecord(value, "widgetsRegistry");
-  const registry: Record<string, WorkspaceWidgetRegistryEntry> = {};
-  for (const [name, entry] of Object.entries(record)) {
-    if (!CUSTOM_WIDGET_NAME_PATTERN.test(name)) {
-      throw new Error(`widgetsRegistry.${name} name is invalid`);
-    }
-    registry[name] = validateRegistryEntry(entry, `widgetsRegistry.${name}`);
-  }
-  return registry;
+  return Object.fromEntries(
+    Object.entries(record).map(([name, entry]) => {
+      if (!CUSTOM_WIDGET_NAME_PATTERN.test(name)) {
+        throw new Error(`widgetsRegistry.${name} name is invalid`);
+      }
+      return [name, validateRegistryEntry(entry, `widgetsRegistry.${name}`)];
+    }),
+  );
 }
 
 function validatePrefs(value: unknown, tabSlugs: Set<string>): WorkspaceDoc["prefs"] {

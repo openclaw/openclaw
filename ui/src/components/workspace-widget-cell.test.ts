@@ -12,6 +12,7 @@ import {
 } from "./workspace-widget-cell.ts";
 
 const BUILTIN_CONTEXT: BuiltinWidgetContext = {
+  basePath: "",
   embed: { embedSandboxMode: "strict", allowExternalEmbedUrls: false },
 };
 
