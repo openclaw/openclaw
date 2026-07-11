@@ -1,6 +1,6 @@
 // Browser tests cover profile reset through the lifecycle actor.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import "./server-context.chrome-test-harness.js";
 import type { RunningChrome } from "./chrome.js";
 import * as chromeModule from "./chrome.js";
