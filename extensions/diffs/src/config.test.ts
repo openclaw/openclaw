@@ -62,7 +62,7 @@ function compileManifestConfigSchema() {
       schema: manifest.configSchema,
       value,
       applyDefaults: true,
-    }).ok;
+    });
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -181,7 +181,6 @@ describe("resolveDiffsPluginDefaults", () => {
 
     expect(resolveDiffImageRenderOptions({ defaults }).format).toBe("pdf");
     expect(resolveDiffImageRenderOptions({ defaults, fileFormat: "png" }).format).toBe("png");
-    expect(resolveDiffImageRenderOptions({ defaults, format: "png" }).format).toBe("png");
   });
 
   it("accepts format as a config alias for fileFormat", () => {
@@ -216,6 +215,20 @@ describe("resolveDiffsPluginDefaults", () => {
     );
   });
 
+  it("prefers an explicit canonical default value over a deprecated alias", () => {
+    expectFields(
+      resolveDiffsPluginDefaults({
+        defaults: {
+          fileFormat: "png",
+          imageFormat: "pdf",
+        },
+      }),
+      {
+        fileFormat: "png",
+      },
+    );
+  });
+
   it("accepts plugin-wide artifact TTL defaults", () => {
     expectFields(
       resolveDiffsPluginDefaults({
@@ -240,7 +253,7 @@ describe("resolveDiffsPluginDefaults", () => {
     );
   });
 
-  it("keeps loader-applied schema defaults from shadowing aliases and quality-derived defaults", () => {
+  it("keeps alias-only config values after manifest validation", () => {
     const validate = compileManifestConfigSchema();
 
     const aliasOnly = {
@@ -249,8 +262,11 @@ describe("resolveDiffsPluginDefaults", () => {
         imageQuality: "hq",
       },
     };
-    expect(validate(aliasOnly)).toBe(true);
-    expectFields(resolveDiffsPluginDefaults(aliasOnly), {
+    const validatedAliasOnly = validate(aliasOnly);
+    if (!validatedAliasOnly.ok) {
+      throw new Error("Expected alias-only config to pass manifest validation.");
+    }
+    expectFields(resolveDiffsPluginDefaults(validatedAliasOnly.value), {
       fileFormat: "pdf",
       fileQuality: "hq",
       fileScale: 2.5,
@@ -262,8 +278,11 @@ describe("resolveDiffsPluginDefaults", () => {
         fileQuality: "hq",
       },
     };
-    expect(validate(qualityOnly)).toBe(true);
-    expectFields(resolveDiffsPluginDefaults(qualityOnly), {
+    const validatedQualityOnly = validate(qualityOnly);
+    if (!validatedQualityOnly.ok) {
+      throw new Error("Expected quality-only config to pass manifest validation.");
+    }
+    expectFields(resolveDiffsPluginDefaults(validatedQualityOnly.value), {
       fileQuality: "hq",
       fileScale: 2.5,
       fileMaxWidth: 1200,
@@ -301,10 +320,10 @@ describe("diffs plugin schema surfaces", () => {
   it("rejects invalid viewerBaseUrl values at manifest-validation time too", () => {
     const validate = compileManifestConfigSchema();
 
-    expect(validate({ viewerBaseUrl: "javascript:alert(1)" })).toBe(false);
-    expect(validate({ viewerBaseUrl: "https://example.com/openclaw?x=1" })).toBe(false);
-    expect(validate({ viewerBaseUrl: "https://example.com/openclaw#frag" })).toBe(false);
-    expect(validate({ viewerBaseUrl: "https://example.com/openclaw/" })).toBe(true);
+    expect(validate({ viewerBaseUrl: "javascript:alert(1)" }).ok).toBe(false);
+    expect(validate({ viewerBaseUrl: "https://example.com/openclaw?x=1" }).ok).toBe(false);
+    expect(validate({ viewerBaseUrl: "https://example.com/openclaw#frag" }).ok).toBe(false);
+    expect(validate({ viewerBaseUrl: "https://example.com/openclaw/" }).ok).toBe(true);
   });
 
   it("preserves defaults and security for direct safeParse callers", () => {
@@ -344,7 +363,7 @@ describe("diffs plugin schema surfaces", () => {
     expectFields(data.security, { allowRemoteViewer: true });
   });
 
-  it("canonicalizes alias-driven defaults for direct safeParse callers", () => {
+  it("resolves deprecated aliases before safeParse applies runtime defaults", () => {
     const parsed = requireRecord(
       diffsPluginConfigSchema.safeParse?.({
         defaults: {

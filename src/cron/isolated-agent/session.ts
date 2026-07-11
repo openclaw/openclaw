@@ -1,13 +1,19 @@
 /** Resolves session rollover and carried state for isolated cron runs. */
 import crypto from "node:crypto";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
-import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
+import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
+import {
+  resolveSessionLifecycleTimestamps,
+  resolveSessionWorkStartError,
+} from "../../config/sessions/lifecycle.js";
 import { hasSessionAutoModelFallbackProvenance } from "../../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
+  type SessionFreshness,
 } from "../../config/sessions/reset-policy.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -22,6 +28,7 @@ const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
   "reasoningLevel",
   "ttsAuto",
   "responseUsage",
+  "pinnedAt",
   "label",
   "displayName",
 ] as const satisfies readonly (keyof SessionEntry)[];
@@ -64,14 +71,21 @@ function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry)
   const recoveredAutoFallbackOverride =
     entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
   if (entry.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
+    let preservedModelSelection = false;
     if (entry.modelOverride !== undefined) {
       target.modelOverride = entry.modelOverride;
+      preservedModelSelection = true;
     }
     if (entry.providerOverride !== undefined) {
       target.providerOverride = entry.providerOverride;
     }
     if (entry.modelOverrideSource !== undefined) {
       target.modelOverrideSource = entry.modelOverrideSource;
+    }
+    // Runtime overrides qualify an explicit model selection; carrying one alone
+    // would pin a fresh cron session to a stale engine after its model resets.
+    if (preservedModelSelection && entry.agentRuntimeOverride !== undefined) {
+      target.agentRuntimeOverride = entry.agentRuntimeOverride;
     }
   }
 }
@@ -104,6 +118,20 @@ function sanitizeFreshCronSessionEntry(
   return next;
 }
 
+/**
+ * Reads the current cron session row without an in-process cache snapshot.
+ * Lifecycle admission guards compare this against the run's initial entry, so
+ * the read must bypass cached store snapshots (accessor readConsistency
+ * "latest"). Cron keys are canonicalized before use, so accessor key
+ * resolution selects the same row the cron persist path writes.
+ */
+export function loadCronSessionEntryLatest(
+  storePath: string,
+  sessionKey: string,
+): SessionEntry | undefined {
+  return loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" });
+}
+
 /** Resolves or rolls over the cron session entry for one isolated-agent run. */
 export function resolveCronSession(params: {
   cfg: OpenClawConfig;
@@ -119,6 +147,10 @@ export function resolveCronSession(params: {
   });
   const store = params.store ?? loadSessionStore(storePath);
   const entry = store[params.sessionKey];
+  const archivedSessionError = resolveSessionWorkStartError(params.sessionKey, entry);
+  if (archivedSessionError) {
+    throw new Error(archivedSessionError);
+  }
 
   let sessionId: string;
   let isNewSession: boolean;
@@ -131,16 +163,19 @@ export function resolveCronSession(params: {
       sessionCfg,
       resetType: "direct",
     });
-    const freshness = evaluateSessionFreshness({
-      updatedAt: entry.updatedAt,
-      ...resolveSessionLifecycleTimestamps({
-        entry,
-        agentId: params.agentId,
-        storePath,
-      }),
-      now: params.nowMs,
-      policy: resetPolicy,
-    });
+    const skipImplicitExpiry = resetPolicy.configured !== true && hasProviderOwnedSession(entry);
+    const freshness = skipImplicitExpiry
+      ? ({ fresh: true } satisfies SessionFreshness)
+      : evaluateSessionFreshness({
+          updatedAt: entry.updatedAt,
+          ...resolveSessionLifecycleTimestamps({
+            entry,
+            agentId: params.agentId,
+            storePath,
+          }),
+          now: params.nowMs,
+          policy: resetPolicy,
+        });
 
     if (freshness.fresh) {
       sessionId = entry.sessionId;
@@ -169,11 +204,13 @@ export function resolveCronSession(params: {
       : entry
     : undefined;
 
+  const lifecycleRevision = crypto.randomUUID();
   const sessionEntry: SessionEntry = {
     // Fresh cron sessions keep user preference/auth overrides but drop resume
     // handles and auto-fallback model overrides that belong to the old run.
     ...baseEntry,
     sessionId,
+    lifecycleRevision,
     updatedAt: params.nowMs,
     sessionStartedAt: isNewSession
       ? params.nowMs
@@ -186,5 +223,14 @@ export function resolveCronSession(params: {
     lastInteractionAt: isNewSession ? params.nowMs : baseEntry?.lastInteractionAt,
     systemSent,
   };
-  return { storePath, store, sessionEntry, systemSent, isNewSession, previousSessionId };
+  return {
+    storePath,
+    store,
+    sessionEntry,
+    lifecycleRevision,
+    systemSent,
+    isNewSession,
+    previousSessionId,
+    initialSessionEntry: entry,
+  };
 }

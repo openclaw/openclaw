@@ -5,21 +5,40 @@ import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-/** Find an existing Claude `--mcp-config` argument value. */
-export function findClaudeMcpConfigPath(args?: string[]): string | undefined {
+/** Find existing Claude `--mcp-config` argument values. */
+export function findClaudeMcpConfigPaths(args?: string[]): string[] {
+  const paths: string[] = [];
   if (!args?.length) {
-    return undefined;
+    return paths;
   }
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i] ?? "";
     if (arg === "--mcp-config") {
-      return normalizeOptionalString(args[i + 1]);
+      // Claude treats --mcp-config as variadic. Keep this scan aligned with
+      // extensions/anthropic/cli-shared.ts so user config files are not leaked
+      // as positional prompts after OpenClaw injects its strict overlay.
+      while (typeof args[i + 1] === "string" && !args[i + 1]?.startsWith("-")) {
+        i += 1;
+        const path = normalizeOptionalString(args[i]);
+        if (path) {
+          paths.push(path);
+        }
+      }
+      continue;
     }
     if (arg.startsWith("--mcp-config=")) {
-      return normalizeOptionalString(arg.slice("--mcp-config=".length));
+      const path = normalizeOptionalString(arg.slice("--mcp-config=".length));
+      if (path) {
+        paths.push(path);
+      }
     }
   }
-  return undefined;
+  return paths;
+}
+
+/** Find an existing Claude `--mcp-config` argument value. */
+export function findClaudeMcpConfigPath(args?: string[]): string | undefined {
+  return findClaudeMcpConfigPaths(args)[0];
 }
 
 /** Return Claude args with OpenClaw's strict MCP config path injected. */
@@ -34,7 +53,9 @@ export function injectClaudeMcpConfigArgs(
       continue;
     }
     if (arg === "--mcp-config") {
-      i += 1;
+      while (typeof args?.[i + 1] === "string" && !args[i + 1]?.startsWith("-")) {
+        i += 1;
+      }
       continue;
     }
     if (arg.startsWith("--mcp-config=")) {

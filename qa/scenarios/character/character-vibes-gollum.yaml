@@ -112,17 +112,16 @@ flow:
               - set: beforeOutboundCount
                 value:
                   expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId).length"
-              - call: state.addInboundMessage
-                args:
-                  - conversation:
-                      id:
-                        ref: config.conversationId
-                      kind: direct
-                    senderId: alice
-                    senderName:
-                      ref: config.senderName
-                    text:
-                      expr: turn.text
+              - sendInbound:
+                  conversation:
+                    id:
+                      ref: config.conversationId
+                    kind: direct
+                  senderId: alice
+                  senderName:
+                    ref: config.senderName
+                  text:
+                    expr: turn.text
               - try:
                   actions:
                     - call: waitForOutboundMessage

@@ -73,6 +73,7 @@ export function buildCodexPluginThreadConfigEligibilityLogData(params: {
     enabled: params.pluginThreadConfigRequired,
     policyConfigured: params.resolvedPluginPolicy?.configured === true,
     policyEnabled: params.resolvedPluginPolicy?.enabled === true,
+    allowAllPlugins: params.resolvedPluginPolicy?.allowAllPlugins === true,
     pluginConfigKeys: params.resolvedPluginPolicy?.pluginPolicies
       .map((plugin) => plugin.configKey)
       .toSorted(),

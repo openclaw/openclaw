@@ -26,7 +26,6 @@ export {
   resolvePathsWithinRoot,
   resolvePathWithinRoot,
   root,
-  safeEqualSecret,
   sanitizeUntrustedFileName,
   resolveStrictExistingPathsWithinRoot,
   resolveWritablePathWithinRoot,

@@ -6,7 +6,6 @@ export type CommandQueueEnqueueOptions = {
   warnAfterMs?: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
   taskTimeoutMs?: number;
-  allowDuringGatewayDrain?: boolean;
   taskTimeoutProgressAtMs?: () => number | undefined;
   taskTimeoutAbortSignal?: AbortSignal;
   taskTimeoutAbortGraceMs?: number;

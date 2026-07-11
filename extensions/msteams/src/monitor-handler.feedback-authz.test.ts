@@ -42,11 +42,8 @@ function createRuntimeStub(readAllowFromStore: ReturnType<typeof vi.fn>): Plugin
         resolveInboundDebounceMs: () => 0,
         createInboundDebouncer: () => ({
           enqueue: async () => {},
-          flushKey: async () => false,
-          flushKeyWithCount: async () => ({ flushed: 0 }),
+          flushKey: async () => {},
           cancelKey: () => false,
-          flushAll: async () => 0,
-          unregister: () => {},
         }),
       },
       pairing: {

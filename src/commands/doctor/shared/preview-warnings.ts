@@ -675,7 +675,7 @@ export type DoctorPreviewNotes = {
   warningNotes: string[];
 };
 
-async function resolveDoctorChannelPreviewConfig(params: {
+export async function resolveDoctorChannelPreviewConfig(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   allowExec?: boolean;
@@ -904,6 +904,15 @@ export async function collectDoctorPreviewNotes(params: {
       }).join("\n"),
     );
   }
+
+  const { collectStaleConfiguredAuthOrderWarnings } = await import("./stale-auth-order.js");
+  warnings.push(
+    ...collectStaleConfiguredAuthOrderWarnings({
+      cfg: params.cfg,
+      doctorFixCommand: params.doctorFixCommand,
+      env,
+    }),
+  );
 
   return { infoNotes, warningNotes: warnings };
 }

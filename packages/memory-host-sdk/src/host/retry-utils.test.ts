@@ -1,35 +1,10 @@
 // Memory Host SDK tests cover retry utils behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../../gateway-client/src/timeouts.js";
-import { resolveRetryConfig, retryAsync } from "./retry-utils.js";
+import { retryAsync } from "./retry-utils.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
-});
-
-describe("resolveRetryConfig", () => {
-  const defaults = {
-    attempts: 4,
-    minDelayMs: 0,
-    maxDelayMs: 0,
-    jitter: 0,
-  };
-
-  it("does not round malformed attempt counts", () => {
-    expect(resolveRetryConfig(defaults, { attempts: 1.5 }).attempts).toBe(4);
-    expect(resolveRetryConfig(defaults, { attempts: Number.POSITIVE_INFINITY }).attempts).toBe(4);
-    expect(resolveRetryConfig(defaults, { attempts: Number.NaN }).attempts).toBe(4);
-  });
-
-  it("caps oversized retry delays at the timer-safe ceiling", () => {
-    const config = resolveRetryConfig(defaults, {
-      minDelayMs: Number.MAX_SAFE_INTEGER,
-      maxDelayMs: Number.MAX_SAFE_INTEGER,
-    });
-
-    expect(config.minDelayMs).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
-    expect(config.maxDelayMs).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
-  });
 });
 
 describe("retryAsync", () => {
@@ -39,6 +14,22 @@ describe("retryAsync", () => {
     });
 
     await expect(retryAsync(run, Number.NaN, 0)).rejects.toThrow("boom");
+
+    expect(run).toHaveBeenCalledTimes(3);
+  });
+
+  it("falls back to the default attempt count for malformed option counts", async () => {
+    const run = vi.fn(async () => {
+      throw new Error("boom");
+    });
+
+    await expect(
+      retryAsync(run, {
+        attempts: 1.5,
+        minDelayMs: 0,
+        maxDelayMs: 0,
+      }),
+    ).rejects.toThrow("boom");
 
     expect(run).toHaveBeenCalledTimes(3);
   });

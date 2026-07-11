@@ -8,6 +8,7 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyCodexAppServerAuthProfile,
@@ -238,6 +239,23 @@ describe("bridgeCodexAppServerStartOptions", () => {
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
+  });
+
+  it("uses the native user Codex home for coexistence mode", async () => {
+    await withTempDir("openclaw-codex-user-home-", async (root) => {
+      const agentDir = path.join(root, "agent");
+      const codexHome = path.join(root, "user-codex-home");
+      vi.stubEnv("CODEX_HOME", codexHome);
+      const startOptions = createStartOptions({ homeScope: "user" });
+      await expect(
+        bridgeCodexAppServerStartOptions({ startOptions, agentDir, authProfileId: null }),
+      ).resolves.toEqual({
+        ...startOptions,
+        env: { CODEX_HOME: codexHome },
+      });
+      await expect(fs.access(codexHome)).resolves.toBeUndefined();
+      await expectPathMissing(resolveCodexAppServerHomeDir(agentDir));
+    });
   });
 
   it("preserves inherited HOME when clearEnv asks to clear app-server isolation vars", async () => {
@@ -1367,6 +1385,35 @@ describe("bridgeCodexAppServerStartOptions", () => {
       expect(loadAuthProfileStoreForSecretsRuntime(agentDir).profiles).not.toHaveProperty(
         "openai:default",
       );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds native Codex OAuth in the OS home when OpenClaw uses an isolated home", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const osHome = path.join(root, "os-home");
+    const openClawHome = path.join(root, "openclaw-home");
+    const agentDir = path.join(openClawHome, "agents", "main", "agent");
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    vi.stubEnv("HOME", osHome);
+    vi.stubEnv("OPENCLAW_HOME", openClawHome);
+    vi.stubEnv("CODEX_HOME", undefined);
+    try {
+      await writeCodexCliAuthFile(path.join(osHome, ".codex"));
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+      });
+
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "cli-access-token",
+        chatgptAccountId: "account-cli",
+        chatgptPlanType: null,
+      });
+      await expectPathMissing(path.join(agentDir, "auth-profiles.json"));
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

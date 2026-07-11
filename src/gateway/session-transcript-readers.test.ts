@@ -110,7 +110,11 @@ describe("session transcript reader facade", () => {
           content: "metered answer",
           provider: "openai",
           model: "gpt-5.5",
-          usage: { input: 11, output: 7 },
+          usage: {
+            input: 11,
+            output: 7,
+            contextUsage: { state: "unavailable" },
+          },
         },
       },
     ]);
@@ -123,6 +127,7 @@ describe("session transcript reader facade", () => {
       readLatestRecentSessionUsageFromTranscriptAsync(scope, 4096),
     ).resolves.toMatchObject({
       inputTokens: 11,
+      contextUsage: { state: "unavailable" },
       model: "gpt-5.5",
       modelProvider: "openai",
       outputTokens: 7,

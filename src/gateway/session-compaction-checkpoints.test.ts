@@ -633,7 +633,7 @@ describe("session-compaction-checkpoints", () => {
     ]);
   });
 
-  test("file-backed checkpoint store restores from the stored transcript boundary", async () => {
+  test("file-backed checkpoint store branches active state and restores source management state", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-store-"));
     tempDirs.push(dir);
 
@@ -658,10 +658,13 @@ describe("session-compaction-checkpoints", () => {
 
     const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
     const storePath = path.join(dir, "sessions.json");
+    const managedAt = Date.now() - 2;
     await writeSessionStore(storePath, MAIN_SESSION_KEY, {
       sessionId: "current-session",
       sessionFile,
       updatedAt: Date.now() - 1,
+      archivedAt: managedAt,
+      pinnedAt: managedAt,
       totalTokens: 200,
       compactionCheckpoints: [
         {
@@ -681,6 +684,19 @@ describe("session-compaction-checkpoints", () => {
       ],
     });
     const store = createFileBackedCompactionCheckpointStore();
+    const branched = await store.branchCheckpointSession({
+      storePath,
+      sourceKey: MAIN_SESSION_KEY,
+      nextKey: "agent:main:dashboard:checkpoint-branch",
+      checkpointId: "checkpoint-1",
+    });
+
+    if (branched.status !== "created") {
+      throw new Error("expected branched checkpoint transcript");
+    }
+    expect(branched.entry.archivedAt).toBeUndefined();
+    expect(branched.entry.pinnedAt).toBeUndefined();
+
     const restored = await store.restoreCheckpointSession({
       storePath,
       sessionKey: MAIN_SESSION_KEY,
@@ -691,6 +707,8 @@ describe("session-compaction-checkpoints", () => {
       throw new Error("expected restored checkpoint transcript");
     }
     expect(restored.entry.totalTokens).toBe(45);
+    expect(restored.entry.archivedAt).toBe(managedAt);
+    expect(restored.entry.pinnedAt).toBe(managedAt);
     const restoredSessionFile = requireNonEmptyString(
       restored.entry.sessionFile,
       "restored session file missing",
@@ -704,6 +722,71 @@ describe("session-compaction-checkpoints", () => {
     );
     expect(nextStore[MAIN_SESSION_KEY]?.sessionFile).toBe(restored.entry.sessionFile);
     expect(nextStore[MAIN_SESSION_KEY]?.totalTokens).toBe(45);
+  });
+
+  test("file-backed checkpoint store rejects identity changes for model-selection-locked sessions", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-locked-"));
+    tempDirs.push(dir);
+
+    const session = SessionManager.create(dir, dir);
+    session.appendMessage({
+      role: "user",
+      content: "locked checkpoint source",
+      timestamp: Date.now(),
+    });
+    const checkpointLeafId = requireNonEmptyString(
+      session.getLeafId(),
+      "checkpoint leaf id missing",
+    );
+    const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
+    const storePath = path.join(dir, "sessions.json");
+    await writeSessionStore(storePath, MAIN_SESSION_KEY, {
+      sessionId: "locked-session",
+      sessionFile,
+      updatedAt: Date.now(),
+      modelSelectionLocked: true,
+      compactionCheckpoints: [
+        {
+          checkpointId: "checkpoint-locked",
+          sessionKey: MAIN_SESSION_KEY,
+          sessionId: "locked-session",
+          createdAt: Date.now(),
+          reason: "manual",
+          preCompaction: { sessionId: "locked-session", leafId: checkpointLeafId },
+          postCompaction: {
+            sessionId: "locked-session",
+            sessionFile,
+            leafId: checkpointLeafId,
+          },
+        },
+      ],
+    });
+    const filesBefore = (await fs.readdir(dir)).toSorted();
+    const store = createFileBackedCompactionCheckpointStore();
+
+    await expect(
+      store.branchCheckpointSession({
+        storePath,
+        sourceKey: MAIN_SESSION_KEY,
+        nextKey: "agent:main:dashboard:locked-checkpoint-branch",
+        checkpointId: "checkpoint-locked",
+      }),
+    ).resolves.toEqual({ status: "model-selection-locked" });
+    await expect(
+      store.restoreCheckpointSession({
+        storePath,
+        sessionKey: MAIN_SESSION_KEY,
+        checkpointId: "checkpoint-locked",
+      }),
+    ).resolves.toEqual({ status: "model-selection-locked" });
+
+    expect((await fs.readdir(dir)).toSorted()).toEqual(filesBefore);
+    expect(await readSessionStore(storePath)).toEqual({
+      [MAIN_SESSION_KEY]: expect.objectContaining({
+        modelSelectionLocked: true,
+        sessionId: "locked-session",
+      }),
+    });
   });
 
   test("async fork migrates legacy checkpoint snapshots before writing a current header", async () => {
@@ -789,7 +872,7 @@ describe("session-compaction-checkpoints", () => {
     const messages = SessionManager.open(forked.sessionFile, dir).buildSessionContext().messages;
     expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
       "legacy first",
-      "legacy second",
+      [{ type: "text", text: "legacy second" }],
     ]);
   });
 

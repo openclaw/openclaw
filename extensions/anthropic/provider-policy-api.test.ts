@@ -136,35 +136,58 @@ describe("anthropic provider policy public artifact", () => {
     expect(profile?.defaultLevel).toBe("off");
   });
 
-  it("exposes the always-adaptive Claude Fable 5 thinking profile", () => {
+  it.each(["claude-fable-5", "claude-mythos-5"])(
+    "exposes the mandatory-adaptive %s thinking profile",
+    (modelId) => {
+      const profile = resolveThinkingProfile({
+        provider: "anthropic",
+        modelId,
+      });
+
+      expect(profile).toEqual({
+        levels: [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          { id: "xhigh" },
+          { id: "adaptive" },
+          { id: "max" },
+        ],
+        defaultLevel: "high",
+        preserveWhenCatalogReasoningFalse: true,
+      });
+      expect(
+        resolveThinkingProfile({
+          provider: "claude-cli",
+          modelId,
+        }),
+      ).toEqual({
+        levels: [{ id: "off" }],
+        defaultLevel: "off",
+      });
+    },
+  );
+
+  it("does not return fable-5 off-thinking profile for claude-fable-50 (prefix boundary check)", () => {
     const profile = resolveThinkingProfile({
-      provider: "anthropic",
-      modelId: "claude-fable-5",
+      provider: "claude-cli",
+      modelId: "claude-fable-50",
     });
 
-    expect(profile).toEqual({
-      levels: [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        { id: "xhigh" },
-        { id: "adaptive" },
-        { id: "max" },
-      ],
-      defaultLevel: "high",
-      preserveWhenCatalogReasoningFalse: true,
+    expect(profile).not.toBeNull();
+    expect(profile?.defaultLevel).not.toBe("off");
+  });
+
+  it("preserves the existing Claude CLI Mythos Preview thinking profile", () => {
+    const profile = resolveThinkingProfile({
+      provider: "claude-cli",
+      modelId: "claude-mythos-preview",
     });
-    expect(
-      resolveThinkingProfile({
-        provider: "claude-cli",
-        modelId: "claude-fable-5",
-      }),
-    ).toEqual({
-      levels: [{ id: "off" }],
-      defaultLevel: "off",
-    });
+
+    expect(profile?.defaultLevel).toBe("adaptive");
+    expect(profile?.levels.map((level) => level.id)).toContain("max");
   });
 
   it("exposes native max without xhigh for direct Claude 4.6 routes", () => {

@@ -3,6 +3,7 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
@@ -61,16 +62,11 @@ type PrestartedTypingFeedbackEntry = {
   feedback: DiscordReplyTypingFeedback;
 };
 
-let messagePreflightRuntimePromise:
-  | Promise<typeof import("./message-handler.preflight.js")>
-  | undefined;
+const loadMessagePreflightRuntime = createLazyRuntimeModule(
+  () => import("./message-handler.preflight.js"),
+);
 
-async function loadMessagePreflightRuntime() {
-  messagePreflightRuntimePromise ??= import("./message-handler.preflight.js");
-  return await messagePreflightRuntimePromise;
-}
-
-export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
+type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
 };
 
@@ -186,7 +182,7 @@ export function createDiscordMessageHandler(
           hasDiscordMessageStickers(message),
       });
     },
-    onFlush: async (entries, context) => {
+    onFlush: async (entries) => {
       const last = entries.at(-1);
       if (!last) {
         return;
@@ -226,12 +222,7 @@ export function createDiscordMessageHandler(
             activeFeedback: prestartedTypingFeedback,
           });
           applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
-          const job = buildDiscordInboundJob(ctx, { replayKeys });
-          if (context?.allowDuringGatewayDrain) {
-            messageRunQueue.enqueueInternal(job);
-          } else {
-            messageRunQueue.enqueue(job);
-          }
+          messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
           return;
         }
         const combinedBaseText = entries
@@ -300,12 +291,7 @@ export function createDiscordMessageHandler(
             ctxBatch.MessageSidLast = ids[ids.length - 1];
           }
         }
-        const job = buildDiscordInboundJob(ctx, { replayKeys });
-        if (context?.allowDuringGatewayDrain) {
-          messageRunQueue.enqueueInternal(job);
-        } else {
-          messageRunQueue.enqueue(job);
-        }
+        messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
       } catch (error) {
         if (error instanceof DiscordRetryableInboundError) {
           releaseDiscordInboundReplay({ replayKeys, error, replayGuard });
@@ -358,10 +344,7 @@ export function createDiscordMessageHandler(
     }
   };
 
-  handler.deactivate = () => {
-    debouncer.unregister();
-    messageRunQueue.deactivate();
-  };
+  handler.deactivate = messageRunQueue.deactivate;
 
   return handler;
 }

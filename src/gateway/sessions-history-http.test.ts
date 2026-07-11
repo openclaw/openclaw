@@ -14,6 +14,7 @@ import {
   emitInternalSessionTranscriptUpdate,
   emitSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -126,11 +127,14 @@ function makeTranscriptAssistantMessage(params: {
 function makeDeliveryMirrorAssistantMessage(
   params: Parameters<typeof makeTranscriptAssistantMessage>[0],
 ): AssistantMessage {
-  return makeTranscriptAssistantMessage({
-    ...params,
-    provider: "openclaw",
-    model: "delivery-mirror",
-  });
+  return {
+    ...makeTranscriptAssistantMessage({
+      ...params,
+      provider: "openclaw",
+      model: "delivery-mirror",
+    }),
+    api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+  };
 }
 
 async function appendTranscriptMessage(params: {
@@ -604,6 +608,34 @@ describe("session history HTTP endpoints", () => {
       expect(secondBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([1]);
       expect(secondBody.hasMore).toBe(false);
       expect(secondBody.nextCursor).toBeUndefined();
+    });
+  });
+
+  test("caps all-digit direct REST history limits that exceed safe integer range", async () => {
+    const { storePath } = await seedSession({ text: "first message" });
+    await appendVisibleAssistantMessage({
+      sessionKey: "agent:main:main",
+      text: "second message",
+      storePath,
+    });
+    await appendVisibleAssistantMessage({
+      sessionKey: "agent:main:main",
+      text: "third message",
+      storePath,
+    });
+
+    await withGatewayHarness(async (harness) => {
+      const body = await readSessionHistoryBody(harness.port, "agent:main:main", {
+        query: `?limit=${"9".repeat(100)}`,
+      });
+
+      expect(body.messages?.map((message) => message.content?.[0]?.text)).toEqual([
+        "first message",
+        "second message",
+        "third message",
+      ]);
+      expect(body.hasMore).toBe(false);
+      expect(body.nextCursor).toBeUndefined();
     });
   });
 

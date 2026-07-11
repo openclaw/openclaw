@@ -1,5 +1,4 @@
 // Command queue serializes and limits process execution for shared command lanes.
-import { AsyncLocalStorage } from "node:async_hooks";
 import {
   diagnosticLogger as diag,
   logLaneDequeue,
@@ -8,6 +7,14 @@ import {
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { clampPositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
+import {
+  GatewayDrainingError,
+  isGatewaySubordinateWorkAdmissionClosed,
+  isGatewayWorkAdmissionClosed,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "./gateway-work-admission.js";
+export { GatewayDrainingError } from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because
@@ -41,17 +48,6 @@ export function isCommandLaneTaskTimeoutError(err: unknown, lane?: string): bool
     return false;
   }
   return lane === undefined || err.message.includes(`Command lane "${lane}" task timed out`);
-}
-
-/**
- * Dedicated error type thrown when a new command is rejected because the
- * gateway is currently draining for restart.
- */
-export class GatewayDrainingError extends Error {
-  constructor() {
-    super("Gateway is draining for restart; new tasks are not accepted");
-    this.name = "GatewayDrainingError";
-  }
 }
 
 // Minimal in-process queue to serialize command executions.
@@ -101,18 +97,18 @@ type ActiveTaskWaiter = {
   timeout?: ReturnType<typeof setTimeout>;
 };
 
-const gatewayDrainInternalContext = new AsyncLocalStorage<boolean>();
-
-export function isGatewayDrainInternalContext(): boolean {
-  return gatewayDrainInternalContext.getStore() === true;
-}
-
-export function runWithGatewayDrainInternalContext<T>(task: () => Promise<T>): Promise<T> {
-  return gatewayDrainInternalContext.run(true, task);
-}
-
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
   return err instanceof Error && err.name === "LiveSessionModelSwitchError";
+}
+
+function isQuietProbeLane(lane: string): boolean {
+  // setup-inference.ts retains its temp session key, so its derived session lane
+  // needs the same expected-failure treatment as the explicit probe lane.
+  return (
+    lane.startsWith("auth-probe:") ||
+    lane.startsWith("session:probe-") ||
+    lane.startsWith("session:temp:setup-inference:probe-setup-inference-")
+  );
 }
 
 /**
@@ -123,8 +119,6 @@ const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
 
 function getQueueState() {
   const state = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
-    gatewayDraining: false,
-    gatewayDrainingStartedAt: undefined as number | undefined,
     lanes: new Map<string, LaneState>(),
     activeTaskWaiters: new Set<ActiveTaskWaiter>(),
     nextTaskId: 1,
@@ -435,7 +429,7 @@ function drainLane(lane: string) {
             entry.resolve(result);
           } catch (err) {
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
-            const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
+            const isProbeLane = isQuietProbeLane(lane);
             if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
@@ -466,23 +460,17 @@ function drainLane(lane: string) {
  * `GatewayDrainingError` instead of being silently killed on shutdown.
  */
 export function markGatewayDraining(): void {
-  const queueState = getQueueState();
-  queueState.gatewayDraining = true;
-  queueState.gatewayDrainingStartedAt = Date.now();
+  markGatewayRestartDraining();
 }
 
 export function isGatewayDraining(): boolean {
-  return getQueueState().gatewayDraining;
-}
-
-export function getGatewayDrainingStartedAt(): number | undefined {
-  return getQueueState().gatewayDrainingStartedAt;
+  return isGatewayWorkAdmissionClosed();
 }
 
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const cleaned = normalizeLane(lane);
   const state = getLaneState(cleaned);
-  const isProbeLane = cleaned.startsWith("auth-probe:") || cleaned.startsWith("session:probe-");
+  const isProbeLane = isQuietProbeLane(cleaned);
   const minConcurrent = isProbeLane ? 1 : 0;
   state.maxConcurrent = Math.max(minConcurrent, Math.floor(maxConcurrent));
   if (state.maxConcurrent > 0) {
@@ -496,11 +484,7 @@ export function enqueueCommandInLane<T>(
   opts?: CommandQueueEnqueueOptions,
 ): Promise<T> {
   const queueState = getQueueState();
-  if (
-    queueState.gatewayDraining &&
-    opts?.allowDuringGatewayDrain !== true &&
-    !isGatewayDrainInternalContext()
-  ) {
+  if (isGatewaySubordinateWorkAdmissionClosed()) {
     return Promise.reject(new GatewayDrainingError());
   }
   const cleaned = normalizeLane(lane);
@@ -620,8 +604,7 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
  */
 export function resetCommandQueueStateForTest(): void {
   const queueState = getQueueState();
-  queueState.gatewayDraining = false;
-  queueState.gatewayDrainingStartedAt = undefined;
+  resetGatewayWorkAdmission();
   queueState.lanes.clear();
   for (const waiter of Array.from(queueState.activeTaskWaiters)) {
     resolveActiveTaskWaiter(waiter, { drained: true });
@@ -646,8 +629,7 @@ export function resetCommandQueueStateForTest(): void {
  */
 export function resetAllLanes(): void {
   const queueState = getQueueState();
-  queueState.gatewayDraining = false;
-  queueState.gatewayDrainingStartedAt = undefined;
+  resetGatewayWorkAdmission();
   const lanesToDrain: string[] = [];
   for (const state of queueState.lanes.values()) {
     state.generation += 1;

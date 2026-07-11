@@ -107,6 +107,27 @@ describe("inspectTelegramAccount SecretRef resolution", () => {
     expect(account.config.reactionLevel).toBe("ack");
   });
 
+  it("routes omitted-account inspection through the configured defaultAccount (#61012)", () => {
+    withEnv({ TELEGRAM_BOT_TOKEN: "123:env" }, () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: {
+            botToken: "123:channel",
+            defaultAccount: "ops",
+            accounts: {
+              ops: { botToken: "123:ops" },
+            },
+          },
+        },
+      };
+
+      const account = inspectTelegramAccount({ cfg });
+      expect(account.accountId).toBe("ops");
+      expect(account.tokenSource).toBe("config");
+      expect(account.token).toBe("123:ops");
+    });
+  });
+
   it("blocks channel-token fallback for unknown scoped accounts in multi-account config", () => {
     const cfg: OpenClawConfig = {
       channels: {

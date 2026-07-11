@@ -354,6 +354,10 @@ const DISCORD_QA_DEFAULT_SCENARIOS = DISCORD_QA_SCENARIOS.filter(
     scenario.id !== "discord-thread-reply-filepath-attachment",
 );
 
+export function listDiscordQaScenarioCatalog() {
+  return DISCORD_QA_SCENARIOS.map((scenario) => ({ id: scenario.id }));
+}
+
 const DISCORD_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
   scenarios: DISCORD_QA_SCENARIOS,
 });

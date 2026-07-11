@@ -422,7 +422,7 @@ function pruneAuthProfileStoreReferences(
             provider,
             profileIds.filter((profileId) => keptOrderProfileIds.has(profileId)),
           ])
-          .filter(([, profileIds]) => profileIds.length > 0),
+          .filter(([, profileIds]) => Array.isArray(profileIds) && profileIds.length > 0),
       )
     : undefined;
   store.lastGood = store.lastGood
@@ -1010,7 +1010,11 @@ export function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthPro
   });
 }
 
-export { hasAnyAuthProfileStoreSource, hasLocalAuthProfileStoreSource } from "./source-check.js";
+export {
+  hasAnyAuthProfileStoreSource,
+  hasAuthProfileStoreSourceForProvider,
+  hasLocalAuthProfileStoreSource,
+} from "./source-check.js";
 
 /** Return the current runtime auth-profile snapshot for an agent dir. */
 export function getRuntimeAuthProfileStoreSnapshot(

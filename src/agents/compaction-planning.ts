@@ -74,12 +74,12 @@ export function sanitizeCompactionMessages(messages: AgentMessage[]): AgentMessa
 }
 
 /** Estimates one message using the same sanitization path as multi-message planning. */
-export function estimateCompactionMessageTokens(message: AgentMessage): number {
+function estimateCompactionMessageTokens(message: AgentMessage): number {
   return estimateMessagesTokens([message]);
 }
 
 /** Clamps requested split parts to a usable count for the available messages. */
-export function normalizeCompactionParts(parts: number, messageCount: number): number {
+function normalizeCompactionParts(parts: number, messageCount: number): number {
   if (!Number.isFinite(parts) || parts <= 1) {
     return 1;
   }
@@ -131,9 +131,11 @@ export function splitMessagesByTokenShare(
     return true;
   };
 
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index];
-    const messageTokens = perMessageTokens[index];
+  for (const [index, message] of messages.entries()) {
+    const messageTokens = perMessageTokens.at(index);
+    if (messageTokens === undefined) {
+      throw new Error("Compaction token estimates are out of sync with messages");
+    }
 
     if (
       pendingToolCallIds.size === 0 &&
@@ -214,9 +216,11 @@ export function chunkMessagesByMaxTokens(
   let currentChunk: AgentMessage[] = [];
   let currentTokens = 0;
 
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index];
-    const messageTokens = perMessageTokens[index];
+  for (const [index, message] of messages.entries()) {
+    const messageTokens = perMessageTokens.at(index);
+    if (messageTokens === undefined) {
+      throw new Error("Compaction token estimates are out of sync with messages");
+    }
     if (currentChunk.length > 0 && currentTokens + messageTokens > effectiveMax) {
       chunks.push(currentChunk);
       currentChunk = [];
@@ -298,9 +302,11 @@ export function buildOversizedFallbackPlan(params: {
   const perMessageTokens = estimatePerMessageTokens(params.messages);
   const oversizedThreshold = params.contextWindow * 0.5;
 
-  for (let index = 0; index < params.messages.length; index += 1) {
-    const msg = params.messages[index];
-    const tokens = perMessageTokens[index];
+  for (const [index, msg] of params.messages.entries()) {
+    const tokens = perMessageTokens.at(index);
+    if (tokens === undefined) {
+      throw new Error("Compaction token estimates are out of sync with messages");
+    }
     if (tokens * SAFETY_MARGIN > oversizedThreshold) {
       const role = (msg as { role?: string }).role ?? "message";
       oversizedNotes.push(
@@ -373,6 +379,9 @@ export function pruneHistoryForContextShare(params: {
       break;
     }
     const [dropped, ...rest] = chunks;
+    if (!dropped) {
+      break;
+    }
     const flatRest = rest.flat();
 
     // After dropping a chunk, repair tool_use/tool_result pairing to handle

@@ -3,14 +3,19 @@
  */
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import {
+  addTimerTimeoutGraceMs,
+  MAX_TIMER_TIMEOUT_MS,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -18,6 +23,7 @@ import {
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import { resolveCompactionSuccessorTranscript } from "../../context-engine/types.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -37,6 +43,8 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { looksLikeSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -84,6 +92,13 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../embedded-agent-helpers.js";
+import {
+  fingerprintAuthProfileOwnerShape,
+  fingerprintAwsSdkRuntimeOwner,
+  fingerprintOpaqueRuntimeOwner,
+  fingerprintResolvedAuthProfileCredential,
+  fingerprintResolvedProviderAuth,
+} from "../execution-auth-binding.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import {
   coerceToFailoverError,
@@ -98,7 +113,7 @@ import {
   resolveFastModeForElapsed,
 } from "../fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
-import { selectAgentHarness } from "../harness/selection.js";
+import { agentHarnessBuildsOpenClawTools, selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
 import {
@@ -130,6 +145,7 @@ import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
+import { createAgentRunDirectAbortError } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
@@ -139,8 +155,10 @@ import {
   suspendSession,
   type SessionSuspensionParams,
 } from "../session-suspension.js";
+import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
+import { DEFAULT_AGENT_TIMEOUT_MS } from "../timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
-import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
+import { deriveContextPromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
@@ -160,7 +178,7 @@ import {
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { resolveModelAsync } from "./model.js";
+import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
 import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
@@ -180,7 +198,10 @@ import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
-import { resolveCodexAppServerRecoveryRetry } from "./run/codex-app-server-recovery.js";
+import {
+  hasCodexAppServerRecoveryRetryBudget,
+  resolveCodexAppServerRecoveryRetry,
+} from "./run/codex-app-server-recovery.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
@@ -192,16 +213,17 @@ import {
   resolveActiveErrorContext,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
+  resolveLatestCallUsage,
   resolveMaxRunRetryIterations,
   resolveReportedModelRef,
   MAX_SAME_MODEL_RATE_LIMIT_RETRIES,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
+  resolveEmbeddedAttemptBasePrompt,
   resolveNextSameModelRateLimitRetryCount,
   resolveSameModelRateLimitRetryDelayMs,
   type RuntimeAuthState,
-  scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
 import {
   MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT,
@@ -228,8 +250,11 @@ import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import {
   buildBeforeModelResolveAttachments,
-  resolveEffectiveRuntimeModel,
+  createNativeModelOwnedRuntimeModel,
+  resolveEmbeddedRuntimeModelPolicy,
+  resolveAgentHarnessRunAdmissionError,
   resolveHookModelSelection,
+  resolveNativeModelOwnedHarnessId,
 } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import type { EmbeddedRunFastModeParam } from "./run/types.js";
@@ -245,6 +270,7 @@ import type {
   ToolSummaryTrace,
 } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
+import { mapThinkingLevelForProvider } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
@@ -260,7 +286,17 @@ const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
-type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentParams & { sessionFile: string };
+type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  onSuccessfulAuthBinding?: (
+    binding: import("../execution-auth-binding.js").AgentExecutionAuthBinding,
+  ) => void;
+  authProfileStateMode?: "read-write" | "read-only";
+  /** Ring-zero tool override, supplied only by the Crestodian orchestrator. */
+  crestodianTool?: import("../tools/crestodian-tool.js").CrestodianToolOptions;
+};
+type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {
+  sessionFile: string;
+};
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -351,18 +387,24 @@ function buildBeforeAgentFinalizeRetryPrompt(reason: string): string {
   return `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${reason}`;
 }
 
-function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number | undefined {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return undefined;
+function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number {
+  const defaultLaneTimeoutMs = DEFAULT_AGENT_TIMEOUT_MS + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS;
+  // "No timeout" resolves to the timer-safe MAX_TIMER sentinel upstream.
+  // Lane ownership still caps at the default agent deadline in that case.
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs >= MAX_TIMER_TIMEOUT_MS) {
+    return defaultLaneTimeoutMs;
   }
-  return Math.floor(timeoutMs) + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS;
+  return (
+    addTimerTimeoutGraceMs(Math.floor(timeoutMs), EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS) ??
+    defaultLaneTimeoutMs
+  );
 }
 
 function withEmbeddedRunLaneTimeout(
   opts: CommandQueueEnqueueOptions | undefined,
-  laneTaskTimeoutMs: number | undefined,
+  laneTaskTimeoutMs: number,
 ): CommandQueueEnqueueOptions | undefined {
-  if (laneTaskTimeoutMs === undefined || opts?.taskTimeoutMs !== undefined) {
+  if (opts?.taskTimeoutMs !== undefined) {
     return opts;
   }
   return { ...opts, taskTimeoutMs: laneTaskTimeoutMs };
@@ -401,6 +443,9 @@ function normalizeEmbeddedRunAttemptResult(
       | null;
     didDeliverSourceReplyViaMessageTool?: boolean | null;
     itemLifecycle?: EmbeddedRunAttemptForRunner["itemLifecycle"] | null;
+    currentAttemptReplayMetadata?:
+      | EmbeddedRunAttemptForRunner["currentAttemptReplayMetadata"]
+      | null;
   };
   return {
     ...attempt,
@@ -419,6 +464,7 @@ function normalizeEmbeddedRunAttemptResult(
       activeCount: 0,
     },
     replayMetadata: resolveAttemptReplayMetadata(raw),
+    currentAttemptReplayMetadata: raw.currentAttemptReplayMetadata ?? undefined,
   };
 }
 
@@ -478,8 +524,8 @@ function createScopedAuthProfileStore(
 }
 
 function buildTraceToolSummary(params: {
-  toolMetas?: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
-  hadFailure: boolean;
+  toolMetas?: EmbeddedRunAttemptForRunner["toolMetas"];
+  fallbackHadFailure: boolean;
 }): ToolSummaryTrace | undefined {
   if (!params.toolMetas?.length) {
     return undefined;
@@ -494,10 +540,13 @@ function buildTraceToolSummary(params: {
     seen.add(toolName);
     tools.push(toolName);
   }
+  const failedToolCalls = params.toolMetas.filter((entry) => entry.isError === true).length;
   return {
     calls: params.toolMetas?.length ?? 0,
     tools,
-    failures: params.hadFailure ? 1 : 0,
+    // Per-call error metadata is additive to the shipped harness result contract.
+    // Keep the prior any-failure signal for external harnesses that do not emit it yet.
+    failures: failedToolCalls || Number(params.fallbackHadFailure),
   };
 }
 
@@ -539,6 +588,33 @@ function backfillSessionKey(params: {
       `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${redactRunIdentifier(sanitizeForLog(params.sessionId))}: ${formatErrorMessage(err)}`,
     );
     return undefined;
+  }
+}
+
+function assertAgentHarnessRunAdmission(params: RunEmbeddedAgentParams): void {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return;
+  }
+  const admissionAgentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const storePath =
+    normalizeOptionalString(params.sessionTarget?.storePath) ??
+    resolveStorePath(params.config?.session?.store, { agentId: admissionAgentId });
+  const durableEntry = loadSessionEntry({
+    ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
+    readConsistency: "latest",
+    sessionKey,
+    storePath,
+  });
+  const admissionError = resolveAgentHarnessRunAdmissionError({
+    agentHarnessId: params.agentHarnessId,
+    entry: durableEntry,
+    modelSelectionLocked: params.modelSelectionLocked,
+    sessionId: params.sessionId,
+    sessionKey,
+  });
+  if (admissionError) {
+    throw new Error(admissionError);
   }
 }
 
@@ -605,17 +681,20 @@ const POST_RUN_AUTH_PROFILE_SUCCESS_SLOW_MS = 1_000;
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
-  const requestedProvider = normalizeOptionalString(paramsInput.provider);
-  const requestedModel = normalizeOptionalString(paramsInput.model);
-  const needsConfiguredDefault = !paramsInput.config && !requestedProvider && !requestedModel;
+  const internalParamsInput = paramsInput as RunEmbeddedAgentInternalParams;
+  const requestedProvider = normalizeOptionalString(internalParamsInput.provider);
+  const requestedModel = normalizeOptionalString(internalParamsInput.model);
+  const needsConfiguredDefault =
+    !internalParamsInput.config && !requestedProvider && !requestedModel;
   const config =
-    paramsInput.config ??
+    internalParamsInput.config ??
     (needsConfiguredDefault ? (getRuntimeConfigSnapshot() ?? undefined) : undefined);
   const lifecycleGeneration =
-    paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
+    internalParamsInput.lifecycleGeneration ??
+    captureAgentRunLifecycleGeneration(internalParamsInput.runId);
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
     runEmbeddedAgentInternal({
-      ...paramsInput,
+      ...internalParamsInput,
       config,
       lifecycleGeneration,
     }),
@@ -623,7 +702,7 @@ export function runEmbeddedAgent(
 }
 
 async function runEmbeddedAgentInternal(
-  paramsInput: RunEmbeddedAgentParams,
+  paramsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
@@ -636,6 +715,7 @@ async function runEmbeddedAgentInternal(
     sessionKey: paramsBase.sessionKey,
     agentId: paramsBase.agentId,
   });
+  assertAgentHarnessRunAdmission({ ...paramsBase, sessionKey: effectiveSessionKey });
   const runSessionTarget = await resolveAgentRunSessionTarget({
     ...paramsBase,
     sessionKey: effectiveSessionKey,
@@ -668,10 +748,6 @@ async function runEmbeddedAgentInternal(
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
   };
-  const withGatewayDrainOption = (
-    opts?: CommandQueueEnqueueOptions,
-  ): CommandQueueEnqueueOptions | undefined =>
-    params.allowGatewayDrain ? { ...opts, allowDuringGatewayDrain: true } : opts;
   const throwIfAborted = () => {
     if (!params.abortSignal?.aborted) {
       return;
@@ -690,7 +766,7 @@ async function runEmbeddedAgentInternal(
   const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
     withEmbeddedRunLaneTimeout(
       {
-        ...withGatewayDrainOption(opts),
+        ...opts,
         taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
         taskTimeoutAbortSignal: laneTaskAbortController.signal,
         taskTimeoutAbortGraceMs: EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
@@ -725,7 +801,7 @@ async function runEmbeddedAgentInternal(
   };
   const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
     const globalOpts: CommandQueueEnqueueOptions = {
-      ...withGatewayDrainOption(opts),
+      ...opts,
       priority: sessionQueuePriority,
     };
     const taskWithCurrentLifecycle = () => {
@@ -748,6 +824,9 @@ async function runEmbeddedAgentInternal(
         lifecycleGeneration = currentLifecycleGeneration;
         params = { ...params, lifecycleGeneration };
       }
+      // Queue waits can outlive the durable harness binding that admitted a run.
+      // Recheck only after lifecycle admission, before any run context or hook can execute.
+      assertAgentHarnessRunAdmission(params);
       claimAgentRunContext(params.runId, {
         ...existingContext,
         sessionKey: params.sessionKey ?? existingContext?.sessionKey,
@@ -767,10 +846,7 @@ async function runEmbeddedAgentInternal(
     );
   };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const sessionOpts: CommandQueueEnqueueOptions = {
-      ...withGatewayDrainOption(opts),
-      priority: sessionQueuePriority,
-    };
+    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
     const taskWithLaneAdmission = () => {
       params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
       return task();
@@ -1045,6 +1121,8 @@ async function runEmbeddedAgentInternal(
         hookRunner,
         hookContext: hookCtx,
       });
+      const modelSelectionChangedByHook =
+        hookSelection.provider !== provider || hookSelection.modelId !== modelId;
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
       const requestedModelId = modelId;
@@ -1056,6 +1134,7 @@ async function runEmbeddedAgentInternal(
         config: params.config,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        agentHarnessId: params.agentHarnessId,
         agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
         workspaceDir: resolvedWorkspace,
       });
@@ -1069,52 +1148,44 @@ async function runEmbeddedAgentInternal(
         agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
       });
       const pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
-      const modelConfigProvider = provider;
-      const selectedRuntimeProvider = resolveSelectedOpenAIRuntimeProvider({
-        provider,
-        harnessRuntime: agentHarness.id,
-        agentHarnessId: agentHarness.id,
-        authProfileProvider: params.authProfileId?.split(":", 1)[0],
-        authProfileId: params.authProfileId,
-        config: params.config,
-        workspaceDir: resolvedWorkspace,
+      const expectedHarnessArtifact = params.expectedAgentHarnessRuntimeArtifact;
+      if (expectedHarnessArtifact && expectedHarnessArtifact.harnessId !== agentHarness.id) {
+        throw new Error(
+          `Verified inference requires agent harness ${expectedHarnessArtifact.harnessId}, but ${agentHarness.id} was selected.`,
+        );
+      }
+      if (expectedHarnessArtifact && !agentHarness.runtimeArtifact) {
+        throw new Error(
+          `Agent harness ${agentHarness.id} cannot attest the verified inference runtime artifact.`,
+        );
+      }
+      const nativeModelOwnedHarnessId = resolveNativeModelOwnedHarnessId({
+        agentHarnessId: params.agentHarnessId,
+        modelSelectionLocked: params.modelSelectionLocked,
+        selectedHarnessId: agentHarness.id,
       });
-      const modelResolutionProviders =
-        selectedRuntimeProvider !== provider ? [selectedRuntimeProvider, provider] : [provider];
+      const nativeModelOwned = nativeModelOwnedHarnessId !== undefined;
+      const modelConfigProvider = provider;
       let resolvedModelProvider = provider;
       let firstModelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
       let modelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
-      for (const candidateProvider of modelResolutionProviders) {
-        const candidateResolution = await resolveModelAsync(
-          candidateProvider,
-          modelId,
-          agentDir,
-          params.config,
-          {
-            // Plugin dynamic model hooks can resolve explicit model refs without
-            // first generating OpenClaw models.json. This keeps one-shot model runs from
-            // blocking on unrelated provider discovery.
-            skipAgentDiscovery: true,
-            allowBundledStaticCatalogFallback: pluginHarnessOwnsTransport,
-            preferBundledStaticCatalogTransport: pluginHarnessOwnsTransport,
-            workspaceDir: resolvedWorkspace,
-            authProfileId: params.authProfileId,
-          },
-        );
-        firstModelResolution ??= candidateResolution;
-        if (candidateResolution.model) {
-          resolvedModelProvider = candidateProvider;
-          modelResolution = candidateResolution;
-          break;
-        }
-      }
-      if (!modelResolution && pluginHarnessOwnsTransport) {
-        modelResolution ??= firstModelResolution;
-      }
-      if (!modelResolution) {
-        await ensureOpenClawModelsJson(params.config, agentDir, {
+      if (nativeModelOwned) {
+        modelResolution = {
+          model: createNativeModelOwnedRuntimeModel({ provider, modelId }),
+          ...createEmptyAgentDiscoveryStores(),
+        };
+      } else {
+        const selectedRuntimeProvider = resolveSelectedOpenAIRuntimeProvider({
+          provider,
+          harnessRuntime: agentHarness.id,
+          agentHarnessId: agentHarness.id,
+          authProfileProvider: params.authProfileId?.split(":", 1)[0],
+          authProfileId: params.authProfileId,
+          config: params.config,
           workspaceDir: resolvedWorkspace,
         });
+        const modelResolutionProviders =
+          selectedRuntimeProvider !== provider ? [selectedRuntimeProvider, provider] : [provider];
         for (const candidateProvider of modelResolutionProviders) {
           const candidateResolution = await resolveModelAsync(
             candidateProvider,
@@ -1122,6 +1193,12 @@ async function runEmbeddedAgentInternal(
             agentDir,
             params.config,
             {
+              // Plugin dynamic model hooks can resolve explicit model refs without
+              // first generating OpenClaw models.json. This keeps one-shot model runs from
+              // blocking on unrelated provider discovery.
+              skipAgentDiscovery: true,
+              allowBundledStaticCatalogFallback: pluginHarnessOwnsTransport,
+              preferBundledStaticCatalogTransport: pluginHarnessOwnsTransport,
               workspaceDir: resolvedWorkspace,
               authProfileId: params.authProfileId,
             },
@@ -1133,8 +1210,38 @@ async function runEmbeddedAgentInternal(
             break;
           }
         }
+        if (!modelResolution && pluginHarnessOwnsTransport) {
+          modelResolution ??= firstModelResolution;
+        }
+        if (!modelResolution) {
+          await ensureOpenClawModelsJson(params.config, agentDir, {
+            workspaceDir: resolvedWorkspace,
+          });
+          for (const candidateProvider of modelResolutionProviders) {
+            const candidateResolution = await resolveModelAsync(
+              candidateProvider,
+              modelId,
+              agentDir,
+              params.config,
+              {
+                workspaceDir: resolvedWorkspace,
+                authProfileId: params.authProfileId,
+                // Enable bundled static catalog fallback so plugin-provided
+                // models that are not discoverable via agent model discovery
+                // can still be resolved from the static catalog.
+                allowBundledStaticCatalogFallback: true,
+              },
+            );
+            firstModelResolution ??= candidateResolution;
+            if (candidateResolution.model) {
+              resolvedModelProvider = candidateProvider;
+              modelResolution = candidateResolution;
+              break;
+            }
+          }
+        }
+        modelResolution ??= firstModelResolution;
       }
-      modelResolution ??= firstModelResolution;
       if (!modelResolution) {
         throw new FailoverError(`Unknown model: ${provider}/${modelId}`, {
           reason: "model_not_found",
@@ -1157,7 +1264,7 @@ async function runEmbeddedAgentInternal(
       }
       let runtimeModel = model;
 
-      const resolvedRuntimeModel = resolveEffectiveRuntimeModel({
+      const resolvedRuntimeModel = resolveEmbeddedRuntimeModelPolicy({
         cfg: params.config,
         provider,
         contextConfigProvider: resolveContextConfigProviderForRuntime({
@@ -1167,14 +1274,21 @@ async function runEmbeddedAgentInternal(
         }),
         modelId,
         runtimeModel,
+        nativeModelOwned,
       });
-      const ctxInfo = resolvedRuntimeModel.ctxInfo;
+      const contextTokenBudget = resolvedRuntimeModel.contextTokenBudget;
+      const contextWindowInfo = resolvedRuntimeModel.contextWindowInfo;
+      const outerContextTokenMeta =
+        contextTokenBudget === undefined ? {} : { contextTokens: contextTokenBudget };
       let effectiveModel = resolvedRuntimeModel.effectiveModel;
       startupStages.mark("model-resolution");
       notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
+      const pluginHarnessOwnsAuthBootstrap =
+        pluginHarnessOwnsTransport && agentHarness.authBootstrap === "harness";
       const pluginHarnessNeedsOpenClawAuthBootstrap =
         pluginHarnessOwnsTransport &&
+        !pluginHarnessOwnsAuthBootstrap &&
         provider === OPENAI_PROVIDER_ID &&
         effectiveModel.api === "openai-chatgpt-responses";
       const openClawNativeCodexResponsesNeedsAuthBootstrap =
@@ -1436,16 +1550,40 @@ async function runEmbeddedAgentInternal(
         });
       };
 
-      const initialThinkLevel = resolveInitialThinkLevel({
+      const requestedThinkLevel = resolveInitialThinkLevel({
         requested: params.thinkLevel,
         config: params.config,
         provider,
         modelId,
         model: effectiveModel,
       });
+      // Hooks can replace the model after outer selection. Revalidate here so the
+      // final model/runtime never receives an unsupported thinking level.
+      const initialThinkLevel = modelSelectionChangedByHook
+        ? (resolveCandidateThinkingLevel({
+            cfg: params.config,
+            provider,
+            modelId,
+            level: requestedThinkLevel,
+            catalog: [
+              {
+                provider,
+                id: modelId,
+                api: effectiveModel.api,
+                reasoning: effectiveModel.reasoning,
+                params: effectiveModel.params,
+                compat: effectiveModel.compat,
+              },
+            ],
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            agentRuntime: agentHarness.id,
+          }) ?? requestedThinkLevel)
+        : requestedThinkLevel;
       let thinkLevel = initialThinkLevel;
       const attemptedThinking = new Set<ThinkLevel>();
       let apiKeyInfo: ApiKeyInfo | null = null;
+      const getApiKeyInfo = (): ApiKeyInfo | null => apiKeyInfo;
       let lastProfileId: string | undefined;
       let runtimeAuthState: RuntimeAuthState | null = null;
       let runtimeAuthRefreshCancelled = false;
@@ -1476,7 +1614,7 @@ async function runEmbeddedAgentInternal(
         setEffectiveModel: (next) => {
           effectiveModel = next;
         },
-        getApiKeyInfo: () => apiKeyInfo,
+        getApiKeyInfo,
         setApiKeyInfo: (next) => {
           apiKeyInfo = next;
         },
@@ -1549,8 +1687,7 @@ async function runEmbeddedAgentInternal(
               : lastProfileId,
           )
         : attemptAuthProfileStore;
-      const harnessBuildsOpenClawTools =
-        agentHarness.id === "codex" || agentHarness.id === "copilot";
+      const harnessBuildsOpenClawTools = agentHarnessBuildsOpenClawTools(agentHarness.id);
       const { sessionAgentId } = resolveSessionAgentIds({
         sessionKey: params.sessionKey,
         config: params.config,
@@ -1724,6 +1861,9 @@ async function runEmbeddedAgentInternal(
         agentDir?: RunEmbeddedAgentParams["agentDir"];
         modelId?: string;
       }) => {
+        if (params.authProfileStateMode === "read-only") {
+          return;
+        }
         const { profileId, reason } = failure;
         if (!profileId || !reason) {
           return;
@@ -1744,7 +1884,7 @@ async function runEmbeddedAgentInternal(
         });
       };
       const markAuthProfileSuccessAfterRun = () => {
-        if (!lastProfileId) {
+        if (params.authProfileStateMode === "read-only" || !lastProfileId) {
           return;
         }
         const successProfileId = lastProfileId;
@@ -1859,13 +1999,16 @@ async function runEmbeddedAgentInternal(
         });
         const adoptCompactionTranscript = (
           compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
-        ) => {
-          const nextSessionId = compactResult.result?.sessionId;
-          const nextSessionFile = compactResult.result?.sessionFile;
-          adoptActiveSessionId(nextSessionId);
-          if (nextSessionFile && nextSessionFile !== activeSessionFile) {
-            activeSessionFile = nextSessionFile;
+        ): string | undefined => {
+          const previousSessionId = activeSessionId;
+          const successor = resolveCompactionSuccessorTranscript(compactResult);
+          adoptActiveSessionId(successor.sessionId);
+          if (successor.sessionFile && successor.sessionFile !== activeSessionFile) {
+            activeSessionFile = successor.sessionFile;
           }
+          return successor.sessionId && successor.sessionId !== previousSessionId
+            ? previousSessionId
+            : undefined;
         };
         const onCompactionHookMessages = async (payload: {
           phase: "before" | "after";
@@ -1907,6 +2050,7 @@ async function runEmbeddedAgentInternal(
         const runOwnsCompactionAfterHook = async (
           reason: string,
           compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
+          previousSessionId?: string,
         ) => {
           if (
             contextEngine.info.ownsCompaction !== true ||
@@ -1922,7 +2066,10 @@ async function runEmbeddedAgentInternal(
                 messageCount: -1,
                 compactedCount: -1,
                 tokenCount: compactResult.result?.tokensAfter,
-                sessionFile: compactResult.result?.sessionFile ?? activeSessionFile,
+                sessionFile:
+                  resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
+                  activeSessionFile,
+                ...(previousSessionId ? { previousSessionId } : {}),
               },
               resolveActiveHookContext(),
             );
@@ -1961,7 +2108,7 @@ async function runEmbeddedAgentInternal(
                 sessionFile: activeSessionFile,
                 provider,
                 model: model.id,
-                contextTokens: ctxInfo.tokens,
+                ...outerContextTokenMeta,
                 usageAccumulator,
                 lastRunPromptUsage,
                 lastTurnTotal,
@@ -1981,7 +2128,11 @@ async function runEmbeddedAgentInternal(
 
           const basePrompt =
             nextAttemptPromptOverride ??
-            (provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt);
+            resolveEmbeddedAttemptBasePrompt({
+              nativeModelOwned,
+              provider,
+              prompt: params.prompt,
+            });
           nextAttemptPromptOverride = null;
           const promptAdditions = [
             reasoningOnlyRetryInstruction,
@@ -2025,7 +2176,7 @@ async function runEmbeddedAgentInternal(
             workspaceDir: resolvedWorkspace,
             agentDir,
             agentId: workspaceResolution.agentId,
-            thinkingLevel: thinkLevel,
+            thinkingLevel: mapThinkingLevelForProvider(thinkLevel),
             extraParamsOverride: {
               ...params.streamParams,
               fastMode: attemptFastMode,
@@ -2093,6 +2244,12 @@ async function runEmbeddedAgentInternal(
             );
             timeoutReleaseTimer.unref?.();
           };
+          let attemptCancellationRequested = false;
+          const codexAppServerRecoveryRetryAvailable = hasCodexAppServerRecoveryRetryBudget({
+            alreadyRetried: codexAppServerRecoveryRetries > 0,
+            runLoopIterations,
+            maxRunLoopIterations: MAX_RUN_LOOP_ITERATIONS,
+          });
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -2102,10 +2259,12 @@ async function runEmbeddedAgentInternal(
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
             messageProvider: params.messageProvider,
+            clientCaps: params.clientCaps,
             chatType: params.chatType,
             agentAccountId: params.agentAccountId,
             messageTo: params.messageTo,
             messageThreadId: params.messageThreadId,
+            messageActionTurnCapability: params.messageActionTurnCapability,
             groupId: params.groupId,
             groupChannel: params.groupChannel,
             groupSpace: params.groupSpace,
@@ -2116,6 +2275,7 @@ async function runEmbeddedAgentInternal(
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
+            senderIsOwner: params.senderIsOwner,
             approvalReviewerDeviceId: params.approvalReviewerDeviceId,
             currentChannelId: params.currentChannelId,
             chatId: params.chatId,
@@ -2132,9 +2292,13 @@ async function runEmbeddedAgentInternal(
             agentDir,
             config: params.config,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-            contextEngine,
-            contextTokenBudget: ctxInfo.tokens,
-            contextWindowInfo: ctxInfo,
+            ...(nativeModelOwned
+              ? {}
+              : {
+                  contextEngine,
+                  contextTokenBudget,
+                  contextWindowInfo,
+                }),
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             transcriptPrompt: params.transcriptPrompt,
@@ -2150,10 +2314,19 @@ async function runEmbeddedAgentInternal(
             requestedModelId,
             fallbackActive: modelId !== requestedModelId || Boolean(resolveRuntimeFallbackReason()),
             fallbackReason: resolveRuntimeFallbackReason(),
+            isFinalFallbackAttempt: params.isFinalFallbackAttempt,
             // Use the harness selected before model/auth setup for the actual
             // attempt too. Otherwise plugin-owned transports can skip OpenClaw auth
             // bootstrap but drift back to OpenClaw when the attempt is created.
             agentHarnessId: agentHarness.id,
+            agentHarnessRuntimeOverride: agentHarness.id,
+            modelSelectionLocked: params.modelSelectionLocked,
+            ...(params.onSuccessfulAuthBinding || expectedHarnessArtifact
+              ? { captureRuntimeArtifact: true }
+              : {}),
+            ...(expectedHarnessArtifact
+              ? { expectedRuntimeArtifact: expectedHarnessArtifact.artifact }
+              : {}),
             ...(params.sessionKey
               ? {
                   agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
@@ -2212,12 +2385,16 @@ async function runEmbeddedAgentInternal(
               ? undefined
               : startLaneProgressHeartbeat,
             onAttemptTimeout: pluginHarnessOwnsTransport ? undefined : armAttemptTimeoutRelease,
-            onAttemptAbort: pluginHarnessOwnsTransport
-              ? undefined
-              : () => {
-                  stopLaneProgressHeartbeat();
-                  laneTaskAbortController.abort();
-                },
+            onAttemptAbort: () => {
+              attemptCancellationRequested = true;
+              if (!params.abortSignal?.aborted) {
+                params.replyOperation?.abortByUser();
+              }
+              if (!pluginHarnessOwnsTransport) {
+                stopLaneProgressHeartbeat();
+                laneTaskAbortController.abort();
+              }
+            },
             replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
@@ -2228,6 +2405,7 @@ async function runEmbeddedAgentInternal(
             blockReplyBreak: params.blockReplyBreak,
             blockReplyChunking: params.blockReplyChunking,
             onReasoningStream: params.onReasoningStream,
+            streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: notifyToolResult,
             onAgentToolResult: params.onAgentToolResult,
@@ -2239,6 +2417,7 @@ async function runEmbeddedAgentInternal(
             onExecutionPhase: params.onExecutionPhase,
             extraSystemPrompt: params.extraSystemPrompt,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
             modelRun: params.modelRun,
@@ -2251,6 +2430,7 @@ async function runEmbeddedAgentInternal(
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             jobId: params.jobId,
             toolsAllow: params.toolsAllow,
+            ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
             cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
@@ -2285,6 +2465,10 @@ async function runEmbeddedAgentInternal(
             throw postCompactionAbortError;
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
+          if (attemptCancellationRequested) {
+            throwIfAborted();
+            throw createAgentRunDirectAbortError();
+          }
 
           const {
             aborted,
@@ -2306,6 +2490,7 @@ async function runEmbeddedAgentInternal(
             attempt.setTerminalLifecycleMeta?.({ ...meta, aborted });
           };
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
+          const timedOutByRunBudget = attempt.timedOutByRunBudget ?? false;
           adoptActiveSessionId(sessionIdUsed);
           if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
             activeSessionFile = sessionFileUsed;
@@ -2321,12 +2506,22 @@ async function runEmbeddedAgentInternal(
                 )
               : bootstrapPromptWarningSignaturesSeen);
           const lastAssistantUsage = normalizeUsage(sessionLastAssistant?.usage as UsageLike);
-          const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
+          const currentAttemptAssistantUsage = normalizeUsage(
+            currentAttemptAssistant?.usage as UsageLike,
+          );
+          const promptCacheLastCallUsage = normalizeUsage(
+            attempt.promptCache?.lastCallUsage as UsageLike,
+          );
+          const callUsage = resolveLatestCallUsage({
+            currentAttemptCandidates: [currentAttemptAssistantUsage, promptCacheLastCallUsage],
+            carriedCandidates: [lastRunPromptUsage, lastAssistantUsage],
+          });
+          const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
-          lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
-          lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
+          lastRunPromptUsage = callUsage.latest;
+          lastTurnTotal = callUsage.latest?.total;
           // Idle-timeout cost-runaway breaker (#76293). Logic lives in the
           // pure helper below so it stays unit-testable; the run loop just
           // feeds it the latest attempt outcome and bails through the
@@ -2368,7 +2563,7 @@ async function runEmbeddedAgentInternal(
                 sessionFile: activeSessionFile,
                 provider,
                 model: model.id,
-                contextTokens: ctxInfo.tokens,
+                ...outerContextTokenMeta,
                 usageAccumulator,
                 lastRunPromptUsage,
                 lastTurnTotal,
@@ -2399,10 +2594,11 @@ async function runEmbeddedAgentInternal(
             })
               ? undefined
               : sessionLastAssistant;
+          const attemptAssistant = currentAttemptAssistant ?? sessionAssistantForCandidate;
           const activeErrorContext = resolveActiveErrorContext({
             provider,
             model: modelId,
-            assistant: currentAttemptAssistant ?? sessionAssistantForCandidate,
+            assistant: attemptAssistant,
           });
           const resolveReplayInvalidForAttempt = (incompleteTurnText?: string | null) =>
             accumulatedReplayState.replayInvalid ||
@@ -2438,7 +2634,7 @@ async function runEmbeddedAgentInternal(
             !attempt.lastToolError &&
             (attempt.toolMetas?.length ?? 0) === 0 &&
             (attempt.assistantTexts?.length ?? 0) === 0;
-          if (preflightRecovery?.handled) {
+          if (!nativeModelOwned && preflightRecovery?.handled) {
             const retryingFromTranscript = preflightRecovery.source === "mid-turn";
             log.info(
               `[context-overflow-precheck] early recovery route=${preflightRecovery.route} ` +
@@ -2458,6 +2654,7 @@ async function runEmbeddedAgentInternal(
             defaultModel: DEFAULT_MODEL,
             currentProvider: provider,
             currentModel: modelId,
+            currentAgentRuntimeOverride: params.agentHarnessRuntimeOverride,
             currentAuthProfileId: preferredProfileId,
             currentAuthProfileIdSource: params.authProfileIdSource,
           });
@@ -2472,17 +2669,23 @@ async function runEmbeddedAgentInternal(
             );
             throw new LiveSessionModelSwitchError(requestedSelection);
           }
-          // ── Timeout-triggered compaction ──────────────────────────────────
-          // When the LLM times out with high context usage, compact before
-          // retrying to break the death spiral of repeated timeouts.
-          if (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution) {
+          if (
+            !nativeModelOwned &&
+            contextTokenBudget !== undefined &&
+            timedOut &&
+            !timedOutDuringCompaction &&
+            !timedOutDuringToolExecution &&
+            !timedOutByRunBudget
+          ) {
             // Only consider prompt-side tokens here. API totals include output
             // tokens, which can make a long generation look like high context
             // pressure even when the prompt itself was small.
-            const lastTurnPromptTokens = derivePromptTokens(lastRunPromptUsage);
+            const lastTurnPromptTokens = deriveContextPromptTokens({
+              lastCallUsage: lastRunPromptUsage,
+            });
             const tokenUsedRatio =
-              lastTurnPromptTokens != null && ctxInfo.tokens > 0
-                ? lastTurnPromptTokens / ctxInfo.tokens
+              lastTurnPromptTokens != null && contextTokenBudget > 0
+                ? lastTurnPromptTokens / contextTokenBudget
                 : 0;
             if (timeoutCompactionAttempts >= MAX_TIMEOUT_COMPACTION_ATTEMPTS) {
               log.warn(
@@ -2503,6 +2706,7 @@ async function runEmbeddedAgentInternal(
                     sessionKey: params.sessionKey,
                     messageChannel: params.messageChannel,
                     messageProvider: params.messageProvider,
+                    clientCaps: params.clientCaps,
                     chatType: params.chatType,
                     agentAccountId: params.agentAccountId,
                     currentChannelId: params.currentChannelId,
@@ -2517,6 +2721,7 @@ async function runEmbeddedAgentInternal(
                     provider,
                     modelId,
                     harnessRuntime: agentHarness.id,
+                    modelSelectionLocked: params.modelSelectionLocked,
                     modelFallbacksOverride: params.modelFallbacksOverride,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
@@ -2558,12 +2763,12 @@ async function runEmbeddedAgentInternal(
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
                     sessionFile: activeSessionFile,
-                    tokenBudget: ctxInfo.tokens,
+                    tokenBudget: contextTokenBudget,
                     force: true,
                     compactionTarget: "budget",
                     runtimeContext: timeoutCompactionRuntimeContext,
                     runtimeSettings: buildEmbeddedContextEngineRuntimeSettings({
-                      tokenBudget: ctxInfo.tokens,
+                      tokenBudget: contextTokenBudget,
                     }),
                   },
                   resolveCompactionTimeoutMs(params.config),
@@ -2579,10 +2784,14 @@ async function runEmbeddedAgentInternal(
                   reason: String(compactErr),
                 };
               }
-              if (timeoutCompactResult.compacted) {
-                adoptCompactionTranscript(timeoutCompactResult);
-              }
-              await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
+              const previousSessionId = timeoutCompactResult.compacted
+                ? adoptCompactionTranscript(timeoutCompactResult)
+                : undefined;
+              await runOwnsCompactionAfterHook(
+                "timeout recovery",
+                timeoutCompactResult,
+                previousSessionId,
+              );
               if (timeoutCompactResult.compacted) {
                 autoCompactionCount += 1;
                 if (
@@ -2634,17 +2843,24 @@ async function runEmbeddedAgentInternal(
               })()
             : null;
 
-          if (contextOverflowError) {
+          if (contextOverflowError && !nativeModelOwned && contextTokenBudget !== undefined) {
             const overflowDiagId = createCompactionDiagId();
             const errorText = contextOverflowError.text;
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
             const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
+            const preflightEstimatedPromptTokens =
+              typeof preflightRecovery?.estimatedPromptTokens === "number" &&
+              Number.isFinite(preflightRecovery.estimatedPromptTokens) &&
+              preflightRecovery.estimatedPromptTokens > 0
+                ? Math.ceil(preflightRecovery.estimatedPromptTokens)
+                : undefined;
             const overflowTokenCountForCompaction =
               observedOverflowTokens ??
-              (ctxInfo.tokens > 0
+              preflightEstimatedPromptTokens ??
+              (contextTokenBudget > 0
                 ? // Confirmed overflow with an unparseable provider message still carries a
                   // minimally over-budget count for compaction engines and diagnostics.
-                  ctxInfo.tokens + 1
+                  contextTokenBudget + 1
                 : undefined);
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
@@ -2652,8 +2868,9 @@ async function runEmbeddedAgentInternal(
                 `messages=${msgCount} sessionFile=${activeSessionFile} ` +
                 `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
                 `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
+                `preflightEstimatedTokens=${preflightEstimatedPromptTokens ?? "unknown"} ` +
                 `compactionTokens=${overflowTokenCountForCompaction ?? "unknown"} ` +
-                `error=${errorText.slice(0, 200)}`,
+                `error=${truncateUtf16Safe(errorText, 200)}`,
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
             const hadAttemptLevelCompaction = attemptCompactionCount > 0;
@@ -2692,6 +2909,7 @@ async function runEmbeddedAgentInternal(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
               let compactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
+              let previousSessionId: string | undefined;
               await runOwnsCompactionBeforeHook("overflow recovery");
               try {
                 const overflowCompactionRuntimeContext = {
@@ -2699,6 +2917,7 @@ async function runEmbeddedAgentInternal(
                     sessionKey: params.sessionKey,
                     messageChannel: params.messageChannel,
                     messageProvider: params.messageProvider,
+                    clientCaps: params.clientCaps,
                     chatType: params.chatType,
                     agentAccountId: params.agentAccountId,
                     currentChannelId: params.currentChannelId,
@@ -2713,6 +2932,7 @@ async function runEmbeddedAgentInternal(
                     provider,
                     modelId,
                     harnessRuntime: agentHarness.id,
+                    modelSelectionLocked: params.modelSelectionLocked,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
@@ -2752,7 +2972,7 @@ async function runEmbeddedAgentInternal(
                 // surfaces as a thrown error handled by the catch below.
                 const overflowCompactionRuntimeSettings = buildEmbeddedContextEngineRuntimeSettings(
                   {
-                    tokenBudget: ctxInfo.tokens,
+                    tokenBudget: contextTokenBudget,
                     degradedReason: "context_overflow",
                   },
                 );
@@ -2762,7 +2982,7 @@ async function runEmbeddedAgentInternal(
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
                     sessionFile: activeSessionFile,
-                    tokenBudget: ctxInfo.tokens,
+                    tokenBudget: contextTokenBudget,
                     ...(overflowTokenCountForCompaction !== undefined
                       ? { currentTokenCount: overflowTokenCountForCompaction }
                       : {}),
@@ -2775,7 +2995,7 @@ async function runEmbeddedAgentInternal(
                   params.abortSignal,
                 );
                 if (compactResult.ok && compactResult.compacted) {
-                  adoptCompactionTranscript(compactResult);
+                  previousSessionId = adoptCompactionTranscript(compactResult);
                   await runContextEngineMaintenance({
                     contextEngine,
                     sessionId: activeSessionId,
@@ -2798,7 +3018,11 @@ async function runEmbeddedAgentInternal(
                   reason: String(compactErr),
                 };
               }
-              await runOwnsCompactionAfterHook("overflow recovery", compactResult);
+              await runOwnsCompactionAfterHook(
+                "overflow recovery",
+                compactResult,
+                previousSessionId,
+              );
               if (preflightRecovery && isNoRealConversationCompactionNoop(compactResult)) {
                 lastCompactionTokensAfter = undefined;
                 lastContextBudgetStatus = undefined;
@@ -2828,9 +3052,9 @@ async function runEmbeddedAgentInternal(
                 if (preflightRecovery?.route === "compact_then_truncate") {
                   const truncResult = await truncateOversizedToolResultsInSession({
                     sessionFile: activeSessionFile,
-                    contextWindowTokens: ctxInfo.tokens,
+                    contextWindowTokens: contextTokenBudget,
                     maxCharsOverride: resolveLiveToolResultMaxChars({
-                      contextWindowTokens: ctxInfo.tokens,
+                      contextWindowTokens: contextTokenBudget,
                       cfg: params.config,
                       agentId: sessionAgentId,
                     }),
@@ -2838,6 +3062,7 @@ async function runEmbeddedAgentInternal(
                     sessionKey: params.sessionKey,
                     agentId: sessionAgentId,
                     config: params.config,
+                    protectTrailingToolResults: true,
                   });
                   if (truncResult.truncated) {
                     log.info(
@@ -2873,7 +3098,7 @@ async function runEmbeddedAgentInternal(
               );
             }
             if (!toolResultTruncationAttempted) {
-              const contextWindowTokens = ctxInfo.tokens;
+              const contextWindowTokens = contextTokenBudget;
               const toolResultMaxChars = resolveLiveToolResultMaxChars({
                 contextWindowTokens,
                 cfg: params.config,
@@ -2901,6 +3126,7 @@ async function runEmbeddedAgentInternal(
                   sessionKey: params.sessionKey,
                   agentId: sessionAgentId,
                   config: params.config,
+                  protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
                 });
                 if (truncResult.truncated) {
                   log.info(
@@ -2953,10 +3179,10 @@ async function runEmbeddedAgentInternal(
                   sessionFile: activeSessionFile,
                   provider,
                   model: model.id,
-                  contextTokens: ctxInfo.tokens,
+                  ...outerContextTokenMeta,
                   usageAccumulator,
                   lastRunPromptUsage,
-                  lastAssistant: sessionLastAssistant,
+                  lastAssistant: attemptAssistant,
                   lastTurnTotal,
                 }),
                 systemPromptReport: attempt.systemPromptReport,
@@ -2986,10 +3212,10 @@ async function runEmbeddedAgentInternal(
                   sessionFile: activeSessionFile,
                   provider,
                   model: model.id,
-                  contextTokens: ctxInfo.tokens,
+                  ...outerContextTokenMeta,
                   usageAccumulator,
                   lastRunPromptUsage,
-                  lastAssistant: sessionLastAssistant,
+                  lastAssistant: attemptAssistant,
                   lastTurnTotal,
                 }),
                 systemPromptReport: attempt.systemPromptReport,
@@ -3011,9 +3237,10 @@ async function runEmbeddedAgentInternal(
             // Retry replay-safe Codex app-server failures.
             const codexAppServerRecoveryRetry = resolveCodexAppServerRecoveryRetry({
               attempt,
-              alreadyRetried: codexAppServerRecoveryRetries > 0,
+              retryAvailable: codexAppServerRecoveryRetryAvailable,
             });
             if (codexAppServerRecoveryRetry.retry) {
+              throwIfAborted();
               codexAppServerRecoveryRetries += 1;
               suppressNextUserMessagePersistence = true;
               log.warn(
@@ -3101,10 +3328,10 @@ async function runEmbeddedAgentInternal(
                     sessionFile: activeSessionFile,
                     provider,
                     model: model.id,
-                    contextTokens: ctxInfo.tokens,
+                    ...outerContextTokenMeta,
                     usageAccumulator,
                     lastRunPromptUsage,
-                    lastAssistant: sessionLastAssistant,
+                    lastAssistant: attemptAssistant,
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
@@ -3142,10 +3369,10 @@ async function runEmbeddedAgentInternal(
                     sessionFile: activeSessionFile,
                     provider,
                     model: model.id,
-                    contextTokens: ctxInfo.tokens,
+                    ...outerContextTokenMeta,
                     usageAccumulator,
                     lastRunPromptUsage,
-                    lastAssistant: sessionLastAssistant,
+                    lastAssistant: attemptAssistant,
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
@@ -3206,6 +3433,7 @@ async function runEmbeddedAgentInternal(
               failoverReason: promptFailoverReason,
               harnessOwnsTransport: pluginHarnessOwnsTransport,
               promptTimeoutFallbackSafe,
+              timedOutByRunBudget,
               profileRotated: false,
             });
             if (
@@ -3246,6 +3474,7 @@ async function runEmbeddedAgentInternal(
                 failoverReason: promptFailoverReason,
                 harnessOwnsTransport: pluginHarnessOwnsTransport,
                 promptTimeoutFallbackSafe,
+                timedOutByRunBudget,
                 profileRotated: true,
               });
             }
@@ -3314,9 +3543,8 @@ async function runEmbeddedAgentInternal(
             throw toErrorObject(promptError, "Prompt failed");
           }
 
-          const assistantForFailover = currentAttemptAssistant ?? sessionAssistantForCandidate;
           const fallbackThinking = pickFallbackThinkingLevel({
-            message: assistantForFailover?.errorMessage,
+            message: attemptAssistant?.errorMessage,
             attempted: attemptedThinking,
           });
           if (fallbackThinking && !aborted) {
@@ -3327,11 +3555,11 @@ async function runEmbeddedAgentInternal(
             continue;
           }
 
-          const authFailure = isAuthAssistantError(assistantForFailover);
-          const rateLimitFailure = isRateLimitAssistantError(assistantForFailover);
-          const billingFailure = isBillingAssistantError(assistantForFailover);
-          const failoverFailure = isFailoverAssistantError(assistantForFailover);
-          const assistantFailoverReason = classifyAssistantFailoverReason(assistantForFailover);
+          const authFailure = isAuthAssistantError(attemptAssistant);
+          const rateLimitFailure = isRateLimitAssistantError(attemptAssistant);
+          const billingFailure = isBillingAssistantError(attemptAssistant);
+          const failoverFailure = isFailoverAssistantError(attemptAssistant);
+          const assistantFailoverReason = classifyAssistantFailoverReason(attemptAssistant);
           const assistantProviderStarted =
             Boolean(currentAttemptAssistant?.provider) ||
             idleTimedOut ||
@@ -3345,25 +3573,26 @@ async function runEmbeddedAgentInternal(
               providerStarted: assistantProviderStarted,
               transientRateLimit:
                 assistantProfileFailoverReason === "rate_limit" &&
-                isShortWindowRateLimitMessage(assistantForFailover?.errorMessage),
+                isShortWindowRateLimitMessage(attemptAssistant?.errorMessage),
             },
           );
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(
-            assistantForFailover?.errorMessage ?? "",
+            attemptAssistant?.errorMessage ?? "",
           );
           // The shared runtime wraps interrupted streams as a timeout. Retry that
           // wrapper only for reasoning-only output so ordinary timeouts keep failover.
           const genericUnknownReasoningError =
             assistantFailoverReason === "timeout" &&
-            isGenericUnknownStreamErrorMessage(assistantForFailover?.errorMessage ?? "") &&
-            Boolean(assistantForFailover && hasOnlyAssistantReasoningContent(assistantForFailover));
+            isGenericUnknownStreamErrorMessage(attemptAssistant?.errorMessage ?? "") &&
+            Boolean(attemptAssistant && hasOnlyAssistantReasoningContent(attemptAssistant));
           const silentErrorRetryReason =
             assistantFailoverReason === null ||
             genericUnknownReasoningError ||
             assistantFailoverReason === "no_error_details" ||
             assistantFailoverReason === "unclassified" ||
-            assistantFailoverReason === "unknown";
+            assistantFailoverReason === "unknown" ||
+            assistantFailoverReason === "server_error";
           // Retry replay-safe non-visible provider errors before assistant
           // failover surfaces them as terminal provider failures.
           if (
@@ -3376,15 +3605,15 @@ async function runEmbeddedAgentInternal(
             !promptError &&
             !timedOut &&
             silentErrorRetryReason &&
-            shouldRetrySilentErrorAssistantTurn({ attempt, assistant: assistantForFailover }) &&
+            shouldRetrySilentErrorAssistantTurn({ attempt, assistant: attemptAssistant }) &&
             emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES
           ) {
             emptyErrorRetries += 1;
             log.warn(
               `[empty-error-retry] stopReason=error non-visible-output; resubmitting ` +
                 `attempt=${emptyErrorRetries}/${MAX_EMPTY_ERROR_RETRIES} ` +
-                `provider=${assistantForFailover?.provider ?? provider} ` +
-                `model=${assistantForFailover?.model ?? model.id} ` +
+                `provider=${attemptAssistant?.provider ?? provider} ` +
+                `model=${attemptAssistant?.model ?? model.id} ` +
                 `sessionKey=${params.sessionKey ?? params.sessionId}`,
             );
             continue;
@@ -3394,13 +3623,13 @@ async function runEmbeddedAgentInternal(
           const logAssistantFailoverDecision = createFailoverDecisionLogger({
             stage: "assistant",
             runId: params.runId,
-            rawError: assistantForFailover?.errorMessage?.trim(),
+            rawError: attemptAssistant?.errorMessage?.trim(),
             failoverReason: assistantFailoverReason,
             profileFailureReason: assistantProfileFailureReason,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
-            sourceProvider: assistantForFailover?.provider ?? provider,
-            sourceModel: assistantForFailover?.model ?? modelId,
+            sourceProvider: attemptAssistant?.provider ?? provider,
+            sourceModel: attemptAssistant?.model ?? modelId,
             profileId: failedAssistantProfileId,
             fallbackConfigured,
             timedOut,
@@ -3410,7 +3639,7 @@ async function runEmbeddedAgentInternal(
           if (
             authFailure &&
             (await maybeRefreshRuntimeAuthForAuthError(
-              assistantForFailover?.errorMessage ?? "",
+              attemptAssistant?.errorMessage ?? "",
               runtimeAuthRetry,
             ))
           ) {
@@ -3449,6 +3678,7 @@ async function runEmbeddedAgentInternal(
             timedOutDuringCompaction,
             timedOutDuringToolExecution,
             harnessOwnsTransport: pluginHarnessOwnsTransport,
+            timedOutByRunBudget,
             profileRotated: false,
           });
           const assistantFailoverOutcome = await handleAssistantFailover({
@@ -3462,6 +3692,7 @@ async function runEmbeddedAgentInternal(
             idleTimedOut,
             timedOutDuringCompaction,
             timedOutDuringToolExecution,
+            timedOutByRunBudget,
             allowSameModelIdleTimeoutRetry:
               timedOut &&
               idleTimedOut &&
@@ -3475,7 +3706,7 @@ async function runEmbeddedAgentInternal(
             modelId,
             provider,
             activeErrorContext,
-            lastAssistant: assistantForFailover,
+            lastAssistant: attemptAssistant,
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
             authFailure,
@@ -3559,21 +3790,21 @@ async function runEmbeddedAgentInternal(
           }
           const usageMeta = buildUsageAgentMetaFields({
             usageAccumulator,
-            lastAssistantUsage: sessionLastAssistant?.usage as UsageLike | undefined,
+            lastAssistantUsage: attemptAssistant?.usage as UsageLike | undefined,
             lastRunPromptUsage,
             lastTurnTotal,
           });
           const reportedModelRef = resolveReportedModelRef({
             provider,
             model: model.id,
-            assistant: sessionLastAssistant,
+            assistant: attemptAssistant,
           });
           const agentMeta: EmbeddedAgentMeta = {
             sessionId: sessionIdUsed,
             sessionFile: sessionFileUsed,
             provider: reportedModelRef.provider,
             model: reportedModelRef.model,
-            contextTokens: ctxInfo.tokens,
+            ...outerContextTokenMeta,
             agentHarnessId: attempt.agentHarnessId,
             usage: usageMeta.usage,
             lastCallUsage: usageMeta.lastCallUsage,
@@ -3582,12 +3813,13 @@ async function runEmbeddedAgentInternal(
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
             compactionTokensAfter: lastCompactionTokensAfter,
           };
-          const finalAssistantVisibleText = resolveFinalAssistantVisibleText(sessionLastAssistant);
-          const finalAssistantRawText = resolveFinalAssistantRawText(sessionLastAssistant);
+          const finalAssistantVisibleText = resolveFinalAssistantVisibleText(attemptAssistant);
+          const finalAssistantRawText = resolveFinalAssistantRawText(attemptAssistant);
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
+            assistantTranscriptOwned: attempt.assistantTranscriptOwned,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             currentAssistant: currentAttemptAssistant ?? null,
@@ -3627,7 +3859,7 @@ async function runEmbeddedAgentInternal(
           });
           const timedOutDuringPrompt =
             timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
-          const finalAssistantStopReason = (sessionLastAssistant?.stopReason ?? "")
+          const finalAssistantStopReason = (attemptAssistant?.stopReason ?? "")
             .trim()
             .toLowerCase();
           const recoveredFinalAssistantTextAfterPromptTimeout =
@@ -3667,7 +3899,7 @@ async function runEmbeddedAgentInternal(
             (attempt.toolMetas?.length ?? 0) === 0;
           const attemptToolSummary = buildTraceToolSummary({
             toolMetas: attempt.toolMetas,
-            hadFailure: Boolean(attempt.lastToolError),
+            fallbackHadFailure: Boolean(attempt.lastToolError),
           });
           const failureSignal = resolveEmbeddedRunFailureSignal({
             trigger: params.trigger,
@@ -3991,7 +4223,8 @@ async function runEmbeddedAgentInternal(
               replayInvalid,
               livenessState,
             });
-            const incompleteStopReason = attempt.lastAssistant?.stopReason;
+            const incompleteStopReason =
+              attempt.currentAttemptAssistant?.stopReason ?? attempt.lastAssistant?.stopReason;
             const replayMetadata = resolveAttemptReplayMetadata(attempt);
             log.warn(
               `incomplete turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
@@ -4089,6 +4322,90 @@ async function runEmbeddedAgentInternal(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
           markAuthProfileSuccessAfterRun();
+          const successfulProfileId = lastProfileId;
+          const successfulCredential = successfulProfileId
+            ? attemptAuthProfileStore.profiles[successfulProfileId]
+            : undefined;
+          const successfulApiKeyInfo = getApiKeyInfo();
+          const successfulPluginHarnessApiKeyInfo = (() => {
+            const apiKey = successfulApiKeyInfo?.apiKey;
+            if (!pluginHarnessOwnsTransport || !apiKey || !looksLikeSecretSentinel(apiKey)) {
+              return successfulApiKeyInfo;
+            }
+            const resolvedApiKey = resolveSecretSentinel(apiKey);
+            return resolvedApiKey ? { ...successfulApiKeyInfo, apiKey: resolvedApiKey } : null;
+          })();
+          const authFingerprint =
+            successfulCredential?.type === "oauth" && successfulProfileId
+              ? fingerprintResolvedAuthProfileCredential({
+                  profileId: successfulProfileId,
+                  credential: successfulCredential,
+                  resolvedAuth: successfulApiKeyInfo,
+                })
+              : successfulCredential && successfulProfileId && pluginHarnessOwnsAuthBootstrap
+                ? attempt.authBindingFingerprint
+                : successfulCredential && successfulProfileId && pluginHarnessOwnsTransport
+                  ? fingerprintResolvedAuthProfileCredential({
+                      profileId: successfulProfileId,
+                      credential: successfulCredential,
+                      resolvedAuth: successfulPluginHarnessApiKeyInfo,
+                    })
+                  : successfulApiKeyInfo
+                    ? fingerprintResolvedProviderAuth(successfulApiKeyInfo)
+                    : undefined;
+          const authProfileOwnerFingerprint =
+            successfulProfileId &&
+            (!pluginHarnessOwnsTransport || successfulCredential?.type === "oauth")
+              ? fingerprintAuthProfileOwnerShape({
+                  profileId: successfulProfileId,
+                  credential: successfulCredential,
+                })
+              : undefined;
+          const runtimeArtifact = pluginHarnessOwnsTransport ? attempt.runtimeArtifact : undefined;
+          const runtimeOwnerFingerprint = authFingerprint
+            ? undefined
+            : successfulApiKeyInfo?.mode === "aws-sdk"
+              ? fingerprintAwsSdkRuntimeOwner({
+                  provider,
+                  backendId: agentHarness.id,
+                  auth: successfulApiKeyInfo,
+                })
+              : pluginHarnessOwnsTransport
+                ? fingerprintOpaqueRuntimeOwner({
+                    kind: "plugin-harness",
+                    runner: "embedded",
+                    provider,
+                    backendId: agentHarness.id,
+                    ...(runtimeArtifact
+                      ? { runtimeArtifactFingerprint: runtimeArtifact.fingerprint }
+                      : {}),
+                    ...(successfulProfileId ? { authProfileId: successfulProfileId } : {}),
+                    ...(authProfileOwnerFingerprint ? { authProfileOwnerFingerprint } : {}),
+                  })
+                : undefined;
+          const opaqueRuntimeOwnerKind =
+            runtimeOwnerFingerprint && successfulApiKeyInfo?.mode === "aws-sdk"
+              ? ("aws-sdk" as const)
+              : runtimeOwnerFingerprint && pluginHarnessOwnsTransport
+                ? ("plugin-harness" as const)
+                : undefined;
+          const runtimeOwnerKind =
+            opaqueRuntimeOwnerKind ??
+            (pluginHarnessOwnsTransport ? ("plugin-harness" as const) : undefined);
+          params.onSuccessfulAuthBinding?.({
+            ...(successfulProfileId ? { authProfileId: successfulProfileId } : {}),
+            agentHarnessId: agentHarness.id,
+            ...(authFingerprint ? { authFingerprint } : {}),
+            ...(runtimeOwnerFingerprint ? { runtimeOwnerFingerprint } : {}),
+            ...(runtimeOwnerKind ? { runtimeOwnerKind } : {}),
+            ...(runtimeOwnerKind ? { runtimeOwnerId: agentHarness.id } : {}),
+            ...(runtimeArtifact
+              ? {
+                  runtimeArtifactId: runtimeArtifact.id,
+                  runtimeArtifactFingerprint: runtimeArtifact.fingerprint,
+                }
+              : {}),
+          });
           const replayInvalid = resolveReplayInvalidForAttempt(null);
           const livenessState = attempt.yieldDetected
             ? "paused"
@@ -4103,7 +4420,7 @@ async function runEmbeddedAgentInternal(
             ? "tool_calls"
             : attempt.yieldDetected
               ? "end_turn"
-              : (sessionLastAssistant?.stopReason as string | undefined);
+              : (attemptAssistant?.stopReason as string | undefined);
           const terminalPayloads = emptyAssistantReplyIsSilent
             ? [{ text: SILENT_REPLY_TOKEN }]
             : payloadsForTerminalPath;
@@ -4146,9 +4463,7 @@ async function runEmbeddedAgentInternal(
                 winnerProvider: reportedModelRef.provider,
                 winnerModel: reportedModelRef.model,
                 attempts:
-                  traceAttempts.length > 0 ||
-                  sessionLastAssistant?.provider ||
-                  sessionLastAssistant?.model
+                  traceAttempts.length > 0 || attemptAssistant?.provider || attemptAssistant?.model
                     ? [
                         ...traceAttempts,
                         {
@@ -4251,3 +4566,9 @@ function resolveAuthProfileStateProvider(
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
 }
+
+export const testing = {
+  EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
+  resolveEmbeddedRunLaneTimeoutMs,
+};
+export { testing as __testing };

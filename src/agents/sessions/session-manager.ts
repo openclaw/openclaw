@@ -38,6 +38,7 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
+import { logWarn } from "../../logger.js";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
 import {
   type AgentMessage,
@@ -145,6 +146,7 @@ export interface SessionInfoEntry extends SessionEntryBase {
 interface PromptReleasedOpaqueEntry {
   type: "prompt_released_opaque";
   record: unknown;
+  preserveActiveLeaf?: true;
 }
 
 type PromptReleasedSessionEntry =
@@ -348,28 +350,13 @@ export function migrateSessionEntries(entries: FileEntry[]): void {
 
 /** Exported for compaction.test.ts */
 export function parseSessionEntries(content: string): FileEntry[] {
-  const entries: FileEntry[] = [];
-  const lines = content.trim().split("\n");
-
-  for (const line of lines) {
-    if (!line.trim()) {
-      continue;
-    }
-    try {
-      const entry = JSON.parse(line) as FileEntry;
-      entries.push(entry);
-    } catch {
-      // Skip malformed lines
-    }
-  }
-
-  return entries;
+  return parseJsonlEntries(content);
 }
 
 export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i].type === "compaction") {
-      return entries[i] as CompactionEntry;
+  for (const entry of entries.toReversed()) {
+    if (entry.type === "compaction") {
+      return entry;
     }
   }
   return null;
@@ -603,7 +590,7 @@ function hasCacheableSessionHeader(entries: FileEntry[]): boolean {
     return true;
   }
   const header = entries[0];
-  if (header.type !== "session" || typeof (header as { id?: unknown }).id !== "string") {
+  if (!header || header.type !== "session" || typeof header.id !== "string") {
     return false;
   }
 
@@ -740,7 +727,7 @@ function rememberAppendedSessionEntry(
   const persistedEntry = JSON.parse(
     serializedAppend.startsWith("\n") ? serializedAppend.slice(1) : serializedAppend,
   ) as FileEntry;
-  cached.entries.push(freezeFileEntry(persistedEntry));
+  cached.entries.push(freezeFileEntry(normalizeLoadedFileEntry(persistedEntry)));
   cached.snapshot = snapshot;
   cached.endsWithNewline = true;
   sessionEntriesCache.delete(resolvedPath);
@@ -914,8 +901,9 @@ function revalidateLoadedSessionFile(
 // mutations from leaking back into the cache).
 function copyFileEntries(entries: readonly FileEntry[]): FileEntry[] {
   const copy = entries.slice();
-  if (copy.length > 0 && copy[0].type === "session" && Object.isFrozen(copy[0])) {
-    copy[0] = cloneFileEntry(copy[0]);
+  const header = copy.at(0);
+  if (header?.type === "session" && Object.isFrozen(header)) {
+    copy[0] = cloneFileEntry(header);
   }
   return copy;
 }
@@ -952,6 +940,7 @@ function freezeJsonLikeValue(value: unknown, seen = new WeakSet<object>()): void
 function parseJsonlEntries(content: string): FileEntry[] {
   const entries: FileEntry[] = [];
   const lines = content.trim().split("\n");
+  let skipped = 0;
 
   for (const line of lines) {
     if (!line.trim()) {
@@ -959,13 +948,44 @@ function parseJsonlEntries(content: string): FileEntry[] {
     }
     try {
       const entry = JSON.parse(line) as FileEntry;
-      entries.push(entry);
+      entries.push(normalizeLoadedFileEntry(entry));
     } catch {
-      // Skip malformed lines
+      skipped++;
     }
   }
 
+  // Transcripts written by older code or repaired externally may contain
+  // malformed entries that JSON.parse cannot deserialize. Warn once so the
+  // operator knows data was skipped instead of silently dropping entries.
+  if (skipped > 0) {
+    logWarn(
+      `parseJsonlEntries: skipped ${skipped} malformed JSONL line(s) — ` +
+        `${entries.length} valid entries were loaded`,
+    );
+  }
+
   return entries;
+}
+
+function normalizeLoadedFileEntry(entry: FileEntry): FileEntry {
+  if (!isJsonRecord(entry) || entry.type !== "message" || !isJsonRecord(entry.message)) {
+    return entry;
+  }
+  // Persisted JSONL is untrusted: shapes may predate the current Message type,
+  // so normalize through a record view instead of the declared union.
+  const message: Record<string, unknown> = entry.message;
+  // Replayed JSONL can carry legacy string assistant/toolResult content while
+  // downstream providers require block arrays. Single-record tool results need
+  // the same ingress repair before replay reaches provider conversion.
+  if (
+    (message.role === "assistant" || message.role === "toolResult") &&
+    typeof message.content === "string"
+  ) {
+    message.content = [{ type: "text", text: message.content }];
+  } else if (message.role === "toolResult" && isJsonRecord(message.content)) {
+    message.content = [message.content];
+  }
+  return entry;
 }
 
 function hasReadableSessionHeader(entries: FileEntry[]): boolean {
@@ -1171,27 +1191,34 @@ function readFirstSessionFileLine(filePath: string): string | undefined {
   }
 }
 
-function isValidSessionFile(filePath: string): boolean {
+function readSessionHeaderFromFile(filePath: string): SessionHeader | undefined {
   try {
     const firstLine = readFirstSessionFileLine(filePath);
     if (!firstLine) {
-      return false;
+      return undefined;
     }
     const header = JSON.parse(firstLine);
-    return header.type === "session" && typeof header.id === "string";
+    if (header.type !== "session" || typeof header.id !== "string") {
+      return undefined;
+    }
+    return header as SessionHeader;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
 /** Exported for testing */
-export function findMostRecentSession(sessionDir: string): string | null {
+export function findMostRecentSession(sessionDir: string, cwd?: string): string | null {
   try {
     const files = readdirSync(sessionDir)
       .filter((f) => f.endsWith(".jsonl"))
       .map((f) => join(sessionDir, f))
-      .filter(isValidSessionFile)
-      .map((path) => ({ path, mtime: statSync(path).mtime }))
+      .map((path) => ({ path, header: readSessionHeaderFromFile(path) }))
+      .filter(
+        (candidate): candidate is { path: string; header: SessionHeader } =>
+          candidate.header !== undefined && (cwd === undefined || candidate.header.cwd === cwd),
+      )
+      .map((candidate) => ({ path: candidate.path, mtime: statSync(candidate.path).mtime }))
       .toSorted((a, b) => b.mtime.getTime() - a.mtime.getTime());
 
     return files[0]?.path || null;
@@ -1269,6 +1296,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
     const content = await readFile(filePath, "utf8");
     const entries: FileEntry[] = [];
     const lines = content.trim().split("\n");
+    let skipped = 0;
 
     for (const line of lines) {
       if (!line.trim()) {
@@ -1277,15 +1305,22 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
       try {
         entries.push(JSON.parse(line) as FileEntry);
       } catch {
-        // Skip malformed lines
+        skipped++;
       }
+    }
+
+    if (skipped > 0) {
+      logWarn(
+        `buildSessionInfo: skipped ${skipped} malformed JSONL line(s) in ${filePath} — ` +
+          `${entries.length} valid entries were loaded`,
+      );
     }
 
     if (entries.length === 0) {
       return null;
     }
     const header = entries[0];
-    if (header.type !== "session") {
+    if (!header || header.type !== "session") {
       return null;
     }
 
@@ -1348,6 +1383,10 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
   }
 }
 
+function sessionInfoMatchesCwd(info: SessionInfo, cwd: string | undefined): boolean {
+  return cwd === undefined || info.cwd === cwd;
+}
+
 export type SessionListProgress = (loaded: number, total: number) => void;
 
 const MAX_CONCURRENT_SESSION_INFO_LOADS = 10;
@@ -1397,6 +1436,7 @@ async function listSessionsFromDir(
   onProgress?: SessionListProgress,
   progressOffset = 0,
   progressTotal?: number,
+  cwd?: string,
 ): Promise<SessionInfo[]> {
   const sessions: SessionInfo[] = [];
   if (!existsSync(dir)) {
@@ -1414,7 +1454,7 @@ async function listSessionsFromDir(
       onProgress?.(progressOffset + loaded, total);
     });
     for (const info of results) {
-      if (info) {
+      if (info && sessionInfoMatchesCwd(info, cwd)) {
         sessions.push(info);
       }
     }
@@ -2006,7 +2046,7 @@ export class SessionManager {
     const removedParentById = new Map(
       removedEntries.map((entry) => [entry.id, entry.parentId] as const),
     );
-    for (let index = removeStart; index < this.fileEntries.length; ) {
+    for (let index = removeStart; index < this.fileEntries.length;) {
       const entry = this.fileEntries[index];
       if (
         isIndexedSessionEntry(entry) &&
@@ -2183,6 +2223,7 @@ export class SessionManager {
     entries: readonly PromptReleasedSessionEntry[],
     options?: { persistLeaf?: boolean },
   ): PromptReleasedSessionMergeResult | undefined {
+    this.assertPromptReleasedEntriesPreserveActiveLeaf(entries);
     let sideBranchParentId =
       this.promptReleasedSideBranchParentId === undefined
         ? this.leafId
@@ -2306,6 +2347,39 @@ export class SessionManager {
       sessionFileSnapshot: this.sessionFileSnapshot,
       publishedEntries: [{ kind: "id", id: leafEntry.id }],
     };
+  }
+
+  private assertPromptReleasedEntriesPreserveActiveLeaf(
+    entries: readonly PromptReleasedSessionEntry[],
+  ): void {
+    let sideBranchParentId =
+      this.promptReleasedSideBranchParentId === undefined
+        ? this.leafId
+        : this.promptReleasedSideBranchParentId;
+    for (const entry of entries) {
+      if (entry.type !== "prompt_released_opaque") {
+        sideBranchParentId = entry.id;
+        continue;
+      }
+      const leaf = parseOpaqueLeafEntry(entry.record);
+      if (leaf && entry.preserveActiveLeaf) {
+        const appendParentId =
+          leaf.appendParentId === undefined ? leaf.targetId : leaf.appendParentId;
+        if (
+          leaf.appendMode !== "side" ||
+          leaf.targetId !== this.leafId ||
+          leaf.parentId !== sideBranchParentId ||
+          appendParentId !== sideBranchParentId
+        ) {
+          throw new Error("prompt-released side leaf changed the active branch");
+        }
+        continue;
+      }
+      const link = parseParentLinkedOpaqueEntry(entry.record);
+      if (link) {
+        sideBranchParentId = link.id;
+      }
+    }
   }
 
   private appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {
@@ -2434,8 +2508,7 @@ export class SessionManager {
     // Walk entries in reverse to find the latest session_info entry.
     // Empty names explicitly clear the session title.
     const entries = this.getEntries();
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const entry = entries[i];
+    for (const entry of entries.toReversed()) {
       if (entry.type === "session_info") {
         return entry.name?.trim() || undefined;
       }
@@ -2921,7 +2994,7 @@ export class SessionManager {
    */
   static continueRecent(cwd: string, sessionDir?: string): SessionManager {
     const dir = sessionDir ?? getDefaultSessionDir(cwd);
-    const mostRecent = findMostRecentSession(dir);
+    const mostRecent = findMostRecentSession(dir, cwd);
     if (mostRecent) {
       return new SessionManager(cwd, dir, mostRecent, true);
     }
@@ -2995,7 +3068,7 @@ export class SessionManager {
     onProgress?: SessionListProgress,
   ): Promise<SessionInfo[]> {
     const dir = sessionDir ?? getDefaultSessionDir(cwd);
-    const sessions = await listSessionsFromDir(dir, onProgress);
+    const sessions = await listSessionsFromDir(dir, onProgress, 0, undefined, cwd);
     sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
     return sessions;
   }

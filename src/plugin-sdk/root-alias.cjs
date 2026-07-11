@@ -12,38 +12,115 @@ const pluginSdkSubpathsCache = new Map();
 const pluginSdkPackageNames = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"];
 const pluginSdkSourceExtensions = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"];
 const privateQaExcludedPluginSdkSubpaths = new Set(["ssrf-runtime-internal"]);
-const workspacePackageAliases = [
-  {
-    name: "@openclaw/llm-core",
-    subpath: "",
-    srcFile: "src/index.ts",
-    distFile: "dist/index.mjs",
+// Subpath -> source entry for private/bundled workspace packages that internal
+// source imports by package name. Dist paths mirror each package's export map.
+const workspacePackageAliasEntries = {
+  "@openclaw/llm-core": {
+    dir: "llm-core",
+    subpaths: {
+      "": { srcFile: "src/index.ts", distFile: "dist/index.mjs" },
+      diagnostics: { srcFile: "src/utils/diagnostics.ts", distFile: "dist/utils/diagnostics.mjs" },
+      "event-stream": {
+        srcFile: "src/utils/event-stream.ts",
+        distFile: "dist/utils/event-stream.mjs",
+      },
+      types: { srcFile: "src/types.ts", distFile: "dist/types.mjs" },
+      validation: { srcFile: "src/validation.ts", distFile: "dist/validation.mjs" },
+    },
   },
-  {
-    name: "@openclaw/llm-core",
-    subpath: "diagnostics",
-    srcFile: "src/utils/diagnostics.ts",
-    distFile: "dist/utils/diagnostics.mjs",
+  "@openclaw/ai": {
+    dir: "ai",
+    subpaths: {
+      "": { srcFile: "src/index.ts", distFile: "dist/index.mjs" },
+      providers: { srcFile: "src/providers.ts", distFile: "dist/providers.mjs" },
+      diagnostics: { srcFile: "src/utils/diagnostics.ts", distFile: "dist/diagnostics.mjs" },
+      "event-stream": { srcFile: "src/utils/event-stream.ts", distFile: "dist/event-stream.mjs" },
+      types: { srcFile: "src/types.ts", distFile: "dist/types.mjs" },
+      validation: { srcFile: "src/validation.ts", distFile: "dist/validation.mjs" },
+      "internal/anthropic": {
+        srcFile: "src/internal/anthropic.ts",
+        distFile: "dist/internal/anthropic.mjs",
+      },
+      "internal/openai": {
+        srcFile: "src/internal/openai.ts",
+        distFile: "dist/internal/openai.mjs",
+      },
+      "internal/retry-after": {
+        srcFile: "src/internal/retry-after.ts",
+        distFile: "dist/internal/retry-after.mjs",
+      },
+      "internal/runtime": {
+        srcFile: "src/internal/runtime.ts",
+        distFile: "dist/internal/runtime.mjs",
+      },
+      "internal/shared": {
+        srcFile: "src/internal/shared.ts",
+        distFile: "dist/internal/shared.mjs",
+      },
+    },
   },
-  {
-    name: "@openclaw/llm-core",
-    subpath: "event-stream",
-    srcFile: "src/utils/event-stream.ts",
-    distFile: "dist/utils/event-stream.mjs",
+  "@openclaw/markdown-core": {
+    dir: "markdown-core",
+    subpaths: {
+      "": { srcFile: "src/index.ts", distFile: "dist/index.mjs" },
+      "code-spans": { srcFile: "src/code-spans.ts", distFile: "dist/code-spans.mjs" },
+      fences: { srcFile: "src/fences.ts", distFile: "dist/fences.mjs" },
+      frontmatter: { srcFile: "src/frontmatter.ts", distFile: "dist/frontmatter.mjs" },
+      ir: { srcFile: "src/ir.ts", distFile: "dist/ir.mjs" },
+      render: { srcFile: "src/render.ts", distFile: "dist/render.mjs" },
+      "render-aware-chunking": {
+        srcFile: "src/render-aware-chunking.ts",
+        distFile: "dist/render-aware-chunking.mjs",
+      },
+      tables: { srcFile: "src/tables.ts", distFile: "dist/tables.mjs" },
+      types: { srcFile: "src/types.ts", distFile: "dist/types.mjs" },
+    },
   },
-  {
-    name: "@openclaw/llm-core",
-    subpath: "types",
-    srcFile: "src/types.ts",
-    distFile: "dist/types.mjs",
+  "@openclaw/normalization-core": {
+    dir: "normalization-core",
+    subpaths: {
+      "": { srcFile: "src/index.ts", distFile: "dist/index.mjs" },
+      "boolean-coercion": {
+        srcFile: "src/boolean-coercion.ts",
+        distFile: "dist/boolean-coercion.mjs",
+      },
+      "error-coercion": {
+        srcFile: "src/error-coercion.ts",
+        distFile: "dist/error-coercion.mjs",
+      },
+      "number-coercion": {
+        srcFile: "src/number-coercion.ts",
+        distFile: "dist/number-coercion.mjs",
+      },
+      "record-coerce": {
+        srcFile: "src/record-coerce.ts",
+        distFile: "dist/record-coerce.mjs",
+      },
+      "string-coerce": {
+        srcFile: "src/string-coerce.ts",
+        distFile: "dist/string-coerce.mjs",
+      },
+      "string-normalization": {
+        srcFile: "src/string-normalization.ts",
+        distFile: "dist/string-normalization.mjs",
+      },
+      "utf16-slice": {
+        srcFile: "src/utf16-slice.ts",
+        distFile: "dist/utf16-slice.mjs",
+      },
+    },
   },
-  {
-    name: "@openclaw/llm-core",
-    subpath: "validation",
-    srcFile: "src/validation.ts",
-    distFile: "dist/validation.mjs",
-  },
-];
+};
+const workspacePackageAliases = Object.entries(workspacePackageAliasEntries).flatMap(
+  ([name, pkg]) =>
+    Object.entries(pkg.subpaths).map(([subpath, files]) => ({
+      name,
+      dir: pkg.dir,
+      subpath,
+      srcFile: files.srcFile,
+      distFile: files.distFile,
+    })),
+);
 const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const isDistRootAlias = __filename.includes(
   `${path.sep}dist${path.sep}plugin-sdk${path.sep}root-alias.cjs`,
@@ -350,22 +427,21 @@ function buildPluginSdkAliasMap(useDist) {
     }
   }
 
-  // Agent-core intentionally imports @openclaw/llm-core by package name so built
-  // package entrypoints share constructor identity. In source-checkout live
-  // tests, keep that package specifier on the same source graph instead of
-  // falling through to pnpm's package export and requiring a prebuilt dist.
+  // Internal source still imports private workspace packages by package name.
+  // Keep live source-checkout tests on the same source graph instead of
+  // requiring prebuilt package dist files.
   for (const entry of workspacePackageAliases) {
     const alias = entry.subpath ? `${entry.name}/${entry.subpath}` : entry.name;
     const preferred = path.join(
       packageRoot,
       "packages",
-      "llm-core",
+      entry.dir,
       useDist ? entry.distFile : entry.srcFile,
     );
     const fallback = path.join(
       packageRoot,
       "packages",
-      "llm-core",
+      entry.dir,
       useDist ? entry.srcFile : entry.distFile,
     );
     const target = fs.existsSync(preferred) ? preferred : fs.existsSync(fallback) ? fallback : null;

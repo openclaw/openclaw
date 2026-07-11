@@ -1,5 +1,6 @@
 // Tracks heartbeat wake requests, busy skips, and retry timing.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
 
@@ -38,6 +39,7 @@ export type HeartbeatWakeSource =
   | "background-task"
   | "background-task-blocked"
   | "acp-spawn"
+  | "session-state"
   | "cli-watchdog"
   | "restart-sentinel"
   | "retry"
@@ -235,7 +237,11 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
             ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
             ...(pendingWake.heartbeat ? { heartbeat: pendingWake.heartbeat } : {}),
           };
-          const res = await active(wakeOpts);
+          // Each wake is detached process work: admit the whole handler before
+          // it can mutate sessions or commitments, and keep it visible until done.
+          const res = await runWithGatewayIndependentRootWorkAdmission(async () =>
+            active(wakeOpts),
+          );
           if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
             // The target runtime is busy; retry this wake target soon.
             queuePendingWakeReason({

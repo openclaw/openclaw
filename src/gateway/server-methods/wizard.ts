@@ -81,7 +81,11 @@ export const wizardHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        await session.answer(answer.stepId ?? "", answer.value);
+        const validationError = await session.answer(answer.stepId ?? "", answer.value);
+        if (validationError) {
+          respond(true, { ...(await session.next()), error: validationError }, undefined);
+          return;
+        }
       } catch (err) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
         return;
@@ -104,9 +108,11 @@ export const wizardHandlers: GatewayRequestHandlers = {
     if (!session) {
       return;
     }
-    session.cancel();
+    const cancelled = session.cancel();
     const status = readWizardStatus(session);
-    context.wizardSessions.delete(sessionId);
+    if (cancelled || status.status !== "running") {
+      context.wizardSessions.delete(sessionId);
+    }
     respond(true, status, undefined);
   },
   "wizard.status": ({ params, respond, context }) => {

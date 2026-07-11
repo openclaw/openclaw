@@ -555,35 +555,39 @@ describe("cron tool", () => {
       });
     });
 
-    it("derives agentId from an explicit cross-agent sessionKey instead of the caller's agentId", async () => {
-      // A caller in agent-123 explicitly waking an agent-456 session must
-      // NOT have agent-123's agentId paired with agent-456's sessionKey —
-      // that would canonicalize back to agent-123's main lane on the
-      // gateway side.
+    it("rejects an explicit cross-agent sessionKey", async () => {
       const tool = createTestCronTool({
         agentSessionKey: "agent:agent-123:telegram:direct:channing",
       });
-      await tool.execute("call-wake-cross-agent", {
-        action: "wake",
-        text: "follow up",
-        sessionKey: "agent:agent-456:discord:thread-xyz",
+      await expect(
+        tool.execute("call-wake-cross-agent", {
+          action: "wake",
+          text: "follow up",
+          sessionKey: "agent:agent-456:discord:thread-xyz",
+        }),
+      ).rejects.toThrow("cron sessionKey must match the calling agent");
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects an explicit cross-agent agentId", async () => {
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
       });
-      const params = expectSingleGatewayCallMethod("wake");
-      expect(params).toEqual({
-        mode: "next-heartbeat",
-        text: "follow up",
-        sessionKey: "agent:agent-456:discord:thread-xyz",
-        agentId: "agent-456",
-      });
+      await expect(
+        tool.execute("call-wake-cross-agent-id", {
+          action: "wake",
+          text: "follow up",
+          agentId: "agent-456",
+        }),
+      ).rejects.toThrow("wake agentId must match the calling agent");
+      expect(callGatewayMock).not.toHaveBeenCalled();
     });
 
     it("rejects a contradictory explicit agentId + agent-prefixed sessionKey pair", async () => {
       // The gateway target resolver treats agentId as authoritative, so a
       // contradictory pair would silently canonicalize the wake onto a session
       // the caller never named. The tool rejects instead of guessing.
-      const tool = createTestCronTool({
-        agentSessionKey: "agent:agent-123:telegram:direct:channing",
-      });
+      const tool = createTestCronTool();
       await expect(
         tool.execute("call-wake-explicit-pair", {
           action: "wake",
@@ -595,29 +599,26 @@ describe("cron tool", () => {
       expect(callGatewayMock).not.toHaveBeenCalled();
     });
 
-    it("accepts an explicit agentId that matches the agent owning the explicit sessionKey", async () => {
+    it("accepts a different session owned by the calling agent", async () => {
       const tool = createTestCronTool({
         agentSessionKey: "agent:agent-123:telegram:direct:channing",
       });
       await tool.execute("call-wake-matching-pair", {
         action: "wake",
         text: "manual",
-        sessionKey: "agent:agent-456:discord:thread-xyz",
-        agentId: "agent-456",
+        sessionKey: "agent:agent-123:discord:thread-xyz",
+        agentId: "agent-123",
       });
       const params = expectSingleGatewayCallMethod("wake");
       expect(params).toEqual({
         mode: "next-heartbeat",
         text: "manual",
-        sessionKey: "agent:agent-456:discord:thread-xyz",
-        agentId: "agent-456",
+        sessionKey: "agent:agent-123:discord:thread-xyz",
+        agentId: "agent-123",
       });
     });
 
-    it("omits agentId when explicit sessionKey is not in agent:<id>:* form and no explicit agentId is given", async () => {
-      // Defence-in-depth: if the explicit sessionKey can't be parsed for an
-      // agentId, we'd rather omit it (gateway falls back to default routing
-      // for that session) than incorrectly attach the caller's agentId.
+    it("binds an unparseable explicit sessionKey to the calling agent", async () => {
       const tool = createTestCronTool({
         agentSessionKey: "agent:agent-123:telegram:direct:channing",
       });
@@ -631,9 +632,7 @@ describe("cron tool", () => {
         mode: "next-heartbeat",
         text: "x",
         sessionKey: "subagent:weird:format",
-        // No agentId — explicit sessionKey wasn't parseable + no explicit
-        // override, so we deliberately drop agentId rather than inherit
-        // the caller's.
+        agentId: "agent-123",
       });
     });
 
@@ -846,6 +845,65 @@ describe("cron tool", () => {
     });
   });
 
+  it("preserves omitted declaration enablement and forwards explicit enablement", async () => {
+    const tool = createTestCronTool();
+    const baseJob = {
+      name: "wake-up",
+      declarationKey: "daily-wake",
+      schedule: { at: new Date(123).toISOString() },
+      payload: { kind: "systemEvent" as const, text: "hello" },
+    };
+
+    await tool.execute("call-declaration-default", { action: "add", job: baseJob });
+    expect(readGatewayCall(0).params).not.toHaveProperty("enabled");
+
+    await tool.execute("call-declaration-disabled", {
+      action: "add",
+      job: { ...baseJob, enabled: false },
+    });
+    expect(readGatewayCall(1).params).toMatchObject({ enabled: false });
+  });
+
+  it("rejects blank declaration keys before create normalization", async () => {
+    const tool = createTestCronTool();
+    await expect(
+      tool.execute("call-blank-declaration", {
+        action: "add",
+        job: {
+          name: "wake-up",
+          declarationKey: "   ",
+          schedule: { at: new Date(123).toISOString() },
+          payload: { kind: "systemEvent", text: "hello" },
+        },
+      }),
+    ).rejects.toThrow("declarationKey must be a non-empty string");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects blank display names before create and patch normalization", async () => {
+    const tool = createTestCronTool();
+    await expect(
+      tool.execute("call-blank-display-add", {
+        action: "add",
+        job: {
+          name: "wake-up",
+          declarationKey: "daily",
+          displayName: "   ",
+          schedule: { at: new Date(123).toISOString() },
+          payload: { kind: "systemEvent", text: "hello" },
+        },
+      }),
+    ).rejects.toThrow("displayName must be a non-empty string");
+    await expect(
+      tool.execute("call-blank-display-update", {
+        action: "update",
+        jobId: "daily",
+        patch: { displayName: "   " },
+      }),
+    ).rejects.toThrow("displayName must be a non-empty string or null");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("rejects null agentId on add from the scoped agent cron tool", async () => {
     const tool = createTestCronTool({ agentSessionKey: "main" });
     await expect(
@@ -988,7 +1046,10 @@ describe("cron tool", () => {
     expect(params?.failureAlert).toBe(false);
   });
 
-  it("rejects command payloads from the agent cron tool on add", async () => {
+  it.each([
+    ["canonical", "command"],
+    ["mixed-case", "Command"],
+  ])("rejects %s command payloads from the agent cron tool on add", async (_case, kind) => {
     const tool = createTestCronTool();
 
     await expect(
@@ -998,10 +1059,26 @@ describe("cron tool", () => {
           name: "command",
           schedule: { at: new Date(123).toISOString() },
           sessionTarget: "isolated",
-          payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+          payload: { kind, argv: ["sh", "-lc", "echo ok"] },
         },
       }),
     ).rejects.toThrow("cron command payloads cannot be created or edited");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects on-exit schedules from the agent cron tool on add", async () => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-on-exit-add", {
+        action: "add",
+        job: {
+          name: "watch command",
+          schedule: { kind: "on-exit", command: "make" },
+          payload: { kind: "agentTurn", message: "done" },
+        },
+      }),
+    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -1999,7 +2076,10 @@ describe("cron tool", () => {
     expect(params?.patch?.failureAlert).toBe(false);
   });
 
-  it("rejects command payloads from the agent cron tool on update", async () => {
+  it.each([
+    ["canonical", "command"],
+    ["mixed-case", "Command"],
+  ])("rejects %s command payloads from the agent cron tool on update", async (_case, kind) => {
     const tool = createTestCronTool();
 
     await expect(
@@ -2007,10 +2087,25 @@ describe("cron tool", () => {
         action: "update",
         id: "job-4",
         patch: {
-          payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+          payload: { kind, argv: ["sh", "-lc", "echo ok"] },
         },
       }),
     ).rejects.toThrow("cron command payloads cannot be created or edited");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects on-exit schedules from the agent cron tool on update", async () => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-on-exit-update", {
+        action: "update",
+        id: "job-4",
+        patch: {
+          schedule: { kind: "on-exit", command: "make" },
+        },
+      }),
+    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 

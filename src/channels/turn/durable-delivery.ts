@@ -207,6 +207,7 @@ export async function deliverInboundReplyWithMessageSendContext(
     mediaAccess: params.mediaAccess,
     silent: params.silent,
     durability,
+    ...(durability === "required" ? { requireUnknownSendReconciliation: true } : {}),
     session,
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
   });
@@ -233,6 +234,3 @@ export async function deliverInboundReplyWithMessageSendContext(
   }
   return { status: "handled_visible", delivery };
 }
-
-/** @deprecated Use `deliverInboundReplyWithMessageSendContext`. */
-export const deliverDurableInboundReplyPayload = deliverInboundReplyWithMessageSendContext;

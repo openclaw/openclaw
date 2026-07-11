@@ -3,21 +3,13 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveAnyEnabledFeishuToolsConfig, resolveFeishuToolAccount } from "./tool-account.js";
 import { resolveToolsConfig } from "./tools-config.js";
-
-// ============ Helpers ============
-
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
-}
 
 type LarkResponse<T = unknown> = { code?: number; msg?: string; data?: T };
 type BitableRecordCreatePayload = NonNullable<
@@ -31,7 +23,7 @@ type BitableRecordUpdateFields = NonNullable<
   NonNullable<BitableRecordUpdatePayload["data"]>["fields"]
 >;
 
-export class LarkApiError extends Error {
+class LarkApiError extends Error {
   readonly code: number;
   readonly api: string;
   readonly context?: Record<string, unknown>;
@@ -525,12 +517,18 @@ const GetRecordSchema = Type.Object({
   record_id: Type.String({ description: "Record ID to retrieve" }),
 });
 
+// TypeBox emits an empty schema for Any/Unknown, which Bedrock-backed validators
+// can reject inside patternProperties. Keep the existing any-JSON-value contract explicit.
+const BitableFieldValueSchema = Type.Unsafe<unknown>({
+  type: ["string", "number", "boolean", "object", "array", "null"],
+});
+
 const CreateRecordSchema = Type.Object({
   app_token: Type.String({
     description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
-  fields: Type.Record(Type.String(), Type.Any(), {
+  fields: Type.Record(Type.String(), BitableFieldValueSchema, {
     description:
       "Field values keyed by field name. Format by type: Text='string', Number=123, SingleSelect='Option', MultiSelect=['A','B'], DateTime=timestamp_ms, User=[{id:'ou_xxx'}], URL={text:'Display',link:'https://...'}",
   }),
@@ -560,7 +558,7 @@ const CreateFieldSchema = Type.Object({
     minimum: 1,
   }),
   property: Type.Optional(
-    Type.Record(Type.String(), Type.Any(), {
+    Type.Record(Type.String(), BitableFieldValueSchema, {
       description: "Field-specific properties (e.g., options for SingleSelect, format for Number)",
     }),
   ),
@@ -572,7 +570,7 @@ const UpdateRecordSchema = Type.Object({
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
   record_id: Type.String({ description: "Record ID to update" }),
-  fields: Type.Record(Type.String(), Type.Any(), {
+  fields: Type.Record(Type.String(), BitableFieldValueSchema, {
     description: "Field values to update (same format as create_record)",
   }),
 });

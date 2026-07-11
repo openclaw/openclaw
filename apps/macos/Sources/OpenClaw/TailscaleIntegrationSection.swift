@@ -381,7 +381,7 @@ struct TailscaleIntegrationSection: View {
 
     private func restartGatewayIfNeeded() {
         guard self.connectionMode == .local, !self.isPaused else { return }
-        Task { await GatewayLaunchAgentManager.kickstart() }
+        Task { _ = await GatewayLaunchAgentManager.kickstart() }
     }
 
     private func currentSettingsSnapshot() -> GatewayTailscaleSettingsSnapshot {
@@ -512,9 +512,7 @@ struct TailscaleIntegrationSection: View {
 
     private func startStatusTimer() {
         self.stopStatusTimer()
-        if ProcessInfo.processInfo.isRunningTests {
-            return
-        }
+        if ProcessInfo.processInfo.isRunningTests { return }
         self.statusTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
             Task { await self.effectiveService.checkTailscaleStatus() }
         }
