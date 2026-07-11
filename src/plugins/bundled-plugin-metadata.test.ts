@@ -579,9 +579,7 @@ describe("bundled plugin metadata", () => {
   });
 
   it("scopes Codex CLI activation to the codex command", () => {
-    const entry = listRepoBundledPluginManifests().find(
-      ({ manifest }) => manifest.id === "codex",
-    );
+    const entry = listRepoBundledPluginManifests().find(({ manifest }) => manifest.id === "codex");
 
     expect(entry?.manifest.activation?.onCommands).toStrictEqual(["codex"]);
   });

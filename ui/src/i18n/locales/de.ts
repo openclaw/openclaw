@@ -894,8 +894,8 @@ export const de: TranslationMap = {
   codexSessions: {
     eyebrow: "Codex-Flotte",
     title: "Sitzungen auf allen deinen Computern",
-    subtitle:
-      "Eine schreibgeschützte Ansicht der Codex-Sitzungen auf diesem Gateway und allen verbundenen Computern, die sie freigeben.",
+    interactiveSubtitle:
+      "Starten Sie einen Chat-Branch, dessen Modell und Anbieter vom Codex App Server ausgewählt und in OpenClaw gesperrt werden, archivieren Sie lokale Sitzungen nach Bestätigung und sehen Sie sich Sitzungen gekoppelter Computer an.",
     summaryLabel: "Zusammenfassung der Codex-Sitzungen",
     summary: {
       sessions: "Sitzungen",
@@ -904,11 +904,6 @@ export const de: TranslationMap = {
     },
     searchLabel: "Codex-Sitzungen durchsuchen",
     searchPlaceholder: "Sitzungstitel durchsuchen",
-    scopeLabel: "Archivfilter für Sitzungen",
-    scope: {
-      active: "Aktiv",
-      archived: "Archiviert",
-    },
     refresh: "Aktualisieren",
     disconnected: "Verbinde dich erneut mit dem Gateway, um die Codex-Sitzungen zu aktualisieren.",
     partial: "Nicht verfügbare Hosts: {count}. Andere Hosts bleiben verfügbar.",
@@ -917,11 +912,36 @@ export const de: TranslationMap = {
     loadingMore: "Wird geladen…",
     untitled: "Unbenannte Codex-Sitzung",
     threadId: "Thread",
+    actions: {
+      continue: "Fortfahren",
+      continueAsBranch: "Als Branch fortfahren",
+      openChat: "Chat öffnen",
+      continuing: "Wird fortgesetzt…",
+      archive: "Archivieren",
+      continueLabel: "{title} fortsetzen",
+      continueAsBranchLabel: "{title} als Branch fortsetzen",
+      openChatLabel: "Chat für {title} öffnen",
+      continueAsBranchHint:
+        "Erstellen Sie einen Chat aus dem dauerhaft gespeicherten sichtbaren Verlauf. Bei Ihrer ersten Nachricht wählt der Codex App Server das Modell und den Anbieter aus, und OpenClaw sperrt dieses Paar für den neuen Harness-Thread; die Quelle bleibt unverändert, und laufende Arbeiten sind möglicherweise nicht enthalten.",
+      archiveLabel: "{title} archivieren",
+      archiveConfirmation:
+        "{title} archivieren? Codex Desktop und Codex CLI dürfen diese Sitzung nicht verwenden. Das Archivieren, während ein anderer Runner aktiv ist, kann dessen Arbeit unterbrechen.",
+      active: "Aktive Sitzungen können keinen Branch starten und nicht archiviert werden.",
+      archiveActivityUnknownHint:
+        "Die Aktivität ist unbekannt. Schließen Sie Codex Desktop und Codex CLI und archivieren Sie erst, nachdem Sie bestätigt haben, dass kein anderer Runner diese Sitzung verwendet.",
+      statusUnavailable:
+        "Diese Codex-Sitzung kann in ihrem aktuellen Zustand nicht verwaltet werden.",
+      hostOffline:
+        "Verbinden Sie diesen Computer erneut, bevor Sie seine Codex-Sitzungen verwalten.",
+      gatewayOffline:
+        "Stellen Sie erneut eine Verbindung zum Gateway her, bevor Sie Codex-Sitzungen verwalten.",
+      remoteReadOnly: "Sitzungen gekoppelter Computer können vorerst nur angezeigt werden.",
+    },
     status: {
       active: "Aktiv",
       idle: "Inaktiv",
       archived: "Archiviert",
-      notLoaded: "Gespeichert",
+      storedActivityUnknown: "Gespeichert / Aktivität unbekannt",
       systemError: "Systemfehler",
       unknown: "Unbekannt",
     },
@@ -939,7 +959,6 @@ export const de: TranslationMap = {
         "Aktiviere die Freigabe von Codex-Sitzungen auf dem Gateway oder einem gekoppelten Computer und aktualisiere dann diese Ansicht.",
       search: "Keine Sitzungen auf diesem Host entsprechen deiner Suche.",
       active: "Keine aktiven Sitzungen auf diesem Host.",
-      archived: "Keine archivierten Sitzungen auf diesem Host.",
     },
   },
   logbook: {
@@ -2039,6 +2058,11 @@ export const de: TranslationMap = {
       clearSessionSearch: "Sitzungssuche löschen",
       loadMoreSessions: "Weitere Sitzungen laden",
       model: "Chat model",
+      modelSection: "Modell",
+      modelLocked: "Gesperrt",
+      modelLockedLabel: "Modell für diese Sitzung gesperrt",
+      lockedSessionModel: "Sitzungsmodell",
+      nativeCodexModel: "Von Codex gesteuertes Modell",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

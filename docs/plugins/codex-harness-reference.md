@@ -72,11 +72,11 @@ opted-in paired nodes. Enable it independently from the agent harness:
 
 `supervision` fields:
 
-| Field                 | Default                 | Meaning                                                                                                                                                                                                                             |
-| --------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`             | `false`                 | Advertise the local session catalog and, on the Gateway, aggregate opted-in paired-node catalogs for the Codex Sessions page.                                                                                                       |
-| `endpoints`           | built-in local endpoint | Compatibility and advanced endpoint targets for the retained Codex supervision agent and standalone MCP tools. The human catalog and branch flow ignore these targets and use the supervision App Server resolved from `appServer`. |
-| `allowRawTranscripts` | `false`                 | With supervision enabled, allow autonomous agent or standalone MCP transcript reads and transcript-derived list fields. `codex_threads` metadata-only reads remain available. Does not control authenticated Control UI continuation. |
+| Field                 | Default                 | Meaning                                                                                                                                                                                                                                   |
+| --------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`             | `false`                 | Advertise the local session catalog and, on the Gateway, aggregate opted-in paired-node catalogs for the Codex Sessions page.                                                                                                             |
+| `endpoints`           | built-in local endpoint | Compatibility and advanced endpoint targets for the retained Codex supervision agent and standalone MCP tools. The human catalog and branch flow ignore these targets and use the supervision App Server resolved from `appServer`.       |
+| `allowRawTranscripts` | `false`                 | With supervision enabled, allow autonomous agent or standalone MCP transcript reads and transcript-derived list fields. `codex_threads` metadata-only reads remain available. Does not control authenticated Control UI continuation.     |
 | `allowWriteControls`  | `false`                 | With supervision enabled, allow autonomous `codex_threads` fork, rename, archive, and unarchive mutations plus standalone MCP send, steer, and interrupt operations. Does not bypass other binding, host, status, or confirmation checks. |
 
 Endpoint entries accept these fields:

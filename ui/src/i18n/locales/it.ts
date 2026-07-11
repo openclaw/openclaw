@@ -892,8 +892,8 @@ export const it: TranslationMap = {
   codexSessions: {
     eyebrow: "Flotta Codex",
     title: "Sessioni su tutti i tuoi computer",
-    subtitle:
-      "Una vista di sola lettura delle sessioni Codex su questo Gateway e su ogni computer connesso che le condivide.",
+    interactiveSubtitle:
+      "Avvia un ramo Chat il cui modello e provider sono selezionati da Codex App Server e bloccati in OpenClaw, archivia le sessioni locali con conferma e visualizza le sessioni del computer associato.",
     summaryLabel: "Riepilogo delle sessioni Codex",
     summary: {
       sessions: "sessioni",
@@ -902,11 +902,6 @@ export const it: TranslationMap = {
     },
     searchLabel: "Cerca sessioni Codex",
     searchPlaceholder: "Cerca nei titoli delle sessioni",
-    scopeLabel: "Filtro di archiviazione delle sessioni",
-    scope: {
-      active: "Attive",
-      archived: "Archiviate",
-    },
     refresh: "Aggiorna",
     disconnected: "Riconnettiti al Gateway per aggiornare le sessioni Codex.",
     partial: "Host non disponibili: {count}. Gli altri host restano disponibili.",
@@ -915,11 +910,33 @@ export const it: TranslationMap = {
     loadingMore: "Caricamento…",
     untitled: "Sessione Codex senza titolo",
     threadId: "Thread",
+    actions: {
+      continue: "Continua",
+      continueAsBranch: "Continua come ramo",
+      openChat: "Apri Chat",
+      continuing: "Continuazione…",
+      archive: "Archivia",
+      continueLabel: "Continua {title}",
+      continueAsBranchLabel: "Continua {title} come ramo",
+      openChatLabel: "Apri Chat per {title}",
+      continueAsBranchHint:
+        "Crea una Chat dalla cronologia visibile salvata. Al tuo primo messaggio, Codex App Server seleziona il modello e il provider, e OpenClaw blocca quella coppia per il nuovo thread dell'harness; la sorgente rimane invariata e il lavoro in corso potrebbe essere assente.",
+      archiveLabel: "Archivia {title}",
+      archiveConfirmation:
+        "Archiviare {title}? Codex Desktop e Codex CLI non devono usare questa sessione. L'archiviazione mentre è attivo un altro runner potrebbe interromperne il lavoro.",
+      active: "Le sessioni attive non possono avviare un ramo né essere archiviate.",
+      archiveActivityUnknownHint:
+        "L'attività è sconosciuta. Chiudi Codex Desktop e Codex CLI, quindi archivia solo dopo aver confermato che nessun altro runner sta usando questa sessione.",
+      statusUnavailable: "Questa sessione Codex non può essere gestita nel suo stato attuale.",
+      hostOffline: "Riconnetti questo computer prima di gestirne le sessioni Codex.",
+      gatewayOffline: "Riconnettiti al gateway prima di gestire le sessioni Codex.",
+      remoteReadOnly: "Le sessioni del computer associato sono per ora di sola visualizzazione.",
+    },
     status: {
       active: "Attiva",
       idle: "Inattiva",
       archived: "Archiviata",
-      notLoaded: "Memorizzata",
+      storedActivityUnknown: "Salvata / attività sconosciuta",
       systemError: "Errore di sistema",
       unknown: "Sconosciuto",
     },
@@ -937,7 +954,6 @@ export const it: TranslationMap = {
         "Abilita la condivisione delle sessioni Codex sul Gateway o su un computer associato, quindi aggiorna questa vista.",
       search: "Nessuna sessione su questo host corrisponde alla ricerca.",
       active: "Nessuna sessione attiva su questo host.",
-      archived: "Nessuna sessione archiviata su questo host.",
     },
   },
   logbook: {
@@ -2037,6 +2053,11 @@ export const it: TranslationMap = {
       clearSessionSearch: "Cancella ricerca sessioni",
       loadMoreSessions: "Carica altre sessioni",
       model: "Chat model",
+      modelSection: "Modello",
+      modelLocked: "Bloccato",
+      modelLockedLabel: "Modello bloccato per questa sessione",
+      lockedSessionModel: "Modello della sessione",
+      nativeCodexModel: "Modello controllato da Codex",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

@@ -1211,7 +1211,9 @@ export async function createSessionEntryWithTranscript<TError = string>(
       {
         activeSessionKey: options.activeSessionKey,
         requireWriteSuccess: options.requireWriteSuccess,
-        skipSaveWhenResult: (result) => !result.ok,
+        // Entry rejection is side-effect free; transcript failure deletes the target row
+        // and must persist that rollback instead of restoring the writer snapshot.
+        skipSaveWhenResult: (result) => !result.ok && result.phase === "entry",
       },
     );
   } catch (error) {

@@ -873,7 +873,8 @@ export const th: TranslationMap = {
   codexSessions: {
     eyebrow: "กลุ่มเครื่อง Codex",
     title: "เซสชันบนคอมพิวเตอร์ของคุณ",
-    subtitle: "มุมมองแบบอ่านอย่างเดียวของเซสชัน Codex บน Gateway นี้และคอมพิวเตอร์ที่เชื่อมต่อทุกเครื่องซึ่งแชร์เซสชัน",
+    interactiveSubtitle:
+      "เริ่มสาขา Chat ที่โมเดลและผู้ให้บริการถูกเลือกโดย Codex App Server และล็อกไว้ใน OpenClaw, เก็บถาวรเซสชันในเครื่องพร้อมการยืนยัน และดูเซสชันของคอมพิวเตอร์ที่จับคู่ไว้",
     summaryLabel: "สรุปเซสชัน Codex",
     summary: {
       sessions: "เซสชัน",
@@ -882,11 +883,6 @@ export const th: TranslationMap = {
     },
     searchLabel: "ค้นหาเซสชัน Codex",
     searchPlaceholder: "ค้นหาชื่อเซสชัน",
-    scopeLabel: "ตัวกรองคลังเซสชัน",
-    scope: {
-      active: "ใช้งานอยู่",
-      archived: "เก็บถาวรแล้ว",
-    },
     refresh: "รีเฟรช",
     disconnected: "เชื่อมต่อ Gateway ใหม่เพื่อรีเฟรชเซสชัน Codex",
     partial: "มีโฮสต์ที่ไม่พร้อมใช้งาน {count} โฮสต์ ส่วนโฮสต์อื่นยังคงพร้อมใช้งาน",
@@ -895,11 +891,33 @@ export const th: TranslationMap = {
     loadingMore: "กำลังโหลด…",
     untitled: "เซสชัน Codex ที่ไม่มีชื่อ",
     threadId: "เธรด",
+    actions: {
+      continue: "ดำเนินการต่อ",
+      continueAsBranch: "ดำเนินการต่อเป็นสาขา",
+      openChat: "เปิด Chat",
+      continuing: "กำลังดำเนินการต่อ…",
+      archive: "เก็บถาวร",
+      continueLabel: "ดำเนินการต่อ {title}",
+      continueAsBranchLabel: "ดำเนินการต่อ {title} เป็นสาขา",
+      openChatLabel: "เปิด Chat สำหรับ {title}",
+      continueAsBranchHint:
+        "สร้าง Chat จากประวัติที่มองเห็นซึ่งบันทึกไว้ เมื่อคุณส่งข้อความแรก Codex App Server จะเลือกโมเดลและผู้ให้บริการ และ OpenClaw จะล็อกคู่นั้นสำหรับเธรด harness ใหม่ แหล่งที่มาจะไม่ถูกแตะต้อง และงานที่กำลังดำเนินอยู่บางส่วนอาจไม่ปรากฏ",
+      archiveLabel: "เก็บถาวร {title}",
+      archiveConfirmation:
+        "เก็บถาวร {title}? Codex Desktop และ Codex CLI ต้องไม่ได้กำลังใช้เซสชันนี้ การเก็บถาวรขณะที่ runner อื่นยังทำงานอยู่อาจขัดจังหวะงานของ runner นั้น",
+      active: "เซสชันที่ใช้งานอยู่ไม่สามารถเริ่มสาขาหรือถูกเก็บถาวรได้",
+      archiveActivityUnknownHint:
+        "ไม่ทราบกิจกรรม ปิด Codex Desktop และ Codex CLI แล้วเก็บถาวรเฉพาะหลังจากยืนยันว่าไม่มี runner อื่นกำลังใช้เซสชันนี้",
+      statusUnavailable: "ไม่สามารถจัดการเซสชัน Codex นี้ได้ในสถานะปัจจุบัน",
+      hostOffline: "เชื่อมต่อคอมพิวเตอร์เครื่องนี้อีกครั้งก่อนจัดการเซสชัน Codex ของเครื่องนี้",
+      gatewayOffline: "เชื่อมต่อกับ gateway อีกครั้งก่อนจัดการเซสชัน Codex",
+      remoteReadOnly: "เซสชันของคอมพิวเตอร์ที่จับคู่ไว้เป็นแบบดูอย่างเดียวในขณะนี้",
+    },
     status: {
       active: "ใช้งานอยู่",
       idle: "ไม่ได้ใช้งาน",
       archived: "เก็บถาวรแล้ว",
-      notLoaded: "จัดเก็บแล้ว",
+      storedActivityUnknown: "จัดเก็บไว้ / ไม่ทราบกิจกรรม",
       systemError: "ข้อผิดพลาดของระบบ",
       unknown: "ไม่ทราบ",
     },
@@ -916,7 +934,6 @@ export const th: TranslationMap = {
       subtitle: "เปิดใช้การแชร์เซสชัน Codex บน Gateway หรือคอมพิวเตอร์ที่จับคู่ไว้ แล้วรีเฟรชมุมมองนี้",
       search: "ไม่มีเซสชันบนโฮสต์นี้ตรงกับการค้นหาของคุณ",
       active: "ไม่มีเซสชันที่ใช้งานอยู่บนโฮสต์นี้",
-      archived: "ไม่มีเซสชันที่เก็บถาวรบนโฮสต์นี้",
     },
   },
   logbook: {
@@ -1973,6 +1990,11 @@ export const th: TranslationMap = {
       clearSessionSearch: "ล้างการค้นหาเซสชัน",
       loadMoreSessions: "โหลดเซสชันเพิ่มเติม",
       model: "Chat model",
+      modelSection: "โมเดล",
+      modelLocked: "ล็อกแล้ว",
+      modelLockedLabel: "โมเดลถูกล็อกสำหรับเซสชันนี้",
+      lockedSessionModel: "โมเดลของเซสชัน",
+      nativeCodexModel: "โมเดลที่ควบคุมโดย Codex",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

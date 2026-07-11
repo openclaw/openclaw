@@ -872,7 +872,8 @@ export const zh_TW: TranslationMap = {
   codexSessions: {
     eyebrow: "Codex 裝置群",
     title: "所有電腦上的工作階段",
-    subtitle: "以唯讀方式查看此 Gateway 和所有已連線且啟用工作階段分享的電腦上的 Codex 工作階段。",
+    interactiveSubtitle:
+      "啟動一個 Chat 分支，其模型與提供者由 Codex App Server 選取並在 OpenClaw 中鎖定；以確認方式封存本機工作階段，並檢視已配對電腦的工作階段。",
     summaryLabel: "Codex 工作階段摘要",
     summary: {
       sessions: "工作階段",
@@ -881,11 +882,6 @@ export const zh_TW: TranslationMap = {
     },
     searchLabel: "搜尋 Codex 工作階段",
     searchPlaceholder: "搜尋工作階段標題",
-    scopeLabel: "工作階段封存篩選器",
-    scope: {
-      active: "進行中",
-      archived: "已封存",
-    },
     refresh: "重新整理",
     disconnected: "請重新連線至 Gateway 以重新整理 Codex 工作階段。",
     partial: "有 {count} 台主機無法使用。其他主機仍可使用。",
@@ -894,11 +890,33 @@ export const zh_TW: TranslationMap = {
     loadingMore: "正在載入…",
     untitled: "未命名的 Codex 工作階段",
     threadId: "執行緒",
+    actions: {
+      continue: "繼續",
+      continueAsBranch: "作為分支繼續",
+      openChat: "開啟 Chat",
+      continuing: "正在繼續…",
+      archive: "封存",
+      continueLabel: "繼續 {title}",
+      continueAsBranchLabel: "將 {title} 作為分支繼續",
+      openChatLabel: "開啟 {title} 的 Chat",
+      continueAsBranchHint:
+        "從已保留的可見歷程建立 Chat。在你的第一則訊息中，Codex App Server 會選取模型與提供者，而 OpenClaw 會為新的 harness 執行緒鎖定該組合；來源保持不變，進行中的工作可能不存在。",
+      archiveLabel: "封存 {title}",
+      archiveConfirmation:
+        "要封存 {title} 嗎？Codex Desktop 和 Codex CLI 不得正在使用此工作階段。若在其他 runner 作用中時封存，可能會中斷其工作。",
+      active: "作用中的工作階段無法啟動分支或封存。",
+      archiveActivityUnknownHint:
+        "活動狀態不明。請關閉 Codex Desktop 和 Codex CLI，並僅在確認沒有其他 runner 正在使用此工作階段後再封存。",
+      statusUnavailable: "此 Codex 工作階段目前狀態無法管理。",
+      hostOffline: "請重新連線此電腦後，再管理其 Codex 工作階段。",
+      gatewayOffline: "請重新連線至 gateway 後，再管理 Codex 工作階段。",
+      remoteReadOnly: "已配對電腦的工作階段目前僅供檢視。",
+    },
     status: {
       active: "進行中",
       idle: "閒置",
       archived: "已封存",
-      notLoaded: "已儲存",
+      storedActivityUnknown: "已儲存 / 活動狀態不明",
       systemError: "系統錯誤",
       unknown: "未知",
     },
@@ -915,7 +933,6 @@ export const zh_TW: TranslationMap = {
       subtitle: "請在 Gateway 或已配對的電腦上啟用 Codex 工作階段分享，然後重新整理此檢視。",
       search: "此主機上沒有符合搜尋條件的工作階段。",
       active: "此主機上沒有進行中的工作階段。",
-      archived: "此主機上沒有已封存的工作階段。",
     },
   },
   logbook: {
@@ -1968,6 +1985,11 @@ export const zh_TW: TranslationMap = {
       clearSessionSearch: "清除工作階段搜尋",
       loadMoreSessions: "載入更多工作階段",
       model: "Chat model",
+      modelSection: "模型",
+      modelLocked: "已鎖定",
+      modelLockedLabel: "此工作階段的模型已鎖定",
+      lockedSessionModel: "工作階段模型",
+      nativeCodexModel: "Codex 控制的模型",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

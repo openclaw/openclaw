@@ -883,8 +883,8 @@ export const ko: TranslationMap = {
   codexSessions: {
     eyebrow: "Codex 호스트",
     title: "내 모든 컴퓨터의 세션",
-    subtitle:
-      "이 Gateway와 세션 공유를 활성화한 모든 연결된 컴퓨터의 Codex 세션을 읽기 전용으로 표시합니다.",
+    interactiveSubtitle:
+      "모델과 제공자가 Codex App Server에서 선택되고 OpenClaw에 잠기는 Chat 브랜치를 시작하고, 확인 후 로컬 세션을 보관하며, 페어링된 컴퓨터 세션을 확인하세요.",
     summaryLabel: "Codex 세션 요약",
     summary: {
       sessions: "세션",
@@ -893,11 +893,6 @@ export const ko: TranslationMap = {
     },
     searchLabel: "Codex 세션 검색",
     searchPlaceholder: "세션 제목 검색",
-    scopeLabel: "세션 보관 상태 필터",
-    scope: {
-      active: "활성",
-      archived: "보관됨",
-    },
     refresh: "새로고침",
     disconnected: "Codex 세션을 새로고침하려면 Gateway에 다시 연결하세요.",
     partial: "사용할 수 없는 호스트: {count}개. 다른 호스트는 계속 사용할 수 있습니다.",
@@ -906,11 +901,33 @@ export const ko: TranslationMap = {
     loadingMore: "불러오는 중…",
     untitled: "제목 없는 Codex 세션",
     threadId: "스레드",
+    actions: {
+      continue: "계속",
+      continueAsBranch: "브랜치로 계속",
+      openChat: "Chat 열기",
+      continuing: "계속하는 중…",
+      archive: "보관",
+      continueLabel: "{title} 계속",
+      continueAsBranchLabel: "{title}을(를) 브랜치로 계속",
+      openChatLabel: "{title}의 Chat 열기",
+      continueAsBranchHint:
+        "저장된 표시 기록에서 Chat을 만듭니다. 첫 메시지에서 Codex App Server가 모델과 제공자를 선택하고, OpenClaw가 새 harness 스레드에 해당 쌍을 잠급니다. 원본은 변경되지 않으며, 진행 중인 작업은 없을 수 있습니다.",
+      archiveLabel: "{title} 보관",
+      archiveConfirmation:
+        "{title}을(를) 보관할까요? Codex Desktop 및 Codex CLI가 이 세션을 사용 중이면 안 됩니다. 다른 runner가 활성 상태일 때 보관하면 해당 작업이 중단될 수 있습니다.",
+      active: "활성 세션은 브랜치를 시작하거나 보관할 수 없습니다.",
+      archiveActivityUnknownHint:
+        "활동 상태를 알 수 없습니다. Codex Desktop과 Codex CLI를 닫은 다음, 다른 runner가 이 세션을 사용하지 않는지 확인한 후에만 보관하세요.",
+      statusUnavailable: "현재 상태에서는 이 Codex 세션을 관리할 수 없습니다.",
+      hostOffline: "Codex 세션을 관리하기 전에 이 컴퓨터를 다시 연결하세요.",
+      gatewayOffline: "Codex 세션을 관리하기 전에 gateway에 다시 연결하세요.",
+      remoteReadOnly: "페어링된 컴퓨터 세션은 현재 보기 전용입니다.",
+    },
     status: {
       active: "활성",
       idle: "유휴",
       archived: "보관됨",
-      notLoaded: "저장됨",
+      storedActivityUnknown: "저장됨 / 활동 상태 알 수 없음",
       systemError: "시스템 오류",
       unknown: "알 수 없음",
     },
@@ -928,7 +945,6 @@ export const ko: TranslationMap = {
         "Gateway나 페어링된 컴퓨터에서 Codex 세션 공유를 활성화한 후 이 화면을 새로고침하세요.",
       search: "이 호스트에 검색어와 일치하는 세션이 없습니다.",
       active: "이 호스트에 활성 세션이 없습니다.",
-      archived: "이 호스트에 보관된 세션이 없습니다.",
     },
   },
   logbook: {
@@ -2011,6 +2027,11 @@ export const ko: TranslationMap = {
       clearSessionSearch: "세션 검색 지우기",
       loadMoreSessions: "세션 더 불러오기",
       model: "Chat model",
+      modelSection: "모델",
+      modelLocked: "잠김",
+      modelLockedLabel: "이 세션에서는 모델이 잠겨 있습니다",
+      lockedSessionModel: "세션 모델",
+      nativeCodexModel: "Codex 제어 모델",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

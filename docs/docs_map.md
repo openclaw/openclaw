@@ -5382,6 +5382,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/codex-harness-reference
 - Headings:
   - H2: Plugin config surface
+  - H2: Supervision
   - H2: App-server transport
   - H2: Approval and sandbox modes
   - H2: Sandboxed native execution
@@ -5399,6 +5400,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Overview
   - H2: Thread bindings and model changes
+  - H2: Supervision and safe continuation
   - H2: Visible replies and heartbeats
   - H2: Hook boundaries
   - H2: V1 support contract
@@ -5416,6 +5418,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Requirements
   - H2: Quickstart
   - H2: Share threads with Codex Desktop and CLI
+  - H2: Supervise Codex sessions
   - H2: Configuration
   - H3: Compaction
   - H2: Verify Codex runtime
@@ -5452,6 +5455,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Connected account apps
   - H2: Thread app config
   - H2: Destructive action policy
+  - H2: Troubleshooting
+  - H2: Related
+
+## plugins/codex-supervision.md
+
+- Route: /plugins/codex-supervision
+- Headings:
+  - H2: Before you begin
+  - H2: Enable supervision
+  - H2: Branch from a local session
+  - H2: Archive a local session
+  - H2: Understand paired-node limits
+  - H2: Metadata and permissions
   - H2: Troubleshooting
   - H2: Related
 
@@ -5921,20 +5937,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
-
-## plugins/reference/codex-supervisor.md
-
-- Route: /plugins/reference/codex-supervisor
-- Headings:
-  - H1: Codex Supervisor plugin
-  - H2: Distribution
-  - H2: Surface
-  - H2: Enable the plugin
-  - H2: App Server selection
-  - H2: List sessions from the CLI
-  - H2: Use the Control UI
-  - H2: Metadata and security boundary
-  - H2: Supervisor agent session listing
 
 ## plugins/reference/codex.md
 
@@ -8760,25 +8762,23 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Recommended blocked destinations
   - H2: Limits
 
-## specs/claw-supervisor.md
+## specs/codex-supervision.md
 
-- Route: /specs/claw-supervisor
+- Route: /specs/codex-supervision
 - Headings:
-  - H1: Claw Supervisor
+  - H1: Codex supervision
   - H2: Goal
-  - H2: Product Model
-  - H2: Architecture
-  - H2: Federated Session Catalog
-  - H2: Codex App-Server Contract
-  - H2: Session Registry
-  - H2: MCP Surface For Codex
-  - H2: Claw Control Surface
-  - H2: Launch Flow
-  - H2: Deployment
-  - H2: Security
-  - H2: Implementation Plan
-  - H2: Acceptance Tests
-  - H2: Open Questions
+  - H2: Product boundary
+  - H2: Ownership
+  - H2: Catalog flow
+  - H2: Local continuation
+  - H2: Archive behavior
+  - H2: Active thread safety
+  - H2: Paired-node boundary
+  - H2: Permissions
+  - H2: Compatibility
+  - H2: Future work
+  - H2: Acceptance tests
 
 ## start/bootstrapping.md
 

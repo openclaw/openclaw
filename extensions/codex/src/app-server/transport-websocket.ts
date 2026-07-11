@@ -7,10 +7,7 @@ import net from "node:net";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import WebSocket, { type RawData } from "ws";
-import {
-  resolveCodexAppServerUserHomeDir,
-  type CodexAppServerStartOptions,
-} from "./config.js";
+import { resolveCodexAppServerUserHomeDir, type CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
 /** Opens a WebSocket app-server transport and maps newline-delimited frames to stdout/stdin. */
@@ -117,12 +114,14 @@ export function resolveCodexAppServerUnixSocketPath(
     throw new Error("codex app-server unix transport requires a unix:// URL");
   }
   const configuredPath = url.slice("unix://".length);
-  return configuredPath ||
+  return (
+    configuredPath ||
     path.join(
       resolveCodexAppServerUserHomeDir(options.env ?? process.env),
       "app-server-control",
       "app-server-control.sock",
-    );
+    )
+  );
 }
 
 function websocketFrameToText(data: RawData): string {

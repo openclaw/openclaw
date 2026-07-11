@@ -881,8 +881,8 @@ export const fa: TranslationMap = {
   codexSessions: {
     eyebrow: "ناوگان Codex",
     title: "نشست‌ها در همهٔ رایانه‌های شما",
-    subtitle:
-      "نمایی فقط‌خواندنی از نشست‌های Codex روی این Gateway و همهٔ رایانه‌های متصلی که آن‌ها را به اشتراک می‌گذارند.",
+    interactiveSubtitle:
+      "یک شاخه Chat را شروع کنید که مدل و ارائه‌دهندهٔ آن توسط Codex App Server انتخاب شده و در OpenClaw قفل می‌شود، نشست‌های محلی را با تأیید بایگانی کنید، و نشست‌های رایانهٔ جفت‌شده را مشاهده کنید.",
     summaryLabel: "خلاصهٔ نشست‌های Codex",
     summary: {
       sessions: "نشست‌ها",
@@ -891,11 +891,6 @@ export const fa: TranslationMap = {
     },
     searchLabel: "جست‌وجوی نشست‌های Codex",
     searchPlaceholder: "جست‌وجوی عنوان نشست‌ها",
-    scopeLabel: "فیلتر بایگانی نشست‌ها",
-    scope: {
-      active: "فعال",
-      archived: "بایگانی‌شده",
-    },
     refresh: "تازه‌سازی",
     disconnected: "برای تازه‌سازی نشست‌های Codex دوباره به Gateway متصل شوید.",
     partial: "میزبان‌های غیرقابل‌دسترسی: {count}. سایر میزبان‌ها همچنان در دسترس‌اند.",
@@ -904,11 +899,33 @@ export const fa: TranslationMap = {
     loadingMore: "در حال بارگیری…",
     untitled: "نشست بی‌عنوانِ Codex",
     threadId: "رشته",
+    actions: {
+      continue: "ادامه",
+      continueAsBranch: "ادامه به‌عنوان شاخه",
+      openChat: "باز کردن Chat",
+      continuing: "در حال ادامه…",
+      archive: "بایگانی",
+      continueLabel: "ادامهٔ {title}",
+      continueAsBranchLabel: "ادامهٔ {title} به‌عنوان شاخه",
+      openChatLabel: "باز کردن Chat برای {title}",
+      continueAsBranchHint:
+        "از تاریخچهٔ قابل‌مشاهدهٔ ذخیره‌شده یک Chat ایجاد کنید. در نخستین پیام شما، Codex App Server مدل و ارائه‌دهنده را انتخاب می‌کند، و OpenClaw آن جفت را برای رشتهٔ harness جدید قفل می‌کند؛ منبع دست‌نخورده می‌ماند، و کارهای در حال انجام ممکن است وجود نداشته باشند.",
+      archiveLabel: "بایگانی {title}",
+      archiveConfirmation:
+        "{title} بایگانی شود؟ Codex Desktop و Codex CLI نباید از این نشست استفاده کنند. بایگانی کردن در حالی که runner دیگری فعال است ممکن است کار آن را مختل کند.",
+      active: "نشست‌های فعال نمی‌توانند شاخه‌ای را شروع کنند یا بایگانی شوند.",
+      archiveActivityUnknownHint:
+        "فعالیت نامشخص است. Codex Desktop و Codex CLI را ببندید، سپس فقط پس از تأیید اینکه runner دیگری از این نشست استفاده نمی‌کند، بایگانی کنید.",
+      statusUnavailable: "این نشست Codex در وضعیت فعلی خود قابل مدیریت نیست.",
+      hostOffline: "پیش از مدیریت نشست‌های Codex این رایانه، آن را دوباره متصل کنید.",
+      gatewayOffline: "پیش از مدیریت نشست‌های Codex، دوباره به gateway متصل شوید.",
+      remoteReadOnly: "نشست‌های رایانهٔ جفت‌شده فعلاً فقط قابل مشاهده هستند.",
+    },
     status: {
       active: "فعال",
       idle: "بی‌کار",
       archived: "بایگانی‌شده",
-      notLoaded: "ذخیره‌شده",
+      storedActivityUnknown: "ذخیره‌شده / فعالیت نامشخص",
       systemError: "خطای سیستم",
       unknown: "نامشخص",
     },
@@ -926,7 +943,6 @@ export const fa: TranslationMap = {
         "اشتراک‌گذاری نشست‌های Codex را روی Gateway یا یک رایانهٔ جفت‌شده فعال کنید، سپس این نما را تازه‌سازی کنید.",
       search: "هیچ نشستی روی این میزبان با جست‌وجوی شما مطابقت ندارد.",
       active: "هیچ نشست فعالی روی این میزبان وجود ندارد.",
-      archived: "هیچ نشست بایگانی‌شده‌ای روی این میزبان وجود ندارد.",
     },
   },
   logbook: {
@@ -2015,6 +2031,11 @@ export const fa: TranslationMap = {
       clearSessionSearch: "پاک کردن جستجوی نشست",
       loadMoreSessions: "بارگذاری نشست‌های بیشتر",
       model: "Chat model",
+      modelSection: "مدل",
+      modelLocked: "قفل‌شده",
+      modelLockedLabel: "مدل برای این جلسه قفل شده است",
+      lockedSessionModel: "مدل جلسه",
+      nativeCodexModel: "مدل کنترل‌شده توسط Codex",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

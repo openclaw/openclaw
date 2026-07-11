@@ -883,8 +883,8 @@ export const uk: TranslationMap = {
   codexSessions: {
     eyebrow: "Парк Codex",
     title: "Сеанси на всіх ваших комп’ютерах",
-    subtitle:
-      "Сеанси Codex на цьому Gateway й усіх підключених комп’ютерах зі спільним доступом. Лише для читання.",
+    interactiveSubtitle:
+      "Запустіть гілку Chat, модель і постачальника якої вибирає Codex App Server і які фіксуються в OpenClaw, архівуйте локальні сеанси з підтвердженням і переглядайте сеанси спареного комп’ютера.",
     summaryLabel: "Підсумок сеансів Codex",
     summary: {
       sessions: "сеанси",
@@ -893,11 +893,6 @@ export const uk: TranslationMap = {
     },
     searchLabel: "Пошук сеансів Codex",
     searchPlaceholder: "Пошук за назвами сеансів",
-    scopeLabel: "Фільтр архіву сеансів",
-    scope: {
-      active: "Активні",
-      archived: "Заархівовані",
-    },
     refresh: "Оновити",
     disconnected: "Повторно підключіться до Gateway, щоб оновити сеанси Codex.",
     partial: "Недоступних хостів: {count}. Решта хостів доступні.",
@@ -906,11 +901,33 @@ export const uk: TranslationMap = {
     loadingMore: "Завантаження…",
     untitled: "Сеанс Codex без назви",
     threadId: "Гілка",
+    actions: {
+      continue: "Продовжити",
+      continueAsBranch: "Продовжити як гілку",
+      openChat: "Відкрити Chat",
+      continuing: "Продовження…",
+      archive: "Архівувати",
+      continueLabel: "Продовжити {title}",
+      continueAsBranchLabel: "Продовжити {title} як гілку",
+      openChatLabel: "Відкрити Chat для {title}",
+      continueAsBranchHint:
+        "Створіть Chat зі збереженої видимої історії. Під час першого повідомлення Codex App Server вибирає модель і постачальника, а OpenClaw фіксує цю пару для нового потоку harness; джерело залишається незмінним, а поточна робота може бути відсутня.",
+      archiveLabel: "Архівувати {title}",
+      archiveConfirmation:
+        "Архівувати {title}? Codex Desktop і Codex CLI не повинні використовувати цей сеанс. Архівування, коли активний інший runner, може перервати його роботу.",
+      active: "Активні сеанси не можна запускати як гілку або архівувати.",
+      archiveActivityUnknownHint:
+        "Активність невідома. Закрийте Codex Desktop і Codex CLI, а потім архівуйте лише після підтвердження, що жоден інший runner не використовує цей сеанс.",
+      statusUnavailable: "Цим сеансом Codex не можна керувати в його поточному стані.",
+      hostOffline: "Повторно підключіть цей комп’ютер, перш ніж керувати його сеансами Codex.",
+      gatewayOffline: "Повторно підключіться до gateway, перш ніж керувати сеансами Codex.",
+      remoteReadOnly: "Сеанси спареного комп’ютера наразі доступні лише для перегляду.",
+    },
     status: {
       active: "Активний",
       idle: "Неактивний",
       archived: "Заархівований",
-      notLoaded: "Збережений",
+      storedActivityUnknown: "Збережено / активність невідома",
       systemError: "Системна помилка",
       unknown: "Невідомо",
     },
@@ -928,7 +945,6 @@ export const uk: TranslationMap = {
         "Увімкніть спільний доступ до сеансів Codex на Gateway або спареному комп’ютері, а потім оновіть цю сторінку.",
       search: "Жоден сеанс на цьому хості не відповідає пошуку.",
       active: "На цьому хості немає активних сеансів.",
-      archived: "На цьому хості немає архівних сеансів.",
     },
   },
   logbook: {
@@ -2020,6 +2036,11 @@ export const uk: TranslationMap = {
       clearSessionSearch: "Очистити пошук сеансів",
       loadMoreSessions: "Завантажити більше сеансів",
       model: "Chat model",
+      modelSection: "Модель",
+      modelLocked: "Заблоковано",
+      modelLockedLabel: "Модель заблоковано для цього сеансу",
+      lockedSessionModel: "Модель сеансу",
+      nativeCodexModel: "Модель, керована Codex",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

@@ -508,14 +508,13 @@ describe("runCodexAppServerSideQuestion", () => {
       "developerInstructions",
       "ephemeral",
       "model",
-      "personality",
       "sandbox",
       "threadId",
       "threadSource",
     ]);
     expect(forkParams?.threadId).toBe("parent-thread");
     expect(forkParams?.model).toBe("gpt-5.5");
-    expect(forkParams?.personality).toBe("none");
+    expect(forkParams).not.toHaveProperty("personality");
     expect(forkParams?.approvalPolicy).toBe("on-request");
     expect(forkParams?.sandbox).toBe("workspace-write");
     expect(forkParams?.ephemeral).toBe(true);
@@ -674,6 +673,9 @@ describe("runCodexAppServerSideQuestion", () => {
     });
     const turnCall = client.request.mock.calls.find(([method]) => method === "turn/start");
     expect(turnCall?.[1]).toMatchObject({ model: "gpt-5.5" });
+    expect(turnCall?.[1]).not.toHaveProperty("effort");
+    expect(turnCall?.[1]).not.toHaveProperty("collaborationMode");
+    expect(turnCall?.[1]).not.toHaveProperty("personality");
     expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({ modelProvider: "openai", modelId: "gpt-5.5" }),
     );

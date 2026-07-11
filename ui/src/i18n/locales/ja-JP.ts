@@ -889,8 +889,8 @@ export const ja_JP: TranslationMap = {
   codexSessions: {
     eyebrow: "Codex フリート",
     title: "すべてのコンピューター上のセッション",
-    subtitle:
-      "この Gateway と、接続済みでセッション共有を有効にしているすべてのコンピューター上の Codex セッションを読み取り専用で表示します。",
+    interactiveSubtitle:
+      "Codex App Server によってモデルとプロバイダーが選択され、OpenClaw でロックされる Chat ブランチを開始し、確認のうえローカルセッションをアーカイブし、ペアリング済みコンピューターのセッションを表示します。",
     summaryLabel: "Codex セッションの概要",
     summary: {
       sessions: "セッション",
@@ -899,11 +899,6 @@ export const ja_JP: TranslationMap = {
     },
     searchLabel: "Codex セッションを検索",
     searchPlaceholder: "セッションタイトルを検索",
-    scopeLabel: "セッションのアーカイブフィルター",
-    scope: {
-      active: "アクティブ",
-      archived: "アーカイブ済み",
-    },
     refresh: "更新",
     disconnected: "Codex セッションを更新するには、Gateway に再接続してください。",
     partial: "利用できないホストが {count} 台あります。他のホストは引き続き利用できます。",
@@ -912,11 +907,33 @@ export const ja_JP: TranslationMap = {
     loadingMore: "読み込み中…",
     untitled: "無題の Codex セッション",
     threadId: "スレッド",
+    actions: {
+      continue: "続行",
+      continueAsBranch: "ブランチとして続行",
+      openChat: "Chat を開く",
+      continuing: "続行中…",
+      archive: "アーカイブ",
+      continueLabel: "{title} を続行",
+      continueAsBranchLabel: "{title} をブランチとして続行",
+      openChatLabel: "{title} の Chat を開く",
+      continueAsBranchHint:
+        "保存されている表示可能な履歴から Chat を作成します。最初のメッセージで、Codex App Server がモデルとプロバイダーを選択し、OpenClaw がその組み合わせを新しいハーネススレッド用にロックします。ソースは変更されず、進行中の作業は含まれない場合があります。",
+      archiveLabel: "{title} をアーカイブ",
+      archiveConfirmation:
+        "{title} をアーカイブしますか？Codex Desktop と Codex CLI がこのセッションを使用していない必要があります。別のランナーがアクティブな状態でアーカイブすると、その作業が中断される可能性があります。",
+      active: "アクティブなセッションでは、ブランチを開始したりアーカイブしたりできません。",
+      archiveActivityUnknownHint:
+        "アクティビティは不明です。Codex Desktop と Codex CLI を閉じてから、他のランナーがこのセッションを使用していないことを確認した後にのみアーカイブしてください。",
+      statusUnavailable: "この Codex セッションは現在の状態では管理できません。",
+      hostOffline: "Codex セッションを管理する前に、このコンピューターに再接続してください。",
+      gatewayOffline: "Codex セッションを管理する前に、gateway に再接続してください。",
+      remoteReadOnly: "ペアリング済みコンピューターのセッションは、現時点では表示専用です。",
+    },
     status: {
       active: "アクティブ",
       idle: "アイドル",
       archived: "アーカイブ済み",
-      notLoaded: "保存済み",
+      storedActivityUnknown: "保存済み / アクティビティ不明",
       systemError: "システムエラー",
       unknown: "不明",
     },
@@ -934,7 +951,6 @@ export const ja_JP: TranslationMap = {
         "Gateway またはペアリング済みのコンピューターで Codex セッション共有を有効にしてから、このビューを更新してください。",
       search: "このホストに検索条件と一致するセッションはありません。",
       active: "このホストにアクティブなセッションはありません。",
-      archived: "このホストにアーカイブ済みのセッションはありません。",
     },
   },
   logbook: {
@@ -2025,6 +2041,11 @@ export const ja_JP: TranslationMap = {
       clearSessionSearch: "セッション検索をクリア",
       loadMoreSessions: "さらにセッションを読み込む",
       model: "Chat model",
+      modelSection: "モデル",
+      modelLocked: "ロック済み",
+      modelLockedLabel: "このセッションではモデルがロックされています",
+      lockedSessionModel: "セッションモデル",
+      nativeCodexModel: "Codex 制御のモデル",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

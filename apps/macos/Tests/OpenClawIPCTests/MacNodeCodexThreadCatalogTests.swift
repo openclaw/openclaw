@@ -311,7 +311,7 @@ struct MacNodeCodexThreadCatalogTests {
         printf '%s' '"name":"One","preview":"private transcript","cwd":"/work",'
         printf '%s' '"status":{"type":"notLoaded"},"source":{"custom":"chatgpt"},'
         printf '%s' '"path":"/private/rollout.jsonl","turns":[]},{"id":"thread-2",'
-        printf '%s' '"name":"one","preview":"One","cwd":"/other",'
+        printf '%s' '"name":"Two","preview":"One","cwd":"/other",'
         printf '%s\n' '"status":{"type":"notLoaded"}}],"nextCursor":"opaque/+==","backwardsCursor":"back/+=="}}'
         sleep 1
         """#)

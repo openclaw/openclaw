@@ -2613,17 +2613,20 @@ describe("codex command", () => {
   });
 
   it("rejects diagnostics confirmation when private connection scope changes", async () => {
-    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
-    await writeTestBinding(identity, supervisedTestBinding("thread-scope-change"));
+    let binding: CodexAppServerThreadBinding = supervisedTestBinding("thread-scope-change");
+    const readBinding = vi.fn(async () => binding);
     const safeCodexControlRequest = vi.fn();
-    const deps = createDeps({ safeCodexControlRequest });
+    const deps = createDeps({
+      bindingStore: { ...testCodexAppServerBindingStore, read: readBinding },
+      safeCodexControlRequest,
+    });
     const pluginConfig = { supervision: { enabled: true } };
     const request = await handleCodexCommand(createContext("diagnostics"), {
       deps,
       pluginConfig,
     });
     const token = readDiagnosticsConfirmationToken(request);
-    await writeTestBinding(identity, { threadId: "thread-scope-change", cwd: "/repo" });
+    binding = { threadId: "thread-scope-change", cwd: "/repo" };
 
     await expect(
       handleCodexCommand(createContext(`diagnostics confirm ${token}`), {

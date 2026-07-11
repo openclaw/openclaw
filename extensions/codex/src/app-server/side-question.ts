@@ -608,8 +608,9 @@ export async function runCodexAppServerSideQuestion(
           model: modelSelection.model,
           ...(usesSupervisionConnection ? {} : { personality: CODEX_NATIVE_PERSONALITY_NONE }),
           ...(serviceTier ? { serviceTier } : {}),
-          ...(effort
-            ? {
+          ...(usesSupervisionConnection
+            ? {}
+            : {
                 effort,
                 collaborationMode: {
                   mode: "default" as const,
@@ -619,8 +620,7 @@ export async function runCodexAppServerSideQuestion(
                     developer_instructions: null,
                   },
                 },
-              }
-            : {}),
+              }),
         },
         { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
       ),

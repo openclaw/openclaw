@@ -889,8 +889,8 @@ export const nl: TranslationMap = {
   codexSessions: {
     eyebrow: "Codex-vloot",
     title: "Sessies op al je computers",
-    subtitle:
-      "Een alleen-lezen weergave van Codex-sessies op deze Gateway en elke verbonden computer die ze deelt.",
+    interactiveSubtitle:
+      "Start een Chat-branch waarvan het model en de provider worden geselecteerd door Codex App Server en vastgezet in OpenClaw, archiveer lokale sessies met bevestiging en bekijk sessies van gekoppelde computers.",
     summaryLabel: "Overzicht van Codex-sessies",
     summary: {
       sessions: "sessies",
@@ -899,11 +899,6 @@ export const nl: TranslationMap = {
     },
     searchLabel: "Codex-sessies zoeken",
     searchPlaceholder: "Sessietitels zoeken",
-    scopeLabel: "Archieffilter voor sessies",
-    scope: {
-      active: "Actief",
-      archived: "Gearchiveerd",
-    },
     refresh: "Vernieuwen",
     disconnected: "Maak opnieuw verbinding met de Gateway om Codex-sessies te vernieuwen.",
     partial: "Onbeschikbare hosts: {count}. Andere hosts blijven beschikbaar.",
@@ -912,11 +907,33 @@ export const nl: TranslationMap = {
     loadingMore: "Laden…",
     untitled: "Codex-sessie zonder titel",
     threadId: "Thread",
+    actions: {
+      continue: "Doorgaan",
+      continueAsBranch: "Doorgaan als branch",
+      openChat: "Chat openen",
+      continuing: "Bezig met doorgaan…",
+      archive: "Archiveren",
+      continueLabel: "Doorgaan met {title}",
+      continueAsBranchLabel: "Doorgaan met {title} als branch",
+      openChatLabel: "Chat openen voor {title}",
+      continueAsBranchHint:
+        "Maak een Chat aan vanuit opgeslagen zichtbare geschiedenis. Bij je eerste bericht selecteert Codex App Server het model en de provider, en OpenClaw zet dat paar vast voor de nieuwe harness-thread; de bron blijft ongewijzigd en lopend werk kan ontbreken.",
+      archiveLabel: "{title} archiveren",
+      archiveConfirmation:
+        "{title} archiveren? Codex Desktop en Codex CLI mogen deze sessie niet gebruiken. Archiveren terwijl een andere runner actief is, kan het werk ervan onderbreken.",
+      active: "Actieve sessies kunnen geen branch starten en kunnen niet worden gearchiveerd.",
+      archiveActivityUnknownHint:
+        "Activiteit is onbekend. Sluit Codex Desktop en Codex CLI en archiveer pas nadat je hebt bevestigd dat geen andere runner deze sessie gebruikt.",
+      statusUnavailable: "Deze Codex-sessie kan in de huidige status niet worden beheerd.",
+      hostOffline: "Verbind deze computer opnieuw voordat je de Codex-sessies ervan beheert.",
+      gatewayOffline: "Maak opnieuw verbinding met de gateway voordat je Codex-sessies beheert.",
+      remoteReadOnly: "Sessies van gekoppelde computers zijn voorlopig alleen-lezen.",
+    },
     status: {
       active: "Actief",
       idle: "Inactief",
       archived: "Gearchiveerd",
-      notLoaded: "Opgeslagen",
+      storedActivityUnknown: "Opgeslagen / activiteit onbekend",
       systemError: "Systeemfout",
       unknown: "Onbekend",
     },
@@ -934,7 +951,6 @@ export const nl: TranslationMap = {
         "Schakel het delen van Codex-sessies in op de Gateway of een gekoppelde computer en vernieuw daarna deze weergave.",
       search: "Geen sessies op deze host komen overeen met je zoekopdracht.",
       active: "Geen actieve sessies op deze host.",
-      archived: "Geen gearchiveerde sessies op deze host.",
     },
   },
   logbook: {
@@ -2029,6 +2045,11 @@ export const nl: TranslationMap = {
       clearSessionSearch: "Sessiezoekopdracht wissen",
       loadMoreSessions: "Meer sessies laden",
       model: "Chat model",
+      modelSection: "Model",
+      modelLocked: "Vergrendeld",
+      modelLockedLabel: "Model vergrendeld voor deze sessie",
+      lockedSessionModel: "Sessiemodel",
+      nativeCodexModel: "Door Codex beheerd model",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

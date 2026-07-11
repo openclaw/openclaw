@@ -708,8 +708,9 @@ describe("Codex supervision actions", () => {
       preserveNativeModel: true,
       pendingSupervisionBranch: { sourceThreadId: "thread-1", lastTurnId: "turn-failed" },
     });
-    expect(control.readThread).toHaveBeenCalledOnce();
-    expect(control.readThread).toHaveBeenCalledWith("thread-1", true);
+    expect(control.readThread).toHaveBeenCalledTimes(2);
+    expect(control.readThread).toHaveBeenNthCalledWith(1, "thread-1", true);
+    expect(control.readThread).toHaveBeenNthCalledWith(2, "thread-1", false);
     expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
   });
 

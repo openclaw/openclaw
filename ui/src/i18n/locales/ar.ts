@@ -877,7 +877,8 @@ export const ar: TranslationMap = {
   codexSessions: {
     eyebrow: "أسطول Codex",
     title: "الجلسات على جميع أجهزتك",
-    subtitle: "عرض للقراءة فقط لجلسات Codex على بوابة Gateway هذه وعلى كل كمبيوتر متصل يشاركها.",
+    interactiveSubtitle:
+      "ابدأ فرع Chat يتم اختيار نموذجه ومزوّده بواسطة Codex App Server وتثبيتهما في OpenClaw، وأرشف الجلسات المحلية مع التأكيد، واعرض جلسات الكمبيوتر المقترن.",
     summaryLabel: "ملخص جلسات Codex",
     summary: {
       sessions: "الجلسات",
@@ -886,11 +887,6 @@ export const ar: TranslationMap = {
     },
     searchLabel: "البحث في جلسات Codex",
     searchPlaceholder: "البحث في عناوين الجلسات",
-    scopeLabel: "عامل تصفية أرشيف الجلسات",
-    scope: {
-      active: "نشطة",
-      archived: "مؤرشفة",
-    },
     refresh: "تحديث",
     disconnected: "أعد الاتصال بـ Gateway لتحديث جلسات Codex.",
     partial: "عدد المضيفين غير المتاحين: {count}. لا يزال بقية المضيفين متاحين.",
@@ -899,11 +895,33 @@ export const ar: TranslationMap = {
     loadingMore: "جارٍ التحميل…",
     untitled: "جلسة Codex بلا عنوان",
     threadId: "السلسلة",
+    actions: {
+      continue: "متابعة",
+      continueAsBranch: "متابعة كفرع",
+      openChat: "فتح Chat",
+      continuing: "جارٍ المتابعة…",
+      archive: "أرشفة",
+      continueLabel: "متابعة {title}",
+      continueAsBranchLabel: "متابعة {title} كفرع",
+      openChatLabel: "فتح Chat لـ {title}",
+      continueAsBranchHint:
+        "أنشئ Chat من السجل المرئي المحفوظ. عند رسالتك الأولى، يختار Codex App Server النموذج والمزوّد، ويثبّت OpenClaw هذا الزوج لسلسلة harness الجديدة؛ ويظل المصدر دون تغيير، وقد يكون العمل قيد التنفيذ غير موجود.",
+      archiveLabel: "أرشفة {title}",
+      archiveConfirmation:
+        "أرشفة {title}؟ يجب ألا يكون Codex Desktop وCodex CLI يستخدمان هذه الجلسة. قد تؤدي الأرشفة أثناء نشاط مُشغّل آخر إلى مقاطعة عمله.",
+      active: "لا يمكن للجلسات النشطة بدء فرع أو أرشفتها.",
+      archiveActivityUnknownHint:
+        "النشاط غير معروف. أغلق Codex Desktop وCodex CLI، ثم قم بالأرشفة فقط بعد التأكد من عدم استخدام أي مُشغّل آخر لهذه الجلسة.",
+      statusUnavailable: "لا يمكن إدارة جلسة Codex هذه في حالتها الحالية.",
+      hostOffline: "أعِد توصيل هذا الكمبيوتر قبل إدارة جلسات Codex الخاصة به.",
+      gatewayOffline: "أعِد الاتصال بـ gateway قبل إدارة جلسات Codex.",
+      remoteReadOnly: "جلسات الكمبيوتر المقترن للعرض فقط في الوقت الحالي.",
+    },
     status: {
       active: "نشط",
       idle: "خامل",
       archived: "مؤرشف",
-      notLoaded: "مخزّن",
+      storedActivityUnknown: "محفوظ / النشاط غير معروف",
       systemError: "خطأ في النظام",
       unknown: "غير معروف",
     },
@@ -920,7 +938,6 @@ export const ar: TranslationMap = {
       subtitle: "فعّل مشاركة جلسات Codex على Gateway أو كمبيوتر مقترن، ثم حدّث هذا العرض.",
       search: "لا توجد جلسات على هذا المضيف تطابق بحثك.",
       active: "لا توجد جلسات نشطة على هذا المضيف.",
-      archived: "لا توجد جلسات مؤرشفة على هذا المضيف.",
     },
   },
   logbook: {
@@ -1993,6 +2010,11 @@ export const ar: TranslationMap = {
       clearSessionSearch: "مسح البحث في الجلسات",
       loadMoreSessions: "تحميل المزيد من الجلسات",
       model: "Chat model",
+      modelSection: "النموذج",
+      modelLocked: "مقفَل",
+      modelLockedLabel: "النموذج مقفَل لهذه الجلسة",
+      lockedSessionModel: "نموذج الجلسة",
+      nativeCodexModel: "النموذج المتحكَّم به من Codex",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
