@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDraftSessionCreateParams } from "./new-session-dialog.ts";
+import { buildDraftSessionCreateParams } from "./create-params.ts";
 
 describe("buildDraftSessionCreateParams", () => {
   it("keeps plain chats minimal", () => {

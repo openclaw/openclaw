@@ -221,6 +221,7 @@ import {
   ShutdownEventSchema,
   TickEventSchema,
 } from "./frames.js";
+import { FsDirEntrySchema, FsListDirParamsSchema, FsListDirResultSchema } from "./fs.js";
 import {
   GatewaySuspendBlockerSchema,
   GatewaySuspendPrepareBusyResultSchema,
@@ -483,6 +484,9 @@ export const ProtocolSchemas = {
   WorktreeBranch: WorktreeBranchSchema,
   WorktreesBranchesParams: WorktreesBranchesParamsSchema,
   WorktreesBranchesResult: WorktreesBranchesResultSchema,
+  FsDirEntry: FsDirEntrySchema,
+  FsListDirParams: FsListDirParamsSchema,
+  FsListDirResult: FsListDirResultSchema,
 
   // Node pairing, invocation, presence, and pending-queue payloads.
   NodePairListParams: NodePairListParamsSchema,
