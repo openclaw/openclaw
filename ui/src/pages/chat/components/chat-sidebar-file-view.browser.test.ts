@@ -140,7 +140,9 @@ describe.runIf(browserMode)("chat file editor", () => {
 
   it("reloads the latest content after a save conflict", async () => {
     const save = vi.fn().mockResolvedValue({ ok: false, code: "conflict" });
-    const fetchLatest = vi.fn().mockResolvedValue({ content: "latest", hash: "hash-2" });
+    const fetchLatest = vi
+      .fn()
+      .mockResolvedValue({ content: "latest", hash: "hash-2", editable: true });
     const panel = await mountFile({
       kind: "file",
       path: "notes.txt",
@@ -162,12 +164,44 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(button(panel, "Save").disabled).toBe(true);
   });
 
+  it("drops edit mode when a conflict reload returns non-editable content", async () => {
+    const save = vi.fn().mockResolvedValue({ ok: false, code: "conflict" });
+    const fetchLatest = vi.fn().mockResolvedValue({
+      content: "mixed\r\nendings\nnow",
+      hash: "hash-2",
+      editable: false,
+    });
+    const panel = await mountFile({
+      kind: "file",
+      path: "notes.txt",
+      name: "notes.txt",
+      content: "before",
+      edit: { hash: "hash-1", save, fetchLatest },
+    });
+
+    await userEvent.click(button(panel, "Edit file"));
+    await userEvent.fill(panel.querySelector<HTMLElement>(".cm-content")!, "local");
+    await userEvent.click(button(panel, "Save"));
+    await expect.poll(() => panel.querySelector('[role="alert"]')).not.toBeNull();
+    await userEvent.click(button(panel, "Reload"));
+
+    await expect.poll(() => panel.querySelector(".cm-content")?.textContent).toContain("mixed");
+    expect(panel.querySelector(".cm-content")?.getAttribute("contenteditable")).toBe("false");
+    expect(
+      Array.from(panel.querySelectorAll("button")).some(
+        (candidate) => candidate.getAttribute("aria-label") === "Edit file",
+      ),
+    ).toBe(false);
+  });
+
   it("makes the editor read-only while reloading a conflict", async () => {
-    let finishReload: ((latest: { content: string; hash: string }) => void) | undefined;
+    let finishReload:
+      | ((latest: { content: string; hash: string; editable: boolean }) => void)
+      | undefined;
     const save = vi.fn().mockResolvedValue({ ok: false, code: "conflict" });
     const fetchLatest = vi.fn().mockImplementation(
       () =>
-        new Promise<{ content: string; hash: string }>((resolve) => {
+        new Promise<{ content: string; hash: string; editable: boolean }>((resolve) => {
           finishReload = resolve;
         }),
     );
@@ -190,7 +224,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     await expect
       .poll(() => panel.querySelector(".cm-content")?.getAttribute("contenteditable"))
       .toBe("false");
-    finishReload?.({ content: "latest", hash: "hash-2" });
+    finishReload?.({ content: "latest", hash: "hash-2", editable: true });
     await expect.poll(() => panel.querySelector(".cm-content")?.textContent).toContain("latest");
     expect(panel.querySelector(".cm-content")?.getAttribute("contenteditable")).toBe("true");
   });

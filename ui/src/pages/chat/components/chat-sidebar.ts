@@ -92,7 +92,8 @@ export type FileSaveOutcome =
 export type FileSidebarEdit = {
   hash: string;
   save: (params: { content: string; expectedHash: string }) => Promise<FileSaveOutcome>;
-  fetchLatest: () => Promise<{ content: string; hash: string } | null>;
+  /** `editable: false` means the latest content no longer qualifies for edit mode. */
+  fetchLatest: () => Promise<{ content: string; hash: string; editable: boolean } | null>;
 };
 
 export type FileSidebarContent = {
@@ -1060,6 +1061,15 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         }
         this.fileEditor?.setContent(latest.content);
         this.updateSavedFile(this.visibleContent, latest.content, latest.hash);
+        // A reload can bring back content that no longer qualifies for edit
+        // mode (e.g. the agent rewrote the file with mixed line endings);
+        // drop the edit capability instead of letting a save corrupt it.
+        if (!latest.editable && this.visibleContent?.kind === "file") {
+          this.fileEditing = false;
+          this.fileDirty = false;
+          const { edit: _removed, ...readOnly } = this.visibleContent;
+          this.visibleContent = readOnly;
+        }
       })
       .catch((error) => {
         if (version === this.fileOperationVersion) {
@@ -1085,6 +1095,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       return;
     }
     const version = this.fileOperationVersion;
+    // Overwrite deliberately replaces whatever is on disk (even content that
+    // would fail the edit gates) with the local editor text the user chose.
     const localContent = editor.getContent();
     this.fileSaving = true;
     void content.edit

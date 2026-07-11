@@ -472,11 +472,20 @@ function openFile(
                 agentId: workspace.agentId,
               });
               const latestFile = latest?.file;
-              return latestFile &&
-                typeof latestFile.content === "string" &&
-                typeof latestFile.hash === "string"
-                ? { content: latestFile.content, hash: latestFile.hash }
-                : null;
+              if (
+                !latestFile ||
+                typeof latestFile.content !== "string" ||
+                typeof latestFile.hash !== "string"
+              ) {
+                return null;
+              }
+              return {
+                content: latestFile.content,
+                hash: latestFile.hash,
+                // Reloaded content re-passes the uniform-endings gate so a
+                // conflict reload cannot smuggle mixed endings into edit mode.
+                editable: hasUniformLineEndings(latestFile.content),
+              };
             },
           }
         : undefined;
