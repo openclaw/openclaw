@@ -263,7 +263,7 @@ describe("createSmsWebhookHandler", () => {
     expect(dispatchSmsInboundEvent).not.toHaveBeenCalled();
   });
 
-  it("does not let unsigned proxy traffic consume another client's signed webhook rate limit", async () => {
+  it("does not let unsigned proxy traffic consume the same client's signed webhook rate limit", async () => {
     const account = createAccount();
     const handler = createSmsWebhookHandler({
       cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
@@ -295,7 +295,7 @@ describe("createSmsWebhookHandler", () => {
     const accepted = createResponse();
     await handler(
       createRequest(valid.body, valid.signature, {
-        headers: { "x-forwarded-for": "203.0.113.11" },
+        headers: { "x-forwarded-for": "203.0.113.10" },
       }),
       accepted,
     );
