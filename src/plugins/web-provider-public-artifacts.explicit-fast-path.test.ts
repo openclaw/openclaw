@@ -10,6 +10,7 @@ const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
 const {
   loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock,
   loadBundledPluginPublicArtifactModuleSyncMock,
+  loadPluginPublicArtifactModuleFromCandidatesSyncMock,
 } = vi.hoisted(() => {
   const providerBase = {
     label: "Fixture",
@@ -104,6 +105,30 @@ const {
         return null;
       },
     ),
+    loadPluginPublicArtifactModuleFromCandidatesSyncMock: vi.fn(
+      ({
+        rootDir,
+      }: {
+        rootDir: string;
+        source?: string;
+        artifactCandidates: readonly string[];
+      }) => {
+        if (rootDir === "/tmp/broken-search") {
+          throw new Error("broken public artifact");
+        }
+        if (rootDir === "/tmp/custom-search") {
+          return {
+            createCustomSearchWebSearchProvider: () => ({
+              ...providerBase,
+              id: "custom-search",
+              getConfiguredCredentialValue: () => "custom-token",
+              createTool: () => null,
+            }),
+          };
+        }
+        return null;
+      },
+    ),
   };
 });
 
@@ -122,10 +147,15 @@ vi.mock("./public-surface-loader.js", async (importOriginal) => {
     loadBundledPluginPublicArtifactModuleFromCandidatesSync:
       loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock,
     loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
+    loadPluginPublicArtifactModuleFromCandidatesSync:
+      loadPluginPublicArtifactModuleFromCandidatesSyncMock,
   };
 });
 
-import { resolveBundledExplicitRuntimeWebFetchProvidersFromPublicArtifacts } from "./web-provider-public-artifacts.explicit.js";
+import {
+  resolveBundledExplicitRuntimeWebFetchProvidersFromPublicArtifacts,
+  resolveExplicitWebSearchProvidersFromManifestPublicArtifacts,
+} from "./web-provider-public-artifacts.explicit.js";
 import {
   resolveBundledWebFetchProvidersFromPublicArtifacts,
   resolveBundledWebSearchProvidersFromPublicArtifacts,
@@ -145,6 +175,7 @@ describe("web provider public artifacts explicit fast path", () => {
     loadPluginManifestRegistryMock.mockClear();
     loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock.mockClear();
     loadBundledPluginPublicArtifactModuleSyncMock.mockClear();
+    loadPluginPublicArtifactModuleFromCandidatesSyncMock.mockClear();
   });
 
   it("resolves bundled web search providers by explicit plugin id without manifest scans", () => {
@@ -161,6 +192,64 @@ describe("web provider public artifacts explicit fast path", () => {
       artifactBasename: "web-search-contract-api.js",
     });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves external web search providers from manifest public artifacts", () => {
+    const provider = expectSingleProvider(
+      resolveExplicitWebSearchProvidersFromManifestPublicArtifacts({
+        manifestRecords: [
+          {
+            id: "custom-search",
+            origin: "global",
+            rootDir: "/tmp/custom-search",
+            source: "/tmp/custom-search/index.js",
+          },
+        ],
+      }),
+    );
+
+    expect(provider.pluginId).toBe("custom-search");
+    expect(provider.getConfiguredCredentialValue?.({})).toBe("custom-token");
+    expect(loadPluginPublicArtifactModuleFromCandidatesSyncMock).toHaveBeenCalledWith({
+      rootDir: "/tmp/custom-search",
+      source: "/tmp/custom-search/index.js",
+      artifactCandidates: ["web-search-contract-api.js", "web-search-provider.js", "web-search.js"],
+    });
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalled();
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("skips broken external web search artifact records while preserving healthy siblings", () => {
+    const provider = expectSingleProvider(
+      resolveExplicitWebSearchProvidersFromManifestPublicArtifacts({
+        manifestRecords: [
+          {
+            id: "broken-search",
+            origin: "global",
+            rootDir: "/tmp/broken-search",
+            source: "/tmp/broken-search/index.js",
+          },
+          {
+            id: "custom-search",
+            origin: "global",
+            rootDir: "/tmp/custom-search",
+            source: "/tmp/custom-search/index.js",
+          },
+        ],
+      }),
+    );
+
+    expect(provider.pluginId).toBe("custom-search");
+    expect(loadPluginPublicArtifactModuleFromCandidatesSyncMock).toHaveBeenCalledWith({
+      rootDir: "/tmp/broken-search",
+      source: "/tmp/broken-search/index.js",
+      artifactCandidates: ["web-search-contract-api.js", "web-search-provider.js", "web-search.js"],
+    });
+    expect(loadPluginPublicArtifactModuleFromCandidatesSyncMock).toHaveBeenCalledWith({
+      rootDir: "/tmp/custom-search",
+      source: "/tmp/custom-search/index.js",
+      artifactCandidates: ["web-search-contract-api.js", "web-search-provider.js", "web-search.js"],
+    });
   });
 
   it("skips throwing bundled web provider factories while preserving healthy siblings", () => {

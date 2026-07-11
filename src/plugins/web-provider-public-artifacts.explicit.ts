@@ -1,7 +1,12 @@
 // Extracts explicit public artifacts from web provider plugin manifests.
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
+import {
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync,
+  loadPluginPublicArtifactModuleFromCandidatesSync,
+} from "./public-surface-loader.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -110,8 +115,22 @@ function loadBundledProviderEntriesFromDir<TProvider extends object>(params: {
   if (!mod) {
     return null;
   }
-  const { providers, errors } = collectProviderFactories({
+  return loadProviderEntriesFromModule({
     mod,
+    pluginId: params.pluginId,
+    suffix: params.suffix,
+    isProvider: params.isProvider,
+  });
+}
+
+function loadProviderEntriesFromModule<TProvider extends object>(params: {
+  mod: Record<string, unknown>;
+  pluginId: string;
+  suffix: string;
+  isProvider: (value: unknown) => value is TProvider;
+}): Array<TProvider & { pluginId: string }> | null {
+  const { providers, errors } = collectProviderFactories({
+    mod: params.mod,
     suffix: params.suffix,
     isProvider: params.isProvider,
   });
@@ -125,6 +144,37 @@ function loadBundledProviderEntriesFromDir<TProvider extends object>(params: {
     return null;
   }
   return providers.map((provider) => Object.assign({}, provider, { pluginId: params.pluginId }));
+}
+
+function loadProviderEntriesFromManifestRecord<TProvider extends object>(params: {
+  record: Pick<PluginManifestRecord, "id" | "origin" | "rootDir" | "source">;
+  artifactCandidates: readonly string[];
+  suffix: string;
+  isProvider: (value: unknown) => value is TProvider;
+}): Array<TProvider & { pluginId: string }> | null {
+  if (params.record.origin === "bundled") {
+    return loadBundledProviderEntriesFromDir({
+      dirName: path.basename(params.record.rootDir),
+      pluginId: params.record.id,
+      artifactCandidates: params.artifactCandidates,
+      suffix: params.suffix,
+      isProvider: params.isProvider,
+    });
+  }
+  const mod = loadPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
+    rootDir: params.record.rootDir,
+    source: params.record.source,
+    artifactCandidates: params.artifactCandidates,
+  });
+  if (!mod) {
+    return null;
+  }
+  return loadProviderEntriesFromModule({
+    mod,
+    pluginId: params.record.id,
+    suffix: params.suffix,
+    isProvider: params.isProvider,
+  });
 }
 
 export function loadBundledWebSearchProviderEntriesFromDir(params: {
@@ -177,6 +227,32 @@ export function resolveBundledExplicitWebSearchProvidersFromPublicArtifacts(para
     });
     if (!loadedProviders) {
       return null;
+    }
+    providers.push(...loadedProviders);
+  }
+  return providers;
+}
+
+export function resolveExplicitWebSearchProvidersFromManifestPublicArtifacts(params: {
+  manifestRecords: readonly Pick<PluginManifestRecord, "id" | "origin" | "rootDir" | "source">[];
+}): PluginWebSearchProviderEntry[] | null {
+  const providers: PluginWebSearchProviderEntry[] = [];
+  for (const record of [...params.manifestRecords].toSorted((left, right) =>
+    left.id.localeCompare(right.id),
+  )) {
+    let loadedProviders: PluginWebSearchProviderEntry[] | null;
+    try {
+      loadedProviders = loadProviderEntriesFromManifestRecord<WebSearchProviderPlugin>({
+        record,
+        artifactCandidates: WEB_SEARCH_ARTIFACT_CANDIDATES,
+        suffix: "WebSearchProvider",
+        isProvider: isWebSearchProviderPlugin,
+      });
+    } catch {
+      continue;
+    }
+    if (!loadedProviders) {
+      continue;
     }
     providers.push(...loadedProviders);
   }

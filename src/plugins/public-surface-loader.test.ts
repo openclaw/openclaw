@@ -206,6 +206,106 @@ describe("bundled plugin public surface loader", () => {
     expect(createJiti).not.toHaveBeenCalled();
   });
 
+  it("loads plugin-root public artifacts from manifest source directories", async () => {
+    const createJiti = vi.fn(() => vi.fn(() => ({ marker: "jiti-should-not-run" })));
+    vi.doMock("jiti", () => ({
+      createJiti,
+    }));
+    vi.doMock("./native-module-require.js", () => ({
+      tryNativeRequireJavaScriptModule: (modulePath: string) => ({
+        ok: true,
+        moduleExport: { marker: path.basename(path.dirname(modulePath)) },
+      }),
+    }));
+
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=plugin-root-source-public-artifacts");
+    const pluginRoot = createTempDir();
+    const sourceDir = path.join(pluginRoot, "src");
+    const modulePath = path.join(sourceDir, "web-search-contract-api.js");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(modulePath, 'export const marker = "source";\n', "utf8");
+
+    expect(
+      publicSurfaceLoader.loadPluginPublicArtifactModuleFromCandidatesSync<{ marker: string }>({
+        rootDir: pluginRoot,
+        source: path.join(sourceDir, "index.js"),
+        artifactCandidates: ["missing-contract-api.js", "web-search-contract-api.js"],
+      })?.marker,
+    ).toBe("src");
+    expect(createJiti).not.toHaveBeenCalled();
+  });
+
+  it("skips source-directory public artifact candidates outside the plugin root", async () => {
+    const createJiti = vi.fn(() => vi.fn(() => ({ marker: "jiti-should-not-run" })));
+    vi.doMock("jiti", () => ({
+      createJiti,
+    }));
+    vi.doMock("./native-module-require.js", () => ({
+      tryNativeRequireJavaScriptModule: (modulePath: string) => ({
+        ok: true,
+        moduleExport: { marker: path.basename(modulePath) },
+      }),
+    }));
+
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=plugin-root-source-boundary");
+    const pluginRoot = createTempDir();
+    const outsideRoot = createTempDir();
+    const outsideModulePath = path.join(outsideRoot, "outside-contract-api.js");
+    const modulePath = path.join(pluginRoot, "web-search-contract-api.js");
+    fs.writeFileSync(outsideModulePath, 'export const marker = "outside";\n', "utf8");
+    fs.writeFileSync(modulePath, 'export const marker = "inside";\n', "utf8");
+
+    expect(
+      publicSurfaceLoader.loadPluginPublicArtifactModuleFromCandidatesSync<{ marker: string }>({
+        rootDir: pluginRoot,
+        source: path.join(outsideRoot, "index.js"),
+        artifactCandidates: ["outside-contract-api.js", "web-search-contract-api.js"],
+      })?.marker,
+    ).toBe("web-search-contract-api.js");
+    expect(createJiti).not.toHaveBeenCalled();
+  });
+
+  it("continues plugin-root candidate loading after one artifact load fails", async () => {
+    const createJiti = vi.fn(() => vi.fn(() => ({ marker: "jiti-should-not-run" })));
+    vi.doMock("jiti", () => ({
+      createJiti,
+    }));
+    vi.doMock("./native-module-require.js", () => ({
+      tryNativeRequireJavaScriptModule: (modulePath: string) => {
+        if (path.basename(modulePath) === "bad-contract-api.js") {
+          throw new Error("bad contract artifact");
+        }
+        return {
+          ok: true,
+          moduleExport: { marker: path.basename(modulePath) },
+        };
+      },
+    }));
+
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=plugin-root-candidate-load-failure");
+    const pluginRoot = createTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "bad-contract-api.js"), "throw new Error('bad');\n");
+    fs.writeFileSync(
+      path.join(pluginRoot, "web-search-contract-api.js"),
+      'export const marker = "inside";\n',
+      "utf8",
+    );
+
+    expect(
+      publicSurfaceLoader.loadPluginPublicArtifactModuleFromCandidatesSync<{ marker: string }>({
+        rootDir: pluginRoot,
+        artifactCandidates: ["bad-contract-api.js", "web-search-contract-api.js"],
+      })?.marker,
+    ).toBe("web-search-contract-api.js");
+    expect(createJiti).not.toHaveBeenCalled();
+  });
+
   it("keeps package-local dist public artifacts on the native path for source plugin roots", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ marker: "jiti-should-not-run" })));
     vi.doMock("jiti", () => ({

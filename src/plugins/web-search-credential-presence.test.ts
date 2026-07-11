@@ -17,7 +17,12 @@ type ManifestSnapshot = {
 
 type PublicWebSearchProvider = Pick<
   PluginWebSearchProviderEntry,
-  "id" | "pluginId" | "authProviderId" | "getConfiguredCredentialFallback" | "requiresCredential"
+  | "id"
+  | "pluginId"
+  | "authProviderId"
+  | "getConfiguredCredentialFallback"
+  | "getConfiguredCredentialValue"
+  | "requiresCredential"
 > & { envVars?: string[] };
 
 const agentScopeMocks = vi.hoisted(() => ({
@@ -31,6 +36,9 @@ const manifestMocks = vi.hoisted(() => ({
 }));
 const publicArtifactMocks = vi.hoisted(() => ({
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: vi.fn<
+    () => PublicWebSearchProvider[]
+  >(() => []),
+  resolveExplicitWebSearchProvidersFromManifestPublicArtifacts: vi.fn<
     () => PublicWebSearchProvider[]
   >(() => []),
 }));
@@ -47,6 +55,8 @@ vi.mock("./manifest-contract-eligibility.js", () => ({
 vi.mock("./web-provider-public-artifacts.explicit.js", () => ({
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts:
     publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+  resolveExplicitWebSearchProvidersFromManifestPublicArtifacts:
+    publicArtifactMocks.resolveExplicitWebSearchProvidersFromManifestPublicArtifacts,
 }));
 
 let hasConfiguredWebSearchCredential: typeof import("./web-search-credential-presence.js").hasConfiguredWebSearchCredential;
@@ -60,7 +70,12 @@ describe("hasConfiguredWebSearchCredential", () => {
     agentScopeMocks.resolveDefaultAgentDir.mockReturnValue("/agent/default");
     authProfileMocks.hasAuthProfileForProvider.mockReturnValue(false);
     manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({ plugins: [] });
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockClear();
     publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValue(
+      [],
+    );
+    publicArtifactMocks.resolveExplicitWebSearchProvidersFromManifestPublicArtifacts.mockClear();
+    publicArtifactMocks.resolveExplicitWebSearchProvidersFromManifestPublicArtifacts.mockReturnValue(
       [],
     );
   });
@@ -359,6 +374,164 @@ describe("hasConfiguredWebSearchCredential", () => {
         origin: "bundled",
       }),
     ).toBe(true);
+  });
+
+  it("uses provider configured credential hooks for selected nonstandard plugin fields", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "brave",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["brave"] },
+        },
+        {
+          id: "custom-search",
+          origin: "global",
+          contracts: { webSearchProviders: ["custom-search"] },
+        },
+      ],
+    });
+    publicArtifactMocks.resolveExplicitWebSearchProvidersFromManifestPublicArtifacts.mockReturnValue(
+      [
+        {
+          id: "custom-search",
+          pluginId: "custom-search",
+          requiresCredential: true,
+          getConfiguredCredentialValue: (config) => {
+            const entryConfig = config?.plugins?.entries?.["custom-search"]?.config as
+              | { webSearch?: { token?: unknown } }
+              | undefined;
+            return entryConfig?.webSearch?.token;
+          },
+        },
+      ],
+    );
+    const config = {
+      tools: { web: { search: { provider: "custom-search" } } },
+      plugins: {
+        entries: {
+          "custom-search": {
+            config: {
+              webSearch: {
+                token: { source: "env", id: "CUSTOM_SEARCH_TOKEN" },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config,
+        env: { CUSTOM_SEARCH_TOKEN: "custom-token" },
+        origin: "bundled",
+      }),
+    ).toBe(true);
+    expect(
+      publicArtifactMocks.resolveExplicitWebSearchProvidersFromManifestPublicArtifacts,
+    ).toHaveBeenLastCalledWith({
+      manifestRecords: [
+        expect.objectContaining({
+          id: "custom-search",
+          origin: "global",
+        }),
+      ],
+    });
+  });
+
+  it("uses provider configured credential hooks without requiring plugin entries", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "custom-search",
+          origin: "global",
+          contracts: { webSearchProviders: ["custom-search"] },
+        },
+      ],
+    });
+    publicArtifactMocks.resolveExplicitWebSearchProvidersFromManifestPublicArtifacts.mockReturnValue(
+      [
+        {
+          id: "custom-search",
+          pluginId: "custom-search",
+          requiresCredential: true,
+          getConfiguredCredentialValue: (config) => {
+            const searchConfig = config?.tools?.web?.search as
+              | { customToken?: unknown }
+              | undefined;
+            return searchConfig?.customToken;
+          },
+        },
+      ],
+    );
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "custom-search",
+                customToken: "custom-token",
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not load configured credential hooks after manifest env credentials match", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "brave",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["brave"] },
+          setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
+          providerAuthEnvVars: {},
+        },
+        {
+          id: "custom-search",
+          origin: "global",
+          contracts: { webSearchProviders: ["custom-search"] },
+        },
+      ],
+    });
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          plugins: {
+            entries: {
+              "custom-search": {
+                config: {
+                  webSearch: {
+                    token: "custom-token",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: { BRAVE_API_KEY: "brave-key" },
+        origin: "bundled",
+      }),
+    ).toBe(true);
+    expect(
+      publicArtifactMocks.resolveExplicitWebSearchProvidersFromManifestPublicArtifacts,
+    ).not.toHaveBeenCalled();
   });
 
   it("limits explicit provider checks to the selected provider", () => {

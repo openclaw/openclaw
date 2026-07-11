@@ -7,7 +7,10 @@ import { coerceSecretRef, normalizeSecretInputString } from "../config/types.sec
 import { normalizePluginId } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "./web-provider-public-artifacts.explicit.js";
+import {
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+  resolveExplicitWebSearchProvidersFromManifestPublicArtifacts,
+} from "./web-provider-public-artifacts.explicit.js";
 
 function hasConfiguredCredentialValue(value: unknown, env?: NodeJS.ProcessEnv): boolean {
   const ref = coerceSecretRef(value);
@@ -430,6 +433,46 @@ function hasProviderConfiguredCredentialFallbackCandidate(params: {
   }
 }
 
+function hasProviderConfiguredCredentialValueCandidate(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  providerOwnerRecords: readonly PluginManifestRecord[];
+  searchConfig: unknown;
+}): boolean {
+  const providerId = getConfiguredProviderId(params.searchConfig);
+  const providerOwnerRecords = providerId
+    ? params.providerOwnerRecords.filter((plugin) =>
+        (plugin.contracts?.webSearchProviders ?? []).includes(providerId),
+      )
+    : params.providerOwnerRecords;
+  if (providerOwnerRecords.length === 0) {
+    return false;
+  }
+  try {
+    // This intentionally imports policy-enabled provider public contracts, not
+    // runtime providers; SDK configuredCredential hooks own arbitrary fields.
+    const providers = resolveExplicitWebSearchProvidersFromManifestPublicArtifacts({
+      manifestRecords: providerOwnerRecords,
+    });
+    return (
+      providers?.some((provider) => {
+        if (providerId && provider.id !== providerId) {
+          return false;
+        }
+        if (!providerId && provider.requiresCredential === false) {
+          return false;
+        }
+        return hasConfiguredCredentialValue(
+          provider.getConfiguredCredentialValue?.(params.config),
+          params.env,
+        );
+      }) ?? false
+    );
+  } catch {
+    return false;
+  }
+}
+
 function resolveBundledProviderContractEnvVars(params: {
   manifestRecords: readonly PluginManifestRecord[];
   providerId: string | undefined;
@@ -555,6 +598,14 @@ export function hasConfiguredWebSearchCredential(params: {
       manifestRecords: policyScope.manifestRecords,
       env: params.env,
       providerId,
+    }) ||
+    // Runtime can explicitly select an external provider while bundled-scope
+    // audits ask whether search is configured; use owner records for parity.
+    hasProviderConfiguredCredentialValueCandidate({
+      config: params.config,
+      env: params.env,
+      providerOwnerRecords: policyScope.providerOwnerRecords,
+      searchConfig,
     })
   );
 }

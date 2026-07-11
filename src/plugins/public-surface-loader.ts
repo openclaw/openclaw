@@ -11,7 +11,11 @@ import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
-import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.js";
+import {
+  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
+  normalizeBundledPluginArtifactSubpath,
+  resolveBundledPluginPublicSurfacePath,
+} from "./public-surface-runtime.js";
 import { resolvePluginLoaderTryNative, resolveLoaderPackageRoot } from "./sdk-alias.js";
 
 const OPENCLAW_PACKAGE_ROOT =
@@ -112,6 +116,144 @@ function loadPublicSurfaceModule(modulePath: string): unknown {
     return sourceArtifactRequire(modulePath);
   }
   return getModuleLoader(modulePath)(modulePath);
+}
+
+function addExistingPublicSurfaceCandidate(
+  candidates: Set<string>,
+  directory: string | undefined,
+  artifactBasename: string,
+): void {
+  if (!directory) {
+    return;
+  }
+  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
+  for (const candidate of [
+    path.resolve(directory, artifactBasename),
+    path.resolve(directory, "dist", artifactBasename),
+    ...PUBLIC_SURFACE_SOURCE_EXTENSIONS.map((ext) =>
+      path.resolve(directory, `${sourceBaseName}${ext}`),
+    ),
+  ]) {
+    if (fs.existsSync(candidate)) {
+      candidates.add(candidate);
+    }
+  }
+}
+
+function isPathInsideOrSame(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isPluginPublicArtifactCandidateFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.message.startsWith("Unable to resolve plugin public surface ") ||
+    error.message.startsWith("Unable to open plugin public surface ") ||
+    error.message.startsWith("Unable to load plugin public surface ") ||
+    error.message.startsWith("Plugin public surface changed after validation: ")
+  );
+}
+
+function resolvePluginPublicSurfaceLocation(params: {
+  rootDir: string;
+  source?: string;
+  artifactBasename: string;
+}): { modulePath: string; boundaryRoot: string } | null {
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
+  const rootDir = path.resolve(params.rootDir);
+  const sourcePath = params.source
+    ? path.resolve(
+        path.isAbsolute(params.source) ? params.source : path.join(rootDir, params.source),
+      )
+    : undefined;
+  const sourceDir = sourcePath ? path.dirname(sourcePath) : undefined;
+  const candidates = new Set<string>();
+  addExistingPublicSurfaceCandidate(candidates, rootDir, artifactBasename);
+  if (sourceDir && isPathInsideOrSame(rootDir, sourceDir)) {
+    addExistingPublicSurfaceCandidate(candidates, sourceDir, artifactBasename);
+  }
+  for (const modulePath of candidates) {
+    return { modulePath, boundaryRoot: rootDir };
+  }
+  return null;
+}
+
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
+export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
+  rootDir: string;
+  source?: string;
+  artifactBasename: string;
+}): T {
+  const location = resolvePluginPublicSurfaceLocation(params);
+  if (!location) {
+    throw new Error(`Unable to resolve plugin public surface ${params.artifactBasename}`);
+  }
+  const cached = publicSurfaceModuleCache.get(location.modulePath);
+  if (cached) {
+    return cached as T;
+  }
+
+  const opened = openRootFileSync({
+    absolutePath: location.modulePath,
+    rootPath: location.boundaryRoot,
+    boundaryLabel: "plugin root",
+    rejectHardlinks: false,
+  });
+  if (!opened.ok) {
+    throw new Error(`Unable to open plugin public surface ${params.artifactBasename}`, {
+      cause: opened.error,
+    });
+  }
+  const validatedPath = opened.path;
+  const validatedStat = opened.stat;
+  fs.closeSync(opened.fd);
+
+  const currentStat = fs.statSync(validatedPath);
+  if (!sameFileIdentity(validatedStat, currentStat)) {
+    throw new Error(`Plugin public surface changed after validation: ${params.artifactBasename}`);
+  }
+
+  const sentinel = {} as T;
+  publicSurfaceModuleCache.set(location.modulePath, sentinel);
+  publicSurfaceModuleCache.set(validatedPath, sentinel);
+  try {
+    const loaded = loadPublicSurfaceModule(validatedPath) as T;
+    Object.assign(sentinel, loaded);
+    return sentinel;
+  } catch (error) {
+    publicSurfaceModuleCache.delete(location.modulePath);
+    publicSurfaceModuleCache.delete(validatedPath);
+    throw new Error(`Unable to load plugin public surface ${params.artifactBasename}`, {
+      cause: error,
+    });
+  }
+}
+
+/** Loads the first resolvable plugin public artifact from an ordered candidate list. */
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
+export function loadPluginPublicArtifactModuleFromCandidatesSync<T extends object>(params: {
+  rootDir: string;
+  source?: string;
+  artifactCandidates: readonly string[];
+}): T | null {
+  for (const artifactBasename of params.artifactCandidates) {
+    try {
+      return loadPluginPublicArtifactModuleSync<T>({
+        rootDir: params.rootDir,
+        ...(params.source ? { source: params.source } : {}),
+        artifactBasename,
+      });
+    } catch (error) {
+      if (isPluginPublicArtifactCandidateFailure(error)) {
+        continue;
+      }
+      throw error;
+    }
+  }
+  return null;
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
