@@ -158,6 +158,30 @@ has_controlling_tty() {
     return 0
 }
 
+resolve_subprocess_stdin_path() {
+    if [[ "${NO_PROMPT:-0}" == "1" ]]; then
+        echo "/dev/null"
+        return 0
+    fi
+    if ! needs_stdin_isolation; then
+        return 1
+    fi
+    if has_controlling_tty; then
+        echo "/dev/tty"
+    else
+        echo "/dev/null"
+    fi
+}
+
+run_with_safe_stdin() {
+    local stdin_path=""
+    if stdin_path="$(resolve_subprocess_stdin_path)"; then
+        "$@" < "$stdin_path"
+    else
+        "$@"
+    fi
+}
+
 gum_is_tty() {
     if [[ -n "${NO_COLOR:-}" ]]; then
         return 1
@@ -492,22 +516,14 @@ run_with_spinner() {
         mktempfile gum_err
         mktempfile gum_out
         local gum_status=0
-        if needs_stdin_isolation; then
-            "$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err" || gum_status=$?
-        else
-            "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?
-        fi
+        run_with_safe_stdin "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?
         if [[ "$gum_status" -eq 0 ]]; then
             if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then
                 GUM=""
                 GUM_STATUS="skipped"
                 GUM_REASON="gum raw mode unavailable"
                 ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-                if needs_stdin_isolation; then
-                    "$@" < /dev/null
-                else
-                    "$@"
-                fi
+                run_with_safe_stdin "$@"
                 return $?
             fi
             if [[ -s "$gum_out" ]]; then
@@ -520,11 +536,7 @@ run_with_spinner() {
             GUM_STATUS="skipped"
             GUM_REASON="gum raw mode unavailable"
             ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-            if needs_stdin_isolation; then
-                "$@" < /dev/null
-            else
-                "$@"
-            fi
+            run_with_safe_stdin "$@"
             return $?
         fi
         if [[ -s "$gum_err" ]]; then
@@ -533,14 +545,7 @@ run_with_spinner() {
         return "$gum_status"
     fi
 
-    # Redirect stdin from /dev/null so subprocesses cannot consume the script
-    # stream when the installer is piped via curl | bash.  When running
-    # interactively, preserve terminal stdin for commands that need it.
-    if needs_stdin_isolation; then
-        "$@" < /dev/null
-    else
-        "$@"
-    fi
+    run_with_safe_stdin "$@"
 }
 
 run_quiet_step() {
@@ -572,11 +577,7 @@ run_quiet_step() {
         # Keep users informed even when gum spinner cannot run (for example shell functions).
         ui_info "${title}"
         showed_progress=true
-        if needs_stdin_isolation; then
-            "$@" < /dev/null >"$log" 2>&1 || cmd_exit=$?
-        else
-            "$@" >"$log" 2>&1 || cmd_exit=$?
-        fi
+        run_with_safe_stdin "$@" >"$log" 2>&1 || cmd_exit=$?
         if (( cmd_exit == 0 )); then
             return 0
         fi
@@ -2945,11 +2946,7 @@ maybe_open_dashboard() {
     if ! "$claw" dashboard --help >/dev/null 2>&1; then
         return 0
     fi
-    if needs_stdin_isolation; then
-        "$claw" dashboard < /dev/null || true
-    else
-        "$claw" dashboard || true
-    fi
+    run_with_safe_stdin "$claw" dashboard || true
 }
 
 has_openclaw_config() {
@@ -3400,11 +3397,7 @@ main() {
             if (( doctor_ok )); then
                 should_open_dashboard=true
                 ui_info "Updating plugins"
-                if needs_stdin_isolation; then
-                    OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all < /dev/null || true
-                else
-                    OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all || true
-                fi
+                OPENCLAW_UPDATE_IN_PROGRESS=1 run_with_safe_stdin "$claw" plugins update --all || true
             else
                 ui_warn "Doctor failed; skipping plugin updates"
             fi

@@ -1971,12 +1971,8 @@ describe("install.sh macOS Homebrew Node behavior", () => {
 
   it("falls back when gum reports raw-mode ioctl failures", () => {
     expect(script).toContain("setrawmode|inappropriate ioctl");
-    // Gum spin stdin redirect is now conditional on needs_stdin_isolation
     expect(script).toContain(
-      '"$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err" || gum_status=$?',
-    );
-    expect(script).toContain(
-      '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
+      'run_with_safe_stdin "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
     );
     expect(script).toContain(
       'if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then',
@@ -1984,9 +1980,7 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     expect(script).toContain(
       'ui_warn "Spinner unavailable in this terminal; continuing without spinner"',
     );
-    expect(script).toContain(
-      'if needs_stdin_isolation; then\n                    "$@" < /dev/null\n                else\n                    "$@"\n                fi\n                return $?',
-    );
+    expect(script).toContain('run_with_safe_stdin "$@"\n                return $?');
   });
 
   it("reruns spinner-wrapped commands when gum reports ioctl failure", () => {
@@ -2066,9 +2060,8 @@ exit 0
       // Assert the child command's stdin was NOT /dev/null
       const observed = readFileSync(stdinLog, "utf8").trim();
       expect(observed).toBe("other");
-      expect(script).toContain("needs_stdin_isolation; then");
       expect(script).toContain(
-        '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
+        'run_with_safe_stdin "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
       );
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -2076,13 +2069,8 @@ exit 0
   });
 
   it("gum spin redirects stdin from /dev/null for piped installs", () => {
-    // When needs_stdin_isolation returns true (piped install),
-    // gum spin MUST redirect stdin from /dev/null to prevent
-    // wrapped commands from consuming the pipe stream.
-    expect(script).toContain("needs_stdin_isolation; then");
-    expect(script).toContain(
-      '"$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err" || gum_status=$?',
-    );
+    expect(script).toContain('echo "/dev/null"');
+    expect(script).toContain("run_with_safe_stdin");
   });
 });
 
@@ -2161,6 +2149,31 @@ describe("install.sh duplicate OpenClaw install detection", () => {
     `);
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("ISOLATED");
+  });
+
+  it("routes piped interactive subprocesses through the controlling TTY", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      NO_PROMPT=0
+      needs_stdin_isolation() { return 0; }
+      has_controlling_tty() { return 0; }
+      resolve_subprocess_stdin_path
+    `);
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("/dev/tty");
+  });
+
+  it("routes non-promptable subprocesses through /dev/null", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      NO_PROMPT=1
+      has_controlling_tty() { return 0; }
+      resolve_subprocess_stdin_path
+    `);
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("/dev/null");
   });
 
   it("run_quiet_step redirects stdin to /dev/null in piped context", () => {
@@ -2257,14 +2270,12 @@ describe("install.sh doctor cancellation and dashboard guard", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
   it("preserves dashboard stdin for direct interactive installs", () => {
-    expect(script).toContain(
-      'if needs_stdin_isolation; then\n        "$claw" dashboard < /dev/null || true\n    else\n        "$claw" dashboard || true\n    fi',
-    );
+    expect(script).toContain('run_with_safe_stdin "$claw" dashboard || true');
   });
 
   it("preserves plugin update stdin for direct interactive upgrades", () => {
     expect(script).toContain(
-      'if needs_stdin_isolation; then\n                    OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all < /dev/null || true\n                else\n                    OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all || true\n                fi',
+      'OPENCLAW_UPDATE_IN_PROGRESS=1 run_with_safe_stdin "$claw" plugins update --all || true',
     );
   });
 
