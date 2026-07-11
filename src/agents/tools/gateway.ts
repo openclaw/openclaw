@@ -238,11 +238,12 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
   if (trimToUndefined(params.opts.gatewayUrl) !== undefined) {
     return undefined;
   }
+  if (params.target !== "remote") {
+    return undefined;
+  }
   try {
     const identity = loadOrCreateDeviceIdentity();
-    // Approval request/wait calls may cross backend processes. Bind them to the
-    // persisted device id so a process-local approval token mismatch cannot hide
-    // the pending record from the matching wait call.
+    // Remote approval requests are later matched by requester device id.
     // Reject loadOrCreate's unpersisted fallback so another process can see the same id.
     const persistedIdentity = loadDeviceIdentityIfPresent();
     if (persistedIdentity?.deviceId !== identity.deviceId) {
@@ -250,9 +251,6 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
     }
     return identity;
   } catch (error) {
-    if (params.target === "local") {
-      return undefined;
-    }
     throw new Error(
       [
         "remote approval gateway calls require a stable device identity.",
@@ -270,7 +268,12 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCallOptions,
   params?: unknown,
-  extra?: { expectFinal?: boolean; scopes?: OperatorScope[] },
+  extra?: {
+    expectFinal?: boolean;
+    onAccepted?: (payload: unknown) => void;
+    scopes?: OperatorScope[];
+    signal?: AbortSignal;
+  },
 ) {
   const gateway = resolveGatewayOptions(opts);
   const scopes = Array.isArray(extra?.scopes)
@@ -292,7 +295,9 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     method,
     params,
     timeoutMs: gateway.timeoutMs,
+    signal: extra?.signal,
     expectFinal: extra?.expectFinal,
+    onAccepted: extra?.onAccepted,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: "agent",
     mode: GATEWAY_CLIENT_MODES.BACKEND,

@@ -20,6 +20,7 @@ import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js
 import {
   approvalRequestExplicitlyUnavailable,
   mapExecDecisionToOutcome,
+  readFinalApprovalDecision,
   requestPluginApproval,
   type AppServerApprovalOutcome,
   waitForPluginApprovalDecision,
@@ -140,6 +141,23 @@ export async function handleCodexAppServerApprovalRequest(params: {
     }
     // Codex app-server approval requests do not expose an enforceable resolved
     // executable, so unresolved requests must stay on the human approval route.
+    let emittedApprovalRequestId: string | undefined;
+    const emitRequestedApproval = (approvalId: string): void => {
+      if (emittedApprovalRequestId === approvalId) {
+        return;
+      }
+      emittedApprovalRequestId = approvalId;
+      emitApprovalEvent(params.paramsForRun, {
+        phase: "requested",
+        kind: context.kind,
+        status: "pending",
+        title: context.title,
+        approvalId,
+        approvalSlug: approvalId,
+        ...context.eventDetails,
+        message: "Codex app-server approval requested.",
+      });
+    };
     const requestResult = await requestPluginApproval({
       paramsForRun: params.paramsForRun,
       title: context.title,
@@ -147,6 +165,14 @@ export async function handleCodexAppServerApprovalRequest(params: {
       severity: context.severity,
       toolName: context.toolName,
       toolCallId: context.approvalId,
+      finalResponse: {
+        signal: params.signal,
+        onAccepted: (accepted) => {
+          if (accepted.id) {
+            emitRequestedApproval(accepted.id);
+          }
+        },
+      },
     });
 
     const approvalId = requestResult?.id;
@@ -163,20 +189,13 @@ export async function handleCodexAppServerApprovalRequest(params: {
       return buildApprovalResponse(params.method, context.requestParams, "denied");
     }
 
-    emitApprovalEvent(params.paramsForRun, {
-      phase: "requested",
-      kind: context.kind,
-      status: "pending",
-      title: context.title,
-      approvalId,
-      approvalSlug: approvalId,
-      ...context.eventDetails,
-      message: "Codex app-server approval requested.",
-    });
+    emitRequestedApproval(approvalId);
 
+    const finalDecision = readFinalApprovalDecision(requestResult);
     const decision = approvalRequestExplicitlyUnavailable(requestResult)
       ? null
-      : await waitForPluginApprovalDecision({ approvalId, signal: params.signal });
+      : (finalDecision ??
+        (await waitForPluginApprovalDecision({ approvalId, signal: params.signal })));
     const outcome = mapExecDecisionToOutcome(decision);
 
     emitApprovalEvent(params.paramsForRun, {

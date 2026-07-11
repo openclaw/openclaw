@@ -195,9 +195,10 @@ describe("Codex app-server approval bridge", () => {
 
   it("routes command approvals through plugin approvals and accepts allowed commands", async () => {
     const params = createParams();
-    mockCallGatewayTool
-      .mockResolvedValueOnce({ id: "plugin:approval-1", status: "accepted" })
-      .mockResolvedValueOnce({ id: "plugin:approval-1", decision: "allow-once" });
+    mockCallGatewayTool.mockImplementationOnce(async (_method, _opts, _payload, extra) => {
+      extra?.onAccepted?.({ id: "plugin:approval-1", status: "accepted" });
+      return { id: "plugin:approval-1", decision: "allow-once" };
+    });
 
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
@@ -215,7 +216,6 @@ describe("Codex app-server approval bridge", () => {
     expect(result).toEqual({ decision: "accept" });
     expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
-      "plugin.approval.waitDecision",
     ]);
     expect(gatewayCallMethod()).toBe("plugin.approval.request");
     expect(typeof gatewayCallAt(0)[1]).toBe("object");
@@ -225,7 +225,11 @@ describe("Codex app-server approval bridge", () => {
     expect(requestPayload.twoPhase).toBe(true);
     expect(requestPayload.turnSourceChannel).toBe("telegram");
     expect(requestPayload.turnSourceTo).toBe("chat-1");
-    expect(gatewayCallOptions()).toEqual({ expectFinal: false });
+    expect(gatewayCallOptions()).toEqual({
+      expectFinal: true,
+      onAccepted: expect.any(Function),
+      signal: undefined,
+    });
     expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith({
       toolName: "exec",
       params: {
@@ -2187,7 +2191,11 @@ describe("Codex app-server approval bridge", () => {
     expect(requestPayload.toolName).toBe("codex_permission_approval");
     const description = String(requestPayload.description);
     expect(description).toContain("Permissions: network, fileSystem");
-    expect(gatewayCallOptions()).toEqual({ expectFinal: false });
+    expect(gatewayCallOptions()).toEqual({
+      expectFinal: true,
+      onAccepted: expect.any(Function),
+      signal: undefined,
+    });
     expect(description).toContain("Network allowHosts: example.com, *.internal");
     expect(description).toContain("File system roots: /; writePaths: ~");
     expect(description).toContain(
