@@ -7,7 +7,7 @@ import Testing
 @Suite(.serialized)
 struct TalkMLXSpeechSynthesizerTests {
     @Test
-    func reusesResidentHelperAcrossUtterances() async throws {
+    func `reuses resident helper across utterances`() async throws {
         let transport = TestMLXTransport(mode: .audio)
         let factory = TestMLXTransportFactory([transport])
         let synthesizer = TalkMLXSpeechSynthesizer(
@@ -43,7 +43,7 @@ struct TalkMLXSpeechSynthesizerTests {
     }
 
     @Test
-    func retriesOnceAfterHelperCrash() async throws {
+    func `retries once after helper crash`() async throws {
         let crashed = TestMLXTransport(mode: .crash)
         let restarted = TestMLXTransport(mode: .audio)
         let factory = TestMLXTransportFactory([crashed, restarted])
@@ -64,7 +64,7 @@ struct TalkMLXSpeechSynthesizerTests {
     }
 
     @Test
-    func cancelUsesProtocolWithoutClosingHelper() async throws {
+    func `cancel uses protocol without closing helper`() async throws {
         let transport = TestMLXTransport(mode: .waitForCancel)
         let factory = TestMLXTransportFactory([transport])
         let synthesizer = TalkMLXSpeechSynthesizer(
@@ -94,7 +94,7 @@ struct TalkMLXSpeechSynthesizerTests {
     }
 
     @Test
-    func unresponsiveCancelTerminatesHelperWithoutRetry() async throws {
+    func `unresponsive cancel terminates helper without retry`() async throws {
         let transport = TestMLXTransport(mode: .ignoreCancel)
         let factory = TestMLXTransportFactory([transport])
         let synthesizer = TalkMLXSpeechSynthesizer(
@@ -122,7 +122,7 @@ struct TalkMLXSpeechSynthesizerTests {
     }
 
     @Test
-    func cancelCanTerminateHelperBeforeReady() async throws {
+    func `cancel can terminate helper before ready`() async throws {
         let transport = TestMLXTransport(mode: .startupHang)
         let factory = TestMLXTransportFactory([transport])
         let synthesizer = TalkMLXSpeechSynthesizer(
@@ -150,7 +150,7 @@ struct TalkMLXSpeechSynthesizerTests {
     }
 
     @Test
-    func idleTimeoutShutsDownResidentHelper() async throws {
+    func `idle timeout shuts down resident helper`() async throws {
         let transport = TestMLXTransport(mode: .audio)
         let factory = TestMLXTransportFactory([transport])
         let synthesizer = TalkMLXSpeechSynthesizer(
@@ -168,7 +168,7 @@ struct TalkMLXSpeechSynthesizerTests {
     }
 
     @Test
-    func pcmResponseBecomesPlayableWAV() throws {
+    func `pcm response becomes playable WAV`() throws {
         let wav = try TalkMLXSpeechSynthesizer.makeWAV(audio: MLXTTSAudio(
             id: "one",
             sampleRate: 32000,
@@ -176,7 +176,7 @@ struct TalkMLXSpeechSynthesizerTests {
 
         #expect(wav.count == 48)
         #expect(wav.prefix(4) == Data("RIFF".utf8))
-        #expect(wav.subdata(in: 8 ..< 12) == Data("WAVE".utf8))
+        #expect(wav.subdata(in: 8..<12) == Data("WAVE".utf8))
         #expect(wav.suffix(4) == Data([0x00, 0x00, 0xFF, 0x7F]))
     }
 }

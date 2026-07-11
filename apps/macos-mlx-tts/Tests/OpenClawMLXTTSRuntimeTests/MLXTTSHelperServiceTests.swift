@@ -1,7 +1,7 @@
 import Foundation
-@testable import OpenClawMLXTTSRuntime
 import OpenClawMLXTTSProtocol
 import XCTest
+@testable import OpenClawMLXTTSRuntime
 
 final class MLXTTSHelperServiceTests: XCTestCase {
     func testReusesModelForMatchingRepoAndReloadsForChange() async {

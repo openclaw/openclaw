@@ -21,9 +21,9 @@ public enum MLXTTSRequest: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(RequestType.self, forKey: .type) {
         case .synthesize:
-            self = .synthesize(try container.decode(MLXTTSSynthesizeRequest.self, forKey: .synthesize))
+            self = try .synthesize(container.decode(MLXTTSSynthesizeRequest.self, forKey: .synthesize))
         case .cancel:
-            self = .cancel(id: try container.decode(String.self, forKey: .id))
+            self = try .cancel(id: container.decode(String.self, forKey: .id))
         case .shutdown:
             self = .shutdown
         }
@@ -133,11 +133,11 @@ public enum MLXTTSEvent: Codable, Equatable, Sendable {
         case .ready:
             self = .ready
         case .audio:
-            self = .audio(try container.decode(MLXTTSAudio.self, forKey: .audio))
+            self = try .audio(container.decode(MLXTTSAudio.self, forKey: .audio))
         case .error:
-            self = .error(try container.decode(MLXTTSErrorEvent.self, forKey: .error))
+            self = try .error(container.decode(MLXTTSErrorEvent.self, forKey: .error))
         case .canceled:
-            self = .canceled(id: try container.decode(String.self, forKey: .id))
+            self = try .canceled(id: container.decode(String.self, forKey: .id))
         }
     }
 
@@ -167,7 +167,7 @@ public enum MLXTTSFrameError: Error, Equatable, Sendable {
 public enum MLXTTSFrameCodec {
     public static let maximumPayloadSize = 64 * 1024 * 1024
 
-    public static func encode<T: Encodable>(_ value: T) throws -> Data {
+    public static func encode(_ value: some Encodable) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let payload = try encoder.encode(value)
@@ -210,8 +210,8 @@ public struct MLXTTSFrameDecoder: Sendable {
                 break
             }
 
-            payloads.append(self.buffer.subdata(in: 4 ..< (4 + length)))
-            self.buffer.removeSubrange(0 ..< (4 + length))
+            payloads.append(self.buffer.subdata(in: 4..<(4 + length)))
+            self.buffer.removeSubrange(0..<(4 + length))
         }
 
         return payloads

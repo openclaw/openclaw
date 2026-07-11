@@ -84,7 +84,7 @@ actor TalkMLXSpeechSynthesizer {
             language: language?.nilIfBlank,
             voice: voicePreset?.nilIfBlank))
 
-        for attempt in 0 ... 1 {
+        for attempt in 0...1 {
             do {
                 let transport = try await self.ensureTransport()
                 guard self.activeID == id, self.cancelRequestedID != id else {
@@ -295,7 +295,7 @@ actor TalkMLXSpeechSynthesizer {
     }
 
     private static func resolvedModelRepo(_ modelRepo: String?) -> String {
-        modelRepo?.nilIfBlank ?? Self.defaultModelRepo
+        modelRepo?.nilIfBlank ?? self.defaultModelRepo
     }
 
     static func makeWAV(audio: MLXTTSAudio) throws -> Data {
@@ -418,7 +418,7 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
             guard let chunk = await self.chunks.next() else {
                 throw MLXTTSTransportError.closed
             }
-            self.pendingPayloads.append(contentsOf: try self.decoder.append(chunk))
+            try self.pendingPayloads.append(contentsOf: self.decoder.append(chunk))
         }
     }
 
@@ -463,20 +463,20 @@ private final class MLXMemoryPressureMonitor: @unchecked Sendable {
     }
 }
 
-private extension String {
-    var nilIfBlank: String? {
+extension String {
+    fileprivate var nilIfBlank: String? {
         let trimmed = self.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 }
 
-private extension Data {
-    mutating func appendLEUInt16(_ value: UInt16) {
+extension Data {
+    fileprivate mutating func appendLEUInt16(_ value: UInt16) {
         var littleEndian = value.littleEndian
         Swift.withUnsafeBytes(of: &littleEndian) { self.append(contentsOf: $0) }
     }
 
-    mutating func appendLEUInt32(_ value: UInt32) {
+    fileprivate mutating func appendLEUInt32(_ value: UInt32) {
         var littleEndian = value.littleEndian
         Swift.withUnsafeBytes(of: &littleEndian) { self.append(contentsOf: $0) }
     }

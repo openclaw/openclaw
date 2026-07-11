@@ -20,7 +20,7 @@ enum OpenClawMLXTTSHelper {
             try await writer.write(MLXTTSEvent.ready)
             try await Self.readRequests(service: service, writer: writer)
         } catch {
-            Self.log("\(error)")
+            self.log("\(error)")
             exit(1)
         }
     }
@@ -38,8 +38,24 @@ enum OpenClawMLXTTSHelper {
     }
 
     private static func readRequests(service: MLXTTSHelperService, writer: FrameWriter) async throws {
+        let input = FileHandle.standardInput
+        let (chunks, continuation) = AsyncStream<Data>.makeStream()
+        input.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                continuation.finish()
+            } else {
+                continuation.yield(data)
+            }
+        }
+        defer {
+            input.readabilityHandler = nil
+            continuation.finish()
+        }
+
         var decoder = MLXTTSFrameDecoder()
-        while let chunk = try FileHandle.standardInput.read(upToCount: 64 * 1024), !chunk.isEmpty {
+        for await chunk in chunks {
             for payload in try decoder.append(chunk) {
                 let request: MLXTTSRequest
                 do {
@@ -52,7 +68,7 @@ enum OpenClawMLXTTSHelper {
                     continue
                 }
 
-                if !(await service.handle(request)) {
+                if await !(service.handle(request)) {
                     return
                 }
             }
