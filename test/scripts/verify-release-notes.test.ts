@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  canonicalMainCommitMatches,
+  canonicalPullRequests,
   contaminatingPullRequestReferences,
   countTopLevelSectionBullets,
   createGithubSnapshotState,
@@ -46,6 +48,57 @@ describe("release-note verification", () => {
         `verify-release-notes-${"a".repeat(40)}-${"b".repeat(40)}.json`,
       ),
     );
+  });
+
+  it("uses the original main PR for explicit and uniquely matched backports", () => {
+    const mainCommit = {
+      authorEmail: "maintainer@example.com",
+      authorName: "Maintainer",
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: "a".repeat(40),
+      subject: "fix(channel): preserve durable replies (#123)",
+    };
+    const explicitBackport = {
+      authorEmail: "other@example.com",
+      authorName: "Other",
+      body: `(cherry picked from commit ${mainCommit.hash})`,
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: "b".repeat(40),
+      subject: "fix(channel): preserve durable replies",
+    };
+    const integratedBackport = {
+      authorEmail: mainCommit.authorEmail,
+      authorName: mainCommit.authorName,
+      body: "",
+      changedPaths: new Set(["src/channel.ts", "src/release.ts"]),
+      hash: "c".repeat(40),
+      subject: "fix(channel): preserve durable replies",
+    };
+
+    expect(canonicalMainCommitMatches(explicitBackport, [mainCommit])).toEqual([mainCommit.hash]);
+    expect(canonicalMainCommitMatches(integratedBackport, [mainCommit])).toEqual([mainCommit.hash]);
+    expect(canonicalPullRequests([456], [123])).toEqual([123]);
+  });
+
+  it("keeps the release PR without an unambiguous main forward-port", () => {
+    const releaseCommit = {
+      authorEmail: "maintainer@example.com",
+      authorName: "Maintainer",
+      body: "",
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: "c".repeat(40),
+      subject: "fix(channel): preserve durable replies",
+    };
+    const ambiguousMainCommits = ["a", "b"].map((prefix) => ({
+      authorEmail: releaseCommit.authorEmail,
+      authorName: releaseCommit.authorName,
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: prefix.repeat(40),
+      subject: "fix(channel): preserve durable replies (#123)",
+    }));
+
+    expect(canonicalMainCommitMatches(releaseCommit, ambiguousMainCommits)).toEqual([]);
+    expect(canonicalPullRequests([456], [])).toEqual([456]);
   });
 
   it("reuses exact-range GitHub GraphQL snapshots without caching REST reads", () => {
