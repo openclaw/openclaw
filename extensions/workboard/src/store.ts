@@ -11,7 +11,6 @@ import type {
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
-  WorkboardActiveOwnerQueryable,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
@@ -2354,34 +2353,6 @@ export class WorkboardStore {
       .map((entry) => entry.card)
       .filter((card) => !boardId || cardBoardId(card) === boardId)
       .toSorted(compareCards);
-  }
-
-  /**
-   * agentId (or undefined for unowned cards) of every card that currently
-   * consumes a dispatch "owner slot" — running, claimed, or with a running
-   * execution — across ALL boards, excluding archived cards. Used by
-   * dispatchAndStartWorkboardCards to enforce the cross-board same-owner
-   * exclusion without materializing the full corpus via list()/entries()
-   * when the underlying card store can answer this more cheaply (e.g. a
-   * single indexed SQL query instead of N+1 child-table reads per card).
-   * Falls back to a full list() scan for stores that don't implement the
-   * fast path (e.g. in-memory test stores), so behavior is unchanged there.
-   */
-  async listActiveOwnerIds(): Promise<Array<string | undefined>> {
-    const cardStore = this.store as WorkboardKeyedStore & Partial<WorkboardActiveOwnerQueryable>;
-    if (typeof cardStore.activeOwnerIds === "function") {
-      return await cardStore.activeOwnerIds();
-    }
-    const cards = await this.list();
-    return cards
-      .filter(
-        (card) =>
-          !card.metadata?.archivedAt &&
-          (card.status === "running" ||
-            Boolean(card.metadata?.claim) ||
-            card.execution?.status === "running"),
-      )
-      .map((card) => card.agentId);
   }
 
   async listBoards(): Promise<{ boards: WorkboardBoardSummary[] }> {

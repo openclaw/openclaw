@@ -157,82 +157,6 @@ describe("WorkboardStore", () => {
     }
   });
 
-  it("computes active owner ids across boards via the sqlite fast path, matching the full-scan fallback", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-owners-"));
-    const dbPath = path.join(dir, "workboard.sqlite");
-    try {
-      const stores = createWorkboardSqliteStores({ dbPath });
-      const store = new WorkboardStore(stores.cards, {
-        boards: stores.boards,
-        subscriptions: stores.subscriptions,
-        attachments: stores.attachments,
-      });
-      await store.upsertBoard({ id: "board-a", name: "A" });
-      await store.upsertBoard({ id: "board-b", name: "B" });
-
-      // Claimed/running on board-a: consumes an owner slot for agent-1.
-      const claimedOnA = await store.create({
-        title: "Claimed on A",
-        boardId: "board-a",
-        status: "ready",
-      });
-      await store.claim(claimedOnA.id, { ownerId: "agent-1" });
-
-      // Ready (unclaimed) on board-b, same owner: dispatch must see agent-1 as busy
-      // even though this card lives on a different board than the running one.
-      const readyOnB = await store.create({
-        title: "Ready on B, same owner",
-        boardId: "board-b",
-        agentId: "agent-1",
-        status: "ready",
-      });
-
-      // Archived running card: must NOT count as an active owner slot.
-      const archived = await store.create({
-        title: "Archived running",
-        boardId: "board-a",
-        status: "ready",
-      });
-      await store.claim(archived.id, { ownerId: "agent-archived" });
-      await store.update(archived.id, { metadata: { archivedAt: Date.now() } });
-
-      // Bulk of unrelated triage-status cards (a different board), the case that
-      // made the original unscoped list() scan expensive. None should appear as
-      // active owners since none are running/claimed.
-      for (let i = 0; i < 25; i++) {
-        await store.create({ title: `Triage ${i}`, boardId: "triage-board", status: "triage" });
-      }
-
-      const activeOwnerIds = await store.listActiveOwnerIds();
-      expect(activeOwnerIds).toContain("agent-1");
-      expect(activeOwnerIds).not.toContain("agent-archived");
-      expect(activeOwnerIds.length).toBe(1);
-
-      // Cross-check the sqlite fast path against the generic list()-based fallback
-      // (what an in-memory/non-sqlite backend would compute) to prove they agree.
-      const fallbackStore = new WorkboardStore(
-        {
-          register: stores.cards.register.bind(stores.cards),
-          lookup: stores.cards.lookup.bind(stores.cards),
-          delete: stores.cards.delete.bind(stores.cards),
-          entries: stores.cards.entries.bind(stores.cards),
-        },
-        {
-          boards: stores.boards,
-          subscriptions: stores.subscriptions,
-          attachments: stores.attachments,
-        },
-      );
-      const fallbackOwnerIds = await fallbackStore.listActiveOwnerIds();
-      expect([...activeOwnerIds].sort()).toEqual([...fallbackOwnerIds].sort());
-
-      expect(readyOnB.metadata?.claim).toBeUndefined();
-      stores.close();
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   it("uses rollback journaling on network-backed volumes", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-network-"));
     const dbPath = path.join(dir, "workboard.sqlite");
@@ -1402,8 +1326,9 @@ describe("WorkboardStore", () => {
     entriesSpy.mockClear();
     const dispatch = await store.dispatch();
 
-    expect(dispatch.promoted.map((card) => card.id).sort()).toEqual(
-      children.map((child) => child.id).sort(),
+    const idComparator = (left: string, right: string) => left.localeCompare(right);
+    expect(dispatch.promoted.map((card) => card.id).toSorted(idComparator)).toEqual(
+      children.map((child) => child.id).toSorted(idComparator),
     );
     // Regression guard for the dependencyTargetStatus N+1: before the fix, every
     // parented card being checked in this pass triggered its own additional
