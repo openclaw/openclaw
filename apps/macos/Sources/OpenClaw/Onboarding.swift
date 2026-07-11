@@ -19,6 +19,7 @@ enum RemoteOnboardingProbeState: Equatable {
 @MainActor
 final class OnboardingController: NSObject, NSWindowDelegate {
     static let shared = OnboardingController()
+    static let windowStyleMask: NSWindow.StyleMask = [.titled, .closable, .resizable, .fullSizeContentView]
     private var window: NSWindow?
     /// Human description of work in flight ("Installing the Gateway…").
     /// While set, closing the window asks for confirmation instead of quitting
@@ -47,7 +48,10 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         let window = NSWindow(contentViewController: hosting)
         window.title = UIStrings.welcomeTitle
         window.setContentSize(NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight))
-        window.styleMask = [.titled, .closable, .fullSizeContentView]
+        window.styleMask = Self.windowStyleMask
+        // Keep the focused dialog width while letting taller displays give setup more breathing room.
+        window.contentMinSize = NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight)
+        window.contentMaxSize = NSSize(width: OnboardingView.windowWidth, height: .greatestFiniteMagnitude)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
@@ -128,7 +132,7 @@ struct OnboardingView: View {
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingChatModel: OpenClawChatViewModel
     @State var onboardingSkillsModel = SkillsSettingsModel()
-    @State var crestodianChat = CrestodianOnboardingChatModel()
+    @State var crestodianState = OnboardingCrestodianChatState()
     @State var aiSetup = OnboardingAISetupModel()
     @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
@@ -147,9 +151,15 @@ struct OnboardingView: View {
 
     let permissionsPageIndex = 5
 
-    /// Chat-like pages shrink the mascot so the conversation gets the room.
+    /// Only the full-page chat shrinks the mascot so the conversation gets the room.
     var usesCompactHero: Bool {
-        [self.aiPageIndex, self.onboardingChatPageIndex].contains(self.activePageIndex)
+        Self.shouldUseCompactHero(
+            activePageIndex: self.activePageIndex,
+            onboardingChatPageIndex: self.onboardingChatPageIndex)
+    }
+
+    static func shouldUseCompactHero(activePageIndex: Int, onboardingChatPageIndex: Int) -> Bool {
+        activePageIndex == onboardingChatPageIndex
     }
 
     var heroFrameHeight: CGFloat {
@@ -160,10 +170,16 @@ struct OnboardingView: View {
         self.usesCompactHero ? 64 : 130
     }
 
-    /// Sized so the permissions page fits all capabilities without scrolling:
-    /// heroFrameHeight + contentHeight + ~72 (nav bar) fills windowHeight 752.
-    var contentHeight: CGFloat {
-        Self.windowHeight - self.heroFrameHeight - 72
+    /// The baseline fits every setup control. Taller windows donate all extra room
+    /// to the active page instead of leaving the content pinned to a fixed canvas.
+    func contentHeight(for windowHeight: CGFloat) -> CGFloat {
+        Self.contentHeight(for: windowHeight, usesCompactHero: self.usesCompactHero)
+    }
+
+    static func contentHeight(for windowHeight: CGFloat, usesCompactHero: Bool) -> CGFloat {
+        let availableHeight = max(Self.windowHeight, windowHeight)
+        let heroHeight: CGFloat = usesCompactHero ? 78 : 145
+        return availableHeight - heroHeight - 72
     }
 
     static func pageOrder(
@@ -228,9 +244,28 @@ struct OnboardingView: View {
     /// server-side on that success). "Configure later" on the connection page
     /// remains the explicit skip path.
     var isAISetupBlocking: Bool {
-        self.activePageIndex == self.aiPageIndex &&
-            self.state.connectionMode != .unconfigured &&
-            !self.aiSetup.connected
+        Self.shouldBlockAISetup(
+            currentPage: self.currentPage,
+            pageOrder: self.pageOrder,
+            aiPageIndex: self.aiPageIndex,
+            connectionMode: self.state.connectionMode,
+            connected: self.aiSetup.connected)
+    }
+
+    static func shouldBlockAISetup(
+        currentPage: Int,
+        pageOrder: [Int],
+        aiPageIndex: Int,
+        connectionMode: AppState.ConnectionMode,
+        connected: Bool) -> Bool
+    {
+        guard connectionMode != .unconfigured,
+              !connected,
+              let aiPageCursor = pageOrder.firstIndex(of: aiPageIndex)
+        else {
+            return false
+        }
+        return currentPage >= aiPageCursor
     }
 
     var canAdvance: Bool {

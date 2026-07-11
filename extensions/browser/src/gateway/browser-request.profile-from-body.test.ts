@@ -15,6 +15,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
+    getRuntimeConfig: loadConfigMock,
     loadConfig: loadConfigMock,
   };
 });
@@ -31,32 +32,44 @@ vi.mock("../sdk-node-runtime.js", async () => {
 
 import { browserHandlers } from "./browser-request.js";
 
-type RespondCall = [boolean, unknown?, { code: number; message: string }?];
+type RespondCall = [boolean, unknown?, { code: string; message: string; details?: unknown }?];
 
-function createContext() {
-  const invoke = vi.fn(async () => ({
-    ok: true,
-    payload: {
-      result: { ok: true },
-    },
-  }));
-  const listConnected = vi.fn(() => [
-    {
-      nodeId: "node-1",
-      caps: ["browser"],
-      commands: ["browser.proxy"],
-      platform: "linux",
-    },
-  ]);
+type TestNode = {
+  nodeId: string;
+  displayName?: string;
+  caps?: string[];
+  commands?: string[];
+  platform?: string;
+};
+
+function createContext(invokeResult?: unknown, connectedNodes?: TestNode[]) {
+  const invoke = vi.fn(async () =>
+    invokeResult === undefined ? { ok: true, payload: { result: { ok: true } } } : invokeResult,
+  );
+  const listConnected = vi.fn(
+    () =>
+      connectedNodes ?? [
+        {
+          nodeId: "node-1",
+          caps: ["browser"],
+          commands: ["browser.proxy"],
+          platform: "linux",
+        },
+      ],
+  );
   return {
     invoke,
     listConnected,
   };
 }
 
-async function runBrowserRequest(params: Record<string, unknown>) {
+async function runBrowserRequest(
+  params: Record<string, unknown>,
+  invokeResult?: unknown,
+  connectedNodes?: TestNode[],
+) {
   const respond = vi.fn();
-  const nodeRegistry = createContext();
+  const nodeRegistry = createContext(invokeResult, connectedNodes);
   await browserHandlers["browser.request"]({
     params,
     respond: respond as never,
@@ -73,7 +86,7 @@ function invokeParams(nodeRegistry: ReturnType<typeof createContext>) {
   if (!call) {
     throw new Error("expected browser node invoke call");
   }
-  return call[0] as { command?: string; params?: Record<string, unknown> };
+  return call[0] as { nodeId?: string; command?: string; params?: Record<string, unknown> };
 }
 
 function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall {
@@ -103,6 +116,7 @@ describe("browser.request profile selection", () => {
     const invoke = invokeParams(nodeRegistry);
     expect(invoke.command).toBe("browser.proxy");
     expect(invoke.params?.profile).toBe("work");
+    expect(invoke.params?.errorEnvelope).toBe("browser-v1");
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
@@ -115,6 +129,41 @@ describe("browser.request profile selection", () => {
     });
 
     expect(invokeParams(nodeRegistry).params?.profile).toBe("chrome");
+  });
+
+  it("routes configured compact Unicode browser node names through the node proxy", async () => {
+    loadConfigMock.mockReturnValue({
+      gateway: { nodes: { browser: { mode: "auto", node: "Café01" } } },
+    });
+
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      {
+        method: "GET",
+        path: "/profiles",
+      },
+      undefined,
+      [
+        {
+          nodeId: "cafe-node",
+          displayName: "Cafe\u0301 01",
+          caps: ["browser"],
+          commands: ["browser.proxy"],
+          platform: "linux",
+        },
+        {
+          nodeId: "other-node",
+          displayName: "Other Browser",
+          caps: ["browser"],
+          commands: ["browser.proxy"],
+          platform: "linux",
+        },
+      ],
+    );
+
+    const invoke = invokeParams(nodeRegistry);
+    expect(invoke.nodeId).toBe("cafe-node");
+    expect(invoke.command).toBe("browser.proxy");
+    expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
   it.each([
@@ -173,5 +222,31 @@ describe("browser.request profile selection", () => {
     expect(invoke.params?.method).toBe("GET");
     expect(invoke.params?.path).toBe("/profiles");
     expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
+  it("maps validated node-proxy route failures like local route failures", async () => {
+    const errorBody = {
+      error: "headed mode needs a display",
+      reason: "no_display_for_headed_profile",
+      details: {
+        profile: "openclaw",
+        requestedHeadless: false,
+        headlessSource: "config",
+        displayPresent: false,
+      },
+    };
+    const { respond } = await runBrowserRequest(
+      { method: "POST", path: "/start" },
+      { ok: true, payload: { error: { status: 409, body: errorBody } } },
+    );
+
+    const [ok, payload, error] = firstRespondCall(respond);
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "headed mode needs a display",
+      details: errorBody,
+    });
   });
 });

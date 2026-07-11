@@ -7,7 +7,7 @@ import SwiftUI
 
 extension OnboardingView {
     @ViewBuilder
-    func pageView(for pageIndex: Int) -> some View {
+    func pageView(for pageIndex: Int, contentHeight: CGFloat) -> some View {
         switch pageIndex {
         case 0:
             self.welcomePage()
@@ -16,11 +16,11 @@ extension OnboardingView {
         case 2:
             self.cliPage()
         case 3:
-            self.aiSetupPage()
+            self.aiSetupPage(contentHeight: contentHeight)
         case 5:
-            self.permissionsPage()
+            self.permissionsPage(contentHeight: contentHeight)
         case 8:
-            self.onboardingChatPage()
+            self.onboardingChatPage(contentHeight: contentHeight)
         case 9:
             self.readyPage()
         default:
@@ -161,6 +161,12 @@ extension OnboardingView {
             self.resetRemoteProbeFeedback()
         }
         .onChange(of: self.state.remoteUrl) { _, _ in
+            self.resetRemoteProbeFeedback()
+        }
+        .onChange(of: self.state.remoteToken) { _, _ in
+            self.resetRemoteProbeFeedback()
+        }
+        .onChange(of: self.state.remoteIdentity) { _, _ in
             self.resetRemoteProbeFeedback()
         }
     }
@@ -358,7 +364,9 @@ extension OnboardingView {
                 return "Select a nearby gateway or open Advanced to enter a gateway URL."
             }
             if GatewayRemoteConfig.normalizeGatewayUrl(trimmedUrl) == nil {
-                return "Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, LAN, or Tailnet hosts."
+                return """
+                Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, LAN, or Tailnet hosts.
+                """
             }
             return nil
         case .ssh:
@@ -533,6 +541,7 @@ extension OnboardingView {
     private func resetRemoteProbeFeedback() {
         self.remoteProbeState = .idle
         self.remoteAuthIssue = nil
+        self.restartGatewayBoundAISetup()
     }
 
     static func remoteAuthPromptStyle(
@@ -646,7 +655,7 @@ extension OnboardingView {
         .buttonStyle(.plain)
     }
 
-    func permissionsPage() -> some View {
+    func permissionsPage(contentHeight: CGFloat) -> some View {
         // Fixed layout (no ScrollView): sorted by importance and sized so all
         // permissions stay visible at once — no scrollbars during onboarding.
         VStack(spacing: 12) {
@@ -680,7 +689,7 @@ extension OnboardingView {
             }
         }
         .padding(.horizontal, 28)
-        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
+        .frame(width: self.pageWidth, height: contentHeight, alignment: .top)
     }
 
     func cliPage() -> some View {
@@ -893,7 +902,7 @@ extension OnboardingView {
         }
     }
 
-    func onboardingChatPage() -> some View {
+    func onboardingChatPage(contentHeight: CGFloat) -> some View {
         VStack(spacing: 12) {
             Text("Meet your agent")
                 .font(.largeTitle.weight(.semibold))
@@ -913,7 +922,7 @@ extension OnboardingView {
             .frame(maxHeight: .infinity)
         }
         .padding(.horizontal, 28)
-        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
+        .frame(width: self.pageWidth, height: contentHeight, alignment: .top)
     }
 
     func readyPage() -> some View {

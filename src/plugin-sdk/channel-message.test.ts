@@ -3,7 +3,10 @@
  */
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { defineChannelMessageAdapter as defineCoreChannelMessageAdapter } from "../channels/message/index.js";
-import { defineChannelMessageAdapter } from "./channel-outbound.js";
+import {
+  defineChannelMessageAdapter,
+  type ChannelMessageDurableFinalAdapter,
+} from "./channel-outbound.js";
 
 describe("defineChannelMessageAdapter", () => {
   const loadPluginSdkSubpaths = async () =>
@@ -78,6 +81,36 @@ describe("defineChannelMessageAdapter", () => {
     expect(adapter.receive).toEqual({
       defaultAckPolicy: "after_agent_dispatch",
       supportedAckPolicies: ["after_receive_record", "after_agent_dispatch"],
+    });
+  });
+
+  it("exposes the synchronous deferred-delivery admission contract", () => {
+    const admitDeferredDelivery = vi.fn<
+      NonNullable<ChannelMessageDurableFinalAdapter["admitDeferredDelivery"]>
+    >((ctx) =>
+      ctx.phase === "recovery"
+        ? { status: "permanent_rejection", reason: "account no longer supports replay" }
+        : { status: "allowed" },
+    );
+    const adapter = defineChannelMessageAdapter({
+      id: "demo",
+      durableFinal: { admitDeferredDelivery },
+    });
+    const context = {
+      cfg: {},
+      channel: "demo",
+      to: "conversation-1",
+      accountId: "workspace-1",
+    } as Parameters<typeof admitDeferredDelivery>[0];
+
+    expect(adapter.durableFinal?.admitDeferredDelivery?.({ ...context, phase: "live" })).toEqual({
+      status: "allowed",
+    });
+    expect(
+      adapter.durableFinal?.admitDeferredDelivery?.({ ...context, phase: "recovery" }),
+    ).toEqual({
+      status: "permanent_rejection",
+      reason: "account no longer supports replay",
     });
   });
 });

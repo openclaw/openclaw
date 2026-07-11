@@ -251,8 +251,8 @@ function chatHtml(opts: ChatFixtureOptions = {}) {
       <header class="topbar">
         <div class="topnav-shell">
           <div class="topnav-shell__actions">
-            <button class="topbar-search"><span class="topbar-search__label">Search</span><kbd class="topbar-search__kbd">K</kbd></button>
-            <div class="topbar-status">${chatControlsHtml({ agent: !opts.singleAgent })}</div>
+            <button class="topbar-search">${iconSvg()}</button>
+            <div>${chatControlsHtml({ agent: !opts.singleAgent })}</div>
           </div>
         </div>
       </header>
@@ -371,11 +371,20 @@ function chatHtml(opts: ChatFixtureOptions = {}) {
                         </svg>
                       </summary>
                       <section class="context-usage__popover">
-                        <div class="context-usage__quota">
-                          <a class="chat-controls__quota chat-controls__quota--ok" href="/usage">
-                            <span class="chat-controls__quota-label">Usage Remaining</span>
-                            <span class="chat-controls__quota-value">28%</span>
+                        <div class="context-usage__section-label context-usage__plan-header">
+                          <span>Plan usage</span>
+                          <a class="context-usage__plan-link" href="/usage" data-chat-provider-usage="true">
+                            <span class="context-usage__plan-badge">Max (20x)</span>${iconSvg()}
                           </a>
+                        </div>
+                        <div class="context-usage__limits">
+                          <div class="context-usage__limit">
+                            <div class="context-usage__limit-head">
+                              <span class="context-usage__limit-label">Weekly · all models</span>
+                              <span class="context-usage__limit-meta"><strong>72%</strong></span>
+                            </div>
+                            <div class="context-usage__limit-bar"><span style="width: 72%"></span></div>
+                          </div>
                         </div>
                       </section>
                     </details>
@@ -635,6 +644,43 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("renders encoded media extensions from assistant output and transcript fields", async () => {
+    if (!realChatServer) {
+      throw new Error("Expected the Control UI server to be ready");
+    }
+    const imageUrl = "https://cdn.example/render%2Epng?download=1";
+    const videoUrl = "https://cdn.example/clip%2Emp4?download=1";
+    const page = await openBrowserPage(1366, 900);
+    try {
+      await page.route("https://cdn.example/**", (route) => route.abort());
+      await installMockGateway(page, {
+        historyMessages: [
+          {
+            content: `MEDIA:${imageUrl}`,
+            role: "assistant",
+            timestamp: Date.UTC(2026, 6, 9, 10, 0),
+          },
+          {
+            content: "Encoded transcript video",
+            MediaPath: videoUrl,
+            role: "user",
+            timestamp: Date.UTC(2026, 6, 9, 10, 1),
+          },
+        ],
+      });
+      await page.goto(`${realChatServer.baseUrl}chat`);
+
+      const image = page.locator("img.chat-message-image");
+      const video = page.locator("video");
+      await image.waitFor({ timeout: 10_000 });
+      await video.waitFor({ timeout: 10_000 });
+      expect(await image.getAttribute("src")).toBe(imageUrl);
+      expect(await video.getAttribute("src")).toBe(videoUrl);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it.each([
     [393, 852],
     [1366, 900],
@@ -706,13 +752,15 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           };
         };
         return {
-          bubble: styleFor(".chat-group.assistant .chat-bubble:first-child"),
+          assistantBubble: styleFor(".chat-group.assistant .chat-bubble:first-child"),
+          bubble: styleFor(".chat-group.user .chat-bubble:first-child"),
           composer: styleFor(".agent-chat__input"),
           footer: styleFor(".agent-chat__composer-footer"),
           textarea: styleFor(".agent-chat__composer-combobox > textarea"),
         };
       });
 
+      expect(geometry.assistantBubble).not.toBeNull();
       expect(geometry.bubble).not.toBeNull();
       expect(geometry.composer).not.toBeNull();
       expect(geometry.footer).not.toBeNull();
@@ -727,6 +775,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           geometry.bubble?.paddingLeft,
         ]),
       ).toEqual(new Set([16]));
+      // Assistant replies render flat (no bubble card): zero horizontal inset
+      // keeps the text on the tool-row left edge.
+      expect(geometry.assistantBubble?.paddingLeft).toBe(0);
+      expect(geometry.assistantBubble?.paddingRight).toBe(0);
       expect(geometry.composer?.borderRadius).toBe(10);
 
       const composerInset = width <= 768 ? 4 : 8;

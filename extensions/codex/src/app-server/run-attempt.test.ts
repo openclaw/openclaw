@@ -44,6 +44,7 @@ import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
 import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   flattenCodexDynamicToolFunctions,
+  type CodexDynamicToolCallResponse,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type CodexServerNotification,
@@ -1249,6 +1250,37 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("reuses one computer execution when Codex redelivers an in-flight request", async () => {
+    const response: CodexDynamicToolCallResponse = {
+      success: true,
+      contentItems: [{ type: "inputText", text: "left_click ok" }],
+    };
+    let finishExecution!: (value: typeof response) => void;
+    const inFlight = new Promise<typeof response>((resolve) => {
+      finishExecution = resolve;
+    });
+    const start = vi.fn(() => inFlight);
+    const registry = testing.createCodexDynamicToolExecutionRegistry();
+    const call = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-computer-1",
+    };
+
+    const first = registry.claim(call, start);
+    const replayed = registry.claim(call, start);
+
+    expect(first.replayed).toBe(false);
+    expect(replayed.replayed).toBe(true);
+    expect(replayed.execution).toBe(first.execution);
+    expect(start).toHaveBeenCalledTimes(1);
+    finishExecution(response);
+    await expect(Promise.all([first.execution, replayed.execution])).resolves.toEqual([
+      response,
+      response,
+    ]);
+  });
+
   it("emits TUI-compatible tool events for Codex dynamic tool calls", async () => {
     const sessionFile = path.join(tempDir, "session-tool-events.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-tool-events");
@@ -1261,23 +1293,27 @@ describe("runCodexAppServerAttempt", () => {
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
 
-    await expect(
-      harness.handleServerRequest({
-        id: "request-tool-1",
-        method: "item/tool/call",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-1",
-          namespace: null,
-          tool: "python",
-          arguments: { code: "print('hi')" },
-        },
-      }),
-    ).resolves.toMatchObject({
+    const request = {
+      id: "request-tool-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "python",
+        arguments: { code: "print('hi')" },
+      },
+    };
+    const [firstResponse, replayedResponse] = await Promise.all([
+      harness.handleServerRequest(request),
+      harness.handleServerRequest(request),
+    ]);
+    expect(firstResponse).toMatchObject({
       success: false,
       contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: python" }],
     });
+    expect(replayedResponse).toEqual(firstResponse);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -1317,6 +1353,11 @@ describe("runCodexAppServerAttempt", () => {
       );
     expect(resultEvent?.data.result).not.toHaveProperty("success");
     expect(resultEvent?.data.result).not.toHaveProperty("contentItems");
+    const toolPhases = onRunAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "tool")
+      .map((event) => event.data?.phase);
+    expect(toolPhases).toEqual(["start", "result"]);
   });
 
   it("maps sanitized dynamic tool output into transcript progress content", () => {
@@ -3463,6 +3504,58 @@ describe("runCodexAppServerAttempt", () => {
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
       text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
     });
+  });
+
+  it("preserves every command failure from official app-server events", async () => {
+    const sessionFile = path.join(tempDir, "session-multi-command-failure.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-multi-command-failure");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+
+    for (const [id, status, exitCode] of [
+      ["command-failed-1", "failed", 1],
+      ["command-succeeded", "completed", 0],
+      ["command-failed-2", "failed", 2],
+    ] as const) {
+      await harness.notify({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id,
+            command: `/bin/bash -lc 'exit ${exitCode}'`,
+            cwd: workspaceDir,
+            status: "inProgress",
+          },
+        },
+      });
+      await harness.notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id,
+            command: `/bin/bash -lc 'exit ${exitCode}'`,
+            cwd: workspaceDir,
+            status,
+            aggregatedOutput: "",
+            exitCode,
+            durationMs: 1,
+          },
+        },
+      });
+    }
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    const result = await run;
+    expect(result.toolMetas).toHaveLength(3);
+    expect(result.toolMetas.filter((meta) => meta.isError === true)).toHaveLength(2);
   });
 
   it("promotes implicit Codex yolo approval policy when OpenClaw tool policy exists", async () => {

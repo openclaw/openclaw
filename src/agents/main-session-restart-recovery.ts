@@ -16,7 +16,7 @@ import {
   resolveSessionFilePath,
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions.js";
-import { applyRestartRecoveryLifecycle } from "../config/sessions/session-accessor.js";
+import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
@@ -26,6 +26,7 @@ import {
   listAgentRunsForSession,
 } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { CommandLane } from "../process/lanes.js";
 import {
   isAcpSessionKey,
@@ -212,7 +213,7 @@ export async function markRestartAbortedMainSessions(params: {
   }
 
   for (const storePath of storePaths) {
-    const storeResult = await applyRestartRecoveryLifecycle({
+    const storeResult = await applySessionEntryReplacements({
       storePath,
       requireWriteSuccess: true,
       update: (entries) => {
@@ -329,7 +330,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
 
   for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
-    const storeResult = await applyRestartRecoveryLifecycle({
+    const storeResult = await applySessionEntryReplacements({
       storePath,
       update: (entries) => {
         const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
@@ -441,7 +442,7 @@ async function markSessionFailed(params: {
   sessionKey: string;
   reason: string;
 }): Promise<void> {
-  await applyRestartRecoveryLifecycle({
+  await applySessionEntryReplacements({
     storePath: params.storePath,
     update: (entries) => {
       const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
@@ -600,7 +601,7 @@ async function resumeMainSession(params: {
       params: agentParams,
       timeoutMs: 10_000,
     });
-    await applyRestartRecoveryLifecycle({
+    await applySessionEntryReplacements({
       storePath: params.storePath,
       update: (entries) => {
         const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
@@ -662,7 +663,7 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
   }
 
   const storePath = path.join(sessionsDir, "sessions.json");
-  const storeResult = await applyRestartRecoveryLifecycle({
+  const storeResult = await applySessionEntryReplacements({
     storePath,
     update: (entries) => {
       const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
@@ -956,12 +957,17 @@ export function scheduleRestartAbortedMainSessionRecovery(
   const startupRecoveryCutoffMs = Date.now();
 
   const runRecoveryAttempt = (attempt: number, delay: number) => {
-    void recoverStartupOrphanedMainSessions({
-      cfg: params.cfg,
-      stateDir: params.stateDir,
-      resumedSessionKeys,
-      updatedBeforeMs: startupRecoveryCutoffMs,
-    })
+    // Delayed retries outlive startup; each attempt must independently block
+    // host suspension while it reads and rewrites recovery session state.
+    void runWithGatewayIndependentRootWorkAdmission(
+      async () =>
+        await recoverStartupOrphanedMainSessions({
+          cfg: params.cfg,
+          stateDir: params.stateDir,
+          resumedSessionKeys,
+          updatedBeforeMs: startupRecoveryCutoffMs,
+        }),
+    )
       .then((result) => {
         if (result.failed > 0 && attempt < maxRetries) {
           scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);

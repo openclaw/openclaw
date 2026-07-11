@@ -31,6 +31,7 @@ import {
 } from "../diagnostic-events.js";
 import { retryAsync } from "../retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
+import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn<() => Promise<SessionTranscriptAppendResult>>(
@@ -815,6 +816,57 @@ describe("deliverOutboundPayloads", () => {
     expect(commitParams?.result?.messageId).toBe("message-adapter-1");
     expect(results[0]?.channel).toBe("matrix");
     expect(results[0]?.messageId).toBe("message-adapter-1");
+  });
+
+  it("rejects provider-blocked deferred delivery before queue creation or platform work", async () => {
+    const admitDeferredDelivery = vi.fn(() => ({
+      status: "permanent_rejection" as const,
+      reason: "unsupported_enterprise_slack_delivery",
+    }));
+    const messageSendText = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: {
+            id: "matrix",
+            message: {
+              id: "matrix",
+              durableFinal: { admitDeferredDelivery },
+              send: { text: messageSendText },
+            },
+          },
+        },
+      ]),
+    );
+
+    const request = {
+      cfg: {},
+      channel: "matrix" as const,
+      to: "!room:example",
+      accountId: "enterprise",
+      payloads: [{ text: "blocked" }],
+    };
+    await expect(deliverOutboundPayloads(request)).rejects.toThrow(
+      "unsupported_enterprise_slack_delivery",
+    );
+    await expect(deliverOutboundPayloads({ ...request, skipQueue: true })).rejects.toThrow(
+      "unsupported_enterprise_slack_delivery",
+    );
+
+    expect(admitDeferredDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "enterprise",
+        channel: "matrix",
+        phase: "live",
+        to: "!room:example",
+      }),
+    );
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(admitDeferredDelivery).toHaveBeenCalledTimes(2);
+    expect(messageSendText).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
   });
 
   it("continues best-effort sends when the precise dispatch timestamp cannot be refreshed", async () => {
@@ -1824,19 +1876,45 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
-  it("preserves queued send evidence when any best-effort failure is ambiguous", async () => {
+  it("clears queued send evidence for an all-not-dispatched best-effort failure", async () => {
+    const sendMatrix = vi.fn().mockRejectedValueOnce(
+      new PlatformMessageNotDispatchedError("upload timed out before completion dispatch", {
+        cause: new Error("request timed out"),
+      }),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        bestEffort: true,
+      }),
+    ).resolves.toEqual([]);
+
+    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+      "mock-queue-id",
+      "partial delivery failure (bestEffort)",
+    );
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("preserves queued send evidence when a marked best-effort batch has an ambiguous failure", async () => {
     const ambiguousError = Object.assign(new Error("connect ECONNRESET"), {
       code: "ECONNRESET",
       syscall: "connect",
     });
-    const preConnectError = Object.assign(new Error("connect ECONNREFUSED"), {
-      code: "ECONNREFUSED",
-      syscall: "connect",
-    });
+    const notDispatchedError = new PlatformMessageNotDispatchedError(
+      "upload timed out before completion dispatch",
+      { cause: new Error("request timed out") },
+    );
     const sendMatrix = vi
       .fn()
       .mockRejectedValueOnce(ambiguousError)
-      .mockRejectedValueOnce(preConnectError);
+      .mockRejectedValueOnce(notDispatchedError);
 
     await expect(
       deliverOutboundPayloads({

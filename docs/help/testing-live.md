@@ -288,8 +288,8 @@ Docker notes:
 - Goal: validate the plugin-owned Codex harness through the normal gateway
   `agent` method:
   - load the bundled `codex` plugin
-  - select `openai/gpt-5.5`, which routes OpenAI agent turns through Codex by default
-  - send a first gateway agent turn to `openai/gpt-5.5` with the Codex harness selected
+  - select an OpenAI model through `/model <ref> --runtime codex`
+  - send a first gateway agent turn with the requested thinking level
   - send a second turn to the same OpenClaw session and verify the app-server
     thread can resume
   - run `/codex status` and `/codex models` through the same gateway command
@@ -299,15 +299,22 @@ Docker notes:
     denied so the agent asks back
 - Test: `src/gateway/gateway-codex-harness.live.test.ts`
 - Enable: `OPENCLAW_LIVE_CODEX_HARNESS=1`
-- Default model: `openai/gpt-5.5`
+- Harness baseline model: `codex/gpt-5.5`
+- Fresh OpenAI API-key selection default: `openai/gpt-5.6`
+- Default thinking: `low`
+- Model override: `OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/<model>`
+- Thinking override: `OPENCLAW_LIVE_CODEX_HARNESS_THINKING=<level>`
+- Matrix override: `OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=<model>=<thinking>,...`
+- Auth mode: `OPENCLAW_LIVE_CODEX_HARNESS_AUTH=codex-auth` (default) uses the
+  copied Codex login; `api-key` uses `OPENAI_API_KEY` through Codex app-server.
 - Optional image probe: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
 - Optional MCP/tool probe: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
 - Optional Guardian probe: `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`
 - The smoke forces provider/model `agentRuntime.id: "codex"` so a broken Codex
   harness cannot pass by silently falling back to OpenClaw.
-- Auth: Codex app-server auth from the local Codex subscription login. Docker
-  smokes can also provide `OPENAI_API_KEY` for non-Codex probes when applicable,
-  plus optional copied `~/.codex/auth.json` and `~/.codex/config.toml`.
+- Auth: Codex app-server auth from the local Codex subscription login, or
+  `OPENAI_API_KEY` when `OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key`. Docker can
+  copy `~/.codex/auth.json` and `~/.codex/config.toml` for subscription runs.
 
 Local recipe:
 
@@ -326,6 +333,36 @@ Docker recipe:
 pnpm test:docker:live-codex-harness
 ```
 
+GPT-5.6 native Codex matrix:
+
+```bash
+OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key \
+  OPENCLAW_LIVE_CODEX_HARNESS_TARGETS='openai/gpt-5.6-sol=ultra,openai/gpt-5.6-terra=ultra,openai/gpt-5.6-luna=max' \
+  pnpm test:docker:live-codex-harness
+```
+
+Fresh OpenAI API-key default:
+
+```bash
+OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT=1 \
+  OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai \
+  OPENCLAW_LIVE_GATEWAY_THINKING=off \
+  pnpm test:live -- src/gateway/gateway-models.profiles.live.test.ts
+```
+
+This proof leaves `OPENCLAW_LIVE_GATEWAY_MODELS` unset, resolves the model through
+the fresh onboarding inference-selection seam, asserts `openai/gpt-5.6`, and then
+runs a real gateway turn with that resolved model.
+
+GPT-5.6 embedded OpenClaw matrix:
+
+```bash
+OPENCLAW_LIVE_GATEWAY_THINKING=ultra \
+  OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai \
+  OPENCLAW_LIVE_GATEWAY_MODELS='openai/gpt-5.6-sol,openai/gpt-5.6-terra,openai/gpt-5.6-luna' \
+  pnpm test:live -- src/gateway/gateway-models.profiles.live.test.ts
+```
+
 Docker notes:
 
 - The Docker runner lives at `scripts/test-live-codex-harness-docker.sh`.
@@ -339,6 +376,9 @@ Docker notes:
   run.
 - Docker uses the same explicit Codex runtime config, so legacy aliases or OpenClaw
   fallback cannot hide a Codex harness regression.
+- Matrix targets run sequentially in one container. The Docker script scales its
+  default 35-minute timeout by target count; any outer shell or CI timeout must
+  allow the same total. Canonical CI keeps each GPT-5.6 target in a separate shard.
 
 ### Recommended live recipes
 
@@ -360,13 +400,13 @@ Narrow, explicit allowlists are fastest and least flaky:
   - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Tool calling across several providers:
-  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M3" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3.5-flash,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M3" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Z.AI Coding Plan GLM-5.2 direct smoke:
   - `ZAI_CODING_LIVE_TEST=1 pnpm test:live src/agents/zai.live.test.ts`
 
 - Google focus (Gemini API key + Antigravity):
-  - Gemini (API key): `OPENCLAW_LIVE_GATEWAY_MODELS="google/gemini-3-flash-preview" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - Gemini (API key): `OPENCLAW_LIVE_GATEWAY_MODELS="google/gemini-3.5-flash" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
   - Antigravity (OAuth): `OPENCLAW_LIVE_GATEWAY_MODELS="google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-pro-high" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Google adaptive thinking smoke (`qa manual` from the private QA CLI - requires `OPENCLAW_ENABLE_PRIVATE_QA_CLI=1` and a source checkout; see [QA overview](/concepts/qa-e2e-automation)):
@@ -389,10 +429,12 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 | Provider/model                                | Notes      |
 | --------------------------------------------- | ---------- |
 | `anthropic/claude-opus-4-8`                   |            |
+| `anthropic/claude-sonnet-5`                   |            |
 | `anthropic/claude-sonnet-4-6`                 |            |
 | `anthropic/claude-opus-4-7`                   |            |
 | `google/gemini-3.1-pro-preview`               | Gemini API |
-| `google/gemini-3-flash-preview`               | Gemini API |
+| `google/gemini-3.5-flash`                     | Gemini API |
+| `cohere/command-a-plus-05-2026`               |            |
 | `moonshot/kimi-k2.7-code`                     |            |
 | `anthropic/claude-opus-4-6`                   |            |
 | `deepseek/deepseek-v4-flash`                  |            |
@@ -404,6 +446,7 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 | `opencode-go/glm-5`                           |            |
 | `openrouter/ai21/jamba-large-1.7`             |            |
 | `xai/grok-4.5`                                |            |
+| `xai/grok-4.20-0309-reasoning`                |            |
 | `zai/glm-5.1`                                 |            |
 | `fireworks/accounts/fireworks/models/glm-5p1` |            |
 | `minimax-portal/minimax-m3`                   |            |
@@ -430,7 +473,7 @@ Notes on the modern list:
 Run gateway smoke with tools + image across a hand-picked cross-provider set:
 
 ```bash
-OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M3" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts
+OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3.5-flash,google-antigravity/claude-opus-4-6-thinking,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M3" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts
 ```
 
 Optional additional coverage outside the curated lists (nice to have, pick a "tools"-capable model you have enabled):
@@ -579,6 +622,11 @@ request. Plugin dependencies are expected to be present before runtime load.
   - Provider-specific Vydra coverage:
     - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_VYDRA_VIDEO=1 pnpm test:live -- extensions/vydra/vydra.live.test.ts`
     - That file runs `veo3` text-to-video plus a `kling` image-to-video lane that uses a remote image URL fixture by default (`OPENCLAW_LIVE_VYDRA_KLING_IMAGE_URL` to override).
+  - Provider-specific xAI coverage:
+    - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_XAI_VIDEO=1 pnpm test:live -- extensions/xai/xai.live.test.ts -t "classic Grok Imagine"`
+    - The classic case generates a square local PNG first frame, omits geometry, requests a one-second image-to-video clip, polls to completion, and verifies the downloaded buffer.
+    - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_XAI_VIDEO=1 pnpm test:live -- extensions/xai/xai.live.test.ts -t "Grok Imagine Video 1.5"`
+    - The 1.5 case generates a local PNG first frame, requests a one-second 1080P image-to-video clip, polls to completion, and verifies the downloaded buffer.
   - Current `videoToVideo` live coverage:
     - `runway` only when the selected model resolves to `gen4_aleph`
   - Current declared-but-skipped `videoToVideo` providers in the shared sweep:

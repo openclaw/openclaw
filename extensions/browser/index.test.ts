@@ -115,6 +115,19 @@ describe("browser plugin", () => {
     expect(browserPluginNodeHostCommands).toHaveLength(1);
     expect(browserPluginNodeHostCommands[0]?.command).toBe("browser.proxy");
     expect(browserPluginNodeHostCommands[0]?.cap).toBe("browser");
+    expect(browserPluginNodeHostCommands[0]?.isAvailable?.({ config: {}, env: {} })).toBe(true);
+    expect(
+      browserPluginNodeHostCommands[0]?.isAvailable?.({
+        config: { browser: { enabled: false } },
+        env: {},
+      }),
+    ).toBe(false);
+    expect(
+      browserPluginNodeHostCommands[0]?.isAvailable?.({
+        config: { nodeHost: { browserProxy: { enabled: false } } },
+        env: {},
+      }),
+    ).toBe(false);
     expect(typeof browserPluginNodeHostCommands[0]?.handle).toBe("function");
     expect(browserSecurityAuditCollectors).toHaveLength(1);
   });
@@ -150,6 +163,8 @@ describe("browser plugin", () => {
     }
 
     expect(tool.name).toBe("browser");
+    expect(tool.description).toContain("action=profiles");
+    expect(tool.description).not.toContain('profile="user"');
     expect(runtimeApiMocks.createBrowserTool).not.toHaveBeenCalled();
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
