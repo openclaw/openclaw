@@ -186,6 +186,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
   @state() private width = DEFAULT_LAYOUT.width;
   @state() private running: boolean | null = null;
   @state() private tabs: BrowserPanelTab[] = [];
+  /** Stable tab handle (plugin alias when available), not a raw CDP target id. */
   @state() private activeTargetId: string | null = null;
   @state() private view: BrowserPanelView | null = null;
   @state() private loading = false;
@@ -204,6 +205,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
   private refreshTimer: number | null = null;
   private activeClient: GatewayBrowserClient | null = null;
   private drawingStroke: AnnotationStroke | null = null;
+  private suppressStageClick = false;
   private urlDraftEditing = false;
   private wheelDeltaX = 0;
   private wheelDeltaY = 0;
@@ -422,13 +424,13 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
         this.view = null;
       }
       const active =
-        snapshot.tabs.find((tab) => tab.targetId === this.activeTargetId) ?? snapshot.tabs[0];
-      this.activeTargetId = active?.targetId ?? null;
+        snapshot.tabs.find((tab) => tab.id === this.activeTargetId) ?? snapshot.tabs[0];
+      this.activeTargetId = active?.id ?? null;
       if (!this.urlDraftEditing) {
         this.urlDraft = active?.url ?? "";
       }
       if (active) {
-        await this.refreshView(active.targetId, epoch);
+        await this.refreshView(active.id, epoch);
       } else {
         this.view = null;
       }
@@ -448,10 +450,13 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
     if (!client) {
       return;
     }
+    // A slow capture for one tab must never overwrite the view after the user
+    // switched tabs; the epoch alone does not move on tab selection.
+    const current = () => this.isCurrent(epoch) && this.activeTargetId === targetId;
     this.loading = true;
     try {
       const shot = await captureBrowserScreenshot(client, targetId);
-      if (!this.isCurrent(epoch)) {
+      if (!current()) {
         return;
       }
       const dataUrl = await fetchBrowserScreenshotDataUrl({
@@ -461,7 +466,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
       });
       const image = await loadImage(dataUrl);
       const metrics = await this.readMetrics(client, targetId);
-      if (!this.isCurrent(epoch)) {
+      if (!current()) {
         return;
       }
       this.view = { targetId, dataUrl, image, url: shot.url, metrics };
@@ -469,7 +474,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
         this.urlDraft = shot.url;
       }
     } catch (err) {
-      if (this.isCurrent(epoch)) {
+      if (current()) {
         this.reportError(err);
       }
     } finally {
@@ -565,13 +570,14 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
         if (!this.isCurrent(epoch)) {
           return;
         }
-        this.activeTargetId = tab?.targetId ?? this.activeTargetId;
+        this.activeTargetId = tab?.id ?? this.activeTargetId;
       } else {
-        const result = await navigateBrowser(client, { url, targetId: this.activeTargetId });
+        // Keep the stable alias as the active handle; navigate may swap the
+        // raw target underneath and the alias migrates server-side.
+        await navigateBrowser(client, { url, targetId: this.activeTargetId });
         if (!this.isCurrent(epoch)) {
           return;
         }
-        this.activeTargetId = result.targetId || this.activeTargetId;
       }
       await this.refreshTabsOnly(client, epoch);
       if (this.activeTargetId) {
@@ -620,10 +626,10 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
       await this.refreshTabsOnly(client, epoch);
       if (this.activeTargetId === targetId) {
         const next = this.tabs[0] ?? null;
-        this.activeTargetId = next?.targetId ?? null;
+        this.activeTargetId = next?.id ?? null;
         this.view = null;
         if (next) {
-          await this.refreshView(next.targetId, epoch);
+          await this.refreshView(next.id, epoch);
         }
       }
     });
@@ -742,6 +748,12 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
   // --- interact mode ------------------------------------------------------
 
   private handleStageClick(event: MouseEvent): void {
+    if (this.suppressStageClick) {
+      // The click that follows an inspect-capture pointerdown lands after the
+      // mode already returned to interact; it must not reach the remote page.
+      this.suppressStageClick = false;
+      return;
+    }
     if (this.mode !== "interact") {
       return;
     }
@@ -813,6 +825,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
 
   private handleOverlayPointerDown(event: PointerEvent): void {
     if (this.mode === "inspect") {
+      this.suppressStageClick = true;
       void this.sendAnnotation({ element: this.inspected });
       return;
     }
@@ -907,7 +920,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
 
   private async sendAnnotation(params: { element?: BrowserInspectedNode | null }): Promise<void> {
     const view = this.view;
-    const tab = this.tabs.find((entry) => entry.targetId === this.activeTargetId);
+    const tab = this.tabs.find((entry) => entry.id === this.activeTargetId);
     if (!view) {
       return;
     }
@@ -1022,15 +1035,15 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
         ${this.tabs.map(
           (tab) => html`
             <div
-              class="bp-tab ${tab.targetId === this.activeTargetId ? "is-active" : ""}"
+              class="bp-tab ${tab.id === this.activeTargetId ? "is-active" : ""}"
               role="tab"
               title=${tab.url}
-              aria-selected=${tab.targetId === this.activeTargetId ? "true" : "false"}
-              @click=${() => void this.selectTab(tab.targetId)}
+              aria-selected=${tab.id === this.activeTargetId ? "true" : "false"}
+              @click=${() => void this.selectTab(tab.id)}
               @auxclick=${(event: MouseEvent) => {
                 if (event.button === 1) {
                   event.preventDefault();
-                  void this.closeTab(tab.targetId);
+                  void this.closeTab(tab.id);
                 }
               }}
             >
@@ -1042,7 +1055,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
                 aria-label=${t("browser.closeTab")}
                 @click=${(event: Event) => {
                   event.stopPropagation();
-                  void this.closeTab(tab.targetId);
+                  void this.closeTab(tab.id);
                 }}
               >
                 ${CLOSE_GLYPH}

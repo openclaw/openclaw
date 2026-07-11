@@ -9,6 +9,13 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 const BROWSER_REQUEST_METHOD = "browser.request";
 
 export type BrowserPanelTab = {
+  /**
+   * Stable panel handle: the plugin's per-profile tab alias (`t1`, a label)
+   * when present, else the raw CDP target id. Raw target ids are volatile
+   * across form submits/target replacement; aliases migrate server-side, so
+   * the panel must address tabs by this id.
+   */
+  id: string;
   targetId: string;
   title: string;
   url: string;
@@ -76,7 +83,13 @@ function normalizeTab(value: unknown): BrowserPanelTab | null {
   if (!targetId) {
     return null;
   }
-  return { targetId, title: asString(record?.title), url: asString(record?.url) };
+  const tabId = asString(record?.tabId);
+  return {
+    id: tabId || targetId,
+    targetId,
+    title: asString(record?.title),
+    url: asString(record?.url),
+  };
 }
 
 export async function listBrowserTabs(client: GatewayBrowserClient): Promise<BrowserTabsSnapshot> {
