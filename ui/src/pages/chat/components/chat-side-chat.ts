@@ -5,10 +5,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
-import {
-  buildSideChatFollowUpCommand,
-  extractSideQuestionDisplayText,
-} from "../../../lib/chat/side-question.ts";
+import { buildSideChatFollowUpCommand } from "../../../lib/chat/side-question.ts";
 import type { ChatSideResult, ChatSideResultPending } from "../../../lib/chat/side-result.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 
@@ -32,8 +29,12 @@ export function isSideChatPanelVisible(
   return !props.hidden && (props.turns.length > 0 || props.pending != null);
 }
 
+// Questions arrive display-ready: chat-send strips composer commands, the
+// server echo carries no /btw prefix, and panel follow-ups pass structured
+// text. Re-parsing here would corrupt questions that start with a command
+// token, so render them verbatim.
 function renderSideChatTurn(turn: ChatSideResult): TemplateResult {
-  const question = extractSideQuestionDisplayText(turn.question);
+  const question = turn.question;
   return html`
     <article class=${`chat-side-chat__turn ${turn.isError ? "chat-side-chat__turn--error" : ""}`}>
       <div class="chat-side-chat__question" dir=${detectTextDirection(question)}>${question}</div>
@@ -45,7 +46,7 @@ function renderSideChatTurn(turn: ChatSideResult): TemplateResult {
 }
 
 function renderSideChatPendingTurn(pending: ChatSideResultPending): TemplateResult {
-  const question = extractSideQuestionDisplayText(pending.question);
+  const question = pending.question;
   return html`
     <article class="chat-side-chat__turn chat-side-chat__turn--pending">
       <div class="chat-side-chat__question" dir=${detectTextDirection(question)}>${question}</div>
@@ -75,9 +76,7 @@ export function renderSideChatPanel(props: SideChatPanelProps): TemplateResult |
   };
   const submitFollowUp = (input: HTMLInputElement) => {
     const followUp = buildSideChatFollowUpCommand(
-      lastTurn
-        ? { question: extractSideQuestionDisplayText(lastTurn.question), answer: lastTurn.text }
-        : null,
+      lastTurn ? { question: lastTurn.question, answer: lastTurn.text } : null,
       input.value,
     );
     if (!followUp || !props.onFollowUp) {
