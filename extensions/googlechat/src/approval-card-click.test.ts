@@ -9,10 +9,21 @@ import type { WebhookTarget } from "./monitor-types.js";
 import type { GoogleChatEvent } from "./types.js";
 
 const resolveApprovalOverGateway = vi.hoisted(() => vi.fn());
+const isApprovalNotFoundError = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway,
 }));
+
+vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
+  isApprovalNotFoundError,
+}));
+
+function createApprovalNotFoundError(): Error {
+  const err = new Error("unknown or expired approval id");
+  (err as { gatewayCode?: string }).gatewayCode = "APPROVAL_NOT_FOUND";
+  return err;
+}
 
 function createTarget(): WebhookTarget {
   return {
@@ -275,5 +286,48 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
     ).resolves.toBe(true);
 
     expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("consumes the token when gateway returns APPROVAL_NOT_FOUND", async () => {
+    registerGoogleChatApprovalCardBinding({
+      token: "token-not-found",
+      accountId: "default",
+      approvalId: "approval-expired",
+      approvalKind: "exec",
+      decision: "allow-once",
+      allowedDecisions: ["allow-once", "deny"],
+      spaceName: "spaces/AAA",
+      messageName: "spaces/AAA/messages/msg-1",
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    const notFoundError = createApprovalNotFoundError();
+    resolveApprovalOverGateway.mockRejectedValueOnce(notFoundError);
+    isApprovalNotFoundError.mockReturnValueOnce(true);
+
+    const target = createTarget();
+    await expect(
+      maybeHandleGoogleChatApprovalCardClick({
+        event: createCardClickEvent("token-not-found"),
+        target,
+      }),
+    ).resolves.toBe(true);
+
+    // Token should be consumed, not released for retry
+    expect(target.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("googlechat approval expired/stale"),
+    );
+
+    // Subsequent click should be ignored without calling gateway
+    isApprovalNotFoundError.mockReturnValue(false);
+    await expect(
+      maybeHandleGoogleChatApprovalCardClick({
+        event: createCardClickEvent("token-not-found"),
+        target: createTarget(),
+      }),
+    ).resolves.toBe(true);
+
+    // Gateway should only have been called once
+    expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
   });
 });
