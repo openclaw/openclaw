@@ -91,6 +91,69 @@ class ChatControllerModelSelectionTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun existingSessionPreservesEffectiveLevelOmittedFromAdvertisedOptions() =
+    runTest {
+      val sentThinkingLevels = mutableListOf<String>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            when (method) {
+              "sessions.list" ->
+                """
+                {
+                  "sessions": [
+                    {
+                      "key": "main",
+                      "modelProvider": "openai",
+                      "model": "gpt-5.6-luna",
+                      "thinkingLevel": "ultra",
+                      "thinkingLevels": [
+                        {"id": "off", "label": "off"},
+                        {"id": "high", "label": "high"},
+                        {"id": "xhigh", "label": "xhigh"},
+                        {"id": "max", "label": "max"}
+                      ]
+                    }
+                  ]
+                }
+                """.trimIndent()
+              "chat.send" -> {
+                val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+                sentThinkingLevels += (params["thinking"] as JsonPrimitive).content
+                """{"runId":"run-ok","status":"ok"}"""
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      assertEquals(
+        listOf("off", "high", "xhigh", "max"),
+        controller
+          .thinkingLevelSelection
+          .value
+          .options
+          .map { it.id },
+      )
+      assertEquals("ultra", controller.thinkingLevel.value)
+      controller.handleGatewayEvent("health", null)
+      assertTrue(
+        controller.sendMessageAwaitAcceptance(
+          message = "preserve effective reasoning",
+          thinkingLevel = controller.thinkingLevel.value,
+          attachments = emptyList(),
+        ),
+      )
+      assertEquals(listOf("ultra"), sentThinkingLevels)
+    }
+
+  @Test
   fun failedSelectionDoesNotRecordRecentOrUpdateSelectedModel() =
     runTest {
       val recents = mutableListOf<String>()

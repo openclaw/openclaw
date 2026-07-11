@@ -2297,9 +2297,11 @@ class ChatController internal constructor(
     val selected = entry.thinkingLevel?.let(::normalizeThinking)
     val currentLevel = normalizeThinking(_thinkingLevel.value)
     val defaultLevel = entry.thinkingDefault?.let(::normalizeThinking)
+    // Lightweight picker metadata can omit a Gateway-validated effective level.
+    // Preserve that send state; only local/default fallbacks require picker membership.
     _thinkingLevel.value =
-      listOfNotNull(selected, currentLevel, defaultLevel)
-        .firstOrNull { candidate -> options.any { it.id == candidate } }
+      selected
+        ?: listOf(currentLevel, defaultLevel).firstOrNull { candidate -> options.any { it.id == candidate } }
         ?: options.first().id
   }
 
