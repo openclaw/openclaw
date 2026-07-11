@@ -222,7 +222,10 @@ export function createSmsWebhookHandler(
     if (invalidRequestRateLimited && params.account.dangerouslyDisableSignatureValidation) {
       return rejectInvalidRequestRateLimit({ key, log: params.log, res });
     }
-    if (signedRateLimiter.isRateLimited(key)) {
+    if (
+      !params.account.dangerouslyDisableSignatureValidation &&
+      signedRateLimiter.isRateLimited(key)
+    ) {
       params.log?.warn?.(`SMS webhook rate limit exceeded for ${key}`);
       respondTwiml(res, 429, "Rate limit exceeded");
       return true;
