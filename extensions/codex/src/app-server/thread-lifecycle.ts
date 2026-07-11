@@ -513,7 +513,10 @@ export async function startOrResumeThread(params: {
           networkProxyProfileName: params.appServer.networkProxy?.profileName,
           networkProxyConfigFingerprint,
           nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
-          appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
+          appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+            params.appServer,
+            params.params.agentDir,
+          ),
           pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
           pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
           pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -542,7 +545,10 @@ export async function startOrResumeThread(params: {
       binding?.threadId &&
       shouldRotateCodexAppServerBindingForRuntime({
         connectionClass: params.appServer.connectionClass,
-        current: params.appServerRuntimeFingerprint,
+        current:
+          binding.connectionScope === "supervision"
+            ? buildCodexAppServerConnectionFingerprint(params.appServer, params.params.agentDir)
+            : params.appServerRuntimeFingerprint,
         binding: binding.appServerRuntimeFingerprint,
       })
     ) {
@@ -920,7 +926,10 @@ export async function startOrResumeThread(params: {
             networkProxyConfigFingerprint,
             nativeHookRelayGeneration:
               finalConfigPatch.nativeHookRelayGeneration ?? resumeBinding.nativeHookRelayGeneration,
-            appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
+            appServerRuntimeFingerprint:
+              resumeBinding.connectionScope === "supervision"
+                ? buildCodexAppServerConnectionFingerprint(params.appServer, params.params.agentDir)
+                : params.appServerRuntimeFingerprint,
             pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
             pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
             pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,

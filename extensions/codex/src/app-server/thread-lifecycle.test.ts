@@ -1561,6 +1561,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       dynamicTools,
       environmentSelection: [{ environmentId: "local", cwd: workspaceDir }],
       appServer: createThreadLifecycleAppServerOptions(),
+      appServerRuntimeFingerprint: "codex-runtime-v1",
     };
 
     const materialized = await startOrResumeThread(commonParams);
@@ -1629,10 +1630,14 @@ describe("Codex app-server supervised branch lifecycle", () => {
       modelProvider: "native-provider",
       preserveNativeModel: true,
       conversationSourceTransferComplete: true,
+      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(commonParams.appServer),
     });
 
     request.mockClear();
-    const resumed = await startOrResumeThread(commonParams);
+    const resumed = await startOrResumeThread({
+      ...commonParams,
+      appServerRuntimeFingerprint: "codex-runtime-v2",
+    });
 
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read", "thread/resume"]);
     expect(request.mock.calls[0]?.[1]).toEqual({ threadId: finalThreadId, includeTurns: false });
@@ -1643,6 +1648,9 @@ describe("Codex app-server supervised branch lifecycle", () => {
       preserveNativeModel: true,
       conversationSourceTransferComplete: true,
       lifecycle: { action: "resumed" },
+    });
+    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(commonParams.appServer),
     });
   });
 
