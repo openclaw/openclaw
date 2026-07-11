@@ -178,7 +178,9 @@ export type CronState = {
   cronStatus: CronStatus | null;
   cronError: string | null;
   cronForm: CronFormState;
-  cronFormCollapsed: boolean;
+  // True while the create panel owns the detail pane; job selection (editing)
+  // always wins over it when deriving the visible panel.
+  cronCreateOpen: boolean;
   cronFieldErrors: CronFieldErrors;
   cronEditingJobId: string | null;
   cronRunsJobId: string | null;
@@ -227,7 +229,7 @@ export function createInitialCronState(
     cronStatus: null,
     cronError: null,
     cronForm: { ...DEFAULT_CRON_FORM },
-    cronFormCollapsed: true,
+    cronCreateOpen: false,
     cronFieldErrors: {},
     cronEditingJobId: null,
     cronRunsJobId: null,
@@ -657,7 +659,9 @@ function clearCronRunsPage(state: CronState) {
 
 function resetCronFormToDefaults(state: CronState) {
   state.cronForm = { ...DEFAULT_CRON_FORM };
-  state.cronFieldErrors = validateCronForm(state.cronForm);
+  // A fresh form starts visually clean; validation re-arms on the first change
+  // or submit so required-field errors do not greet the user immediately.
+  state.cronFieldErrors = {};
 }
 
 function formatDateTimeLocal(input: string): string {

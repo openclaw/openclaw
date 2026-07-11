@@ -10,7 +10,6 @@ import {
   addCronJob,
   cancelCronEdit,
   createInitialCronState,
-  DEFAULT_CRON_FORM,
   getCronJobPayload,
   getVisibleCronJobs,
   hasCronFormErrors,
@@ -29,6 +28,7 @@ import {
   updateCronJobsFilter,
   updateCronRunsFilter,
   validateCronForm,
+  type CronFormState,
   type CronModelSuggestionsState,
   type CronState,
 } from "../../lib/cron/index.ts";
@@ -36,8 +36,6 @@ import { searchForSession } from "../../lib/sessions/index.ts";
 import { sortUniqueStrings } from "../../lib/string-coerce.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { createDefaultDraft, draftToCronFormPatch, renderCronQuickCreate } from "./quick-create.ts";
-import type { CronQuickCreateDraft, CronQuickCreateStep } from "./quick-create.ts";
 import { renderCron } from "./view.ts";
 
 const THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
@@ -63,9 +61,6 @@ class CronPage extends OpenClawLightDomElement {
   @state() private cron = createInitialCronState();
   @state() private agentsList: AgentsListResult | null = null;
   @state() private cronModelSuggestions: string[] = [];
-  @state() private quickCreateOpen = false;
-  @state() private quickCreateStep: CronQuickCreateStep = "what";
-  @state() private quickCreateDraft: CronQuickCreateDraft | null = null;
 
   private modelSuggestionsState: CronState | null = null;
   private gatewaySource?: ApplicationContext["gateway"];
@@ -125,9 +120,6 @@ class CronPage extends OpenClawLightDomElement {
     this.agentsList = snapshot.connected ? this.context.agents.state.agentsList : null;
     this.cronModelSuggestions = [];
     this.modelSuggestionsState = null;
-    this.quickCreateOpen = false;
-    this.quickCreateStep = "what";
-    this.quickCreateDraft = null;
   }
 
   private syncGatewayState(
@@ -171,6 +163,27 @@ class CronPage extends OpenClawLightDomElement {
   private requestCronUpdate(cronState: CronState = this.cron) {
     if (this.cron === cronState) {
       this.requestUpdate();
+    }
+  }
+
+  private lastPanelKey: string | null = null;
+
+  override updated() {
+    // Reset the detail pane scroll when the panel switches target; the scroll
+    // container survives re-renders, so a long editor would otherwise open
+    // mid-scroll.
+    const mode = this.cron.cronEditingJobId
+      ? "job"
+      : this.cron.cronCreateOpen
+        ? "create"
+        : "overview";
+    const panelKey = `${mode}:${this.cron.cronEditingJobId ?? ""}`;
+    if (panelKey !== this.lastPanelKey) {
+      this.lastPanelKey = panelKey;
+      const scroller = this.querySelector(".cron-detail-scroll");
+      if (scroller instanceof HTMLElement && typeof scroller.scrollTo === "function") {
+        scroller.scrollTo({ top: 0 });
+      }
     }
   }
 
@@ -223,43 +236,67 @@ class CronPage extends OpenClawLightDomElement {
     }
   }
 
-  private openQuickCreate(patch?: Partial<CronQuickCreateDraft>) {
-    this.quickCreateOpen = true;
-    this.quickCreateStep = "what";
-    this.quickCreateDraft = { ...createDefaultDraft(), ...patch };
-  }
-
-  private closeQuickCreate() {
-    this.quickCreateOpen = false;
-  }
-
-  private draftToForm() {
-    const draft = this.quickCreateDraft ?? createDefaultDraft();
-    this.cron.cronEditingJobId = null;
-    this.cron.cronForm = normalizeCronFormState({
-      ...DEFAULT_CRON_FORM,
-      ...draftToCronFormPatch(draft),
-    });
+  private patchForm(patch: Partial<CronFormState>) {
+    this.cron.cronForm = normalizeCronFormState({ ...this.cron.cronForm, ...patch });
     this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
     this.requestCronUpdate();
   }
 
-  private async createFromQuickCreate(options?: { runNow?: boolean }) {
-    this.draftToForm();
-    const cronState = this.cron;
-    const result = await this.runCronTask((current) => addCronJob(current));
-    if (!result.saved || this.cron !== cronState) {
+  private selectJob(job: CronJob) {
+    this.cron.cronCreateOpen = false;
+    startCronEdit(this.cron, job);
+    this.requestCronUpdate();
+    void this.runCronTask(async (cronState) => {
+      updateCronRunsFilter(cronState, { cronRunsScope: "job" });
+      await loadCronRuns(cronState, job.id);
+    });
+  }
+
+  private openCreate(patch?: Partial<CronFormState>) {
+    cancelCronEdit(this.cron);
+    this.cron.cronCreateOpen = true;
+    if (patch) {
+      this.patchForm(patch);
       return;
     }
-    this.quickCreateOpen = false;
-    this.quickCreateStep = "what";
-    this.quickCreateDraft = null;
-    if (options?.runNow && result.jobId) {
-      // Immediate first run so a freshly created job shows output right away
-      // instead of staying silent until its first scheduled tick.
-      const jobId = result.jobId;
-      await this.runCronTask((current) => runCronJob(current, jobId, "force"));
-    }
+    this.requestCronUpdate();
+  }
+
+  private cloneJob(job: CronJob) {
+    // A clone is a prefilled create: the editor submits cron.add, not update.
+    startCronClone(this.cron, job);
+    this.cron.cronCreateOpen = true;
+    this.requestCronUpdate();
+  }
+
+  private closePanel() {
+    cancelCronEdit(this.cron);
+    this.cron.cronCreateOpen = false;
+    this.requestCronUpdate();
+    void this.runCronTask(async (cronState) => {
+      updateCronRunsFilter(cronState, { cronRunsScope: "all" });
+      cronState.cronRunsJobId = null;
+      await loadCronRuns(cronState, null);
+    });
+  }
+
+  private submitForm() {
+    void this.runCronTask(async (cronState) => {
+      const editingJobId = cronState.cronEditingJobId;
+      if (!(await addCronJob(cronState))) {
+        return;
+      }
+      if (editingJobId) {
+        // Saving an update clears the edit state; re-select the refreshed job so
+        // the detail pane stays on it instead of snapping back to overview.
+        const saved = cronState.cronJobs.find((job) => job.id === editingJobId);
+        if (saved) {
+          startCronEdit(cronState, saved);
+        }
+        return;
+      }
+      cronState.cronCreateOpen = false;
+    });
   }
 
   private suggestions() {
@@ -306,18 +343,6 @@ class CronPage extends OpenClawLightDomElement {
     };
   }
 
-  private editJob(job: CronJob) {
-    this.cron.cronFormCollapsed = false;
-    startCronEdit(this.cron, job);
-    this.requestCronUpdate();
-  }
-
-  private cloneJob(job: CronJob) {
-    this.cron.cronFormCollapsed = false;
-    startCronClone(this.cron, job);
-    this.requestCronUpdate();
-  }
-
   override render() {
     const channels = this.context.channels.state;
     const suggestions = this.suggestions();
@@ -328,31 +353,8 @@ class CronPage extends OpenClawLightDomElement {
           <div class="page-sub">${subtitleForRoute("cron")}</div>
         </div>
       </section>
-      ${renderSettingsWorkspace(html`
-        ${renderCronQuickCreate({
-          open: this.quickCreateOpen,
-          step: this.quickCreateStep,
-          draft: this.quickCreateDraft ?? createDefaultDraft(),
-          modelSuggestions: suggestions.modelSuggestions,
-          onCancel: () => this.closeQuickCreate(),
-          onStepChange: (step) => (this.quickCreateStep = step),
-          onDraftChange: (patch) => {
-            this.quickCreateDraft = {
-              ...(this.quickCreateDraft ?? createDefaultDraft()),
-              ...patch,
-            };
-          },
-          onCreate: (options) => void this.createFromQuickCreate(options),
-          onAdvancedCreate: () => {
-            this.draftToForm();
-            this.quickCreateOpen = false;
-            this.quickCreateStep = "what";
-            this.quickCreateDraft = null;
-            this.cron.cronFormCollapsed = false;
-            this.requestCronUpdate();
-          },
-        })}
-        ${renderCron({
+      ${renderSettingsWorkspace(
+        renderCron({
           basePath: this.context.basePath,
           loading: this.cron.cronLoading,
           status: this.cron.cronStatus,
@@ -367,24 +369,21 @@ class CronPage extends OpenClawLightDomElement {
           jobsSortBy: this.cron.cronJobsSortBy,
           jobsSortDir: this.cron.cronJobsSortDir,
           editingJobId: this.cron.cronEditingJobId,
+          createOpen: this.cron.cronCreateOpen,
           error: this.cron.cronError,
           busy: this.cron.cronBusy,
           form: this.cron.cronForm,
-          cronFormCollapsed: this.cron.cronFormCollapsed,
           channels: channels.channelsSnapshot?.channelMeta?.length
             ? channels.channelsSnapshot.channelMeta.map((entry) => entry.id)
             : (channels.channelsSnapshot?.channelOrder ?? []),
           channelLabels: channels.channelsSnapshot?.channelLabels ?? {},
           channelMeta: channels.channelsSnapshot?.channelMeta ?? [],
-          runsJobId: this.cron.cronRunsJobId,
           runs: this.cron.cronRuns,
           runsTotal: this.cron.cronRunsTotal,
           runsHasMore: this.cron.cronRunsHasMore,
           runsLoadingMore: this.cron.cronRunsLoadingMore,
-          runsScope: this.cron.cronRunsScope,
           runsStatuses: this.cron.cronRunsStatuses,
           runsDeliveryStatuses: this.cron.cronRunsDeliveryStatuses,
-          runsStatusFilter: this.cron.cronRunsStatusFilter,
           runsQuery: this.cron.cronRunsQuery,
           runsSortDir: this.cron.cronRunsSortDir,
           fieldErrors: this.cron.cronFieldErrors,
@@ -395,41 +394,18 @@ class CronPage extends OpenClawLightDomElement {
           timezoneSuggestions: TIMEZONE_SUGGESTIONS,
           deliveryToSuggestions: suggestions.deliveryToSuggestions,
           accountSuggestions: suggestions.accountTargets,
-          onFormChange: (patch) => {
-            this.cron.cronForm = normalizeCronFormState({ ...this.cron.cronForm, ...patch });
-            this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
-            this.requestCronUpdate();
-          },
+          onFormChange: (patch) => this.patchForm(patch),
           onRefresh: () => void this.refreshCron({ tableFilters: true }),
-          onAdd: () =>
-            void this.runCronTask(async (cronState) => {
-              if ((await addCronJob(cronState)).saved) {
-                cronState.cronFormCollapsed = true;
-              }
-            }),
-          onEdit: (job) => this.editJob(job),
+          onSubmit: () => this.submitForm(),
+          onSelectJob: (job) => this.selectJob(job),
+          onOpenCreate: (patch) => this.openCreate(patch),
+          onClosePanel: () => this.closePanel(),
           onClone: (job) => this.cloneJob(job),
-          onCancelEdit: () => {
-            cancelCronEdit(this.cron);
-            this.cron.cronFormCollapsed = true;
-            this.requestCronUpdate();
-          },
-          onToggleFormCollapsed: (collapsed) => {
-            this.cron.cronFormCollapsed = collapsed;
-            this.requestCronUpdate();
-          },
           onToggle: (job, enabled) =>
             void this.runCronTask((cronState) => toggleCronJob(cronState, job, enabled)),
           onRun: (job, mode) =>
-            void this.runCronTask((cronState) => runCronJob(cronState, job.id, mode ?? "force")),
+            void this.runCronTask((cronState) => runCronJob(cronState, job, mode ?? "force")),
           onRemove: (job) => void this.runCronTask((cronState) => removeCronJob(cronState, job)),
-          onQuickCreate: () => this.openQuickCreate(),
-          onUseSuggestion: (draft) => this.openQuickCreate(draft),
-          onLoadRuns: (jobId) =>
-            void this.runCronTask(async (cronState) => {
-              updateCronRunsFilter(cronState, { cronRunsScope: "job" });
-              await loadCronRuns(cronState, jobId);
-            }),
           onLoadMoreJobs: () =>
             void this.runCronTask((cronState) =>
               loadCronJobsPage(cronState, { append: true, tableFilters: true }),
@@ -442,8 +418,6 @@ class CronPage extends OpenClawLightDomElement {
           onJobsFiltersReset: () =>
             void this.runCronTask(async (cronState) => {
               updateCronJobsFilter(cronState, {
-                cronJobsQuery: "",
-                cronJobsEnabledFilter: "all",
                 cronJobsScheduleKindFilter: "all",
                 cronJobsLastStatusFilter: "all",
                 cronJobsSortBy: "nextRunAtMs",
@@ -462,8 +436,9 @@ class CronPage extends OpenClawLightDomElement {
             }),
           onNavigateToChat: (sessionKey) =>
             this.context.navigate("chat", { search: searchForSession(sessionKey) }),
-        })}
-      `)}
+        }),
+        { fillHeight: true },
+      )}
     `;
   }
 }
