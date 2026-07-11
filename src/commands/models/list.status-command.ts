@@ -153,6 +153,8 @@ type StatusProviderUseRef = {
   provider: string;
   model: string;
   allowCodexRuntimeFallback: boolean;
+  /** Text uses get per-model route analysis; image auth stays provider-wide. */
+  routeScope: "text" | "image";
 };
 
 type StatusProviderUse = {
@@ -452,7 +454,11 @@ export async function modelsStatusCommand(
     );
     const providersFromModels = new Set<string>();
     const providerUseRefs: StatusProviderUseRef[] = [];
-    const addProviderUse = (raw: string | undefined, allowCodexRuntimeFallback: boolean) => {
+    const addProviderUse = (
+      raw: string | undefined,
+      allowCodexRuntimeFallback: boolean,
+      routeScope: StatusProviderUseRef["routeScope"],
+    ) => {
       const ref = resolveStatusModelRef(raw);
       if (ref?.provider) {
         const provider = normalizeProviderId(ref.provider);
@@ -460,6 +466,7 @@ export async function modelsStatusCommand(
           provider,
           model: ref.model,
           allowCodexRuntimeFallback,
+          routeScope,
         });
       }
     };
@@ -477,15 +484,16 @@ export async function modelsStatusCommand(
       }
     }
     for (const raw of [defaultLabel, ...fallbacks]) {
-      addProviderUse(raw, true);
+      addProviderUse(raw, true, "text");
     }
-    // Utility completions (narration/titles) are a real runtime auth consumer
-    // with their own per-model route requirements: an OAuth-healthy primary
-    // does not prove the utility's plain API path, so the utility ref is
-    // analyzed like image models instead of hiding behind the primary.
-    for (const raw of [imageModel, ...imageFallbacks, utilityModelRef ?? ""]) {
-      addProviderUse(raw, false);
+    for (const raw of [imageModel, ...imageFallbacks]) {
+      addProviderUse(raw, false, "image");
     }
+    // Utility completions (narration/titles) are a text-route auth consumer in
+    // their own right: an OAuth-healthy primary does not prove the utility's
+    // plain API path, so the ref gets full route analysis without inheriting
+    // the primary's codex-runtime fallback.
+    addProviderUse(utilityModelRef, false, "text");
 
     const providersFromEnv = new Set<string>();
     // Use the shared provider-env registry so `models status` stays aligned with
@@ -564,12 +572,13 @@ export async function modelsStatusCommand(
         };
         // Image tools own their provider auth behavior. The text-route artifact
         // must not reinterpret image auth as an OpenAI text transport.
-        const rawEvaluation: ModelAuthAvailabilityEvaluation = usage.allowCodexRuntimeFallback
-          ? resolver.evaluateModelAuth(usage.provider, ref)
-          : {
-              availability: resolver.resolveProviderAuthAvailability(usage.provider, ref),
-              routeResolution: null,
-            };
+        const rawEvaluation: ModelAuthAvailabilityEvaluation =
+          usage.routeScope === "text"
+            ? resolver.evaluateModelAuth(usage.provider, ref)
+            : {
+                availability: resolver.resolveProviderAuthAvailability(usage.provider, ref),
+                routeResolution: null,
+              };
         const routeAuth: StatusProviderRouteAuth = (() => {
           if (rawEvaluation.routeResolution?.kind === "incompatible") {
             return {
