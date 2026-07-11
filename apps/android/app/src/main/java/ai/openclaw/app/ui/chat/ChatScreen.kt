@@ -103,6 +103,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -190,6 +192,8 @@ fun ChatScreen(
   val activeAgentId = selectedChatAgentId(mainSessionKey, gatewayDefaultAgentId)
   val workspaceGit = gatewayAgents.firstOrNull { it.id == sessionAgentId }?.workspaceGit == true
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
+  val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsState()
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
   val attachments = remember { mutableStateListOf<PendingAttachment>() }
@@ -269,7 +273,8 @@ fun ChatScreen(
     viewModel.clearChatDraft()
   }
 
-  LaunchedEffect(chatShareDraft?.id) {
+  LaunchedEffect(chatShareDraft?.id, lifecycleState) {
+    if (!lifecycleState.isAtLeast(Lifecycle.State.RESUMED)) return@LaunchedEffect
     val share = chatShareDraft ?: return@LaunchedEffect
     viewModel.withChatShareDraftLease(share.id) {
       val attachmentSnapshot = attachments.toList()
@@ -286,6 +291,11 @@ fun ChatScreen(
           currentAttachments = attachments,
         )
       if (!canCommitStagedChatShare(stagedId = share.id, currentHead = viewModel.chatShareDraft.value)) {
+        return@withChatShareDraftLease
+      }
+      // A non-resumed Activity must not acknowledge into its hidden composer; the next visible
+      // Activity keeps the process-owned head and retries the complete import instead.
+      if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
         return@withChatShareDraftLease
       }
       // Keep the head pending through both mutations: Send stays gated until text and images
