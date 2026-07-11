@@ -394,6 +394,9 @@ export function createChangedCheckPlan(result, options = {}) {
   if (lanes.scripts) {
     addTypecheck("typecheck scripts", ["tsgo:scripts"]);
   }
+  if (lanes.testRoot) {
+    addTypecheck("typecheck test root", ["tsgo:test:root"]);
+  }
 
   if (lanes.core || lanes.coreTests) {
     const coreLintCommand = createTargetedCoreLintCommand(result.paths, baseEnv);
