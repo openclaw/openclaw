@@ -1307,10 +1307,10 @@ export type WorkerProvider = {
    */
   provision: (profile: WorkerProfile, operationId: string) => Promise<WorkerLease>;
   /** Throws on transient/indeterminate failures; `unknown` means authoritative absence. */
-  inspect: (leaseId: string) => Promise<WorkerLeaseStatus>;
+  inspect: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<WorkerLeaseStatus>;
   renew?: (leaseId: string) => Promise<void>;
   /** Idempotent; resolves only after the provider can prove teardown. */
-  destroy: (leaseId: string) => Promise<void>;
+  destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
 };
 
 /** Text-inference provider capability registered by a plugin. */

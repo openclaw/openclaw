@@ -15,6 +15,8 @@ const EXTENSION_PATH_RE = /^extensions\/[^/]+(?:\/|$)/u;
 const CORE_PATH_RE = /^(?:src\/|ui\/|packages\/)/u;
 const SCRIPTS_TYPECHECK_PATH_RE =
   /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;
+const TEST_ROOT_TYPECHECK_PATH_RE =
+  /^(?:test\/(?!fixtures\/).*\.(?:[cm]?ts|[cm]?tsx)|test\/tsconfig\/tsconfig\.test\.root\.json)$/u;
 const TOOLING_PATH_RE =
   /^(?:scripts\/|test\/vitest\/|\.github\/|\.vscode\/|config\/|deploy\/|git-hooks\/|Dockerfile\.sandbox(?:-(?:browser|common))?$|Makefile$|docker-setup\.sh$|setup-podman\.sh$|openclaw\.podman\.env$|skills\/pyproject\.toml$|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.dockerignore$|\.gitignore$|\.jscpd\.json$|\.npmignore$|\.pre-commit-config\.yaml$|\.swiftformat$|\.swiftlint\.yml$|\.oxlint.*|\.oxfmt.*)/u;
 const ROOT_GLOBAL_PATH_RE =
@@ -56,7 +58,7 @@ export const RELEASE_METADATA_PATHS = new Set([
   "package.json",
 ]);
 
-/** @typedef {"core" | "coreTests" | "extensions" | "extensionTests" | "scripts" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
+/** @typedef {"core" | "coreTests" | "extensions" | "extensionTests" | "scripts" | "testRoot" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
 
 /**
  * @typedef {{
@@ -88,6 +90,7 @@ export function createEmptyChangedLanes() {
     extensions: false,
     extensionTests: false,
     scripts: false,
+    testRoot: false,
     apps: false,
     docs: false,
     tooling: false,
@@ -144,6 +147,9 @@ export function detectChangedLanes(changedPaths, options = {}) {
   for (const changedPath of paths) {
     if (SCRIPTS_TYPECHECK_PATH_RE.test(changedPath)) {
       lanes.scripts = true;
+    }
+    if (TEST_ROOT_TYPECHECK_PATH_RE.test(changedPath)) {
+      lanes.testRoot = true;
     }
 
     if (DOCS_PATH_RE.test(changedPath)) {
@@ -299,12 +305,14 @@ export function listChangedPathsFromGit(params) {
   let rangePaths;
   let noMergeBase = false;
   try {
+    // oxlint-disable-next-line typescript/no-base-to-string, typescript/restrict-template-expressions -- resolveMergeHeadDiffBase returns a git ref string when present.
     rangePaths = runGitNameOnlyDiff([`${base}...${head}`], cwd);
   } catch (error) {
     if (!isGitNoMergeBaseError(error)) {
       throw error;
     }
     noMergeBase = true;
+    // oxlint-disable-next-line typescript/no-base-to-string, typescript/restrict-template-expressions -- resolveMergeHeadDiffBase returns a git ref string when present.
     rangePaths = runGitNameOnlyDiff([`${base}..${head}`], cwd);
   }
   if (params.includeWorktree === false) {

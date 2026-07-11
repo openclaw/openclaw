@@ -1777,7 +1777,7 @@ jobs:
                     control_pid="$!"
                     trap "kill ${control_pid} >/dev/null 2>&1 || true" EXIT
                     proc_marker_visible=false
-                    # The background child can still expose the shell's pre-exec environment.
+                    # The background child can still expose the shell pre-exec environment.
                     for _ in {1..100}; do
                       if tr "\0" "\n" <"/proc/${control_pid}/environ" 2>/dev/null |
                         grep -Fxq "OPENCLAW_QA_PROC_CONTROL=visible"; then

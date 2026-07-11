@@ -1,6 +1,7 @@
 // QA OTEL Smoke runtime supports OpenClaw repository automation.
 
 import { spawn } from "node:child_process";
+/* oxlint-disable typescript/unbound-method -- the original stream method is invoked with process.stdout through Reflect.apply below. */
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -1087,7 +1088,7 @@ async function stopDockerContainer(name: string): Promise<void> {
 }
 
 type StartDockerOtelCollectorDeps = {
-  mkdtemp?: typeof mkdtemp;
+  mkdtemp?: (prefix: string) => Promise<string>;
   platform?: NodeJS.Platform;
   randomUUID?: typeof randomUUID;
   reserveLocalPort?: typeof reserveLocalPort;
@@ -1763,7 +1764,7 @@ async function main() {
     const originalStdoutWrite = process.stdout.write;
     process.stdout.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
       stdoutDiagnosticLogs.append(chunk);
-      return originalStdoutWrite.call(process.stdout, chunk, ...args);
+      return Reflect.apply(originalStdoutWrite, process.stdout, [chunk, ...args]) as boolean;
     }) as typeof process.stdout.write;
     try {
       await runDirectTelemetryProducer({

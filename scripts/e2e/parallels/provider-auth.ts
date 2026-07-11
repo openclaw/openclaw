@@ -7,7 +7,7 @@ import { die, run } from "./host-command.ts";
 import type { Mode, Platform, Provider, ProviderAuth } from "./types.ts";
 
 type ResolveLatestVersionDeps = {
-  createTempDir?: typeof mkdtempSync;
+  createTempDir?: (prefix: string) => string;
   removeDir?: typeof rmSync;
   runCommand?: typeof run;
   tempDir?: typeof tmpdir;
