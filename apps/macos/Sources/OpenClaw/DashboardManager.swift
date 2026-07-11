@@ -30,6 +30,7 @@ final class DashboardManager {
             launchAgentUsesManagedCLI: CLIInstallPrompter.launchAgentUsesManagedCLI(
                 programArguments: GatewayLaunchAgentManager.launchdConfigSnapshot()?.programArguments ?? []),
             gatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel(),
+            installPolicy: CLIInstallPolicy.storedPolicy(),
             launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled())
     }
 

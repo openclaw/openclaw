@@ -679,7 +679,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
 }
 
 func allowedSparkleChannels(forGatewayUpdateChannel channel: String?) -> Set<String> {
-    switch channel?.lowercased() {
+    switch channel {
     case "beta", "dev":
         ["beta"]
     default:
