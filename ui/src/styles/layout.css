@@ -664,13 +664,14 @@ html.openclaw-native-macos .shell-nav-expand {
   display: none;
 }
 
+/* 1px overlay on the nav border edge; the divider paints its own centered
+   line, so the host needs no background here. */
 .sidebar-resizer {
   grid-area: nav;
   align-self: stretch;
   justify-self: end;
   z-index: 20;
   width: 1px;
-  background: transparent;
 }
 
 .shell:has(.sidebar-resizer.dragging) {

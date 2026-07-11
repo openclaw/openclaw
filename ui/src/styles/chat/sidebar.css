@@ -161,10 +161,11 @@
   transition: flex 250ms ease-out;
 }
 
+/* No border-left: the resizable divider rendered next to this panel draws
+   the separator line; a border here doubles it. */
 .chat-sidebar {
   flex: 1;
   min-width: 300px;
-  border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1370,6 +1371,5 @@
   .chat-split-container--open .chat-sidebar {
     width: 100%;
     min-width: 0;
-    border-left: none;
   }
 }
