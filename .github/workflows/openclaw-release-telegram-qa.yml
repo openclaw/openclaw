@@ -1046,6 +1046,16 @@ jobs:
           CANDIDATE_ROOT="$candidate_runtime_root"
           sudo install -d -o root -g root -m 0755 "$runtime_root"
           sudo install -d -o "$runner_uid" -g "$runner_gid" -m 0711 "$runtime_root/tmp"
+          # Frozen candidates prefer /tmp/openclaw before TMPDIR. Make that shared path
+          # unavailable to the runner so they use the isolated runtime fallback instead.
+          sudo rm -rf -- /tmp/openclaw
+          sudo install -d -o root -g root -m 0700 /tmp/openclaw
+          sudo install \
+            -d \
+            -o "$runner_uid" \
+            -g "$runner_gid" \
+            -m 0711 \
+            "${runtime_root}/tmp/openclaw-${runner_uid}"
           sudo chown -R root:root "$CANDIDATE_ROOT"
           sudo chmod -R go-w "$CANDIDATE_ROOT"
           sudo chmod -R a+rX "$CANDIDATE_ROOT"
@@ -1185,7 +1195,8 @@ jobs:
             source /etc/openclaw-telegram-sut.conf
             identity_file="$(realpath -e "$1")"
             case "$identity_file" in
-              "$RUNTIME_ROOT"/tmp/openclaw-qa-suite-*/process-boundary/identity-*.json) ;;
+              "$RUNTIME_ROOT"/tmp/openclaw-qa-suite-*/process-boundary/identity-*.json | \
+              "$RUNTIME_ROOT"/tmp/openclaw-"$RUNNER_UID"/openclaw-qa-suite-*/process-boundary/identity-*.json) ;;
               *) echo "Telegram SUT identity escaped the runtime root." >&2; exit 1 ;;
             esac
             [[ "$(stat -c '%F:%a:%u:%g' "$identity_file")" == "regular file:640:0:${RUNNER_GID}" ]]
@@ -1534,7 +1545,8 @@ jobs:
 
           temp_root="$(realpath -e "${OPENCLAW_QA_TEMP_ROOT:?}")"
           case "$temp_root" in
-            "$RUNTIME_ROOT"/tmp/openclaw-qa-suite-*) ;;
+            "$RUNTIME_ROOT"/tmp/openclaw-qa-suite-* | \
+            "$RUNTIME_ROOT"/tmp/openclaw-"$RUNNER_UID"/openclaw-qa-suite-*) ;;
             *) echo "SUT temp root escaped the workflow runtime root." >&2; exit 1 ;;
           esac
           config_path="${temp_root}/openclaw.json"
