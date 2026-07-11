@@ -1,6 +1,7 @@
 // Slack tests cover interactions plugin behavior.
 import type { SlackShortcutMiddlewareArgs } from "@slack/bolt";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildOpenClawBulkActionsBlock } from "../../bulk-action-ids.js";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
@@ -2184,18 +2185,7 @@ describe("registerSlackInteractionEvents", () => {
           text: "fallback",
           blocks: [
             { type: "divider" },
-            {
-              type: "actions",
-              block_id: "bulk_row",
-              elements: [
-                { type: "button", action_id: "select_all", text: { type: "plain_text", text: "All" } },
-                {
-                  type: "button",
-                  action_id: "deselect_all",
-                  text: { type: "plain_text", text: "None" },
-                },
-              ],
-            },
+            buildOpenClawBulkActionsBlock(),
             { type: "divider" },
             {
               type: "actions",
@@ -2257,18 +2247,7 @@ describe("registerSlackInteractionEvents", () => {
           text: "fallback",
           blocks: [
             { type: "divider" },
-            {
-              type: "actions",
-              block_id: "bulk_row",
-              elements: [
-                { type: "button", action_id: "select_all", text: { type: "plain_text", text: "All" } },
-                {
-                  type: "button",
-                  action_id: "deselect_all",
-                  text: { type: "plain_text", text: "None" },
-                },
-              ],
-            },
+            buildOpenClawBulkActionsBlock(),
             { type: "divider" },
             {
               type: "actions",
@@ -2311,18 +2290,7 @@ describe("registerSlackInteractionEvents", () => {
       ts: "555.666",
       blocks: [
         { type: "divider" },
-        {
-          type: "actions",
-          block_id: "bulk_row",
-          elements: [
-            { type: "button", action_id: "select_all", text: { type: "plain_text", text: "All" } },
-            {
-              type: "button",
-              action_id: "deselect_all",
-              text: { type: "plain_text", text: "None" },
-            },
-          ],
-        },
+        buildOpenClawBulkActionsBlock(),
         { type: "divider" },
         {
           type: "actions",

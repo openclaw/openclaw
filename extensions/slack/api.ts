@@ -47,6 +47,15 @@ export {
   type SlackBlock,
 } from "./src/blocks-render.js";
 export {
+  buildOpenClawBulkActionsBlock,
+  isOpenClawBulkActionId,
+  isOpenClawBulkActionsBlock,
+  OPENCLAW_SLACK_BULK_ACTION_IDS,
+  SLACK_BULK_ACTIONS_BLOCK_ID_PREFIX,
+  SLACK_BULK_DESELECT_ALL_ACTION_ID,
+  SLACK_BULK_SELECT_ALL_ACTION_ID,
+} from "./src/bulk-action-ids.js";
+export {
   resetSlackChannelTypeCacheForTest as __resetSlackChannelTypeCacheForTest,
   resetSlackChannelTypeCacheForTest,
   resolveSlackChannelType,

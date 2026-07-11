@@ -35,7 +35,7 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "../conversation.runtime.js";
-import { isSlackBulkActionId } from "../../bulk-action-ids.js";
+import { isOpenClawBulkActionsBlock } from "../../bulk-action-ids.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 
 type InteractionMessageBlock = {
@@ -287,14 +287,7 @@ export function summarizeAction(action: Record<string, unknown>): SlackActionSum
 }
 
 function isBulkActionsBlock(block: InteractionMessageBlock): boolean {
-  return (
-    block.type === "actions" &&
-    Array.isArray(block.elements) &&
-    block.elements.length > 0 &&
-    block.elements.every(
-      (el) => typeof el.action_id === "string" && isSlackBulkActionId(el.action_id),
-    )
-  );
+  return isOpenClawBulkActionsBlock(block);
 }
 
 function formatInteractionSelectionLabel(params: {
