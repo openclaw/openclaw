@@ -9,6 +9,7 @@ import type { InterpreterInlineEvalHit } from "../infra/command-analysis/inline-
 import {
   type ExecAsk,
   type ExecSecurity,
+  formatAllowAlwaysUnavailableReason,
   maxAsk,
   requiresExecApproval,
   resolveExecApprovalAllowedDecisions,
@@ -642,6 +643,10 @@ export async function executeNodeHostCommand(
           unavailableReason,
           allowedDecisions,
           nodeId: target.nodeId,
+          allowAlwaysUnavailableReason: formatAllowAlwaysUnavailableReason({
+            ask: approvalDecisionAsk,
+            allowAlwaysPersistence,
+          }),
         });
       }
     }

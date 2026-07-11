@@ -508,6 +508,9 @@ export function buildExecApprovalPendingToolResult(params: {
   unavailableReason: ExecApprovalUnavailableReason | null;
   allowedDecisions?: readonly ExecApprovalDecision[];
   nodeId?: string;
+  /** When allow-always is unavailable for a reason other than effective policy, this
+   * message replaces the generic "policy requires approval every time" explanation. */
+  allowAlwaysUnavailableReason?: string;
 }): AgentToolResult<ExecToolDetails> {
   const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
   return {
@@ -529,6 +532,7 @@ export function buildExecApprovalPendingToolResult(params: {
                 approvalSlug: params.approvalSlug,
                 approvalId: params.approvalId,
                 allowedDecisions,
+                allowAlwaysUnavailableReason: params.allowAlwaysUnavailableReason,
                 command: params.command,
                 cwd: params.cwd,
                 host: params.host,

@@ -29,6 +29,7 @@ import {
   resolveAllowAlwaysPersistenceDecision,
   resolveDurableExecApprovalRequirement,
   resolveExecApprovalUnavailableDecisions,
+  formatAllowAlwaysUnavailableReason,
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
@@ -1198,6 +1199,10 @@ export async function processGatewayAllowlist(
         sentApproverDms,
         unavailableReason,
         allowedDecisions: approvalAllowedDecisions,
+        allowAlwaysUnavailableReason: formatAllowAlwaysUnavailableReason({
+          ask: hostAsk,
+          allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
+        }),
       }),
     };
   }

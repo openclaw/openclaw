@@ -378,6 +378,8 @@ export function buildApprovalPendingMessage(params: {
   cwd: string | undefined;
   host: "gateway" | "node";
   nodeId?: string;
+  /** When provided, used as the exact explanation for why Allow Always is unavailable. */
+  allowAlwaysUnavailableReason?: string;
 }) {
   const commandBlock = formatFencedCodeBlock(params.command, "sh");
   const lines: string[] = [];
@@ -404,7 +406,8 @@ export function buildApprovalPendingMessage(params: {
   lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      params.allowAlwaysUnavailableReason ??
+        "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     );
   }
   lines.push("If the short code is ambiguous, use the full id in /approve.");

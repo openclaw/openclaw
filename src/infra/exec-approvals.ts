@@ -2820,6 +2820,27 @@ export function resolveExecApprovalAllowedDecisions(params?: {
   return DEFAULT_EXEC_APPROVAL_DECISIONS;
 }
 
+/**
+ * Returns a user-facing explanation for why Allow Always is unavailable, or
+ * undefined when the reason cannot be determined from the available context.
+ *
+ * When the command is non-persistable (one-shot, e.g. shell redirection) the
+ * message names that fact instead of blaming the effective policy — the policy
+ * may be ask=on-miss while only this particular command prevents replay.
+ */
+export function formatAllowAlwaysUnavailableReason(params?: {
+  ask?: string | null;
+  allowAlwaysPersistence?: AllowAlwaysPersistenceDecision | null;
+}): string | undefined {
+  if (params?.allowAlwaysPersistence?.kind === "one-shot") {
+    return "Allow Always is unavailable because this command uses shell-specific features (redirection, pipes, or variables) that cannot be reliably replayed.";
+  }
+  if (normalizeExecAsk(params?.ask) === "always") {
+    return "The effective approval policy requires approval every time, so Allow Always is unavailable.";
+  }
+  return undefined;
+}
+
 export function resolveExecApprovalUnavailableDecisions(params?: {
   ask?: string | null;
   allowAlwaysPersistence?: AllowAlwaysPersistenceDecision | null;

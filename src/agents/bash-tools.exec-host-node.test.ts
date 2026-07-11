@@ -227,6 +227,7 @@ vi.mock("../infra/exec-approvals.js", () => ({
   evaluateShellAllowlistWithAuthorization: evaluateShellAllowlistMock,
   commandRequiresSecurityAuditSuppressionApproval:
     commandRequiresSecurityAuditSuppressionApprovalMock,
+  formatAllowAlwaysUnavailableReason: vi.fn(() => undefined),
   hasDurableExecApproval: hasDurableExecApprovalMock,
   hasNodeCommandAllowAlwaysMarker: hasNodeCommandAllowAlwaysMarkerMock,
   requiresExecApproval: requiresExecApprovalMock,
