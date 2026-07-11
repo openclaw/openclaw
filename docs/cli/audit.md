@@ -18,25 +18,12 @@ Gateway to stop all new event records. Message records are separately disabled b
 default; set `audit.messages` to `direct` or `all` and restart the Gateway to
 record them. Existing records stay queryable until they expire (30 days).
 
-The ledger is separate from conversation transcripts. It records identity,
+The ledger is separate from conversation transcripts: it records identity,
 ordering, provenance, action, status, and normalized outcome codes, but never
-stores prompts, message bodies, tool arguments, tool results, command output,
-or raw error text. Message rows do not store raw platform account,
-conversation, message, and target ids. Where correlation is available, those
-message identifiers are exposed only as
-installation-local keyed pseudonyms. They are correlation aids, not
-anonymization: the state database stores the key needed to derive them from
-candidate raw identifiers, while RPC and CLI exports do not include that key.
-Run and tool records retain `sessionKey` and `sessionId` for correlation;
-canonical session keys can themselves contain platform account or peer ids.
-
-The Gateway writes records to the shared OpenClaw state database through a
-bounded background writer. Queries never return records older than 30 days,
-and the ledger is capped at 100,000 rows. Expired rows are deleted during
-Gateway startup, hourly maintenance, and later writes. Writes are best-effort:
-worker failure or queue saturation can drop records and trigger an operational
-warning. This ledger supports debugging and operational review; it is not a
-lossless compliance archive.
+stores content, and message identifiers appear only as installation-local
+keyed pseudonyms. [Audit history](/gateway/audit) owns the full data model,
+privacy semantics, storage/retention bounds, and coverage limits; this page
+covers the command surface.
 
 ```bash
 openclaw audit
@@ -145,6 +132,7 @@ instead of being silently discarded.
 
 ## Related
 
+- [Audit history](/gateway/audit)
 - [Gateway protocol](/gateway/protocol#audit-ledger-rpc)
 - [Sessions](/cli/sessions)
 - [Tasks](/cli/tasks)

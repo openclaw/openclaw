@@ -589,7 +589,8 @@ for auto-allow checks.
 run, tool action, and opt-in message lifecycle metadata. It requires
 `operator.read`. Queries exclude records older than 30 days, and the shared
 SQLite ledger is capped at 100,000 records. Expired rows are deleted during
-Gateway startup, hourly maintenance, and later writes.
+Gateway startup, hourly maintenance, and later writes. See
+[Audit history](/gateway/audit) for the data model and privacy semantics.
 
 - Params: optional exact `agentId`, `sessionKey`, or `runId`; optional `kind`
   (`"agent_run"`, `"tool_action"`, or `"message"`); optional `status`
