@@ -6,6 +6,9 @@ const REGISTRY_IDS = [
   "agents.list[].memorySearch.remote.apiKey",
   "channels.discord.token",
   "channels.discord.accounts.*.token",
+  "channels.matrix.accessToken",
+  "channels.matrix.password",
+  "channels.matrix.accounts.default.accessToken",
   "channels.telegram.botToken",
   "gateway.auth.token",
   "gateway.auth.password",
@@ -94,6 +97,53 @@ vi.mock("../secrets/target-registry.js", () => ({
     }
     return out;
   }),
+}));
+
+vi.mock("../secrets/channel-contract-api.js", () => ({
+  loadChannelSecretContractApi: vi.fn(({ channelId }: { channelId: string }) => {
+    if (channelId === "discord") {
+      return {
+        secretTargetRegistryEntries: [
+          {
+            id: "channels.discord.token",
+            configFile: "openclaw.json",
+            pathPattern: "channels.discord.token",
+          },
+          {
+            id: "channels.discord.accounts.*.token",
+            configFile: "openclaw.json",
+            pathPattern: "channels.discord.accounts.*.token",
+          },
+        ],
+      };
+    }
+    if (channelId === "matrix") {
+      return {
+        secretTargetRegistryEntries: [
+          {
+            id: "channels.matrix.accessToken",
+            configFile: "openclaw.json",
+            pathPattern: "channels.matrix.accessToken",
+          },
+          {
+            id: "channels.matrix.password",
+            configFile: "openclaw.json",
+            pathPattern: "channels.matrix.password",
+          },
+          {
+            id: "channels.matrix.accounts.*.accessToken",
+            configFile: "openclaw.json",
+            pathPattern: "channels.matrix.accounts.*.accessToken",
+          },
+        ],
+      };
+    }
+    return { secretTargetRegistryEntries: [] };
+  }),
+}));
+
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: vi.fn(() => []),
 }));
 
 vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
@@ -245,6 +295,7 @@ import {
   getCapabilityWebFetchCommandSecretTargetIds,
   getCapabilityWebSearchCommandSecretTargets,
   getCapabilityWebSearchCommandSecretTargetIds,
+  getConfiguredChannelsCommandSecretTargetIds,
   getModelsCommandSecretTargetIds,
   getQrRemoteCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
@@ -286,6 +337,25 @@ describe("command secret target ids", () => {
     expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
+  });
+
+  it("includes only configured channel secret targets for doctor preview scans", () => {
+    const ids = getConfiguredChannelsCommandSecretTargetIds({
+      channels: {
+        matrix: {
+          enabled: false,
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+        },
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_TOKEN" },
+        },
+      },
+    } as never);
+
+    expect(ids).toEqual(new Set(["channels.discord.token"]));
+    expect(ids.has("channels.matrix.accessToken")).toBe(false);
+    expect(ids.has("channels.matrix.password")).toBe(false);
   });
 
   it("scopes capability web search commands to search credential surfaces only", () => {

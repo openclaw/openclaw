@@ -752,7 +752,7 @@ function getConfiguredChannelSecretTargetIds(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  const targetIds = new Set<string>();
+  const candidateTargetIds = new Set<string>();
   const channels = config.channels;
   if (channels && typeof channels === "object" && !Array.isArray(channels)) {
     for (const channelId of Object.keys(channels)) {
@@ -762,7 +762,7 @@ function getConfiguredChannelSecretTargetIds(
       const contract = loadChannelSecretContractApi({ channelId, config, env });
       for (const entry of contract?.secretTargetRegistryEntries ?? []) {
         if (isScopedChannelSecretTargetEntry({ entry, pluginChannelId: channelId })) {
-          targetIds.add(entry.id);
+          candidateTargetIds.add(entry.id);
         }
       }
     }
@@ -773,11 +773,15 @@ function getConfiguredChannelSecretTargetIds(
   })) {
     for (const entry of plugin.secrets?.secretTargetRegistryEntries ?? []) {
       if (isScopedChannelSecretTargetEntry({ entry, pluginChannelId: plugin.id })) {
-        targetIds.add(entry.id);
+        candidateTargetIds.add(entry.id);
       }
     }
   }
-  return [...targetIds].toSorted((left, right) => left.localeCompare(right));
+  return [
+    ...new Set(
+      discoverConfigSecretTargetsByIds(config, candidateTargetIds).map((target) => target.entry.id),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
 }
 
 function buildCommandSecretTargets(): CommandSecretTargets {
