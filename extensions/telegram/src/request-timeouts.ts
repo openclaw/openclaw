@@ -54,11 +54,12 @@ export function resolveTelegramRequestTimeoutMs(
   if (!method) {
     return undefined;
   }
-  const baseTimeoutMs =
-    TELEGRAM_REQUEST_TIMEOUTS_MS[method as keyof typeof TELEGRAM_REQUEST_TIMEOUTS_MS];
-  if (baseTimeoutMs === undefined || method === "getupdates") {
-    return baseTimeoutMs;
+  if (method === "getupdates") {
+    return TELEGRAM_REQUEST_TIMEOUTS_MS.getupdates;
   }
+  const baseTimeoutMs =
+    TELEGRAM_REQUEST_TIMEOUTS_MS[method as keyof typeof TELEGRAM_REQUEST_TIMEOUTS_MS] ??
+    TELEGRAM_OUTBOUND_TEXT_REQUEST_TIMEOUT_MS;
   return Math.max(baseTimeoutMs, resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds) ?? 0);
 }
 
