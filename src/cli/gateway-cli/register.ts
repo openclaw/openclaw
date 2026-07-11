@@ -131,7 +131,7 @@ async function loadSettledCostUsageSummary(
     const summary = (await callGatewayCli("usage.cost", callOpts, params)) as CostUsageSummary;
     lastSummary = summary;
     const status = summary.cacheStatus?.status;
-    if (status !== "refreshing" && status !== "partial") {
+    if (!status || status === "fresh") {
       return summary;
     }
 

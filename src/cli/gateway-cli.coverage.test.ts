@@ -347,20 +347,30 @@ describe("gateway-cli coverage", () => {
     }
   });
 
-  it("uses --timeout as the command-wide usage-cost settle budget", async () => {
-    callGateway.mockResolvedValue({
-      cacheStatus: { status: "refreshing", cachedFiles: 0, pendingFiles: 1 },
-    });
+  it.each(["refreshing", "partial", "stale"] as const)(
+    "uses --timeout as the command-wide usage-cost settle budget for %s caches",
+    async (status) => {
+      callGateway.mockResolvedValue({
+        cacheStatus: { status, cachedFiles: 0, pendingFiles: 1 },
+      });
 
-    await expectGatewayExit(["gateway", "usage-cost", "--all-agents", "--timeout", "50", "--json"]);
+      await expectGatewayExit([
+        "gateway",
+        "usage-cost",
+        "--all-agents",
+        "--timeout",
+        "50",
+        "--json",
+      ]);
 
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    const costCall = firstMockArg(callGateway) as { method?: string; timeoutMs?: number };
-    expect(costCall.method).toBe("usage.cost");
-    expect(costCall.timeoutMs).toBeGreaterThan(0);
-    expect(costCall.timeoutMs).toBeLessThanOrEqual(50);
-    expect(runtimeErrors.join("\n")).toContain("Timed out waiting for usage cost cache refresh");
-  });
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const costCall = firstMockArg(callGateway) as { method?: string; timeoutMs?: number };
+      expect(costCall.method).toBe("usage.cost");
+      expect(costCall.timeoutMs).toBeGreaterThan(0);
+      expect(costCall.timeoutMs).toBeLessThanOrEqual(50);
+      expect(runtimeErrors.join("\n")).toContain("Timed out waiting for usage cost cache refresh");
+    },
+  );
 
   it("rejects combining --agent with --all-agents for usage-cost", async () => {
     callGateway.mockClear();
