@@ -1310,6 +1310,25 @@ describe("WorkboardStore", () => {
     await expect(store.linkCards(lateParent.id, child.id)).rejects.toThrow(/active child/);
   });
 
+  it("reports already claimed for dependency-backed cards on repeat claim", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent", status: "todo" });
+    const child = await store.create({
+      title: "Child",
+      status: "todo",
+      parents: [parent.id],
+    });
+
+    await store.complete(parent.id, { summary: "Parent done." });
+    await store.dispatch();
+
+    const claimed = await store.claim(child.id, { ownerId: "main" });
+    expect(claimed.card.status).toBe("running");
+    expect(claimed.card.metadata?.claim).toMatchObject({ ownerId: "main" });
+
+    await expect(store.claim(child.id, { ownerId: "other" })).rejects.toThrow(/already claimed/);
+  });
+
   it("rejects terminal children with incomplete dependency parents", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const runningParent = await store.create({ title: "Running parent", status: "running" });

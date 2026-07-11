@@ -3401,6 +3401,10 @@ export class WorkboardStore {
         ttlSeconds ? secondsToDurationMs(ttlSeconds) : DEFAULT_CLAIM_TTL_MS,
       );
       const guarded = await this.promoteDependencyReady(id, now);
+      const existingClaim = guarded.metadata?.claim;
+      if (existingClaim && isFutureDateTimestampMs(existingClaim.expiresAt, { nowMs: now })) {
+        throw new Error(`card already claimed by ${existingClaim.ownerId}.`);
+      }
       if (cardParentIds(guarded).length > 0 && guarded.status !== "ready") {
         throw new Error("card dependencies are not done.");
       }
@@ -3409,10 +3413,6 @@ export class WorkboardStore {
       }
       if (retryBudgetExhausted(guarded)) {
         throw new Error("card exhausted its retry budget.");
-      }
-      const existingClaim = guarded.metadata?.claim;
-      if (existingClaim && isFutureDateTimestampMs(existingClaim.expiresAt, { nowMs: now })) {
-        throw new Error(`card already claimed by ${existingClaim.ownerId}.`);
       }
       const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
       const card = await this.updateCard(id, {
