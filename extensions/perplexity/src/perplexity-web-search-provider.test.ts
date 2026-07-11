@@ -196,9 +196,9 @@ describe("perplexity web search provider", () => {
   it("forwards the execution abort signal to the Perplexity HTTP request", async () => {
     await withEnvAsync({ [perplexityApiKeyEnv]: directPerplexityApiKey }, async () => {
       const controller = new AbortController();
-      let capturedSignal: AbortSignal | undefined;
+      let capturedSignal: AbortSignal | null | undefined;
       const mockFetch = vi.fn(async (_input?: unknown, init?: unknown) => {
-        capturedSignal = (init as RequestInit)?.signal;
+        capturedSignal = (init as RequestInit)?.signal ?? undefined;
         // Hold the request open and only resolve on the forwarded signal
         // abort. If the provider drops the signal, the captured signal is
         // undefined and the first expectation below fails.
