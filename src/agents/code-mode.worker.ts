@@ -312,7 +312,7 @@ const CONTROLLER_SOURCE = String.raw`
       path,
       content,
       description: typeof file.description === "string" ? file.description : undefined,
-      bytes: content.length,
+      bytes: file.bytes,
     }));
   }
   const api = Object.freeze({
@@ -459,7 +459,11 @@ async function createVm(params: {
   } finally {
     namespacesHandle.dispose();
   }
-  const apiFilesHandle = vm.hostToHandle(params.apiFiles);
+  const apiFiles = params.apiFiles.map((file) => ({
+    ...file,
+    bytes: Buffer.byteLength(file.content, "utf8"),
+  }));
+  const apiFilesHandle = vm.hostToHandle(apiFiles);
   try {
     vm.setProp(vm.global, "__openclawApiFiles", apiFilesHandle);
   } finally {
