@@ -658,20 +658,13 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
 
     if (msg.role === "toolResult") {
       const textResult = extractToolResultText(msg.content);
-      const hasTextBlock = msg.content.some((item) => item.type === "text");
       const imageContent = model.input.includes("image")
         ? msg.content.filter(
             (item): item is Extract<(typeof msg.content)[number], { type: "image" }> =>
               item.type === "image",
           )
         : [];
-      // Empty text owns the fallback only when its image is actually delivered.
-      // Text-only models still need a description for media they omit.
-      const suppressMediaPlaceholder =
-        hasTextBlock && (textResult.length > 0 || imageContent.length > 0);
-      const mediaPlaceholder = suppressMediaPlaceholder
-        ? undefined
-        : describeToolResultMediaPlaceholder(msg.content);
+      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const responseValue = textResult
         ? sanitizeTransportPayloadText(textResult)
         : (mediaPlaceholder ?? "");

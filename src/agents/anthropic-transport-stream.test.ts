@@ -3210,7 +3210,7 @@ describe("anthropic transport stream", () => {
     expect(toolResult.is_error).toBe(false);
   });
 
-  it("does not add generic placeholder when image tool results include explicit empty text", async () => {
+  it("drops empty text blocks from image tool results before Anthropic payloads", async () => {
     const imageData = Buffer.from("image").toString("base64");
 
     await runTransportStream(
@@ -3251,6 +3251,7 @@ describe("anthropic transport stream", () => {
       (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
     );
     expect(toolResult.content).toEqual([
+      { type: "text", text: "(see attached image)" },
       {
         type: "image",
         source: {

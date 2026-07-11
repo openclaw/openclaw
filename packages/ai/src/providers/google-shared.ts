@@ -32,10 +32,7 @@ import type {
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
-import {
-  describeMediaOnlyToolResultPlaceholder,
-  extractToolResultText,
-} from "./tool-result-text.js";
+import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 type GoogleApiType = "google-generative-ai" | "google-vertex";
@@ -289,7 +286,7 @@ export function convertMessages<T extends GoogleApiType>(
 
       const hasText = textResult.length > 0;
       const hasImages = imageContent.length > 0;
-      const mediaPlaceholder = describeMediaOnlyToolResultPlaceholder(msg.content);
+      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
 
       // Gemini 3+ models support multimodal function responses with images nested inside
       // functionResponse.parts. Claude and other non-Gemini models behind Cloud Code Assist /

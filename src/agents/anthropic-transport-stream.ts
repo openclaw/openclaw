@@ -41,7 +41,7 @@ import {
   parseStreamingJson,
 } from "@openclaw/ai/internal/runtime";
 import {
-  describeMediaOnlyToolResultPlaceholder,
+  describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
   extractToolResultText,
 } from "@openclaw/ai/internal/shared";
@@ -341,13 +341,13 @@ function toClaudeCodeName(name: string): string {
 
 function convertContentBlocks(content: readonly unknown[]) {
   const text = extractToolResultText(content);
+  const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
   const hasImages =
     Array.isArray(content) &&
     content.some(
       (item) =>
         item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
     );
-  const mediaPlaceholder = describeMediaOnlyToolResultPlaceholder(content);
   if (!hasImages) {
     return sanitizeNonEmptyTransportPayloadText(text, mediaPlaceholder ?? "(no output)");
   }
@@ -381,8 +381,8 @@ function convertContentBlocks(content: readonly unknown[]) {
       },
     });
   }
-  if (!hasTextBlock && mediaPlaceholder) {
-    blocks.unshift({ type: "text", text: mediaPlaceholder });
+  if (!hasTextBlock) {
+    blocks.unshift({ type: "text", text: mediaPlaceholder ?? "(see attached image)" });
   }
   return blocks;
 }

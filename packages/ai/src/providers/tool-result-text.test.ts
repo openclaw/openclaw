@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  describeMediaOnlyToolResultPlaceholder,
-  describeToolResultMediaPlaceholder,
-  extractToolResultText,
-} from "./tool-result-text.js";
+import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 
 describe("extractToolResultText", () => {
   it("keeps media-only blocks out of provider replay text", () => {
@@ -97,15 +93,6 @@ describe("extractToolResultText", () => {
 });
 
 describe("describeToolResultMediaPlaceholder", () => {
-  it("continues to describe mixed media for existing callers", () => {
-    expect(
-      describeToolResultMediaPlaceholder([
-        { type: "image", mimeType: "image/png", data: "img" },
-        { type: "text", text: "PLAIN_TEXT_PROBE_99241" },
-      ]),
-    ).toBe("(see attached image)");
-  });
-
   it("describes image-only tool result media", () => {
     expect(
       describeToolResultMediaPlaceholder([{ type: "image", mimeType: "image/png", data: "img" }]),
@@ -127,27 +114,5 @@ describe("describeToolResultMediaPlaceholder", () => {
         { type: "audio", mimeType: "audio/mpeg", data: "audio" },
       ]),
     ).toBe("(see attached media)");
-  });
-});
-
-describe("describeMediaOnlyToolResultPlaceholder", () => {
-  it.each(["PLAIN_TEXT_PROBE_99241", ""])(
-    "suppresses media fallback when a tool result has text %j",
-    (text) => {
-      expect(
-        describeMediaOnlyToolResultPlaceholder([
-          { type: "text", text },
-          { type: "image", mimeType: "image/png", data: "img" },
-        ]),
-      ).toBeUndefined();
-    },
-  );
-
-  it("describes media-only tool results", () => {
-    expect(
-      describeMediaOnlyToolResultPlaceholder([
-        { type: "image", mimeType: "image/png", data: "img" },
-      ]),
-    ).toBe("(see attached image)");
   });
 });

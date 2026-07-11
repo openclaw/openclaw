@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Agent tool-result recovery:** preserve fresh non-trailing tool output across runtime-context, steering, and queued follow-up messages by reducing older frozen prompt projections first while retaining the hard aggregate cap. (#99756, #99524, #99241) Thanks @AcosX and @snowzlmbot.
 - **Gateway service audit:** treat POSIX shell `-c` wrappers as opaque for the gateway-subcommand check, avoiding false missing-command warnings for shell-wrapped macOS LaunchAgents without parsing inner commands or ports. Fixes #81751. (#81778) Thanks @liaoandi.
 - **Memory filename search:** index paths separately from chunk bodies so exact full-path, basename, and stem queries rank the intended memory file first without changing body BM25 scores, snippets, or embeddings. (#96052, #94102) Thanks @Pick-cat.
 - **Outbound channel bootstrap:** suppress repeated failed plugin activation for the same channel, config, and registry generation while retrying after config or registry reloads. (#100377) Thanks @xialonglee.

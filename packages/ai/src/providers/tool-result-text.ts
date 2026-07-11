@@ -159,23 +159,6 @@ export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): 
   return undefined;
 }
 
-/** Select a media fallback only when no explicit text block owns the tool-result payload. */
-export function describeMediaOnlyToolResultPlaceholder(
-  blocks: readonly unknown[],
-): string | undefined {
-  if (
-    blocks.some(
-      (block) =>
-        Boolean(block) &&
-        typeof block === "object" &&
-        (block as { type?: unknown }).type === "text",
-    )
-  ) {
-    return undefined;
-  }
-  return describeToolResultMediaPlaceholder(blocks);
-}
-
 export function extractToolResultBlockText(block: unknown): string | undefined {
   if (!block || typeof block !== "object") {
     return undefined;

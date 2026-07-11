@@ -87,7 +87,7 @@ import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
 import {
-  describeMediaOnlyToolResultPlaceholder,
+  describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
   extractToolResultText,
 } from "./tool-result-text.js";
@@ -164,13 +164,13 @@ function convertContentBlocks(
         }
     > {
   const text = extractToolResultText(content);
+  const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
   const hasImages =
     Array.isArray(content) &&
     content.some(
       (item) =>
         item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
     );
-  const mediaPlaceholder = describeMediaOnlyToolResultPlaceholder(content);
 
   if (!hasImages) {
     const sanitized = sanitizeSurrogates(text);
@@ -218,8 +218,8 @@ function convertContentBlocks(
       },
     });
   }
-  if (!hasTextBlock && mediaPlaceholder) {
-    blocks.unshift({ type: "text" as const, text: mediaPlaceholder });
+  if (!hasTextBlock) {
+    blocks.unshift({ type: "text" as const, text: mediaPlaceholder ?? "(see attached image)" });
   }
 
   return blocks;
