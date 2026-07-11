@@ -361,7 +361,7 @@ function createDeferred<T>() {
 function createArgMenusHarness(
   cfg: OpenClawConfig = { commands: { native: true, nativeSkills: false } },
 ) {
-  const commands = new Map<string, (args: unknown) => Promise<void>>();
+  const commands = new Map<string | RegExp, (args: unknown) => Promise<void>>();
   const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
   const options = new Map<string, (args: unknown) => Promise<void>>();
   const optionsReceiverContexts: unknown[] = [];
@@ -369,7 +369,7 @@ function createArgMenusHarness(
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
   const app = {
     client: { chat: { postEphemeral } },
-    command: (name: string, handler: (args: unknown) => Promise<void>) => {
+    command: (name: string | RegExp, handler: (args: unknown) => Promise<void>) => {
       commands.set(name, handler);
     },
     action: (id: string | RegExp, handler: (args: unknown) => Promise<void>) => {
@@ -397,7 +397,7 @@ function createArgMenusHarness(
     useAccessGroups: false,
     channelsConfig: undefined,
     slashCommand: {
-      enabled: true,
+      enabled: false,
       name: "openclaw",
       ephemeral: true,
       sessionPrefix: "slack:slash",
@@ -658,12 +658,21 @@ describe("Slack native command argument menus", () => {
     harness.postEphemeral.mockClear();
   });
 
-  it("registers the configured slash command alongside native commands", () => {
+  it("prefers the configured slash command over native commands", async () => {
+    const configuredHarness = createArgMenusHarness();
+    (
+      configuredHarness.ctx as {
+        slashCommand: { enabled: boolean };
+      }
+    ).slashCommand.enabled = true;
+    await registerCommands(configuredHarness.ctx, configuredHarness.account);
+
     expect(
-      [...harness.commands.keys()].some(
+      [...configuredHarness.commands.keys()].some(
         (command) => command instanceof RegExp && command.test("/openclaw"),
       ),
     ).toBe(true);
+    expect(configuredHarness.commands.has("/usage")).toBe(false);
   });
 
   it("registers options handlers without losing app receiver binding", async () => {
@@ -1620,6 +1629,54 @@ describe("slack slash command session metadata", () => {
     expect(dispatchMock).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg: resolvedCfg,
+      }),
+    );
+  });
+
+  it("adopts matching runtime refreshes after resolving monitor secrets", async () => {
+    const harness = createPolicyHarness({
+      channelId: "D123",
+      channelName: "directmessage",
+      resolveChannelName: async () => ({ name: "directmessage", type: "im" }),
+    });
+    const sourceCfg = (harness.ctx as { cfg: OpenClawConfig }).cfg;
+    const resolvedCfg = {
+      ...sourceCfg,
+      channels: {
+        slack: {
+          accounts: {
+            default: {
+              botToken: "xoxb-resolved",
+              appToken: "xapp-resolved",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const refreshedSourceCfg = {
+      ...sourceCfg,
+      session: { dmScope: "per-channel-peer" },
+    } as OpenClawConfig;
+    const refreshedResolvedCfg = {
+      ...resolvedCfg,
+      session: { dmScope: "per-channel-peer" },
+    } as OpenClawConfig;
+    (harness.ctx as { cfg: OpenClawConfig }).cfg = resolvedCfg;
+    setRuntimeConfigSnapshot(resolvedCfg, sourceCfg);
+    await registerCommands(harness.ctx, harness.account);
+    setRuntimeConfigSnapshot(refreshedResolvedCfg, refreshedSourceCfg);
+
+    await runSlashHandler({
+      commands: harness.commands,
+      command: {
+        channel_id: harness.channelId,
+        channel_name: harness.channelName,
+      },
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: refreshedResolvedCfg,
       }),
     );
   });

@@ -387,6 +387,7 @@ export async function registerSlackMonitorSlashCommands(params: {
   const slashCommand = resolveSlackSlashCommandConfig(
     ctx.slashCommand ?? account.config.slashCommand,
   );
+  const startupRuntimeSourceConfig = getRuntimeConfigSourceSnapshot();
 
   const handleSlashCommand = async (p: {
     command: SlackCommandMiddlewareArgs["command"];
@@ -415,12 +416,15 @@ export async function registerSlackMonitorSlashCommands(params: {
           }
         : createSlackResponseUrlBudget(respondWithoutBudget);
     const respond = responseBudget.respond;
+    const applicableRuntimeConfig = selectApplicableRuntimeConfig({
+      inputConfig: startupRuntimeSourceConfig ?? ctx.cfg,
+      runtimeConfig: getRuntimeConfigSnapshot(),
+      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
+    });
     const cfg =
-      selectApplicableRuntimeConfig({
-        inputConfig: ctx.cfg,
-        runtimeConfig: getRuntimeConfigSnapshot(),
-        runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
-      }) ?? ctx.cfg;
+      applicableRuntimeConfig === startupRuntimeSourceConfig
+        ? ctx.cfg
+        : (applicableRuntimeConfig ?? ctx.cfg);
     try {
       if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
         await ack();
@@ -863,7 +867,20 @@ export async function registerSlackMonitorSlashCommands(params: {
     }
   }
 
-  if (nativeCommands.length > 0) {
+  if (slashCommand.enabled) {
+    ctx.app.command(
+      buildSlackSlashCommandMatcher(slashCommand.name),
+      async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
+        await handleSlashCommand({
+          command,
+          ack,
+          respond,
+          body,
+          prompt: command.text?.trim() ?? "",
+        });
+      },
+    );
+  } else if (nativeCommands.length > 0) {
     if (!slashCommandsRuntime) {
       throw new Error("Missing commands runtime for native Slack commands.");
     }
@@ -898,27 +915,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         },
       );
     }
-  }
-
-  const configuredSlashCommandIsNative = nativeCommands.some(
-    (command) =>
-      normalizeLowercaseStringOrEmpty(command.name) ===
-      normalizeLowercaseStringOrEmpty(slashCommand.name),
-  );
-  if (slashCommand.enabled && !configuredSlashCommandIsNative) {
-    ctx.app.command(
-      buildSlackSlashCommandMatcher(slashCommand.name),
-      async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
-        await handleSlashCommand({
-          command,
-          ack,
-          respond,
-          body,
-          prompt: command.text?.trim() ?? "",
-        });
-      },
-    );
-  } else if (nativeCommands.length === 0) {
+  } else {
     logVerbose("slack: slash commands disabled");
   }
 
