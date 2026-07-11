@@ -1778,7 +1778,8 @@ jobs:
                     trap "kill ${control_pid} >/dev/null 2>&1 || true" EXIT
                     tr "\0" "\n" <"/proc/${control_pid}/environ" |
                       grep -Fxq "OPENCLAW_QA_PROC_CONTROL=visible"
-                    kill "$control_pid"
+                    # Reading the marker is the proof; the probe may exit before cleanup.
+                    kill "$control_pid" >/dev/null 2>&1 || true
                     wait "$control_pid" || true
                     trap - EXIT
                     runtime_stage=verify-secret-env-hidden
