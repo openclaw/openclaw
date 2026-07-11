@@ -293,7 +293,7 @@ import {
 } from "../compaction-successor-transcript.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
-import { buildEmbeddedExtensionFactories } from "../extensions.js";
+import { buildEmbeddedExtensionFactories, prepareSafeguardRuntimeTarget } from "../extensions.js";
 import {
   applyExtraParamsToAgent,
   resolveAgentTransportOverride,
@@ -2552,6 +2552,20 @@ export async function runEmbeddedAttempt(
 
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
+      const safeguardRuntimeTarget = await prepareSafeguardRuntimeTarget({
+        cfg: params.config,
+        provider: params.provider,
+        modelId: params.modelId,
+        model: params.model,
+        modelRegistry: params.modelRegistry,
+        authStorage: params.authStorage,
+        authProfileStore: params.authProfileStore,
+        agentDir,
+        workspaceDir: effectiveWorkspace,
+        authProfileId: params.authProfileId,
+        harnessRuntime: params.agentHarnessRuntimeOverride ?? params.agentHarnessId,
+        modelSelectionLocked: params.modelSelectionLocked,
+      });
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
@@ -2564,6 +2578,7 @@ export async function runEmbeddedAttempt(
         authProfileId: params.authProfileId,
         harnessRuntime: params.agentHarnessRuntimeOverride ?? params.agentHarnessId,
         modelSelectionLocked: params.modelSelectionLocked,
+        safeguardRuntimeTarget,
         runId: params.runId,
       });
       const resourceLoader = createEmbeddedAgentResourceLoader({

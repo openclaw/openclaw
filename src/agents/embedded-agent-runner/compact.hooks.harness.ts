@@ -755,6 +755,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("./extensions.js", () => ({
     buildEmbeddedExtensionFactories: vi.fn(() => []),
+    prepareSafeguardRuntimeTarget: vi.fn(async () => undefined),
   }));
 
   vi.doMock("./history.js", () => ({

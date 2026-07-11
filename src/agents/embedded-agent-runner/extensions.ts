@@ -3,6 +3,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
@@ -16,14 +17,21 @@ import {
   finalizeToolTerminalPresentation,
   peekAdjustedParamsForToolCall,
 } from "../agent-tools.before-tool-call.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
 import type { AgentToolResult } from "../runtime/index.js";
-import type { ExtensionFactory, ModelRegistry, SessionManager } from "../sessions/index.js";
+import type {
+  AuthStorage,
+  ExtensionFactory,
+  ModelRegistry,
+  SessionManager,
+} from "../sessions/index.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
+import { prepareCompactionRuntimeAuth } from "./compaction-runtime-auth.js";
 import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
 import { log } from "./logger.js";
 import { resolveModelWithRegistry } from "./model.js";
@@ -178,6 +186,14 @@ function hasCompactionModelOverride(cfg?: OpenClawConfig): boolean {
   return Boolean(cfg?.agents?.defaults?.compaction?.model?.trim());
 }
 
+export type SafeguardRuntimeTarget = {
+  provider: string;
+  modelId: string;
+  model: ProviderRuntimeModel | undefined;
+  authProfileId?: string;
+  requiresAuthPreparation: boolean;
+};
+
 function resolveSafeguardRuntimeTarget(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -189,7 +205,7 @@ function resolveSafeguardRuntimeTarget(params: {
   authProfileId?: string;
   harnessRuntime?: string;
   modelSelectionLocked?: boolean;
-}): { provider: string; modelId: string; model: ProviderRuntimeModel | undefined } {
+}): SafeguardRuntimeTarget {
   const resolved = resolveEmbeddedCompactionTarget({
     config: params.cfg,
     provider: params.provider,
@@ -204,7 +220,13 @@ function resolveSafeguardRuntimeTarget(params: {
     !hasCompactionModelOverride(params.cfg) ||
     (provider === params.provider && modelId === params.modelId)
   ) {
-    return { provider, modelId, model: params.model };
+    return {
+      provider,
+      modelId,
+      model: params.model,
+      authProfileId: resolved.authProfileId,
+      requiresAuthPreparation: false,
+    };
   }
 
   const model = params.modelRegistry
@@ -219,7 +241,13 @@ function resolveSafeguardRuntimeTarget(params: {
       })
     : undefined;
   if (model) {
-    return { provider, modelId, model };
+    return {
+      provider,
+      modelId,
+      model,
+      authProfileId: resolved.authProfileId,
+      requiresAuthPreparation: true,
+    };
   }
 
   log.warn(
@@ -230,7 +258,54 @@ function resolveSafeguardRuntimeTarget(params: {
     provider: params.provider,
     modelId: params.modelId,
     model: params.model,
+    authProfileId: params.authProfileId,
+    requiresAuthPreparation: false,
   };
+}
+
+export async function prepareSafeguardRuntimeTarget(
+  params: Parameters<typeof resolveSafeguardRuntimeTarget>[0] & {
+    authStorage: Pick<AuthStorage, "setRuntimeApiKey">;
+    authProfileStore?: AuthProfileStore;
+  },
+): Promise<SafeguardRuntimeTarget | undefined> {
+  if (resolveEffectiveCompactionMode(params.cfg) !== "safeguard") {
+    return undefined;
+  }
+  const target = resolveSafeguardRuntimeTarget(params);
+  if (!target.requiresAuthPreparation || !target.model) {
+    return target;
+  }
+
+  try {
+    const prepared = await prepareCompactionRuntimeAuth({
+      model: target.model,
+      modelId: target.modelId,
+      config: params.cfg,
+      authStorage: params.authStorage,
+      authProfileStore: params.authProfileStore,
+      authProfileId: target.authProfileId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+    });
+    return {
+      ...target,
+      model: prepared.model,
+      authProfileId: prepared.authProfileId,
+    };
+  } catch (err) {
+    log.warn(
+      `Configured safeguard compaction model "${target.provider}/${target.modelId}" auth could not be prepared (${formatErrorMessage(err)}); ` +
+        "using the active session model when available, otherwise safeguard compaction will be skipped.",
+    );
+    return {
+      provider: params.provider,
+      modelId: params.modelId,
+      model: params.model,
+      authProfileId: params.authProfileId,
+      requiresAuthPreparation: false,
+    };
+  }
 }
 
 export function buildEmbeddedExtensionFactories(params: {
@@ -245,13 +320,14 @@ export function buildEmbeddedExtensionFactories(params: {
   authProfileId?: string;
   harnessRuntime?: string;
   modelSelectionLocked?: boolean;
+  safeguardRuntimeTarget?: SafeguardRuntimeTarget;
   runId?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
-    const runtimeTarget = resolveSafeguardRuntimeTarget(params);
+    const runtimeTarget = params.safeguardRuntimeTarget ?? resolveSafeguardRuntimeTarget(params);
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
       provider: runtimeTarget.provider,

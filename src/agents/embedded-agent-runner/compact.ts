@@ -30,7 +30,6 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
-  prepareProviderRuntimeAuth,
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
@@ -96,8 +95,6 @@ import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-promp
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
-  getApiKeyForModel,
-  MissingProviderAuthError,
   resolveModelAuthMode,
 } from "../model-auth.js";
 import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.js";
@@ -105,11 +102,6 @@ import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
-import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
-import {
-  protectPreparedProviderRuntimeAuth,
-  unwrapSecretSentinelsForProviderEgress,
-} from "../provider-secret-egress.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import {
   applyAgentRunSessionTargetIdentity,
@@ -156,6 +148,7 @@ import {
   runBeforeCompactionHooks,
   runPostCompactionSideEffects,
 } from "./compaction-hooks.js";
+import { prepareCompactionRuntimeAuth } from "./compaction-runtime-auth.js";
 import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
 import {
   compactWithSafetyTimeout,
@@ -167,7 +160,7 @@ import {
   shouldRotateCompactionTranscript,
 } from "./compaction-successor-transcript.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
-import { buildEmbeddedExtensionFactories } from "./extensions.js";
+import { buildEmbeddedExtensionFactories, prepareSafeguardRuntimeTarget } from "./extensions.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { log } from "./logger.js";
@@ -715,60 +708,22 @@ async function compactEmbeddedAgentSessionDirectOnce(
     const reason = error ?? `Unknown model: ${runtimeProvider}/${modelId}`;
     return fail(reason);
   }
-  let runtimeModel = model;
-  let apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>> | null;
-  let hasRuntimeAuthExchange = false;
+  let preparedRuntimeAuth: Awaited<ReturnType<typeof prepareCompactionRuntimeAuth>>;
   try {
-    apiKeyInfo = await getApiKeyForModel({
-      model: runtimeModel,
-      cfg: params.config,
-      profileId: authProfileId,
+    preparedRuntimeAuth = await prepareCompactionRuntimeAuth({
+      model,
+      modelId,
+      config: params.config,
+      authStorage,
+      authProfileId,
       agentDir,
       workspaceDir: resolvedWorkspace,
-      secretSentinels: true,
     });
-
-    if (!apiKeyInfo.apiKey) {
-      if (apiKeyInfo.mode !== "aws-sdk") {
-        throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
-      }
-    } else {
-      const preparedAuth = protectPreparedProviderRuntimeAuth({
-        provider: runtimeModel.provider,
-        preparedAuth: await prepareProviderRuntimeAuth({
-          provider: runtimeModel.provider,
-          config: params.config,
-          workspaceDir: resolvedWorkspace,
-          env: process.env,
-          context: {
-            config: params.config,
-            agentDir,
-            workspaceDir: resolvedWorkspace,
-            env: process.env,
-            provider: runtimeModel.provider,
-            modelId,
-            model: runtimeModel,
-            apiKey: unwrapSecretSentinelsForProviderEgress(
-              apiKeyInfo.apiKey,
-              "provider runtime auth exchange",
-            ),
-            authMode: apiKeyInfo.mode,
-            profileId: apiKeyInfo.profileId,
-          },
-        }),
-      });
-      runtimeModel = applyPreparedRuntimeAuthToModel(runtimeModel, preparedAuth);
-      const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
-      hasRuntimeAuthExchange = Boolean(preparedAuth?.apiKey);
-      if (!runtimeApiKey) {
-        throw new Error(`Provider "${runtimeModel.provider}" runtime auth returned no apiKey.`);
-      }
-      authStorage.setRuntimeApiKey(runtimeModel.provider, runtimeApiKey);
-    }
   } catch (err) {
     const reason = formatErrorMessage(err);
     return fail(reason, err);
   }
+  const { model: runtimeModel, apiKeyInfo, hasRuntimeAuthExchange } = preparedRuntimeAuth;
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =
@@ -1310,18 +1265,32 @@ async function compactEmbeddedAgentSessionDirectOnce(
       });
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
+      const safeguardRuntimeTarget = await prepareSafeguardRuntimeTarget({
+        cfg: params.config,
+        provider,
+        modelId,
+        model: effectiveModel,
+        modelRegistry,
+        authStorage,
+        agentDir,
+        workspaceDir: resolvedWorkspace,
+        authProfileId: preparedRuntimeAuth.authProfileId,
+        harnessRuntime: selectedHarnessRuntime,
+        modelSelectionLocked: params.modelSelectionLocked,
+      });
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
         provider,
         modelId,
-        model,
+        model: effectiveModel,
         modelRegistry,
         agentDir,
         workspaceDir: resolvedWorkspace,
-        authProfileId,
+        authProfileId: preparedRuntimeAuth.authProfileId,
         harnessRuntime: selectedHarnessRuntime,
         modelSelectionLocked: params.modelSelectionLocked,
+        safeguardRuntimeTarget,
       });
       const resourceLoader = createEmbeddedAgentResourceLoader({
         cwd: effectiveCwd,
