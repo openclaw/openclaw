@@ -2251,7 +2251,7 @@ export function loadReplySessionInitializationSnapshot(params: {
   storePath: string;
   sessionKey: string;
 }): ReplySessionInitializationSnapshot {
-  const store = loadSessionStore(params.storePath, { skipCache: true, clone: false });
+  const store = loadSessionStore(params.storePath, { skipCache: false, clone: false });
   const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
   const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
   const entries = cloneSessionEntries(store);
