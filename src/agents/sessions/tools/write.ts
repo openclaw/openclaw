@@ -370,12 +370,8 @@ async function recoverSuccessfulWrite(params: {
     return null;
   }
   const readback = await params.ops.readFile(params.absolutePath).catch(() => undefined);
-  const currentContent = Buffer.isBuffer(readback) ? readback.toString("utf8") : readback;
-  if (typeof currentContent !== "string") {
-    return null;
-  }
   if (params.append) {
-    if (!isRecoveredAppendContent(currentContent, params.content, params.precheck)) {
+    if (!isRecoveredAppendContent(readback, params.content, params.precheck)) {
       return null;
     }
     return {
@@ -387,6 +383,10 @@ async function recoverSuccessfulWrite(params: {
       ],
       details: undefined,
     };
+  }
+  const currentContent = Buffer.isBuffer(readback) ? readback.toString("utf8") : readback;
+  if (typeof currentContent !== "string") {
+    return null;
   }
   const changed =
     params.precheck.state === "different" ||
@@ -406,29 +406,35 @@ async function recoverSuccessfulWrite(params: {
   };
 }
 
+/**
+ * Byte-safe append recovery check.
+ *
+ * Avoids UTF-8 round-trips (toString/decode) that would mangle non-UTF-8
+ * bytes and cause false recovery rejections for binary files. Uses file
+ * sizes from before-stat and byte-level measurement of the readback buffer
+ * so the path works for UTF-8 and arbitrary byte streams alike.
+ */
 function isRecoveredAppendContent(
-  currentContent: string,
+  readback: Buffer | string | undefined,
   appendedContent: string,
   precheck: WriteToolPrecheck,
 ): boolean {
-  // If we have the before content, verify the file is exactly before + appended.
-  if (precheck.beforeContent !== undefined) {
-    return currentContent === `${precheck.beforeContent}${appendedContent}`;
-  }
-  // If file didn't exist before, any content that matches the appended content is proof.
-  if (precheck.beforeStat === null) {
-    return currentContent === appendedContent;
-  }
-  // Without before content, approximate check: content ends with appended text
-  // and size grew by the expected amount.
-  if (!precheck.beforeStat || precheck.beforeStat.type !== "file") {
+  if (!readback) {
     return false;
   }
-  return (
-    currentContent.endsWith(appendedContent) &&
-    Buffer.byteLength(currentContent, "utf8") ===
-      precheck.beforeStat.size + Buffer.byteLength(appendedContent, "utf8")
-  );
+  const afterSize = Buffer.isBuffer(readback)
+    ? readback.byteLength
+    : Buffer.byteLength(readback, "utf-8");
+  const appendedSize = Buffer.byteLength(appendedContent, "utf-8");
+  // File did not exist before; the readback size must match appended size.
+  if (precheck.beforeStat === null) {
+    return afterSize === appendedSize;
+  }
+  // File existed before; verify before size + appended == after size.
+  if (precheck.beforeStat?.type === "file") {
+    return afterSize === precheck.beforeStat.size + appendedSize;
+  }
+  return false;
 }
 
 export function createWriteToolDefinition(
