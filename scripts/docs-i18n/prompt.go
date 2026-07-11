@@ -62,7 +62,8 @@ var localeRules = map[string]string{
 - Fixed terminology: “Gateway” is “Gateway 网关”; keep “Skills”, “local loopback”, and “Tailscale” in English.`,
 	"zh-tw": `Locale rules:
 - Write fluent Traditional Chinese using Taiwan terminology and traditional characters; do not emit Simplified Chinese forms. Use neutral documentation tone with “你/你的”.
-- Insert a space between Latin characters or digits and Chinese text when natural. Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes in protected literals.`,
+- Insert a space between Latin characters or digits and Chinese text when natural. Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes in protected literals.
+- Keep security concepts distinct: translate “credentials” as “認證資訊”, not “憑證”; reserve “憑證” for certificates.`,
 	"ja-jp": `Locale rules:
 - Write fluent technical Japanese in a neutral documentation tone. Avoid excessively formal honorifics such as “〜でございます”.
 - Use Japanese quotation marks 「 and 」 for Japanese prose. Do not add or remove spacing around Latin text merely because it borders Japanese; change spacing only when Japanese grammar requires it.

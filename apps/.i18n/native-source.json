@@ -147,7 +147,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 277,
+      "line": 289,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt",
       "source": "OPENCLAW",
       "surface": "android",
@@ -275,7 +275,7 @@
     },
     {
       "kind": "ui-dialog",
-      "line": 213,
+      "line": 198,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Permission required",
       "surface": "android",
@@ -283,7 +283,7 @@
     },
     {
       "kind": "ui-dialog",
-      "line": 215,
+      "line": 200,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Continue",
       "surface": "android",
@@ -291,7 +291,7 @@
     },
     {
       "kind": "ui-dialog",
-      "line": 216,
+      "line": 201,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Not now",
       "surface": "android",
@@ -299,7 +299,7 @@
     },
     {
       "kind": "ui-dialog",
-      "line": 243,
+      "line": 228,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Enable permission in Settings",
       "surface": "android",
@@ -307,7 +307,7 @@
     },
     {
       "kind": "ui-dialog",
-      "line": 245,
+      "line": 230,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Open Settings",
       "surface": "android",
@@ -315,7 +315,7 @@
     },
     {
       "kind": "ui-dialog",
-      "line": 253,
+      "line": 238,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Cancel",
       "surface": "android",
@@ -323,7 +323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 260,
+      "line": 245,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "OpenClaw needs ${labels.joinToString(\", \")} permissions to continue.",
       "surface": "android",
@@ -331,7 +331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 265,
+      "line": 250,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Please enable ${labels.joinToString(\", \")} in Android Settings to continue.",
       "surface": "android",
@@ -339,7 +339,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 270,
+      "line": 255,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Camera",
       "surface": "android",
@@ -347,7 +347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 271,
+      "line": 256,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Microphone",
       "surface": "android",
@@ -355,7 +355,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 272,
+      "line": 257,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Send SMS",
       "surface": "android",
@@ -363,7 +363,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 273,
+      "line": 258,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Read SMS",
       "surface": "android",
@@ -371,7 +371,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 274,
+      "line": 259,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Read Contacts",
       "surface": "android",
@@ -379,7 +379,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 275,
+      "line": 260,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Write Contacts",
       "surface": "android",
@@ -387,7 +387,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 276,
+      "line": 261,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Read Calendar",
       "surface": "android",
@@ -395,7 +395,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 277,
+      "line": 262,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Write Calendar",
       "surface": "android",
@@ -403,7 +403,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 278,
+      "line": 263,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Read Call Log",
       "surface": "android",
@@ -411,7 +411,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 279,
+      "line": 264,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Motion Activity",
       "surface": "android",
@@ -419,7 +419,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 282,
+      "line": 267,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/PermissionRequester.kt",
       "source": "Photos",
       "surface": "android",

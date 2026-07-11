@@ -116,7 +116,7 @@ func TestTranslationPromptAddsRepresentativeLocaleRules(t *testing.T) {
 		wants  []string
 	}{
 		{locale: "zh-CN", wants: []string{"Simplified Chinese", "你/你的", "Gateway 网关"}},
-		{locale: "zh-TW", wants: []string{"Traditional Chinese", "Taiwan terminology", "do not emit Simplified Chinese forms"}},
+		{locale: "zh-TW", wants: []string{"Traditional Chinese", "Taiwan terminology", "do not emit Simplified Chinese forms", "translate “credentials” as “認證資訊”, not “憑證”", "reserve “憑證” for certificates"}},
 		{locale: "ja-JP", wants: []string{"technical Japanese", "〜でございます", "「 and 」"}},
 		{locale: "de", wants: []string{"Sie/Ihr/Ihnen", "du/dein/dir"}},
 		{locale: "pt-BR", wants: []string{"Brazilian Portuguese, not European Portuguese"}},
