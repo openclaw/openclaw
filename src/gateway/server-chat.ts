@@ -243,12 +243,12 @@ export function resolveChatErrorKindFromError(error: unknown): ChatErrorKind | u
   ) {
     return "refusal";
   }
-  switch (resolveFailoverReasonFromError(error)) {
-    case "rate_limit":
-    case "overloaded":
-      return "rate_limit";
-    case "context_overflow":
-      return "context_length";
+  const reason = resolveFailoverReasonFromError(error);
+  if (reason === "rate_limit" || reason === "overloaded") {
+    return "rate_limit";
+  }
+  if (reason === "context_overflow") {
+    return "context_length";
   }
   // FailoverReason "timeout" is the retryable-transient bucket and deliberately
   // swallows generic 5xx; only genuinely timeout-shaped errors get the badge.
