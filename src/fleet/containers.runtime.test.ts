@@ -116,7 +116,7 @@ describe("fleet container runtime", () => {
     const profile = {
       runtime: "podman",
       environment: { OPENCLAW_GATEWAY_TOKEN: "fake-value" },
-    } as CellContainerProfile;
+    } as unknown as CellContainerProfile;
 
     await runtime.run(profile, true);
     await runtime.run(profile, false);
@@ -356,7 +356,7 @@ describe("fleet container runtime", () => {
     const profile = {
       runtime: "docker",
       environment: { OPENCLAW_GATEWAY_TOKEN: "fake-value" },
-    } as CellContainerProfile;
+    } as unknown as CellContainerProfile;
 
     let failure: unknown;
     try {
