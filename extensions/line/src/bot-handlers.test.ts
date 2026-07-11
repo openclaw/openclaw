@@ -143,7 +143,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
   pathExists: pathExistsMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/media-store", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   deleteMediaBuffer: deleteMediaBufferMock,
 }));
 
@@ -2070,6 +2070,76 @@ describe("handleLineWebhookEvents", () => {
       // Without the lock engaging, the second delivery for the same default
       // group must run to completion even while the first is still blocked
       // -- proving no serialization happened.
+      await secondRun;
+      expect(callOrder).toEqual(["first-start", "second-start", "second-end"]);
+
+      releaseFirst?.();
+      await firstRun;
+      expect(callOrder).toEqual(["first-start", "second-start", "second-end", "first-end"]);
+      expect(processMessage).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not engage the pending-media lock when requireMention is false even if requireMentionForNonText is true (P2 regression)", async () => {
+      // requireMentionForNonText is a sub-setting that only applies when
+      // requireMention is ALSO true. A group with requireMention: false but
+      // requireMentionForNonText: true (and no pre-existing queued media)
+      // must NOT have its overlapping webhook deliveries serialized behind
+      // the per-group lock -- the feature is not active for this group.
+      let releaseFirst: (() => void) | undefined;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const callOrder: string[] = [];
+      let callCount = 0;
+      const processMessage = vi.fn(async () => {
+        callCount += 1;
+        if (callCount === 1) {
+          callOrder.push("first-start");
+          await firstGate;
+          callOrder.push("first-end");
+        } else {
+          callOrder.push("second-start");
+          callOrder.push("second-end");
+        }
+      });
+      // requireMention: false, requireMentionForNonText: true, no queued media.
+      const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+      const context = createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: false,
+        requireMentionForNonText: true,
+        pendingMediaQueues,
+      });
+
+      const firstRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-no-require-mention",
+            userId: "user-no-require-mention",
+            messageId: "m-no-require-mention-1",
+            webhookEventId: "evt-no-require-mention-1",
+          }),
+        ],
+        context,
+      );
+      await vi.waitFor(() => {
+        expect(processMessage).toHaveBeenCalledTimes(1);
+      });
+      const secondRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-no-require-mention",
+            userId: "user-no-require-mention",
+            messageId: "m-no-require-mention-2",
+            webhookEventId: "evt-no-require-mention-2",
+          }),
+        ],
+        context,
+      );
+
+      // Without the lock engaging, the second delivery must run to completion
+      // even while the first is still blocked -- proving no serialization.
       await secondRun;
       expect(callOrder).toEqual(["first-start", "second-start", "second-end"]);
 

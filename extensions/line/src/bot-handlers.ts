@@ -12,7 +12,7 @@ import {
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { deleteMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { deleteMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -573,16 +573,16 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     ? resolveLineGroupConfig({ config: account.config, groupId, roomId })
     : undefined;
   const pendingMediaFeatureActive = Boolean(
-    groupConfig?.requireMentionForNonText === true ||
+    (groupConfig?.requireMention === true && groupConfig?.requireMentionForNonText === true) ||
     (groupQueueKey && (context.pendingMediaQueues?.get(groupQueueKey)?.length ?? 0) > 0),
   );
 
   // Runs `fn` serialized behind this group's pending-media lock only when
   // the pending-media feature is actually active for this group (opted in
-  // via `requireMentionForNonText`, or the group already has media queued
-  // from before); runs it directly (no serialization) for DMs, or for
-  // default/unconfigured groups, so unrelated traffic never pays for a lock
-  // it doesn't need.
+  // via both requireMention and requireMentionForNonText, or the group
+  // already has media queued from before for safe draining); runs it
+  // directly (no serialization) for DMs, or for default/unconfigured groups,
+  // so unrelated traffic never pays for a lock it doesn't need.
   const runPendingMediaGuarded = <T>(fn: () => Promise<T>): Promise<T> => {
     if (groupQueueKey && context.pendingMediaQueues && pendingMediaFeatureActive) {
       return getPendingMediaLock(context.pendingMediaQueues).enqueue(groupQueueKey, fn);
