@@ -3,6 +3,62 @@ import Foundation
 struct ExecHostDenylistEntry: Codable, Equatable, Sendable {
     var pattern: String
     var reason: String?
+
+    init(pattern: String, reason: String? = nil) {
+        self.pattern = pattern
+        self.reason = reason
+    }
+
+    init(from decoder: Decoder) throws {
+        // TS parity (`normalizeExecDenylist`): malformed entries decode to an
+        // empty pattern and are dropped during normalization instead of
+        // failing the whole approvals-file read.
+        guard let container = try? decoder.container(keyedBy: CodingKeys.self) else {
+            self.init(pattern: "")
+            return
+        }
+        self.init(
+            pattern: ((try? container.decodeIfPresent(String.self, forKey: .pattern)) ?? nil) ?? "",
+            reason: (try? container.decodeIfPresent(String.self, forKey: .reason)) ?? nil)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pattern
+        case reason
+    }
+}
+
+enum ExecHostDenylist {
+    /// Stable identity key for a denylist entry (pattern + reason). Matches
+    /// the TS `buildExecDenylistRuleKey` format so `approvedRuleKeys`
+    /// forwarded by the gateway compare correctly against local rules.
+    static func ruleKey(_ entry: ExecHostDenylistEntry) -> String {
+        "\(entry.pattern)\u{0}\(entry.reason ?? "")"
+    }
+
+    /// Normalizes a raw denylist layer: trims patterns/reasons, drops empty
+    /// patterns, and de-duplicates by rule key (TS `normalizeExecDenylist`).
+    static func normalize(_ entries: [ExecHostDenylistEntry]?) -> [ExecHostDenylistEntry] {
+        guard let entries else { return [] }
+        var seen = Set<String>()
+        var out: [ExecHostDenylistEntry] = []
+        for entry in entries {
+            let pattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !pattern.isEmpty else { continue }
+            let trimmedReason = entry.reason?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let reason = (trimmedReason?.isEmpty ?? true) ? nil : trimmedReason
+            let normalized = ExecHostDenylistEntry(pattern: pattern, reason: reason)
+            guard seen.insert(self.ruleKey(normalized)).inserted else { continue }
+            out.append(normalized)
+        }
+        return out
+    }
+
+    /// De-duplicated union across layers: a deny in ANY layer denies
+    /// (TS `resolveEffectiveExecDenylist`).
+    static func union(_ layers: [[ExecHostDenylistEntry]?]) -> [ExecHostDenylistEntry] {
+        self.normalize(layers.compactMap { $0 }.flatMap { $0 })
+    }
 }
 
 struct ExecHostDenylistAuthorizationSnapshot: Codable, Equatable, Sendable {
@@ -12,10 +68,20 @@ struct ExecHostDenylistAuthorizationSnapshot: Codable, Equatable, Sendable {
     var approvedRuleKeys: [String]
     var denylisted: Bool?
 
-    func requiresFreshApproval(command: [String]) -> Bool {
+    /// Deny-over-allow re-screen at final commit. The effective STOP list is
+    /// the union of the forwarded config layer and the CURRENT local
+    /// approvals-file layer (re-read fresh under the approvals write lock by
+    /// the caller), so a rule added to either surface while the approval was
+    /// pending still revokes it before dispatch (TS parity:
+    /// `assertCurrentDenylistAuthorization`).
+    func requiresFreshApproval(
+        command: [String],
+        currentFileDenylist: [ExecHostDenylistEntry]) -> Bool
+    {
         let approvedRuleKeys = Set(self.approvedRuleKeys)
-        let newlyCurrent = self.configDenylist.filter { entry in
-            !approvedRuleKeys.contains(Self.ruleKey(entry))
+        let currentEffective = ExecHostDenylist.union([self.configDenylist, currentFileDenylist])
+        let newlyCurrent = currentEffective.filter { entry in
+            !approvedRuleKeys.contains(ExecHostDenylist.ruleKey(entry))
         }
         guard !newlyCurrent.isEmpty else { return false }
         if !self.analysisOk {
@@ -28,10 +94,6 @@ struct ExecHostDenylistAuthorizationSnapshot: Codable, Equatable, Sendable {
                 ExecHostDenylistMatcher.matches(pattern: entry.pattern, target: target)
             }
         }
-    }
-
-    private static func ruleKey(_ entry: ExecHostDenylistEntry) -> String {
-        "\(entry.pattern)\u{0}\(entry.reason ?? "")"
     }
 
     private static func denylistTargets(command: [String], canonicalCommand: String) -> [String] {

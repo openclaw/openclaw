@@ -178,7 +178,7 @@ struct ExecApprovalsSocketAuthTests {
             approvedRuleKeys: [],
             denylisted: false)
 
-        #expect(binding.requiresFreshApproval(command: ["/bin/echo", "ok"]))
+        #expect(binding.requiresFreshApproval(command: ["/bin/echo", "ok"], currentFileDenylist: []))
     }
 
     @Test
@@ -190,7 +190,7 @@ struct ExecApprovalsSocketAuthTests {
             approvedRuleKeys: [],
             denylisted: false)
 
-        #expect(binding.requiresFreshApproval(command: ["/bin/rm", "./nested/secrets"]))
+        #expect(binding.requiresFreshApproval(command: ["/bin/rm", "./nested/secrets"], currentFileDenylist: []))
     }
 
     @Test
@@ -202,7 +202,7 @@ struct ExecApprovalsSocketAuthTests {
             approvedRuleKeys: [],
             denylisted: false)
 
-        #expect(!binding.requiresFreshApproval(command: ["/bin/rm", "./nested/secrets"]))
+        #expect(!binding.requiresFreshApproval(command: ["/bin/rm", "./nested/secrets"], currentFileDenylist: []))
     }
 
     @Test
@@ -214,7 +214,7 @@ struct ExecApprovalsSocketAuthTests {
             approvedRuleKeys: [],
             denylisted: false)
 
-        #expect(binding.requiresFreshApproval(command: ["/usr/bin/git", "push", "--force", "origin", "main"]))
+        #expect(binding.requiresFreshApproval(command: ["/usr/bin/git", "push", "--force", "origin", "main"], currentFileDenylist: []))
     }
 
     @Test
@@ -226,7 +226,35 @@ struct ExecApprovalsSocketAuthTests {
             approvedRuleKeys: ["echo *\u{0}stop"],
             denylisted: true)
 
-        #expect(!binding.requiresFreshApproval(command: ["/bin/echo", "ok"]))
+        #expect(!binding.requiresFreshApproval(command: ["/bin/echo", "ok"], currentFileDenylist: []))
+    }
+
+    @Test
+    func `companion denylist provenance rejects newly current local approvals file rule`() throws {
+        let binding = ExecHostDenylistAuthorizationSnapshot(
+            command: "echo ok",
+            analysisOk: true,
+            configDenylist: [],
+            approvedRuleKeys: [],
+            denylisted: false)
+
+        #expect(binding.requiresFreshApproval(
+            command: ["/bin/echo", "ok"],
+            currentFileDenylist: [ExecHostDenylistEntry(pattern: "echo *", reason: "stop")]))
+    }
+
+    @Test
+    func `companion denylist provenance accepts already approved local approvals file rule`() throws {
+        let binding = ExecHostDenylistAuthorizationSnapshot(
+            command: "echo ok",
+            analysisOk: true,
+            configDenylist: [],
+            approvedRuleKeys: ["echo *\u{0}stop"],
+            denylisted: true)
+
+        #expect(!binding.requiresFreshApproval(
+            command: ["/bin/echo", "ok"],
+            currentFileDenylist: [ExecHostDenylistEntry(pattern: "echo *", reason: "stop")]))
     }
 
     @Test
@@ -238,7 +266,7 @@ struct ExecApprovalsSocketAuthTests {
             approvedRuleKeys: [],
             denylisted: false)
 
-        #expect(binding.requiresFreshApproval(command: ["/bin/echo", "ok"]))
+        #expect(binding.requiresFreshApproval(command: ["/bin/echo", "ok"], currentFileDenylist: []))
     }
 
     @Test
