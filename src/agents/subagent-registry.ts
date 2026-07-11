@@ -12,6 +12,10 @@ import { callGateway } from "../gateway/call.js";
 import { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  isGatewayRestartDraining,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import {
   formatAbandonedLivenessError,
   formatBlockedLivenessError,
   isAbandonedLivenessState,
@@ -225,6 +229,7 @@ let restoreAttempted = false;
 const ORPHAN_RECOVERY_DEBOUNCE_MS = 1_000;
 let lastOrphanRecoveryScheduleAt = 0;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
+const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 /**
  * Embedded runs can emit transient lifecycle `error` events while provider/model
  * retry is still in progress. Defer terminal error cleanup briefly so a
@@ -379,6 +384,8 @@ export function scheduleSubagentOrphanRecovery(params?: { delayMs?: number; maxR
   lastOrphanRecoveryScheduleAt = now;
   void import("./subagent-orphan-recovery.js").then(
     ({ scheduleOrphanRecovery }) => {
+      // This import only installs timers. Each delayed or retrying recovery
+      // attempt owns independent root admission inside the recovery module.
       scheduleOrphanRecovery({
         getActiveRuns: () => subagentRuns,
         delayMs: params?.delayMs,
@@ -453,9 +460,13 @@ type CompleteSubagentRunParams = {
   triggerCleanup: boolean;
   startedAt?: number;
   suppressSessionEffects?: boolean;
+  recoverInterrupted?: true;
 };
 
-async function completeSubagentRunWithRecovery(params: CompleteSubagentRunParams, source: string) {
+async function completeSubagentRunWithRecoveryAttempt(
+  params: CompleteSubagentRunParams,
+  source: string,
+) {
   try {
     await completeSubagentRun(params);
     return;
@@ -504,6 +515,52 @@ async function completeSubagentRunWithRecovery(params: CompleteSubagentRunParams
   latest.cleanupHandled = false;
   resumedRuns.delete(params.runId);
   resumeSubagentRun(params.runId);
+}
+
+function scheduleSubagentCompletionRetryAfterRestart(
+  params: CompleteSubagentRunParams,
+  source: string,
+  expectedEntry: SubagentRunRecord,
+) {
+  const expectedGeneration = expectedEntry.generation;
+  const timer = setTimeout(() => {
+    resumeRetryTimers.delete(timer);
+    const current = subagentRuns.get(params.runId);
+    if (current !== expectedEntry || current.generation !== expectedGeneration) {
+      return;
+    }
+    void completeSubagentRunWithRecovery(params, source).catch((error: unknown) => {
+      log.warn("failed to retry subagent completion after gateway restart", {
+        source,
+        runId: params.runId,
+        error,
+      });
+    });
+  }, GATEWAY_ADMISSION_RETRY_DELAY_MS);
+  timer.unref?.();
+  resumeRetryTimers.add(timer);
+}
+
+async function completeSubagentRunWithRecovery(params: CompleteSubagentRunParams, source: string) {
+  // Each controller attempt owns its terminal transition, while this outer
+  // lease closes the gap between failed attempts and fallback cleanup.
+  try {
+    await runWithGatewayIndependentRootWorkAdmission(async () => {
+      await completeSubagentRunWithRecoveryAttempt(params, source);
+    });
+  } catch (error) {
+    if (!isGatewayRestartDraining()) {
+      throw error;
+    }
+    log.warn("subagent completion deferred during gateway restart", {
+      source,
+      runId: params.runId,
+    });
+    const current = subagentRuns.get(params.runId);
+    if (current) {
+      scheduleSubagentCompletionRetryAfterRestart(params, source, current);
+    }
+  }
 }
 
 function completeSubagentRunInBackground(params: CompleteSubagentRunParams, source: string) {
@@ -717,12 +774,73 @@ const {
   startSubagentAnnounceCleanupFlow,
 } = subagentLifecycleController;
 
+function scheduleSubagentDeliveryResumeRetry(
+  runId: string,
+  scheduledEntry: SubagentRunRecord,
+  waitMs: number,
+) {
+  const timer = setTimeout(() => {
+    resumeRetryTimers.delete(timer);
+    void runWithGatewayIndependentRootWorkAdmission(async () => {
+      if (subagentRuns.get(runId) !== scheduledEntry) {
+        resumedRuns.delete(runId);
+        return;
+      }
+      resumedRuns.delete(runId);
+      resumeSubagentRun(runId);
+    }).catch((error: unknown) => {
+      log.warn("failed to resume subagent delivery retry", { runId, error });
+      if (
+        isGatewayRestartDraining() &&
+        subagentRuns.get(runId) === scheduledEntry &&
+        typeof scheduledEntry.cleanupCompletedAt !== "number"
+      ) {
+        scheduleSubagentDeliveryResumeRetry(
+          runId,
+          scheduledEntry,
+          Math.max(waitMs, GATEWAY_ADMISSION_RETRY_DELAY_MS),
+        );
+        return;
+      }
+      resumedRuns.delete(runId);
+    });
+  }, waitMs);
+  timer.unref?.();
+  resumeRetryTimers.add(timer);
+}
+
+function finalizeResumedAnnounceGiveUpInBackground(
+  runId: string,
+  entry: SubagentRunRecord,
+  reason: "retry-limit" | "expiry",
+) {
+  void runWithGatewayIndependentRootWorkAdmission(async () => {
+    await finalizeResumedAnnounceGiveUp({ runId, entry, reason });
+  }).catch((error: unknown) => {
+    log.warn("failed to finalize exhausted subagent delivery", { runId, reason, error });
+    if (
+      isGatewayRestartDraining() &&
+      subagentRuns.get(runId) === entry &&
+      typeof entry.cleanupCompletedAt !== "number"
+    ) {
+      scheduleSubagentDeliveryResumeRetry(runId, entry, GATEWAY_ADMISSION_RETRY_DELAY_MS);
+      resumedRuns.add(runId);
+    }
+  });
+}
+
 function resumeSubagentRun(runId: string) {
   if (!runId || resumedRuns.has(runId)) {
     return;
   }
   const entry = subagentRuns.get(runId);
   if (!entry) {
+    return;
+  }
+  if (entry.terminalOwner === "interrupted-recovery") {
+    // Startup orphan recovery replays this durable exact-run winner before it
+    // reads session/config state. Do not prune or resume it through announce.
+    resumedRuns.add(runId);
     return;
   }
   if (entry.cleanupCompletedAt) {
@@ -738,11 +856,7 @@ function resumeSubagentRun(runId: string) {
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
   if (getDeliveryAttemptCount(entry) >= MAX_ANNOUNCE_RETRY_COUNT) {
-    void finalizeResumedAnnounceGiveUp({
-      runId,
-      entry,
-      reason: "retry-limit",
-    });
+    finalizeResumedAnnounceGiveUpInBackground(runId, entry, "retry-limit");
     return;
   }
   if (
@@ -750,11 +864,7 @@ function resumeSubagentRun(runId: string) {
     typeof entry.endedAt === "number" &&
     Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS
   ) {
-    void finalizeResumedAnnounceGiveUp({
-      runId,
-      entry,
-      reason: "expiry",
-    });
+    finalizeResumedAnnounceGiveUpInBackground(runId, entry, "expiry");
     return;
   }
 
@@ -764,17 +874,7 @@ function resumeSubagentRun(runId: string) {
   const earliestRetryAt = (lastAttemptAt ?? 0) + delayMs;
   if (entry.expectsCompletionMessage === true && lastAttemptAt && now < earliestRetryAt) {
     const waitMs = Math.max(1, earliestRetryAt - now);
-    const scheduledEntry = entry;
-    const timer = setTimeout(() => {
-      resumeRetryTimers.delete(timer);
-      if (subagentRuns.get(runId) !== scheduledEntry) {
-        return;
-      }
-      resumedRuns.delete(runId);
-      resumeSubagentRun(runId);
-    }, waitMs);
-    timer.unref?.();
-    resumeRetryTimers.add(timer);
+    scheduleSubagentDeliveryResumeRetry(runId, entry, waitMs);
     resumedRuns.add(runId);
     return;
   }
@@ -884,10 +984,18 @@ function startSweeper() {
 
 async function runSubagentSweep() {
   try {
-    await sweepSubagentRuns();
+    await runWithGatewayIndependentRootWorkAdmission(async () => {
+      await sweepSubagentRuns();
+    });
   } catch (err) {
     log.warn(`subagent run sweep failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+function runSubagentSweepCleanupTail(runId: string, label: string, run: () => Promise<unknown>) {
+  void runWithGatewayIndependentRootWorkAdmission(run).catch((error: unknown) => {
+    log.warn(`subagent sweep ${label} failed`, { runId, error });
+  });
 }
 
 function stopSweeper() {
@@ -1342,11 +1450,13 @@ async function sweepSubagentRuns() {
           now - entry.cleanupCompletedAt > SESSION_RUN_TTL_MS
         ) {
           clearPendingLifecycleError(runId);
-          void notifyContextEngineSubagentEnded({
-            childSessionKey: entry.childSessionKey,
-            reason: "swept",
-            agentDir: entry.agentDir,
-            workspaceDir: entry.workspaceDir,
+          runSubagentSweepCleanupTail(runId, "context-engine cleanup", async () => {
+            await notifyContextEngineSubagentEnded({
+              childSessionKey: entry.childSessionKey,
+              reason: "swept",
+              agentDir: entry.agentDir,
+              workspaceDir: entry.workspaceDir,
+            });
           });
           subagentRuns.delete(runId);
           mutated = true;
@@ -1382,11 +1492,13 @@ async function sweepSubagentRuns() {
       mutated = true;
       // Archive/purge is terminal for the run record; remove any retained attachments too.
       await safeRemoveAttachmentsDir(entry);
-      void notifyContextEngineSubagentEnded({
-        childSessionKey: entry.childSessionKey,
-        reason: "swept",
-        agentDir: entry.agentDir,
-        workspaceDir: entry.workspaceDir,
+      runSubagentSweepCleanupTail(runId, "context-engine cleanup", async () => {
+        await notifyContextEngineSubagentEnded({
+          childSessionKey: entry.childSessionKey,
+          reason: "swept",
+          agentDir: entry.agentDir,
+          workspaceDir: entry.workspaceDir,
+        });
       });
     }
     // Sweep orphaned pendingLifecycleError entries (absolute TTL).
@@ -1426,7 +1538,12 @@ function ensureListener() {
       const entry = subagentRuns.get(evt.runId);
       if (!entry) {
         if (phase === "end" && typeof evt.sessionKey === "string") {
-          await refreshFrozenResultFromSession(evt.sessionKey);
+          const sessionKey = evt.sessionKey;
+          // A replacement generation can finish after its predecessor row is
+          // terminal. Keep capture + persistence inside the suspension fence.
+          await runWithGatewayIndependentRootWorkAdmission(async () => {
+            await refreshFrozenResultFromSession(sessionKey);
+          });
         }
         return;
       }
@@ -1573,7 +1690,9 @@ const subagentRunManager = createSubagentRunManager({
   resolveSubagentSessionStartedAt,
   notifyContextEngineSubagentEnded,
   completeCleanupBookkeeping,
-  completeSubagentRun,
+  completeSubagentRun: async (params) => {
+    await completeSubagentRunWithRecovery(params, "subagent-wait");
+  },
   resolveSubagentTask: findSubagentTaskForRun,
 });
 
@@ -1626,6 +1745,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   stopSweeper();
   sweepInProgress = false;
   restoreAttempted = false;
+  lastOrphanRecoveryScheduleAt = 0;
   if (listenerStop) {
     listenerStop();
     listenerStop = null;
@@ -1661,25 +1781,24 @@ export function releaseSubagentRun(runId: string) {
   subagentRunManager.releaseSubagentRun(runId);
 }
 
+function hasCompleteSubagentTerminalState(entry: SubagentRunRecord | undefined): boolean {
+  return (
+    entry !== undefined &&
+    typeof entry.endedAt === "number" &&
+    Number.isFinite(entry.endedAt) &&
+    entry.outcome !== undefined &&
+    entry.endedReason !== undefined &&
+    entry.execution?.status === "terminal"
+  );
+}
+
 export async function finalizeInterruptedSubagentRun(params: {
-  runId?: string;
-  childSessionKey?: string;
+  runId: string;
   error: string;
   endedAt?: number;
 }): Promise<number> {
-  const runIds = new Set<string>();
-  if (typeof params.runId === "string" && params.runId.trim()) {
-    runIds.add(params.runId.trim());
-  }
-  if (typeof params.childSessionKey === "string" && params.childSessionKey.trim()) {
-    const childSessionKey = params.childSessionKey.trim();
-    for (const [runId, entry] of subagentRuns.entries()) {
-      if (entry.childSessionKey === childSessionKey) {
-        runIds.add(runId);
-      }
-    }
-  }
-  if (runIds.size === 0) {
+  const runId = params.runId.trim();
+  if (!runId) {
     return 0;
   }
 
@@ -1687,32 +1806,55 @@ export async function finalizeInterruptedSubagentRun(params: {
     typeof params.endedAt === "number" && Number.isFinite(params.endedAt)
       ? params.endedAt
       : Date.now();
-  let updated = 0;
-  for (const runId of runIds) {
-    clearPendingLifecycleError(runId);
-    clearPendingLifecycleTimeout(runId);
-    const entry = subagentRuns.get(runId);
-    if (!entry || typeof entry.cleanupCompletedAt === "number") {
-      continue;
-    }
-    await completeSubagentRunWithRecovery(
-      {
-        runId,
-        endedAt,
-        outcome: {
-          status: "error",
-          error: params.error,
-        },
-        reason: SUBAGENT_ENDED_REASON_ERROR,
-        sendFarewell: true,
-        accountId: entry.requesterOrigin?.accountId,
-        triggerCleanup: true,
-      },
-      "explicit-failed-mark",
-    );
-    updated += 1;
+  clearPendingLifecycleError(runId);
+  clearPendingLifecycleTimeout(runId);
+  const entry = subagentRuns.get(runId);
+  if (!entry) {
+    return 0;
   }
-  return updated;
+  if (
+    typeof entry.cleanupCompletedAt === "number" &&
+    entry.terminalOwner !== "interrupted-recovery"
+  ) {
+    return hasCompleteSubagentTerminalState(entry) ? 1 : 0;
+  }
+  const completionParams: CompleteSubagentRunParams = {
+    runId,
+    endedAt,
+    outcome: {
+      status: "error",
+      error: params.error,
+    },
+    reason: SUBAGENT_ENDED_REASON_ERROR,
+    sendFarewell: true,
+    accountId: entry.requesterOrigin?.accountId,
+    triggerCleanup: true,
+    recoverInterrupted: true,
+  };
+  try {
+    await completeSubagentRun(completionParams);
+    // A successfully finalized stale generation can be retired once a newer
+    // generation owns the session; the captured exact row still has its result.
+    const finalized = subagentRuns.get(runId) ?? entry;
+    // Recovery preserves partial terminal evidence instead of overwriting it.
+    // Keep scheduler retries alive until the exact row is fully terminal.
+    return hasCompleteSubagentTerminalState(finalized) ? 1 : 0;
+  } catch (error) {
+    if (isGatewayRestartDraining() && subagentRuns.get(runId) === entry) {
+      log.warn("subagent completion deferred during gateway restart", {
+        source: "explicit-failed-mark",
+        runId,
+      });
+      scheduleSubagentCompletionRetryAfterRestart(completionParams, "explicit-failed-mark", entry);
+      return 1;
+    }
+    log.warn("failed to durably finalize interrupted subagent run", {
+      runId,
+      childSessionKey: entry.childSessionKey,
+      error,
+    });
+    return 0;
+  }
 }
 
 export function resolveRequesterForChildSession(childSessionKey: string): {

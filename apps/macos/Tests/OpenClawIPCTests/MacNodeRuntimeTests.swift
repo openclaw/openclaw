@@ -73,6 +73,25 @@ struct MacNodeRuntimeTests {
         }
     }
 
+    actor ShellRunProbe {
+        private var commands: [[String]] = []
+
+        func run(_ command: [String]) -> ShellExecutor.ShellResult {
+            self.commands.append(command)
+            return ShellExecutor.ShellResult(
+                stdout: "",
+                stderr: "",
+                exitCode: 0,
+                timedOut: false,
+                success: true,
+                errorMessage: nil)
+        }
+
+        func capturedCommands() -> [[String]] {
+            self.commands
+        }
+    }
+
     @MainActor
     final class ScreenSnapshotProbeServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
         var snapshotCallCount = 0
@@ -221,6 +240,127 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @Test func `system run rejects raw command prompt spoof before execution`() async throws {
+        let probe = ShellRunProbe()
+        let runtime = MacNodeRuntime(
+            shellRunner: { command, _, _, _ in await probe.run(command) })
+        let params = OpenClawSystemRunParams(
+            command: ["/usr/bin/printf", "unsafe"],
+            rawCommand: "echo safe")
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-raw-command-spoof",
+            command: OpenClawSystemCommand.run.rawValue,
+            paramsJSON: json))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(response.error?.message.contains("rawCommand does not match command") == true)
+        #expect(await probe.capturedCommands().isEmpty)
+    }
+
+    @Test func `system run rejects mismatched shell payload preview before execution`() async throws {
+        let probe = ShellRunProbe()
+        let runtime = MacNodeRuntime(
+            shellRunner: { command, _, _, _ in await probe.run(command) })
+        let params = OpenClawSystemRunParams(
+            command: ["/bin/sh", "-lc", "/usr/bin/printf unsafe"],
+            rawCommand: "echo safe")
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-shell-preview-spoof",
+            command: OpenClawSystemCommand.run.rawValue,
+            paramsJSON: json))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(response.error?.message.contains("rawCommand does not match command") == true)
+        #expect(await probe.capturedCommands().isEmpty)
+    }
+
+    @Test func `system run shares padded executable rejection with socket host`() async throws {
+        let probe = ShellRunProbe()
+        let runtime = MacNodeRuntime(
+            shellRunner: { command, _, _, _ in await probe.run(command) })
+        let params = OpenClawSystemRunParams(command: [" /usr/bin/printf ", "unsafe"])
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-padded-executable",
+            command: OpenClawSystemCommand.run.rawValue,
+            paramsJSON: json))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(response.error?.message.contains("executable has surrounding whitespace") == true)
+        #expect(await probe.capturedCommands().isEmpty)
+    }
+
+    @Test func `exec approvals snapshot reports resolved host defaults`() async throws {
+        let root = URL(
+            fileURLWithPath: "/tmp/oc-appr-\(UUID().uuidString.prefix(8))",
+            isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        let stateDir = root.appendingPathComponent("state", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_HOME": home.path,
+            "OPENCLAW_STATE_DIR": stateDir.path,
+        ]) {
+            let runtime = MacNodeRuntime()
+            let legacyResponse = await runtime.handleInvoke(
+                BridgeInvokeRequest(
+                    id: "req-approvals-get-legacy",
+                    command: OpenClawSystemCommand.execApprovalsGet.rawValue))
+            #expect(legacyResponse.ok)
+            let legacyPayloadJSON = try #require(legacyResponse.payloadJSON)
+            let legacyPayload = try #require(
+                JSONSerialization.jsonObject(with: Data(legacyPayloadJSON.utf8)) as? [String: Any])
+            #expect(legacyPayload["resolvedDefaults"] == nil)
+
+            let response = await runtime.handleInvoke(
+                BridgeInvokeRequest(
+                    id: "req-approvals-get-resolved",
+                    command: OpenClawSystemCommand.execApprovalsGet.rawValue,
+                    paramsJSON: #"{"includeResolvedDefaults":true}"#))
+
+            #expect(response.ok)
+            let payloadJSON = try #require(response.payloadJSON)
+            struct Snapshot: Decodable {
+                let resolvedDefaults: ExecApprovalsResolvedDefaults
+            }
+            let snapshot = try JSONDecoder().decode(Snapshot.self, from: Data(payloadJSON.utf8))
+            #expect(snapshot.resolvedDefaults.security == .full)
+            #expect(snapshot.resolvedDefaults.ask == .off)
+            #expect(snapshot.resolvedDefaults.askFallback == .deny)
+            #expect(snapshot.resolvedDefaults.autoAllowSkills == false)
+
+            try ExecApprovalsStore.updateDefaults { defaults in
+                defaults.security = .deny
+                defaults.ask = .onMiss
+                defaults.askFallback = .deny
+                defaults.autoAllowSkills = false
+            }.get()
+            let persistedResponse = await runtime.handleInvoke(
+                BridgeInvokeRequest(
+                    id: "req-approvals-get-persisted",
+                    command: OpenClawSystemCommand.execApprovalsGet.rawValue,
+                    paramsJSON: #"{"includeResolvedDefaults":true}"#))
+            #expect(persistedResponse.ok)
+            let persistedPayloadJSON = try #require(persistedResponse.payloadJSON)
+            let persistedSnapshot = try JSONDecoder().decode(
+                Snapshot.self,
+                from: Data(persistedPayloadJSON.utf8))
+            #expect(persistedSnapshot.resolvedDefaults.security == .deny)
+            #expect(persistedSnapshot.resolvedDefaults.ask == .onMiss)
+            #expect(persistedSnapshot.resolvedDefaults.askFallback == .deny)
+            #expect(persistedSnapshot.resolvedDefaults.autoAllowSkills == false)
+        }
+    }
+
     @Test func `system run denied event preserves gateway run id`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
@@ -234,8 +374,10 @@ struct MacNodeRuntimeTests {
             }
             let params = OpenClawSystemRunParams(
                 command: ["/bin/sh", "-lc", "printf ok"],
+                rawCommand: "printf ok",
                 sessionKey: "agent:main:main",
-                runId: "gateway-run-1")
+                runId: "gateway-run-1",
+                approvalDecision: ExecApprovalDecision.deny.rawValue)
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
             let response = await runtime.handleInvoke(
                 BridgeInvokeRequest(
@@ -248,10 +390,13 @@ struct MacNodeRuntimeTests {
             struct Payload: Decodable {
                 var sessionKey: String
                 var runId: String
+                var command: String
             }
             let payload = try JSONDecoder().decode(Payload.self, from: Data(denied.json.utf8))
             #expect(payload.sessionKey == "agent:main:main")
             #expect(payload.runId == "gateway-run-1")
+            #expect(payload.command == ExecCommandFormatter.displayString(for: params.command))
+            #expect(payload.command != params.rawCommand)
         }
     }
 

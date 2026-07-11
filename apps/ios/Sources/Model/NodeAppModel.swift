@@ -237,11 +237,7 @@ final class NodeAppModel {
     // value equality alone cannot tell the UI to re-surface or shake the toast.
     private(set) var gatewayProblemReportCount = 0
     private(set) var lastGatewayProblem: GatewayConnectionProblem? {
-        didSet {
-            if self.lastGatewayProblem != nil {
-                self.gatewayProblemReportCount &+= 1
-            }
-        }
+        didSet { if self.lastGatewayProblem != nil { self.gatewayProblemReportCount &+= 1 } }
     }
 
     private var operatorGatewayProblem: GatewayConnectionProblem?
@@ -366,12 +362,8 @@ final class NodeAppModel {
     }
 
     var localChatFixture: LocalChatFixture? {
-        if self.isScreenshotFixtureModeEnabled {
-            return .appScreenshots
-        }
-        if self.isAppleReviewDemoModeEnabled {
-            return .appleReviewDemo
-        }
+        if self.isScreenshotFixtureModeEnabled { return .appScreenshots }
+        if self.isAppleReviewDemoModeEnabled { return .appleReviewDemo }
         return nil
     }
 
@@ -384,12 +376,8 @@ final class NodeAppModel {
     }
 
     var chatTransportModeID: String {
-        if self.isScreenshotFixtureModeEnabled {
-            return "screenshots"
-        }
-        if self.isAppleReviewDemoModeEnabled {
-            return "apple-review-demo"
-        }
+        if self.isScreenshotFixtureModeEnabled { return "screenshots" }
+        if self.isAppleReviewDemoModeEnabled { return "apple-review-demo" }
         return self.isOperatorGatewayConnected ? "operator" : "offline"
     }
 
@@ -707,9 +695,7 @@ final class NodeAppModel {
     private func handleCanvasA2UIAction(body: [String: Any]) async {
         let userActionAny = body["userAction"] ?? body
         let userAction: [String: Any] = {
-            if let dict = userActionAny as? [String: Any] {
-                return dict
-            }
+            if let dict = userActionAny as? [String: Any] { return dict }
             if let dict = userActionAny as? [AnyHashable: Any] {
                 return dict.reduce(into: [String: Any]()) { acc, pair in
                     guard let key = pair.key as? String else { return }
@@ -1297,9 +1283,7 @@ final class NodeAppModel {
             guard let operatorRoute = await self.operatorGateway.currentRoute(), shouldContinue() else { return }
             let stream = await self.operatorGateway.subscribeServerEvents(bufferingNewest: 200)
             for await evt in stream {
-                if Task.isCancelled || !shouldContinue() {
-                    return
-                }
+                if Task.isCancelled || !shouldContinue() { return }
                 guard evt.payload != nil else { continue }
                 await self.handleOperatorGatewayServerEvent(
                     evt,
@@ -1386,9 +1370,7 @@ final class NodeAppModel {
         self.gatewayHealthMonitor.start(
             check: { [weak self] in
                 guard let self else { return false }
-                if await MainActor.run(body: { self.isGatewayHealthMonitorDisabled() }) {
-                    return true
-                }
+                if await MainActor.run(body: { self.isGatewayHealthMonitorDisabled() }) { return true }
                 do {
                     let data = try await self.operatorGateway.request(
                         method: "health",
@@ -1599,9 +1581,7 @@ final class NodeAppModel {
             let params = try? Self.decodeParams(OpenClawCanvasSnapshotParams.self, from: req.paramsJSON)
             let format = params?.format ?? .jpeg
             let maxWidth: CGFloat? = {
-                if let raw = params?.maxWidth, raw > 0 {
-                    return CGFloat(raw)
-                }
+                if let raw = params?.maxWidth, raw > 0 { return CGFloat(raw) }
                 // Keep default snapshots comfortably below the gateway client's maxPayload.
                 // For full-res, clients should explicitly request a larger maxWidth.
                 return switch format {
@@ -2640,9 +2620,7 @@ extension NodeAppModel {
 
     private func isCameraEnabled() -> Bool {
         // Default-on: if the key doesn't exist yet, treat it as enabled.
-        if UserDefaults.standard.object(forKey: "camera.enabled") == nil {
-            return true
-        }
+        if UserDefaults.standard.object(forKey: "camera.enabled") == nil { return true }
         return UserDefaults.standard.bool(forKey: "camera.enabled")
     }
 
@@ -2702,9 +2680,7 @@ extension NodeAppModel {
         let base = SessionKey.normalizeMainKey(self.mainSessionBaseKey)
         let agentId = (selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let defaultId = (gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if agentId.isEmpty || (!defaultId.isEmpty && agentId == defaultId) {
-            return base
-        }
+        if agentId.isEmpty || (!defaultId.isEmpty && agentId == defaultId) { return base }
         return SessionKey.makeAgentSessionKey(agentId: agentId, baseKey: base)
     }
 
@@ -2807,9 +2783,7 @@ extension NodeAppModel {
             return sessionAgentId.lowercased()
         }
         let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !selected.isEmpty {
-            return selected.lowercased()
-        }
+        if !selected.isEmpty { return selected.lowercased() }
         let defaultId = (self.gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return defaultId.isEmpty ? nil : defaultId.lowercased()
     }
@@ -2845,9 +2819,7 @@ extension NodeAppModel {
 
     private func agentDisplayName(for agentId: String, fallback: String) -> String {
         let resolvedId = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if resolvedId.isEmpty {
-            return fallback
-        }
+        if resolvedId.isEmpty { return fallback }
         if let match = gatewayAgents.first(where: { $0.id == resolvedId }) {
             let name = (match.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return name.isEmpty ? match.id : name
@@ -6432,17 +6404,13 @@ extension NodeAppModel {
            let kind = payload["kind"] as? String
         {
             let trimmed = kind.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return trimmed
-            }
+            if !trimmed.isEmpty { return trimmed }
         }
         if let payload = userInfo["openclaw"] as? [AnyHashable: Any],
            let kind = payload["kind"] as? String
         {
             let trimmed = kind.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return trimmed
-            }
+            if !trimmed.isEmpty { return trimmed }
         }
         return "unknown"
     }
@@ -7434,9 +7402,7 @@ extension NodeAppModel {
         let trimmed = (key ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let current = self.mainSessionBaseKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed == current {
-            return
-        }
+        if trimmed == current { return }
         self.mainSessionBaseKey = trimmed
         self.synchronizeTalkSessionKey()
     }
