@@ -23,6 +23,15 @@ afterEach(() => {
   restoreStrategy = undefined;
 });
 
+const internalSessionStateSourceTools = [
+  "agent_harness_task",
+  "image_generate",
+  "music_generate",
+  "subagent_announce",
+  "subagent_interrupted_resume",
+  "video_generate",
+] as const;
+
 describe("embedded agent transcript repair runtime contract", () => {
   it("merges text orphan leaves into the next prompt with the queued marker", () => {
     const result = mergeOrphanedTrailingUserPrompt({
@@ -35,6 +44,43 @@ describe("embedded agent transcript repair runtime contract", () => {
       merged: true,
       removeLeaf: true,
       prompt: `${QUEUED_USER_MESSAGE_MARKER}\nolder active-turn message\n\nnewest inbound message`,
+    });
+  });
+
+  it.each(internalSessionStateSourceTools)(
+    "removes internal %s leaves instead of prepending them to a fresh prompt",
+    (sourceTool) => {
+      const result = mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: [{ type: "text", text: `NO_REPLY stale ${sourceTool} completion` }],
+          provenance: { kind: "inter_session", sourceTool },
+        },
+      });
+
+      expect(result).toEqual({
+        merged: false,
+        removeLeaf: true,
+        prompt: "newest inbound message",
+      });
+    },
+  );
+
+  it("preserves user-directed inter-session leaves in the repaired prompt", () => {
+    const result = mergeOrphanedTrailingUserPrompt({
+      prompt: "newest inbound message",
+      trigger: "user",
+      leafMessage: {
+        content: "forwarded user request",
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      },
+    });
+
+    expect(result).toEqual({
+      merged: true,
+      removeLeaf: true,
+      prompt: `${QUEUED_USER_MESSAGE_MARKER}\nforwarded user request\n\nnewest inbound message`,
     });
   });
 
