@@ -285,10 +285,16 @@ export async function createMeetWithBrowserProxyOnNode(params: {
       timeoutMs: stepTimeoutMs,
     });
     // Meet automation scripts match English UI labels; a reused tab may have
-    // been opened by the browser/profile in a non-English locale. Navigate to
-    // the English variant so DOM matchers don't go blind.
-    const englishUrl = tab.url ? forceMeetEnglishUi(tab.url) : undefined;
-    if (englishUrl && englishUrl !== tab.url) {
+    // been opened by the browser/profile in a non-English locale. Only force
+    // English on the /new creation page or sign-in flow; a reused tab that
+    // already has a meeting code may be an active call, and reloading it would
+    // interrupt the meeting and replace its target.
+    const reusedUrl = tab.url ?? "";
+    const isCreatePage =
+      /^https:\/\/meet\.google\.com\/new(?:$|[/?#])/i.test(reusedUrl) ||
+      reusedUrl.startsWith("https://accounts.google.com/");
+    const englishUrl = isCreatePage && reusedUrl ? forceMeetEnglishUi(reusedUrl) : undefined;
+    if (englishUrl && englishUrl !== reusedUrl) {
       tab =
         readBrowserTab(
           await callBrowserProxyOnNode({

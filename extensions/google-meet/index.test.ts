@@ -288,6 +288,12 @@ function mockLocalMeetBrowserRequest(
       if (request.path === "/tabs/focus") {
         return { ok: true };
       }
+      if (request.path === "/navigate") {
+        return {
+          targetId: request.body?.targetId ?? "local-meet-tab",
+          url: request.body?.url ?? "https://meet.google.com/abc-defg-hij",
+        };
+      }
       if (request.path === "/permissions/grant") {
         return {
           ok: true,
@@ -2761,6 +2767,12 @@ describe("google-meet plugin", () => {
         if (request.path === "/tabs/focus") {
           return { ok: true };
         }
+        if (request.path === "/navigate") {
+          return {
+            targetId: request.body?.targetId ?? "local-meet-tab",
+            url: request.body?.url ?? "https://meet.google.com/abc-defg-hij",
+          };
+        }
         if (request.path === "/act") {
           actCount += 1;
           return {
@@ -2885,6 +2897,16 @@ describe("google-meet plugin", () => {
             }
             if (raw.path === "/tabs/focus" || raw.path === "/permissions/grant") {
               return { payload: { result: { ok: true } } };
+            }
+            if (raw.path === "/navigate") {
+              return {
+                payload: {
+                  result: {
+                    targetId: raw.body?.targetId ?? "tab-1",
+                    url: raw.body?.url ?? "https://meet.google.com/abc-defg-hij",
+                  },
+                },
+              };
             }
             if (raw.path === "/act") {
               return {
@@ -3393,6 +3415,7 @@ describe("google-meet plugin", () => {
   });
 
   it("reuses existing Meet browser tabs across URL query differences", async () => {
+    let actCount = 0;
     const { methods, nodesInvoke } = setup(
       {
         defaultTransport: "chrome-node",
@@ -3437,14 +3460,23 @@ describe("google-meet plugin", () => {
             };
           }
           if (proxy.path === "/act") {
+            actCount += 1;
             return {
               payload: {
                 result: {
-                  result: JSON.stringify({
-                    inCall: true,
-                    title: "Meet",
-                    url: "https://meet.google.com/abc-defg-hij?authuser=me%40example.com&hl=en",
-                  }),
+                  result: JSON.stringify(
+                    actCount === 1
+                      ? {
+                          inCall: false,
+                          title: "Meet",
+                          url: "https://meet.google.com/abc-defg-hij?authuser=me@example.com",
+                        }
+                      : {
+                          inCall: true,
+                          title: "Meet",
+                          url: "https://meet.google.com/abc-defg-hij?authuser=me%40example.com&hl=en",
+                        },
+                  ),
                 },
               },
             };
@@ -3504,16 +3536,22 @@ describe("google-meet plugin", () => {
         url: "https://meet.google.com/abc-defg-hij?authuser=me%40example.com&hl=en",
       },
     });
-    const actCall = nodesInvoke.mock.calls.find(([rawCall]) => {
+    const actCalls = nodesInvoke.mock.calls.filter(([rawCall]) => {
       const call = requireRecord(rawCall, "node invoke");
       const params = requireRecord(call.params, "node invoke params");
       return params.path === "/act";
     });
-    if (!actCall) {
-      throw new Error("Expected browser.proxy /act node invoke");
+    expect(actCalls.length).toBeGreaterThanOrEqual(1);
+    const postNavigateActCall = actCalls.find(([rawCall]) => {
+      const call = requireRecord(rawCall, "node invoke");
+      const params = requireRecord(call.params, "node invoke params");
+      return requireRecord(params.body, "act body").targetId === "navigated-meet-tab";
+    });
+    if (!postNavigateActCall) {
+      throw new Error("Expected post-navigation browser.proxy /act node invoke");
     }
     expect(
-      requireRecord(requireRecord(actCall[0], "act node invoke").params, "act params"),
+      requireRecord(requireRecord(postNavigateActCall[0], "act node invoke").params, "act params"),
     ).toEqual({
       method: "POST",
       path: "/act",
@@ -3639,6 +3677,16 @@ describe("google-meet plugin", () => {
           if (proxy.path === "/tabs/focus") {
             return { payload: { result: { ok: true } } };
           }
+          if (proxy.path === "/navigate") {
+            return {
+              payload: {
+                result: {
+                  targetId: proxy.body?.targetId ?? "existing-meet-tab",
+                  url: "https://meet.google.com/abc-defg-hij?authuser=me%40example.com&hl=en",
+                },
+              },
+            };
+          }
           if (proxy.path === "/act") {
             return {
               payload: {
@@ -3649,7 +3697,7 @@ describe("google-meet plugin", () => {
                     manualActionReason: "meet-admission-required",
                     manualActionMessage: "Admit the OpenClaw browser participant in Google Meet.",
                     title: "Meet",
-                    url: "https://meet.google.com/abc-defg-hij?authuser=me@example.com",
+                    url: "https://meet.google.com/abc-defg-hij?authuser=me%40example.com&hl=en",
                   }),
                 },
               },
@@ -3723,6 +3771,12 @@ describe("google-meet plugin", () => {
         if (request.path === "/tabs/focus") {
           return { ok: true };
         }
+        if (request.path === "/navigate") {
+          return {
+            targetId: request.body?.targetId ?? "local-meet-tab",
+            url: "https://meet.google.com/abc-defg-hij?authuser=me%40example.com&hl=en",
+          };
+        }
         if (request.path === "/act") {
           return {
             result: JSON.stringify({
@@ -3731,7 +3785,7 @@ describe("google-meet plugin", () => {
               manualActionReason: "meet-admission-required",
               manualActionMessage: "Admit the OpenClaw browser participant in Google Meet.",
               title: "Meet",
-              url: "https://meet.google.com/abc-defg-hij?authuser=me@example.com",
+              url: "https://meet.google.com/abc-defg-hij?authuser=me%40example.com&hl=en",
             }),
           };
         }
@@ -3858,6 +3912,12 @@ describe("google-meet plugin", () => {
           }
           if (request.path === "/tabs/focus" || request.path === "/permissions/grant") {
             return { ok: true };
+          }
+          if (request.path === "/navigate") {
+            return {
+              targetId: request.body?.targetId ?? "local-meet-tab",
+              url: request.body?.url ?? "https://meet.google.com/abc-defg-hij",
+            };
           }
           if (request.path === "/act") {
             return { result: JSON.stringify(browserState) };
@@ -4520,6 +4580,16 @@ describe("google-meet plugin", () => {
             }
             if (raw.path === "/tabs/focus" || raw.path === "/permissions/grant") {
               return { payload: { result: { ok: true } } };
+            }
+            if (raw.path === "/navigate") {
+              return {
+                payload: {
+                  result: {
+                    targetId: raw.body?.targetId ?? "tab-1",
+                    url: raw.body?.url ?? "https://meet.google.com/abc-defg-hij",
+                  },
+                },
+              };
             }
             if (raw.path === "/act") {
               return {
