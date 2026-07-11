@@ -27,6 +27,9 @@ openclaw-chat-page {
 }
 
 .chat-workbench__main {
+  /* Positioning context for the floating rail openers so they pin to the
+     thread column instead of overlapping an open right-docked rail. */
+  position: relative;
   grid-column: 1;
   grid-row: 1;
   display: flex;

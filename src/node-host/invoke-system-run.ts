@@ -19,6 +19,7 @@ import {
   commandRequiresSecurityAuditSuppressionApproval,
   createExecApprovalPolicySnapshot,
   hasDurableExecApproval,
+  isExecApprovalPolicySnapshotCurrent,
   maxAsk,
   minSecurity,
   resolveApprovalAuditTrustPath,
@@ -113,6 +114,7 @@ type SystemRunParsePhase = {
   execution: SystemRunExecutionContext;
   approvalDecision: ReturnType<typeof resolveExecApprovalDecision>;
   approvalSource: "ask-fallback" | "auto-review" | undefined;
+  delayedApprovalPolicySnapshot: ExecApprovalPolicySnapshot | null;
   envOverrides: Record<string, string> | undefined;
   env: Record<string, string> | undefined;
   cwd: string | undefined;
@@ -124,7 +126,7 @@ type SystemRunParsePhase = {
 
 type SystemRunPolicyPhase = SystemRunParsePhase & {
   approvals: ExecApprovalsResolved;
-  allowAlwaysPolicySnapshot: ExecApprovalPolicySnapshot;
+  evaluationPolicySnapshot: ExecApprovalPolicySnapshot;
   security: ExecSecurity;
   ask: ExecAsk;
   policy: ReturnType<typeof evaluateSystemRunPolicy>;
@@ -438,7 +440,9 @@ async function parseSystemRunPhase(
     });
     return null;
   }
-  if (approvalSource != null) {
+  const explicitApproval = approved || approvalDecision !== null;
+  const forwardedDelayedApproval = approvalSource === "auto-review" || explicitApproval;
+  if (approvalSource != null || explicitApproval) {
     const planMatchesRequest =
       approvalPlan !== null &&
       argvArraysMatch(approvalPlan.argv, command.argv) &&
@@ -451,11 +455,27 @@ async function parseSystemRunPhase(
         ok: false,
         error: {
           code: "INVALID_REQUEST",
-          message: "approvalSource requires matching systemRunPlan",
+          message:
+            approvalSource != null
+              ? "approvalSource requires matching systemRunPlan"
+              : "explicit approval requires matching systemRunPlan",
         },
       });
       return null;
     }
+  }
+  const delayedApprovalPolicySnapshot = forwardedDelayedApproval
+    ? (approvalPlan?.policySnapshot ?? null)
+    : null;
+  if (forwardedDelayedApproval && !delayedApprovalPolicySnapshot) {
+    await opts.sendInvokeResult({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "delayed approval requires a prepared policy snapshot",
+      },
+    });
+    return null;
   }
   const envAssignmentKeys = extractEnvAssignmentKeysFromDispatchWrappers(command.argv);
   const envAssignmentOverrides =
@@ -523,6 +543,7 @@ async function parseSystemRunPhase(
     execution: { sessionKey, runId, commandText, suppressNotifyOnExit },
     approvalDecision,
     approvalSource: approvalSource ?? undefined,
+    delayedApprovalPolicySnapshot,
     envOverrides,
     env: opts.sanitizeEnv(envOverrides),
     cwd,
@@ -546,10 +567,24 @@ async function evaluateSystemRunPolicyPhase(
     requireSocket: opts.preferMacAppExecHost,
   });
   const { agentExec, globalExec, approvals } = effectivePolicy;
-  const allowAlwaysPolicySnapshot = createExecApprovalPolicySnapshot({
+  const currentPolicySnapshot = createExecApprovalPolicySnapshot({
     file: approvals.file,
     agentId: parsed.agentId,
   });
+  if (
+    parsed.delayedApprovalPolicySnapshot &&
+    !isExecApprovalPolicySnapshotCurrent(
+      parsed.delayedApprovalPolicySnapshot,
+      currentPolicySnapshot,
+    )
+  ) {
+    await sendSystemRunDenied(opts, parsed.execution, {
+      reason: "approval-required",
+      message: "SYSTEM_RUN_DENIED: exec approval policy changed; request approval again",
+    });
+    return null;
+  }
+  const evaluationPolicySnapshot = parsed.delayedApprovalPolicySnapshot ?? currentPolicySnapshot;
   const baseSecurity = effectivePolicy.security;
   const baseAsk = effectivePolicy.ask;
   const fallbackRequest = parsed.approvalSource === "ask-fallback";
@@ -841,7 +876,7 @@ async function evaluateSystemRunPolicyPhase(
     argv: hardenedPaths.argv,
     cwd: hardenedPaths.cwd,
     approvals,
-    allowAlwaysPolicySnapshot,
+    evaluationPolicySnapshot,
     security,
     ask,
     policy,
@@ -989,6 +1024,7 @@ async function executeSystemRunPhase(
       sessionKey: phase.sessionKey ?? null,
       approvalDecision: macApprovalSource ? null : companionApprovalDecision,
       approvalSource: macApprovalSource,
+      ...(phase.approvalGrantSource ? { policySnapshot: phase.evaluationPolicySnapshot } : {}),
     };
     const response = await opts.runViaMacAppExecHost({
       approvals: phase.approvals,
@@ -1042,14 +1078,14 @@ async function executeSystemRunPhase(
       : phase.approvalSource === "auto-review"
         ? "auto-review"
         : (phase.approvalGrantSource ?? "current-policy");
-  const persistsAllowAlways =
-    allowAlwaysDecision !== undefined && allowAlwaysDecision.kind !== "one-shot";
+  const delayedAuthorization =
+    authorizationSource === "explicit-approval" || authorizationSource === "auto-review";
   const authorization: ExecApprovalUsageAuthorization = {
     source: authorizationSource,
     security: phase.security,
     ask: phase.ask,
     allowlistSatisfied: phase.allowlistAuthorizationSatisfied || phase.durableApprovalSatisfied,
-    ...(persistsAllowAlways ? { policySnapshot: phase.allowAlwaysPolicySnapshot } : {}),
+    ...(delayedAuthorization ? { policySnapshot: phase.evaluationPolicySnapshot } : {}),
     requireAutoAllowSkills: phase.segmentSatisfiedBy.includes("skills"),
     requireExactCommandApproval: phase.durableApprovalRequirement === "exact-command",
     requireDurableAllowlistApproval: phase.durableApprovalRequirement === "segment-allowlist",

@@ -485,7 +485,7 @@ export async function processGatewayAllowlist(
     ask: params.ask,
     host: "gateway",
   });
-  const allowAlwaysPolicySnapshot = createExecApprovalPolicySnapshot({
+  const evaluationPolicySnapshot = createExecApprovalPolicySnapshot({
     file: approvals.file,
     agentId: params.agentId,
   });
@@ -635,8 +635,8 @@ export async function processGatewayAllowlist(
       allowlist: approvals.allowlist,
       commandText: params.command,
     });
-    const persistsAllowAlways =
-      options.allowAlwaysDecision !== undefined && options.allowAlwaysDecision.kind !== "one-shot";
+    const delayedAuthorization =
+      options.source === "explicit-approval" || options.source === "auto-review";
     return commitExecAuthorizationLocked({
       agentId: params.agentId,
       matches: allowlistMatches,
@@ -647,7 +647,7 @@ export async function processGatewayAllowlist(
         security: options.source === "ask-fallback" ? fallbackSecurity : hostSecurity,
         ask: hostAsk,
         allowlistSatisfied: allowlistAuthorizationSatisfied || durableApprovalSatisfied,
-        ...(persistsAllowAlways ? { policySnapshot: allowAlwaysPolicySnapshot } : {}),
+        ...(delayedAuthorization ? { policySnapshot: evaluationPolicySnapshot } : {}),
         requireAutoAllowSkills:
           policyAuthorization && allowlistEval.segmentSatisfiedBy.includes("skills"),
         requireExactCommandApproval:

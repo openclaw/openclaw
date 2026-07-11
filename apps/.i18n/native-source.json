@@ -17115,7 +17115,15 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 281,
+      "line": 282,
+      "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
+      "source": "This allowlist entry is inherited. Edit its owning scope and retry.",
+      "surface": "apple",
+      "id": "native.apple.5b9878c76d9a0995"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 284,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
       "source": "Could not save exec approvals. Last known settings are shown; retry the change.",
       "surface": "apple",
@@ -18763,7 +18771,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 225,
+      "line": 235,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Finish",
       "surface": "apple",
@@ -18771,7 +18779,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 225,
+      "line": 235,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Next",
       "surface": "apple",
@@ -19091,7 +19099,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 156,
+      "line": 164,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Layout.swift",
       "source": "Back",
       "surface": "apple",
@@ -19891,15 +19899,31 @@
     },
     {
       "kind": "ui-call",
-      "line": 52,
+      "line": 59,
       "path": "apps/macos/Sources/OpenClaw/PairingApprovalPanelView.swift",
       "source": "Not Now",
       "surface": "apple",
       "id": "native.apple.048e9cc88fb7af55"
     },
     {
+      "kind": "ui-call",
+      "line": 76,
+      "path": "apps/macos/Sources/OpenClaw/PairingApprovalPanelView.swift",
+      "source": "Reject All",
+      "surface": "apple",
+      "id": "native.apple.4f271aca6df52a32"
+    },
+    {
+      "kind": "ui-call",
+      "line": 83,
+      "path": "apps/macos/Sources/OpenClaw/PairingApprovalPanelView.swift",
+      "source": "Approve All",
+      "surface": "apple",
+      "id": "native.apple.bef7b0a91ca5c184"
+    },
+    {
       "kind": "conditional-branch",
-      "line": 67,
+      "line": 103,
       "path": "apps/macos/Sources/OpenClaw/PairingApprovalPanelView.swift",
       "source": "Pairing Request",
       "surface": "apple",
@@ -19907,7 +19931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 67,
+      "line": 103,
       "path": "apps/macos/Sources/OpenClaw/PairingApprovalPanelView.swift",
       "source": "Pairing Requests",
       "surface": "apple",
@@ -19915,7 +19939,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 176,
+      "line": 212,
       "path": "apps/macos/Sources/OpenClaw/PairingApprovalPanelView.swift",
       "source": "Copy full ID",
       "surface": "apple",
@@ -19923,7 +19947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 192,
+      "line": 227,
       "path": "apps/macos/Sources/OpenClaw/PairingApprovalPanelView.swift",
       "source": "Approve Device",
       "surface": "apple",
@@ -19931,7 +19955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 192,
+      "line": 227,
       "path": "apps/macos/Sources/OpenClaw/PairingApprovalPanelView.swift",
       "source": "Approve Node",
       "surface": "apple",
@@ -19939,7 +19963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 214,
+      "line": 238,
       "path": "apps/macos/Sources/OpenClaw/PairingApprovalPanelView.swift",
       "source": "Reject",
       "surface": "apple",
@@ -19947,7 +19971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 258,
+      "line": 295,
       "path": "apps/macos/Sources/OpenClaw/PairingApprovalPanelView.swift",
       "source": "A device wants to connect to OpenClaw.",
       "surface": "apple",
@@ -19955,7 +19979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 258,
+      "line": 295,
       "path": "apps/macos/Sources/OpenClaw/PairingApprovalPanelView.swift",
       "source": "A node wants to connect to OpenClaw.",
       "surface": "apple",
@@ -19963,7 +19987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 269,
+      "line": 306,
       "path": "apps/macos/Sources/OpenClaw/PairingApprovalPanelView.swift",
       "source": "New device",
       "surface": "apple",
@@ -19971,7 +19995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 269,
+      "line": 306,
       "path": "apps/macos/Sources/OpenClaw/PairingApprovalPanelView.swift",
       "source": "OpenClaw Mac app",
       "surface": "apple",
