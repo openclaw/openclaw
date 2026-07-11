@@ -62,6 +62,12 @@ export type DetectInferenceBackendsOptions = {
   deps?: DetectInferenceBackendsDeps;
 };
 
+export type DetectNativeCodexAppServerOptions = {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  probeLocalCommand?: typeof probeLocalCommand;
+};
+
 function detectCliCredentialState(params: {
   probe: LocalCommandProbe;
   hasStoredCredentials: boolean;
@@ -108,7 +114,8 @@ function randomizeClaudeCodexTie(
   ];
 }
 
-const CODEX_MACOS_APP_NAMES = ["Codex.app", "Codex Beta.app"] as const;
+// ChatGPT.app is the current desktop owner; keep Codex stable/beta as fallbacks.
+const CODEX_MACOS_APP_NAMES = ["ChatGPT.app", "Codex.app", "Codex Beta.app"] as const;
 
 async function probeCodexCommand(params: {
   probe: typeof probeLocalCommand;
@@ -133,6 +140,16 @@ async function probeCodexCommand(params: {
     }
   }
   return pathProbe;
+}
+/** Detects a native Codex App Server without coupling it to inference selection. */
+export async function detectNativeCodexAppServer(
+  options: DetectNativeCodexAppServerOptions = {},
+): Promise<LocalCommandProbe> {
+  return await probeCodexCommand({
+    probe: options.probeLocalCommand ?? probeLocalCommand,
+    env: options.env ?? process.env,
+    platform: options.platform ?? process.platform,
+  });
 }
 /**
  * Detect usable inference backends in ladder order. Returns candidates only
@@ -200,7 +217,7 @@ export async function detectInferenceBackends(
 
   const [claudeProbe, codexProbe, geminiProbe] = await Promise.all([
     probe("claude"),
-    probeCodexCommand({ probe, env, platform }),
+    detectNativeCodexAppServer({ probeLocalCommand: probe, env, platform }),
     probe("gemini"),
   ]);
   const cliCandidates: InferenceBackendCandidate[] = [];

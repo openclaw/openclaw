@@ -22,6 +22,7 @@ const LEGACY_TOOL_NAMES = [
   "codex_session_interrupt",
 ] as const;
 const LEGACY_TOOL_NAME_SET = new Set<string>(LEGACY_TOOL_NAMES);
+const TRUSTED_STANDALONE_MCP_OWNER_CONTEXT = { senderIsOwner: true as const };
 
 function withCodexSupervisionEnabled(config: OpenClawConfig): OpenClawConfig {
   const next = structuredClone(config) as OpenClawConfig & Record<string, unknown>;
@@ -56,7 +57,9 @@ function resolveCodexSupervisionTools(config: OpenClawConfig): AnyAgentTool[] {
     config,
     runtimeConfig: config,
     getRuntimeConfig: () => config,
-    senderIsOwner: true,
+    // This local stdio bridge is operator-launched and intentionally receives
+    // the same trusted owner capability as an owner-authenticated agent turn.
+    ...TRUSTED_STANDALONE_MCP_OWNER_CONTEXT,
   };
   const toolAllowlist = [...LEGACY_TOOL_NAMES];
   const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
