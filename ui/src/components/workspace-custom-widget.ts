@@ -18,6 +18,7 @@ import { html, type TemplateResult } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { generateUUID } from "../lib/uuid.ts";
 import {
   createWidgetBridge,
   type WidgetBridge,
@@ -217,6 +218,7 @@ export function attachWidgetBridge(params: {
         sessionKey: context.sessionKey,
         message: text,
         deliver: false,
+        idempotencyKey: generateUUID(),
       });
     },
   });

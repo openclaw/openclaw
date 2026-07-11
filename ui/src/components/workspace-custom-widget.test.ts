@@ -181,6 +181,42 @@ describe("attachWidgetBridge accept filter (identity, not origin)", () => {
     detach();
   });
 
+  it("sends an approved prompt with a gateway idempotency key", async () => {
+    const iframe = document.createElement("iframe");
+    document.body.appendChild(iframe);
+    const request = vi.fn(async () => ({ runId: "run-1", status: "started" }));
+    const detach = attachWidgetBridge({
+      iframe,
+      widget: widget(),
+      manifest: manifest({ name: "prompt-send-test", capabilities: ["prompt:send"] }),
+      context: host({ client: { request } as never, confirmPrompt: () => true }),
+    });
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          v: 1,
+          type: "workspace:sendPrompt",
+          requestId: "r1",
+          text: "Summarize this workspace",
+        },
+        source: iframe.contentWindow,
+      }),
+    );
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: "Summarize this workspace",
+      deliver: false,
+      idempotencyKey: expect.any(String),
+    });
+    expect((request.mock.calls[0]?.[1] as { idempotencyKey?: string }).idempotencyKey).toMatch(
+      /^[0-9a-f-]{36}$/i,
+    );
+    detach();
+  });
+
   it("removes its window listener on detach", async () => {
     const iframe = document.createElement("iframe");
     document.body.appendChild(iframe);
