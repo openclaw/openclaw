@@ -71,13 +71,23 @@ function sanitizePageText(value: string, maxLength = 80): string {
   return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
+/** Selector fragments (tag/id/class) are page-controlled too: keep only
+ * word characters and dashes so they cannot carry quotes or directives. */
+function sanitizeSelectorToken(value: string, maxLength = 40): string {
+  return value.replace(/[^\w-]/g, "").slice(0, maxLength);
+}
+
 /** Compact human/agent-readable element descriptor, e.g. `button#save.btn "Save"`. */
 export function describeInspectedNode(node: BrowserInspectedNode): string {
   const classes = node.classes
     .slice(0, 3)
+    .map((cls) => sanitizeSelectorToken(cls))
+    .filter((cls) => cls.length > 0)
     .map((cls) => `.${cls}`)
     .join("");
-  const selector = `${node.tag}${node.id ? `#${node.id}` : ""}${classes}`;
+  const tag = sanitizeSelectorToken(node.tag) || "element";
+  const id = sanitizeSelectorToken(node.id);
+  const selector = `${tag}${id ? `#${id}` : ""}${classes}`;
   const sanitizedName = sanitizePageText(node.name);
   const name = sanitizedName ? ` "${sanitizedName}"` : "";
   const role = node.role ? ` (role=${sanitizePageText(node.role, 40)})` : "";
