@@ -418,6 +418,9 @@ async function startAndWaitForLocalService(params: {
     stderrTail: "",
   };
   managed.diagnostics = diagnostics;
+  // The last lease can disappear while the health probe or restart settles.
+  // Recheck at the spawn boundary so cleanup cannot orphan a newly created child.
+  throwIfAborted(signal);
   log.info(`starting ${provider} local service: ${service.command}`);
   managed.process = spawn(service.command, service.args ?? [], {
     cwd: service.cwd,
