@@ -390,6 +390,8 @@ async function startAndWaitForLocalService(params: {
       child.stderr?.off("data", captureStderr);
       diagnostics.stdoutTail = "";
       diagnostics.stderrTail = "";
+      child.stdout?.resume();
+      child.stderr?.resume();
       unrefLocalServiceOutput(child.stdout);
       unrefLocalServiceOutput(child.stderr);
       log.info(
