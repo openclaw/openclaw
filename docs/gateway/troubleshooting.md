@@ -489,7 +489,7 @@ Use this when a macOS install keeps restarting every few seconds, `openclaw`
 health checks flap between healthy and unavailable, and channel dispatch stalls
 even though the service appears to be running.
 
-This was observed on `2026.5.26` when both `ai.openclaw.gateway` and
+This was observed on older installs where both `ai.openclaw.gateway` and
 `ai.openclaw.node` LaunchAgents were active and each injected
 `OPENCLAW_LAUNCHD_LABEL`. In that state OpenClaw can detect launchd
 supervision, try to hand restart back to launchd, and fall into a fast
@@ -501,6 +501,8 @@ for i in 1 2 3 4; do
   sleep 10
 done
 
+openclaw gateway status --deep
+openclaw node status
 launchctl print gui/$UID/ai.openclaw.gateway | grep -E 'state|last exit|runs'
 tail -n 80 ~/Library/Logs/openclaw/gateway.log
 ```
@@ -517,72 +519,63 @@ Look for:
 
 What to do:
 
-1. Verify the gateway env-wrapper clears launchd markers after sourcing the
-   managed env file. Putting `unset` before `. "$env_file"` is a no-op because
-   the env file reintroduces the marker:
+1. If this host should only run the Gateway service, remove the managed node
+   service through OpenClaw. **Skip this step** if you actively rely on the node
+   service for remote node features; uninstalling it stops those features on
+   this host:
 
-   ```sh
-   # ~/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh
-   # Correct order: source first, then unset launchd markers.
-   . "$env_file"
+   ```bash
+   openclaw node uninstall
+   ```
+
+2. Install a persistent Gateway wrapper that clears the inherited launchd
+   markers before starting OpenClaw. Use the supported `--wrapper` option; do
+   not edit the generated file under `~/.openclaw/service-env/`, because service
+   reinstall, update, and doctor repair regenerate that file:
+
+   ```bash
+   mkdir -p ~/.local/bin
+   cat >~/.local/bin/openclaw-launchd-workaround <<'EOF'
+   #!/bin/sh
+   set -eu
    unset OPENCLAW_LAUNCHD_LABEL LAUNCH_JOB_LABEL LAUNCH_JOB_NAME XPC_SERVICE_NAME || true
-   exec "$@"
-   ```
-
-2. Dry-run the wrapper before restarting:
-
-   ```bash
-   cat >/tmp/openclaw-launchd-test.env <<'EOF'
-   export OPENCLAW_LAUNCHD_LABEL='ai.openclaw.gateway'
+   exec openclaw "$@"
    EOF
+   chmod 700 ~/.local/bin/openclaw-launchd-workaround
 
-   sh ~/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh \
-     /tmp/openclaw-launchd-test.env \
-     /bin/sh -c 'echo "OPENCLAW_LAUNCHD_LABEL=$OPENCLAW_LAUNCHD_LABEL"'
+   openclaw gateway install \
+     --wrapper ~/.local/bin/openclaw-launchd-workaround \
+     --force
    ```
 
-   Expected output is an empty value:
+   `gateway install` persists the wrapper path across forced reinstalls,
+   updates, and doctor repairs.
 
-   ```text
-   OPENCLAW_LAUNCHD_LABEL=
-   ```
-
-3. If a legacy `ai.openclaw.node` LaunchAgent is still installed and your host
-   should only run the gateway service, boot it out and disable it. **Skip this
-   step** if you actively rely on the node LaunchAgent for remote node features;
-   disabling it stops that service on the host:
+3. Verify that the Gateway is stable and serving RPC, not merely listening:
 
    ```bash
-   launchctl bootout gui/$UID/ai.openclaw.node
-   mv ~/Library/LaunchAgents/ai.openclaw.node.plist \
-     ~/Library/LaunchAgents/ai.openclaw.node.plist.disabled
+   openclaw gateway status --deep --require-rpc
+
+   for i in 1 2 3 4; do
+     ps aux | grep 'openclaw.*index.js' | grep -v grep | awk '{print $2}'
+     sleep 10
+   done
    ```
 
-4. Reload the existing gateway LaunchAgent through `launchctl` so the manual
-   wrapper edit stays in place:
+   The PID sample should show one stable process instead of a rotating set of
+   PIDs, and inbound channel dispatch should resume.
+
+4. After upgrading to a release where the underlying dual-LaunchAgent loop is
+   fixed, remove the workaround and reinstall the normal managed service:
 
    ```bash
-   launchctl bootout gui/$UID/ai.openclaw.gateway
-   launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+   OPENCLAW_WRAPPER= openclaw gateway install --force
+   rm ~/.local/bin/openclaw-launchd-workaround
    ```
-
-   If you run a named profile, replace `ai.openclaw.gateway` with
-   `ai.openclaw.<profile>` in both commands and use the matching plist path
-   `~/Library/LaunchAgents/ai.openclaw.<profile>.plist`.
-
-   Do not run `openclaw gateway restart` or `openclaw gateway install --force`
-   as part of this workaround on current releases unless the generated wrapper
-   has also been fixed upstream. Both commands regenerate
-   `~/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh` and can erase
-   the manual `unset OPENCLAW_LAUNCHD_LABEL ...` repair you just applied.
-
-After the fix, the 30-second PID sample should show one stable process instead
-of a rotating set of PIDs, and inbound channel dispatch should resume without
-manual dashboard/SSH nudges.
 
 Related:
 
-- [Gateway on macOS](/platforms/mac/bundled-gateway)
+- [macOS platform notes](/platforms/mac/bundled-gateway)
 - [Doctor](/gateway/doctor)
 - [Gateway CLI](/cli/gateway)
 
