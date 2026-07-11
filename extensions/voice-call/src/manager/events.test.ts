@@ -818,65 +818,53 @@ describe("processEvent privacy assertions", () => {
     logSpy.clearLogEntries();
   });
 
-  it("never logs raw caller phone numbers in allowlist rejection", () => {
+  function expectCallerRedacted(phone: string, ...expectedMetadata: string[]): void {
+    const logOutput = logSpy.logEntries.join(" ");
+    expect(logOutput).not.toContain(phone);
+    expect(logOutput).toContain("caller=sha256:");
+    for (const metadata of expectedMetadata) {
+      expect(logOutput).toContain(metadata);
+    }
+  }
+
+  it.each([
+    {
+      label: "acceptance",
+      phone: "+15551112222",
+      allowFrom: ["+15551112222"],
+      allowed: true,
+    },
+    {
+      label: "rejection",
+      phone: "+15559999999",
+      allowFrom: ["+15550001111"],
+      allowed: false,
+    },
+  ])("redacts caller phone numbers in allowlist $label logs", ({ phone, allowFrom, allowed }) => {
     const ctx = createContext({
       config: VoiceCallConfigSchema.parse({
         enabled: true,
         provider: "plivo",
         fromNumber: "+15550000000",
         inboundPolicy: "allowlist",
-        allowFrom: ["+15550001111"],
+        allowFrom,
       }),
       provider: createProvider(),
     });
-    const phone = "+15559999999";
-    const event = createInboundInitiatedEvent({
-      id: "evt-privacy-reject",
-      providerCallId: "prov-privacy-reject",
-      from: phone,
-    });
 
-    processEvent(ctx, event);
-
-    const logOutput = logSpy.logEntries.join(" ");
-    // Raw phone number must never appear in log output.
-    expect(logOutput).not.toContain(phone);
-    // Redacted stable identifier must be present instead.
-    expect(logOutput).toContain("sha256:");
-    // Event metadata must still be present.
-    expect(logOutput).toContain("allowlisted=false");
-  });
-
-  it("never logs raw caller phone numbers in allowlist acceptance", () => {
-    const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
-        enabled: true,
-        provider: "plivo",
-        fromNumber: "+15550000000",
-        inboundPolicy: "allowlist",
-        allowFrom: ["+15551112222"],
+    processEvent(
+      ctx,
+      createInboundInitiatedEvent({
+        id: `evt-privacy-${allowed ? "accept" : "reject"}`,
+        providerCallId: `prov-privacy-${allowed ? "accept" : "reject"}`,
+        from: phone,
       }),
-      provider: createProvider(),
-    });
-    const phone = "+15551112222";
-    const event = createInboundInitiatedEvent({
-      id: "evt-privacy-accept",
-      providerCallId: "prov-privacy-accept",
-      from: phone,
-    });
+    );
 
-    processEvent(ctx, event);
-
-    const logOutput = logSpy.logEntries.join(" ");
-    // Raw phone number must never appear in log output.
-    expect(logOutput).not.toContain(phone);
-    // Redacted stable identifier must be present instead.
-    expect(logOutput).toContain("sha256:");
-    // Event metadata must still be present.
-    expect(logOutput).toContain("allowlisted=true");
+    expectCallerRedacted(phone, `allowlisted=${allowed}`);
   });
 
-  it("never logs raw caller phone numbers in call record creation", () => {
+  it("redacts caller phone numbers in call record creation logs", () => {
     const ctx = createContext({
       config: VoiceCallConfigSchema.parse({
         enabled: true,
@@ -886,25 +874,20 @@ describe("processEvent privacy assertions", () => {
       }),
     });
     const phone = "+15554444444";
-    const event = createInboundInitiatedEvent({
-      id: "evt-privacy-create",
-      providerCallId: "prov-privacy-create",
-      from: phone,
-    });
+    processEvent(
+      ctx,
+      createInboundInitiatedEvent({
+        id: "evt-privacy-create",
+        providerCallId: "prov-privacy-create",
+        from: phone,
+      }),
+    );
 
-    processEvent(ctx, event);
-
-    const logOutput = logSpy.logEntries.join(" ");
-    // Raw phone number must never appear in log output.
-    expect(logOutput).not.toContain(phone);
-    // Redacted stable identifier must be present instead.
-    expect(logOutput).toContain("sha256:");
-    // Call record ID must still be present.
     const call = requireFirstActiveCall(ctx);
-    expect(logOutput).toContain(call.callId);
+    expectCallerRedacted(phone, call.callId);
   });
 
-  it("never logs raw caller phone numbers when rejecting without provider", () => {
+  it("redacts caller phone numbers when rejection cannot reach a provider", () => {
     const ctx = createContext({
       config: VoiceCallConfigSchema.parse({
         enabled: true,
@@ -916,20 +899,15 @@ describe("processEvent privacy assertions", () => {
       provider: null,
     });
     const phone = "+15559999999";
-    const event = createInboundInitiatedEvent({
-      id: "evt-privacy-no-provider",
-      providerCallId: "prov-privacy-no-provider",
-      from: phone,
-    });
+    processEvent(
+      ctx,
+      createInboundInitiatedEvent({
+        id: "evt-privacy-no-provider",
+        providerCallId: "prov-privacy-no-provider",
+        from: phone,
+      }),
+    );
 
-    processEvent(ctx, event);
-
-    const logOutput = logSpy.logEntries.join(" ");
-    // Raw phone number must never appear in log output.
-    expect(logOutput).not.toContain(phone);
-    // Redacted stable identifier must be present instead.
-    expect(logOutput).toContain("sha256:");
-    // Provider call ID metadata must still be present.
-    expect(logOutput).toContain("prov-privacy-no-provider");
+    expectCallerRedacted(phone, "prov-privacy-no-provider");
   });
 });
