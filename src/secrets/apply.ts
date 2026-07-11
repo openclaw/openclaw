@@ -341,6 +341,7 @@ async function projectPlanState(params: {
 
   const envRawByPath = scrubEnvFiles({
     env: params.env,
+    stateDir,
     scrubbedValues: targetMutations.scrubbedValues,
     changedFiles,
     enabled: options.scrubEnv,
@@ -735,6 +736,7 @@ function scrubLegacyAuthJsonStores(params: {
 
 function scrubEnvFiles(params: {
   env: NodeJS.ProcessEnv;
+  stateDir: string;
   scrubbedValues: Set<string>;
   changedFiles: Set<string>;
   enabled: boolean;
@@ -743,7 +745,7 @@ function scrubEnvFiles(params: {
   if (!params.enabled || params.scrubbedValues.size === 0) {
     return envRawByPath;
   }
-  const envPath = path.join(resolveStateDir(params.env, os.homedir), ".env");
+  const envPath = path.join(params.stateDir, ".env");
   if (!fs.existsSync(envPath)) {
     return envRawByPath;
   }

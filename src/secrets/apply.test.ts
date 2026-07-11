@@ -1633,6 +1633,85 @@ describe("secrets apply", () => {
     }
   });
 
+  it("uses the same resolved stateDir for .env scrubbing as for auth stores", async () => {
+    // Regression: projectPlanState resolves stateDir once (line 296) and
+    // must pass it into scrubEnvFiles so the same root is used for auth
+    // stores (auth-profiles.json, auth.json) and .env. If scrubEnvFiles
+    // re-resolves stateDir independently, a legacy/canonical directory
+    // appearing or disappearing during the operation could direct .env
+    // scrubbing at a different file.
+    //
+    // Set up a HOME where both .openclaw and .clawdbot exist.
+    // resolveStateDir returns .openclaw when both exist because it checks
+    // .openclaw first. The apply must use that same root for .env.
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-apply-root-"));
+    const openclawDir = path.join(homeDir, ".openclaw");
+    const clawdbotDir = path.join(homeDir, ".clawdbot");
+    const configPath = path.join(openclawDir, "openclaw.json");
+    const agentDir = path.join(openclawDir, "agents", "main", "agent");
+    const openclawEnvPath = path.join(openclawDir, ".env");
+    const clawdbotEnvPath = path.join(clawdbotDir, ".env");
+    const authStorePath = resolveAuthProfileDatabasePath(agentDir);
+
+    await fs.mkdir(agentDir, { recursive: true });
+    // Create .clawdbot dir (without config) to simulate a legacy install
+    await fs.mkdir(clawdbotDir, { recursive: true });
+
+    const env = {
+      HOME: homeDir,
+      OPENAI_API_KEY: "sk-openai-plaintext", // pragma: allowlist secret
+    };
+
+    await writeJsonFile(configPath, {
+      models: {
+        providers: {
+          openai: createOpenAiProviderConfig(),
+        },
+      },
+    });
+    await writeJsonFile(authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    // .env in the canonical .openclaw dir — this is the one that should be scrubbed
+    await fs.writeFile(
+      openclawEnvPath,
+      "OPENAI_API_KEY=sk-openai-plaintext\nUNRELATED=value\n", // pragma: allowlist secret
+      "utf8",
+    );
+    // .env in the legacy .clawdbot dir — must NOT be touched
+    await fs.writeFile(
+      clawdbotEnvPath,
+      "OPENAI_API_KEY=sk-should-not-touch\nUNRELATED=legacy\n", // pragma: allowlist secret
+      "utf8",
+    );
+
+    try {
+      const plan = createPlan({
+        targets: [createOpenAiProviderTarget()],
+        options: createOneWayScrubOptions(),
+      });
+
+      const applied = await runSecretsApply({ plan, env, write: true });
+      expect(applied.mode).toBe("write");
+      expect(applied.changed).toBe(true);
+
+      // Canonical .openclaw/.env was scrubbed
+      const nextOpenclawEnv = await fs.readFile(openclawEnvPath, "utf8");
+      expect(nextOpenclawEnv).not.toContain("sk-openai-plaintext");
+      expect(nextOpenclawEnv).toContain("UNRELATED=value");
+
+      // Legacy .clawdbot/.env was NOT touched — same stateDir used throughout
+      const nextClawdbotEnv = await fs.readFile(clawdbotEnvPath, "utf8");
+      expect(nextClawdbotEnv).toContain("sk-should-not-touch");
+      expect(nextClawdbotEnv).toContain("UNRELATED=legacy");
+    } finally {
+      clearSecretsRuntimeSnapshot();
+      closeOpenClawAgentDatabasesForTest();
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("preserves normalized restrictive plugin allowlist entries for plugin-managed exec provider upserts", async () => {
     await writeJsonFile(fixture.configPath, {
       plugins: {
