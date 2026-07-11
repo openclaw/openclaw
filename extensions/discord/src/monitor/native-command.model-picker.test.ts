@@ -10,6 +10,7 @@ import type {
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
 import {
   loadSessionStore,
@@ -291,6 +292,7 @@ describe("Discord model picker interactions", () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-discord-model-picker-"));
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSnapshot").mockReturnValue(null);
   });
 
   afterEach(async () => {
@@ -353,6 +355,69 @@ describe("Discord model picker interactions", () => {
     expect(loadSpy).toHaveBeenCalledTimes(1);
     expect(interaction.editReply).toHaveBeenCalledTimes(1);
     expect(interaction.update).not.toHaveBeenCalled();
+  });
+
+  it("uses the hot-reloaded runtime config when old components reset to default", async () => {
+    const context = createModelPickerContext();
+    (context.cfg as { agents?: OpenClawConfig["agents"] }).agents = {
+      defaults: {
+        model: { primary: "openai/gpt-5.5" },
+        models: {
+          "openai/gpt-5.5": {},
+        },
+      },
+    };
+    const runtimeCfg = {
+      ...context.cfg,
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-terra" },
+          models: {
+            "openai/gpt-5.5": {},
+            "openai/gpt-5.6-terra": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSnapshot").mockReturnValue(runtimeCfg);
+
+    const staleData = createModelsProviderData({ openai: ["gpt-5.5"] });
+    staleData.resolvedDefault = { provider: "openai", model: "gpt-5.5" };
+    const runtimeData = createModelsProviderData({
+      openai: ["gpt-5.5", "gpt-5.6-terra"],
+    });
+    runtimeData.resolvedDefault = { provider: "openai", model: "gpt-5.6-terra" };
+    const loadSpy = vi
+      .spyOn(modelPickerModule, "loadDiscordModelPickerData")
+      .mockImplementation(async (cfg) => (cfg === runtimeCfg ? runtimeData : staleData));
+    const modelCommand = createModelCommandDefinition();
+    mockModelCommandPipeline(modelCommand);
+    const dispatchSpy = createDispatchSpy();
+
+    const resetInteraction = await runSubmitButton({
+      context,
+      data: {
+        cmd: "model",
+        act: "reset",
+        view: "models",
+        u: "owner",
+        pg: "1",
+      },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+
+    expect(loadSpy).toHaveBeenCalledWith(runtimeCfg, "main");
+    expectDispatchedModelSelection({
+      dispatchSpy,
+      model: "openai/gpt-5.6-terra",
+    });
+    const dispatchCall = firstMockArg(dispatchSpy, "dispatchCommandInteraction") as
+      | Parameters<DispatchDiscordCommandInteraction>[0]
+      | undefined;
+    expect(dispatchCall?.cfg).toBe(runtimeCfg);
+    expect(
+      JSON.stringify(firstMockArg(resetInteraction.followUp, "interaction.followUp")),
+    ).toContain("✅ Model set to openai/gpt-5.6-terra.");
   });
 
   it("requires submit click before routing selected model through /model pipeline", async () => {

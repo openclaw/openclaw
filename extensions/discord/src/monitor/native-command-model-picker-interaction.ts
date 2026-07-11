@@ -7,6 +7,7 @@ import {
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   Button,
@@ -299,20 +300,21 @@ export async function handleDiscordModelPickerInteraction(params: {
     deferredUpdate = true;
   }
 
+  const cfg = getRuntimeConfigSnapshot() ?? ctx.cfg;
   const route = await resolveDiscordModelPickerRoute({
     interaction,
-    cfg: ctx.cfg,
+    cfg,
     accountId: ctx.accountId,
     threadBindings: ctx.threadBindings,
   });
-  const pickerData = await loadDiscordModelPickerData(ctx.cfg, route.agentId);
+  const pickerData = await loadDiscordModelPickerData(cfg, route.agentId);
   const currentModelRef = resolveDiscordModelPickerCurrentModel({
-    cfg: ctx.cfg,
+    cfg,
     route,
     data: pickerData,
   });
   const currentRuntime = resolveDiscordModelPickerCurrentRuntime({
-    cfg: ctx.cfg,
+    cfg,
     route,
   });
   const allowedModelRefs = buildDiscordModelPickerAllowedModelRefs(pickerData);
@@ -627,7 +629,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       interaction,
       selectionCommand,
       dispatchCommandInteraction: params.dispatchCommandInteraction,
-      cfg: ctx.cfg,
+      cfg,
       discordConfig: ctx.discordConfig,
       accountId: ctx.accountId,
       sessionPrefix: ctx.sessionPrefix,
@@ -643,7 +645,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       settleMs: ctx.postApplySettleMs ?? 250,
       resolveCurrentModel: (currentRoute) =>
         resolveDiscordModelPickerCurrentModel({
-          cfg: ctx.cfg,
+          cfg,
           route: currentRoute,
           data: pickerData,
         }),
