@@ -191,21 +191,23 @@ Related:
 
 A desktop or server node can expose chat-capable models from an Ollama server running on that node. Agents use the Ollama plugin's `node_inference` tool to discover installed models and run a bounded prompt remotely; the Gateway does not need direct network access to Ollama. See [Ollama node-local inference](/providers/ollama#node-local-inference) for setup, model filtering, and direct verification commands.
 
-### Codex session catalog
+### Codex sessions and transcripts
 
-The official `codex` plugin can expose metadata for non-archived Codex sessions
+The official `codex` plugin can expose non-archived Codex sessions
 on a headless node host or native macOS node.
 Enable `plugins.entries.codex.config.supervision.enabled` independently in the
 node's local config and on the Gateway. The node setting is local consent;
 enabling only the Gateway cannot read another computer's Codex state.
 
 The node advertises the versioned read-only
-`codex.appServer.threads.list.v1` command. Approve the node pairing upgrade when
-that command first appears. The Gateway invokes it through the normal plugin
-node policy and isolates failures by host.
+`codex.appServer.threads.list.v1` and
+`codex.appServer.thread.turns.list.v1` commands. Approve the node pairing
+upgrade when those commands first appear. The Gateway invokes them through the
+normal plugin node policy and isolates failures by host.
 
-Paired-node rows are visible in **Codex Sessions**, but remain read-only in the
-initial release. The node invoke transport is request/response only and cannot
+Paired-node rows appear in the main sidebar and **Codex Sessions**. Selecting a
+row reads its persisted transcript through bounded, cursor-paginated
+`thread/turns/list` calls with full item projection. The node invoke transport is request/response only and cannot
 carry the streaming turns, live events, or approvals required to continue a
 native thread through the Codex harness. **Continue** and **Archive** are
 therefore unavailable for remote rows. On the Gateway computer, stored and idle
