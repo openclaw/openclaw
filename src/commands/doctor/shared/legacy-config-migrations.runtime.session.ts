@@ -91,16 +91,22 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
     legacyRules: [SESSION_MAINTENANCE_PRUNE_AFTER_ZERO_RULE],
     apply: (raw, changes) => {
       const maintenance = getRecord(getRecord(raw.session)?.maintenance);
-      if (!maintenance || !Object.hasOwn(maintenance, "pruneAfter")) return;
+      if (!maintenance || !Object.hasOwn(maintenance, "pruneAfter")) {
+        return;
+      }
       const val = maintenance.pruneAfter;
-      if (typeof val !== "string") return;
+      if (typeof val !== "string") {
+        return;
+      }
       let ms: number;
       try {
         ms = parseDurationMs(val, { defaultUnit: "d" });
       } catch {
         return;
       }
-      if (ms > 0) return;
+      if (ms > 0) {
+        return;
+      }
       delete maintenance.pruneAfter;
       changes.push(
         `Removed session.maintenance.pruneAfter "${val}" (zero duration); documented 30d default applies.`,
