@@ -22,7 +22,6 @@ import { createDiscordClient, resolveDiscordRest, type DiscordClientOpts } from 
 import {
   createChannelMessage,
   createUserDmChannel,
-  DiscordMultipartBodyOverflowError,
   getChannel,
   RequestClient,
 } from "./internal/discord.js";
@@ -165,7 +164,6 @@ function getDiscordErrorStatus(err: unknown) {
 
 function isDiscordUploadTooLargeError(err: unknown) {
   return (
-    err instanceof DiscordMultipartBodyOverflowError ||
     getDiscordErrorCode(err) === DISCORD_UPLOAD_TOO_LARGE ||
     getDiscordErrorStatus(err) === DISCORD_UPLOAD_TOO_LARGE_STATUS
   );
@@ -306,15 +304,6 @@ export function buildDiscordTextChunks(
   return resolveTextChunksWithFallback(text, chunks);
 }
 
-export function toDiscordFileBlob(data: Blob | Uint8Array): Blob {
-  if (data instanceof Blob) {
-    return data;
-  }
-  const arrayBuffer = new ArrayBuffer(data.byteLength);
-  new Uint8Array(arrayBuffer).set(data);
-  return new Blob([arrayBuffer]);
-}
-
 export type DiscordSendProgress = (
   result: { id: string; channel_id: string },
   kind: "text" | "media",
@@ -452,7 +441,6 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars })
     : [];
   const caption = chunks[0] ?? "";
-  const fileData = toDiscordFileBlob(media.buffer);
   const captionComponents = resolveDiscordSendComponents({
     components,
     text: caption,
@@ -472,7 +460,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     replyTo: resolveDiscordReplyMessageId(reply, true),
     files: [
       {
-        data: fileData,
+        data: media.buffer,
         name: resolvedFileName,
       },
     ],

@@ -1,7 +1,7 @@
 // Discord tests cover send.sends basic channel messages plugin behavior.
 import { ChannelType, MessageFlags, PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { Container, DiscordMultipartBodyOverflowError, TextDisplay } from "./internal/discord.js";
+import { Container, TextDisplay } from "./internal/discord.js";
 import { discordWebMediaMockFactory, makeDiscordRest } from "./send.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/web-media", () => discordWebMediaMockFactory());
@@ -691,32 +691,6 @@ describe("sendMessageDiscord", () => {
     expect(onDeliveryResult.mock.calls.map((call) => call[0]?.receipt.parts[0]?.replyToId)).toEqual(
       ["orig-123", undefined],
     );
-  });
-
-  it("preserves text when local multipart serialization rejects an oversized upload", async () => {
-    const { rest, postMock } = makeDiscordRest();
-    postMock
-      .mockRejectedValueOnce(new DiscordMultipartBodyOverflowError(1024))
-      .mockResolvedValueOnce({ id: "fallback-msg", channel_id: "789" });
-
-    const res = await sendMessageDiscord("channel:789", "Here is the report", {
-      rest,
-      token: "t",
-      cfg: DISCORD_TEST_CFG,
-      mediaUrl: "file:///tmp/report.pdf",
-      components: [new Container([new TextDisplay("Attachment controls")])],
-      embeds: [{ title: "Attachment preview" }],
-    });
-
-    expect(res.messageId).toBe("fallback-msg");
-    expect(postMock).toHaveBeenCalledTimes(2);
-    const fallbackBody = requireRestBody(postMock, 1);
-    expect(fallbackBody.content).toBe(
-      "Here is the report\n\n[Attachment skipped: Discord rejected the file as too large.]",
-    );
-    expect(fallbackBody).not.toHaveProperty("files");
-    expect(fallbackBody).not.toHaveProperty("components");
-    expect(fallbackBody).not.toHaveProperty("embeds");
   });
 
   it("reports a media-only upload rejected with HTTP 413", async () => {

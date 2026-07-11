@@ -99,21 +99,6 @@ describe("createDiscordRestClient", () => {
     expect(result.rest.options.timeout).toBe(250);
   });
 
-  it("keeps configured mediaMaxMb as a payload limit when sizing dedicated REST multipart bodies", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "discord-token",
-          mediaMaxMb: 32,
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = createDiscordRestClient({ cfg });
-
-    expect(result.rest.options.multipartBodyMaxBytes).toBe(33 * 1024 * 1024);
-  });
-
   it("still fails closed when no explicit token is provided and config token is unresolved", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
     const cfg = {
