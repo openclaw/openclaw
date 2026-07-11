@@ -181,6 +181,50 @@ describe("memory hybrid helpers", () => {
     ]);
   });
 
+  it("uses net weighted content relevance for exact hybrid ordering", async () => {
+    const merged = await mergeHybridResults({
+      vectorWeight: 1,
+      textWeight: 1,
+      vector: [
+        {
+          id: "cancelled",
+          path: "memory/z/foo.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "negative vector",
+          vectorScore: -1,
+          exactPathSpecificity: 2,
+        },
+      ],
+      keyword: [
+        {
+          id: "cancelled",
+          path: "memory/z/foo.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "weak body",
+          textScore: 0.5,
+          exactPathSpecificity: 2,
+        },
+        {
+          id: "path",
+          path: "memory/a/foo.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "path only",
+          textScore: 0,
+          pathScore: 1,
+          exactPathSpecificity: 2,
+        },
+      ],
+    });
+
+    expect(merged.map((entry) => entry.path)).toEqual(["memory/a/foo.md", "memory/z/foo.md"]);
+  });
+
   it("keeps content-backed exact hits ahead of path-only hits through MMR", async () => {
     const merged = await mergeHybridResults({
       vectorWeight: 0,

@@ -89,7 +89,6 @@ export async function mergeHybridResults(params: {
       vectorScore: number;
       textScore: number;
       pathScore: number;
-      hasWeightedContentRelevance: boolean;
       exactPathSpecificity: ExactPathSpecificity;
     }
   >();
@@ -105,7 +104,6 @@ export async function mergeHybridResults(params: {
       vectorScore: r.vectorScore,
       textScore: 0,
       pathScore: 0,
-      hasWeightedContentRelevance: params.vectorWeight * r.vectorScore > 0,
       exactPathSpecificity: r.exactPathSpecificity ?? 0,
     });
   }
@@ -116,7 +114,6 @@ export async function mergeHybridResults(params: {
     if (existing) {
       existing.textScore = r.textScore;
       existing.pathScore = r.pathScore ?? 0;
-      existing.hasWeightedContentRelevance ||= params.textWeight * r.textScore > 0;
       existing.exactPathSpecificity = Math.max(
         existing.exactPathSpecificity,
         exactPathSpecificity,
@@ -135,20 +132,22 @@ export async function mergeHybridResults(params: {
         vectorScore: 0,
         textScore: r.textScore,
         pathScore: r.pathScore ?? 0,
-        hasWeightedContentRelevance: params.textWeight * r.textScore > 0,
         exactPathSpecificity,
       });
     }
   }
 
   const merged = Array.from(byId.values()).map((entry) => {
+    const weightedContentScore =
+      params.vectorWeight * entry.vectorScore + params.textWeight * entry.textScore;
+    const hasWeightedContentRelevance = weightedContentScore > 0;
     // Exact specificity already carries path precedence. Keep body scores as
     // the within-tier signal, and use path BM25 only for partial path-only hits.
     const keywordScore =
       entry.exactPathSpecificity > 0 || entry.textScore > 0 ? entry.textScore : entry.pathScore;
     // Exact path-only hits share one recency baseline. Content-backed hits stay
     // in the stronger tie class and retain their weighted relevance.
-    const exactPathOnly = entry.exactPathSpecificity > 0 && !entry.hasWeightedContentRelevance;
+    const exactPathOnly = entry.exactPathSpecificity > 0 && !hasWeightedContentRelevance;
     const weightedScore = exactPathOnly
       ? 1
       : params.vectorWeight * entry.vectorScore + params.textWeight * keywordScore;
@@ -160,7 +159,7 @@ export async function mergeHybridResults(params: {
       vectorScore: entry.vectorScore,
       textScore: entry.textScore,
       exactPathSpecificity: entry.exactPathSpecificity,
-      hasWeightedContentRelevance: entry.hasWeightedContentRelevance,
+      hasWeightedContentRelevance,
       snippet: entry.snippet,
       source: entry.source,
     };
