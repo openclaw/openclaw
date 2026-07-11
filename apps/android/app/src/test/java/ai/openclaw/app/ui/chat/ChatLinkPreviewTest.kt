@@ -550,11 +550,9 @@ class ChatLinkPreviewTest {
 
   private fun realPolicyFetcher(): LinkPreviewFetcher = LinkPreviewFetcher(baseClient().build())
 
-  private fun imageFetcher(timeoutMillis: Long = 6_000): SafeRemoteImageFetcher =
-    SafeRemoteImageFetcher(SafeWebFetcher(baseClient().build(), timeoutMillis, permissiveHostPolicy))
+  private fun imageFetcher(timeoutMillis: Long = 6_000): SafeRemoteImageFetcher = SafeRemoteImageFetcher(SafeWebFetcher(baseClient().build(), timeoutMillis, permissiveHostPolicy))
 
-  private fun realPolicyImageFetcher(): SafeRemoteImageFetcher =
-    SafeRemoteImageFetcher(SafeWebFetcher(baseClient().build()))
+  private fun realPolicyImageFetcher(): SafeRemoteImageFetcher = SafeRemoteImageFetcher(SafeWebFetcher(baseClient().build()))
 
   private fun baseClient(): OkHttpClient.Builder =
     OkHttpClient

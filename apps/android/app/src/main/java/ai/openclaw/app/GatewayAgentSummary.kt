@@ -17,8 +17,7 @@ data class GatewayAgentSummary(
 )
 
 /** Parses validated agents.list rows into the smaller Android display model. */
-internal fun parseGatewayAgentSummaries(root: JsonObject): List<GatewayAgentSummary> =
-  (root["agents"] as? JsonArray)?.mapNotNull(::parseGatewayAgentSummary) ?: emptyList()
+internal fun parseGatewayAgentSummaries(root: JsonObject): List<GatewayAgentSummary> = (root["agents"] as? JsonArray)?.mapNotNull(::parseGatewayAgentSummary) ?: emptyList()
 
 private fun parseGatewayAgentSummary(item: JsonElement): GatewayAgentSummary? {
   val agent = item.asObjectOrNull() ?: return null

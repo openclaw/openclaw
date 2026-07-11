@@ -33,6 +33,7 @@ import java.util.Locale
 private const val AGENT_AVATAR_MAX_DIMENSION = 256
 private const val AGENT_AVATAR_MAX_BYTES = 2 * 1024 * 1024
 private const val AGENT_AVATAR_MAX_DATA_URL_PREFIX_CHARS = 26
+
 // Keep Android decoding inside the Gateway's shared avatar payload boundary.
 private const val AGENT_AVATAR_MAX_DATA_URL_CHARS =
   ((AGENT_AVATAR_MAX_BYTES + 2) / 3) * 4 + AGENT_AVATAR_MAX_DATA_URL_PREFIX_CHARS
