@@ -92,7 +92,10 @@ export function materializeSessionArchiveForRead(filePath: string): string {
     removeMaterializedArchiveCacheEntries(cacheDir, pathKey);
     throw error;
   }
-  const cachePath = path.join(cacheDir, `${pathKey}-${sourceStat.size}.jsonl`);
+  const cachePath = path.join(
+    cacheDir,
+    `${pathKey}-${sourceStat.size}-${Math.trunc(sourceStat.mtimeMs)}.jsonl`,
+  );
   if (fs.existsSync(cachePath)) {
     return cachePath;
   }
