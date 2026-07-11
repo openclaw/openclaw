@@ -873,7 +873,7 @@ export const zh_TW: TranslationMap = {
     eyebrow: "Codex 裝置群",
     title: "所有電腦上的工作階段",
     interactiveSubtitle:
-      "啟動一個 Chat 分支，其模型與提供者由 Codex App Server 選取並在 OpenClaw 中鎖定；以確認方式封存本機工作階段，並檢視已配對電腦的工作階段。",
+      "啟動一個 Chat 分支，其模型選擇維持由 Codex App Server 控制；在確認後封存符合資格的本機工作階段，並檢視已配對電腦的工作階段。",
     summaryLabel: "Codex 工作階段摘要",
     summary: {
       sessions: "工作階段",
@@ -900,13 +900,13 @@ export const zh_TW: TranslationMap = {
       continueAsBranchLabel: "將 {title} 作為分支繼續",
       openChatLabel: "開啟 {title} 的 Chat",
       continueAsBranchHint:
-        "從已保留的可見歷程建立 Chat。在你的第一則訊息中，Codex App Server 會選取模型與提供者，而 OpenClaw 會為新的 harness 執行緒鎖定該組合；來源保持不變，進行中的工作可能不存在。",
+        "從已持久保存的可見歷程建立 Chat。在你的第一則訊息中，Codex App Server 會為新的 harness 執行緒選擇模型和提供者。後續選擇仍由 Codex 控制；OpenClaw 絕不會替換為其他執行階段、模型或備援。來源保持不變，進行中的工作可能不存在。",
       archiveLabel: "封存 {title}",
       archiveConfirmation:
-        "要封存 {title} 嗎？Codex Desktop 和 Codex CLI 不得正在使用此工作階段。若在其他 runner 作用中時封存，可能會中斷其工作。",
+        "要封存 {title} 及其產生的任何後代嗎？請確認沒有其他 Codex 用戶端或 OpenClaw runner 正在使用它們。在另一個 runner 仍在活動時封存，可能會中斷其工作。",
       active: "作用中的工作階段無法啟動分支或封存。",
       archiveActivityUnknownHint:
-        "活動狀態不明。請關閉 Codex Desktop 和 Codex CLI，並僅在確認沒有其他 runner 正在使用此工作階段後再封存。",
+        "由於狀態是程序本機的，因此活動狀態未知。請僅在確認沒有其他 Codex 用戶端或 runner 正在使用此工作階段後再封存。",
       statusUnavailable: "此 Codex 工作階段目前狀態無法管理。",
       hostOffline: "請重新連線此電腦後，再管理其 Codex 工作階段。",
       gatewayOffline: "請重新連線至 gateway 後，再管理 Codex 工作階段。",
@@ -930,9 +930,9 @@ export const zh_TW: TranslationMap = {
     },
     empty: {
       title: "找不到 Codex 主機",
-      subtitle: "請在 Gateway 或已配對的電腦上啟用 Codex 工作階段分享，然後重新整理此檢視。",
+      supervisionSubtitle: "在 Gateway 或已配對的電腦上啟用 Codex 監督，然後重新整理此檢視。",
       search: "此主機上沒有符合搜尋條件的工作階段。",
-      active: "此主機上沒有進行中的工作階段。",
+      nonArchived: "此主機上沒有未封存的工作階段。",
     },
   },
   logbook: {
@@ -1987,7 +1987,7 @@ export const zh_TW: TranslationMap = {
       model: "Chat model",
       modelSection: "模型",
       modelLocked: "已鎖定",
-      modelLockedLabel: "此工作階段的模型已鎖定",
+      modelLockedLabel: "此工作階段的模型選擇受到控制",
       lockedSessionModel: "工作階段模型",
       nativeCodexModel: "Codex 控制的模型",
       thinkingLevel: "Chat thinking level",

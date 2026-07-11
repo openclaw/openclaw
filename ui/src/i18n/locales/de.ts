@@ -895,7 +895,7 @@ export const de: TranslationMap = {
     eyebrow: "Codex-Flotte",
     title: "Sitzungen auf allen deinen Computern",
     interactiveSubtitle:
-      "Starten Sie einen Chat-Branch, dessen Modell und Anbieter vom Codex App Server ausgewählt und in OpenClaw gesperrt werden, archivieren Sie lokale Sitzungen nach Bestätigung und sehen Sie sich Sitzungen gekoppelter Computer an.",
+      "Starten Sie einen Chat-Branch, dessen Modellauswahl unter der Kontrolle des Codex App Server bleibt, archivieren Sie berechtigte lokale Sitzungen nach Bestätigung und zeigen Sie Sitzungen gekoppelter Computer an.",
     summaryLabel: "Zusammenfassung der Codex-Sitzungen",
     summary: {
       sessions: "Sitzungen",
@@ -922,13 +922,13 @@ export const de: TranslationMap = {
       continueAsBranchLabel: "{title} als Branch fortsetzen",
       openChatLabel: "Chat für {title} öffnen",
       continueAsBranchHint:
-        "Erstellen Sie einen Chat aus dem dauerhaft gespeicherten sichtbaren Verlauf. Bei Ihrer ersten Nachricht wählt der Codex App Server das Modell und den Anbieter aus, und OpenClaw sperrt dieses Paar für den neuen Harness-Thread; die Quelle bleibt unverändert, und laufende Arbeiten sind möglicherweise nicht enthalten.",
+        "Erstellen Sie einen Chat aus dem gespeicherten sichtbaren Verlauf. Bei Ihrer ersten Nachricht wählt der Codex App Server das Modell und den Anbieter für den neuen Harness-Thread aus. Die spätere Auswahl bleibt Codex-gesteuert; OpenClaw ersetzt niemals eine andere Laufzeitumgebung, ein anderes Modell oder einen Fallback. Die Quelle bleibt unverändert, und laufende Arbeit ist möglicherweise nicht enthalten.",
       archiveLabel: "{title} archivieren",
       archiveConfirmation:
-        "{title} archivieren? Codex Desktop und Codex CLI dürfen diese Sitzung nicht verwenden. Das Archivieren, während ein anderer Runner aktiv ist, kann dessen Arbeit unterbrechen.",
+        "{title} und alle erzeugten Nachfolger archivieren? Bestätigen Sie, dass kein anderer Codex-Client oder OpenClaw-Runner sie verwendet. Das Archivieren, während ein anderer Runner aktiv ist, kann dessen Arbeit unterbrechen.",
       active: "Aktive Sitzungen können keinen Branch starten und nicht archiviert werden.",
       archiveActivityUnknownHint:
-        "Die Aktivität ist unbekannt. Schließen Sie Codex Desktop und Codex CLI und archivieren Sie erst, nachdem Sie bestätigt haben, dass kein anderer Runner diese Sitzung verwendet.",
+        "Die Aktivität ist unbekannt, da der Status prozesslokal ist. Archivieren Sie erst, nachdem Sie bestätigt haben, dass kein anderer Codex-Client oder Runner diese Sitzung verwendet.",
       statusUnavailable:
         "Diese Codex-Sitzung kann in ihrem aktuellen Zustand nicht verwaltet werden.",
       hostOffline:
@@ -955,10 +955,10 @@ export const de: TranslationMap = {
     },
     empty: {
       title: "Keine Codex-Hosts gefunden",
-      subtitle:
-        "Aktiviere die Freigabe von Codex-Sitzungen auf dem Gateway oder einem gekoppelten Computer und aktualisiere dann diese Ansicht.",
+      supervisionSubtitle:
+        "Aktiviere die Codex-Überwachung auf dem Gateway oder einem gekoppelten Computer und aktualisiere dann diese Ansicht.",
       search: "Keine Sitzungen auf diesem Host entsprechen deiner Suche.",
-      active: "Keine aktiven Sitzungen auf diesem Host.",
+      nonArchived: "Keine nicht archivierten Sitzungen auf diesem Host.",
     },
   },
   logbook: {
@@ -2060,7 +2060,7 @@ export const de: TranslationMap = {
       model: "Chat model",
       modelSection: "Modell",
       modelLocked: "Gesperrt",
-      modelLockedLabel: "Modell für diese Sitzung gesperrt",
+      modelLockedLabel: "Modellauswahl für diese Sitzung gesteuert",
       lockedSessionModel: "Sitzungsmodell",
       nativeCodexModel: "Von Codex gesteuertes Modell",
       thinkingLevel: "Chat thinking level",

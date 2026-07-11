@@ -890,7 +890,7 @@ export const ja_JP: TranslationMap = {
     eyebrow: "Codex フリート",
     title: "すべてのコンピューター上のセッション",
     interactiveSubtitle:
-      "Codex App Server によってモデルとプロバイダーが選択され、OpenClaw でロックされる Chat ブランチを開始し、確認のうえローカルセッションをアーカイブし、ペアリング済みコンピューターのセッションを表示します。",
+      "モデル選択が Codex App Server の制御下にある Chat ブランチを開始し、対象となるローカルセッションを確認のうえアーカイブし、ペアリングされたコンピューターのセッションを表示します。",
     summaryLabel: "Codex セッションの概要",
     summary: {
       sessions: "セッション",
@@ -917,13 +917,13 @@ export const ja_JP: TranslationMap = {
       continueAsBranchLabel: "{title} をブランチとして続行",
       openChatLabel: "{title} の Chat を開く",
       continueAsBranchHint:
-        "保存されている表示可能な履歴から Chat を作成します。最初のメッセージで、Codex App Server がモデルとプロバイダーを選択し、OpenClaw がその組み合わせを新しいハーネススレッド用にロックします。ソースは変更されず、進行中の作業は含まれない場合があります。",
+        "永続化された表示中の履歴から Chat を作成します。最初のメッセージで、Codex App Server が新しいハーネススレッドのモデルとプロバイダーを選択します。その後の選択も Codex の制御下に留まり、OpenClaw が別のランタイム、モデル、またはフォールバックに置き換えることはありません。ソースは変更されず、進行中の作業は含まれない場合があります。",
       archiveLabel: "{title} をアーカイブ",
       archiveConfirmation:
-        "{title} をアーカイブしますか？Codex Desktop と Codex CLI がこのセッションを使用していない必要があります。別のランナーがアクティブな状態でアーカイブすると、その作業が中断される可能性があります。",
+        "{title} と、そこから生成されたすべての子孫をアーカイブしますか？他の Codex クライアントまたは OpenClaw ランナーがそれらを使用していないことを確認してください。別のランナーがアクティブな状態でアーカイブすると、その作業が中断される場合があります。",
       active: "アクティブなセッションでは、ブランチを開始したりアーカイブしたりできません。",
       archiveActivityUnknownHint:
-        "アクティビティは不明です。Codex Desktop と Codex CLI を閉じてから、他のランナーがこのセッションを使用していないことを確認した後にのみアーカイブしてください。",
+        "ステータスはプロセスローカルであるため、アクティビティは不明です。他の Codex クライアントまたはランナーがこのセッションを使用していないことを確認してからアーカイブしてください。",
       statusUnavailable: "この Codex セッションは現在の状態では管理できません。",
       hostOffline: "Codex セッションを管理する前に、このコンピューターに再接続してください。",
       gatewayOffline: "Codex セッションを管理する前に、gateway に再接続してください。",
@@ -947,10 +947,10 @@ export const ja_JP: TranslationMap = {
     },
     empty: {
       title: "Codex ホストが見つかりません",
-      subtitle:
-        "Gateway またはペアリング済みのコンピューターで Codex セッション共有を有効にしてから、このビューを更新してください。",
+      supervisionSubtitle:
+        "gateway またはペアリング済みのコンピューターで Codex supervision を有効にしてから、このビューを更新してください。",
       search: "このホストに検索条件と一致するセッションはありません。",
-      active: "このホストにアクティブなセッションはありません。",
+      nonArchived: "このホストにはアーカイブされていないセッションがありません。",
     },
   },
   logbook: {
@@ -2043,7 +2043,7 @@ export const ja_JP: TranslationMap = {
       model: "Chat model",
       modelSection: "モデル",
       modelLocked: "ロック済み",
-      modelLockedLabel: "このセッションではモデルがロックされています",
+      modelLockedLabel: "このセッションではモデル選択が制御されています",
       lockedSessionModel: "セッションモデル",
       nativeCodexModel: "Codex 制御のモデル",
       thinkingLevel: "Chat thinking level",

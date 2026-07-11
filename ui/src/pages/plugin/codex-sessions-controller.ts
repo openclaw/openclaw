@@ -55,6 +55,7 @@ export type CodexSessionsUiState = {
   pollClient: GatewayBrowserClient | null;
   requestUpdate: (() => void) | null;
   pendingSessionActions: Map<string, CodexSessionPendingAction>;
+  archivedSessionKeys: Set<string>;
   actionError: string | null;
   actionGeneration: number;
 };
@@ -97,6 +98,7 @@ export function getCodexSessionsState(host: object): CodexSessionsUiState {
       pollClient: null,
       requestUpdate: null,
       pendingSessionActions: new Map(),
+      archivedSessionKeys: new Set(),
       actionError: null,
       actionGeneration: 0,
     };
@@ -133,7 +135,7 @@ export function getCodexSessionPendingAction(
   return state.pendingSessionActions.get(sessionActionKey(hostId, threadId));
 }
 
-function filterVisibleSessions(
+function filterCatalogSessions(
   state: CodexSessionsUiState,
   hosts: CodexSessionHostPayload[],
 ): CodexSessionHostPayload[] {
@@ -142,7 +144,7 @@ function filterVisibleSessions(
     sessions: host.sessions.filter(
       (session) =>
         !session.archived &&
-        getCodexSessionPendingAction(state, host.hostId, session.threadId) !== "archive",
+        !state.archivedSessionKeys.has(sessionActionKey(host.hostId, session.threadId)),
     ),
   }));
 }
@@ -161,11 +163,12 @@ function mergeRefreshedHosts(
       return refreshed;
     }
     const refreshedThreadIds = new Set(refreshed.sessions.map((session) => session.threadId));
+    const retainedSessions = filterCatalogSessions(state, [current])[0]?.sessions ?? [];
     const sessions = refreshed.error
-      ? current.sessions
+      ? retainedSessions
       : [
           ...refreshed.sessions,
-          ...current.sessions.filter((session) => !refreshedThreadIds.has(session.threadId)),
+          ...retainedSessions.filter((session) => !refreshedThreadIds.has(session.threadId)),
         ];
     // The retained tail belongs to the last page the user loaded. Its cursor
     // must stay paired with that tail or the next click would reload page two.
@@ -200,6 +203,7 @@ function clearCatalogContext(state: CodexSessionsUiState): void {
   state.refreshedAtMs = null;
   state.hasAttemptedLoad = false;
   state.pendingSessionActions = new Map();
+  state.archivedSessionKeys = new Set();
   state.actionError = null;
 }
 
@@ -215,6 +219,10 @@ export async function loadCodexSessions(
   state.hasAttemptedLoad = true;
   state.activeLoadCount += 1;
   const generation = ++state.requestGeneration;
+  // A fresh first page supersedes every older list/page request through the
+  // generation check, so archive race tombstones are no longer needed. This
+  // also lets a thread reappear after another Codex client unarchives it.
+  state.archivedSessionKeys = new Set();
   if (!options?.silent || state.hosts.length === 0) {
     state.loading = true;
   }
@@ -228,7 +236,7 @@ export async function loadCodexSessions(
     if (generation !== state.requestGeneration) {
       return;
     }
-    const visibleHosts = filterVisibleSessions(state, result.hosts);
+    const visibleHosts = filterCatalogSessions(state, result.hosts);
     state.hosts = options?.preservePagination
       ? mergeRefreshedHosts(state, visibleHosts)
       : visibleHosts;
@@ -284,7 +292,7 @@ export async function loadMoreCodexSessions(
     if (generation !== state.requestGeneration) {
       return;
     }
-    const page = filterVisibleSessions(state, result.hosts).find((host) => host.hostId === hostId);
+    const page = filterCatalogSessions(state, result.hosts).find((host) => host.hostId === hostId);
     if (!page) {
       state.hosts = state.hosts.map((host) =>
         host.hostId === hostId
@@ -300,13 +308,18 @@ export async function loadMoreCodexSessions(
       );
       return;
     }
-    const seenThreadIds = new Set(currentHost.sessions.map((session) => session.threadId));
+    const liveHost = state.hosts.find((host) => host.hostId === hostId);
+    if (!liveHost) {
+      return;
+    }
+    const retainedSessions = filterCatalogSessions(state, [liveHost])[0]?.sessions ?? [];
+    const seenThreadIds = new Set(retainedSessions.map((session) => session.threadId));
     const appendedSessions = page.sessions.filter(
       (session) => !seenThreadIds.has(session.threadId),
     );
     state.hosts = state.hosts.map((host) =>
       host.hostId === hostId
-        ? { ...page, sessions: [...currentHost.sessions, ...appendedSessions] }
+        ? { ...page, sessions: [...retainedSessions, ...appendedSessions] }
         : host,
     );
     state.paginatedHostIds = new Set(state.paginatedHostIds).add(hostId);
@@ -349,26 +362,22 @@ export function setCodexSessionsSearch(
   notify(state);
 }
 
-function sessionForAction(
+function canRunSessionAction(
   state: CodexSessionsUiState,
   hostId: string,
   threadId: string,
   action: CodexSessionPendingAction,
-): { session: CodexSessionPayload; sessionIndex: number } | null {
+): boolean {
   const host = state.hosts.find((candidate) => candidate.hostId === hostId);
-  const sessionIndex = host?.sessions.findIndex((session) => session.threadId === threadId) ?? -1;
-  const session = sessionIndex >= 0 ? host?.sessions[sessionIndex] : undefined;
+  const session = host?.sessions.find((candidate) => candidate.threadId === threadId);
   if (!host?.connected || host.kind !== "gateway" || !session || session.archived) {
-    return null;
+    return false;
   }
   const statusSupported =
-    action === "continue"
-      ? session.status === "idle" || session.status === "notLoaded"
+    action === "continue" && Boolean(session.openClawSessionKey?.trim())
+      ? true
       : session.status === "idle" || session.status === "notLoaded";
-  if (!statusSupported) {
-    return null;
-  }
-  return { session, sessionIndex };
+  return statusSupported;
 }
 
 function beginSessionAction(
@@ -420,7 +429,7 @@ export async function continueCodexSession(
   threadId: string,
   onContinue: (sessionKey: string) => void,
 ): Promise<void> {
-  if (!client || !sessionForAction(state, hostId, threadId, "continue")) {
+  if (!client || !canRunSessionAction(state, hostId, threadId, "continue")) {
     return;
   }
   const pending = beginSessionAction(state, hostId, threadId, "continue");
@@ -449,7 +458,7 @@ export async function continueCodexSession(
   }
 }
 
-/** Archives optimistically; failures restore the row in its original position. */
+/** Archives optimistically while the catalog remains authoritative for rollback. */
 export async function archiveCodexSession(
   state: CodexSessionsUiState,
   client: GatewayBrowserClient | null,
@@ -460,16 +469,13 @@ export async function archiveCodexSession(
   if (!client || !confirmNoOtherRunner) {
     return;
   }
-  const match = sessionForAction(state, hostId, threadId, "archive");
-  if (!match) {
+  if (!canRunSessionAction(state, hostId, threadId, "archive")) {
     return;
   }
   const pending = beginSessionAction(state, hostId, threadId, "archive");
   if (!pending) {
     return;
   }
-  removeSession(state, hostId, threadId);
-  notify(state);
   try {
     const result = await client.request<{ archived: boolean }>(ARCHIVE_METHOD, {
       hostId,
@@ -480,22 +486,13 @@ export async function archiveCodexSession(
       throw new Error("Codex archive response did not confirm the archive");
     }
     if (state.actionGeneration === pending.generation) {
-      // A concurrent refresh may have returned the row before the archive completed.
+      // Keep a tombstone until the next fresh first-page request. An older list or page
+      // request can otherwise resolve after the pending action clears and restore this row.
+      state.archivedSessionKeys = new Set(state.archivedSessionKeys).add(pending.actionKey);
       removeSession(state, hostId, threadId);
     }
   } catch (error) {
     if (state.actionGeneration === pending.generation) {
-      state.hosts = state.hosts.map((host) => {
-        if (
-          host.hostId !== hostId ||
-          host.sessions.some((session) => session.threadId === threadId)
-        ) {
-          return host;
-        }
-        const sessions = [...host.sessions];
-        sessions.splice(Math.min(match.sessionIndex, sessions.length), 0, match.session);
-        return { ...host, sessions };
-      });
       state.actionError = messageForError(error);
     }
   } finally {

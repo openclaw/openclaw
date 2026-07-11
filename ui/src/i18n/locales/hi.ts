@@ -877,7 +877,7 @@ export const hi: TranslationMap = {
     eyebrow: "Codex फ़्लीट",
     title: "आपके सभी कंप्यूटरों के सेशन",
     interactiveSubtitle:
-      "एक Chat शाखा शुरू करें जिसका मॉडल और प्रदाता Codex App Server द्वारा चुना जाता है और OpenClaw में लॉक किया जाता है, पुष्टि के साथ स्थानीय सत्रों को आर्काइव करें, और paired-computer सत्र देखें।",
+      "एक Chat शाखा शुरू करें जिसका मॉडल चयन Codex App Server के नियंत्रण में रहे, पुष्टि के साथ पात्र स्थानीय सत्रों को आर्काइव करें, और paired-computer सत्र देखें।",
     summaryLabel: "Codex सेशन सारांश",
     summary: {
       sessions: "सेशन",
@@ -904,13 +904,13 @@ export const hi: TranslationMap = {
       continueAsBranchLabel: "{title} को शाखा के रूप में जारी रखें",
       openChatLabel: "{title} के लिए Chat खोलें",
       continueAsBranchHint:
-        "सहेजे गए दृश्यमान इतिहास से Chat बनाएं। आपके पहले संदेश पर, Codex App Server मॉडल और प्रदाता चुनता है, और OpenClaw नए harness thread के लिए उस जोड़ी को लॉक करता है; स्रोत अपरिवर्तित रहता है, और चल रहा काम अनुपस्थित हो सकता है।",
+        "सहेजे गए दृश्यमान इतिहास से एक Chat बनाएँ। आपके पहले संदेश पर, Codex App Server नए harness thread के लिए मॉडल और provider चुनता है। बाद का चयन Codex-नियंत्रित रहता है; OpenClaw कभी भी कोई अन्य runtime, model, या fallback प्रतिस्थापित नहीं करता। स्रोत अपरिवर्तित रहता है, और जारी काम अनुपस्थित हो सकता है।",
       archiveLabel: "{title} आर्काइव करें",
       archiveConfirmation:
-        "{title} आर्काइव करें? Codex Desktop और Codex CLI इस सत्र का उपयोग नहीं कर रहे होने चाहिए। किसी अन्य runner के सक्रिय होने पर आर्काइव करने से उसका काम बाधित हो सकता है।",
+        "{title} और उससे बने सभी descendants को आर्काइव करें? पुष्टि करें कि कोई अन्य Codex client या OpenClaw runner उनका उपयोग नहीं कर रहा है। किसी अन्य runner के सक्रिय रहते हुए आर्काइव करने से उसका काम बाधित हो सकता है।",
       active: "सक्रिय सत्र शाखा शुरू नहीं कर सकते या आर्काइव नहीं किए जा सकते।",
       archiveActivityUnknownHint:
-        "गतिविधि अज्ञात है। Codex Desktop और Codex CLI बंद करें, फिर केवल यह पुष्टि करने के बाद आर्काइव करें कि कोई अन्य runner इस सत्र का उपयोग नहीं कर रहा है।",
+        "गतिविधि अज्ञात है क्योंकि स्थिति process-local है। इस सत्र का उपयोग कोई अन्य Codex client या runner नहीं कर रहा है, इसकी पुष्टि करने के बाद ही आर्काइव करें।",
       statusUnavailable: "इस Codex सत्र को इसकी वर्तमान स्थिति में प्रबंधित नहीं किया जा सकता।",
       hostOffline: "इसके Codex सत्रों को प्रबंधित करने से पहले इस कंप्यूटर को फिर से कनेक्ट करें।",
       gatewayOffline: "Codex सत्रों को प्रबंधित करने से पहले gateway से फिर से कनेक्ट करें।",
@@ -934,10 +934,10 @@ export const hi: TranslationMap = {
     },
     empty: {
       title: "कोई Codex होस्ट नहीं मिला",
-      subtitle:
-        "Gateway या किसी पेयर किए गए कंप्यूटर पर Codex सेशन शेयरिंग चालू करें, फिर इस व्यू को रीफ़्रेश करें।",
+      supervisionSubtitle:
+        "gateway या जोड़े गए कंप्यूटर पर Codex supervision सक्षम करें, फिर इस दृश्य को रीफ़्रेश करें।",
       search: "इस होस्ट पर कोई सेशन आपकी खोज से मेल नहीं खाता।",
-      active: "इस होस्ट पर कोई सक्रिय सेशन नहीं है।",
+      nonArchived: "इस होस्ट पर कोई गैर-आर्काइव किए गए सेशन नहीं हैं।",
     },
   },
   logbook: {
@@ -2013,7 +2013,7 @@ export const hi: TranslationMap = {
       model: "चैट मॉडल",
       modelSection: "मॉडल",
       modelLocked: "लॉक किया गया",
-      modelLockedLabel: "इस सत्र के लिए मॉडल लॉक किया गया है",
+      modelLockedLabel: "इस सत्र के लिए मॉडल चयन नियंत्रित है",
       lockedSessionModel: "सत्र मॉडल",
       nativeCodexModel: "Codex-नियंत्रित मॉडल",
       thinkingLevel: "चैट सोच स्तर",

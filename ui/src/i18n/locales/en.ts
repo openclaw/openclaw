@@ -878,7 +878,7 @@ export const en: TranslationMap = {
     eyebrow: "Codex fleet",
     title: "Sessions across your computers",
     interactiveSubtitle:
-      "Start a Chat branch whose model and provider are selected by Codex App Server and locked in OpenClaw, archive local sessions with confirmation, and view paired-computer sessions.",
+      "Start a Chat branch whose model selection stays under Codex App Server control, archive eligible local sessions with confirmation, and view paired-computer sessions.",
     summaryLabel: "Codex session summary",
     summary: {
       sessions: "sessions",
@@ -905,13 +905,13 @@ export const en: TranslationMap = {
       continueAsBranchLabel: "Continue {title} as a branch",
       openChatLabel: "Open Chat for {title}",
       continueAsBranchHint:
-        "Create a Chat from persisted visible history. On your first message, Codex App Server selects the model and provider, and OpenClaw locks that pair for the new harness thread; the source remains untouched, and in-flight work may be absent.",
+        "Create a Chat from persisted visible history. On your first message, Codex App Server selects the model and provider for the new harness thread. Later selection remains Codex-controlled; OpenClaw never substitutes another runtime, model, or fallback. The source remains untouched, and in-flight work may be absent.",
       archiveLabel: "Archive {title}",
       archiveConfirmation:
-        "Archive {title}? Codex Desktop and Codex CLI must not be using this session. Archiving while another runner is active may interrupt its work.",
+        "Archive {title} and any spawned descendants? Confirm that no other Codex client or OpenClaw runner is using them. Archiving while another runner is active may interrupt its work.",
       active: "Active sessions cannot start a branch or be archived.",
       archiveActivityUnknownHint:
-        "Activity is unknown. Close Codex Desktop and Codex CLI, then archive only after confirming no other runner is using this session.",
+        "Activity is unknown because status is process-local. Archive only after confirming that no other Codex client or runner is using this session.",
       statusUnavailable: "This Codex session cannot be managed in its current state.",
       hostOffline: "Reconnect this computer before managing its Codex sessions.",
       gatewayOffline: "Reconnect to the gateway before managing Codex sessions.",
@@ -935,10 +935,10 @@ export const en: TranslationMap = {
     },
     empty: {
       title: "No Codex hosts found",
-      subtitle:
+      supervisionSubtitle:
         "Enable Codex supervision on the gateway or a paired computer, then refresh this view.",
       search: "No sessions on this host match your search.",
-      active: "No non-archived sessions on this host.",
+      nonArchived: "No non-archived sessions on this host.",
     },
   },
   logbook: {
@@ -2020,7 +2020,7 @@ export const en: TranslationMap = {
       model: "Chat model",
       modelSection: "Model",
       modelLocked: "Locked",
-      modelLockedLabel: "Model locked for this session",
+      modelLockedLabel: "Model selection controlled for this session",
       lockedSessionModel: "Session model",
       nativeCodexModel: "Codex-controlled model",
       thinkingLevel: "Chat thinking level",

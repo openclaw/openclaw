@@ -127,7 +127,7 @@ describe("Codex sessions view", () => {
     );
   });
 
-  it("opens an already adopted active session without calling Continue", async () => {
+  it("revalidates an already adopted active session through Continue before opening it", async () => {
     const host = {};
     hosts.push(host);
     const state = getCodexSessionsState(host);
@@ -149,7 +149,10 @@ describe("Codex sessions view", () => {
         ],
       },
     ];
-    const request = vi.fn();
+    const request = vi.fn(async () => ({
+      sessionKey: "agent:main:current-adopted-codex",
+      disposition: "existing",
+    }));
     const onContinueSession = vi.fn();
     const container = document.createElement("div");
 
@@ -169,9 +172,14 @@ describe("Codex sessions view", () => {
     openButton.click();
 
     await vi.waitFor(() =>
-      expect(onContinueSession).toHaveBeenCalledWith("agent:main:adopted-codex"),
+      expect(request).toHaveBeenCalledWith("codex.sessions.continue", {
+        hostId: "gateway:local",
+        threadId: "thread-adopted",
+      }),
     );
-    expect(request).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(onContinueSession).toHaveBeenCalledWith("agent:main:current-adopted-codex"),
+    );
   });
 
   it("requires an explicit no-other-runner confirmation before archiving", async () => {
@@ -210,7 +218,7 @@ describe("Codex sessions view", () => {
     (container.querySelector(".codex-session__archive") as HTMLButtonElement).click();
 
     expect(confirm).toHaveBeenCalledWith(
-      "Archive Finished work? Codex Desktop and Codex CLI must not be using this session. Archiving while another runner is active may interrupt its work.",
+      "Archive Finished work and any spawned descendants? Confirm that no other Codex client or OpenClaw runner is using them. Archiving while another runner is active may interrupt its work.",
     );
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("codex.sessions.archive", {
@@ -255,6 +263,9 @@ describe("Codex sessions view", () => {
     expect(container.querySelector(".codex-session__continue")?.getAttribute("title")).toBe(
       "Reconnect this computer before managing its Codex sessions.",
     );
+    expect(container.querySelector(".codex-session__view-only")?.textContent).toContain(
+      "Paired-computer sessions are view-only for now.",
+    );
   });
 
   it("explains that connected paired-computer sessions are view-only", () => {
@@ -268,6 +279,7 @@ describe("Codex sessions view", () => {
         label: "Remote Mac",
         kind: "node",
         connected: true,
+        nextCursor: "next-page",
         sessions: [
           {
             threadId: "thread-remote",
@@ -285,8 +297,14 @@ describe("Codex sessions view", () => {
     const continueButton = container.querySelector(".codex-session__continue") as HTMLButtonElement;
     expect(continueButton.disabled).toBe(true);
     expect(continueButton.title).toBe("Paired-computer sessions are view-only for now.");
+    expect(container.querySelector(".codex-session__view-only")?.textContent).toContain(
+      "Paired-computer sessions are view-only for now.",
+    );
     expect((container.querySelector(".codex-session__archive") as HTMLButtonElement).disabled).toBe(
       true,
+    );
+    expect(container.querySelector(".codex-host__footer button")?.getAttribute("aria-label")).toBe(
+      "Load more — Remote Mac",
     );
   });
 
@@ -326,12 +344,12 @@ describe("Codex sessions view", () => {
     expect(continueButton.disabled).toBe(false);
     expect(continueButton.textContent).toContain("Continue as branch");
     expect(continueButton.title).toBe(
-      "Create a Chat from persisted visible history. On your first message, Codex App Server selects the model and provider, and OpenClaw locks that pair for the new harness thread; the source remains untouched, and in-flight work may be absent.",
+      "Create a Chat from persisted visible history. On your first message, Codex App Server selects the model and provider for the new harness thread. Later selection remains Codex-controlled; OpenClaw never substitutes another runtime, model, or fallback. The source remains untouched, and in-flight work may be absent.",
     );
     const archiveButton = container.querySelector(".codex-session__archive") as HTMLButtonElement;
     expect(archiveButton.disabled).toBe(false);
     expect(archiveButton.title).toBe(
-      "Activity is unknown. Close Codex Desktop and Codex CLI, then archive only after confirming no other runner is using this session.",
+      "Activity is unknown because status is process-local. Archive only after confirming that no other Codex client or runner is using this session.",
     );
   });
 

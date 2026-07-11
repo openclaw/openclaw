@@ -873,7 +873,7 @@ export const zh_CN: TranslationMap = {
     eyebrow: "Codex 设备群",
     title: "所有电脑上的会话",
     interactiveSubtitle:
-      "启动一个 Chat 分支，其模型和提供商由 Codex App Server 选择并在 OpenClaw 中锁定；在确认后归档本地会话，并查看配对计算机的会话。",
+      "启动一个 Chat 分支，其模型选择由 Codex App Server 控制；在确认后归档符合条件的本地会话；并查看已配对计算机的会话。",
     summaryLabel: "Codex 会话摘要",
     summary: {
       sessions: "会话",
@@ -900,13 +900,13 @@ export const zh_CN: TranslationMap = {
       continueAsBranchLabel: "将 {title} 作为分支继续",
       openChatLabel: "为 {title} 打开 Chat",
       continueAsBranchHint:
-        "从已持久保存的可见历史创建一个 Chat。发送第一条消息时，Codex App Server 会选择模型和提供商，OpenClaw 会为新的 harness 线程锁定该组合；源会话保持不变，进行中的工作可能不会包含在内。",
+        "基于已持久化的可见历史创建一个 Chat。在你的第一条消息发送后，Codex App Server 会为新的 harness 线程选择模型和提供方。之后的选择仍由 Codex 控制；OpenClaw 绝不会替换为其他运行时、模型或备用方案。源会话保持不变，进行中的工作可能不会包含在内。",
       archiveLabel: "归档 {title}",
       archiveConfirmation:
-        "要归档 {title} 吗？Codex Desktop 和 Codex CLI 不得正在使用此会话。在另一个运行器处于活动状态时归档，可能会中断其工作。",
+        "要归档 {title} 及其生成的所有后代吗？请确认没有其他 Codex 客户端或 OpenClaw runner 正在使用它们。在其他 runner 处于活动状态时归档可能会中断其工作。",
       active: "活动会话无法启动分支或被归档。",
       archiveActivityUnknownHint:
-        "活动状态未知。请关闭 Codex Desktop 和 Codex CLI，然后仅在确认没有其他运行器正在使用此会话后再归档。",
+        "由于状态仅限本进程本地可见，因此活动状态未知。请仅在确认没有其他 Codex 客户端或 runner 正在使用此会话后再归档。",
       statusUnavailable: "此 Codex 会话在当前状态下无法管理。",
       hostOffline: "请重新连接此计算机，然后再管理其 Codex 会话。",
       gatewayOffline: "请重新连接到 gateway，然后再管理 Codex 会话。",
@@ -930,9 +930,9 @@ export const zh_CN: TranslationMap = {
     },
     empty: {
       title: "未找到 Codex 主机",
-      subtitle: "请在 Gateway 或已配对的电脑上启用 Codex 会话共享，然后刷新此视图。",
+      supervisionSubtitle: "在 Gateway 或已配对的计算机上启用 Codex 监督，然后刷新此视图。",
       search: "此主机上没有符合搜索条件的会话。",
-      active: "此主机上没有活跃会话。",
+      nonArchived: "此主机上没有未归档的会话。",
     },
   },
   logbook: {
@@ -1985,7 +1985,7 @@ export const zh_CN: TranslationMap = {
       model: "聊天模型",
       modelSection: "模型",
       modelLocked: "已锁定",
-      modelLockedLabel: "此会话的模型已锁定",
+      modelLockedLabel: "此会话的模型选择已受控",
       lockedSessionModel: "会话模型",
       nativeCodexModel: "Codex 控制的模型",
       thinkingLevel: "聊天思考级别",

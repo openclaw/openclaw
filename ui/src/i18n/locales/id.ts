@@ -885,7 +885,7 @@ export const id: TranslationMap = {
     eyebrow: "Armada Codex",
     title: "Sesi di semua komputer Anda",
     interactiveSubtitle:
-      "Mulai cabang Chat yang model dan penyedianya dipilih oleh Codex App Server dan dikunci di OpenClaw, arsipkan sesi lokal dengan konfirmasi, dan lihat sesi komputer yang dipasangkan.",
+      "Mulai cabang Chat yang pemilihan modelnya tetap di bawah kendali Codex App Server, arsipkan sesi lokal yang memenuhi syarat dengan konfirmasi, dan lihat sesi komputer yang dipasangkan.",
     summaryLabel: "Ringkasan sesi Codex",
     summary: {
       sessions: "sesi",
@@ -912,13 +912,13 @@ export const id: TranslationMap = {
       continueAsBranchLabel: "Lanjutkan {title} sebagai cabang",
       openChatLabel: "Buka Chat untuk {title}",
       continueAsBranchHint:
-        "Buat Chat dari riwayat terlihat yang dipertahankan. Pada pesan pertama Anda, Codex App Server memilih model dan penyedia, dan OpenClaw mengunci pasangan tersebut untuk thread harness baru; sumber tetap tidak tersentuh, dan pekerjaan yang sedang berjalan mungkin tidak ada.",
+        "Buat Chat dari riwayat terlihat yang tersimpan. Pada pesan pertama Anda, Codex App Server memilih model dan penyedia untuk thread harness baru. Pemilihan berikutnya tetap dikendalikan Codex; OpenClaw tidak pernah mengganti dengan runtime, model, atau fallback lain. Sumber tetap tidak berubah, dan pekerjaan yang sedang berjalan mungkin tidak ada.",
       archiveLabel: "Arsipkan {title}",
       archiveConfirmation:
-        "Arsipkan {title}? Codex Desktop dan Codex CLI tidak boleh sedang menggunakan sesi ini. Mengarsipkan saat runner lain aktif dapat mengganggu pekerjaannya.",
+        "Arsipkan {title} dan semua turunan yang dihasilkan? Konfirmasikan bahwa tidak ada klien Codex atau runner OpenClaw lain yang menggunakannya. Mengarsipkan saat runner lain aktif dapat mengganggu pekerjaannya.",
       active: "Sesi aktif tidak dapat memulai cabang atau diarsipkan.",
       archiveActivityUnknownHint:
-        "Aktivitas tidak diketahui. Tutup Codex Desktop dan Codex CLI, lalu arsipkan hanya setelah mengonfirmasi bahwa tidak ada runner lain yang menggunakan sesi ini.",
+        "Aktivitas tidak diketahui karena status bersifat lokal pada proses. Arsipkan hanya setelah mengonfirmasi bahwa tidak ada klien Codex atau runner lain yang menggunakan sesi ini.",
       statusUnavailable: "Sesi Codex ini tidak dapat dikelola dalam statusnya saat ini.",
       hostOffline: "Hubungkan kembali komputer ini sebelum mengelola sesi Codex-nya.",
       gatewayOffline: "Hubungkan kembali ke gateway sebelum mengelola sesi Codex.",
@@ -942,10 +942,10 @@ export const id: TranslationMap = {
     },
     empty: {
       title: "Tidak ditemukan host Codex",
-      subtitle:
-        "Aktifkan berbagi sesi Codex di Gateway atau komputer yang dipasangkan, lalu muat ulang tampilan ini.",
+      supervisionSubtitle:
+        "Aktifkan supervisi Codex di gateway atau komputer yang dipasangkan, lalu segarkan tampilan ini.",
       search: "Tidak ada sesi di host ini yang cocok dengan pencarian Anda.",
-      active: "Tidak ada sesi aktif di host ini.",
+      nonArchived: "Tidak ada sesi non-arsip di host ini.",
     },
   },
   logbook: {
@@ -2037,7 +2037,7 @@ export const id: TranslationMap = {
       model: "Chat model",
       modelSection: "Model",
       modelLocked: "Terkunci",
-      modelLockedLabel: "Model dikunci untuk sesi ini",
+      modelLockedLabel: "Pemilihan model dikendalikan untuk sesi ini",
       lockedSessionModel: "Model sesi",
       nativeCodexModel: "Model yang dikontrol Codex",
       thinkingLevel: "Chat thinking level",

@@ -224,6 +224,24 @@ describeControlUiE2e("Codex Sessions mocked Gateway E2E", () => {
         .poll(() =>
           page
             .locator('[data-thread-id="00000000-0000-4000-8000-000000000001"]')
+            .locator(".codex-session__view-only")
+            .getByText("Paired-computer sessions are view-only for now.", { exact: true })
+            .isVisible(),
+        )
+        .toBe(true);
+      await expect
+        .poll(() =>
+          page
+            .locator('[data-thread-id="demo-offline-thread"]')
+            .locator(".codex-session__view-only")
+            .getByText("Paired-computer sessions are view-only for now.", { exact: true })
+            .isVisible(),
+        )
+        .toBe(true);
+      await expect
+        .poll(() =>
+          page
+            .locator('[data-thread-id="00000000-0000-4000-8000-000000000001"]')
             .getByRole("button", { name: "Continue Current Codex UI session" })
             .isDisabled(),
         )
@@ -239,11 +257,20 @@ describeControlUiE2e("Codex Sessions mocked Gateway E2E", () => {
       await holdUiProof(page);
       await captureUiProof(page, "01-hosts-and-partial-error.png");
 
-      await page.getByRole("button", { name: "Load more" }).click();
+      await page.getByRole("button", { name: "Load more — Development Box", exact: true }).click();
       await expect
         .poll(async () => (await gateway.getRequests("codex.sessions.list")).length)
         .toBeGreaterThanOrEqual(2);
       await expect.poll(() => page.getByText("Follow-up on the dev box").isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          page
+            .locator('[data-thread-id="demo-next-thread"]')
+            .locator(".codex-session__view-only")
+            .getByText("Paired-computer sessions are view-only for now.", { exact: true })
+            .isVisible(),
+        )
+        .toBe(true);
       await expect
         .poll(() =>
           page
@@ -299,7 +326,7 @@ describeControlUiE2e("Codex Sessions mocked Gateway E2E", () => {
       await expect
         .poll(() => branchButton.getAttribute("title"))
         .toBe(
-          "Create a Chat from persisted visible history. On your first message, Codex App Server selects the model and provider, and OpenClaw locks that pair for the new harness thread; the source remains untouched, and in-flight work may be absent.",
+          "Create a Chat from persisted visible history. On your first message, Codex App Server selects the model and provider for the new harness thread. Later selection remains Codex-controlled; OpenClaw never substitutes another runtime, model, or fallback. The source remains untouched, and in-flight work may be absent.",
         );
       await expect
         .poll(() => storedRow.getByText("Stored / activity unknown").isVisible())
@@ -311,7 +338,7 @@ describeControlUiE2e("Codex Sessions mocked Gateway E2E", () => {
       await expect
         .poll(() => unsafeArchive.getAttribute("title"))
         .toBe(
-          "Activity is unknown. Close Codex Desktop and Codex CLI, then archive only after confirming no other runner is using this session.",
+          "Activity is unknown because status is process-local. Archive only after confirming that no other Codex client or runner is using this session.",
         );
 
       const archiveDialog = page.waitForEvent("dialog");
@@ -319,9 +346,7 @@ describeControlUiE2e("Codex Sessions mocked Gateway E2E", () => {
         .getByRole("button", { name: "Archive Archive after testing" })
         .click();
       const dialog = await archiveDialog;
-      expect(dialog.message()).toContain(
-        "Codex Desktop and Codex CLI must not be using this session",
-      );
+      expect(dialog.message()).toContain("no other Codex client or OpenClaw runner is using them");
       await dialog.accept();
       await archiveClick;
       const archiveRequest = await gateway.waitForRequest("codex.sessions.archive");

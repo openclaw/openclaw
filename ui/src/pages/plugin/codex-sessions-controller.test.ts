@@ -28,7 +28,12 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
-type SessionFixture = { threadId: string; name: string; status?: string };
+type SessionFixture = {
+  threadId: string;
+  name: string;
+  status?: string;
+  openClawSessionKey?: string;
+};
 
 function payload(sessions: SessionFixture[], nextCursor?: string): CodexSessionsPayload {
   return {
@@ -49,8 +54,8 @@ function payload(sessions: SessionFixture[], nextCursor?: string): CodexSessions
   };
 }
 
-function gatewayPayload(sessions: SessionFixture[]): CodexSessionsPayload {
-  const result = payload(sessions);
+function gatewayPayload(sessions: SessionFixture[], nextCursor?: string): CodexSessionsPayload {
+  const result = payload(sessions, nextCursor);
   const host = result.hosts[0];
   if (!host) {
     return result;
@@ -120,6 +125,39 @@ describe("Codex sessions controller", () => {
     expect(state.actionError).toBeNull();
   });
 
+  it("revalidates a mapped active session before opening its OpenClaw chat", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getCodexSessionsState(host);
+    state.hosts = gatewayPayload([
+      {
+        threadId: "thread-active",
+        name: "Already supervised",
+        status: "active",
+        openClawSessionKey: "agent:main:stale-catalog-key",
+      },
+    ]).hosts;
+    const request = vi.fn(async () => ({
+      sessionKey: "agent:main:current-codex-session",
+      disposition: "existing",
+    }));
+    const onContinue = vi.fn();
+
+    await continueCodexSession(
+      state,
+      clientWithRequest(request),
+      "gateway:local",
+      "thread-active",
+      onContinue,
+    );
+
+    expect(request).toHaveBeenCalledWith("codex.sessions.continue", {
+      hostId: "gateway:local",
+      threadId: "thread-active",
+    });
+    expect(onContinue).toHaveBeenCalledWith("agent:main:current-codex-session");
+  });
+
   it("continues or confirmed-archives a not-loaded thread", async () => {
     const host = {};
     hosts.push(host);
@@ -187,7 +225,7 @@ describe("Codex sessions controller", () => {
     expect(state.hosts[0]?.sessions[0]?.threadId).toBe("thread-remote");
   });
 
-  it("archives optimistically and keeps the row removed after confirmation", async () => {
+  it("keeps the canonical row while archiving and removes it after confirmation", async () => {
     const host = {};
     hosts.push(host);
     const state = getCodexSessionsState(host);
@@ -201,7 +239,8 @@ describe("Codex sessions controller", () => {
     expect(state.hosts[0]?.sessions[0]?.threadId).toBe("thread-1");
 
     const archiving = archiveCodexSession(state, client, "gateway:local", "thread-1", true);
-    expect(state.hosts[0]?.sessions).toEqual([]);
+    expect(state.hosts[0]?.sessions[0]?.threadId).toBe("thread-1");
+    expect(state.pendingSessionActions.get('["gateway:local","thread-1"]')).toBe("archive");
     expect(request).toHaveBeenCalledWith("codex.sessions.archive", {
       hostId: "gateway:local",
       threadId: "thread-1",
@@ -213,6 +252,109 @@ describe("Codex sessions controller", () => {
 
     expect(state.hosts[0]?.sessions).toEqual([]);
     expect(state.pendingSessionActions.size).toBe(0);
+  });
+
+  it("does not resurrect a confirmed archive from an older first-page response", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getCodexSessionsState(host);
+    state.hosts = gatewayPayload([{ threadId: "thread-1", name: "Archived" }]).hosts;
+    const listResponse = deferred<CodexSessionsPayload>();
+    const request = vi.fn((method: string) => {
+      if (method === "codex.sessions.list") {
+        return listResponse.promise;
+      }
+      if (method === "codex.sessions.archive") {
+        return Promise.resolve({ archived: true });
+      }
+      return Promise.reject(new Error(`Unexpected method: ${method}`));
+    });
+    const client = clientWithRequest(request);
+
+    const loading = loadCodexSessions(state, client);
+    await archiveCodexSession(state, client, "gateway:local", "thread-1", true);
+    listResponse.resolve(
+      gatewayPayload([
+        { threadId: "thread-1", name: "Stale archived row" },
+        { threadId: "thread-2", name: "Survivor" },
+      ]),
+    );
+    await loading;
+
+    expect(state.hosts[0]?.sessions.map((session) => session.threadId)).toEqual(["thread-2"]);
+    expect(state.pendingSessionActions.size).toBe(0);
+  });
+
+  it("restores a refreshed row immediately when an in-flight archive fails", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getCodexSessionsState(host);
+    state.hosts = gatewayPayload([{ threadId: "thread-1", name: "Before refresh" }]).hosts;
+    const archiveResponse = deferred<{ archived: boolean }>();
+    const listResponse = deferred<CodexSessionsPayload>();
+    const request = vi.fn((method: string) => {
+      if (method === "codex.sessions.archive") {
+        return archiveResponse.promise;
+      }
+      if (method === "codex.sessions.list") {
+        return listResponse.promise;
+      }
+      return Promise.reject(new Error(`Unexpected method: ${method}`));
+    });
+    const client = clientWithRequest(request);
+
+    const archiving = archiveCodexSession(state, client, "gateway:local", "thread-1", true);
+    const loading = loadCodexSessions(state, client);
+    listResponse.resolve(
+      gatewayPayload([
+        { threadId: "thread-1", name: "Refreshed while pending" },
+        { threadId: "thread-2", name: "Second" },
+      ]),
+    );
+    await loading;
+
+    expect(state.hosts[0]?.sessions.map((session) => session.threadId)).toEqual([
+      "thread-1",
+      "thread-2",
+    ]);
+    expect(state.pendingSessionActions.get('["gateway:local","thread-1"]')).toBe("archive");
+
+    archiveResponse.reject(new Error("thread is still active"));
+    await archiving;
+
+    expect(state.hosts[0]?.sessions.map((session) => session.name)).toEqual([
+      "Refreshed while pending",
+      "Second",
+    ]);
+    expect(state.actionError).toBe("thread is still active");
+    expect(state.pendingSessionActions.size).toBe(0);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a thread again after a fresh catalog reports it unarchived", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getCodexSessionsState(host);
+    state.hosts = gatewayPayload([{ threadId: "thread-1", name: "Before archive" }]).hosts;
+    const request = vi.fn((method: string) => {
+      if (method === "codex.sessions.archive") {
+        return Promise.resolve({ archived: true });
+      }
+      if (method === "codex.sessions.list") {
+        return Promise.resolve(
+          gatewayPayload([{ threadId: "thread-1", name: "Unarchived elsewhere" }]),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected method: ${method}`));
+    });
+    const client = clientWithRequest(request);
+
+    await archiveCodexSession(state, client, "gateway:local", "thread-1", true);
+    expect(state.hosts[0]?.sessions).toEqual([]);
+
+    await loadCodexSessions(state, client);
+
+    expect(state.hosts[0]?.sessions[0]?.threadId).toBe("thread-1");
   });
 
   it("restores an optimistically archived row when the Gateway rejects it", async () => {
@@ -232,7 +374,10 @@ describe("Codex sessions controller", () => {
       "thread-1",
       true,
     );
-    expect(state.hosts[0]?.sessions.map((session) => session.threadId)).toEqual(["thread-2"]);
+    expect(state.hosts[0]?.sessions.map((session) => session.threadId)).toEqual([
+      "thread-1",
+      "thread-2",
+    ]);
 
     response.reject(new Error("thread is still active"));
     await archiving;
@@ -241,6 +386,36 @@ describe("Codex sessions controller", () => {
       "thread-1",
       "thread-2",
     ]);
+    expect(state.actionError).toBe("thread is still active");
+    expect(state.pendingSessionActions.size).toBe(0);
+  });
+
+  it("does not restore a failed archive into a newer catalog result", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getCodexSessionsState(host);
+    state.hosts = gatewayPayload([{ threadId: "thread-old", name: "Old result" }]).hosts;
+    const archiveResponse = deferred<{ archived: boolean }>();
+    const archiveRequest = vi.fn(() => archiveResponse.promise);
+    const archiving = archiveCodexSession(
+      state,
+      clientWithRequest(archiveRequest),
+      "gateway:local",
+      "thread-old",
+      true,
+    );
+    expect(state.hosts[0]?.sessions[0]?.threadId).toBe("thread-old");
+
+    await loadCodexSessions(
+      state,
+      clientWithRequest(async () =>
+        gatewayPayload([{ threadId: "thread-new", name: "New result" }]),
+      ),
+    );
+    archiveResponse.reject(new Error("thread is still active"));
+    await archiving;
+
+    expect(state.hosts[0]?.sessions.map((session) => session.threadId)).toEqual(["thread-new"]);
     expect(state.actionError).toBe("thread is still active");
     expect(state.pendingSessionActions.size).toBe(0);
   });
@@ -301,6 +476,46 @@ describe("Codex sessions controller", () => {
       "thread-2",
     ]);
     expect(state.hosts[0]?.nextCursor).toBeUndefined();
+  });
+
+  it("does not resurrect a confirmed archive from an older host page", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getCodexSessionsState(host);
+    state.hosts = gatewayPayload(
+      [
+        { threadId: "thread-1", name: "Archived" },
+        { threadId: "thread-2", name: "Survivor" },
+      ],
+      "cursor-2",
+    ).hosts;
+    const pageResponse = deferred<CodexSessionsPayload>();
+    const request = vi.fn((method: string) => {
+      if (method === "codex.sessions.list") {
+        return pageResponse.promise;
+      }
+      if (method === "codex.sessions.archive") {
+        return Promise.resolve({ archived: true });
+      }
+      return Promise.reject(new Error(`Unexpected method: ${method}`));
+    });
+    const client = clientWithRequest(request);
+
+    const loadingMore = loadMoreCodexSessions(state, client, "gateway:local");
+    await archiveCodexSession(state, client, "gateway:local", "thread-1", true);
+    pageResponse.resolve(
+      gatewayPayload([
+        { threadId: "thread-1", name: "Stale archived row" },
+        { threadId: "thread-3", name: "Next page" },
+      ]),
+    );
+    await loadingMore;
+
+    expect(state.hosts[0]?.sessions.map((session) => session.threadId)).toEqual([
+      "thread-2",
+      "thread-3",
+    ]);
+    expect(state.pendingSessionActions.size).toBe(0);
   });
 
   it("stops pagination when the requested host disappears", async () => {

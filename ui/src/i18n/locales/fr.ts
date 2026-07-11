@@ -901,7 +901,7 @@ export const fr: TranslationMap = {
     eyebrow: "Parc Codex",
     title: "Sessions sur tous vos ordinateurs",
     interactiveSubtitle:
-      "Démarrez une branche Chat dont le modèle et le fournisseur sont sélectionnés par Codex App Server et verrouillés dans OpenClaw, archivez les sessions locales avec confirmation et consultez les sessions d’ordinateurs jumelés.",
+      "Démarrez une branche de Chat dont la sélection du modèle reste sous le contrôle de Codex App Server, archivez les sessions locales éligibles avec confirmation et consultez les sessions d’ordinateurs appairés.",
     summaryLabel: "Résumé des sessions Codex",
     summary: {
       sessions: "sessions",
@@ -928,13 +928,13 @@ export const fr: TranslationMap = {
       continueAsBranchLabel: "Continuer {title} en tant que branche",
       openChatLabel: "Ouvrir Chat pour {title}",
       continueAsBranchHint:
-        "Créez un Chat à partir de l’historique visible conservé. À votre premier message, Codex App Server sélectionne le modèle et le fournisseur, et OpenClaw verrouille cette paire pour le nouveau thread de harness ; la source reste intacte, et le travail en cours peut être absent.",
+        "Créez un Chat à partir de l’historique visible persistant. Lors de votre premier message, Codex App Server sélectionne le modèle et le fournisseur pour le nouveau fil de harness. La sélection ultérieure reste contrôlée par Codex ; OpenClaw ne substitue jamais un autre runtime, modèle ou fallback. La source reste inchangée, et le travail en cours peut être absent.",
       archiveLabel: "Archiver {title}",
       archiveConfirmation:
-        "Archiver {title} ? Codex Desktop et Codex CLI ne doivent pas utiliser cette session. L’archivage pendant qu’un autre runner est actif peut interrompre son travail.",
+        "Archiver {title} et tous les descendants générés ? Confirmez qu’aucun autre client Codex ni runner OpenClaw ne les utilise. L’archivage pendant qu’un autre runner est actif peut interrompre son travail.",
       active: "Les sessions actives ne peuvent pas démarrer une branche ni être archivées.",
       archiveActivityUnknownHint:
-        "L’activité est inconnue. Fermez Codex Desktop et Codex CLI, puis archivez uniquement après avoir confirmé qu’aucun autre runner n’utilise cette session.",
+        "L’activité est inconnue, car le statut est local au processus. Archivez uniquement après avoir confirmé qu’aucun autre client Codex ni runner n’utilise cette session.",
       statusUnavailable: "Cette session Codex ne peut pas être gérée dans son état actuel.",
       hostOffline: "Reconnectez cet ordinateur avant de gérer ses sessions Codex.",
       gatewayOffline: "Reconnectez-vous au gateway avant de gérer les sessions Codex.",
@@ -958,10 +958,10 @@ export const fr: TranslationMap = {
     },
     empty: {
       title: "Aucun hôte Codex trouvé",
-      subtitle:
-        "Activez le partage des sessions Codex sur le Gateway ou un ordinateur jumelé, puis actualisez cette vue.",
+      supervisionSubtitle:
+        "Activez la supervision Codex sur le gateway ou un ordinateur jumelé, puis actualisez cette vue.",
       search: "Aucune session de cet hôte ne correspond à votre recherche.",
-      active: "Aucune session active sur cet hôte.",
+      nonArchived: "Aucune session non archivée sur cet hôte.",
     },
   },
   logbook: {
@@ -2070,7 +2070,7 @@ export const fr: TranslationMap = {
       model: "Chat model",
       modelSection: "Modèle",
       modelLocked: "Verrouillé",
-      modelLockedLabel: "Modèle verrouillé pour cette session",
+      modelLockedLabel: "Sélection du modèle contrôlée pour cette session",
       lockedSessionModel: "Modèle de session",
       nativeCodexModel: "Modèle contrôlé par Codex",
       thinkingLevel: "Chat thinking level",

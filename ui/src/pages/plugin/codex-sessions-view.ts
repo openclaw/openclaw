@@ -203,6 +203,7 @@ function renderSession(
       : t("codexSessions.actions.archiveLabel", { title }));
   const continueDisabled = Boolean(continueReason || pendingAction);
   const archiveDisabled = Boolean(archiveReason || pendingAction);
+  const remoteViewOnly = host.kind !== "gateway";
   return html`
     <article
       class="codex-session"
@@ -223,6 +224,11 @@ function renderSession(
         <div class="codex-session__identity" title=${session.threadId}>
           ${t("codexSessions.threadId")} <span>${session.threadId}</span>
         </div>
+        ${remoteViewOnly
+          ? html`<div class="codex-session__view-only">
+              ${icons.eye}<span>${t("codexSessions.actions.remoteReadOnly")}</span>
+            </div>`
+          : nothing}
       </div>
       <div class="codex-session__actions">
         <button
@@ -232,10 +238,6 @@ function renderSession(
           title=${continueTitle}
           ?disabled=${continueDisabled}
           @click=${() => {
-            if (openClawSessionKey) {
-              onContinueSession?.(openClawSessionKey);
-              return;
-            }
             void continueCodexSession(
               state,
               client,
@@ -275,6 +277,15 @@ function renderSession(
   `;
 }
 
+function visibleSessionsForHost(
+  state: CodexSessionsUiState,
+  host: CodexSessionHostPayload,
+): CodexSessionPayload[] {
+  return host.sessions.filter(
+    (session) => getCodexSessionPendingAction(state, host.hostId, session.threadId) !== "archive",
+  );
+}
+
 function renderHost(
   state: CodexSessionsUiState,
   client: GatewayBrowserClient | null,
@@ -283,6 +294,7 @@ function renderHost(
   onContinueSession: ((sessionKey: string) => void) | undefined,
 ): TemplateResult {
   const loadingMore = state.loadingMoreHostIds.has(host.hostId);
+  const visibleSessions = visibleSessionsForHost(state, host);
   const statusLabel = host.connected
     ? t("codexSessions.host.connected")
     : t("codexSessions.host.offline");
@@ -306,7 +318,7 @@ function renderHost(
             <span class="codex-host__status-dot" aria-hidden="true"></span>
             ${statusLabel}
             <span aria-hidden="true">·</span>
-            ${t("codexSessions.host.sessionCount", { count: String(host.sessions.length) })}
+            ${t("codexSessions.host.sessionCount", { count: String(visibleSessions.length) })}
           </div>
         </div>
         ${host.nodeId || host.endpointId
@@ -326,9 +338,9 @@ function renderHost(
             </div>
           `
         : nothing}
-      ${host.sessions.length > 0
+      ${visibleSessions.length > 0
         ? html`<div class="codex-host__sessions">
-            ${host.sessions.map((session) =>
+            ${visibleSessions.map((session) =>
               renderSession(state, client, host, interactionsEnabled, onContinueSession, session),
             )}
           </div>`
@@ -336,7 +348,7 @@ function renderHost(
           ? html`<div class="codex-host__empty">
               ${state.search.trim()
                 ? t("codexSessions.empty.search")
-                : t("codexSessions.empty.active")}
+                : t("codexSessions.empty.nonArchived")}
             </div>`
           : nothing}
       ${host.nextCursor
@@ -344,6 +356,7 @@ function renderHost(
             <button
               class="btn btn--small"
               type="button"
+              aria-label=${`${t("codexSessions.loadMore")} — ${host.label}`}
               ?disabled=${loadingMore || !interactionsEnabled || !host.connected}
               @click=${() => void loadMoreCodexSessions(state, client, host.hostId)}
             >
@@ -365,7 +378,10 @@ export function renderCodexSessions(props: CodexSessionsProps) {
 
   const hostErrors = state.hosts.filter((host) => host.error).length;
   const onlineHosts = state.hosts.filter((host) => host.connected).length;
-  const sessionCount = state.hosts.reduce((count, host) => count + host.sessions.length, 0);
+  const sessionCount = state.hosts.reduce(
+    (count, host) => count + visibleSessionsForHost(state, host).length,
+    0,
+  );
   return html`
     <section class="codex-sessions">
       <header class="codex-sessions__hero">
@@ -440,7 +456,7 @@ export function renderCodexSessions(props: CodexSessionsProps) {
             ? html`<div class="codex-sessions__empty">
                 <div class="codex-sessions__empty-icon" aria-hidden="true">${icons.terminal}</div>
                 <h2>${t("codexSessions.empty.title")}</h2>
-                <p>${t("codexSessions.empty.subtitle")}</p>
+                <p>${t("codexSessions.empty.supervisionSubtitle")}</p>
               </div>`
             : state.hosts.map((host) =>
                 renderHost(state, props.client, host, props.connected, props.onContinueSession),

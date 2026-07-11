@@ -488,6 +488,27 @@
   user-select: all;
 }
 
+.codex-session__view-only {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  margin-top: 7px;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in oklab, var(--border) 80%, var(--accent));
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in oklab, var(--panel-strong) 72%, transparent);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.codex-session__view-only svg {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+}
+
 .codex-session__actions {
   display: flex;
   align-items: center;

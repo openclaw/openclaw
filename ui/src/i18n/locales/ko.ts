@@ -884,7 +884,7 @@ export const ko: TranslationMap = {
     eyebrow: "Codex 호스트",
     title: "내 모든 컴퓨터의 세션",
     interactiveSubtitle:
-      "모델과 제공자가 Codex App Server에서 선택되고 OpenClaw에 잠기는 Chat 브랜치를 시작하고, 확인 후 로컬 세션을 보관하며, 페어링된 컴퓨터 세션을 확인하세요.",
+      "모델 선택이 Codex App Server 제어하에 유지되는 Chat 브랜치를 시작하고, 확인 후 보관 대상 로컬 세션을 보관하며, 페어링된 컴퓨터 세션을 봅니다.",
     summaryLabel: "Codex 세션 요약",
     summary: {
       sessions: "세션",
@@ -911,13 +911,13 @@ export const ko: TranslationMap = {
       continueAsBranchLabel: "{title}을(를) 브랜치로 계속",
       openChatLabel: "{title}의 Chat 열기",
       continueAsBranchHint:
-        "저장된 표시 기록에서 Chat을 만듭니다. 첫 메시지에서 Codex App Server가 모델과 제공자를 선택하고, OpenClaw가 새 harness 스레드에 해당 쌍을 잠급니다. 원본은 변경되지 않으며, 진행 중인 작업은 없을 수 있습니다.",
+        "지속 저장된 표시 기록에서 Chat을 만듭니다. 첫 메시지에서 Codex App Server가 새 하네스 스레드의 모델과 공급자를 선택합니다. 이후 선택은 Codex 제어하에 유지되며, OpenClaw는 다른 런타임, 모델 또는 폴백으로 대체하지 않습니다. 소스는 그대로 유지되며, 진행 중인 작업은 없을 수 있습니다.",
       archiveLabel: "{title} 보관",
       archiveConfirmation:
-        "{title}을(를) 보관할까요? Codex Desktop 및 Codex CLI가 이 세션을 사용 중이면 안 됩니다. 다른 runner가 활성 상태일 때 보관하면 해당 작업이 중단될 수 있습니다.",
+        "{title} 및 생성된 모든 하위 항목을 보관하시겠습니까? 다른 Codex 클라이언트 또는 OpenClaw 러너가 이를 사용하고 있지 않은지 확인하세요. 다른 러너가 활성 상태일 때 보관하면 해당 작업이 중단될 수 있습니다.",
       active: "활성 세션은 브랜치를 시작하거나 보관할 수 없습니다.",
       archiveActivityUnknownHint:
-        "활동 상태를 알 수 없습니다. Codex Desktop과 Codex CLI를 닫은 다음, 다른 runner가 이 세션을 사용하지 않는지 확인한 후에만 보관하세요.",
+        "상태가 프로세스 로컬이므로 활동 여부를 알 수 없습니다. 다른 Codex 클라이언트 또는 러너가 이 세션을 사용하고 있지 않은지 확인한 후에만 보관하세요.",
       statusUnavailable: "현재 상태에서는 이 Codex 세션을 관리할 수 없습니다.",
       hostOffline: "Codex 세션을 관리하기 전에 이 컴퓨터를 다시 연결하세요.",
       gatewayOffline: "Codex 세션을 관리하기 전에 gateway에 다시 연결하세요.",
@@ -941,10 +941,10 @@ export const ko: TranslationMap = {
     },
     empty: {
       title: "Codex 호스트가 없습니다",
-      subtitle:
-        "Gateway나 페어링된 컴퓨터에서 Codex 세션 공유를 활성화한 후 이 화면을 새로고침하세요.",
+      supervisionSubtitle:
+        "Gateway 또는 페어링된 컴퓨터에서 Codex supervision을 활성화한 다음 이 보기를 새로 고치세요.",
       search: "이 호스트에 검색어와 일치하는 세션이 없습니다.",
-      active: "이 호스트에 활성 세션이 없습니다.",
+      nonArchived: "이 호스트에 보관 처리되지 않은 세션이 없습니다.",
     },
   },
   logbook: {
@@ -2029,7 +2029,7 @@ export const ko: TranslationMap = {
       model: "Chat model",
       modelSection: "모델",
       modelLocked: "잠김",
-      modelLockedLabel: "이 세션에서는 모델이 잠겨 있습니다",
+      modelLockedLabel: "이 세션의 모델 선택이 제어됨",
       lockedSessionModel: "세션 모델",
       nativeCodexModel: "Codex 제어 모델",
       thinkingLevel: "Chat thinking level",

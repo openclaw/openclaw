@@ -883,7 +883,7 @@ export const vi: TranslationMap = {
     eyebrow: "Nhóm thiết bị Codex",
     title: "Phiên trên các máy tính của bạn",
     interactiveSubtitle:
-      "Bắt đầu một nhánh Chat có mô hình và nhà cung cấp được Codex App Server chọn và khóa trong OpenClaw, lưu trữ các phiên cục bộ sau khi xác nhận, và xem các phiên trên máy tính đã ghép nối.",
+      "Bắt đầu một nhánh Chat có lựa chọn mô hình luôn nằm dưới sự kiểm soát của Codex App Server, lưu trữ các phiên cục bộ đủ điều kiện sau khi xác nhận, và xem các phiên trên máy tính đã ghép đôi.",
     summaryLabel: "Tóm tắt phiên Codex",
     summary: {
       sessions: "phiên",
@@ -910,13 +910,13 @@ export const vi: TranslationMap = {
       continueAsBranchLabel: "Tiếp tục {title} dưới dạng nhánh",
       openChatLabel: "Mở Chat cho {title}",
       continueAsBranchHint:
-        "Tạo Chat từ lịch sử hiển thị đã được duy trì. Ở tin nhắn đầu tiên của bạn, Codex App Server sẽ chọn mô hình và nhà cung cấp, và OpenClaw khóa cặp đó cho luồng harness mới; nguồn vẫn không bị thay đổi, và công việc đang thực hiện có thể không có.",
+        "Tạo một Chat từ lịch sử hiển thị đã được lưu giữ. Ở tin nhắn đầu tiên của bạn, Codex App Server sẽ chọn mô hình và nhà cung cấp cho luồng harness mới. Các lựa chọn về sau vẫn do Codex kiểm soát; OpenClaw không bao giờ thay thế bằng runtime, mô hình hoặc phương án dự phòng khác. Nguồn vẫn được giữ nguyên, và công việc đang thực hiện có thể không có.",
       archiveLabel: "Lưu trữ {title}",
       archiveConfirmation:
-        "Lưu trữ {title}? Codex Desktop và Codex CLI không được đang sử dụng phiên này. Việc lưu trữ khi một runner khác đang hoạt động có thể làm gián đoạn công việc của runner đó.",
+        "Lưu trữ {title} và mọi phiên con được tạo ra? Hãy xác nhận rằng không có Codex client hoặc OpenClaw runner nào khác đang sử dụng chúng. Lưu trữ trong khi một runner khác đang hoạt động có thể làm gián đoạn công việc của runner đó.",
       active: "Không thể bắt đầu một nhánh hoặc lưu trữ các phiên đang hoạt động.",
       archiveActivityUnknownHint:
-        "Không rõ hoạt động. Đóng Codex Desktop và Codex CLI, rồi chỉ lưu trữ sau khi xác nhận không có runner nào khác đang sử dụng phiên này.",
+        "Hoạt động không xác định vì trạng thái chỉ cục bộ theo tiến trình. Chỉ lưu trữ sau khi xác nhận rằng không có Codex client hoặc runner nào khác đang sử dụng phiên này.",
       statusUnavailable: "Không thể quản lý phiên Codex này ở trạng thái hiện tại.",
       hostOffline: "Kết nối lại máy tính này trước khi quản lý các phiên Codex của máy.",
       gatewayOffline: "Kết nối lại với gateway trước khi quản lý các phiên Codex.",
@@ -940,10 +940,10 @@ export const vi: TranslationMap = {
     },
     empty: {
       title: "Không tìm thấy máy nào chia sẻ phiên Codex",
-      subtitle:
-        "Bật chia sẻ phiên Codex trên Gateway hoặc máy tính đã ghép nối, rồi làm mới chế độ xem này.",
+      supervisionSubtitle:
+        "Bật tính năng giám sát Codex trên gateway hoặc một máy tính đã ghép đôi, rồi làm mới chế độ xem này.",
       search: "Không có phiên nào trên máy này khớp với từ khóa tìm kiếm.",
-      active: "Không có phiên đang hoạt động trên máy này.",
+      nonArchived: "Không có phiên chưa lưu trữ nào trên máy chủ này.",
     },
   },
   logbook: {
@@ -2025,7 +2025,7 @@ export const vi: TranslationMap = {
       model: "Chat model",
       modelSection: "Mô hình",
       modelLocked: "Đã khóa",
-      modelLockedLabel: "Mô hình đã bị khóa cho phiên này",
+      modelLockedLabel: "Lựa chọn mô hình được kiểm soát cho phiên này",
       lockedSessionModel: "Mô hình phiên",
       nativeCodexModel: "Mô hình do Codex kiểm soát",
       thinkingLevel: "Chat thinking level",

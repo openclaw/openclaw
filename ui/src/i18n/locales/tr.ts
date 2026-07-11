@@ -894,7 +894,7 @@ export const tr: TranslationMap = {
     eyebrow: "Codex filosu",
     title: "Bilgisayarlarınızdaki oturumlar",
     interactiveSubtitle:
-      "Modeli ve sağlayıcısı Codex App Server tarafından seçilip OpenClaw içinde kilitlenen bir Chat dalı başlatın, yerel oturumları onayla arşivleyin ve eşleştirilmiş bilgisayar oturumlarını görüntüleyin.",
+      "Model seçimi Codex App Server denetiminde kalan bir Chat dalı başlatın, uygun yerel oturumları onayla arşivleyin ve eşlenmiş bilgisayar oturumlarını görüntüleyin.",
     summaryLabel: "Codex oturum özeti",
     summary: {
       sessions: "oturum",
@@ -922,13 +922,13 @@ export const tr: TranslationMap = {
       continueAsBranchLabel: "{title} ile dal olarak devam et",
       openChatLabel: "{title} için Chat'i aç",
       continueAsBranchHint:
-        "Kalıcı görünür geçmişten bir Chat oluşturun. İlk mesajınızda Codex App Server modeli ve sağlayıcıyı seçer, OpenClaw da yeni harness iş parçacığı için bu çifti kilitler; kaynak dokunulmadan kalır ve devam eden çalışma eksik olabilir.",
+        "Kalıcı hale getirilmiş görünür geçmişten bir Chat oluşturun. İlk mesajınızda, Codex App Server yeni harness iş parçacığı için modeli ve sağlayıcıyı seçer. Sonraki seçimler Codex denetiminde kalır; OpenClaw hiçbir zaman başka bir çalışma zamanı, model veya yedek seçenekle değiştirme yapmaz. Kaynak dokunulmadan kalır ve devam eden çalışma eksik olabilir.",
       archiveLabel: "{title} oturumunu arşivle",
       archiveConfirmation:
-        "{title} arşivlensin mi? Codex Desktop ve Codex CLI bu oturumu kullanıyor olmamalıdır. Başka bir çalıştırıcı etkin durumdayken arşivlemek onun çalışmasını kesintiye uğratabilir.",
+        "{title} ve ondan türetilen alt öğeler arşivlensin mi? Başka hiçbir Codex istemcisinin veya OpenClaw çalıştırıcısının bunları kullanmadığını onaylayın. Başka bir çalıştırıcı etkinken arşivleme yapmak çalışmasını kesintiye uğratabilir.",
       active: "Etkin oturumlar dal başlatamaz veya arşivlenemez.",
       archiveActivityUnknownHint:
-        "Etkinlik bilinmiyor. Codex Desktop ve Codex CLI'yi kapatın, ardından başka bir çalıştırıcının bu oturumu kullanmadığını doğruladıktan sonra arşivleyin.",
+        "Durum sürece yerel olduğundan etkinlik bilinmiyor. Yalnızca başka hiçbir Codex istemcisinin veya çalıştırıcısının bu oturumu kullanmadığını onayladıktan sonra arşivleyin.",
       statusUnavailable: "Bu Codex oturumu mevcut durumunda yönetilemez.",
       hostOffline: "Codex oturumlarını yönetmeden önce bu bilgisayarı yeniden bağlayın.",
       gatewayOffline: "Codex oturumlarını yönetmeden önce gateway'e yeniden bağlanın.",
@@ -952,10 +952,10 @@ export const tr: TranslationMap = {
     },
     empty: {
       title: "Codex ana makinesi bulunamadı",
-      subtitle:
-        "Gateway'de veya eşleştirilmiş bir bilgisayarda Codex oturum paylaşımını etkinleştirin, ardından bu görünümü yenileyin.",
+      supervisionSubtitle:
+        "Gateway’de veya eşleştirilmiş bir bilgisayarda Codex denetimini etkinleştirin, ardından bu görünümü yenileyin.",
       search: "Bu ana makinedeki hiçbir oturum aramanızla eşleşmiyor.",
-      active: "Bu ana makinede etkin oturum yok.",
+      nonArchived: "Bu ana makinede arşivlenmemiş oturum yok.",
     },
   },
   logbook: {
@@ -2050,7 +2050,7 @@ export const tr: TranslationMap = {
       model: "Chat model",
       modelSection: "Model",
       modelLocked: "Kilitli",
-      modelLockedLabel: "Bu oturum için model kilitli",
+      modelLockedLabel: "Bu oturum için model seçimi denetleniyor",
       lockedSessionModel: "Oturum modeli",
       nativeCodexModel: "Codex kontrollü model",
       thinkingLevel: "Chat thinking level",
