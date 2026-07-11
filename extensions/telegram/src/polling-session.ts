@@ -11,7 +11,6 @@ import {
 import {
   computeBackoff,
   formatDurationPrecise,
-  logVerbose,
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -1232,8 +1231,9 @@ export class TelegramPollingSession {
         .catch(() => undefined);
       return stopWorkerPromise;
     };
-    // Routine startup detail; only failures/stops below warrant info-level output.
-    logVerbose(`[telegram][diag] isolated polling ingress started spool=${spoolDir}`);
+    // Readiness contract: test/e2e/qa-lab telegram-bot-token-runtime waits for
+    // this marker on the injected runtime log; do not demote it to verbose.
+    this.opts.log(`[telegram][diag] isolated polling ingress started spool=${spoolDir}`);
     const pollState: {
       startedAt: number | null;
       offset: number | null;
