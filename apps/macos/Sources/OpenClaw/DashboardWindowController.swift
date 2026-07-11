@@ -28,8 +28,18 @@ private final class DashboardLinkMessageHandler: NSObject, WKScriptMessageHandle
 }
 
 @MainActor
+private final class DashboardWindowDragMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var owner: DashboardWindowController?
+
+    func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
+        self.owner?.receiveWindowDragMessage(message)
+    }
+}
+
+@MainActor
 final class DashboardWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     private static let linkMessageHandlerName = "openclawLink"
+    private static let windowDragMessageHandlerName = "openclawWindowDrag"
 
     private let webView: WKWebView
     private let linkBrowser: DashboardLinkBrowserView
@@ -55,6 +65,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         config.userContentController = WKUserContentController()
         let linkMessageHandler = DashboardLinkMessageHandler()
         config.userContentController.add(linkMessageHandler, name: Self.linkMessageHandlerName)
+        let windowDragMessageHandler = DashboardWindowDragMessageHandler()
+        config.userContentController.add(windowDragMessageHandler, name: Self.windowDragMessageHandlerName)
         Self.installNativeChromeScript(into: config.userContentController)
         Self.installNativeAuthScript(into: config.userContentController, url: url, auth: auth)
 
@@ -104,6 +116,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // optional browser collapsed until a link explicitly opens it.
         self.linkBrowserItem.isCollapsed = true
         linkMessageHandler.owner = self
+        windowDragMessageHandler.owner = self
         self.webView.navigationDelegate = self
         self.webView.uiDelegate = self
         self.linkBrowser.webViewNavigationDelegate = self
@@ -276,6 +289,36 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         case .external:
             self.openExternal(request.url)
         }
+    }
+
+    /// The Control UI posts this from mousedown on passive pane-header chrome
+    /// (split-view session titles). WKWebView swallows titlebar-style drags, so
+    /// the web side asks the window to take over the in-flight mouse gesture.
+    fileprivate func receiveWindowDragMessage(_ message: WKScriptMessage) {
+        guard message.name == Self.windowDragMessageHandlerName,
+              message.webView === self.webView,
+              message.frameInfo.isMainFrame,
+              Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
+              Self.isWindowDragRequest(message.body),
+              let window
+        else {
+            return
+        }
+        // The script message arrives async; during a press the app's current
+        // event is still the initiating left-mouse-down (or a later drag). A
+        // finished click leaves left-mouse-up here and starts no drag.
+        guard let event = NSApp.currentEvent,
+              event.type == .leftMouseDown || event.type == .leftMouseDragged,
+              event.window === window
+        else {
+            return
+        }
+        window.performDrag(with: event)
+    }
+
+    static func isWindowDragRequest(_ body: Any) -> Bool {
+        guard let payload = body as? [String: Any] else { return false }
+        return payload["type"] as? String == "window-drag"
     }
 
     static func linkRequest(from body: Any) -> DashboardLinkRequest? {

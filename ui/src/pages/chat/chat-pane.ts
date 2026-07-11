@@ -18,6 +18,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { beginNativeWindowDrag } from "../../app/native-window-drag.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
@@ -1124,7 +1125,10 @@ class ChatPane extends OpenClawLightDomElement {
     backgroundTasks: BackgroundTasksProps,
   ) {
     return html`
-      <div class="chat-pane__header ${this.active ? "chat-pane__header--active" : ""}">
+      <div
+        class="chat-pane__header ${this.active ? "chat-pane__header--active" : ""}"
+        @mousedown=${beginNativeWindowDrag}
+      >
         <!-- Static text on purpose: an interactive session picker here would
              fight pane focus. Panes change sessions via the sidebar or
              drag-and-drop. -->
