@@ -544,11 +544,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     @objc private func navigateBack(_: Any?) {
-        self.navigateBack()
+        self.webView.goBack()
     }
 
     @objc private func navigateForward(_: Any?) {
-        self.navigateForward()
+        self.webView.goForward()
     }
 
     private var activeNavigationWebView: WKWebView {
