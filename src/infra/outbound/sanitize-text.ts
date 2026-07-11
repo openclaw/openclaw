@@ -7,7 +7,7 @@ export { stripInternalRuntimeScaffolding };
 
 const HTML_TAG_RE = /<\/?[a-z][a-z0-9_-]*\b[^>]*>/gi;
 
-// Quoted attribute values may contain `>`; consume them atomically so tag text never leaks.
+// Quoted attribute values may contain `>`; normalize convertible openers without leaking attribute text.
 const CONVERTIBLE_HTML_OPEN_TAG_RE =
   /<(b|strong|i|em|s|strike|del|code|h[1-6]|li)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
 
