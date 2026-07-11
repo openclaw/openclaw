@@ -31,15 +31,11 @@ type LmstudioEmbeddingClient = {
   ssrfPolicy?: SsrFPolicy;
   model: string;
 };
-type LmstudioProviderConfig = NonNullable<
-  NonNullable<MemoryEmbeddingProviderCreateOptions["config"]["models"]>["providers"]
->[string];
 type MemoryCoreAcquireLocalService = (
   target: {
     providerId: string;
     baseUrl: string;
     headers?: HeadersInit;
-    service?: LmstudioProviderConfig["localService"];
   },
   signal?: AbortSignal | null,
 ) => Promise<{ release: () => void } | undefined>;
@@ -196,7 +192,6 @@ export async function createLmstudioEmbeddingProvider(
         providerId: resolvedProvider?.providerId ?? LMSTUDIO_PROVIDER_ID,
         baseUrl,
         headers,
-        service: providerConfig.localService,
       }
     : undefined;
   const acquireLocalService = (options as LocalServiceAwareEmbeddingOptions).acquireLocalService;

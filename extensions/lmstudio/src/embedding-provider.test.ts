@@ -168,7 +168,6 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
         providerId: "lmstudio-spark",
         baseUrl: "http://spark.local:1234/v1",
         headers: { "Content-Type": "application/json" },
-        service,
       },
       undefined,
     );
@@ -178,7 +177,6 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
         providerId: "lmstudio-spark",
         baseUrl: "http://spark.local:1234/v1",
         headers: { "Content-Type": "application/json" },
-        service,
       },
       undefined,
     );

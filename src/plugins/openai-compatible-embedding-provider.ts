@@ -3,8 +3,8 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import type {
-  ensureProviderLocalService,
-  ProviderLocalServiceTarget,
+  AcquireConfiguredProviderLocalService,
+  ConfiguredProviderLocalServiceTarget,
 } from "../agents/provider-local-service.js";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
@@ -37,8 +37,8 @@ export type OpenAICompatibleEmbeddingClient = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
-  localServiceTarget?: ProviderLocalServiceTarget;
-  acquireLocalService?: typeof ensureProviderLocalService;
+  localServiceTarget?: ConfiguredProviderLocalServiceTarget;
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
 };
 
 type OpenAICompatibleEmbeddingResponse = {
@@ -59,7 +59,7 @@ type ResolvedConfiguredEmbeddingProvider = {
 };
 
 type LocalServiceAwareEmbeddingOptions = EmbeddingProviderCreateOptions & {
-  acquireLocalService?: typeof ensureProviderLocalService;
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
 };
 
 function normalizeBaseUrl(value: string | undefined): string {
@@ -426,7 +426,6 @@ async function createOpenAICompatibleEmbeddingClient(
               OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
             baseUrl,
             headers,
-            service: configuredProvider.localService,
           },
           acquireLocalService: localServiceOptions.acquireLocalService,
         }

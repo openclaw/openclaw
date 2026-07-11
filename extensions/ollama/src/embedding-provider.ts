@@ -40,7 +40,6 @@ type MemoryCoreAcquireLocalService = (
     providerId: string;
     baseUrl: string;
     headers?: HeadersInit;
-    service?: OllamaProviderConfig["localService"];
   },
   signal?: AbortSignal | null,
 ) => Promise<{ release: () => void } | undefined>;
@@ -348,7 +347,6 @@ function resolveOllamaEmbeddingClient(
             providerId: providerConfig.providerId,
             baseUrl,
             headers,
-            service: localService,
           },
           acquireLocalService: options.acquireLocalService,
         }

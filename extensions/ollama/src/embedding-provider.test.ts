@@ -611,7 +611,6 @@ describe("ollama embedding provider", () => {
           "X-Custom-Ollama": "spark",
           Authorization: "Bearer spark-key",
         },
-        service,
       },
       undefined,
     );

@@ -10,6 +10,7 @@ import {
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
 import type { Model } from "../llm/types.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -72,10 +73,29 @@ export type ProviderLocalServiceTarget = {
   service?: ModelProviderLocalServiceConfig;
 };
 
+/** Configured provider endpoint whose host-owned local service may be leased. */
+export type ConfiguredProviderLocalServiceTarget = Omit<ProviderLocalServiceTarget, "service">;
+
 /** Lease returned for a started or already-running local provider service. */
 export type ProviderLocalServiceLease = {
   release: () => void;
 };
+
+/** Host-injected acquisition hook that cannot supply process configuration. */
+export type AcquireConfiguredProviderLocalService = (
+  target: ConfiguredProviderLocalServiceTarget,
+  signal?: AbortSignal | null,
+) => Promise<ProviderLocalServiceLease | undefined>;
+
+/** Bind local-service acquisition to a host-owned config snapshot. */
+export function createConfiguredProviderLocalServiceAcquirer(
+  getConfig: () => OpenClawConfig,
+): AcquireConfiguredProviderLocalService {
+  return async (target, signal) => {
+    const service = getConfig().models?.providers?.[target.providerId]?.localService;
+    return await ensureProviderLocalService({ ...target, service }, signal);
+  };
+}
 
 /** Attach local-service startup metadata to a model without mutating the original object. */
 export function attachModelProviderLocalService<TModel extends object>(

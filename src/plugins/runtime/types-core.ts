@@ -454,7 +454,6 @@ export type PluginRuntimeCore = {
         providerId: string;
         baseUrl: string;
         headers?: HeadersInit;
-        service?: import("../../config/types.models.js").ModelProviderLocalServiceConfig;
       },
       signal?: AbortSignal | null,
     ) => Promise<{ release: () => void } | undefined>;

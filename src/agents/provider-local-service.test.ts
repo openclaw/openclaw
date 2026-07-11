@@ -12,6 +12,7 @@ import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
 import {
   attachModelProviderLocalService,
+  createConfiguredProviderLocalServiceAcquirer,
   ensureModelProviderLocalService,
   ensureProviderLocalService,
   getManagedProviderLocalServiceDiagnosticsForTest,
@@ -113,6 +114,42 @@ describe("provider local service", () => {
     }
     expect((await fetch(healthUrl)).ok).toBe(true);
     lease.release();
+    await waitForProbeFailure(healthUrl);
+  });
+
+  it("resolves process configuration from the host config", async () => {
+    const port = await freePort();
+    const healthUrl = `http://127.0.0.1:${port}/v1/models`;
+    const acquire = createConfiguredProviderLocalServiceAcquirer(() => ({
+      models: {
+        providers: {
+          "gpu-spark": {
+            baseUrl: `http://127.0.0.1:${port}/v1`,
+            models: [],
+            localService: {
+              command: process.execPath,
+              args: [
+                "-e",
+                `const http=require("http");http.createServer((req,res)=>{res.writeHead(200);res.end("ok");}).listen(${port},"127.0.0.1");`,
+              ],
+              healthUrl,
+              readyTimeoutMs: 5_000,
+              idleStopMs: 1,
+            },
+          },
+        },
+      },
+    }));
+
+    const lease = await acquire({
+      providerId: "gpu-spark",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      service: { command: "caller-controlled" },
+    } as Parameters<typeof acquire>[0]);
+
+    expect(lease).toBeDefined();
+    expect((await fetch(healthUrl)).ok).toBe(true);
+    lease?.release();
     await waitForProbeFailure(healthUrl);
   });
 

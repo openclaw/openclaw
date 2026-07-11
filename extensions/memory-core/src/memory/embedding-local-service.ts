@@ -1,14 +1,9 @@
 // Memory Core receives local-service acquisition from the host before provider creation.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-
-type ModelProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
-
 export type MemoryCoreAcquireLocalService = (
   target: {
     providerId: string;
     baseUrl: string;
     headers?: HeadersInit;
-    service?: ModelProviderConfig["localService"];
   },
   signal?: AbortSignal | null,
 ) => Promise<{ release: () => void } | undefined>;

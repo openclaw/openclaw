@@ -116,6 +116,10 @@ function createRuntimeMusicGeneration(): PluginRuntime["musicGeneration"] {
 }
 
 function createRuntimeLlmFacade(): PluginRuntime["llm"] {
+  const loadAcquireLocalService = createLazyRuntimeMethod(
+    () => import("../../agents/provider-local-service.js"),
+    (runtime) => runtime.createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig),
+  );
   const loadLlm = createLazyRuntimeSurface(
     () => import("./runtime-llm.runtime.js"),
     (m) =>
@@ -127,10 +131,7 @@ function createRuntimeLlmFacade(): PluginRuntime["llm"] {
       }),
   );
   return {
-    acquireLocalService: async (...args) => {
-      const { ensureProviderLocalService } = await import("../../agents/provider-local-service.js");
-      return await ensureProviderLocalService(...args);
-    },
+    acquireLocalService: (...args) => loadAcquireLocalService(...args),
     complete: async (params) => {
       const llm = await loadLlm();
       return llm.complete(params);

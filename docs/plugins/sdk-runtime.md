@@ -229,7 +229,6 @@ two-party event loops that do not go through the shared inbound reply runner.
         providerId,
         baseUrl,
         headers,
-        service: providerConfig.localService,
       },
       signal,
     );
@@ -241,9 +240,10 @@ two-party event loops that do not go through the shared inbound reply runner.
     ```
 
     `acquireLocalService(...)` is a stable, generic provider-service SDK
-    contract. It exposes only host-owned acquisition and release; process
-    spawning, readiness, diagnostics, and idle-stop policy remain internal to
-    the host.
+    contract. The host resolves process configuration from
+    `models.providers.<providerId>.localService`; callers cannot supply a
+    command, arguments, environment, or lifecycle policy. Process spawning,
+    readiness, diagnostics, and idle-stop policy remain internal to the host.
 
     Pass the exact configured provider id and resolved request base URL. Do not
     replace aliases with an adapter id: separate aliases can point at separate

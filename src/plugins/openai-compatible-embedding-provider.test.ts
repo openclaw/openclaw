@@ -341,7 +341,6 @@ describe("openai-compatible generic embedding provider", () => {
           "content-type": "application/json",
           "x-gpu-host": "spark",
         }),
-        service,
       },
       undefined,
     );

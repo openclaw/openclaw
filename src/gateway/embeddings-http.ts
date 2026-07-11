@@ -8,7 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
-import { ensureProviderLocalService } from "../agents/provider-local-service.js";
+import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider-local-service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -126,6 +126,7 @@ async function createConfiguredEmbeddingProvider(params: {
   model: string;
   memorySearch?: MemorySearchEmbeddingConfig;
 }): Promise<MemoryEmbeddingProvider> {
+  const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(() => params.cfg);
   const providerId =
     params.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : params.provider;
   // Prefer memory-specific adapters because they understand query/document
@@ -139,7 +140,7 @@ async function createConfiguredEmbeddingProvider(params: {
       local: params.memorySearch?.local,
       remote: resolveEmbeddingProviderRemoteConfig(params.memorySearch?.remote),
       outputDimensionality: params.memorySearch?.outputDimensionality,
-      acquireLocalService: ensureProviderLocalService,
+      acquireLocalService,
     };
     const result = await adapter.create(createOptions);
     return result.provider;
@@ -156,7 +157,7 @@ async function createConfiguredEmbeddingProvider(params: {
       inputType: params.memorySearch?.inputType,
       queryInputType: params.memorySearch?.queryInputType,
       documentInputType: params.memorySearch?.documentInputType,
-      acquireLocalService: ensureProviderLocalService,
+      acquireLocalService,
     };
     const result = await adapter.create(createOptions);
     return result.provider ? adaptGenericEmbeddingProvider(result.provider) : null;
