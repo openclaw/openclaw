@@ -156,6 +156,46 @@ describe("runDoctorSessionSqlite", () => {
     expect(message?.message?.content).toEqual([{ type: "text", text: "legacy string" }]);
   });
 
+  it("preserves a same-generation canonical harness owner during legacy import", async () => {
+    const store = createLegacyStore({
+      entryOverrides: { lifecycleRevision: "rev-1" },
+    });
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env: store.env,
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      },
+      {
+        agentHarnessId: "codex",
+        lifecycleRevision: "rev-1",
+        sessionId: "session-1",
+        updatedAt: 3000,
+      },
+    );
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({ importedEntries: 1, issues: 0 });
+    expect(
+      loadExactSqliteSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      })?.entry,
+    ).toMatchObject({
+      agentHarnessId: "codex",
+      lifecycleRevision: "rev-1",
+      sessionId: "session-1",
+      sessionFile: expect.stringMatching(/^sqlite:/),
+    });
+  });
+
   it("imports and validates legacy sessions idempotently", async () => {
     const store = createLegacyStore();
 
