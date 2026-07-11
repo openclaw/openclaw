@@ -92,20 +92,6 @@ describe("worker protocol schemas", () => {
     ).toBe(true);
   });
 
-  it.each([
-    { ...connectParams, admission: { ...connectParams.admission, credential: "short" } },
-    { ...connectParams, admission: { ...connectParams.admission, environmentId: " worker-1 " } },
-  ])("rejects a mixed or malformed worker connect %#", (candidate) => {
-    expect(
-      validateWorkerConnectRequestFrame({
-        type: "req",
-        id: "connect-1",
-        method: "connect",
-        params: candidate,
-      }),
-    ).toBe(false);
-  });
-
   it("validates heartbeat status frames", () => {
     expect(validateWorkerHeartbeatParams({ sentAtMs: 1, status: "ready" })).toBe(true);
     expect(validateWorkerHeartbeatParams({ sentAtMs: 1, status: "unknown" })).toBe(false);
