@@ -34,6 +34,7 @@ type EmbeddedCompactionRuntimeContext = {
   currentThreadTs?: string;
   currentMessageId?: string | number;
   authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
   agentHarnessId?: string;
   modelSelectionLocked?: boolean;
   workspaceDir: string;
@@ -55,6 +56,26 @@ type EmbeddedCompactionRuntimeContext = {
   ownerNumbers?: string[];
   activeProcessSessions?: ActiveProcessSessionReference[];
 };
+
+export function resolveCompactionAuthProfilePolicy(params: {
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+}): {
+  lockedProfile: boolean | undefined;
+  fallbackOnIncompatibleProfile: boolean;
+} {
+  if (!params.authProfileId) {
+    return {
+      lockedProfile: undefined,
+      fallbackOnIncompatibleProfile: false,
+    };
+  }
+  const allowInheritedFallback = params.authProfileIdSource === "auto";
+  return {
+    lockedProfile: !allowInheritedFallback,
+    fallbackOnIncompatibleProfile: allowInheritedFallback,
+  };
+}
 
 /**
  * Resolve the effective compaction target from config, falling back to the
@@ -264,6 +285,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   currentThreadTs?: string | null;
   currentMessageId?: string | number | null;
   authProfileId?: string | null;
+  authProfileIdSource?: "auto" | "user" | null;
   workspaceDir: string;
   cwd?: string | null;
   agentDir: string;
@@ -310,6 +332,9 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     currentThreadTs: params.currentThreadTs ?? undefined,
     currentMessageId: params.currentMessageId ?? undefined,
     authProfileId: resolved.authProfileId,
+    authProfileIdSource: resolved.authProfileId
+      ? (params.authProfileIdSource ?? undefined)
+      : undefined,
     agentHarnessId,
     modelSelectionLocked: params.modelSelectionLocked,
     workspaceDir: params.workspaceDir,

@@ -5,6 +5,7 @@ import { addSession, resetProcessRegistryForTests } from "../bash-process-regist
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
+  resolveCompactionAuthProfilePolicy,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 
@@ -84,6 +85,69 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.senderId).toBeUndefined();
     expect(result.provider).toBeUndefined();
     expect(result.model).toBeUndefined();
+  });
+
+  it("allows incompatible-profile fallback only for auto-selected profiles", () => {
+    expect(
+      resolveCompactionAuthProfilePolicy({
+        authProfileId: "openai:auto",
+        authProfileIdSource: "auto",
+      }),
+    ).toEqual({
+      lockedProfile: false,
+      fallbackOnIncompatibleProfile: true,
+    });
+    expect(
+      resolveCompactionAuthProfilePolicy({
+        authProfileId: "openai:user",
+        authProfileIdSource: "user",
+      }),
+    ).toEqual({
+      lockedProfile: true,
+      fallbackOnIncompatibleProfile: false,
+    });
+    expect(
+      resolveCompactionAuthProfilePolicy({
+        authProfileId: "openai:unknown",
+      }),
+    ).toEqual({
+      lockedProfile: true,
+      fallbackOnIncompatibleProfile: false,
+    });
+    expect(resolveCompactionAuthProfilePolicy({})).toEqual({
+      lockedProfile: undefined,
+      fallbackOnIncompatibleProfile: false,
+    });
+  });
+
+  it("preserves auth profile source only while the profile stays on the same provider", () => {
+    const sameProvider = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {
+        agents: { defaults: { compaction: { model: "openai/gpt-5.4-mini" } } },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:default",
+      authProfileIdSource: "auto",
+    });
+    expect(sameProvider.authProfileId).toBe("openai:default");
+    expect(sameProvider.authProfileIdSource).toBe("auto");
+
+    const switchedProvider = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {
+        agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:default",
+      authProfileIdSource: "user",
+    });
+    expect(switchedProvider.authProfileId).toBeUndefined();
+    expect(switchedProvider.authProfileIdSource).toBeUndefined();
   });
 
   it("applies compaction.model override with provider/model format", () => {

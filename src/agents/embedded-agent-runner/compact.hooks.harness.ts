@@ -50,6 +50,11 @@ export const resolveModelMock: Mock<
   authStorage: { setRuntimeApiKey: vi.fn() },
   modelRegistry: {},
 }));
+export const getApiKeyForModelMock = vi.fn(async () => ({
+  apiKey: "test",
+  mode: "env" as const,
+  source: "test harness",
+}));
 export const sessionCompactImpl = vi.fn(async () => ({
   summary: "summary",
   firstKeptEntryId: "entry-1",
@@ -422,6 +427,12 @@ export function resetCompactHooksHarnessMocks(): void {
     authStorage: { setRuntimeApiKey: vi.fn() },
     modelRegistry: {},
   });
+  getApiKeyForModelMock.mockReset();
+  getApiKeyForModelMock.mockResolvedValue({
+    apiKey: "test",
+    mode: "env",
+    source: "test harness",
+  });
   resolveAgentHarnessPolicyMock.mockReset();
   resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
   resolveContextWindowInfoMock.mockReset();
@@ -581,11 +592,7 @@ export async function loadCompactHooksHarness(): Promise<{
       (auth: { mode: string; source: string }, provider: string) =>
         `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
     ),
-    getApiKeyForModel: vi.fn(async () => ({
-      apiKey: "test",
-      mode: "env",
-      source: "test harness",
-    })),
+    getApiKeyForModel: getApiKeyForModelMock,
     resolveModelAuthMode: vi.fn(() => "env"),
   }));
 

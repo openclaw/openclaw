@@ -14,6 +14,7 @@ import {
   enqueueCommandInLaneMock,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
+  getApiKeyForModelMock,
   getMemorySearchManagerMock,
   guardSessionManagerMock,
   hookRunner,
@@ -1059,6 +1060,49 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(mockCallArg(resolveModelMock)).toBe("openai");
     expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.5");
   });
+
+  it.each([
+    ["auto", false, true],
+    ["user", true, false],
+    [undefined, true, false],
+  ] as const)(
+    "gates incompatible-profile fallback for %s compaction auth",
+    async (authProfileIdSource, lockedProfile, fallbackOnIncompatibleProfile) => {
+      resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
+      resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+        model: { provider, api: "responses", id: modelId, input: [] },
+        error: null,
+        authStorage: { setRuntimeApiKey: vi.fn() },
+        modelRegistry: {},
+      }));
+
+      const result = await compactEmbeddedAgentSessionDirect({
+        sessionId: "session-1",
+        sessionKey: TEST_SESSION_KEY,
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-5.5",
+        authProfileId: "openai:work",
+        ...(authProfileIdSource ? { authProfileIdSource } : {}),
+        config: {
+          models: {
+            providers: {
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
+            },
+          },
+          agents: { defaults: { embeddedHarness: { runtime: "openclaw" } } },
+        } as never,
+      });
+
+      expect(result.ok).toBe(true);
+      expectRecordFields(mockCallArg(getApiKeyForModelMock), {
+        profileId: "openai:work",
+        lockedProfile,
+        fallbackOnIncompatibleProfile,
+      });
+    },
+  );
 
   it("routes OpenAI compaction model overrides through Codex OAuth when Codex runtime is active", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });

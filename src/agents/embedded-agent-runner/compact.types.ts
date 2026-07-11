@@ -38,6 +38,8 @@ export type CompactEmbeddedAgentSessionParams = {
   senderUsername?: string;
   senderE164?: string;
   authProfileId?: string;
+  /** Whether the selected auth profile was automatic/inherited or explicitly user-locked. */
+  authProfileIdSource?: "auto" | "user";
   /** Host-resolved provider credential for native harness compaction. */
   resolvedApiKey?: string;
   /** Group id for channel-level tool policy resolution. */

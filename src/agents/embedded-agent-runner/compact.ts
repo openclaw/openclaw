@@ -156,7 +156,10 @@ import {
   runBeforeCompactionHooks,
   runPostCompactionSideEffects,
 } from "./compaction-hooks.js";
-import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
+import {
+  resolveCompactionAuthProfilePolicy,
+  resolveEmbeddedCompactionTarget,
+} from "./compaction-runtime-context.js";
 import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
@@ -561,6 +564,7 @@ export async function compactEmbeddedAgentSessionDirect(
         const preservesPrimaryAuth =
           provider === primaryProvider || provider === requestedPrimaryProvider;
         const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
+        const authProfileIdSource = authProfileId ? params.authProfileIdSource : undefined;
         const candidateThinkLevel = resolveCandidateThinkingLevel({
           cfg: params.config,
           provider,
@@ -575,6 +579,7 @@ export async function compactEmbeddedAgentSessionDirect(
           provider,
           model,
           authProfileId,
+          authProfileIdSource,
           thinkLevel: candidateThinkLevel,
         });
       },
@@ -662,6 +667,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const contextConfigProvider = resolvedCompactionTarget.contextProvider ?? provider;
   const modelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
   const authProfileId = resolvedCompactionTarget.authProfileId;
+  const authProfileIdSource = authProfileId ? params.authProfileIdSource : undefined;
   if (runtimeProvider !== provider || selectedHarnessRuntime) {
     await ensureSelectedAgentHarnessPlugin({
       config: params.config,
@@ -724,7 +730,10 @@ async function compactEmbeddedAgentSessionDirectOnce(
       profileId: authProfileId,
       agentDir,
       workspaceDir: resolvedWorkspace,
-      fallbackOnIncompatibleProfile: true,
+      ...resolveCompactionAuthProfilePolicy({
+        authProfileId,
+        authProfileIdSource,
+      }),
       secretSentinels: true,
     });
 

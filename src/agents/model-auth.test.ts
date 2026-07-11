@@ -1328,7 +1328,6 @@ describe("resolveApiKeyForProvider", () => {
     });
   });
 
-
   it("falls back from an incompatible explicit OAuth profile when requested", async () => {
     const resolved = await withoutEnv("OPENAI_API_KEY", () =>
       resolveApiKeyForProvider({
@@ -1386,6 +1385,46 @@ describe("resolveApiKeyForProvider", () => {
                 access: "oauth-access", // pragma: allowlist secret
                 refresh: "oauth-refresh", // pragma: allowlist secret
                 expires: Date.now() + 60 * 60_000,
+              },
+            },
+          },
+        }),
+      ),
+    ).rejects.toThrow(
+      'Auth profile "openai:oauth" uses oauth auth, but openai/openai-responses requires an OpenAI API key profile.',
+    );
+  });
+
+  it("keeps incompatible profiles fail-fast when the caller locks the profile", async () => {
+    await expect(
+      withoutEnv("OPENAI_API_KEY", () =>
+        resolveApiKeyForProvider({
+          provider: "openai",
+          modelApi: "openai-responses",
+          profileId: "openai:oauth",
+          lockedProfile: true,
+          fallbackOnIncompatibleProfile: true,
+          cfg: {
+            auth: {
+              order: {
+                openai: ["openai:oauth", "openai:api-key"],
+              },
+            },
+          },
+          store: {
+            version: 1,
+            profiles: {
+              "openai:oauth": {
+                type: "oauth",
+                provider: "openai",
+                access: "oauth-access", // pragma: allowlist secret
+                refresh: "oauth-refresh", // pragma: allowlist secret
+                expires: Date.now() + 60 * 60_000,
+              },
+              "openai:api-key": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-compaction-fallback", // pragma: allowlist secret
               },
             },
           },
