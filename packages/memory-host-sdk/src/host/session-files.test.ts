@@ -904,6 +904,42 @@ describe("buildSessionEntry", () => {
     expect(entry.lineMap).toStrictEqual([2, 3]);
   });
 
+  it("drops heartbeat assistant responses that follow a filtered heartbeat user message", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "[OpenClaw heartbeat poll]",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Heartbeat received. Main is active. No pending user request in this cron poll.",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "What is the weather today?" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "The weather is sunny." },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "heartbeat-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    // Heartbeat user + assistant should be dropped; only real messages remain
+    expect(entry.content).toBe(
+      "User: What is the weather today?\nAssistant: The weather is sunny.",
+    );
+    expect(entry.lineMap).toStrictEqual([3, 4]);
+  });
+
   it("drops Date-invalid numeric message timestamps", async () => {
     const jsonlLines = [
       JSON.stringify({
