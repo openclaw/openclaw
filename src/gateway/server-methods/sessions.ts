@@ -2606,7 +2606,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         }
       | undefined;
     const abortSessionKey = target.canonicalKey ?? key;
-    await chatHandlers["chat.abort"]({
+    const chatAbort = chatHandlers["chat.abort"];
+    if (!chatAbort) {
+      throw new Error("chat.abort handler is not registered");
+    }
+    await chatAbort({
       req,
       params: {
         sessionKey: abortSessionKey,
