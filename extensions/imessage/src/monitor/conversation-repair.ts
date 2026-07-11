@@ -87,6 +87,22 @@ function overlayRecoveredConversation(
     repaired.participants = entry.participants;
   }
 
+  // The exact-GUID history row is authoritative for routing/direction fields;
+  // the raw notification may carry stale or incorrect sender/direction values
+  // (#104136).
+  if (isNonEmptyString(entry.sender)) {
+    repaired.sender = entry.sender;
+  }
+  if (isNonEmptyString(entry.destination_caller_id)) {
+    repaired.destination_caller_id = entry.destination_caller_id;
+  }
+  if (typeof entry.is_from_me === "boolean") {
+    repaired.is_from_me = entry.is_from_me;
+  }
+  if (isNonEmptyString(entry.service)) {
+    repaired.service = entry.service;
+  }
+
   return repaired;
 }
 
@@ -150,6 +166,14 @@ export async function repairIMessageConversationAnchor(
       }
 
       const repaired = overlayRecoveredConversation(message, entry);
+      // A recovered outgoing message (is_from_me: true) must not dispatch
+      // to the agent — it was sent by the local identity, not a remote peer (#104136).
+      if (repaired.is_from_me === true) {
+        runtime?.error?.(
+          `imessage: dropping recovered anchorless message GUID=${guid} with is_from_me=true`,
+        );
+        return null;
+      }
       if (isIMessageAnchorless(repaired)) {
         runtime?.error?.(
           `imessage: dropping anchorless message GUID=${guid} after recovery found no usable conversation anchor`,
