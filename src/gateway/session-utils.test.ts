@@ -694,6 +694,7 @@ describe("gateway session utils", () => {
     expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
     expect(providerArtifactMocks.resolveBundledProviderPolicySurface).toHaveBeenCalledWith(
       "openai",
+      { manifestRegistry: undefined },
     );
   });
 
