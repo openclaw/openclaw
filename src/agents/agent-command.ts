@@ -2759,6 +2759,11 @@ async function agentCommandInternal(
             sessionId: artifact.sessionId,
             sessionFile: artifact.sessionFile,
             storePath: artifact.sessionFile,
+            // A private internal-run scratch transcript, never archived (its
+            // own removeInternalSessionEffectsTranscript unlinks it outright
+            // for privacy/disk reasons below) — its trajectory pair must not
+            // outlive it as a lingering tombstone in an unswept directory.
+            disposal: { mode: "delete" },
           });
         } catch (error) {
           log.warn(

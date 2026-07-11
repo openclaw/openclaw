@@ -354,8 +354,12 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
   return uniqueStrings(archives.map((archive) => archive.archivePath));
 }
 
-export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
-  const ts = formatSessionArchiveTimestamp();
+export function archiveFileOnDisk(
+  filePath: string,
+  reason: ArchiveFileReason,
+  nowMs?: number,
+): string {
+  const ts = formatSessionArchiveTimestamp(nowMs);
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
   clearSessionTranscriptResetArchiveDiscoveryCache();
@@ -384,6 +388,10 @@ export function archiveSessionTranscripts(opts: {
    */
   restrictToStoreDir?: boolean;
   onArchiveError?: (err: unknown, sourcePath: string) => void;
+  /** Explicit archive instant. Lets a caller pair this rename with another
+   * artifact's rename (e.g. a trajectory tombstone) under the exact same
+   * timestamp string instead of each independently calling Date.now(). */
+  nowMs?: number;
 }): string[] {
   return archiveSessionTranscriptsDetailed(opts).map((entry) => entry.archivedPath);
 }
@@ -404,6 +412,8 @@ export function archiveSessionTranscriptsDetailed(opts: {
    * caller decides whether to log, warn-deliver, or escalate.
    */
   onArchiveError?: (err: unknown, sourcePath: string) => void;
+  /** Explicit archive instant — see archiveSessionTranscripts. */
+  nowMs?: number;
 }): ArchivedSessionTranscript[] {
   const archived: ArchivedSessionTranscript[] = [];
   const storeDir =
@@ -429,7 +439,7 @@ export function archiveSessionTranscriptsDetailed(opts: {
     try {
       archived.push({
         sourcePath: candidatePath,
-        archivedPath: archiveFileOnDisk(candidatePath, opts.reason),
+        archivedPath: archiveFileOnDisk(candidatePath, opts.reason, opts.nowMs),
       });
     } catch (err) {
       opts.onArchiveError?.(err, candidatePath);
@@ -485,6 +495,13 @@ export type SessionArchiveCleanupRule = {
 // Store maintenance runs this on every session-store save. All retention rules
 // share one directory listing: a listing per reason would multiply READDIR
 // load on the per-save hot path, which is expensive on networked filesystems.
+//
+// The `.{reason}.{timestamp}` suffix match below is filename-agnostic, so
+// trajectory tombstones (`X.trajectory.jsonl.reset.<ts>`,
+// `X.trajectory-path.json.deleted.<ts>`) age out under the exact same rules
+// and cadence as transcript tombstones for free, as long as they land in one
+// of `directories` — which they do by default, since the trajectory pair is
+// renamed beside its transcript (see trajectory/cleanup.ts).
 export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
   rules: SessionArchiveCleanupRule[];

@@ -851,6 +851,8 @@ async function archiveLifecycleSessionTranscripts(params: {
   sessionFile?: string;
   agentId?: string;
   reason: "reset" | "deleted";
+  /** Shared with the paired trajectory tombstone rename — see callers. */
+  nowMs?: number;
 }): Promise<SessionLifecycleArchivedTranscript[]> {
   if (!params.sessionId) {
     return [];
@@ -862,6 +864,7 @@ async function archiveLifecycleSessionTranscripts(params: {
     sessionFile: params.sessionFile,
     agentId: params.agentId,
     reason: params.reason,
+    nowMs: params.nowMs,
   });
 }
 
@@ -944,6 +947,8 @@ function lifecycleTranscriptIsReclaimable(params: {
 function archiveExactLifecycleTranscriptPath(params: {
   sessionsDir: string;
   transcriptPath: string;
+  /** Shared with the paired trajectory tombstone rename — see callers. */
+  nowMs?: number;
 }): number {
   const resolvedSessionsDir = normalizePathForLifecycleComparison(params.sessionsDir);
   const resolvedTranscriptPath = normalizePathForLifecycleComparison(params.transcriptPath);
@@ -951,7 +956,7 @@ function archiveExactLifecycleTranscriptPath(params: {
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     return 0;
   }
-  const archivedPath = `${resolvedTranscriptPath}.deleted.${formatSessionArchiveTimestamp()}`;
+  const archivedPath = `${resolvedTranscriptPath}.deleted.${formatSessionArchiveTimestamp(params.nowMs)}`;
   try {
     fs.renameSync(resolvedTranscriptPath, archivedPath);
     emitSessionTranscriptUpdate({ sessionFile: archivedPath });
@@ -1372,12 +1377,17 @@ export async function resetSessionEntryLifecycle(params: {
       });
     }
     await params.afterEntryMutation?.(mutation);
+    // One instant for both the transcript's own reset-archive rename below and
+    // the abandoned-path trajectory tombstone further down, so the pair carries
+    // the exact same ".reset.<timestamp>" suffix and stays visibly coupled.
+    const nowMs = Date.now();
     const archivedTranscripts = await archiveLifecycleSessionTranscripts({
       sessionId: previousSessionId,
       storePath: params.storePath,
       sessionFile: previousSessionFile,
       agentId: params.agentId,
       reason: "reset",
+      nowMs,
     });
     if (reusesTranscriptPath) {
       ensureLifecycleTranscriptHeader({
@@ -1395,7 +1405,8 @@ export async function resetSessionEntryLifecycle(params: {
       }
     } else if (previousSessionId) {
       // The previous path is genuinely abandoned (different transcript path):
-      // retire it exactly like a delete, unless another row still points at it.
+      // tombstone it exactly like a delete (reason "reset", same nowMs as the
+      // transcript archive above), unless another row still points at it.
       const referencedSessionIds = new Set(
         Object.values(store)
           .map((entry) => entry?.sessionId)
@@ -1408,6 +1419,7 @@ export async function resetSessionEntryLifecycle(params: {
           referencedSessionIds,
           storePath: params.storePath,
           restrictToStoreDir: true,
+          disposal: { mode: "tombstone", reason: "reset", nowMs },
         });
       }
     }
@@ -1495,6 +1507,10 @@ async function deleteSessionEntryLifecycleInternal(
           }
         : undefined,
     );
+    // One instant for both the transcript's own deleted-archive rename below
+    // and the trajectory tombstone further down, so the pair carries the
+    // exact same ".deleted.<timestamp>" suffix and stays visibly coupled.
+    const nowMs = Date.now();
     const archivedTranscripts = params.archiveTranscript
       ? await archiveLifecycleSessionTranscripts({
           sessionId: deletedSessionId,
@@ -1502,6 +1518,7 @@ async function deleteSessionEntryLifecycleInternal(
           sessionFile: deletedSessionFile,
           agentId: params.agentId,
           reason: "deleted",
+          nowMs,
         })
       : [];
     if (params.archiveTranscript && deletedSessionId) {
@@ -1519,6 +1536,7 @@ async function deleteSessionEntryLifecycleInternal(
         referencedSessionIds,
         storePath: params.storePath,
         restrictToStoreDir: true,
+        disposal: { mode: "tombstone", reason: "deleted", nowMs },
       });
     }
     const result: DeleteSessionEntryLifecycleResult = {
@@ -1925,6 +1943,7 @@ export async function cleanupSessionLifecycleArtifacts(
       archivedTranscriptArtifacts += archiveExactLifecycleTranscriptPath({
         sessionsDir,
         transcriptPath,
+        nowMs,
       });
     }
     const { removeRemovedSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
@@ -1933,6 +1952,7 @@ export async function cleanupSessionLifecycleArtifacts(
       referencedSessionIds,
       storePath,
       restrictToStoreDir: true,
+      disposal: { mode: "tombstone", reason: "deleted", nowMs },
     });
     replaceSessionEntries(mutableStore, store);
     await saveSessionStoreUnlocked(storePath, mutableStore, { skipMaintenance: true });
@@ -1973,6 +1993,8 @@ export async function archiveRemovedSessionTranscripts(params: {
   storePath: string;
   reason: "deleted" | "reset";
   restrictToStoreDir?: boolean;
+  /** Shared with the paired trajectory tombstone batch rename — see callers. */
+  nowMs?: number;
 }): Promise<Set<string>> {
   const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
   const archivedDirs = new Set<string>();
@@ -1986,6 +2008,7 @@ export async function archiveRemovedSessionTranscripts(params: {
       sessionFile,
       reason: params.reason,
       restrictToStoreDir: params.restrictToStoreDir,
+      nowMs: params.nowMs,
     });
     for (const archivedPath of archived) {
       archivedDirs.add(path.dirname(archivedPath));

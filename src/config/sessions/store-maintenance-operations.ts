@@ -39,12 +39,14 @@ type RemovedSessionArtifactCleanup = {
     storePath: string;
     reason: "deleted";
     restrictToStoreDir: true;
+    nowMs: number;
   }) => Promise<Set<string>>;
   removeRemovedSessionTrajectoryArtifacts: (params: {
     removedSessionFiles: RemovedSessionFiles;
     referencedSessionIds: ReadonlySet<string>;
     storePath: string;
     restrictToStoreDir: true;
+    disposal: { mode: "tombstone"; reason: "deleted"; nowMs: number };
   }) => Promise<void>;
   cleanupArchivedSessionTranscripts: (params: {
     directories: string[];
@@ -152,12 +154,18 @@ async function cleanupRemovedSessionArtifacts(params: {
   // SQLite should commit entry-retention rows before this named artifact cleanup.
   // The cleanup needs the final referenced-session set so shared transcripts and
   // trajectory sidecars survive until the last referring row is gone.
+  //
+  // One instant for both archive calls below, so a session's transcript and
+  // trajectory tombstones from this maintenance pass carry the exact same
+  // ".deleted.<timestamp>" suffix and stay visibly coupled.
+  const nowMs = Date.now();
   const archivedDirs = await params.operation.artifacts.archiveRemovedSessionTranscripts({
     removedSessionFiles: params.removedSessionFiles,
     referencedSessionIds: params.referencedSessionIds,
     storePath: params.operation.storePath,
     reason: "deleted",
     restrictToStoreDir: true,
+    nowMs,
   });
   if (params.removedSessionFiles.size > 0) {
     await params.operation.artifacts.removeRemovedSessionTrajectoryArtifacts({
@@ -165,6 +173,7 @@ async function cleanupRemovedSessionArtifacts(params: {
       referencedSessionIds: params.referencedSessionIds,
       storePath: params.operation.storePath,
       restrictToStoreDir: true,
+      disposal: { mode: "tombstone", reason: "deleted", nowMs },
     });
   }
   if (archivedDirs.size === 0 && params.maintenance.resetArchiveRetentionMs == null) {
