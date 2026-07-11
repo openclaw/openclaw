@@ -500,12 +500,27 @@ describe("looksLikeMSTeamsTargetId", () => {
     expect(looksLikeMSTeamsTargetId("user:40a1a0ed-4ff2-4164-a219-55518990c197")).toBe(true);
   });
 
-  it.each(["", "   ", "user:John Smith", "Product Team/Roadmap", "Engineering", "hello"])(
-    "rejects non-id inputs (%s)",
-    (raw) => {
-      expect(looksLikeMSTeamsTargetId(raw)).toBe(false);
-    },
-  );
+  it.each([
+    "teams:user:40a1a0ed-4ff2-4164-a219-55518990c197",
+    "msteams:user:40a1a0ed-4ff2-4164-a219-55518990c197",
+    "teams:conversation:19:abc@thread.tacv2",
+    "msteams:conversation:19:abc@thread.tacv2",
+  ])("accepts provider-prefixed explicit target ids (%s)", (raw) => {
+    expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
+  });
+
+  it.each([
+    "",
+    "   ",
+    "user:John Smith",
+    "teams:user:John Smith",
+    "msteams:user:John Smith",
+    "Product Team/Roadmap",
+    "Engineering",
+    "hello",
+  ])("rejects non-id inputs (%s)", (raw) => {
+    expect(looksLikeMSTeamsTargetId(raw)).toBe(false);
+  });
 
   it("normalizes leading/trailing whitespace before classifying", () => {
     expect(looksLikeMSTeamsTargetId("  19:abc@thread.tacv2  ")).toBe(true);
