@@ -372,18 +372,35 @@ describe("scripts/restart-mac.sh", () => {
 
   it("target-only mode refuses foreign app processes without broad cleanup", () => {
     const script = readFileSync(restartScriptPath, "utf8");
-    const targetBlock = script.slice(
+    const initialTargetBlock = script.slice(
       script.indexOf('if [[ "$TARGET_ONLY" -eq 1 ]]; then', script.indexOf("# 1)")),
       script.indexOf("else", script.indexOf("# 1)")),
     );
+    const switchTargetBlock = script.slice(
+      script.indexOf('if [[ "$TARGET_ONLY" -eq 1 ]]; then', script.indexOf("ATTACH_ONLY_ARGS")),
+      script.indexOf("# 4) Launch"),
+    );
 
-    expect(targetBlock).toContain("foreign_openclaw_process_pids");
-    expect(targetBlock).toContain("kill_managed_openclaw");
-    expect(targetBlock).not.toContain("stop_launch_agent");
-    expect(targetBlock).not.toContain("kill_all_openclaw");
+    expect(initialTargetBlock).toContain("foreign_openclaw_process_pids");
+    expect(initialTargetBlock).not.toContain("kill_managed_openclaw");
+    expect(initialTargetBlock).not.toContain("stop_launch_agent");
+    expect(initialTargetBlock).not.toContain("kill_all_openclaw");
+    expect(switchTargetBlock).toContain("foreign_openclaw_process_pids");
+    expect(switchTargetBlock).toContain("kill_managed_openclaw");
     expect(script).toContain('[[ "${executable}" == "${TARGET_EXECUTABLE}" ]] && continue');
     expect(script).toContain('process_pids_for_executable "${TARGET_EXECUTABLE}"');
     expect(script).toContain("target-only restart deferred");
+  });
+
+  it("keeps the managed app alive until the signed replacement is ready", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+    const packageIndex = script.indexOf('run_step "package app"');
+    const switchIndex = script.indexOf('log "==> Switching managed installed');
+    const launchIndex = script.indexOf('run_step "launch app"');
+
+    expect(packageIndex).toBeGreaterThan(-1);
+    expect(switchIndex).toBeGreaterThan(packageIndex);
+    expect(launchIndex).toBeGreaterThan(switchIndex);
   });
 
   it("escalates only exact managed app processes when graceful shutdown stalls", () => {

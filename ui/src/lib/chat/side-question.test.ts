@@ -1,0 +1,46 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildMoreDetailsSideCommand,
+  buildSideChatComposerDraft,
+  CHAT_SELECTION_SNIPPET_MAX_CHARS,
+  collapseChatSelectionSnippet,
+  extractSideQuestionDisplayText,
+} from "./side-question.ts";
+
+describe("collapseChatSelectionSnippet", () => {
+  it("collapses newlines and runs of whitespace into single spaces", () => {
+    expect(collapseChatSelectionSnippet("Let's Encrypt cert\n  is valid\tfor both")).toBe(
+      "Let's Encrypt cert is valid for both",
+    );
+  });
+
+  it("caps overlong selections", () => {
+    const collapsed = collapseChatSelectionSnippet("x".repeat(5000));
+    expect(collapsed.length).toBeLessThanOrEqual(CHAT_SELECTION_SNIPPET_MAX_CHARS);
+  });
+});
+
+describe("side question builders", () => {
+  it("builds a single-line /btw command quoting the selection", () => {
+    expect(buildMoreDetailsSideCommand("Let's Encrypt cert\nis valid")).toBe(
+      `/btw Explain "Let's Encrypt cert is valid" from this conversation in more detail.`,
+    );
+  });
+
+  it("builds a composer draft that leaves room for the user's question", () => {
+    expect(buildSideChatComposerDraft("cron scan job")).toBe(`/btw Regarding "cron scan job": `);
+  });
+
+  it("returns null for whitespace-only selections", () => {
+    expect(buildMoreDetailsSideCommand("  \n\t ")).toBeNull();
+    expect(buildSideChatComposerDraft("")).toBeNull();
+  });
+});
+
+describe("extractSideQuestionDisplayText", () => {
+  it("drops the /btw and /side prefixes", () => {
+    expect(extractSideQuestionDisplayText("/btw what changed?")).toBe("what changed?");
+    expect(extractSideQuestionDisplayText("/side: what changed?")).toBe("what changed?");
+    expect(extractSideQuestionDisplayText("/btw")).toBe("");
+  });
+});

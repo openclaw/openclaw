@@ -14,7 +14,7 @@ import type {
   ChatQueueItem,
   ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
-import type { ChatSideResult } from "../../lib/chat/side-result.ts";
+import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
@@ -73,6 +73,7 @@ export type ChatProps = {
   fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
   sideResult?: ChatSideResult | null;
+  sideResultPending?: ChatSideResultPending | null;
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
@@ -138,6 +139,8 @@ export type ChatProps = {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onGoalCommand?: (command: string) => void;
+  /** Sends a detached /btw side question (chat selection popup). */
+  onSideQuestion?: (command: string) => void;
   onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
@@ -235,6 +238,7 @@ export function renderChat(props: ChatProps) {
     onDraftChange: props.onDraftChange,
     onSend: props.onSend,
     onSetReply: props.onSetReply,
+    onSideQuestion: props.onSideQuestion,
     onFocusComposer: () =>
       chatSection
         ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
@@ -256,6 +260,7 @@ export function renderChat(props: ChatProps) {
     messages: props.messages,
     stream: props.stream,
     sideResult: props.sideResult,
+    sideResultPending: props.sideResultPending,
     queue: props.queue,
     draft: props.draft,
     sessions: props.sessions,
@@ -314,7 +319,11 @@ export function renderChat(props: ChatProps) {
           props.onClearReply?.();
           return;
         }
-        if (event.key === "Escape" && props.sideResult && !isChatThreadSearchOpen(props.paneId)) {
+        if (
+          event.key === "Escape" &&
+          (props.sideResult || props.sideResultPending) &&
+          !isChatThreadSearchOpen(props.paneId)
+        ) {
           event.preventDefault();
           props.onDismissSideResult?.();
           return;

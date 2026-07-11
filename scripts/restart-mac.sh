@@ -269,15 +269,13 @@ stop_launch_agent() {
   launchctl bootout gui/"$UID"/ai.openclaw.mac 2>/dev/null || true
 }
 
-# 1) Stop only the process set selected by the requested mode.
+# 1) Validate the process set selected by the requested mode. Target-only keeps
+# the current managed app alive while the replacement builds and signs.
 if [[ "$TARGET_ONLY" -eq 1 ]]; then
   if [[ -n "$(foreign_openclaw_process_pids)" ]]; then
     fail "Another OpenClaw app or test process is active; target-only restart deferred"
   fi
-  log "==> Killing managed installed and exact target OpenClaw instances"
-  if ! kill_managed_openclaw; then
-    fail "Managed OpenClaw instances did not exit after cleanup attempts"
-  fi
+  log "==> Keeping managed OpenClaw running while the replacement builds"
 else
   stop_launch_agent
   log "==> Killing existing OpenClaw instances"
@@ -376,6 +374,16 @@ fi
 ATTACH_ONLY_ARGS=()
 if [[ "$ATTACH_ONLY" -eq 1 ]]; then
   ATTACH_ONLY_ARGS+=(--args --attach-only)
+fi
+
+if [[ "$TARGET_ONLY" -eq 1 ]]; then
+  if [[ -n "$(foreign_openclaw_process_pids)" ]]; then
+    fail "Another OpenClaw app or test process appeared during build; target-only restart deferred"
+  fi
+  log "==> Switching managed installed and exact target OpenClaw instances"
+  if ! kill_managed_openclaw; then
+    fail "Managed OpenClaw instances did not exit after cleanup attempts"
+  fi
 fi
 
 # 4) Launch the installed app in the foreground so the menu bar extra appears.

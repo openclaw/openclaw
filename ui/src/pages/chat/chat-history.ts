@@ -20,7 +20,7 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import type { ChatSideResult } from "../../lib/chat/side-result.ts";
+import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-result.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -447,6 +447,7 @@ export type ChatState = {
   lastError: string | null;
   chatError?: string | null;
   chatSideResult?: ChatSideResult | null;
+  chatSideResultPending?: ChatSideResultPending | null;
   chatSideResultTerminalRuns?: Set<string>;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
@@ -837,6 +838,7 @@ export async function clearChatHistory(
   }
   state.chatMessages = [];
   state.chatSideResult = null;
+  state.chatSideResultPending = null;
   state.chatReplyTarget = null;
   reconcileChatRunLifecycle(state, {
     outcome: hadActiveRun ? "interrupted" : undefined,

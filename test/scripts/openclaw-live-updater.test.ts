@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -21,6 +22,7 @@ import {
   inspectBuildState,
   maintainMain,
   originMatches,
+  parseGatewayLogAudit,
 } from "../../.agents/skills/openclaw-live-updater/scripts/update-main.mjs";
 import {
   BUILD_STAMP_FILE,
@@ -48,7 +50,17 @@ function maintainFixture(
   options: Record<string, unknown>,
   dependencies: Record<string, unknown> = {},
 ) {
-  return maintainMain(options, { fetchMain: fetchFixtureMain, ...dependencies });
+  return maintainMain(options, {
+    fetchMain: fetchFixtureMain,
+    auditGatewayLogs: () => ({
+      entries: 0,
+      errorCount: 0,
+      warningCount: 0,
+      errors: [],
+      warnings: [],
+    }),
+    ...dependencies,
+  });
 }
 
 function makeFixture() {
@@ -72,6 +84,7 @@ function makeFixture() {
   const canonicalOrigin = "https://github.com/openclaw/openclaw.git";
   git(mirror, "remote", "set-url", "origin", canonicalOrigin);
   fixtureOrigins.set(mirror, origin);
+  fixtureOrigins.set(realpathSync(mirror), origin);
   return { root, mirror, origin, seed };
 }
 
@@ -116,6 +129,53 @@ function fakeCommands(mirror: string) {
 }
 
 describe("openclaw live updater", () => {
+  test("audits only error and warning logs emitted after Gateway restart", () => {
+    const output = [
+      { type: "meta", file: "/tmp/openclaw.log" },
+      { type: "log", time: "2026-07-11T08:00:00.000Z", level: "error", message: "old" },
+      { type: "log", time: "2026-07-11T08:00:02.000Z", level: "info", message: "ready" },
+      {
+        type: "log",
+        time: "2026-07-11T08:00:03.000Z",
+        level: "warn",
+        subsystem: "gateway",
+        message: "degraded",
+      },
+      {
+        type: "log",
+        time: "2026-07-11T08:00:04.000Z",
+        level: "fatal",
+        subsystem: "gateway",
+        message: "failed",
+      },
+      { type: "notice", message: "done" },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+
+    expect(parseGatewayLogAudit(output, Date.parse("2026-07-11T08:00:02.000Z"))).toEqual({
+      entries: 3,
+      errorCount: 1,
+      warningCount: 1,
+      errors: [
+        {
+          time: "2026-07-11T08:00:04.000Z",
+          level: "fatal",
+          subsystem: "gateway",
+          message: "failed",
+        },
+      ],
+      warnings: [
+        {
+          time: "2026-07-11T08:00:03.000Z",
+          level: "warn",
+          subsystem: "gateway",
+          message: "degraded",
+        },
+      ],
+    });
+  });
+
   test("accepts supported OpenClaw GitHub origins", () => {
     expect(originMatches("https://github.com/openclaw/openclaw.git")).toBe(true);
     expect(originMatches("git@github.com:openclaw/openclaw.git")).toBe(true);
@@ -274,6 +334,13 @@ describe("openclaw live updater", () => {
       gatewaySelfHeal: false,
       macAppRebuild: true,
       macUiVerification: true,
+    });
+    expect(output.gatewayLogAudit).toEqual({
+      entries: 0,
+      errorCount: 0,
+      warningCount: 0,
+      errors: [],
+      warnings: [],
     });
     expect(commands.calls).toEqual([
       "pnpm install --frozen-lockfile",

@@ -524,7 +524,9 @@ function assertExactBuild(checkout, expectedSha) {
 
 function restartGateway(runCommand, checkout, expectedSha) {
   assertExactBuild(checkout, expectedSha);
+  const startedAtMs = Date.now();
   runCommand("pnpm", ["openclaw", "gateway", "restart"], checkout);
+  return startedAtMs;
 }
 
 function verifyGateway(runCommand, checkout, expectedSha) {
@@ -535,6 +537,69 @@ function verifyGateway(runCommand, checkout, expectedSha) {
     checkout,
   );
   runCommand("pnpm", ["openclaw", "health", "--verbose", "--json"], checkout);
+}
+
+function summarizeGatewayLogEntry(entry) {
+  return {
+    time: entry.time,
+    level: entry.level,
+    subsystem: entry.subsystem ?? null,
+    message: String(entry.message ?? "").slice(0, 500),
+  };
+}
+
+export function parseGatewayLogAudit(output, sinceMs) {
+  const entries = output
+    .split("\n")
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        const entry = JSON.parse(line);
+        const timestamp = Date.parse(entry.time ?? "");
+        return entry.type === "log" && Number.isFinite(timestamp) && timestamp >= sinceMs
+          ? [entry]
+          : [];
+      } catch {
+        return [];
+      }
+    });
+  const errors = entries
+    .filter((entry) => entry.level === "error" || entry.level === "fatal")
+    .map(summarizeGatewayLogEntry);
+  const warnings = entries.filter((entry) => entry.level === "warn").map(summarizeGatewayLogEntry);
+  return {
+    entries: entries.length,
+    errorCount: errors.length,
+    warningCount: warnings.length,
+    errors: errors.slice(0, 20),
+    warnings: warnings.slice(0, 20),
+  };
+}
+
+function defaultAuditGatewayLogs(checkout, sinceMs) {
+  const output = execFileSync(
+    process.execPath,
+    [
+      "openclaw.mjs",
+      "logs",
+      "--json",
+      "--limit",
+      "1000",
+      "--max-bytes",
+      "1000000",
+      "--timeout",
+      "10000",
+    ],
+    { cwd: checkout, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 },
+  );
+  const audit = parseGatewayLogAudit(output, sinceMs);
+  if (audit.errorCount > 0) {
+    throw new UpdateInvariantError(
+      "gateway_restart_log_errors",
+      `Gateway emitted ${audit.errorCount} error/fatal log entries after restart: ${JSON.stringify(audit.errors.slice(0, 5))}`,
+    );
+  }
+  return audit;
 }
 
 export function findExactMacTarget(processes, executable) {
@@ -601,6 +666,8 @@ export function maintainMain(options, dependencies = {}) {
     }
     const runCommand = dependencies.runCommand ?? defaultRunCommand;
     const verifyMacTarget = dependencies.verifyMacTarget ?? defaultVerifyMacTarget;
+    const auditGatewayLogs = dependencies.auditGatewayLogs ?? defaultAuditGatewayLogs;
+    let gatewayLogAudit = null;
     let queuedMacState = null;
     if (actions.macAppRebuild) {
       queuedMacState = {
@@ -619,16 +686,18 @@ export function maintainMain(options, dependencies = {}) {
     if (actions.gatewayBuild) {
       runCommand("pnpm", ["build"], update.checkout);
       assertExactBuild(update.checkout, update.afterSha);
-      restartGateway(runCommand, update.checkout, update.afterSha);
+      const restartStartedAt = restartGateway(runCommand, update.checkout, update.afterSha);
       verifyGateway(runCommand, update.checkout, update.afterSha);
+      gatewayLogAudit = auditGatewayLogs(update.checkout, restartStartedAt);
     } else {
       try {
         verifyGateway(runCommand, update.checkout, update.afterSha);
       } catch {
         actions.gatewayRestart = true;
         actions.gatewaySelfHeal = true;
-        restartGateway(runCommand, update.checkout, update.afterSha);
+        const restartStartedAt = restartGateway(runCommand, update.checkout, update.afterSha);
         verifyGateway(runCommand, update.checkout, update.afterSha);
+        gatewayLogAudit = auditGatewayLogs(update.checkout, restartStartedAt);
       }
     }
     if (actions.macAppRebuild) {
@@ -664,6 +733,7 @@ export function maintainMain(options, dependencies = {}) {
       buildBefore,
       buildChangedPaths,
       actions,
+      ...(gatewayLogAudit ? { gatewayLogAudit } : {}),
       ...(maintenanceState.macTarget ? { macTarget: maintenanceState.macTarget } : {}),
     };
   } finally {
