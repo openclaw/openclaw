@@ -174,6 +174,43 @@ describe("managed Chrome graphics diagnostics", () => {
     });
   });
 
+  it("classifies Windows WARP and the Microsoft Basic Render Driver as software", () => {
+    const diagnostics = normalizeChromeGraphicsInfo({
+      gpu: {
+        devices: [
+          {
+            vendorId: 65535,
+            deviceId: 65535,
+            vendorString: "Google Inc. (Microsoft)",
+            deviceString:
+              "ANGLE (Microsoft, Microsoft Basic Render Driver Direct3D11, D3D11-10.0.20348.5020)",
+            driverVendor: "SwANGLE",
+            driverVersion: "10.0.20348.5020",
+          },
+        ],
+        auxAttributes: {
+          glRenderer:
+            "ANGLE (Microsoft, Microsoft Basic Render Driver Direct3D11, D3D11-10.0.20348.5020)",
+          glImplementationParts: "(gl=egl-angle,angle=d3d11-warp)",
+        },
+        featureStatus: {
+          gpu_compositing: "disabled_software",
+          rasterization: "disabled_software",
+          webgl: "unavailable_software",
+        },
+        driverBugWorkarounds: [],
+        videoDecoding: [],
+        videoEncoding: [],
+      },
+    });
+
+    expect(diagnostics).toMatchObject({
+      status: "available",
+      acceleration: "software",
+      backend: "(gl=egl-angle,angle=d3d11-warp)",
+    });
+  });
+
   it("uses the browser-level SystemInfo command with bounded passive timeouts", async () => {
     sendMock.mockResolvedValueOnce({
       gpu: {

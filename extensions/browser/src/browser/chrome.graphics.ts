@@ -146,7 +146,11 @@ function classifyGraphicsAcceleration(params: {
     .flatMap((device) => [device.vendor, device.device, device.driverVendor])
     .join(" ");
   const description = `${params.renderer ?? ""} ${deviceText}`.toLowerCase();
-  if (/(swiftshader|llvmpipe|softpipe|software rasterizer|swrast)/.test(description)) {
+  if (
+    /(swiftshader|swangle|llvmpipe|softpipe|software rasterizer|swrast|microsoft basic render driver|d3d11-warp)/.test(
+      description,
+    )
+  ) {
     return "software";
   }
   if (description.trim()) {
