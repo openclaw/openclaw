@@ -12,6 +12,8 @@ const directPerplexityApiKey = ["pplx", "test"].join("-");
 const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
 
 describe("perplexity web search provider", () => {
+  const priorFetch = global.fetch;
+
   it("points missing-key users to fetch/browser alternatives", async () => {
     await withEnvAsync(
       { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: undefined },
@@ -189,5 +191,33 @@ describe("perplexity web search provider", () => {
     expect(streamed.getReadCount()).toBeLessThan(32);
     expect(streamed.wasCanceled()).toBe(true);
     expect(jsonSpy).not.toHaveBeenCalled();
+  });
+
+  it("forwards the execution abort signal to the Perplexity HTTP request", async () => {
+    await withEnvAsync({ [perplexityApiKeyEnv]: directPerplexityApiKey }, async () => {
+      const controller = new AbortController();
+      const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+        controller.abort();
+        throw new DOMException("The operation was aborted", "AbortError");
+      });
+      global.fetch = mockFetch as typeof global.fetch;
+
+      try {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({
+          config: {},
+          searchConfig: { apiKey: directPerplexityApiKey },
+        });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+
+        await expect(
+          tool.execute({ query: "abort propagation" }, { signal: controller.signal }),
+        ).rejects.toThrow("The operation was aborted");
+      } finally {
+        global.fetch = priorFetch;
+      }
+    });
   });
 });

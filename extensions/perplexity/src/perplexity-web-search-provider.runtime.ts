@@ -209,6 +209,7 @@ async function runPerplexitySearchApi(params: {
   searchBeforeDate?: string;
   maxTokens?: number;
   maxTokensPerPage?: number;
+  signal?: AbortSignal;
 }): Promise<Array<Record<string, unknown>>> {
   const body: Record<string, unknown> = {
     query: params.query,
@@ -243,6 +244,7 @@ async function runPerplexitySearchApi(params: {
     {
       url: PERPLEXITY_SEARCH_ENDPOINT,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: buildPerplexityRequestHeaders(params.apiKey, true),
@@ -275,6 +277,7 @@ async function runPerplexitySearch(params: {
   model: string;
   timeoutSeconds: number;
   freshness?: string;
+  signal?: AbortSignal;
 }): Promise<{ content: string; citations: string[] }> {
   const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
   const body: Record<string, unknown> = {
@@ -289,6 +292,7 @@ async function runPerplexitySearch(params: {
     {
       url: endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: buildPerplexityRequestHeaders(params.apiKey),
@@ -311,6 +315,7 @@ async function runPerplexitySearch(params: {
 export async function executePerplexitySearch(
   args: Record<string, unknown>,
   searchConfig?: SearchConfigRecord,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const perplexityConfig = resolvePerplexityConfig(searchConfig);
   const runtime = resolvePerplexityTransport(perplexityConfig);
@@ -500,6 +505,7 @@ export async function executePerplexitySearch(
               model: runtime.model,
               timeoutSeconds,
               freshness,
+              signal,
             });
             return {
               content: wrapWebContent(result.content, "web_search"),
@@ -529,6 +535,7 @@ export async function executePerplexitySearch(
             searchLanguageFilter: language ? [language] : undefined,
             searchAfterDate: dateAfter ? isoToPerplexityDate(dateAfter) : undefined,
             searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
+            signal,
             maxTokens: maxTokens ?? undefined,
             maxTokensPerPage: maxTokensPerPage ?? undefined,
           }),
