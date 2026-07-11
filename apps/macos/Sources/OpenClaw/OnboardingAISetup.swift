@@ -696,9 +696,10 @@ final class OnboardingAISetupModel {
                     timeoutMs: 600_000,
                     ifCurrentServerLease: serverLease
                 )
-                guard token == self.attemptToken else { return }
                 let result = try JSONDecoder().decode(WizardStartResult.self, from: data)
-                guard authAttemptID == self.authAttemptID else {
+                guard token == self.attemptToken, authAttemptID == self.authAttemptID else {
+                    // A route reset can race the start response. Cancel the
+                    // decoded server session so the discarded flow cannot commit.
                     await GatewayConnection.shared.cancelWizardSession(
                         result.sessionid,
                         on: serverLease
@@ -755,7 +756,12 @@ final class OnboardingAISetupModel {
     func cancelProviderAuth() {
         let sessionID = self.authSessionID
         let authServerLease = self.serverLease
-        guard let sessionID, let authServerLease else { return }
+        guard let sessionID, let authServerLease else {
+            self.authAttemptID = UUID()
+            self.providerAuthReconciliationPending = false
+            self.clearProviderAuth()
+            return
+        }
         let authAttemptID = self.authAttemptID
         self.authBusy = true
         Task {
@@ -842,6 +848,9 @@ final class OnboardingAISetupModel {
         let validationError = !done && status == "running" && error?.isEmpty == false
         let preserveEnteredValue = validationError && self.authStep?.id == step?.id
         if status == "error" || (done && error != nil) {
+            // Terminal sessions are removed by the Gateway. Drop the local id
+            // so Cancel dismisses the preserved, copyable error immediately.
+            self.authSessionID = nil
             self.authStep = nil
             self.authError = Self.failure(
                 label: self.activeAuthOption?.label ?? "Provider login",
@@ -1086,6 +1095,18 @@ final class OnboardingAISetupModel {
         func _test_setConnectedSetupLines(_ lines: [String]?) {
             self.connectedSetupLines = Self.normalizedSetupLines(lines)
         }
+
+        func _test_setProviderAuth(option: AuthOption, sessionID: String) {
+            self.activeAuthOption = option
+            self.authSessionID = sessionID
+            self.authBusy = true
+        }
+
+        func _test_applyAuthWizardResult(done: Bool, status: String?, error: String?) {
+            self.applyAuthWizardResult(done: done, step: nil, status: status, error: error)
+        }
+
+        var _test_authSessionID: String? { self.authSessionID }
     #endif
 }
 

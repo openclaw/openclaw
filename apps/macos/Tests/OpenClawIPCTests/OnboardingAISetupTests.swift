@@ -78,6 +78,34 @@ struct OnboardingAISetupTests {
         #expect(OnboardingAISetupModel.providerAuthRequestTimeoutMs > 15 * 60 * 1000)
     }
 
+    @Test func `terminal provider failure remains copyable and can dismiss`() {
+        let model = OnboardingAISetupModel()
+        let option = OnboardingAISetupModel.AuthOption(
+            id: "openai:oauth",
+            label: "OpenAI",
+            hint: nil,
+            groupLabel: "OpenAI",
+            kind: "oauth",
+            featured: true
+        )
+        model._test_setProviderAuth(option: option, sessionID: "finished-session")
+
+        model._test_applyAuthWizardResult(
+            done: true,
+            status: "error",
+            error: "The authorization request was denied."
+        )
+
+        #expect(model.activeAuthOption?.id == option.id)
+        #expect(model.authError?.copyText == "The authorization request was denied.")
+        #expect(model._test_authSessionID == nil)
+        #expect(!model.authBusy)
+
+        model.cancelProviderAuth()
+        #expect(model.activeAuthOption == nil)
+        #expect(model.authError == nil)
+    }
+
     @Test func `activation sends exact model only to capable gateways`() {
         let legacy = OnboardingAISetupModel.activationParams(
             kind: "codex-cli",
