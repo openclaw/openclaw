@@ -689,14 +689,18 @@ export function renderChatThread(props: ChatThreadProps) {
   const displayStream = props.stream ?? null;
   const sessionHost = props.sessionHost ?? null;
   // Equivalence, not exact match: the default session travels under alias
-  // keys ("main" vs "agent:main:main") depending on the caller. Global-scope
-  // fleets additionally select the canonical "global" row via alias keys
-  // (agent:<id>:global, or the configured main alias while the global row
-  // exists); the strict opts mirror chat-history's subscription matching.
-  const activeSession =
-    props.sessions?.sessions?.find((row) =>
-      areUiSessionKeysEquivalent(row.key, props.sessionKey),
-    ) ??
+  // keys ("main" vs "agent:main:main") depending on the caller.
+  const activeSession = props.sessions?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, props.sessionKey),
+  );
+  // Kind-only fallback: global-scope fleets select the canonical "global" row
+  // via alias keys (agent:<id>:global, or the configured main alias while the
+  // global row exists); strict opts mirror chat-history's subscription
+  // matching. Kept separate from activeSession because the shared sessions
+  // list can belong to another agent's scope — the kind is safe to borrow,
+  // reasoning/context metadata is not.
+  const sessionKindRow =
+    activeSession ??
     (sessionHost
       ? props.sessions?.sessions?.find(
           (row) =>
@@ -742,7 +746,7 @@ export function renderChatThread(props: ChatThreadProps) {
   // agent:<id>:global keys are the global stream even without a row, the rest
   // uses the same core helper the gateway uses. Message senderLabels are not a
   // signal here: gateway sanitization labels 1:1 channel DM rows too.
-  const rowKind = activeSession?.kind;
+  const rowKind = sessionKindRow?.kind;
   const sessionKind =
     rowKind && rowKind !== "unknown"
       ? rowKind
