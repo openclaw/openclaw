@@ -144,4 +144,42 @@ describe("AgentSession auto-retry", () => {
       delayMs: 300_000, // 5 minutes max
     });
   });
+
+  it("preserves configured backoff when it exceeds the provider ceiling", async () => {
+    let emittedEvent: any;
+    const session = {
+      // If baseDelayMs is 100_000, retryCount = 4 => delayMs = 100_000 * 2^3 = 800_000
+      retryCount: 3,
+      settingsManager: {
+        getRetrySettings: () => ({ enabled: true, maxRetries: 5, baseDelayMs: 100_000 }),
+      },
+      agent: { state: { messages: [] } },
+      emit: vi.fn((event) => {
+        emittedEvent = event;
+      }),
+    };
+
+    const prepareRetry = AgentSession.prototype["prepareRetry"].bind(
+      session as unknown as AgentSession,
+    );
+
+    // After retryCount++ in prepareRetry, retryCount becomes 4, so exponent is (4 - 1) = 3
+    // 100_000 * 8 = 800_000ms.
+    // Provider requests 10,000s = 10,000,000ms which gets clamped to 300,000ms.
+    // Math.max(800_000, 300_000) = 800_000ms.
+
+    await prepareRetry({
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage: "Too Many Requests",
+      status: 429,
+      retryAfterSeconds: 10000, // Excessive
+    } as any);
+
+    expect(emittedEvent).toMatchObject({
+      type: "auto_retry_start",
+      delayMs: 800_000,
+    });
+  });
 });

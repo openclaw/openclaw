@@ -2674,15 +2674,15 @@ export class AgentSession {
 
     let delayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
     if (message.retryAfterSeconds !== undefined) {
-      delayMs = Math.max(delayMs, message.retryAfterSeconds * 1000);
-    }
-
-    // Bound the provider-controlled delay to a reasonable session ceiling to prevent days-long hangs
-    const MAX_RETRY_DELAY_MS = 5 * 60 * 1000;
-    if (!Number.isFinite(delayMs)) {
-      delayMs = MAX_RETRY_DELAY_MS;
-    } else {
-      delayMs = Math.min(delayMs, MAX_RETRY_DELAY_MS);
+      let providerDelayMs = message.retryAfterSeconds * 1000;
+      // Bound ONLY the provider-controlled delay to a reasonable session ceiling to prevent days-long hangs
+      const MAX_RETRY_DELAY_MS = 5 * 60 * 1000;
+      if (!Number.isFinite(providerDelayMs)) {
+        providerDelayMs = MAX_RETRY_DELAY_MS;
+      } else {
+        providerDelayMs = Math.min(providerDelayMs, MAX_RETRY_DELAY_MS);
+      }
+      delayMs = Math.max(delayMs, providerDelayMs);
     }
 
     this.emit({
