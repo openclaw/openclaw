@@ -58,8 +58,30 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect((statError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
 }
 
+async function findTombstone(
+  originalPath: string,
+  reason: "reset" | "deleted",
+): Promise<string | undefined> {
+  const dir = path.dirname(originalPath);
+  const prefix = `${path.basename(originalPath)}.${reason}.`;
+  const entries = await fs.readdir(dir).catch(() => []);
+  const match = entries.find((name) => name.startsWith(prefix));
+  return match ? path.join(dir, match) : undefined;
+}
+
+/** Asserts originalPath is gone and a matching tombstone now exists; returns its path. */
+async function expectTombstoned(
+  originalPath: string,
+  reason: "reset" | "deleted",
+): Promise<string> {
+  await expectPathMissing(originalPath);
+  const tombstone = await findTombstone(originalPath, reason);
+  expect(tombstone).toBeDefined();
+  return tombstone as string;
+}
+
 describe("trajectory cleanup", () => {
-  it("removes adjacent trajectory sidecars for a deleted session", async () => {
+  it("tombstones adjacent trajectory sidecars into .deleted.<timestamp> for a deleted session", async () => {
     await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
       const sessionId = "session-1";
       const storePath = path.join(dir, "sessions.json");
@@ -74,11 +96,15 @@ describe("trajectory cleanup", () => {
         sessionFile,
         storePath,
         restrictToStoreDir: true,
+        disposal: { mode: "tombstone", reason: "deleted" },
       });
 
       expect(removed.map((entry) => entry.kind).toSorted()).toEqual(["pointer", "runtime"]);
-      await expectPathMissing(runtimeFile);
-      await expectPathMissing(pointerPath);
+      const runtimeTombstone = await expectTombstoned(runtimeFile, "deleted");
+      const pointerTombstone = await expectTombstoned(pointerPath, "deleted");
+      expect(removed.map((entry) => entry.path).toSorted()).toEqual(
+        [runtimeTombstone, pointerTombstone].toSorted(),
+      );
     });
   });
 
@@ -97,6 +123,7 @@ describe("trajectory cleanup", () => {
         referencedSessionIds: new Set([sessionId]),
         storePath,
         restrictToStoreDir: true,
+        disposal: { mode: "tombstone", reason: "deleted" },
       });
 
       expect(removed).toStrictEqual([]);
@@ -126,10 +153,11 @@ describe("trajectory cleanup", () => {
         sessionFile,
         storePath,
         restrictToStoreDir: true,
+        disposal: { mode: "tombstone", reason: "deleted" },
       });
 
-      await expectPathMissing(safeExternalRuntime);
-      await expectPathMissing(pointerPath);
+      await expectTombstoned(safeExternalRuntime, "deleted");
+      await expectTombstoned(pointerPath, "deleted");
 
       await fs.writeFile(pointerPath, pointerFile(sessionId, unsafeExternalRuntime), "utf8");
       await removeSessionTrajectoryArtifacts({
@@ -137,6 +165,7 @@ describe("trajectory cleanup", () => {
         sessionFile,
         storePath,
         restrictToStoreDir: true,
+        disposal: { mode: "tombstone", reason: "deleted" },
       });
 
       expect((await fs.stat(unsafeExternalRuntime)).isFile()).toBe(true);
@@ -162,15 +191,16 @@ describe("trajectory cleanup", () => {
         sessionFile,
         storePath,
         restrictToStoreDir: true,
+        disposal: { mode: "tombstone", reason: "deleted" },
       });
 
-      expect(removed).toEqual([{ kind: "pointer", path: pointerPath }]);
+      const pointerTombstone = await expectTombstoned(pointerPath, "deleted");
+      expect(removed).toEqual([{ kind: "pointer", path: pointerTombstone }]);
       expect((await fs.stat(unrelatedTranscript)).isFile()).toBe(true);
-      await expectPathMissing(pointerPath);
     });
   });
 
-  it("continues best-effort cleanup when one artifact cannot be unlinked", async () => {
+  it("continues best-effort cleanup when one artifact cannot be archived", async () => {
     await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
       const sessionId = "session-4";
       const storePath = path.join(dir, "sessions.json");
@@ -179,8 +209,8 @@ describe("trajectory cleanup", () => {
       const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
       await fs.writeFile(runtimeFile, runtimeEvent(sessionId), "utf8");
       await fs.writeFile(pointerPath, pointerFile(sessionId, runtimeFile), "utf8");
-      const removeFailure = Object.assign(new Error("busy"), { code: "EBUSY" });
-      const rmSpy = vi.spyOn(nodeFs.promises, "rm").mockRejectedValueOnce(removeFailure);
+      const archiveFailure = Object.assign(new Error("busy"), { code: "EBUSY" });
+      const renameSpy = vi.spyOn(nodeFs.promises, "rename").mockRejectedValueOnce(archiveFailure);
 
       try {
         const removed = await removeSessionTrajectoryArtifacts({
@@ -188,18 +218,21 @@ describe("trajectory cleanup", () => {
           sessionFile,
           storePath,
           restrictToStoreDir: true,
+          disposal: { mode: "tombstone", reason: "deleted" },
         });
 
-        expect(removed).toEqual([{ kind: "pointer", path: pointerPath }]);
+        const pointerTombstone = await expectTombstoned(pointerPath, "deleted");
+        expect(removed).toEqual([{ kind: "pointer", path: pointerTombstone }]);
+        // The runtime rename was the one made to fail — it stays exactly where
+        // it was, not tombstoned, matching the best-effort contract.
         expect((await fs.stat(runtimeFile)).isFile()).toBe(true);
-        await expectPathMissing(pointerPath);
       } finally {
-        rmSpy.mockRestore();
+        renameSpy.mockRestore();
       }
     });
   });
 
-  it("retires the canonical path before unlinking the runtime file", async () => {
+  it("retires the canonical path before archiving the runtime file", async () => {
     await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
       const sessionId = "session-5";
       const storePath = path.join(dir, "sessions.json");
@@ -220,6 +253,7 @@ describe("trajectory cleanup", () => {
         sessionFile,
         storePath,
         restrictToStoreDir: true,
+        disposal: { mode: "tombstone", reason: "deleted" },
       });
 
       const afterRemoval = await withTrajectoryPathLock(canonicalPath, (ctx) => ctx);
@@ -261,9 +295,10 @@ describe("trajectory cleanup", () => {
         sessionFile: sessionFileA,
         storePath,
         restrictToStoreDir: true,
+        disposal: { mode: "tombstone", reason: "deleted" },
       });
 
-      await expectPathMissing(leaseA.filePath);
+      await expectTombstoned(leaseA.filePath, "deleted");
       expect((await fs.stat(leaseB.filePath)).isFile()).toBe(true);
     });
   });
@@ -306,15 +341,16 @@ describe("trajectory cleanup", () => {
         sessionFile: sessionFileB,
         storePath,
         restrictToStoreDir: true,
+        disposal: { mode: "tombstone", reason: "deleted" },
       });
 
-      await expectPathMissing(leaseB.filePath);
-      await expectPathMissing(pointerPathB);
+      await expectTombstoned(leaseB.filePath, "deleted");
+      await expectTombstoned(pointerPathB, "deleted");
       expect((await fs.stat(leaseA.filePath)).isFile()).toBe(true);
     });
   });
 
-  it("does not admit a writer claim while a delete's unlink is still in flight", async () => {
+  it("does not admit a writer claim while a delete's archive-rename is still in flight", async () => {
     await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
       const sessionId = "session-7";
       const storePath = path.join(dir, "sessions.json");
@@ -325,18 +361,18 @@ describe("trajectory cleanup", () => {
       await fs.writeFile(pointerPath, pointerFile(sessionId, runtimeFile), "utf8");
 
       const order: string[] = [];
-      const originalRm = nodeFs.promises.rm.bind(nodeFs.promises);
-      let releaseUnlink: () => void = () => {};
-      const unlinkGate = new Promise<void>((resolve) => {
-        releaseUnlink = resolve;
+      const originalRename = nodeFs.promises.rename.bind(nodeFs.promises);
+      let releaseArchive: () => void = () => {};
+      const archiveGate = new Promise<void>((resolve) => {
+        releaseArchive = resolve;
       });
-      const rmSpy = vi
-        .spyOn(nodeFs.promises, "rm")
-        .mockImplementation(async (target: nodeFs.PathLike, options?: nodeFs.RmOptions) => {
-          order.push("unlink-start");
-          await unlinkGate;
-          const result = await originalRm(target, options);
-          order.push("unlink-done");
+      const renameSpy = vi
+        .spyOn(nodeFs.promises, "rename")
+        .mockImplementation(async (src: nodeFs.PathLike, dest: nodeFs.PathLike) => {
+          order.push("archive-start");
+          await archiveGate;
+          const result = await originalRename(src, dest);
+          order.push("archive-done");
           return result;
         });
 
@@ -346,14 +382,15 @@ describe("trajectory cleanup", () => {
           sessionFile,
           storePath,
           restrictToStoreDir: true,
+          disposal: { mode: "tombstone", reason: "deleted" },
         });
 
         // Let the delete turn's synchronous claim+retire run and reach the
-        // paused unlink before attempting a concurrent claim.
+        // paused archive rename before attempting a concurrent claim.
         await new Promise<void>((resolve) => {
           setImmediate(() => resolve());
         });
-        expect(order).toEqual(["unlink-start"]);
+        expect(order).toEqual(["archive-start"]);
 
         const acquirePromise = acquireTrajectoryWriterLease({
           sessionId,
@@ -364,28 +401,29 @@ describe("trajectory cleanup", () => {
         });
 
         // The claim must queue behind the per-path lock, not run concurrently
-        // with the paused unlink (P1-A) — give it every chance to (wrongly)
-        // resolve early before asserting it hasn't.
+        // with the paused archive rename (P1-A) — give it every chance to
+        // (wrongly) resolve early before asserting it hasn't.
         await new Promise<void>((resolve) => {
           setImmediate(() => resolve());
         });
-        expect(order).toEqual(["unlink-start"]);
+        expect(order).toEqual(["archive-start"]);
 
-        releaseUnlink();
+        releaseArchive();
         const [, lease] = await Promise.all([deletePromise, acquirePromise]);
 
-        expect(order.indexOf("unlink-done")).toBeLessThan(order.indexOf("acquire-done"));
+        expect(order.indexOf("archive-done")).toBeLessThan(order.indexOf("acquire-done"));
         expect(lease.filePath).toBe(runtimeFile);
-        // The claim was only admitted after delete's unlink fully committed,
-        // so it cannot have reactivated or recreated the deleted artifact.
-        await expectPathMissing(runtimeFile);
+        // The claim was only admitted after delete's archive rename fully
+        // committed, so it cannot have reactivated or recreated the tombstoned
+        // artifact — the original path is free and a fresh tombstone exists.
+        await expectTombstoned(runtimeFile, "deleted");
       } finally {
-        rmSpy.mockRestore();
+        renameSpy.mockRestore();
       }
     });
   });
 
-  it("keeps a queued re-acquisition's fresh runtime and pointer intact against a racing delete's pointer removal", async () => {
+  it("keeps a queued re-acquisition's fresh runtime and pointer intact against a racing delete's pointer archive", async () => {
     await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
       const sessionId = "session-8";
       const storePath = path.join(dir, "sessions.json");
@@ -396,22 +434,22 @@ describe("trajectory cleanup", () => {
       await fs.writeFile(pointerPath, pointerFile(sessionId, runtimeFile), "utf8");
 
       const order: string[] = [];
-      const originalRm = nodeFs.promises.rm.bind(nodeFs.promises);
-      let releasePointerRemoval: () => void = () => {};
-      const pointerRemovalGate = new Promise<void>((resolve) => {
-        releasePointerRemoval = resolve;
+      const originalRename = nodeFs.promises.rename.bind(nodeFs.promises);
+      let releasePointerArchive: () => void = () => {};
+      const pointerArchiveGate = new Promise<void>((resolve) => {
+        releasePointerArchive = resolve;
       });
-      const rmSpy = vi
-        .spyOn(nodeFs.promises, "rm")
-        .mockImplementation(async (target: nodeFs.PathLike, options?: nodeFs.RmOptions) => {
-          const isPointerTarget = String(target) === pointerPath;
+      const renameSpy = vi
+        .spyOn(nodeFs.promises, "rename")
+        .mockImplementation(async (src: nodeFs.PathLike, dest: nodeFs.PathLike) => {
+          const isPointerTarget = String(src) === pointerPath;
           if (isPointerTarget) {
-            order.push("pointer-unlink-start");
-            await pointerRemovalGate;
+            order.push("pointer-archive-start");
+            await pointerArchiveGate;
           }
-          const result = await originalRm(target, options);
+          const result = await originalRename(src, dest);
           if (isPointerTarget) {
-            order.push("pointer-unlink-done");
+            order.push("pointer-archive-done");
           }
           return result;
         });
@@ -422,29 +460,30 @@ describe("trajectory cleanup", () => {
           sessionFile,
           storePath,
           restrictToStoreDir: true,
+          disposal: { mode: "tombstone", reason: "deleted" },
         });
 
-        // Let delete's locked turn remove the runtime file and reach the
-        // paused pointer removal — still inside the SAME turn once fixed —
+        // Let delete's locked turn archive the runtime file and reach the
+        // paused pointer archive — still inside the SAME turn once fixed —
         // before attempting a concurrent re-acquisition for the same
         // session (ordering (B) from the round-4 finding). The runtime
-        // file's own (unpaused) removal is real disk I/O, so poll rather
+        // file's own (unpaused) rename is real disk I/O, so poll rather
         // than assume a fixed number of ticks.
         for (let attempt = 0; attempt < 50 && order.length === 0; attempt += 1) {
           await new Promise<void>((resolve) => {
             setImmediate(() => resolve());
           });
         }
-        expect(order).toEqual(["pointer-unlink-start"]);
+        expect(order).toEqual(["pointer-archive-start"]);
 
         const recorderPromise = createTrajectoryRuntimeRecorder({ sessionId, sessionFile });
 
         await new Promise<void>((resolve) => {
           setImmediate(() => resolve());
         });
-        expect(order).toEqual(["pointer-unlink-start"]);
+        expect(order).toEqual(["pointer-archive-start"]);
 
-        releasePointerRemoval();
+        releasePointerArchive();
         const [, recorder] = await Promise.all([deletePromise, recorderPromise]);
         if (!recorder) {
           throw new Error("expected trajectory runtime recorder");
@@ -452,6 +491,16 @@ describe("trajectory cleanup", () => {
         recorder.recordEvent("prompt.submitted", { marker: "post-race-owner" });
         await recorder.flush();
 
+        // Delete's OWN pair tombstoned (the runtime rename already completed
+        // unpaused, before this test even started polling for pointer-archive-start).
+        await findTombstone(runtimeFile, "deleted").then((tombstone) =>
+          expect(tombstone).toBeDefined(),
+        );
+        await findTombstone(pointerPath, "deleted").then((tombstone) =>
+          expect(tombstone).toBeDefined(),
+        );
+
+        // The NEW owner's fresh pair is live at the original (now-vacant) paths.
         const pointerContent = JSON.parse(nodeFs.readFileSync(pointerPath, "utf8")) as {
           runtimeFile?: string;
         };
@@ -459,7 +508,7 @@ describe("trajectory cleanup", () => {
         expect(nodeFs.existsSync(recorder.filePath)).toBe(true);
         expect(nodeFs.readFileSync(recorder.filePath, "utf8")).toContain("post-race-owner");
       } finally {
-        rmSpy.mockRestore();
+        renameSpy.mockRestore();
       }
     });
   });

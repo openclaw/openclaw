@@ -52,6 +52,15 @@ async function expectTrajectoryRuntimeRecorder(
   return recorder;
 }
 
+/** Asserts originalPath is gone and a matching tombstone now exists. */
+function expectTombstoned(originalPath: string, reason: "reset" | "deleted"): void {
+  expect(fs.existsSync(originalPath)).toBe(false);
+  const dir = path.dirname(originalPath);
+  const prefix = `${path.basename(originalPath)}.${reason}.`;
+  const entries = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+  expect(entries.some((name) => name.startsWith(prefix))).toBe(true);
+}
+
 describe("trajectory runtime", () => {
   it("resolves a session-adjacent trajectory file by default", () => {
     expect(
@@ -630,6 +639,7 @@ describe("trajectory runtime", () => {
         sessionFile,
         storePath,
         restrictToStoreDir: true,
+        disposal: { mode: "tombstone", reason: "deleted" },
       });
 
       releaseContinuation();
@@ -638,7 +648,9 @@ describe("trajectory runtime", () => {
       await new Promise<void>((resolve) => {
         setImmediate(() => resolve());
       });
-      expect(fs.existsSync(pointerPath)).toBe(false);
+      // The stale claim's publish must never recreate the pointer at its
+      // original path — the path stays free, tombstoned by the delete above.
+      expectTombstoned(pointerPath, "deleted");
     } finally {
       acquireSpy.mockRestore();
     }
