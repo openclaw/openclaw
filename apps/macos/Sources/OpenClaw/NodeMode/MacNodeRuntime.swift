@@ -26,6 +26,7 @@ actor MacNodeRuntime {
     private let refreshCanvasSurfaceUrl: @Sendable () async -> String?
     private let codexThreadCatalogEnabled: @Sendable () -> Bool
     private let codexThreadListRequest: @Sendable (String?) async throws -> String
+    private let codexThreadTurnsRequest: @Sendable (String?) async throws -> String
     private let execApprovalStoreMutations: ExecApprovalStoreMutations
     private let shellRunner: @Sendable (
         _ command: [String],
@@ -65,6 +66,9 @@ actor MacNodeRuntime {
         codexThreadListRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
             try await MacNodeCodexThreadCatalog.list(paramsJSON: paramsJSON)
         },
+        codexThreadTurnsRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
+            try await MacNodeCodexThreadCatalog.turns(paramsJSON: paramsJSON)
+        },
         execApprovalStoreMutations: ExecApprovalStoreMutations = .live,
         shellRunner: @escaping @Sendable (
             _ command: [String],
@@ -82,6 +86,7 @@ actor MacNodeRuntime {
         self.refreshCanvasSurfaceUrl = refreshCanvasSurfaceUrl
         self.codexThreadCatalogEnabled = codexThreadCatalogEnabled
         self.codexThreadListRequest = codexThreadListRequest
+        self.codexThreadTurnsRequest = codexThreadTurnsRequest
         self.execApprovalStoreMutations = execApprovalStoreMutations
         self.shellRunner = shellRunner
     }
@@ -150,6 +155,15 @@ actor MacNodeRuntime {
                         message: "UNAVAILABLE: Codex session catalog is disabled")
                 }
                 let payload = try await codexThreadListRequest(req.paramsJSON)
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+            case MacNodeCodexThreadCatalogContract.turnsCommand:
+                guard self.codexThreadCatalogEnabled() else {
+                    return Self.errorResponse(
+                        req,
+                        code: .unavailable,
+                        message: "UNAVAILABLE: Codex session catalog is disabled")
+                }
+                let payload = try await codexThreadTurnsRequest(req.paramsJSON)
                 return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
             default:
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
