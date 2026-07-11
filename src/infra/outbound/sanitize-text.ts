@@ -34,12 +34,12 @@ export function sanitizeForPlainText(text: string): string {
     // Block elements → newlines
     .replace(/<\/?(p|div)>/gi, "\n")
     // Bold → WhatsApp/Signal bold
-    .replace(/<(b|strong)>(.*?)<\/\1>/gi, "*$2*")
+    .replace(/<(b|strong)(?:\s[^>]*)?>(.*?)<\/\1>/gi, "*$2*")
     // Italic → WhatsApp/Signal italic
-    .replace(/<(i|em)>(.*?)<\/\1>/gi, "_$2_")
+    .replace(/<(i|em)(?:\s[^>]*)?>(.*?)<\/\1>/gi, "_$2_")
     // Strikethrough → WhatsApp/Signal strikethrough
-    .replace(/<(s|strike|del)>(.*?)<\/\1>/gi, "~$2~")
-    // Inline code (allow attributes such as class="language-ts")
+    .replace(/<(s|strike|del)(?:\s[^>]*)?>(.*?)<\/\1>/gi, "~$2~")
+    // Inline code
     .replace(/<code(?:\s[^>]*)?>(.*?)<\/code>/gi, "`$1`")
     // Headings → bold text with newline
     .replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi, "\n*$1*\n")

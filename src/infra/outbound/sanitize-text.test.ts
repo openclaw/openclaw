@@ -25,26 +25,40 @@ describe("sanitizeForPlainText", () => {
   it("converts <b> and <strong> to WhatsApp bold", () => {
     expect(sanitizeForPlainText("<b>bold</b>")).toBe("*bold*");
     expect(sanitizeForPlainText("<strong>bold</strong>")).toBe("*bold*");
+    expect(sanitizeForPlainText('<strong class="emphasis">bold</strong>')).toBe("*bold*");
   });
 
   it("converts <i> and <em> to WhatsApp italic", () => {
     expect(sanitizeForPlainText("<i>italic</i>")).toBe("_italic_");
     expect(sanitizeForPlainText("<em>italic</em>")).toBe("_italic_");
+    expect(sanitizeForPlainText('<em data-language="en">italic</em>')).toBe("_italic_");
   });
 
   it("converts <s>, <strike>, and <del> to WhatsApp strikethrough", () => {
     expect(sanitizeForPlainText("<s>deleted</s>")).toBe("~deleted~");
     expect(sanitizeForPlainText("<del>removed</del>")).toBe("~removed~");
     expect(sanitizeForPlainText("<strike>old</strike>")).toBe("~old~");
+    expect(sanitizeForPlainText('<del data-revision="3">removed</del>')).toBe("~removed~");
   });
 
   it("converts <code> to backtick wrapping", () => {
     expect(sanitizeForPlainText("<code>foo()</code>")).toBe("`foo()`");
-  });
-
-  it("converts <code> with attributes to backtick wrapping", () => {
     expect(sanitizeForPlainText('<code class="language-ts">foo()</code>')).toBe("`foo()`");
     expect(sanitizeForPlainText('<code id="x" class="y">bar()</code>')).toBe("`bar()`");
+  });
+
+  it("keeps formatting tag boundaries exact", () => {
+    expect(sanitizeForPlainText("<bold>bold</bold>")).toBe("bold");
+    expect(sanitizeForPlainText("<strikeout>old</strikeout>")).toBe("old");
+    expect(sanitizeForPlainText("<codebase>foo()</codebase>")).toBe("foo()");
+  });
+
+  it("converts nested attributed formatting", () => {
+    expect(
+      sanitizeForPlainText(
+        '<strong class="emphasis"><code data-language="ts">foo()</code></strong>',
+      ),
+    ).toBe("*`foo()`*");
   });
 
   // --- block elements -----------------------------------------------------
