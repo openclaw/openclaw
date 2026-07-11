@@ -2,6 +2,7 @@
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -623,7 +624,7 @@ function buildFeishuPostMessagePayloads(params: {
     : materializeFeishuPostMarkdownLineBreaks(params.messageText);
   const chunks =
     materializedText.length > params.maxMarkdownTextLength
-      ? chunkTextForOutbound(materializedText, params.maxMarkdownTextLength)
+      ? chunkMarkdownTextWithMode(materializedText, params.maxMarkdownTextLength, "length")
       : [materializedText];
   return (chunks.length ? chunks : [""]).map((chunk, index) =>
     buildFeishuPostMessagePayloadFromText({

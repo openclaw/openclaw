@@ -498,7 +498,7 @@ describe("getMessageFeishu", () => {
         content: [
           [
             { tag: "at", user_id: "ou_target", user_name: "Target User" },
-            { tag: "md", text: "abcd" },
+            { tag: "md", text: "abcd\n" },
           ],
         ],
       },
@@ -510,6 +510,67 @@ describe("getMessageFeishu", () => {
     });
     expect(result.messageId).toBe("om_limited_1");
     expect(result.receipt.platformMessageIds).toEqual(["om_limited_1", "om_limited_2"]);
+  });
+
+  it("keeps direct post markdown fences balanced across send-limit chunks", async () => {
+    const expectedChunks = [
+      "Intro",
+      "```ts\nconst a = \n```",
+      "```ts\n1;\n```",
+      "```ts\nconst b = \n```",
+      "```ts\n2;\n```\nAfter",
+    ];
+    const create = vi.fn();
+    for (const [index] of expectedChunks.entries()) {
+      create.mockResolvedValueOnce({
+        code: 0,
+        data: { message_id: `om_fenced_${index + 1}` },
+      });
+    }
+    mockResolveFeishuAccount.mockReturnValue({
+      accountId: "default",
+      configured: true,
+      config: { textChunkLimit: 20 },
+    });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "Intro\n```ts\nconst a = 1;\nconst b = 2;\n```\nAfter",
+      mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+    });
+
+    expect(create).toHaveBeenCalledTimes(expectedChunks.length);
+    expect(
+      create.mock.calls.map((call) => JSON.parse(call[0].data.content).zh_cn.content[0]),
+    ).toEqual([
+      [
+        { tag: "at", user_id: "ou_target", user_name: "Target User" },
+        { tag: "md", text: expectedChunks[0] },
+      ],
+      [{ tag: "md", text: expectedChunks[1] }],
+      [{ tag: "md", text: expectedChunks[2] }],
+      [{ tag: "md", text: expectedChunks[3] }],
+      [{ tag: "md", text: expectedChunks[4] }],
+    ]);
+    expect(result.receipt.platformMessageIds).toEqual([
+      "om_fenced_1",
+      "om_fenced_2",
+      "om_fenced_3",
+      "om_fenced_4",
+      "om_fenced_5",
+    ]);
   });
 
   it("extracts text content from interactive card elements", async () => {
