@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LocalAudioSelection } from "../media-understanding/local-audio.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { CAPABILITY_METADATA, registerCapabilityCli } from "./capability-cli.js";
 
@@ -147,7 +148,10 @@ const mocks = vi.hoisted(() => ({
   ]),
   listEmbeddingProviders: vi.fn(() => []),
   buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
-  inspectLocalAudioSelection: vi.fn(async () => ({ candidates: [], entries: [] })),
+  inspectLocalAudioSelection: vi.fn<() => Promise<LocalAudioSelection>>(async () => ({
+    candidates: [],
+    entries: [],
+  })),
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
   isWebSearchProviderConfigured: vi.fn(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
