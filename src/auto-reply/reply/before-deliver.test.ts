@@ -4,6 +4,7 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-paylo
 import type { ReplyPayload } from "../types.js";
 import {
   appendReplyDispatcherBeforeDeliverCancelled,
+  appendReplyDispatcherBeforeDeliverFailed,
   createReplyDispatcher,
 } from "./reply-dispatcher.js";
 
@@ -156,6 +157,47 @@ describe("beforeDeliver in reply dispatcher", () => {
     expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 1, final: 0 });
     expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
     expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 1, final: 0 });
+  });
+
+  it("notifies appended delivery-failed observers when deliver throws", async () => {
+    const delivered: string[] = [];
+    const failed: Array<{ kind: string; text: string }> = [];
+    const errors: string[] = [];
+
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        if (payload.text?.includes("boom")) {
+          throw new Error("delivery failed");
+        }
+        delivered.push(payload.text ?? "");
+      },
+      // Distinguish a cancelled send (beforeDeliver null) from a failed delivery.
+      beforeDeliver: (payload) => (payload.text?.includes("cancelled") ? null : payload),
+      onError: (err) => {
+        errors.push(err instanceof Error ? err.message : String(err));
+      },
+    });
+    appendReplyDispatcherBeforeDeliverFailed(dispatcher, (payload, info) => {
+      failed.push({ kind: info.kind, text: payload.text ?? "" });
+    });
+    appendReplyDispatcherBeforeDeliverFailed(dispatcher, () => {
+      throw new Error("failed observer threw");
+    });
+
+    dispatcher.sendFinalReply({ text: "ok reply" });
+    dispatcher.sendFinalReply({ text: "cancelled reply" });
+    dispatcher.sendFinalReply({ text: "boom reply" });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual(["ok reply"]);
+    // The failed observer fires only for the delivery that threw — not for the
+    // cancelled (beforeDeliver null) send, nor the successful send.
+    expect(failed).toEqual([{ kind: "final", text: "boom reply" }]);
+    // An observer that throws is reported through onError, not propagated.
+    expect(errors).toContain("failed observer threw");
+    expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
+    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
   });
 
   it("allows modifying payload in beforeDeliver", async () => {

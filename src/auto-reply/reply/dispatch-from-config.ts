@@ -2947,6 +2947,39 @@ async function dispatchReplyFromConfigInner(
       payload: ReplyPayload;
     }> = [];
     let allQueuedFinalsObserved = true;
+    // Captioned-final mode suppresses the streamed block text so the final voice can
+    // carry it as a caption. A voice sent through the raw dispatcher only proves
+    // admission when sendFinalReply returns — the visible send (e.g. Telegram
+    // sendVoice) settles async and can still fail. This registers a post-settlement
+    // recovery (a sibling of the transcript-mirror settle task) that re-sends the
+    // accumulated block text as a text-only final when THIS voice's own outcome
+    // failed/cancelled, so suppressed content is never silently dropped. Scoping to
+    // the voice's per-payload delivery outcome — not an aggregate final-outcome delta —
+    // keeps a sibling final's failure from re-sending duplicate block text (#83511). It
+    // runs after waitForIdle inside settleReplyDispatcher, off the reply hot path, so it
+    // never blocks completion the way an inline waitForIdle would (#99549).
+    const registerCaptionedFinalTextRecovery = (
+      voiceOutcome: Promise<ReplyDispatchDeliveryOutcome>,
+    ) => {
+      const directiveFallbackText =
+        !deliveredAnyVisibleBlockText && cleanBlockTtsDirectiveText
+          ? resolveDirectiveOnlyTtsCaptionText(accumulatedBlockText)
+          : undefined;
+      const fallbackText = directiveFallbackText ?? accumulatedBlockText;
+      if (!fallbackText.trim()) {
+        return;
+      }
+      registerReplyDispatcherSettledTask(dispatcher, async () => {
+        // The captioned voice reached the user; its caption already carried the text.
+        if ((await voiceOutcome) === "delivered") {
+          return;
+        }
+        dispatcher.sendFinalReply({ text: fallbackText });
+        // Re-drain so the recovery text flushes before settle completes; the enqueue
+        // extends the same send chain waitForIdle returns.
+        await dispatcher.waitForIdle();
+      });
+    };
     // Explicit command turns (native or authorized text-slash like /compact) are
     // user-initiated, so a marked terminal reply for the command bypasses
     // room_event suppression. Ambient marked notices (no CommandTurn) stay
@@ -3004,6 +3037,14 @@ async function dispatchReplyFromConfigInner(
         } else {
           allQueuedFinalsObserved = false;
         }
+      }
+      // A captioned final voice admitted through the raw dispatcher is only queued
+      // here, not confirmed delivered. Recover the suppressed block text if THIS
+      // voice's own outcome fails/cancels async. deliveredMedia is set only for a
+      // genuinely synthesized voice on the direct-dispatcher path (dispatcherOutcome
+      // present); the routed path already knows delivery synchronously.
+      if (willUseCaptionedFinalTts && finalReply.deliveredMedia && finalReply.dispatcherOutcome) {
+        registerCaptionedFinalTextRecovery(finalReply.dispatcherOutcome);
       }
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
         finalDeliveryFailed = true;
@@ -3129,9 +3170,19 @@ async function dispatchReplyFromConfigInner(
             } else {
               throwIfDispatchOperationAborted();
               markInboundDedupeReplayUnsafe();
+              // sendFinalReply only proves admission; the synthesized voice settles
+              // async and can still fail. Optimistically suppress the inline text
+              // fallback and register a post-settlement recovery that re-sends the block
+              // text if THIS voice's own outcome fails/cancels — mirroring the
+              // direct-final recovery, and keeping the reply operation off waitForIdle
+              // (the deadlock removed in #99549).
+              const ttsVoiceOutcome = captureReplyDispatchDeliveryOutcome(normalizedTtsPayload);
               const didQueue = dispatcher.sendFinalReply(normalizedTtsPayload);
               queuedFinal = didQueue || queuedFinal;
               ttsMediaDelivered = didQueue;
+              if (didQueue && ttsVoiceOutcome.isTracked()) {
+                registerCaptionedFinalTextRecovery(ttsVoiceOutcome.promise);
+              }
             }
           }
         } catch (err) {

@@ -2212,12 +2212,20 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     // TTS succeeds (the final payload carries a voice mediaUrl) and sendFinalReply
     // enqueues it, but the captioned voice note fails to send on the dispatcher
-    // chain asynchronously (getFailedCounts().final reports 1 only after
-    // waitForIdle resolves). The accumulated block text must still reach delivery
-    // so the reply content is not silently dropped.
+    // chain asynchronously. The accumulated block text must still reach delivery
+    // via THIS voice's per-payload recovery so the reply content is not dropped.
     ttsMocks.state.synthesizeFinalAudio = true;
     channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
-    const dispatcher = createDispatcher({ failFinalOnMedia: true });
+    const delivered: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+        // The synthesized voice note fails async; the text-only recovery succeeds.
+        if (payload.mediaUrl) {
+          throw new Error("captioned voice send failed");
+        }
+      },
+    });
     const ctx = buildTestCtx({
       Provider: "telegram",
       Surface: "telegram",
@@ -2236,13 +2244,10 @@ describe("dispatchReplyFromConfig", () => {
     // the block-text recovery runs from the settle lifecycle, not inline.
     await settleReplyDispatcher({ dispatcher });
 
-    const finalPayloads = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls.map(
-      ([payload]) => payload as ReplyPayload,
-    );
     // The captioned voice note was attempted with media...
-    expect(finalPayloads.some((payload) => payload.mediaUrl)).toBe(true);
+    expect(delivered.some((payload) => payload.mediaUrl)).toBe(true);
     // ...and after it failed async, the accumulated block text reached delivery.
-    const textFallback = finalPayloads.find(
+    const textFallback = delivered.find(
       (payload) => payload.text === "Block speech content." && !payload.mediaUrl,
     );
     expect(textFallback).toBeDefined();
@@ -2252,12 +2257,19 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     // No returned final reply: the synthesis sibling path queues a voice note from
     // the accumulated (suppressed) block text via sendFinalReply. The enqueue
-    // succeeds but the voice fails async (getFailedCounts().final reports 1 only
-    // after waitForIdle resolves), so ttsMediaDelivered must stay false and the
-    // accumulated block text must still reach delivery as a text-only fallback.
+    // succeeds but the voice fails async, so the accumulated block text must still
+    // reach delivery as a text-only fallback via THIS voice's per-payload recovery.
     ttsMocks.state.synthesizeFinalAudio = true;
     channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
-    const dispatcher = createDispatcher({ failFinalOnMedia: true });
+    const delivered: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+        if (payload.mediaUrl) {
+          throw new Error("synth voice send failed");
+        }
+      },
+    });
     const ctx = buildTestCtx({
       Provider: "telegram",
       Surface: "telegram",
@@ -2276,16 +2288,65 @@ describe("dispatchReplyFromConfig", () => {
     // the block-text recovery runs from the settle lifecycle, not inline.
     await settleReplyDispatcher({ dispatcher });
 
-    const finalPayloads = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls.map(
-      ([payload]) => payload as ReplyPayload,
-    );
     // The synthesized voice note was queued with media...
-    expect(finalPayloads.some((payload) => payload.mediaUrl)).toBe(true);
+    expect(delivered.some((payload) => payload.mediaUrl)).toBe(true);
     // ...and after it failed async, the accumulated block text was sent text-only.
-    const textFallback = finalPayloads.find(
+    const textFallback = delivered.find(
       (payload) => payload.text === "Synth block speech." && !payload.mediaUrl,
     );
     expect(textFallback).toBeDefined();
+  });
+
+  it("does not re-send captioned block text when a sibling final fails but the voice succeeds", async () => {
+    setNoAbort();
+    // A single reply enqueues a captioned voice final (succeeds — its caption
+    // already carried the text) plus a sibling commentary final (fails). Recovery
+    // is attributed to THIS voice's own outcome, not an aggregate final-outcome
+    // delta, so the sibling's failure must NOT re-send the block text as a
+    // duplicate message (#83511).
+    ttsMocks.state.synthesizeFinalAudio = true;
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    const delivered: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+        // The sibling commentary final fails; the captioned voice succeeds.
+        if (payload.isCommentary === true) {
+          throw new Error("sibling commentary final failed");
+        }
+      },
+    });
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:telegram:mixed-final-outcome",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload[]> => {
+      await opts?.onBlockReply?.({ text: "Block answer." });
+      return [{ text: "Voiced answer." }, { text: "Sibling commentary.", isCommentary: true }];
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { commentaryPayloadsEnabled: true },
+    });
+    await settleReplyDispatcher({ dispatcher });
+
+    // The captioned voice was delivered (its caption carried the text)...
+    expect(delivered.some((payload) => payload.mediaUrl)).toBe(true);
+    // ...the sibling commentary final was attempted...
+    expect(delivered.some((payload) => payload.isCommentary === true)).toBe(true);
+    // ...and the sibling's failure did NOT re-send the block text as a duplicate.
+    const duplicateBlockText = delivered.find(
+      (payload) => payload.text === "Block answer." && !payload.mediaUrl,
+    );
+    expect(duplicateBlockText).toBeUndefined();
   });
 
   it("delivers accumulated block text when captioned final TTS media route fails", async () => {

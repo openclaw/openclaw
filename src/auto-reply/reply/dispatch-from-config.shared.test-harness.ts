@@ -679,10 +679,9 @@ vi.mock("../../tts/tts-config.js", () => ({
 export const noAbortResult = { handled: false, aborted: false } as const;
 export const emptyConfig = {} as OpenClawConfig;
 
-export function createDispatcher(options?: { failFinalOnMedia?: boolean }): ReplyDispatcher {
+export function createDispatcher(): ReplyDispatcher {
   let beforeDeliver: ReplyDispatchBeforeDeliver | undefined;
   const beforeDeliverTasks: Promise<unknown>[] = [];
-  let failedFinal = 0;
   const runBeforeDeliver = (kind: "tool" | "block" | "final", payload: ReplyPayload): void => {
     if (!beforeDeliver) {
       return;
@@ -700,16 +699,6 @@ export function createDispatcher(options?: { failFinalOnMedia?: boolean }): Repl
     }),
     sendFinalReply: vi.fn((payload) => {
       runBeforeDeliver("final", payload);
-      // Models a transport whose visible send settles (and fails) asynchronously:
-      // sendFinalReply enqueues successfully, but the media final fails later, so
-      // getFailedCounts().final only reflects it after waitForIdle resolves.
-      if (options?.failFinalOnMedia && payload.mediaUrl) {
-        beforeDeliverTasks.push(
-          Promise.resolve().then(() => {
-            failedFinal += 1;
-          }),
-        );
-      }
       return true;
     }),
     appendBeforeDeliver: vi.fn((hook) => {
@@ -727,7 +716,7 @@ export function createDispatcher(options?: { failFinalOnMedia?: boolean }): Repl
       await Promise.all(beforeDeliverTasks);
     }),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: failedFinal })),
+    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };
 }
