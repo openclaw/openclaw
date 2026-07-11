@@ -991,6 +991,9 @@ export async function runEmbeddedAttempt(
 ): Promise<EmbeddedRunAttemptResult> {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const runAbortController = new AbortController();
+  // Preparation and streaming share one attempt budget. The active watchdog
+  // inherits this deadline so slow assembly cannot reset the caller's timeout.
+  const initialRunDeadlineAtMs = Date.now() + Math.max(1, params.timeoutMs);
   // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
   // prompt/status surfaces, then lower only at agent-core and provider boundaries.
   const agentCoreThinkingLevel = mapThinkingLevel(params.thinkLevel);
@@ -1142,6 +1145,7 @@ export async function runEmbeddedAttempt(
   let isCompactionPendingForExternalSignal: (() => boolean) | undefined;
   let isCompactionInFlightForExternalSignal: (() => boolean) | undefined;
   let removeExternalAbortSignalListener: (() => void) | undefined;
+  let preflightAbortTimer: NodeJS.Timeout | undefined;
   const createAttemptAbortError = (signal: AbortSignal): Error => {
     if (signal.reason instanceof Error) {
       return signal.reason;
@@ -1156,6 +1160,12 @@ export async function runEmbeddedAttempt(
     const err = new Error("request timed out");
     err.name = "TimeoutError";
     return err;
+  };
+  const clearPreflightAbortTimer = () => {
+    if (preflightAbortTimer) {
+      clearTimeout(preflightAbortTimer);
+      preflightAbortTimer = undefined;
+    }
   };
   const cleanupEmbeddedPrepResourcesAfterEarlyExit = async () => {
     if (toolSearchCatalogApplied) {
@@ -1188,6 +1198,7 @@ export async function runEmbeddedAttempt(
     if (!signal) {
       return;
     }
+    clearPreflightAbortTimer();
     externalAbort = true;
     const reason = getAbortReason(signal);
     const timeout = reason ? isSignalTimeoutReason(reason) : false;
@@ -1233,15 +1244,34 @@ export async function runEmbeddedAttempt(
     };
   };
   const throwIfAttemptAbortSignalFiredAfterPrepCleanup = async () => {
-    if (params.abortSignal?.aborted === true) {
-      const abortError = createAttemptAbortError(params.abortSignal);
-      aborted = true;
-      externalAbort = true;
-      promptError = abortError;
-      await cleanupEmbeddedPrepResourcesAfterEarlyExit();
-      throw abortError;
+    const firedSignal = params.abortSignal?.aborted
+      ? params.abortSignal
+      : runAbortController.signal;
+    if (!firedSignal.aborted) {
+      return;
     }
+    const abortError = createAttemptAbortError(firedSignal);
+    aborted = true;
+    externalAbort ||= params.abortSignal?.aborted === true;
+    promptError = abortError;
+    await cleanupEmbeddedPrepResourcesAfterEarlyExit();
+    throw abortError;
   };
+  const preflightTimeoutMs = Math.max(1, initialRunDeadlineAtMs - Date.now());
+  preflightAbortTimer = setTimeout(() => {
+    const timeoutReason = makeTimeoutAbortReason();
+    aborted = true;
+    timedOut = true;
+    timedOutByRunBudget = true;
+    promptError = timeoutReason;
+    params.onAttemptTimeout?.(timeoutReason);
+    if (!runAbortController.signal.aborted) {
+      runAbortController.abort(timeoutReason);
+    }
+    void abortActiveSessionForExternalSignal?.();
+  }, preflightTimeoutMs);
+  params.onAttemptTimeoutArmed?.();
+  armExternalAbortSignal();
   try {
     const {
       skillsEligibility,
@@ -2320,12 +2350,12 @@ export async function runEmbeddedAttempt(
     retainedSessionFileOwner = await acquireEmbeddedAttemptSessionFileOwner({
       sessionFile: params.sessionFile,
       timeoutMs: sessionWriteLockOptions.maxHoldMs,
-      signal: params.abortSignal,
+      signal: runAbortController.signal,
     });
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     const sessionLockController = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock,
-      initialAcquireSignal: params.abortSignal,
+      initialAcquireSignal: runAbortController.signal,
       lockOptions: {
         sessionFile: params.sessionFile,
         ...sessionWriteLockOptions,
@@ -2444,7 +2474,7 @@ export async function runEmbeddedAttempt(
       trackSessionManagerAccess(params.sessionFile);
 
       await withOwnedSessionWriteLock(async () => {
-        await runAttemptContextEngineBootstrap({
+        const contextEngineBootstrap = runAttemptContextEngineBootstrap({
           hadSessionFile,
           contextEngine: activeContextEngine,
           sessionId: params.sessionId,
@@ -2466,8 +2496,12 @@ export async function runEmbeddedAttempt(
           modelId: params.modelId,
           fallbackReason: params.fallbackReason,
           degradedReason: params.degradedReason,
-          runMaintenance: async (contextParams) =>
-            await runContextEngineMaintenance({
+          abortSignal: runAbortController.signal,
+          runMaintenance: async (contextParams) => {
+            if (runAbortController.signal.aborted) {
+              throw createAttemptAbortError(runAbortController.signal);
+            }
+            return await runContextEngineMaintenance({
               contextEngine: contextParams.contextEngine as never,
               sessionId: contextParams.sessionId,
               sessionKey: contextParams.sessionKey,
@@ -2478,9 +2512,24 @@ export async function runEmbeddedAttempt(
               runtimeSettings: contextParams.runtimeSettings,
               config: params.config,
               agentId: sessionAgentId,
-            }),
+              abortSignal: runAbortController.signal,
+            });
+          },
           warn: (message) => log.warn(message),
         });
+        try {
+          // Bootstrap can mutate the session file. It receives the abort signal,
+          // but the write lock stays held until the operation actually settles.
+          await contextEngineBootstrap;
+        } catch (bootstrapErr) {
+          if (runAbortController.signal.aborted) {
+            throw createAttemptAbortError(runAbortController.signal);
+          }
+          throw bootstrapErr;
+        }
+        if (runAbortController.signal.aborted) {
+          throw createAttemptAbortError(runAbortController.signal);
+        }
 
         await prepareSessionManagerForRun({
           sessionManager,
@@ -3648,7 +3697,7 @@ export async function runEmbeddedAttempt(
               1,
               contextEngineAssemblePromptBudget - contextEngineAssembleRenderedPromptTokens,
             );
-            const assembled = await assembleAttemptContextEngine({
+            const contextEngineAssembly = assembleAttemptContextEngine({
               contextEngine: activeContextEngine,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
@@ -3664,7 +3713,12 @@ export async function runEmbeddedAttempt(
               fallbackReason: params.fallbackReason,
               degradedReason: params.degradedReason,
               ...(params.prompt !== undefined ? { prompt: contextEngineAssemblePrompt } : {}),
+              abortSignal: runAbortController.signal,
             });
+            const assembled = await abortableWithSignal(
+              runAbortController.signal,
+              contextEngineAssembly,
+            );
             if (!assembled) {
               throw new Error("context engine assemble returned no result");
             }
@@ -3692,6 +3746,11 @@ export async function runEmbeddedAttempt(
               );
             }
           } catch (assembleErr) {
+            // Caller cancellation is terminal for the attempt, not an engine failure
+            // eligible for the normal pipeline-message fallback below.
+            if (runAbortController.signal.aborted) {
+              throw createAttemptAbortError(runAbortController.signal);
+            }
             log.warn(
               `context engine assemble failed, using pipeline messages: ${String(assembleErr)}`,
             );
@@ -3704,7 +3763,7 @@ export async function runEmbeddedAttempt(
           // PERF: If the run was aborted during the setup,
           // skip the idle wait and flush pending results synchronously so we can
           // immediately dispose the session without orphaning tool calls.
-          ...(params.abortSignal?.aborted ? { timeoutMs: 0 } : {}),
+          ...(runAbortController.signal.aborted ? { timeoutMs: 0 } : {}),
         });
         activeSession.dispose();
         throw err;
@@ -4101,7 +4160,7 @@ export async function runEmbeddedAttempt(
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
       let abortTimer: NodeJS.Timeout | undefined;
-      let runAbortDeadlineAtMs = Date.now() + params.timeoutMs;
+      let runAbortDeadlineAtMs = initialRunDeadlineAtMs;
       let compactionGraceUsed = false;
       const scheduleAbortTimer = (delayMs: number, reason: "initial" | "compaction-grace") => {
         runAbortDeadlineAtMs = Date.now() + Math.max(1, delayMs);
@@ -4158,36 +4217,12 @@ export async function runEmbeddedAttempt(
           Math.max(1, delayMs),
         );
       };
-      scheduleAbortTimer(params.timeoutMs, "initial");
-      params.onAttemptTimeoutArmed?.();
+      clearPreflightAbortTimer();
+      scheduleAbortTimer(Math.max(1, initialRunDeadlineAtMs - Date.now()), "initial");
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
       let sessionFileUsed: string | undefined = params.sessionFile;
-      const onAbort = () => {
-        externalAbort = true;
-        const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
-        const timeout = reason ? isSignalTimeoutReason(reason) : false;
-        if (
-          shouldFlagCompactionTimeout({
-            isTimeout: timeout,
-            isCompactionPendingOrRetrying: subscription.isCompacting(),
-            isCompactionInFlight: activeSession.isCompacting,
-          })
-        ) {
-          timedOutDuringCompaction = true;
-        }
-        abortRun(timeout, reason);
-      };
-      if (params.abortSignal) {
-        if (params.abortSignal.aborted) {
-          onAbort();
-        } else {
-          params.abortSignal.addEventListener("abort", onAbort, {
-            once: true,
-          });
-        }
-      }
 
       const activeSessionManager = sessionManager;
       let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
@@ -5772,7 +5807,6 @@ export async function runEmbeddedAttempt(
           params.sessionKey,
           params.sessionFile,
         );
-        params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
       const toolMetasNormalized = toolMetas
@@ -6286,6 +6320,7 @@ export async function runEmbeddedAttempt(
       }
     }
   } finally {
+    clearPreflightAbortTimer();
     removeExternalAbortSignalListener?.();
     if (!sessionCleanupOwnsEmbeddedResources) {
       try {

@@ -339,6 +339,7 @@ async function executeContextEngineMaintenance(params: {
   agentId?: string;
   executionMode: "foreground" | "background";
   config?: OpenClawConfig;
+  abortSignal?: AbortSignal;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
   if (typeof params.contextEngine.maintain !== "function") {
     return undefined;
@@ -362,6 +363,7 @@ async function executeContextEngineMaintenance(params: {
       purpose: `context-engine.${params.reason}.maintenance`,
       contextEnginePluginId: resolveContextEngineOwnerPluginId(params.contextEngine),
     }),
+    abortSignal: params.abortSignal,
   });
   if (result.changed) {
     log.info(
@@ -658,6 +660,7 @@ export async function runContextEngineMaintenance(params: {
   onDeferredMaintenanceFailure?: (error: unknown) => void;
   config?: OpenClawConfig;
   disposeDeferredContextEngineAfterMaintenance?: boolean;
+  abortSignal?: AbortSignal;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
   if (typeof params.contextEngine?.maintain !== "function") {
     return undefined;
@@ -707,8 +710,12 @@ export async function runContextEngineMaintenance(params: {
       agentId: params.agentId,
       executionMode,
       config: params.config,
+      abortSignal: params.abortSignal,
     });
   } catch (err) {
+    if (params.abortSignal?.aborted) {
+      throw err;
+    }
     log.warn(`context engine maintain failed (${params.reason}): ${String(err)}`);
     return undefined;
   }

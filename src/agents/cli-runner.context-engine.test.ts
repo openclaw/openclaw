@@ -176,6 +176,8 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const dispose = vi.fn(async () => {});
     const contextEngine = createContextEngine({ bootstrap, afterTurn, maintain, dispose });
     const context = buildPreparedContext(contextEngine);
+    const abortController = new AbortController();
+    context.params.abortSignal = abortController.signal;
     context.params.bootstrapContextRunKind = "commitment-only";
     const result = await runPreparedCliAgent(context);
 
@@ -212,6 +214,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
         },
       },
     });
+    expect(bootstrapParams?.abortSignal).toBe(abortController.signal);
     expect(afterTurn).toHaveBeenCalledTimes(1);
     const afterTurnParams = afterTurn.mock.calls[0]?.[0];
     expect(afterTurnParams).toMatchObject({
@@ -332,6 +335,40 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const afterTurnParams = afterTurn.mock.calls[0]?.[0];
     expect(afterTurnParams?.prePromptMessageCount).toBe(1);
     expect(afterTurnParams?.messages[0]).toEqual(postBootstrapHistory[0]);
+  });
+
+  it("aborts pending context bootstrap before starting the CLI backend", async () => {
+    const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async ({ abortSignal }) => {
+      if (!abortSignal) {
+        throw new Error("missing context bootstrap abort signal");
+      }
+      await new Promise<never>((_resolve, reject) => {
+        const rejectForAbort = () =>
+          reject(
+            abortSignal.reason instanceof Error
+              ? abortSignal.reason
+              : new Error("context bootstrap aborted"),
+          );
+        if (abortSignal.aborted) {
+          rejectForAbort();
+          return;
+        }
+        abortSignal.addEventListener("abort", rejectForAbort, { once: true });
+      });
+      throw new Error("unreachable");
+    });
+    const contextEngine = createContextEngine({ bootstrap });
+    const context = buildPreparedContext(contextEngine);
+    const abortController = new AbortController();
+    context.params.abortSignal = abortController.signal;
+
+    const run = runPreparedCliAgent(context);
+    const rejection = expect(run).rejects.toThrow("context bootstrap cancelled");
+    await vi.waitFor(() => expect(bootstrap).toHaveBeenCalledTimes(1));
+    abortController.abort(new Error("context bootstrap cancelled"));
+
+    await rejection;
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
   });
 
   it("falls back to ingestBatch and still runs turn maintenance", async () => {

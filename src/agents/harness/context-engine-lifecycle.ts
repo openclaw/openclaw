@@ -91,6 +91,7 @@ export async function bootstrapHarnessContextEngine(params: {
   maxOutputTokens?: number | null;
   fallbackReason?: string | null;
   degradedReason?: string | null;
+  abortSignal?: AbortSignal;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
   config?: SessionWriteLockAcquireTimeoutConfig;
   warn: (message: string) => void;
@@ -109,7 +110,13 @@ export async function bootstrapHarnessContextEngine(params: {
         sessionKey: params.sessionKey,
         sessionFile: params.sessionFile,
         runtimeSettings,
+        abortSignal: params.abortSignal,
       });
+    }
+    if (params.abortSignal?.aborted) {
+      throw params.abortSignal.reason instanceof Error
+        ? params.abortSignal.reason
+        : new Error("context engine bootstrap aborted");
     }
     await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({
       contextEngine: params.contextEngine,
@@ -121,8 +128,12 @@ export async function bootstrapHarnessContextEngine(params: {
       runtimeContext: params.runtimeContext,
       runtimeSettings,
       config: params.config,
+      abortSignal: params.abortSignal,
     });
   } catch (bootstrapErr) {
+    if (params.abortSignal?.aborted) {
+      throw bootstrapErr;
+    }
     params.warn(`context engine bootstrap failed: ${String(bootstrapErr)}`);
   }
 }
@@ -150,6 +161,7 @@ export async function assembleHarnessContextEngine(params: {
   maxOutputTokens?: number | null;
   fallbackReason?: string | null;
   degradedReason?: string | null;
+  abortSignal?: AbortSignal;
 }) {
   if (!params.contextEngine) {
     return undefined;
@@ -165,6 +177,7 @@ export async function assembleHarnessContextEngine(params: {
     ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
     model: params.modelId,
     runtimeSettings,
+    abortSignal: params.abortSignal,
     ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
   });
   return ensureAssembleResultShape(result, params.contextEngine.info.id);
@@ -381,6 +394,7 @@ export async function runHarnessContextEngineMaintenance(params: {
   executionMode?: "foreground" | "background";
   onDeferredMaintenance?: (promise: Promise<void>) => void;
   config?: SessionWriteLockAcquireTimeoutConfig;
+  abortSignal?: AbortSignal;
 }) {
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
   return await runContextEngineMaintenance({
@@ -397,6 +411,7 @@ export async function runHarnessContextEngineMaintenance(params: {
     executionMode: params.executionMode,
     onDeferredMaintenance: params.onDeferredMaintenance,
     config: params.config,
+    abortSignal: params.abortSignal,
   });
 }
 

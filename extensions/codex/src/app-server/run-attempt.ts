@@ -459,25 +459,76 @@ async function runCodexAgentEndHook(
   runAgentEndSideEffects(sideEffectParams);
 }
 
+type RunCodexAppServerAttemptOptions = {
+  bindingStore: CodexAppServerBindingStore;
+  pluginConfig?: unknown;
+  startupTimeoutFloorMs?: number;
+  nativeHookRelay?: {
+    enabled?: boolean;
+    events?: readonly NativeHookRelayEvent[];
+    ttlMs?: number;
+    gatewayTimeoutMs?: number;
+    hookTimeoutSec?: number;
+  };
+  turnCompletionIdleTimeoutMs?: number;
+  turnAssistantCompletionIdleTimeoutMs?: number;
+  postToolRawAssistantCompletionIdleTimeoutMs?: number;
+  turnTerminalIdleTimeoutMs?: number;
+  clientFactory?: CodexAppServerClientFactory;
+};
+
+function createCodexRunDeadlineScope(params: EmbeddedRunAttemptParams): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const timeoutReason = new Error("Codex agent run timed out");
+  timeoutReason.name = "TimeoutError";
+  const onCallerAbort = () => controller.abort(params.abortSignal?.reason);
+  if (params.abortSignal?.aborted) {
+    onCallerAbort();
+  } else {
+    params.abortSignal?.addEventListener("abort", onCallerAbort, { once: true });
+    if (params.abortSignal?.aborted) {
+      onCallerAbort();
+    }
+  }
+  const timer = setTimeout(() => {
+    if (controller.signal.aborted) {
+      return;
+    }
+    params.onAttemptTimeout?.(timeoutReason);
+    controller.abort(timeoutReason);
+  }, Math.max(1, params.timeoutMs));
+  timer.unref?.();
+  params.onAttemptTimeoutArmed?.();
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      params.abortSignal?.removeEventListener("abort", onCallerAbort);
+    },
+  };
+}
+
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
-  options: {
-    bindingStore: CodexAppServerBindingStore;
-    pluginConfig?: unknown;
-    startupTimeoutFloorMs?: number;
-    nativeHookRelay?: {
-      enabled?: boolean;
-      events?: readonly NativeHookRelayEvent[];
-      ttlMs?: number;
-      gatewayTimeoutMs?: number;
-      hookTimeoutSec?: number;
-    };
-    turnCompletionIdleTimeoutMs?: number;
-    turnAssistantCompletionIdleTimeoutMs?: number;
-    postToolRawAssistantCompletionIdleTimeoutMs?: number;
-    turnTerminalIdleTimeoutMs?: number;
-    clientFactory?: CodexAppServerClientFactory;
-  },
+  options: RunCodexAppServerAttemptOptions,
+): Promise<EmbeddedRunAttemptResult> {
+  const deadline = createCodexRunDeadlineScope(params);
+  try {
+    return await runCodexAppServerAttemptWithinDeadline(
+      { ...params, abortSignal: deadline.signal },
+      options,
+    );
+  } finally {
+    deadline.dispose();
+  }
+}
+
+async function runCodexAppServerAttemptWithinDeadline(
+  params: EmbeddedRunAttemptParams,
+  options: RunCodexAppServerAttemptOptions,
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
   const profilerEnabled = isCodexAppServerProfilerEnabled(params.config);
@@ -680,6 +731,7 @@ export async function runCodexAppServerAttempt(
   preDynamicStartupStages.mark("native-hook-relay");
 
   const runAbortController = new AbortController();
+  let timedOut = false;
   // AbortController preserves its first reason, so retain explicit cancellation
   // that can arrive after the timeout abort while cleanup is still draining.
   let explicitCancellationObserved = false;
@@ -707,7 +759,11 @@ export async function runCodexAppServerAttempt(
     runAbortController.abort(reason);
   };
   const abortFromUpstream = () => {
-    abortExplicitly(params.abortSignal?.reason ?? "upstream_abort");
+    const reason = params.abortSignal?.reason ?? "upstream_abort";
+    if (reason instanceof Error && reason.name === "TimeoutError") {
+      timedOut = true;
+    }
+    abortExplicitly(reason);
   };
   if (params.abortSignal?.aborted) {
     abortFromUpstream();
@@ -1099,6 +1155,7 @@ export async function runCodexAppServerAttempt(
       modelId: effectiveRuntimeModelId,
       fallbackReason: usesSupervisionConnection ? undefined : params.fallbackReason,
       degradedReason: usesSupervisionConnection ? undefined : params.degradedReason,
+      abortSignal: runAbortController.signal,
       runMaintenance: runHarnessContextEngineMaintenance,
       config: params.config,
       warn: (message) => embeddedAgentLog.warn(message),
@@ -1180,6 +1237,7 @@ export async function runCodexAppServerAttempt(
       fallbackReason: usesSupervisionConnection ? undefined : params.fallbackReason,
       degradedReason: usesSupervisionConnection ? undefined : params.degradedReason,
       prompt: params.prompt,
+      abortSignal: runAbortController.signal,
     });
     if (!assembled) {
       throw new Error("context engine assemble returned no result");
@@ -1237,6 +1295,9 @@ export async function runCodexAppServerAttempt(
         !nativeToolSurfaceEnabled ? undefined : startupBinding,
       );
     } catch (assembleErr) {
+      if (runAbortController.signal.aborted) {
+        throw assembleErr;
+      }
       embeddedAgentLog.warn("context engine assemble failed; using Codex baseline prompt", {
         error: formatErrorMessage(assembleErr),
       });
@@ -1838,7 +1899,6 @@ export async function runCodexAppServerAttempt(
   let rateLimitsRevisionBeforeLastTurnStart: number | undefined;
   let completed = false;
   let terminalTurnNotificationQueued = false;
-  let timedOut = false;
   let turnCompletionIdleTimedOut = false;
   let turnWatchTimeoutKind: CodexAttemptTurnWatchTimeoutKind | undefined;
   let turnWatchTimeoutIdleMs: number | undefined;

@@ -60,6 +60,10 @@ describe("runEmbeddedAttempt abort races", () => {
 
     expect(hoisted.createAgentSessionMock).not.toHaveBeenCalled();
     expect(prompt).not.toHaveBeenCalled();
-    expect(observedSignal).toBe(abortController.signal);
+    // The lock follows the attempt-owned signal so both the run deadline and
+    // caller cancellation can stop eager acquisition without losing the reason.
+    expect(observedSignal).not.toBe(abortController.signal);
+    expect(observedSignal?.aborted).toBe(true);
+    expect(observedSignal?.reason).toBe(abortError);
   });
 });

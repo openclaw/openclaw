@@ -180,6 +180,52 @@ function createTestContextEngine(params: Partial<AttemptContextEngine>): Attempt
   } as AttemptContextEngine;
 }
 
+function createPendingContextEngineCall() {
+  let release: (() => void) | undefined;
+  let notifyStarted: (() => void) | undefined;
+  let settled = false;
+  const started = new Promise<void>((resolve) => {
+    notifyStarted = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return {
+    wait: async (abortSignal?: AbortSignal) => {
+      notifyStarted?.();
+      try {
+        if (!abortSignal) {
+          await pending;
+          return;
+        }
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = () => {
+            reject(
+              abortSignal.reason instanceof Error
+                ? abortSignal.reason
+                : new Error("context engine call aborted"),
+            );
+          };
+          if (abortSignal.aborted) {
+            onAbort();
+            return;
+          }
+          abortSignal.addEventListener("abort", onAbort, { once: true });
+          void pending.then(() => {
+            abortSignal.removeEventListener("abort", onAbort);
+            resolve();
+          });
+        });
+      } finally {
+        settled = true;
+      }
+    },
+    started,
+    isSettled: () => settled,
+    release: () => release?.(),
+  };
+}
+
 async function runBootstrap(
   sessionKey: string,
   contextEngine: AttemptContextEngine,
@@ -292,11 +338,208 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     await cleanupTempPaths(tempPaths);
     clearMemoryPluginState();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("enables Tool Search controls for embedded OpenClaw runs when configured", async () => {
     expect(toolSearchControlsCase.includeToolSearchControls).toBe(true);
     expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
+  });
+
+  it("honors caller abort while context-engine assembly is pending", async () => {
+    const abortController = new AbortController();
+    const pendingAssembly = createPendingContextEngineCall();
+    const releaseSessionLock = vi.fn(async () => {});
+    hoisted.acquireSessionWriteLockMock.mockResolvedValue({ release: releaseSessionLock });
+    const attempt = createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages, abortSignal }) => {
+          await pendingAssembly.wait(abortSignal);
+          return { messages, estimatedTokens: 1 };
+        },
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: { abortSignal: abortController.signal },
+    });
+
+    await pendingAssembly.started;
+    abortController.abort();
+    const outcome = await Promise.race([
+      attempt.then(
+        () => "resolved",
+        (error: unknown) => (error instanceof Error ? error.name : "rejected"),
+      ),
+      new Promise<"pending">((resolve) => {
+        setTimeout(() => resolve("pending"), 100);
+      }),
+    ]);
+    pendingAssembly.release();
+    await attempt.catch(() => {});
+
+    expect(outcome).toBe("AbortError");
+    expect(pendingAssembly.isSettled()).toBe(true);
+    expect(releaseSessionLock).toHaveBeenCalled();
+  });
+
+  it("applies the attempt timeout while context-engine assembly is pending", async () => {
+    vi.useFakeTimers();
+    const pendingAssembly = createPendingContextEngineCall();
+    const onAttemptTimeout = vi.fn();
+    const attempt = createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages, abortSignal }) => {
+          await pendingAssembly.wait(abortSignal);
+          return { messages, estimatedTokens: 1 };
+        },
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: { timeoutMs: 25, onAttemptTimeout },
+    });
+
+    await pendingAssembly.started;
+    const outcomePromise = Promise.race([
+      attempt.then(
+        () => "resolved",
+        (error: unknown) => (error instanceof Error ? error.name : "rejected"),
+      ),
+      new Promise<"pending">((resolve) => {
+        setTimeout(() => resolve("pending"), 100);
+      }),
+    ]);
+    await vi.advanceTimersByTimeAsync(100);
+    const outcome = await outcomePromise;
+    pendingAssembly.release();
+    await attempt.catch(() => {});
+    vi.useRealTimers();
+
+    expect(outcome).toBe("TimeoutError");
+    expect(pendingAssembly.isSettled()).toBe(true);
+    expect(onAttemptTimeout).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "TimeoutError" }),
+    );
+  });
+
+  it("honors caller abort while context-engine bootstrap is pending", async () => {
+    const abortController = new AbortController();
+    const pendingBootstrap = createPendingContextEngineCall();
+    const releaseSessionLock = vi.fn(async () => {});
+    hoisted.acquireSessionWriteLockMock.mockResolvedValue({ release: releaseSessionLock });
+    const attempt = createContextEngineAttemptRunner({
+      contextEngine: {
+        bootstrap: async ({ abortSignal }) => {
+          await pendingBootstrap.wait(abortSignal);
+          return { bootstrapped: true };
+        },
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: { abortSignal: abortController.signal },
+    });
+
+    await pendingBootstrap.started;
+    abortController.abort();
+    const outcome = await Promise.race([
+      attempt.then(
+        () => "resolved",
+        (error: unknown) => (error instanceof Error ? error.name : "rejected"),
+      ),
+      new Promise<"pending">((resolve) => {
+        setTimeout(() => resolve("pending"), 100);
+      }),
+    ]);
+    pendingBootstrap.release();
+    await attempt.catch(() => {});
+
+    expect(outcome).toBe("AbortError");
+    expect(pendingBootstrap.isSettled()).toBe(true);
+    expect(releaseSessionLock).toHaveBeenCalled();
+  });
+
+  it("applies the attempt timeout while context-engine bootstrap is pending", async () => {
+    vi.useFakeTimers();
+    const pendingBootstrap = createPendingContextEngineCall();
+    const releaseSessionLock = vi.fn(async () => {});
+    hoisted.acquireSessionWriteLockMock.mockResolvedValue({ release: releaseSessionLock });
+    const onAttemptTimeout = vi.fn();
+    const attempt = createContextEngineAttemptRunner({
+      contextEngine: {
+        bootstrap: async ({ abortSignal }) => {
+          await pendingBootstrap.wait(abortSignal);
+          return { bootstrapped: true };
+        },
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: { timeoutMs: 25, onAttemptTimeout },
+    });
+
+    await pendingBootstrap.started;
+    const outcomePromise = attempt.then(
+      () => "resolved",
+      (error: unknown) => (error instanceof Error ? error.name : "rejected"),
+    );
+    await vi.advanceTimersByTimeAsync(25);
+    const outcome = await outcomePromise;
+    pendingBootstrap.release();
+    await attempt.catch(() => {});
+    vi.useRealTimers();
+
+    expect(outcome).toBe("TimeoutError");
+    expect(pendingBootstrap.isSettled()).toBe(true);
+    expect(onAttemptTimeout).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "TimeoutError" }),
+    );
+    expect(releaseSessionLock).toHaveBeenCalled();
+  });
+
+  it("applies the attempt timeout while the initial session write lock is pending", async () => {
+    vi.useFakeTimers();
+    let notifyLockStarted: (() => void) | undefined;
+    const lockStarted = new Promise<void>((resolve) => {
+      notifyLockStarted = resolve;
+    });
+    hoisted.acquireSessionWriteLockMock.mockImplementation(async ({ signal }) => {
+      notifyLockStarted?.();
+      await new Promise<never>((_resolve, reject) => {
+        const onAbort = () =>
+          reject(
+            signal?.reason instanceof Error ? signal.reason : new Error("session lock aborted"),
+          );
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
+      throw new Error("unreachable");
+    });
+    const onAttemptTimeout = vi.fn();
+    const attempt = createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: { timeoutMs: 25, onAttemptTimeout },
+    });
+    const outcomePromise = attempt.then(
+      () => "resolved",
+      (error: unknown) => (error instanceof Error ? error.name : "rejected"),
+    );
+
+    await lockStarted;
+    await vi.advanceTimersByTimeAsync(25);
+    const outcome = await outcomePromise;
+    vi.useRealTimers();
+
+    expect(outcome).toBe("TimeoutError");
+    expect(onAttemptTimeout).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "TimeoutError" }),
+    );
   });
 
   it("keeps client tool names out of context engine capability guidance", async () => {
