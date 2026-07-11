@@ -503,6 +503,7 @@ describe("provider local service", () => {
       `  },`,
       `});`,
       `const [diagnostics] = getManagedProviderLocalServiceDiagnosticsForTest();`,
+      `if (diagnostics.stdoutTail || diagnostics.stderrTail) throw new Error("runtime output was retained");`,
       `await fs.writeFile(${JSON.stringify(servicePidPath)}, String(diagnostics.pid));`,
       `lease?.release();`,
     ].join("\n");
@@ -574,46 +575,38 @@ describe("provider local service", () => {
     await waitForProbeFailure(healthUrl);
   });
 
-  it("retains only bounded redacted startup diagnostics", async () => {
+  it("reports only bounded redacted startup diagnostics", async () => {
     const port = await freePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const diagnosticSecret = "local-service-diagnostic-secret";
-    const lease = await ensureProviderLocalService({
-      providerId: "local-diagnostics",
-      baseUrl: `http://127.0.0.1:${port}/v1`,
-      service: {
-        command: process.execPath,
-        args: [
-          "-e",
-          `const http=require("node:http");const noise="x".repeat(9000);process.stdout.write(noise+" "+process.env.DIAGNOSTIC_SECRET);process.stderr.write(noise+" "+process.env.DIAGNOSTIC_SECRET);const server=http.createServer((req,res)=>{res.writeHead(200);res.end("ok");});server.listen(${port},"127.0.0.1");process.on("SIGTERM",()=>server.close(()=>process.exit(0)));`,
-        ],
-        env: { DIAGNOSTIC_SECRET: diagnosticSecret },
-        healthUrl,
-        readyTimeoutMs: 5_000,
-        idleStopMs: 1,
-      },
-    });
+    let startupError: Error | undefined;
 
     try {
-      const [diagnostics] = getManagedProviderLocalServiceDiagnosticsForTest();
-      expect(diagnostics).toMatchObject({
+      await ensureProviderLocalService({
         providerId: "local-diagnostics",
-        healthUrl,
-        pid: expect.any(Number),
-        startedAt: expect.any(Number),
-        spawnedAt: expect.any(Number),
-        readyAt: expect.any(Number),
-        lastHealthyAt: expect.any(Number),
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        service: {
+          command: process.execPath,
+          args: [
+            "-e",
+            `const noise="x".repeat(9000);process.stderr.write(noise+" "+process.env.DIAGNOSTIC_SECRET);process.exit(17);`,
+          ],
+          env: { DIAGNOSTIC_SECRET: diagnosticSecret },
+          healthUrl,
+          readyTimeoutMs: 5_000,
+          idleStopMs: 1,
+        },
       });
-      expect(Buffer.byteLength(diagnostics?.stdoutTail ?? "")).toBeLessThanOrEqual(8 * 1024);
-      expect(Buffer.byteLength(diagnostics?.stderrTail ?? "")).toBeLessThanOrEqual(8 * 1024);
-      expect(diagnostics?.stdoutTail).not.toContain(diagnosticSecret);
-      expect(diagnostics?.stderrTail).not.toContain(diagnosticSecret);
-      expect(diagnostics?.stdoutTail).toContain("[redacted]");
-      expect(diagnostics?.stderrTail).toContain("[redacted]");
-    } finally {
-      lease?.release();
-      await waitForProbeFailure(healthUrl);
+    } catch (error) {
+      startupError = error instanceof Error ? error : new Error(String(error));
     }
+
+    expect(startupError?.message).toContain(
+      "local-diagnostics local service exited before readiness with code 17",
+    );
+    expect(startupError?.message).toContain("[redacted]");
+    expect(startupError?.message).not.toContain(diagnosticSecret);
+    expect(Buffer.byteLength(startupError?.message ?? "")).toBeLessThanOrEqual(8 * 1024 + 256);
+    expect(getManagedProviderLocalServiceDiagnosticsForTest()).toEqual([]);
   });
 });
