@@ -266,9 +266,15 @@ describe("ACP event ledger", () => {
           complete: true,
         });
         for (let index = 0; index < 40; index += 1) {
+          // Halfway through, the provisional key becomes a longer canonical
+          // key: the row-overhead component of the aggregate must follow.
+          const sessionKey =
+            index < 20
+              ? `agent:main:budget-${session}`
+              : `agent:main:budget-${session}:canonical-rebound`;
           await ledger.recordUpdate({
             sessionId: `session-${session}`,
-            sessionKey: `agent:main:budget-${session}`,
+            sessionKey,
             update: {
               sessionUpdate: "agent_message_chunk",
               content: { type: "text", text: `payload-${session}-${index}-${"x".repeat(64)}` },

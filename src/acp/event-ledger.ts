@@ -641,11 +641,22 @@ function upsertSqliteSession(
   if (!params.reset && existing) {
     const cwd = params.cwd || existing.cwd;
     const complete = existing.complete || params.complete ? 1 : 0;
+    // SET expressions read the pre-update row, so the aggregate sheds the old
+    // key/cwd lengths and gains the new ones; drift here would silently
+    // unbound the byte budget.
     db.prepare(
       `UPDATE acp_replay_sessions
-          SET session_key = ?, cwd = ?, complete = ?, updated_at = ?
+          SET estimated_bytes = estimated_bytes - length(session_key) - length(cwd) + ?,
+              session_key = ?, cwd = ?, complete = ?, updated_at = ?
         WHERE session_id = ?`,
-    ).run(params.sessionKey, cwd, complete, now, params.sessionId);
+    ).run(
+      params.sessionKey.length + cwd.length,
+      params.sessionKey,
+      cwd,
+      complete,
+      now,
+      params.sessionId,
+    );
     return {
       ...existing,
       sessionKey: params.sessionKey,
@@ -675,7 +686,11 @@ function upsertSqliteSession(
        complete = excluded.complete,
        updated_at = excluded.updated_at,
        next_seq = excluded.next_seq,
-       estimated_bytes = excluded.estimated_bytes`,
+       -- Row overhead plus whatever event rows still exist: exact after a
+       -- reset (events deleted, sum is 0) and on any conflicting rewrite.
+       estimated_bytes = excluded.estimated_bytes + COALESCE(
+         (SELECT SUM(e.estimated_bytes) FROM acp_replay_events e
+           WHERE e.session_id = excluded.session_id), 0)`,
   ).run(
     params.sessionId,
     params.sessionKey,
@@ -859,11 +874,20 @@ function appendSqliteUpdate(
     updateJson,
     eventBytes,
   );
+  // The delta covers the new event plus any session-key length change; SET
+  // expressions read the pre-update row, keeping the aggregate exact.
   db.prepare(
     `UPDATE acp_replay_sessions
-        SET session_key = ?, updated_at = ?, next_seq = ?, estimated_bytes = estimated_bytes + ?
+        SET estimated_bytes = estimated_bytes - length(session_key) + ?,
+            session_key = ?, updated_at = ?, next_seq = ?
       WHERE session_id = ?`,
-  ).run(params.sessionKey, now, session.nextSeq + 1, eventBytes, params.sessionId);
+  ).run(
+    params.sessionKey.length + eventBytes,
+    params.sessionKey,
+    now,
+    session.nextSeq + 1,
+    params.sessionId,
+  );
   trimSqliteLedger(db, state);
 }
 
