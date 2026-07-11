@@ -16,14 +16,14 @@ import {
 } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
-const PRE_VALIDATION_MAX_REQUESTS = 300;
+const INVALID_REQUEST_MAX_REQUESTS = 300;
 const SIGNED_CALLBACK_MAX_REQUESTS = 30;
 
 // Count failed-auth traffic separately from the stricter signed callback quota.
 // The over-budget decision is applied only after validation fails, so a same-key
 // invalid burst cannot block a later valid Twilio callback before authentication.
-const preValidationRateLimiter = createFixedWindowRateLimiter({
-  maxRequests: PRE_VALIDATION_MAX_REQUESTS,
+const invalidRequestRateLimiter = createFixedWindowRateLimiter({
+  maxRequests: INVALID_REQUEST_MAX_REQUESTS,
   windowMs: 60_000,
   maxTrackedKeys: 5_000,
 });
@@ -142,18 +142,18 @@ function rateLimitKey(params: { account: ResolvedSmsAccount; clientAddress: stri
   return `${params.account.accountId}:${params.account.webhookPath}:${params.clientAddress}`;
 }
 
-function rejectPreValidationRateLimit(params: {
+function rejectInvalidRequestRateLimit(params: {
   key: string;
   log?: SmsWebhookLog;
   res: ServerResponse;
 }): true {
-  params.log?.warn?.(`SMS webhook pre-validation rate limit exceeded for ${params.key}`);
+  params.log?.warn?.(`SMS webhook invalid-request rate limit exceeded for ${params.key}`);
   respondTwiml(params.res, 429, "Rate limit exceeded");
   return true;
 }
 
 export function resetSmsWebhookRateLimiterForTest(): void {
-  preValidationRateLimiter.clear();
+  invalidRequestRateLimiter.clear();
   signedRateLimiter.clear();
 }
 
@@ -170,14 +170,14 @@ export function createSmsWebhookHandler(
 
     const clientAddress = resolvedClientAddress({ cfg: params.cfg, req });
     const key = rateLimitKey({ account: params.account, clientAddress });
-    const preValidationRateLimited = preValidationRateLimiter.isRateLimited(key);
+    const invalidRequestRateLimited = invalidRequestRateLimiter.isRateLimited(key);
 
     let form: Record<string, string>;
     try {
       form = await readTwilioWebhookForm(req);
     } catch {
-      if (preValidationRateLimited) {
-        return rejectPreValidationRateLimit({ key, log: params.log, res });
+      if (invalidRequestRateLimited) {
+        return rejectInvalidRequestRateLimit({ key, log: params.log, res });
       }
       respondTwiml(res, 400, "Invalid request body");
       return true;
@@ -194,8 +194,8 @@ export function createSmsWebhookHandler(
         form,
       });
       if (!ok) {
-        if (preValidationRateLimited) {
-          return rejectPreValidationRateLimit({ key, log: params.log, res });
+        if (invalidRequestRateLimited) {
+          return rejectInvalidRequestRateLimit({ key, log: params.log, res });
         }
         params.log?.warn?.("SMS webhook rejected invalid Twilio signature");
         respondTwiml(res, 403, "Invalid signature");
@@ -205,22 +205,22 @@ export function createSmsWebhookHandler(
 
     const msg = buildTwilioInboundMessage(form);
     if (!msg) {
-      if (preValidationRateLimited) {
-        return rejectPreValidationRateLimit({ key, log: params.log, res });
+      if (invalidRequestRateLimited) {
+        return rejectInvalidRequestRateLimit({ key, log: params.log, res });
       }
       respondTwiml(res, 400, "Missing SMS payload");
       return true;
     }
     if (msg.accountSid && msg.accountSid !== params.account.accountSid) {
-      if (preValidationRateLimited) {
-        return rejectPreValidationRateLimit({ key, log: params.log, res });
+      if (invalidRequestRateLimited) {
+        return rejectInvalidRequestRateLimit({ key, log: params.log, res });
       }
       params.log?.warn?.("SMS webhook rejected mismatched Twilio AccountSid");
       respondTwiml(res, 403, "Invalid account");
       return true;
     }
-    if (preValidationRateLimited && params.account.dangerouslyDisableSignatureValidation) {
-      return rejectPreValidationRateLimit({ key, log: params.log, res });
+    if (invalidRequestRateLimited && params.account.dangerouslyDisableSignatureValidation) {
+      return rejectInvalidRequestRateLimit({ key, log: params.log, res });
     }
     if (signedRateLimiter.isRateLimited(key)) {
       params.log?.warn?.(`SMS webhook rate limit exceeded for ${key}`);
