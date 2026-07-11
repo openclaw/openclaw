@@ -70,7 +70,7 @@ export class SessionDiffPanel extends OpenClawLightDomElement {
         file,
         parsed: file.patch
           ? parseSessionDiffPatch(file.patch, (count) =>
-              t("chat.sessionDiff.unmodifiedLines", { count }),
+              t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
             )
           : null,
       }));
