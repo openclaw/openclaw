@@ -5,6 +5,9 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loginMiniMaxPortalOAuth, normalizeOAuthExpires } from "./oauth.js";
 
+const MINIMAX_OAUTH_FETCH_TIMEOUT_MS = 30_000;
+const ACCELERATED_FETCH_TIMEOUT_MS = 50;
+
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -31,6 +34,21 @@ function timeoutResult<T>(value: T, timeoutMs: number): Promise<T> {
   return new Promise((resolve) => {
     setTimeout(() => resolve(value), timeoutMs);
   });
+}
+
+function accelerateMiniMaxOAuthFetchTimeout() {
+  const originalSetTimeout = globalThis.setTimeout;
+  return vi
+    .spyOn(globalThis, "setTimeout")
+    .mockImplementation(((
+      callback: (...args: unknown[]) => void,
+      timeout?: number,
+      ...args: unknown[]
+    ) =>
+      originalSetTimeout(
+        () => callback(...args),
+        timeout === MINIMAX_OAUTH_FETCH_TIMEOUT_MS ? ACCELERATED_FETCH_TIMEOUT_MS : timeout,
+      )) as typeof setTimeout);
 }
 
 async function listenOnLoopback(server: ReturnType<typeof createServer>): Promise<number> {
@@ -209,6 +227,7 @@ describe("loginMiniMaxPortalOAuth", () => {
   it("times out authorization code HTTP requests against a hanging loopback server", async () => {
     const realFetch = fetch;
     const server = await startHangingLoopbackServer();
+    const setTimeoutSpy = accelerateMiniMaxOAuthFetchTimeout();
     let loginPromise: Promise<unknown> | undefined;
 
     try {
@@ -228,7 +247,6 @@ describe("loginMiniMaxPortalOAuth", () => {
         openUrl: vi.fn(async () => undefined),
         note: vi.fn(async () => undefined),
         progress: { update: vi.fn(), stop: vi.fn() },
-        requestTimeoutMs: 50,
       });
       loginPromise.catch(() => undefined);
 
@@ -240,6 +258,9 @@ describe("loginMiniMaxPortalOAuth", () => {
       expectAbortOrTimeoutError(result.error);
       expect(server.requests).toContain("/device-code");
       expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+      expect(
+        setTimeoutSpy.mock.calls.some(([, timeout]) => timeout === MINIMAX_OAUTH_FETCH_TIMEOUT_MS),
+      ).toBe(true);
     } finally {
       await server.close();
       await loginPromise?.catch(() => undefined);
@@ -249,6 +270,7 @@ describe("loginMiniMaxPortalOAuth", () => {
   it("times out token polling HTTP requests against a hanging loopback server", async () => {
     const realFetch = fetch;
     const server = await startHangingLoopbackServer();
+    const setTimeoutSpy = accelerateMiniMaxOAuthFetchTimeout();
     let loginPromise: Promise<unknown> | undefined;
 
     try {
@@ -284,7 +306,6 @@ describe("loginMiniMaxPortalOAuth", () => {
         openUrl: vi.fn(async () => undefined),
         note: vi.fn(async () => undefined),
         progress: { update: vi.fn(), stop: vi.fn() },
-        requestTimeoutMs: 50,
       });
       loginPromise.catch(() => undefined);
 
@@ -296,6 +317,9 @@ describe("loginMiniMaxPortalOAuth", () => {
       expectAbortOrTimeoutError(result.error);
       expect(server.requests).toContain("/token");
       expect(fetchMock.mock.calls[1]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+      expect(
+        setTimeoutSpy.mock.calls.some(([, timeout]) => timeout === MINIMAX_OAUTH_FETCH_TIMEOUT_MS),
+      ).toBe(true);
     } finally {
       await server.close();
       await loginPromise?.catch(() => undefined);
