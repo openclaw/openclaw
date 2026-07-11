@@ -28,9 +28,6 @@ type MockMemorySearchManager = {
     sync: (params?: unknown) => Promise<void>;
   };
 };
-type ProviderEntryApiKeyProfileReference = ReturnType<
-  typeof import("../model-auth.js").resolveProviderEntryApiKeyProfileReference
->;
 type MockEmbeddedAgentStreamFn = Mock<
   (model?: unknown, context?: unknown, options?: unknown) => unknown
 >;
@@ -223,9 +220,9 @@ export const getApiKeyForModelMock: Mock<
   source: params?.profileId ? `profile:${params.profileId}` : "test harness",
   ...(params?.profileId ? { profileId: params.profileId } : {}),
 }));
-export const resolveProviderEntryApiKeyProfileReferenceMock: Mock<
-  () => ProviderEntryApiKeyProfileReference
-> = vi.fn(() => ({ kind: "none" }));
+export const resolveProviderEntryApiKeyProfileReferenceMock: Mock<() => unknown> = vi.fn(() => ({
+  kind: "none",
+}));
 export const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn(() => false);
 export const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));

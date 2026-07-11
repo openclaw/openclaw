@@ -88,7 +88,7 @@ describe("resolveModelProviderRouteOverridePresence", () => {
         config: {
           models: {
             providers: {
-              openai: { timeoutSeconds: 90, models: [{ id: "gpt-5.5" }] },
+              openai: { timeoutSeconds: 90, models: [model("gpt-5.5")] },
             },
           },
         },

@@ -38,14 +38,18 @@ function routeResolverFactory(resolution: ProviderModelRouteResolution | null) {
 }
 
 function authStore(
-  profiles: AuthProfileStore["profiles"] = {},
+  profiles: Record<string, unknown> = {},
   order?: AuthProfileStore["order"],
 ): AuthProfileStore {
-  return { version: 1, profiles, ...(order ? { order } : {}) };
+  return {
+    version: 1,
+    profiles: profiles as AuthProfileStore["profiles"],
+    ...(order ? { order } : {}),
+  };
 }
 
 function evaluate(params: {
-  cfg?: OpenClawConfig;
+  cfg?: OpenClawConfig | Record<string, unknown>;
   env?: NodeJS.ProcessEnv;
   ref?: ModelAuthAvailabilityRef;
   resolution?: ProviderModelRouteResolution | null;
@@ -53,7 +57,7 @@ function evaluate(params: {
   syntheticAuthProviderRefs?: readonly string[];
 }) {
   return createModelAuthAvailabilityResolver({
-    cfg: params.cfg ?? {},
+    cfg: (params.cfg ?? {}) as OpenClawConfig,
     authStore: params.store ?? authStore(),
     env: params.env ?? {},
     routeResolverFactory: routeResolverFactory(params.resolution ?? dualRoutes),
@@ -347,7 +351,7 @@ describe("createModelAuthAvailabilityResolver", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    };
 
     expect(evaluate({ cfg })).toMatchObject({
       availability: true,
@@ -368,7 +372,7 @@ describe("createModelAuthAvailabilityResolver", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    };
 
     expect(
       evaluate({

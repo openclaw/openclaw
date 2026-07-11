@@ -2323,7 +2323,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       version: 1,
       profiles: {
         "openai:default": {
-          type: "oauth",
+          type: "oauth" as const,
           provider: "openai",
           access: "access-token",
           refresh: "refresh-token",
@@ -3952,6 +3952,9 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         "test-profile": {
           provider: "anthropic",
           type: "oauth",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
         },
       },
     });

@@ -40,7 +40,9 @@ const ensureSelectedAgentHarnessPluginMock = vi.fn();
 const loadTranscriptEventsMock = vi.fn();
 const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn((..._args: unknown[]) => false);
 const hasUsableCustomProviderApiKeyMock = vi.fn((..._args: unknown[]) => false);
-const resolveProviderEntryApiKeyProfileReferenceMock = vi.fn(() => ({ kind: "none" }));
+const resolveProviderEntryApiKeyProfileReferenceMock = vi.fn((_params?: unknown): unknown => ({
+  kind: "none",
+}));
 
 vi.mock("../llm/stream.js", async () => {
   const original = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
@@ -91,8 +93,8 @@ vi.mock("./model-auth.js", () => ({
   getApiKeyForModel: (...args: unknown[]) => getApiKeyForModelMock(...args),
   hasUsableCustomProviderApiKey: (...args: unknown[]) => hasUsableCustomProviderApiKeyMock(...args),
   requireApiKey: (...args: unknown[]) => requireApiKeyMock(...args),
-  resolveProviderEntryApiKeyProfileReference: (...args: unknown[]) =>
-    resolveProviderEntryApiKeyProfileReferenceMock(...args),
+  resolveProviderEntryApiKeyProfileReference: (params: unknown) =>
+    resolveProviderEntryApiKeyProfileReferenceMock(params),
   shouldPreferExplicitConfigApiKeyAuth: (...args: unknown[]) =>
     shouldPreferExplicitConfigApiKeyAuthMock(...args),
 }));

@@ -2754,9 +2754,9 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         force?: boolean;
         customInstructions?: string;
         runtimeContext?: Record<string, unknown>;
-      }) =>
-        await compactEmbeddedAgentSessionDirect({
-          ...(compactParams.runtimeContext as never),
+      }) => {
+        const directParams = {
+          ...(compactParams.runtimeContext ?? {}),
           sessionId: compactParams.sessionId,
           sessionKey: compactParams.sessionKey,
           sessionFile: compactParams.sessionFile,
@@ -2764,7 +2764,9 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
           force: compactParams.force,
           customInstructions: compactParams.customInstructions,
           workspaceDir: TEST_WORKSPACE_DIR,
-        }),
+        } as Parameters<typeof compactEmbeddedAgentSessionDirect>[0];
+        return await compactEmbeddedAgentSessionDirect(directParams);
+      },
     );
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },

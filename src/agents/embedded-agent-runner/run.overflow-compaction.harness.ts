@@ -375,11 +375,8 @@ export const mockedResolveAuthProfileOrderWithMetadata = vi.fn<
   profileIds: mockedResolveAuthProfileOrder(params),
   hasExplicitOrder: false,
 }));
-type ProviderEntryApiKeyProfileReference = ReturnType<
-  typeof import("../model-auth.js").resolveProviderEntryApiKeyProfileReference
->;
 export const mockedResolveProviderEntryApiKeyProfileReference = vi.fn<
-  (_params?: unknown) => ProviderEntryApiKeyProfileReference
+  (_params?: unknown) => unknown
 >(() => ({ kind: "none" }));
 export const mockedHasUsableCustomProviderApiKey = vi.fn(() => false);
 export const mockedMarkAuthProfileSuccess = vi.fn(async () => {});

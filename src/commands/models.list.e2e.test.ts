@@ -99,7 +99,7 @@ vi.mock("../agents/model-auth.js", async (importOriginal) => {
 
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog,
-  loadModelCatalogSnapshot: async (...args: unknown[]) => {
+  loadModelCatalogSnapshot: async (...args: Parameters<typeof loadModelCatalog>) => {
     const entries = await loadModelCatalog(...args);
     return { entries, routeVariants: entries };
   },
