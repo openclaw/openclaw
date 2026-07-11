@@ -82,7 +82,7 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const kovaRef = "790f0b28229cb60a60c289ef8c250d76c639f48f";
+    const kovaRef = "8c778e7412a887ee22f54b613b29c17e274068bd";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
 
@@ -779,9 +779,7 @@ esac
     const workflow = readWorkflow();
     const configure = findStep("Configure OCM local workspace dependencies");
 
-    expect(workflow.jobs?.kova?.env?.OPENCLAW_OCM_RUNTIME_BUILD_PROFILE).toBe(
-      "${{ (inputs.profile || 'diagnostic') == 'diagnostic' && 'sourcePerformance' || '' }}",
-    );
+    expect(workflow.jobs?.kova?.env).not.toHaveProperty("OPENCLAW_OCM_RUNTIME_BUILD_PROFILE");
     expect(configure.run).toContain(
       'npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mjs"',
     );
