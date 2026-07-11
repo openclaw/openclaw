@@ -18,13 +18,14 @@ type CapturedResponse = {
   body: string;
 };
 
-function createRequest(body: unknown, method = "POST") {
+function createRequest(body: unknown, method = "POST", headers?: Record<string, string>) {
   const req = Readable.from([typeof body === "string" ? body : JSON.stringify(body)]);
   Object.assign(req, {
     method,
     url: "/api/v1/admin/rpc",
     headers: {
       "content-type": "application/json",
+      ...headers,
     },
   });
   return req as import("node:http").IncomingMessage;
@@ -53,9 +54,9 @@ function createResponse() {
   return { res, captured };
 }
 
-async function invoke(body: unknown, method = "POST") {
+async function invoke(body: unknown, method = "POST", headers?: Record<string, string>) {
   const { res, captured } = createResponse();
-  const handled = await handleAdminHttpRpcRequest(createRequest(body, method), res);
+  const handled = await handleAdminHttpRpcRequest(createRequest(body, method, headers), res);
   return {
     handled,
     captured,
@@ -194,6 +195,22 @@ describe("admin-http-rpc plugin handler", () => {
       error: {
         type: "invalid_request",
         message: "method must be a non-empty string",
+      },
+    });
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+
+  it("rejects declared oversized request bodies before dispatch", async () => {
+    const result = await invoke("", "POST", {
+      "content-length": String(1024 * 1024 + 1),
+    });
+
+    expect(result.captured.statusCode).toBe(413);
+    expect(result.json).toEqual({
+      ok: false,
+      error: {
+        type: "invalid_request",
+        message: "Payload too large",
       },
     });
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
