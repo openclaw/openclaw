@@ -1,6 +1,9 @@
 /** Session-scoped embedded LSP runtime and tool materialization for agent bundles. */
 import type { ChildProcess } from "node:child_process";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { logDebug, logWarn } from "../logger.js";
@@ -21,6 +24,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 type LspSession = {
   serverName: string;
+  toolPrefix: string;
   process: ChildProcess;
   requestId: number;
   pendingRequests: Map<number, PendingLspRequest>;
@@ -66,6 +70,9 @@ type LspPositionParams = {
 
 const LSP_SHUTDOWN_GRACE_MS = 500;
 const LSP_PROCESS_TREE_KILL_GRACE_MS = 1_000;
+const LSP_TOOL_NAME_SAFE_RE = /[^A-Za-z0-9_-]/g;
+const LSP_TOOL_NAME_MAX_TOTAL = 64;
+const LSP_TOOL_NAME_MAX_SERVER_PREFIX = LSP_TOOL_NAME_MAX_TOTAL - "lsp_references_".length;
 const activeBundleLspSessions = new Set<LspSession>();
 
 function delay(ms: number): Promise<void> {
@@ -77,11 +84,13 @@ function delay(ms: number): Promise<void> {
 
 function createLspSession(
   serverName: string,
+  toolPrefix: string,
   child: ChildProcess,
   killProcessTree: BundleLspRuntimeDependencies["killProcessTree"],
 ): LspSession {
   return {
     serverName,
+    toolPrefix,
     process: child,
     requestId: 0,
     pendingRequests: new Map(),
@@ -91,6 +100,38 @@ function createLspSession(
     disposed: false,
     killProcessTree,
   };
+}
+
+function hasReservedLspToolName(prefix: string, reservedNames: Set<string>): boolean {
+  return (
+    reservedNames.has(normalizeLowercaseStringOrEmpty(`lsp_hover_${prefix}`)) ||
+    reservedNames.has(normalizeLowercaseStringOrEmpty(`lsp_definition_${prefix}`)) ||
+    reservedNames.has(normalizeLowercaseStringOrEmpty(`lsp_references_${prefix}`))
+  );
+}
+
+function sanitizeLspToolServerPrefix(
+  raw: string,
+  usedPrefixes: Set<string>,
+  reservedNames: Set<string>,
+): string {
+  const cleaned = raw.trim().replace(LSP_TOOL_NAME_SAFE_RE, "-");
+  const base = /^[A-Za-z]/.test(cleaned) ? cleaned : `lsp-${cleaned || "server"}`;
+  let candidate = base.slice(0, LSP_TOOL_NAME_MAX_SERVER_PREFIX);
+  let n = 2;
+  while (
+    usedPrefixes.has(normalizeLowercaseStringOrEmpty(candidate)) ||
+    hasReservedLspToolName(candidate, reservedNames)
+  ) {
+    const suffix = `-${n}`;
+    candidate = `${base.slice(
+      0,
+      Math.max(1, LSP_TOOL_NAME_MAX_SERVER_PREFIX - suffix.length),
+    )}${suffix}`;
+    n += 1;
+  }
+  usedPrefixes.add(normalizeLowercaseStringOrEmpty(candidate));
+  return candidate;
 }
 
 function registerActiveLspSession(session: LspSession): void {
@@ -451,12 +492,13 @@ function buildLspTools(session: LspSession): AnyAgentTool[] {
   const tools: AnyAgentTool[] = [];
   const caps = session.capabilities;
   const serverLabel = session.serverName;
+  const toolPrefix = session.toolPrefix;
 
   if (caps.hoverProvider) {
     tools.push(
       createLspPositionTool({
         session,
-        toolName: `lsp_hover_${serverLabel}`,
+        toolName: `lsp_hover_${toolPrefix}`,
         label: `LSP Hover (${serverLabel})`,
         description: `Get hover information for a symbol at a position in a file via the ${serverLabel} language server.`,
         method: "textDocument/hover",
@@ -469,7 +511,7 @@ function buildLspTools(session: LspSession): AnyAgentTool[] {
     tools.push(
       createLspPositionTool({
         session,
-        toolName: `lsp_definition_${serverLabel}`,
+        toolName: `lsp_definition_${toolPrefix}`,
         label: `LSP Go to Definition (${serverLabel})`,
         description: `Find the definition of a symbol at a position in a file via the ${serverLabel} language server.`,
         method: "textDocument/definition",
@@ -480,7 +522,7 @@ function buildLspTools(session: LspSession): AnyAgentTool[] {
 
   if (caps.referencesProvider) {
     tools.push({
-      name: `lsp_references_${serverLabel}`,
+      name: `lsp_references_${toolPrefix}`,
       label: `LSP Find References (${serverLabel})`,
       description: `Find all references to a symbol at a position in a file via the ${serverLabel} language server.`,
       parameters: {
@@ -564,6 +606,7 @@ export async function createBundleLspToolRuntime(params: {
   );
   const sessions: LspSession[] = [];
   const tools: AnyAgentTool[] = [];
+  const usedToolPrefixes = new Set<string>();
 
   try {
     for (const [serverName, rawServer] of Object.entries(loaded.lspServers)) {
@@ -578,6 +621,7 @@ export async function createBundleLspToolRuntime(params: {
       try {
         session = createLspSession(
           serverName,
+          sanitizeLspToolServerPrefix(serverName, usedToolPrefixes, reservedNames),
           dependencies.spawnServerProcess(launchConfig),
           dependencies.killProcessTree,
         );

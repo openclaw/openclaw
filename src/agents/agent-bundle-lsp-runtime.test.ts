@@ -54,6 +54,11 @@ class MockChildProcess extends EventEmitter {
       body: Record<string, unknown>,
       method: string,
     ) => string | readonly string[] = encodeLspMessage,
+    private readonly capabilities: Record<string, unknown> = {
+      hoverProvider: true,
+      definitionProvider: true,
+      referencesProvider: true,
+    },
   ) {
     super();
     this.stdin = new Writable({
@@ -87,13 +92,7 @@ class MockChildProcess extends EventEmitter {
     }
     const result =
       method === "initialize"
-        ? {
-            capabilities: {
-              hoverProvider: true,
-              definitionProvider: true,
-              referencesProvider: true,
-            },
-          }
+        ? { capabilities: this.capabilities }
         : null;
     queueMicrotask(() => {
       const response = { jsonrpc: "2.0", id: body.id, result };
@@ -431,6 +430,85 @@ describe("bundle LSP runtime", () => {
 
     expect(outcome).toMatch(/LSP framing error/i);
     expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000, detached: true });
+
+    await runtime.dispose();
+  });
+
+  it("materializes provider-safe LSP tool names from bundle server keys", async () => {
+    loadEmbeddedAgentLspConfigMock.mockReturnValue({
+      lspServers: {
+        "Type Script!": {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+        },
+        "123": {
+          command: "numeric-language-server",
+          args: ["--stdio"],
+        },
+        "Type-Script-": {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+        },
+      },
+      diagnostics: [],
+    });
+    spawnMock.mockImplementation(
+      () =>
+        new MockChildProcess("", undefined, encodeLspMessage, {
+          hoverProvider: true,
+          definitionProvider: true,
+          referencesProvider: true,
+        }),
+    );
+    const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
+
+    const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+
+    const toolNames = runtime.tools.map((tool) => tool.name);
+    expect(toolNames).toContain("lsp_hover_Type-Script-");
+    expect(toolNames).toContain("lsp_definition_lsp-123");
+    expect(toolNames).toContain("lsp_references_Type-Script--2");
+    expect(new Set(toolNames).size).toBe(toolNames.length);
+    for (const toolName of toolNames) {
+      expect(toolName).toMatch(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u);
+    }
+
+    const hoverTool = runtime.tools.find((tool) => tool.name === "lsp_hover_Type-Script-");
+    if (!hoverTool) {
+      throw new Error("expected sanitized hover tool");
+    }
+    const result = await hoverTool.execute("call-1", {
+      uri: "file:///tmp/workspace/index.ts",
+      line: 0,
+      character: 0,
+    });
+    expect(result.details).toEqual({
+      lspServer: "Type Script!",
+      lspMethod: "hover",
+    });
+
+    await runtime.dispose();
+  });
+
+  it("disambiguates LSP tool names from existing registered tools", async () => {
+    loadEmbeddedAgentLspConfigMock.mockReturnValue({
+      lspServers: {
+        "Type Script!": {
+          command: "typescript-language-server",
+          args: ["--stdio"],
+        },
+      },
+      diagnostics: [],
+    });
+    spawnMock.mockReturnValue(new MockChildProcess());
+    const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
+
+    const runtime = await createBundleLspToolRuntime({
+      workspaceDir: "/tmp/workspace",
+      reservedToolNames: ["lsp_hover_Type-Script-"],
+    });
+
+    expect(runtime.tools.map((tool) => tool.name)).toContain("lsp_hover_Type-Script--2");
 
     await runtime.dispose();
   });
