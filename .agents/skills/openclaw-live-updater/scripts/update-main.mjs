@@ -554,11 +554,30 @@ export function parseGatewayLogAudit(output, sinceMs) {
     .filter(Boolean)
     .flatMap((line) => {
       try {
-        const entry = JSON.parse(line);
-        const timestamp = Date.parse(entry.time ?? "");
-        return entry.type === "log" && Number.isFinite(timestamp) && timestamp >= sinceMs
-          ? [entry]
-          : [];
+        const raw = JSON.parse(line);
+        const rawLevel = raw.type === "log" ? raw.level : raw._meta?.logLevelName;
+        const level = String(rawLevel ?? "").toLowerCase();
+        const time = raw.time ?? raw._meta?.date;
+        const timestamp = Date.parse(time ?? "");
+        if (!level || !Number.isFinite(timestamp) || timestamp < sinceMs) {
+          return [];
+        }
+        let subsystem = raw.subsystem ?? null;
+        if (!subsystem && typeof raw["0"] === "string") {
+          try {
+            subsystem = JSON.parse(raw["0"]).subsystem ?? null;
+          } catch {
+            subsystem = null;
+          }
+        }
+        return [
+          {
+            time,
+            level,
+            subsystem,
+            message: raw.message ?? raw["1"] ?? raw["0"] ?? "",
+          },
+        ];
       } catch {
         return [];
       }
@@ -576,28 +595,72 @@ export function parseGatewayLogAudit(output, sinceMs) {
   };
 }
 
+function localDateKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function readFallbackGatewayLogs(sinceMs) {
+  const dates = new Set([localDateKey(new Date(sinceMs)), localDateKey(new Date())]);
+  const directories = new Set(["/tmp/openclaw", path.join(tmpdir(), "openclaw")]);
+  const contents = [];
+  for (const directory of directories) {
+    for (const date of dates) {
+      const logPath = path.join(directory, `openclaw-${date}.log`);
+      if (existsSync(logPath)) {
+        contents.push(readFileSync(logPath, "utf8"));
+      }
+    }
+  }
+  return contents.join("\n");
+}
+
 function defaultAuditGatewayLogs(checkout, sinceMs) {
-  const output = execFileSync(
-    process.execPath,
-    [
-      "openclaw.mjs",
-      "logs",
-      "--json",
-      "--limit",
-      "1000",
-      "--max-bytes",
-      "1000000",
-      "--timeout",
-      "10000",
-    ],
-    { cwd: checkout, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 },
-  );
+  let output;
+  try {
+    output = execFileSync(
+      process.execPath,
+      [
+        "openclaw.mjs",
+        "logs",
+        "--json",
+        "--limit",
+        "1000",
+        "--max-bytes",
+        "1000000",
+        "--timeout",
+        "10000",
+      ],
+      { cwd: checkout, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 },
+    );
+  } catch (error) {
+    output = readFallbackGatewayLogs(sinceMs);
+    if (!output) {
+      throw error;
+    }
+  }
   const audit = parseGatewayLogAudit(output, sinceMs);
   if (audit.errorCount > 0) {
     throw new UpdateInvariantError(
       "gateway_restart_log_errors",
       `Gateway emitted ${audit.errorCount} error/fatal log entries after restart: ${JSON.stringify(audit.errors.slice(0, 5))}`,
     );
+  }
+  return audit;
+}
+
+function verifyAndAuditGateway({ runCommand, auditGatewayLogs, checkout, expectedSha, sinceMs }) {
+  let verificationError;
+  try {
+    verifyGateway(runCommand, checkout, expectedSha);
+  } catch (error) {
+    verificationError = error;
+  }
+  const audit = auditGatewayLogs(checkout, sinceMs);
+  if (verificationError) {
+    throw verificationError;
   }
   return audit;
 }
@@ -684,11 +747,17 @@ export function maintainMain(options, dependencies = {}) {
       runCommand("pnpm", ["install", "--frozen-lockfile"], update.checkout);
     }
     if (actions.gatewayBuild) {
+      runCommand("pnpm", ["openclaw", "gateway", "stop"], update.checkout);
       runCommand("pnpm", ["build"], update.checkout);
       assertExactBuild(update.checkout, update.afterSha);
       const restartStartedAt = restartGateway(runCommand, update.checkout, update.afterSha);
-      verifyGateway(runCommand, update.checkout, update.afterSha);
-      gatewayLogAudit = auditGatewayLogs(update.checkout, restartStartedAt);
+      gatewayLogAudit = verifyAndAuditGateway({
+        runCommand,
+        auditGatewayLogs,
+        checkout: update.checkout,
+        expectedSha: update.afterSha,
+        sinceMs: restartStartedAt,
+      });
     } else {
       try {
         verifyGateway(runCommand, update.checkout, update.afterSha);
@@ -696,8 +765,13 @@ export function maintainMain(options, dependencies = {}) {
         actions.gatewayRestart = true;
         actions.gatewaySelfHeal = true;
         const restartStartedAt = restartGateway(runCommand, update.checkout, update.afterSha);
-        verifyGateway(runCommand, update.checkout, update.afterSha);
-        gatewayLogAudit = auditGatewayLogs(update.checkout, restartStartedAt);
+        gatewayLogAudit = verifyAndAuditGateway({
+          runCommand,
+          auditGatewayLogs,
+          checkout: update.checkout,
+          expectedSha: update.afterSha,
+          sinceMs: restartStartedAt,
+        });
       }
     }
     if (actions.macAppRebuild) {

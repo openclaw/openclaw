@@ -176,6 +176,33 @@ describe("openclaw live updater", () => {
     });
   });
 
+  test("audits raw file logs when RPC log retrieval is unavailable", () => {
+    const output = [
+      {
+        "0": '{"subsystem":"gateway"}',
+        "1": "startup warning",
+        time: "2026-07-11T08:00:03.000Z",
+        _meta: { date: "2026-07-11T08:00:03.000Z", logLevelName: "WARN" },
+      },
+      {
+        "0": '{"subsystem":"gateway"}',
+        "1": "startup failed",
+        time: "2026-07-11T08:00:04.000Z",
+        _meta: { date: "2026-07-11T08:00:04.000Z", logLevelName: "ERROR" },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+
+    expect(parseGatewayLogAudit(output, Date.parse("2026-07-11T08:00:02.000Z"))).toMatchObject({
+      entries: 2,
+      errorCount: 1,
+      warningCount: 1,
+      errors: [{ subsystem: "gateway", message: "startup failed" }],
+      warnings: [{ subsystem: "gateway", message: "startup warning" }],
+    });
+  });
+
   test("accepts supported OpenClaw GitHub origins", () => {
     expect(originMatches("https://github.com/openclaw/openclaw.git")).toBe(true);
     expect(originMatches("git@github.com:openclaw/openclaw.git")).toBe(true);
@@ -344,6 +371,7 @@ describe("openclaw live updater", () => {
     });
     expect(commands.calls).toEqual([
       "pnpm install --frozen-lockfile",
+      "pnpm openclaw gateway stop",
       "pnpm build",
       "pnpm openclaw gateway restart",
       "pnpm openclaw gateway status --deep --require-rpc --json",
@@ -390,6 +418,7 @@ describe("openclaw live updater", () => {
     expect(output.actions.dependencyInstall).toBe(true);
     expect(commands.calls).toEqual([
       "pnpm install --frozen-lockfile",
+      "pnpm openclaw gateway stop",
       "pnpm build",
       "pnpm openclaw gateway restart",
       "pnpm openclaw gateway status --deep --require-rpc --json",
@@ -518,7 +547,40 @@ describe("openclaw live updater", () => {
         },
       ),
     ).toThrow(/build output does not match/u);
-    expect(calls).toEqual(["pnpm install --frozen-lockfile", "pnpm build"]);
+    expect(calls).toEqual([
+      "pnpm install --frozen-lockfile",
+      "pnpm openclaw gateway stop",
+      "pnpm build",
+    ]);
+  });
+
+  test("audits restart-window logs even when deep Gateway verification fails", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    writeBuild(mirror);
+    let auditCalls = 0;
+    let statusCalls = 0;
+
+    expect(() =>
+      maintainMain(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          fetchMain: fetchFixtureMain,
+          runCommand(command: string, args: string[]) {
+            if (command === "pnpm" && args.slice(0, 3).join(" ") === "openclaw gateway status") {
+              statusCalls += 1;
+              throw new Error("RPC unavailable");
+            }
+          },
+          auditGatewayLogs() {
+            auditCalls += 1;
+            return { entries: 1, errorCount: 0, warningCount: 0, errors: [], warnings: [] };
+          },
+        },
+      ),
+    ).toThrow("RPC unavailable");
+    expect(statusCalls).toBe(2);
+    expect(auditCalls).toBe(1);
   });
 
   test("retains failed exact-bundle Mac proof for the next heartbeat", () => {
