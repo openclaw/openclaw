@@ -118,6 +118,8 @@ function createWhatsAppPairingCodeReadySignal(timeoutMs: number): {
         }
         function handler(...args: unknown[]) {
           const update = (args[0] ?? {}) as Partial<import("baileys").ConnectionState>;
+          // Baileys emits "connecting" on the next tick before its WebSocket is
+          // necessarily open. The server's pair-device QR proves sendNode is ready.
           if (update.qr) {
             finish();
             return;
