@@ -140,6 +140,70 @@ export function insertRegistryWorktree(
   });
 }
 
+/**
+ * Atomically claims a worktree path: inserts the record only while no live row
+ * (removed_at IS NULL) exists for that path, as one INSERT ... SELECT ... WHERE NOT EXISTS
+ * statement so the check and insert cannot interleave with a concurrent registration.
+ * Returns whether this record won the claim. The schema is unique only by id, so this
+ * helper is what keeps orphan adoption from double-registering a path.
+ */
+export function insertRegistryWorktreeIfPathFree(
+  env: NodeJS.ProcessEnv,
+  record: ManagedWorktreeRecord,
+): boolean {
+  const db = dbFor(env);
+  const kysely = kyselyFor(db);
+  const row = recordToRow(record);
+  let claimed = false;
+  runOpenClawStateWriteTransaction(() => {
+    const query = kysely
+      .insertInto("worktrees")
+      .columns([
+        "id",
+        "repo_fingerprint",
+        "repo_root",
+        "path",
+        "branch",
+        "base_ref",
+        "owner_kind",
+        "owner_id",
+        "snapshot_ref",
+        "created_at",
+        "last_active_at",
+        "removed_at",
+      ])
+      .expression(
+        kysely
+          .selectNoFrom((eb) => [
+            eb.val(row.id).as("id"),
+            eb.val(row.repo_fingerprint).as("repo_fingerprint"),
+            eb.val(row.repo_root).as("repo_root"),
+            eb.val(row.path).as("path"),
+            eb.val(row.branch).as("branch"),
+            eb.val(row.base_ref).as("base_ref"),
+            eb.val(row.owner_kind).as("owner_kind"),
+            eb.val(row.owner_id).as("owner_id"),
+            eb.val(row.snapshot_ref).as("snapshot_ref"),
+            eb.val(row.created_at).as("created_at"),
+            eb.val(row.last_active_at).as("last_active_at"),
+            eb.val(row.removed_at).as("removed_at"),
+          ])
+          .where(({ not, exists, selectFrom }) =>
+            not(
+              exists(
+                selectFrom("worktrees")
+                  .select("id")
+                  .where("path", "=", row.path)
+                  .where("removed_at", "is", null),
+              ),
+            ),
+          ),
+      );
+    claimed = (executeSqliteQuerySync(db, query).numAffectedRows ?? 0n) > 0n;
+  });
+  return claimed;
+}
+
 export function updateRegistryWorktree(
   env: NodeJS.ProcessEnv,
   id: string,

@@ -9,6 +9,7 @@ import {
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
   insertRegistryWorktree,
+  insertRegistryWorktreeIfPathFree,
   listRegistryWorktrees,
   updateRegistryWorktree,
 } from "./registry.js";
@@ -75,5 +76,33 @@ describe("managed worktree registry", () => {
 
     deleteRegistryWorktree(env, "first");
     expect(getRegistryWorktree(env, "first")).toBeUndefined();
+  });
+
+  it("claims a path atomically only while no live row exists", () => {
+    const record: ManagedWorktreeRecord = {
+      id: "claimant",
+      name: "task",
+      repoFingerprint: "0123456789abcdef",
+      repoRoot: path.join(root, "repo"),
+      path: path.join(root, "worktrees", "task"),
+      branch: "openclaw/task",
+      baseRef: "HEAD",
+      ownerKind: "manual",
+      createdAt: 10,
+      lastActiveAt: 10,
+    };
+
+    expect(insertRegistryWorktreeIfPathFree(env, record)).toBe(true);
+    expect(insertRegistryWorktreeIfPathFree(env, { ...record, id: "rival" })).toBe(false);
+    expect(listRegistryWorktrees(env).map((entry) => entry.id)).toEqual(["claimant"]);
+
+    // A removed row no longer blocks the path; the next claim wins again.
+    updateRegistryWorktree(env, "claimant", { removedAt: 50 });
+    expect(insertRegistryWorktreeIfPathFree(env, { ...record, id: "rival" })).toBe(true);
+    expect(
+      listRegistryWorktrees(env)
+        .map((entry) => entry.id)
+        .toSorted(),
+    ).toEqual(["claimant", "rival"]);
   });
 });

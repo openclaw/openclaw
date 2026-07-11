@@ -25,6 +25,7 @@ import {
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
   insertRegistryWorktree,
+  insertRegistryWorktreeIfPathFree,
   listRegistryWorktrees,
   updateRegistryWorktree,
 } from "./registry.js";
@@ -92,6 +93,12 @@ function recordOwnerMatches(
   return (
     record.ownerKind === (params.ownerKind ?? "manual") &&
     (record.ownerId ?? undefined) === (params.ownerId ?? undefined)
+  );
+}
+
+function worktreeNameInUseError(record: ManagedWorktreeRecord, name: string): Error {
+  return new Error(
+    `worktree name is already in use by ${record.ownerKind}${record.ownerId ? ` ${record.ownerId}` : ""}: ${name}`,
   );
 }
 
@@ -354,9 +361,7 @@ export class ManagedWorktreeService {
     // caller-chosen name could bind a new owner to another session's or a
     // manual checkout and run inside it.
     if (existing?.name === name && !existing.removedAt && !recordOwnerMatches(existing, params)) {
-      throw new Error(
-        `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${name}`,
-      );
+      throw worktreeNameInUseError(existing, name);
     }
     if (existing?.name === name && existing.removedAt === undefined) {
       if (await pathExists(existing.path)) {
@@ -366,9 +371,7 @@ export class ManagedWorktreeService {
     }
     if (existing?.name === name && existing.removedAt !== undefined && existing.snapshotRef) {
       if (!recordOwnerMatches(existing, params)) {
-        throw new Error(
-          `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${name}`,
-        );
+        throw worktreeNameInUseError(existing, name);
       }
       return await this.restore({ id: existing.id });
     }
@@ -404,7 +407,7 @@ export class ManagedWorktreeService {
           }
           throw error;
         }
-        return this.adoptOrphan({
+        const adopted = this.adoptOrphan({
           repoFingerprint: repository.fingerprint,
           repoRoot: repository.repoRoot,
           path: worktreePath,
@@ -413,6 +416,19 @@ export class ManagedWorktreeService {
           ...(params.ownerKind ? { ownerKind: params.ownerKind } : {}),
           ...(params.ownerId ? { ownerId: params.ownerId } : {}),
         });
+        if (adopted) {
+          return adopted;
+        }
+        // Claim lost: a concurrent registration won the path while we re-provisioned; the
+        // winner owns the worktree (the re-run above is idempotent). Mirror create()'s
+        // live-row-at-path shortcut for the row we lost to.
+        const winner = findLiveRegistryWorktreeByPath(this.env, worktreePath);
+        if (winner) {
+          if (!recordOwnerMatches(winner, params)) {
+            throw worktreeNameInUseError(winner, name);
+          }
+          return winner;
+        }
       }
       throw new Error(`branch already exists: ${branch}`);
     }
@@ -839,7 +855,7 @@ export class ManagedWorktreeService {
     baseRef?: string;
     ownerKind?: ManagedWorktreeOwnerKind;
     ownerId?: string;
-  }): ManagedWorktreeRecord {
+  }): ManagedWorktreeRecord | undefined {
     const createdAt = this.now();
     const record: ManagedWorktreeRecord = {
       id: randomUUID(),
@@ -857,7 +873,11 @@ export class ManagedWorktreeService {
       createdAt,
       lastActiveAt: createdAt,
     };
-    insertRegistryWorktree(this.env, record);
+    // Atomic path claim: a concurrent create()/gc() may have registered this path after the
+    // caller's registry snapshot; the loser must never add a second row for the same path.
+    if (!insertRegistryWorktreeIfPathFree(this.env, record)) {
+      return undefined;
+    }
     return record;
   }
 
@@ -896,6 +916,7 @@ export class ManagedWorktreeService {
             // instead of deleting a live worktree or leaving it invisible to list()/gc() forever.
             // Registration-only: background gc must not execute repo setup scripts, so a possibly
             // half-provisioned worktree becomes visible/removable rather than silently trusted.
+            // A lost claim means a concurrent create() registered the path first; skip either way.
             this.adoptOrphan({
               repoFingerprint: repository.fingerprint,
               repoRoot: repository.repoRoot,
