@@ -114,6 +114,7 @@ struct OnboardingView: View {
     @State var copied = false
     @State var monitoringPermissions = false
     @State var monitoringDiscovery = false
+    @State var cliExecutableReady = false
     @State var cliInstalled = false
     @State var cliStatusKnown = false
     @State var onboardingVisible = false
@@ -148,6 +149,7 @@ struct OnboardingView: View {
     let cliPageIndex = 2
     let aiPageIndex = 3
     let onboardingChatPageIndex = 8
+    let readyPageIndex = 9
 
     let permissionsPageIndex = 5
 

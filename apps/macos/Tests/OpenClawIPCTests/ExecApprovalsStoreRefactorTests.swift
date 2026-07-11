@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OpenClawKit
 import Testing
@@ -22,6 +23,26 @@ struct ExecApprovalsStoreRefactorTests {
         func capturedCommands() -> [[String]] {
             self.commands
         }
+    }
+
+    private static func forwardedApprovalPlan(
+        command: [String],
+        rawCommand: String? = nil,
+        agentId: String? = "main",
+        policySnapshot: ExecApprovalPolicySnapshot? = nil,
+        mutableFileOperand: OpenClawSystemRunApprovalFileOperand? = nil) -> OpenClawSystemRunApprovalPlan
+    {
+        let snapshot = policySnapshot ?? ExecApprovalPolicySnapshot(
+            resolved: ExecApprovalsStore.resolve(agentId: agentId))
+        return OpenClawSystemRunApprovalPlan(
+            argv: command,
+            cwd: nil,
+            commandText: ExecCommandFormatter.displayString(for: command),
+            commandPreview: rawCommand,
+            agentId: agentId,
+            sessionKey: nil,
+            policySnapshot: snapshot.portable,
+            mutableFileOperand: mutableFileOperand)
     }
 
     private var realTemporaryDirectory: URL {
@@ -579,6 +600,7 @@ struct ExecApprovalsStoreRefactorTests {
             let params = OpenClawSystemRunParams(
                 command: ["/usr/bin/printf", "ok"],
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
                 approvalDecision: "allow-always")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -708,6 +730,7 @@ struct ExecApprovalsStoreRefactorTests {
             let params = OpenClawSystemRunParams(
                 command: ["/usr/bin/printf", "ok"],
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
                 approvalDecision: "allow-once")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -743,6 +766,7 @@ struct ExecApprovalsStoreRefactorTests {
             let params = OpenClawSystemRunParams(
                 command: ["/usr/bin/printf", "ok"],
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
                 approvalDecision: "allow-once")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -777,6 +801,7 @@ struct ExecApprovalsStoreRefactorTests {
             let params = OpenClawSystemRunParams(
                 command: ["/usr/bin/printf", "ok"],
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
                 approvalSource: "auto-review")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -811,6 +836,7 @@ struct ExecApprovalsStoreRefactorTests {
             let params = OpenClawSystemRunParams(
                 command: ["/usr/bin/printf", "ok"],
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
                 approvalSource: "auto-review")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -859,6 +885,171 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `native runtime requires the prepared snapshot for forwarded delayed authority`() async throws {
+        try await self.withTempStateDir { _ in
+            let probe = ShellRunProbe()
+            let runtime = MacNodeRuntime(
+                shellRunner: { command, _, _, _ in await probe.run(command) })
+            let command = ["/usr/bin/printf", "ok"]
+            let planWithoutSnapshot = OpenClawSystemRunApprovalPlan(
+                argv: command,
+                cwd: nil,
+                commandText: ExecCommandFormatter.displayString(for: command),
+                agentId: "main",
+                sessionKey: nil)
+            let cases = [
+                OpenClawSystemRunParams(
+                    command: command,
+                    agentId: "main",
+                    systemRunPlan: planWithoutSnapshot,
+                    approvalDecision: "allow-once"),
+                OpenClawSystemRunParams(
+                    command: command,
+                    agentId: "main",
+                    systemRunPlan: planWithoutSnapshot,
+                    approvalSource: "auto-review"),
+                OpenClawSystemRunParams(
+                    command: command,
+                    agentId: "main",
+                    systemRunPlan: planWithoutSnapshot,
+                    approved: true),
+            ]
+
+            for (index, params) in cases.enumerated() {
+                let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+                let response = await runtime.handleInvoke(BridgeInvokeRequest(
+                    id: "missing-delayed-snapshot-\(index)",
+                    command: OpenClawSystemCommand.run.rawValue,
+                    paramsJSON: json))
+
+                #expect(!response.ok)
+                #expect(response.error?.code == .invalidRequest)
+                #expect(response.error?.message.contains("prepared policy snapshot") == true)
+            }
+            #expect(await probe.capturedCommands().isEmpty)
+        }
+    }
+
+    @Test
+    func `native runtime rejects forwarded delayed authority for a mismatched plan`() async throws {
+        try await self.withTempStateDir { _ in
+            let probe = ShellRunProbe()
+            let runtime = MacNodeRuntime(
+                shellRunner: { command, _, _, _ in await probe.run(command) })
+            let command = ["/usr/bin/printf", "ok"]
+            let params = OpenClawSystemRunParams(
+                command: command,
+                agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "different"]),
+                approvalDecision: "allow-once")
+            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+
+            let response = await runtime.handleInvoke(BridgeInvokeRequest(
+                id: "mismatched-forwarded-plan",
+                command: OpenClawSystemCommand.run.rawValue,
+                paramsJSON: json))
+
+            #expect(!response.ok)
+            #expect(response.error?.code == .invalidRequest)
+            #expect(response.error?.message.contains("matching systemRunPlan") == true)
+            #expect(await probe.capturedCommands().isEmpty)
+        }
+    }
+
+    @Test
+    func `forwarded node session approval cannot restore a rule revoked before Mac evaluation`() async throws {
+        try await self.withTempStateDir { _ in
+            let stale = ExecAllowlistEntry(
+                pattern: "/usr/bin/echo",
+                source: "allow-always")
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.security = .allowlist
+                entry.ask = .onMiss
+                entry.allowlist = [stale]
+            }.get()
+            let forwardedSnapshot = ExecApprovalPolicySnapshot(
+                resolved: ExecApprovalsStore.resolve(agentId: "main"))
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.allowlist = []
+            }.get()
+
+            let probe = ShellRunProbe()
+            let runtime = MacNodeRuntime(
+                shellRunner: { command, _, _, _ in await probe.run(command) })
+            let command = ["/usr/bin/printf", "ok"]
+            let params = OpenClawSystemRunParams(
+                command: command,
+                agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(
+                    command: command,
+                    policySnapshot: forwardedSnapshot),
+                approvalDecision: "allow-always")
+            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+
+            let response = await runtime.handleInvoke(BridgeInvokeRequest(
+                id: "revoked-node-session-approval",
+                command: OpenClawSystemCommand.run.rawValue,
+                paramsJSON: json))
+
+            #expect(!response.ok)
+            #expect(response.error?.message.contains("exec approvals update unavailable") == true)
+            #expect(await probe.capturedCommands().isEmpty)
+            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
+        }
+    }
+
+    @Test
+    func `forwarded node session approval rejects a changed mutable script operand`() async throws {
+        try await self.withTempStateDir { stateDir in
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.security = .full
+                entry.ask = .off
+            }.get()
+            let scriptURL = stateDir.appendingPathComponent("script.py")
+            let approvedData = Data("print('approved')\n".utf8)
+            try approvedData.write(to: scriptURL)
+            let approvedHash = SHA256.hash(data: approvedData)
+                .map { String(format: "%02x", $0) }
+                .joined()
+            let command = ["/usr/bin/python3", scriptURL.path]
+            let operand = OpenClawSystemRunApprovalFileOperand(
+                argvIndex: 1,
+                path: scriptURL.resolvingSymlinksInPath().path,
+                sha256: approvedHash)
+            try Data("print('changed')\n".utf8).write(to: scriptURL)
+
+            let probe = ShellRunProbe()
+            let runtime = MacNodeRuntime(
+                shellRunner: { command, _, _, _ in await probe.run(command) })
+            let params = OpenClawSystemRunParams(
+                command: command,
+                agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(
+                    command: command,
+                    mutableFileOperand: operand),
+                approvalDecision: "allow-once")
+            let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+
+            let response = await runtime.handleInvoke(BridgeInvokeRequest(
+                id: "changed-script-operand",
+                command: OpenClawSystemCommand.run.rawValue,
+                paramsJSON: json))
+
+            #expect(!response.ok)
+            #expect(response.error?.message.contains("script operand changed") == true)
+            #expect(await probe.capturedCommands().isEmpty)
+
+            try approvedData.write(to: scriptURL)
+            let restoredResponse = await runtime.handleInvoke(BridgeInvokeRequest(
+                id: "restored-script-operand",
+                command: OpenClawSystemCommand.run.rawValue,
+                paramsJSON: json))
+            #expect(restoredResponse.ok)
+            #expect(await probe.capturedCommands() == [command])
+        }
+    }
+
+    @Test
     func `native runtime cannot persist allow always after concurrent policy revocation`() async throws {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
@@ -878,6 +1069,7 @@ struct ExecApprovalsStoreRefactorTests {
             let params = OpenClawSystemRunParams(
                 command: ["/usr/bin/printf", "ok"],
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
                 approvalDecision: "allow-always")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -906,6 +1098,7 @@ struct ExecApprovalsStoreRefactorTests {
             let params = OpenClawSystemRunParams(
                 command: ["/usr/bin/printf", "ok"],
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
                 approvalSource: "ask-fallback")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -935,6 +1128,7 @@ struct ExecApprovalsStoreRefactorTests {
             let params = OpenClawSystemRunParams(
                 command: command,
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: command),
                 approvalSource: "ask-fallback")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -986,6 +1180,7 @@ struct ExecApprovalsStoreRefactorTests {
             let params = OpenClawSystemRunParams(
                 command: command,
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: command),
                 approvalSource: "auto-review")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -1013,6 +1208,7 @@ struct ExecApprovalsStoreRefactorTests {
             let params = OpenClawSystemRunParams(
                 command: ["/usr/bin/printf", "ok"],
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
                 approvalSource: "auto-review")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -1047,6 +1243,7 @@ struct ExecApprovalsStoreRefactorTests {
             let params = OpenClawSystemRunParams(
                 command: ["/usr/bin/printf", "ok"],
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: ["/usr/bin/printf", "ok"]),
                 approvalSource: "auto-review")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -1077,6 +1274,7 @@ struct ExecApprovalsStoreRefactorTests {
                 command: command,
                 rawCommand: payload,
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: command, rawCommand: payload),
                 approvalSource: "auto-review")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -1129,6 +1327,7 @@ struct ExecApprovalsStoreRefactorTests {
             let params = OpenClawSystemRunParams(
                 command: ["printf", "ok"],
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: ["printf", "ok"]),
                 approvalSource: "ask-fallback")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -1157,6 +1356,7 @@ struct ExecApprovalsStoreRefactorTests {
             let params = OpenClawSystemRunParams(
                 command: ["/bin/echo", "miss"],
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: ["/bin/echo", "miss"]),
                 approvalSource: "ask-fallback")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -1188,6 +1388,7 @@ struct ExecApprovalsStoreRefactorTests {
                 command: original,
                 rawCommand: payload,
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: original, rawCommand: payload),
                 approvalDecision: "allow-once")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -1217,6 +1418,7 @@ struct ExecApprovalsStoreRefactorTests {
                 command: original,
                 rawCommand: payload,
                 agentId: "main",
+                systemRunPlan: Self.forwardedApprovalPlan(command: original, rawCommand: payload),
                 approvalDecision: "allow-always")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -1551,6 +1753,55 @@ struct ExecApprovalsStoreRefactorTests {
                 Issue.record("expected deny policy to override auto review")
                 return
             }
+        }
+    }
+
+    @Test
+    func `forwarded explicit approval cannot restore a rule revoked before Mac evaluation`() async throws {
+        try await self.withTempStateDir { _ in
+            let stale = ExecAllowlistEntry(
+                pattern: "/usr/bin/printf",
+                source: "allow-always")
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.security = .allowlist
+                entry.ask = .always
+                entry.allowlist = [stale]
+            }.get()
+            let forwardedSnapshot = ExecApprovalPolicySnapshot(
+                resolved: ExecApprovalsStore.resolve(agentId: "main"))
+
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.allowlist = []
+            }.get()
+            let freshContext = await ExecApprovalEvaluator.evaluate(
+                command: ["/usr/bin/printf", "ok"],
+                rawCommand: nil,
+                cwd: nil,
+                envOverrides: nil,
+                agentId: "main")
+            #expect(freshContext.policySnapshot != forwardedSnapshot)
+
+            let commit = ExecApprovalExecutionCommit.build(
+                context: freshContext,
+                effectiveSecurity: .allowlist,
+                approvalSource: nil,
+                explicitlyApproved: true,
+                persistAllowlist: true,
+                delayedPolicySnapshot: forwardedSnapshot)
+            if case let .explicitAlways(_, policySnapshot, grants) = commit.authorization {
+                #expect(policySnapshot == forwardedSnapshot)
+                #expect(grants.map(\.match.pattern) == ["/usr/bin/printf"])
+            } else {
+                Issue.record("expected forwarded durable approval")
+            }
+
+            let result = ExecApprovalsStore.commitExecution(commit)
+
+            guard case .failure(.unavailable) = result else {
+                Issue.record("expected revoked forwarded approval to fail")
+                return
+            }
+            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
         }
     }
 

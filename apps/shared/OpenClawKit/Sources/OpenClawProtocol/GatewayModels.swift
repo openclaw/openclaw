@@ -57,6 +57,13 @@ public enum SessionFileRelevance: String, Codable, Sendable {
     case mixed = "mixed"
 }
 
+public enum SessionDiffFileStatus: String, Codable, Sendable {
+    case added = "added"
+    case modified = "modified"
+    case deleted = "deleted"
+    case renamed = "renamed"
+}
+
 public enum TaskSuggestionResolution: String, Codable, Sendable {
     case dismissed = "dismissed"
     case accepted = "accepted"
@@ -870,6 +877,7 @@ public struct MessageActionParams: Codable, Sendable {
     public let inboundturnkind: String?
     public let agentid: String?
     public let toolcontext: [String: AnyCodable]?
+    public let conversationreadorigin: String?
     public let idempotencykey: String
 
     public init(
@@ -885,6 +893,7 @@ public struct MessageActionParams: Codable, Sendable {
         inboundturnkind: String? = nil,
         agentid: String? = nil,
         toolcontext: [String: AnyCodable]? = nil,
+        conversationreadorigin: String? = nil,
         idempotencykey: String)
     {
         self.channel = channel
@@ -899,6 +908,7 @@ public struct MessageActionParams: Codable, Sendable {
         self.inboundturnkind = inboundturnkind
         self.agentid = agentid
         self.toolcontext = toolcontext
+        self.conversationreadorigin = conversationreadorigin
         self.idempotencykey = idempotencykey
     }
 
@@ -915,6 +925,7 @@ public struct MessageActionParams: Codable, Sendable {
         case inboundturnkind = "inboundTurnKind"
         case agentid = "agentId"
         case toolcontext = "toolContext"
+        case conversationreadorigin = "conversationReadOrigin"
         case idempotencykey = "idempotencyKey"
     }
 }
@@ -1566,6 +1577,68 @@ public struct WorktreesBranchesResult: Codable, Sendable {
         case branches
         case defaultbranch = "defaultBranch"
         case headbranch = "headBranch"
+    }
+}
+
+public struct FsDirEntry: Codable, Sendable {
+    public let name: String
+    public let path: String
+    public let hidden: Bool?
+
+    public init(
+        name: String,
+        path: String,
+        hidden: Bool? = nil)
+    {
+        self.name = name
+        self.path = path
+        self.hidden = hidden
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case path
+        case hidden
+    }
+}
+
+public struct FsListDirParams: Codable, Sendable {
+    public let path: String?
+
+    public init(
+        path: String? = nil)
+    {
+        self.path = path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+    }
+}
+
+public struct FsListDirResult: Codable, Sendable {
+    public let path: String
+    public let parent: String?
+    public let home: String
+    public let entries: [FsDirEntry]
+
+    public init(
+        path: String,
+        parent: String? = nil,
+        home: String,
+        entries: [FsDirEntry])
+    {
+        self.path = path
+        self.parent = parent
+        self.home = home
+        self.entries = entries
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case parent
+        case home
+        case entries
     }
 }
 
@@ -2766,6 +2839,116 @@ public struct SessionsFilesGetResult: Codable, Sendable {
         case sessionkey = "sessionKey"
         case root
         case file
+    }
+}
+
+public struct SessionDiffFile: Codable, Sendable {
+    public let path: String
+    public let oldpath: String?
+    public let status: SessionDiffFileStatus
+    public let additions: Int
+    public let deletions: Int
+    public let binary: Bool?
+    public let untracked: Bool?
+    public let patch: String?
+    public let truncated: Bool?
+
+    public init(
+        path: String,
+        oldpath: String? = nil,
+        status: SessionDiffFileStatus,
+        additions: Int,
+        deletions: Int,
+        binary: Bool? = nil,
+        untracked: Bool? = nil,
+        patch: String? = nil,
+        truncated: Bool? = nil)
+    {
+        self.path = path
+        self.oldpath = oldpath
+        self.status = status
+        self.additions = additions
+        self.deletions = deletions
+        self.binary = binary
+        self.untracked = untracked
+        self.patch = patch
+        self.truncated = truncated
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case oldpath = "oldPath"
+        case status
+        case additions
+        case deletions
+        case binary
+        case untracked
+        case patch
+        case truncated
+    }
+}
+
+public struct SessionsDiffParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+    }
+}
+
+public struct SessionsDiffResult: Codable, Sendable {
+    public let sessionkey: String
+    public let root: String?
+    public let branch: String?
+    public let baseref: String?
+    public let files: [SessionDiffFile]
+    public let additions: Int
+    public let deletions: Int
+    public let truncated: Bool?
+    public let unavailablereason: AnyCodable?
+
+    public init(
+        sessionkey: String,
+        root: String? = nil,
+        branch: String? = nil,
+        baseref: String? = nil,
+        files: [SessionDiffFile],
+        additions: Int,
+        deletions: Int,
+        truncated: Bool? = nil,
+        unavailablereason: AnyCodable? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.root = root
+        self.branch = branch
+        self.baseref = baseref
+        self.files = files
+        self.additions = additions
+        self.deletions = deletions
+        self.truncated = truncated
+        self.unavailablereason = unavailablereason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case root
+        case branch
+        case baseref = "baseRef"
+        case files
+        case additions
+        case deletions
+        case truncated
+        case unavailablereason = "unavailableReason"
     }
 }
 
@@ -6746,6 +6929,7 @@ public struct ToolsInvokeParams: Codable, Sendable {
     public let agentid: String?
     public let confirm: Bool?
     public let idempotencykey: String?
+    public let conversationreadorigin: String?
 
     public init(
         name: String,
@@ -6753,7 +6937,8 @@ public struct ToolsInvokeParams: Codable, Sendable {
         sessionkey: String? = nil,
         agentid: String? = nil,
         confirm: Bool? = nil,
-        idempotencykey: String? = nil)
+        idempotencykey: String? = nil,
+        conversationreadorigin: String? = nil)
     {
         self.name = name
         self.args = args
@@ -6761,6 +6946,7 @@ public struct ToolsInvokeParams: Codable, Sendable {
         self.agentid = agentid
         self.confirm = confirm
         self.idempotencykey = idempotencykey
+        self.conversationreadorigin = conversationreadorigin
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6770,6 +6956,7 @@ public struct ToolsInvokeParams: Codable, Sendable {
         case agentid = "agentId"
         case confirm
         case idempotencykey = "idempotencyKey"
+        case conversationreadorigin = "conversationReadOrigin"
     }
 }
 
@@ -9650,6 +9837,46 @@ public struct ChatMessageGetResult: Codable, Sendable {
         case ok
         case message
         case unavailablereason = "unavailableReason"
+    }
+}
+
+public struct ChatToolTitlesParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let items: [[String: AnyCodable]]
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        items: [[String: AnyCodable]])
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.items = items
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case items
+    }
+}
+
+public struct ChatToolTitlesResult: Codable, Sendable {
+    public let titles: [String: AnyCodable]
+    public let disabled: Bool?
+
+    public init(
+        titles: [String: AnyCodable],
+        disabled: Bool? = nil)
+    {
+        self.titles = titles
+        self.disabled = disabled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case titles
+        case disabled
     }
 }
 
