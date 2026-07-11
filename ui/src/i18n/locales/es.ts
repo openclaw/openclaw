@@ -380,6 +380,7 @@ export const es: TranslationMap = {
       skills: "Skills",
       channels: "Channels",
       cronJobs: "Cron Jobs",
+      memory: "Memoria",
     },
     context: {
       title: "Agent Context",
@@ -634,7 +635,6 @@ export const es: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Depuración",
     logs: "Registros",
-    dreams: "Sueños",
     plugin: "Plugin",
   },
   subtitles: {
@@ -666,8 +666,10 @@ export const es: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Instantáneas de la puerta de enlace, eventos y llamadas RPC manuales.",
     logs: "Seguimiento en vivo de los registros de la puerta de enlace.",
-    dreams: "Consolidación de la memoria durante el sueño.",
     plugin: "Panel proporcionado por el plugin.",
+  },
+  mcpPage: {
+    manageServersLink: "Gestionar servidores en la página de Plugins.",
   },
   pluginsPage: {
     searchLabel: "Buscar plugins",
@@ -1443,10 +1445,6 @@ export const es: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agente",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Escena",
       diary: "Diario",
@@ -2053,9 +2051,9 @@ export const es: TranslationMap = {
       workSessions: "Trabajo",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Chats recientes",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

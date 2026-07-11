@@ -377,6 +377,7 @@ export const zh_TW: TranslationMap = {
       skills: "Skills",
       channels: "Channels",
       cronJobs: "Cron Jobs",
+      memory: "記憶體",
     },
     context: {
       title: "Agent Context",
@@ -629,7 +630,6 @@ export const zh_TW: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "調試",
     logs: "日誌",
-    dreams: "夢境",
     plugin: "外掛程式",
   },
   subtitles: {
@@ -660,8 +660,10 @@ export const zh_TW: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "快照、事件、RPC。",
     logs: "實時網關日誌。",
-    dreams: "睡眠期間的記憶整合。",
     plugin: "外掛程式提供的面板。",
+  },
+  mcpPage: {
+    manageServersLink: "在插件頁面管理伺服器。",
   },
   pluginsPage: {
     searchLabel: "搜尋外掛程式",
@@ -1419,10 +1421,6 @@ export const zh_TW: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "代理",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "場景",
       diary: "日誌",
@@ -1995,9 +1993,9 @@ export const zh_TW: TranslationMap = {
       workSessions: "工作",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "最近的聊天",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

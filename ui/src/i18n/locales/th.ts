@@ -377,6 +377,7 @@ export const th: TranslationMap = {
       skills: "ทักษะ",
       channels: "ช่องทาง",
       cronJobs: "งาน Cron",
+      memory: "หน่วยความจำ",
     },
     context: {
       title: "Agent Context",
@@ -629,7 +630,6 @@ export const th: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "ดีบัก",
     logs: "บันทึก",
-    dreams: "การฝัน",
     plugin: "ปลั๊กอิน",
   },
   subtitles: {
@@ -660,8 +660,10 @@ export const th: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "สแนปช็อต เหตุการณ์ และ RPC",
     logs: "บันทึกเกตเวย์แบบสด",
-    dreams: "การฝันของหน่วยความจำ การรวมข้อมูล และการสะท้อนคิด",
     plugin: "แผงที่ปลั๊กอินจัดเตรียมไว้",
+  },
+  mcpPage: {
+    manageServersLink: "จัดการเซิร์ฟเวอร์ในหน้า Plugins",
   },
   pluginsPage: {
     searchLabel: "ค้นหาปลั๊กอิน",
@@ -1419,10 +1421,6 @@ export const th: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "เอเจนต์",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "ฉาก",
       diary: "ไดอารี",
@@ -1998,9 +1996,9 @@ export const th: TranslationMap = {
       workSessions: "งาน",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "แชทล่าสุด",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

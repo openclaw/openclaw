@@ -379,6 +379,7 @@ export const vi: TranslationMap = {
       skills: "Skills",
       channels: "Kênh",
       cronJobs: "Cron Jobs",
+      memory: "Bộ nhớ",
     },
     context: {
       title: "Ngữ cảnh agent",
@@ -633,7 +634,6 @@ export const vi: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Gỡ lỗi",
     logs: "Nhật ký",
-    dreams: "Đang mơ",
     plugin: "Plugin",
   },
   subtitles: {
@@ -665,8 +665,10 @@ export const vi: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Ảnh chụp, sự kiện, RPC.",
     logs: "Nhật ký gateway trực tiếp.",
-    dreams: "Mơ bộ nhớ, hợp nhất và phản chiếu.",
     plugin: "Bảng điều khiển do plugin cung cấp.",
+  },
+  mcpPage: {
+    manageServersLink: "Quản lý máy chủ trên trang Plugins.",
   },
   pluginsPage: {
     searchLabel: "Tìm kiếm plugin",
@@ -1434,10 +1436,6 @@ export const vi: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agent",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Cảnh",
       diary: "Nhật ký",
@@ -2030,9 +2028,9 @@ export const vi: TranslationMap = {
       workSessions: "Công việc",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Cuộc trò chuyện gần đây",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

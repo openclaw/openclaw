@@ -379,6 +379,7 @@ export const hi: TranslationMap = {
       skills: "स्किल्स",
       channels: "चैनल",
       cronJobs: "Cron Jobs",
+      memory: "मेमोरी",
     },
     context: {
       title: "एजेंट संदर्भ",
@@ -631,7 +632,6 @@ export const hi: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "डीबग",
     logs: "लॉग्स",
-    dreams: "ड्रीमिंग",
     plugin: "प्लगइन",
   },
   subtitles: {
@@ -662,8 +662,10 @@ export const hi: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "स्नैपशॉट, इवेंट, RPC।",
     logs: "लाइव gateway लॉग।",
-    dreams: "मेमोरी ड्रीमिंग, कंसॉलिडेशन, और रिफ्लेक्शन।",
     plugin: "प्लगइन द्वारा उपलब्ध कराया गया पैनल।",
+  },
+  mcpPage: {
+    manageServersLink: "Plugins पेज पर सर्वर प्रबंधित करें।",
   },
   pluginsPage: {
     searchLabel: "प्लगइन खोजें",
@@ -1427,10 +1429,6 @@ export const hi: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "एजेंट",
-      ariaLabel: "ड्रीमिंग एजेंट",
-    },
     tabs: {
       scene: "दृश्य",
       diary: "डायरी",
@@ -2017,9 +2015,9 @@ export const hi: TranslationMap = {
       workSessions: "कार्य",
     },
     welcome: {
-      ready: "चैट के लिए तैयार",
       hintBeforeShortcut: "नीचे संदेश टाइप करें ·",
       hintAfterShortcut: "कमांड के लिए",
+      recentSessions: "हाल की चैट्स",
       suggestions: {
         whatCanYouDo: "आप क्या कर सकते हैं?",
         summarizeRecentSessions: "मेरे हाल के सेशन का सारांश दें",
