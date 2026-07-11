@@ -7,6 +7,42 @@ const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
 const CLICKCLACK_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
 const CLICKCLACK_INBOUND_JSON_LIMIT_BYTES = 16 * 1024 * 1024;
 
+type OperationOutcome =
+  | { status: "resolved" }
+  | { status: "rejected"; error: unknown }
+  | { status: "pending" };
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function settleWithin(
+  promise: Promise<unknown>,
+  timeoutMs: number,
+): Promise<OperationOutcome> {
+  return await Promise.race([
+    promise.then(
+      () => ({ status: "resolved" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    ),
+    delay(timeoutMs).then(() => ({ status: "pending" as const })),
+  ]);
+}
+
+async function expectRejectionWithin(
+  promise: Promise<unknown>,
+  timeoutMs: number,
+): Promise<unknown> {
+  const outcome = await settleWithin(promise, timeoutMs);
+  expect(outcome.status).toBe("rejected");
+  if (outcome.status !== "rejected") {
+    throw new Error(`expected rejection within ${timeoutMs}ms, got ${outcome.status}`);
+  }
+  return outcome.error;
+}
+
 function requestBodyJson(init: RequestInit | undefined): unknown {
   const body = init?.body;
   if (typeof body !== "string") {
@@ -121,6 +157,36 @@ function streamedErrorResponse(body: string, limit: number) {
     releaseLock,
     text,
     expectedDetail: body.slice(0, limit),
+  };
+}
+
+function createSignalAbortedJsonResponse(signal: AbortSignal): {
+  response: Response;
+  wasAborted: () => boolean;
+} {
+  let aborted = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const abortBody = () => {
+        aborted = true;
+        controller.error(signal.reason ?? new Error("body aborted"));
+      };
+      if (signal.aborted) {
+        abortBody();
+        return;
+      }
+      signal.addEventListener("abort", abortBody, { once: true });
+    },
+    async pull() {
+      await new Promise<void>(() => {});
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+    wasAborted: () => aborted,
   };
 }
 
@@ -521,6 +587,31 @@ describe("ClickClack HTTP client", () => {
     expect(streamed.text).not.toHaveBeenCalled();
     expect(streamed.cancel).toHaveBeenCalledTimes(1);
     expect(streamed.releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the REST request deadline active while reading a hanging response body", async () => {
+    let body: ReturnType<typeof createSignalAbortedJsonResponse> | undefined;
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!(signal instanceof AbortSignal)) {
+        throw new Error("expected ClickClack client to pass an AbortSignal");
+      }
+      const responseBody = createSignalAbortedJsonResponse(signal);
+      body = responseBody;
+      return responseBody.response;
+    });
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock as unknown as typeof fetch,
+      requestTimeoutMs: 25,
+    });
+
+    const error = await expectRejectionWithin(client.me(), 750);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("request timed out");
+    expect(body?.wasAborted()).toBe(true);
   });
 
   it("POSTs durable activity rows with kind and turn_id", async () => {
