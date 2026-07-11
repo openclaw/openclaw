@@ -56,20 +56,16 @@ export const SCOPED_CONFIG_SECTION_KEYS = new Set<string>([
   ...AI_AGENTS_SECTION_KEYS,
 ]);
 
+const CONFIG_SECTION_KEYS_BY_PAGE = {
+  config: undefined,
+  communications: COMMUNICATION_SECTION_KEYS,
+  appearance: APPEARANCE_SECTION_KEYS,
+  automation: AUTOMATION_SECTION_KEYS,
+  mcp: INFRASTRUCTURE_SECTION_KEYS,
+  infrastructure: INFRASTRUCTURE_SECTION_KEYS,
+  "ai-agents": AI_AGENTS_SECTION_KEYS,
+} as const satisfies Record<ConfigPageId, readonly string[] | undefined>;
+
 export function configSectionKeysForPage(pageId: ConfigPageId): readonly string[] | undefined {
-  switch (pageId) {
-    case "communications":
-      return COMMUNICATION_SECTION_KEYS;
-    case "appearance":
-      return APPEARANCE_SECTION_KEYS;
-    case "automation":
-      return AUTOMATION_SECTION_KEYS;
-    case "mcp":
-    case "infrastructure":
-      return INFRASTRUCTURE_SECTION_KEYS;
-    case "ai-agents":
-      return AI_AGENTS_SECTION_KEYS;
-    case "config":
-      return undefined;
-  }
+  return CONFIG_SECTION_KEYS_BY_PAGE[pageId];
 }
