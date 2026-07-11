@@ -32,35 +32,56 @@ suite("Claude native session catalog", () => {
 
   it("uses native sidebar/chat pagination and disables paired-node continuation", async () => {
     const page = await browser.newPage();
+    await page.clock.install();
+    const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
+      catalogs: [
+        {
+          id: "claude",
+          label: "Claude Code",
+          capabilities: { continueSession: true, archive: false },
+          hosts: [
+            {
+              hostId: "node:devbox",
+              label: "Dev Box",
+              kind: "node",
+              connected: true,
+              nodeId: "devbox",
+              sessions: [
+                {
+                  threadId,
+                  name,
+                  status: "stored",
+                  source: "claude-cli",
+                  archived: false,
+                  canContinue: false,
+                  canArchive: false,
+                },
+              ],
+              ...(nextCursor ? { nextCursor } : {}),
+            },
+          ],
+        },
+      ],
+    });
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
       methodResponses: {
         "sessions.catalog.list": {
-          catalogs: [
+          cases: [
             {
-              id: "claude",
-              label: "Claude Code",
-              capabilities: { continueSession: true, archive: false },
-              hosts: [
-                {
-                  hostId: "node:devbox",
-                  label: "Dev Box",
-                  kind: "node",
-                  connected: true,
-                  nodeId: "devbox",
-                  sessions: [
-                    {
-                      threadId: "remote-thread",
-                      name: "Remote architecture review",
-                      status: "stored",
-                      source: "claude-cli",
-                      archived: false,
-                      canContinue: false,
-                      canArchive: false,
-                    },
-                  ],
-                },
-              ],
+              match: {
+                catalogId: "claude",
+                cursors: { "node:devbox": "catalog-page-2" },
+              },
+              response: catalogResponse("older-remote-thread", "Older remote review"),
+            },
+            {
+              match: {},
+              response: catalogResponse(
+                "remote-thread",
+                "Remote architecture review",
+                "catalog-page-2",
+              ),
             },
           ],
         },
@@ -88,6 +109,18 @@ suite("Claude native session catalog", () => {
       },
     });
     await page.goto(`${server.baseUrl}chat`);
+    await page.getByRole("button", { name: "Load more sessions" }).click();
+    await page.getByText("Older remote review", { exact: true }).waitFor();
+    expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
+      catalogId: "claude",
+      cursors: { "node:devbox": "catalog-page-2" },
+    });
+    const catalogRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
+    await page.clock.runFor(30_000);
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+      .toBeGreaterThanOrEqual(catalogRequestCount + 2);
+    await page.getByText("Older remote review", { exact: true }).waitFor();
     await page.getByText("Remote architecture review", { exact: true }).click();
     await expect.poll(() => page.getByText("newer answer", { exact: true }).count()).toBe(1);
     await page.getByRole("button", { name: "Load older" }).click();

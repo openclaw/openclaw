@@ -130,11 +130,11 @@ Loaded pages render in chronological order. The viewer never loads an unbounded
 closed instead of risking the node or Gateway connection.
 
 Open the **Codex** group in the normal sessions sidebar. It lists the same sessions
-grouped by host. Search matches normalized session titles; refresh and per-host
-pagination preserve healthy hosts when another host is offline or unavailable.
-Each returned search page scans a bounded number of native pages per host
-rather than sending the query to App Server, because native search can also
-match transcript previews. Use **Load more** to continue older results.
+grouped by host. **Load more sessions** appends the next page from each host that
+has older rows, and those appended rows survive the sidebar's periodic refresh.
+Each returned search page scans a bounded number of native pages per host rather
+than sending the query to App Server, because native search can also match
+transcript previews.
 
 Host availability and thread status are separate. **Offline** or **Unavailable**
 describes a host refresh; an unavailable host returns no fresh session rows and

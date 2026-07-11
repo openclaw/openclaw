@@ -205,9 +205,11 @@ enabled by default; a native macOS node advertises the read-only Claude session
 commands when the local `~/.claude/projects/` directory exists. Approve the
 node pairing upgrade when those commands first appear.
 
-The sidebar keeps the newest bounded page from each host and refreshes on the
-normal 30-second cadence. Catalog clients use `sessions.catalog.list`; opening a
-row uses `sessions.catalog.read`.
+The sidebar starts with the newest bounded page from each host and refreshes on
+the normal 30-second cadence. Use **Load more sessions** below a catalog group
+to append the next page for every host that has more history; appended rows stay
+visible and are re-fetched to the same depth across refreshes. Catalog clients
+use `sessions.catalog.list`; opening a row uses `sessions.catalog.read`.
 
 Selecting a row reads the newest transcript page first. **Load older transcript
 items** follows an opaque byte cursor and reads another bounded section from the

@@ -277,6 +277,168 @@ describe("AppSidebar session scroll fade", () => {
   });
 });
 
+describe("AppSidebar session catalog pagination", () => {
+  const catalogPage = (
+    sessions: Array<{ threadId: string; name: string }>,
+    nextCursor?: string,
+  ) => ({
+    catalogs: [
+      {
+        id: "codex",
+        label: "Codex",
+        capabilities: { continueSession: true, archive: true },
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Local Codex",
+            kind: "gateway" as const,
+            connected: true,
+            sessions: sessions.map((session) => ({
+              ...session,
+              status: "idle",
+              archived: false,
+              canContinue: true,
+              canArchive: true,
+            })),
+            ...(nextCursor ? { nextCursor } : {}),
+          },
+        ],
+      },
+    ],
+  });
+
+  it("appends host pages and keeps them through the next poll refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"))
+        .mockResolvedValueOnce(
+          catalogPage([{ threadId: "thread-2", name: "Stale title" }], "page-3"),
+        )
+        .mockResolvedValueOnce(
+          catalogPage([{ threadId: "thread-1", name: "Newest refreshed" }], "page-2"),
+        )
+        .mockResolvedValueOnce(
+          catalogPage([{ threadId: "thread-2", name: "Current title" }], "page-3"),
+        )
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-3", name: "Oldest" }]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      const catalogRows = () =>
+        sidebar.querySelectorAll('[data-session-section="catalog:codex"] [data-session-key]');
+      const loadMore = () =>
+        sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
+      expect(catalogRows()).toHaveLength(1);
+      loadMore()?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+        catalogId: "codex",
+        cursors: { "gateway:local": "page-2" },
+      });
+      expect(catalogRows()).toHaveLength(2);
+      expect(sidebar.textContent).toContain("Stale title");
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await sidebar.updateComplete;
+      expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
+        limitPerHost: 40,
+      });
+      expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
+        catalogId: "codex",
+        cursors: { "gateway:local": "page-2" },
+      });
+      expect(catalogRows()).toHaveLength(2);
+      expect(sidebar.textContent).toContain("Newest refreshed");
+      expect(sidebar.textContent).toContain("Current title");
+      expect(sidebar.textContent).not.toContain("Stale title");
+
+      loadMore()?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+      expect(request).toHaveBeenNthCalledWith(5, "sessions.catalog.list", {
+        catalogId: "codex",
+        cursors: { "gateway:local": "page-3" },
+      });
+      expect(catalogRows()).toHaveLength(3);
+      expect(sidebar.textContent).toContain("Oldest");
+      expect(loadMore()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards a load-more response after a poll replaces its cursor", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveStalePage!: (value: ReturnType<typeof catalogPage>) => void;
+      const stalePage = new Promise<ReturnType<typeof catalogPage>>((resolve) => {
+        resolveStalePage = resolve;
+      });
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Initial" }], "page-2"))
+        .mockReturnValueOnce(stalePage)
+        .mockResolvedValueOnce(
+          catalogPage([{ threadId: "thread-1", name: "Polled" }], "replacement-page"),
+        )
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-3", name: "Replacement" }]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      const loadMore = () =>
+        sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
+      loadMore()?.click();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await sidebar.updateComplete;
+      expect(sidebar.textContent).toContain("Polled");
+
+      resolveStalePage(catalogPage([{ threadId: "thread-2", name: "Stale page" }], "page-3"));
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+      expect(sidebar.textContent).not.toContain("Stale page");
+
+      loadMore()?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+      expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
+        catalogId: "codex",
+        cursors: { "gateway:local": "replacement-page" },
+      });
+      expect(sidebar.textContent).toContain("Replacement");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("AppSidebar lobster outcome wiring", () => {
   it.each([
     ["panel", "failed", "error"],

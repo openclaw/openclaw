@@ -182,6 +182,18 @@ function shouldHandleNavigationClick(event: MouseEvent): boolean {
   );
 }
 
+function sessionCatalogHostKey(catalogId: string, hostId: string): string {
+  return `${catalogId}\u0000${hostId}`;
+}
+
+function mergeCatalogSessionRows(
+  first: readonly SessionCatalogSession[],
+  second: readonly SessionCatalogSession[],
+): SessionCatalogSession[] {
+  const seen = new Set(first.map((session) => session.threadId));
+  return [...first, ...second.filter((session) => !seen.has(session.threadId))];
+}
+
 class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
@@ -236,6 +248,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private sessionsLoading = false;
   @state() private sessionsScrollState: SidebarSessionsScrollState = "none";
   @state() private sessionCatalogs: SessionCatalog[] = [];
+  @state() private loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
 
   private readonly subscriptions = new SubscriptionsController(this);
   private customizeMenuTrigger: HTMLElement | null = null;
@@ -255,7 +268,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private sessionsScrollResizeObserver: ResizeObserver | null = null;
   private sessionCatalogTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private sessionCatalogGeneration = 0;
+  private sessionCatalogRevision = 0;
   private sessionCatalogRequestGeneration: number | null = null;
+  private readonly sessionCatalogPageDepths = new Map<string, number>();
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -328,6 +343,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     const generation = this.sessionCatalogGeneration;
+    const revision = this.sessionCatalogRevision;
     if (this.sessionCatalogRequestGeneration === generation) {
       return;
     }
@@ -339,11 +355,22 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       if (generation !== this.sessionCatalogGeneration || client !== this.gatewayClient) {
         return;
       }
-      this.sessionCatalogs = result.catalogs;
-    } catch {
-      if (generation === this.sessionCatalogGeneration && client === this.gatewayClient) {
-        this.sessionCatalogs = [];
+      const catalogs = await this.refetchSessionCatalogPages({
+        catalogs: result.catalogs,
+        client,
+        generation,
+      });
+      if (
+        generation !== this.sessionCatalogGeneration ||
+        revision !== this.sessionCatalogRevision ||
+        client !== this.gatewayClient
+      ) {
+        return;
       }
+      this.sessionCatalogs = catalogs;
+      this.sessionCatalogRevision += 1;
+    } catch {
+      // A transient poll failure must not collapse already visible or expanded pages.
     } finally {
       if (this.sessionCatalogRequestGeneration === generation) {
         this.sessionCatalogRequestGeneration = null;
@@ -357,6 +384,160 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           this.sessionCatalogTimer = null;
           void this.refreshSessionCatalogs();
         }, 30_000);
+      }
+    }
+  }
+
+  private async refetchSessionCatalogPages(params: {
+    catalogs: SessionCatalog[];
+    client: GatewayBrowserClient;
+    generation: number;
+  }): Promise<SessionCatalog[]> {
+    const previousCatalogs = new Map(this.sessionCatalogs.map((catalog) => [catalog.id, catalog]));
+    return Promise.all(
+      params.catalogs.map(async (catalog) => {
+        const previousHosts = new Map(
+          previousCatalogs.get(catalog.id)?.hosts.map((host) => [host.hostId, host]) ?? [],
+        );
+        const hosts = await Promise.all(
+          catalog.hosts.map(async (host) => {
+            const key = sessionCatalogHostKey(catalog.id, host.hostId);
+            const pageDepth = this.sessionCatalogPageDepths.get(key) ?? 0;
+            if (pageDepth === 0) {
+              return host;
+            }
+            const previous = previousHosts.get(host.hostId);
+            if (host.error) {
+              return previous ?? host;
+            }
+            let sessions = host.sessions;
+            let nextCursor = host.nextCursor;
+            let loadedPages = 0;
+            for (; loadedPages < pageDepth && nextCursor; loadedPages += 1) {
+              let result: SessionsCatalogListResult;
+              try {
+                result = await params.client.request<SessionsCatalogListResult>(
+                  "sessions.catalog.list",
+                  { catalogId: catalog.id, cursors: { [host.hostId]: nextCursor } },
+                );
+              } catch {
+                return previous ?? host;
+              }
+              if (
+                params.generation !== this.sessionCatalogGeneration ||
+                params.client !== this.gatewayClient
+              ) {
+                return previous ?? host;
+              }
+              const pageHost = result.catalogs
+                .find((candidate) => candidate.id === catalog.id)
+                ?.hosts.find((candidate) => candidate.hostId === host.hostId);
+              if (!pageHost || pageHost.error) {
+                return previous ?? host;
+              }
+              sessions = mergeCatalogSessionRows(sessions, pageHost.sessions);
+              nextCursor = pageHost.nextCursor;
+            }
+            const {
+              nextCursor: _firstPageCursor,
+              sessions: _firstPageSessions,
+              ...freshHost
+            } = host;
+            return {
+              ...freshHost,
+              sessions,
+              ...(nextCursor ? { nextCursor } : {}),
+            };
+          }),
+        );
+        return { ...catalog, hosts };
+      }),
+    );
+  }
+
+  private async loadMoreSessionCatalog(catalogId: string) {
+    if (this.loadingMoreSessionCatalogIds.has(catalogId)) {
+      return;
+    }
+    const catalog = this.sessionCatalogs.find((candidate) => candidate.id === catalogId);
+    const cursors = Object.fromEntries(
+      (catalog?.hosts ?? []).flatMap((host) =>
+        host.nextCursor ? [[host.hostId, host.nextCursor] as const] : [],
+      ),
+    );
+    if (!catalog || Object.keys(cursors).length === 0) {
+      return;
+    }
+    const client = this.context?.gateway.snapshot.client;
+    if (!client || !this.connected) {
+      return;
+    }
+    const generation = this.sessionCatalogGeneration;
+    const revision = this.sessionCatalogRevision;
+    this.loadingMoreSessionCatalogIds = new Set([...this.loadingMoreSessionCatalogIds, catalogId]);
+    try {
+      const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+        catalogId,
+        cursors,
+      });
+      if (
+        generation !== this.sessionCatalogGeneration ||
+        revision !== this.sessionCatalogRevision ||
+        client !== this.gatewayClient
+      ) {
+        return;
+      }
+      const page = result.catalogs.find((candidate) => candidate.id === catalogId);
+      if (!page) {
+        return;
+      }
+      const pageHosts = new Map(page.hosts.map((host) => [host.hostId, host]));
+      const requestedHosts = new Set(Object.keys(cursors));
+      let updated = false;
+      const catalogs = this.sessionCatalogs.map((currentCatalog) => {
+        if (currentCatalog.id !== catalogId) {
+          return currentCatalog;
+        }
+        return {
+          ...currentCatalog,
+          hosts: currentCatalog.hosts.map((host) => {
+            const pageHost = pageHosts.get(host.hostId);
+            if (
+              !requestedHosts.has(host.hostId) ||
+              host.nextCursor !== cursors[host.hostId] ||
+              !pageHost ||
+              pageHost.error
+            ) {
+              return host;
+            }
+            updated = true;
+            const key = sessionCatalogHostKey(catalogId, host.hostId);
+            this.sessionCatalogPageDepths.set(
+              key,
+              (this.sessionCatalogPageDepths.get(key) ?? 0) + 1,
+            );
+            const { nextCursor, sessions, ...pageHostDetails } = pageHost;
+            const { nextCursor: _currentCursor, ...currentHost } = host;
+            return {
+              ...currentHost,
+              ...pageHostDetails,
+              sessions: mergeCatalogSessionRows(host.sessions, sessions),
+              ...(nextCursor ? { nextCursor } : {}),
+            };
+          }),
+        };
+      });
+      if (updated) {
+        this.sessionCatalogs = catalogs;
+        this.sessionCatalogRevision += 1;
+      }
+    } catch {
+      // Keep the current cursor so the user can retry the same page.
+    } finally {
+      if (generation === this.sessionCatalogGeneration) {
+        const loading = new Set(this.loadingMoreSessionCatalogIds);
+        loading.delete(catalogId);
+        this.loadingMoreSessionCatalogIds = loading;
       }
     }
   }
@@ -466,6 +647,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     this.clearSessionCache();
     this.sessionCatalogGeneration += 1;
+    this.sessionCatalogRevision += 1;
     this.gatewaySource = gateway;
     this.gatewayClient = client;
     if (this.sessionCatalogTimer) {
@@ -473,6 +655,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       this.sessionCatalogTimer = null;
     }
     this.sessionCatalogs = [];
+    this.loadingMoreSessionCatalogIds = new Set();
+    this.sessionCatalogPageDepths.clear();
   }
 
   private clearSessionCache() {
@@ -2161,6 +2345,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       const collapsed = this.collapsedSessionSections.has(sectionId);
       const hosts = catalog.hosts;
       const rows = hosts.flatMap((host) => host.sessions.map((session) => ({ host, session })));
+      const loadingMore = this.loadingMoreSessionCatalogIds.has(catalog.id);
+      const hasMore = hosts.some((host) => Boolean(host.nextCursor));
       return html`
         <section class="sidebar-sessions">
           <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
@@ -2182,10 +2368,22 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             ${collapsed
               ? nothing
               : html`<div class="sidebar-recent-sessions__list">
-                  ${rows.map(({ host, session }) =>
-                    this.renderCatalogSession(catalog, host, session),
-                  )}
-                </div>`}
+                    ${rows.map(({ host, session }) =>
+                      this.renderCatalogSession(catalog, host, session),
+                    )}
+                  </div>
+                  ${hasMore
+                    ? html`<button
+                        type="button"
+                        class="sidebar-session-catalog-load-more"
+                        data-session-catalog-load-more=${catalog.id}
+                        ?disabled=${loadingMore}
+                        aria-busy=${String(loadingMore)}
+                        @click=${() => void this.loadMoreSessionCatalog(catalog.id)}
+                      >
+                        ${t("chat.selectors.loadMoreSessions")}
+                      </button>`
+                    : nothing}`}
           </div>
         </section>
       `;
