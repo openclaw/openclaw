@@ -935,7 +935,7 @@ function truncateJsonTextForOtelAttribute(value: string, maxChars: number): stri
   }
   const suffixBudget = Math.min(TRUNCATED_JSON_TEXT_SUFFIX.length, maxChars);
   const prefixBudget = Math.max(0, maxChars - suffixBudget);
-  return `${redacted.slice(0, prefixBudget)}${TRUNCATED_JSON_TEXT_SUFFIX.slice(
+  return `${truncateUtf16Safe(redacted, prefixBudget)}${TRUNCATED_JSON_TEXT_SUFFIX.slice(
     TRUNCATED_JSON_TEXT_SUFFIX.length - suffixBudget,
   )}`;
 }
@@ -3992,10 +3992,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "session.state":
               recordSessionState(evt);
-              return;
+              break;
             case "session.long_running":
             case "session.stalled":
-              return;
+              break;
             case "session.turn.created":
               recordSessionTurnCreated(evt);
               return;
@@ -4010,9 +4010,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "run.attempt":
               recordRunAttempt(evt);
-              return;
+              break;
             case "run.progress":
-              return;
+              break;
             case "diagnostic.heartbeat":
               recordHeartbeat(evt);
               return;
@@ -4066,9 +4066,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "exec.process.completed":
               recordExecProcessCompleted(evt);
-              return;
+              break;
             case "exec.approval.followup_suppressed":
-              return;
+              break;
             case "log.record":
               recordLogRecord?.(evt, metadata);
               return;

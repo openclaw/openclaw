@@ -52,9 +52,12 @@ export type AgentHarnessSideQuestionParams = {
   workspaceDir?: string;
   messageChannel?: string;
   messageProvider?: string;
+  chatType?: import("../../channels/chat-type.js").ChatType;
   agentAccountId?: string;
   messageTo?: string;
   messageThreadId?: string | number;
+  chatId?: string;
+  messageActionTurnCapability?: string;
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
@@ -101,6 +104,11 @@ type AgentHarnessRunCapability = {
   id: string;
   label: string;
   pluginId?: string;
+  /**
+   * Plugin ids this harness owner permits to execute its locked sessions.
+   * Delegates receive work admission and execution only; session mutation stays owner-only.
+   */
+  delegatedExecutionPluginIds?: readonly string[];
   /**
    * Context-engine host capabilities provided by this harness during agent
    * runs. Harnesses that omit this are unsupported for engines that declare

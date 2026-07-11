@@ -28,6 +28,8 @@ OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the age
 This browser is **not** your daily driver. It is a safe, isolated surface for
 agent automation and verification.
 
+On macOS, you can explicitly copy cookies from a Chrome-family system profile into a separate managed profile. The managed browser still uses its own user data directory; only the selected cookies are copied, and local storage and IndexedDB stay behind. See [Profiles](#profiles-multi-browser) or the [`openclaw browser` CLI reference](/cli/browser) for import commands and limitations.
+
 ## Quick start
 
 ```bash
@@ -321,6 +323,16 @@ main model can read the screenshot directly.
   `no_display_for_headed_profile`. Its `details` contain only `profile`,
   `requestedHeadless`, `headlessSource`, and `displayPresent`, so API clients can
   choose the correct remediation without matching message text.
+- For a running local managed profile, status and doctor query Chrome's
+  browser-level CDP endpoint for renderer, backend, device/driver, feature
+  status, driver workarounds, and accelerated video capabilities. The result is
+  cached for that browser process and exposed in full by
+  `openclaw browser status --json`. A passive status call does not launch Chrome.
+  Existing-session, extension, remote CDP, and sandbox browsers remain separate
+  and are not inspected through this managed-host path.
+- Headless managed Chrome still uses the conservative `--disable-gpu` default.
+  The diagnostics do not enable acceleration, add a global acceleration setting,
+  or grant sandbox browser device access.
 - `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers. Both forms accept `~` for your OS home directory.
 - `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.

@@ -13,12 +13,8 @@ struct Semver: Comparable, CustomStringConvertible {
     }
 
     static func < (lhs: Semver, rhs: Semver) -> Bool {
-        if lhs.major != rhs.major {
-            return lhs.major < rhs.major
-        }
-        if lhs.minor != rhs.minor {
-            return lhs.minor < rhs.minor
-        }
+        if lhs.major != rhs.major { return lhs.major < rhs.major }
+        if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
         return lhs.patch < rhs.patch
     }
 
@@ -80,9 +76,7 @@ enum GatewayEnvironment {
     static func gatewayPort() -> Int {
         if let raw = ProcessInfo.processInfo.environment["OPENCLAW_GATEWAY_PORT"] {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let parsed = Int(trimmed), parsed > 0 {
-                return parsed
-            }
+            if let parsed = Int(trimmed), parsed > 0 { return parsed }
         }
         if let configPort = OpenClawConfigFile.gatewayPort(), configPort > 0 {
             return configPort
@@ -95,10 +89,16 @@ enum GatewayEnvironment {
         Semver.parse(self.expectedGatewayVersionString())
     }
 
-    static func expectedGatewayVersionString() -> String? {
+    static func appVersionString() -> String? {
         let bundleVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
         let trimmed = bundleVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (trimmed?.isEmpty == false) ? trimmed : nil
+    }
+
+    static func expectedGatewayVersionString() -> String? {
+        CLIInstallPolicy.requiredGatewayVersionString(
+            appVersion: self.appVersionString(),
+            isDebug: CLIInstallBuild.isDebug)
     }
 
     /// Exposed for tests so we can inject fake version checks without rewriting bundle metadata.
