@@ -82,10 +82,13 @@ const tools = ${JSON.stringify(
 const callToolIsError = ${params.callToolIsError === true};
 const callToolJsonRpcError = ${params.callToolJsonRpcError === true};
 const resourceListJsonRpcError = ${params.resourceListJsonRpcError === true};
+const callToolDelayMs = ${params.callToolDelayMs ?? 0};
 
 let buffer = "";
 let listCount = 0;
 let pendingTimer;
+let pendingCallTimer;
+let pendingCallId;
 let keepAlive;
 if (pidPath) {
   await fs.writeFile(pidPath, String(process.pid), "utf8");
@@ -161,6 +164,16 @@ function handle(message) {
       }
     }, delayMs);
   }
+  if (message.method === "notifications/cancelled") {
+    log("recv notifications/cancelled requestId=" + message.params?.requestId);
+    if (pendingCallTimer && message.params?.requestId === pendingCallId) {
+      log("cancelled pending tools/call");
+      clearTimeout(pendingCallTimer);
+      pendingCallTimer = undefined;
+      pendingCallId = undefined;
+    }
+    return;
+  }
   if (message.method === "tools/call") {
     if (callToolJsonRpcError) {
       send({
@@ -168,6 +181,22 @@ function handle(message) {
         id: message.id,
         error: { code: -32000, message: "tool request failed" },
       });
+      return;
+    }
+    if (callToolDelayMs > 0) {
+      pendingCallId = message.id;
+      log("delay tools/call " + callToolDelayMs);
+      pendingCallTimer = setTimeout(() => {
+        pendingCallId = undefined;
+        send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            isError: callToolIsError,
+            content: [{ type: "text", text: callToolIsError ? "tool failed" : "tool ok" }],
+          },
+        });
+      }, callToolDelayMs);
       return;
     }
     send({
@@ -199,6 +228,9 @@ process.stdin.setEncoding("utf8");
 function shutdown() {
   if (pendingTimer) {
     clearTimeout(pendingTimer);
+  }
+  if (pendingCallTimer) {
+    clearTimeout(pendingCallTimer);
   }
   if (keepAlive) {
     clearInterval(keepAlive);
@@ -2049,6 +2081,74 @@ process.on("SIGINT", shutdown);`,
     release();
     expect(runtime.lastUsedAt).toBe(lastUsedBefore);
   });
+
+  it(
+    "cancels an in-flight bundle MCP tool call and keeps the server usable",
+    { timeout: 15_000 },
+    async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-cancel-"));
+      const serverPath = path.join(tempDir, "cancel-server.mjs");
+      const logPath = path.join(tempDir, "server.log");
+      await writeListToolsMcpServer({
+        filePath: serverPath,
+        logPath,
+        callToolDelayMs: 5_000,
+      });
+
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-cancel",
+        sessionKey: "agent:test:session-cancel",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: {
+              cancelable: {
+                command: process.execPath,
+                args: [serverPath],
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        const controller = new AbortController();
+        const callPromise = runtime.callTool("cancelable", "slow_tool", {}, controller.signal);
+
+        // Wait long enough for the request to reach the server, then abort.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 200);
+        });
+        controller.abort("user cancelled");
+
+        const start = Date.now();
+        await expect(callPromise).rejects.toThrow();
+        expect(Date.now() - start).toBeLessThan(2_000);
+
+        // The server must receive the MCP cancellation notification.
+        await waitForFileText(
+          logPath,
+          "recv notifications/cancelled",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+        // The server should also clear its pending response once cancelled.
+        await waitForFileText(
+          logPath,
+          "cancelled pending tools/call",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+
+        // A follow-up call on the same session must still succeed.
+        await expect(runtime.callTool("cancelable", "slow_tool", {})).resolves.toMatchObject({
+          content: [{ type: "text", text: "tool ok" }],
+          isError: false,
+        });
+      } finally {
+        await runtime.dispose();
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("disposeSession timeout", () => {
