@@ -626,11 +626,14 @@ Keep OpenClaw as the source of truth for due checks and execution.
 Project a complete wake snapshot instead of forwarding cron event deltas. The
 external adapter's `replaceAll` operation must be atomic and idempotent, and it
 must resolve only after the host has durably accepted the snapshot. It must
-also honor the supplied abort signal so Gateway shutdown can drain cleanly.
+also honor the supplied abort signal: if the signal aborts before durable
+acceptance, the adapter must not accept that snapshot.
 
 This pattern keeps one latest-state worker in flight. Only `cron_reconciled`
 adopts a scheduler instance; `cron_changed` merely asks that worker to reread
 the authoritative instance, so a late hint cannot restore an older scheduler.
+A newer revision aborts the active host attempt before it can accept a stale
+snapshot.
 
 ```typescript
 import { setTimeout as sleep } from "node:timers/promises";
@@ -661,15 +664,22 @@ export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWak
   let requestedRevision = 0;
   let appliedRevision = 0;
   let worker = Promise.resolve();
+  let activeAttempt: AbortController | undefined;
 
   const projectLatest = async () => {
     let retryMs = 1_000;
 
     while (!lifecycle.signal.aborted && appliedRevision < requestedRevision) {
       const targetRevision = requestedRevision;
+      const attempt = new AbortController();
+      const signal = AbortSignal.any([lifecycle.signal, attempt.signal]);
+      activeAttempt = attempt;
 
       try {
         const jobs = enabled && cron ? await cron.list({ includeDisabled: true }) : [];
+        if (signal.aborted || targetRevision !== requestedRevision) {
+          continue;
+        }
         const wakes = jobs
           .flatMap((job): ExternalWake[] => {
             const runAtMs = job.enabled === false ? undefined : job.state?.nextRunAtMs;
@@ -677,26 +687,42 @@ export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWak
           })
           .sort((a, b) => a.runAtMs - b.runAtMs || a.jobId.localeCompare(b.jobId));
 
-        await host.replaceAll(wakes, { signal: lifecycle.signal });
+        await host.replaceAll(wakes, { signal });
+        if (signal.aborted || targetRevision !== requestedRevision) {
+          continue;
+        }
         appliedRevision = targetRevision;
         retryMs = 1_000;
       } catch {
         if (lifecycle.signal.aborted) {
           return;
         }
+        if (attempt.signal.aborted) {
+          continue;
+        }
         api.logger.warn(`external cron projection failed; retrying in ${retryMs}ms`);
         try {
-          await sleep(retryMs, undefined, { signal: lifecycle.signal });
+          await sleep(retryMs, undefined, { signal });
         } catch {
-          return;
+          if (lifecycle.signal.aborted) {
+            return;
+          }
+          if (attempt.signal.aborted) {
+            continue;
+          }
         }
         retryMs = Math.min(retryMs * 2, 30_000);
+      } finally {
+        if (activeAttempt === attempt) {
+          activeAttempt = undefined;
+        }
       }
     }
   };
 
   const requestProjection = () => {
     const targetRevision = ++requestedRevision;
+    activeAttempt?.abort();
     worker = worker.then(async () => {
       if (!lifecycle.signal.aborted && appliedRevision < targetRevision) {
         await projectLatest();
