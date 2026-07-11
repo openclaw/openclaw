@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
@@ -24,6 +25,10 @@ function createRuntime(config: OpenClawConfig) {
 }
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
+  afterEach(() => {
+    resetConfigRuntimeState();
+  });
+
   it("suppresses catalog controls for a host-scoped ring-zero run", () => {
     const openclaw = {
       ...createStubTool("openclaw"),
@@ -113,5 +118,63 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     } finally {
       testing.setToolSearchCodeModeSupportedForTest(undefined);
     }
+  });
+
+  it("applies Tool Search defaults on top of the resolved runtime snapshot", () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: true,
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          "example-plugin": {
+            config: {
+              apiKey: {
+                source: "exec",
+                provider: "vault",
+                id: "example/api-key",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      ...sourceConfig,
+      plugins: {
+        entries: {
+          "example-plugin": {
+            config: {
+              apiKey: "fake",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const runtime = createRuntime(sourceConfig);
+
+    expect(runtime.config?.tools?.toolSearch).toEqual({
+      enabled: true,
+      mode: "tools",
+      searchDefaultLimit: 5,
+      maxSearchLimit: 10,
+    });
+    expect(runtime.config?.plugins?.entries?.["example-plugin"]?.config).toMatchObject({
+      apiKey: "fake",
+    });
+    expect(sourceConfig.plugins?.entries?.["example-plugin"]?.config).toMatchObject({
+      apiKey: {
+        source: "exec",
+        provider: "vault",
+        id: "example/api-key",
+      },
+    });
+    runtime.cleanup();
   });
 });
