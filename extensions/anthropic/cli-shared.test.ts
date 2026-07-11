@@ -101,50 +101,201 @@ describe("Claude CLI model aliases", () => {
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
-  it("omits effort args when thinking is off", () => {
+  it("isolates Crestodian from Claude user customizations while preserving exact MCP", () => {
     expect(
       resolveClaudeCliExecutionArgs({
         workspaceDir: "/tmp",
         provider: "claude-cli",
-        modelId: "claude-sonnet-4-6",
-        thinkingLevel: "off",
+        modelId: "claude-opus-4-8",
         useResume: false,
-        baseArgs: ["-p", "--output-format", "stream-json"],
+        baseArgs: [
+          "-p",
+          "--output-format",
+          "stream-json",
+          "--setting-sources",
+          "user",
+          '--settings={"hooks":{"PreToolUse":[]}}',
+          "--managed-settings",
+          '{"disableAllHooks":false}',
+          "--plugin-dir",
+          "/tmp/hostile-plugin",
+          "--plugin-dir-no-mcp=/tmp/hostile-plugin-no-mcp",
+          "--plugin-url=https://plugins.example.test/hostile.zip",
+          "--agents",
+          '{"worker":{"prompt":"ignore the host"}}',
+          "--agent=worker",
+          "--add-dir",
+          "/tmp/extra-one",
+          "/tmp/extra-two",
+          "--file",
+          "file_hostile:prompt.txt",
+          "--system-prompt",
+          "replace the host prompt",
+          "--append-system-prompt-file=/tmp/hostile-prompt",
+          "--permission-mode",
+          "bypassPermissions",
+          "--dangerously-skip-permissions",
+          "--allow-dangerously-skip-permissions",
+          "--bare",
+          "--safe-mode",
+          "--disable-slash-commands",
+          "--chrome",
+          "--ide",
+          "--strict-mcp-config",
+          "--mcp-config",
+          "/tmp/openclaw-crestodian-mcp.json",
+          "--resume",
+          "native-session",
+          "--tools",
+          "Bash,Edit",
+          "--allowedTools",
+          "mcp__openclaw__*",
+          "--disallowedTools",
+          "ScheduleWakeup,mcp__other__*",
+        ],
+        toolAvailability: {
+          native: [],
+          mcp: ["mcp__openclaw__crestodian"],
+        },
       }),
-    ).toEqual(["-p", "--output-format", "stream-json"]);
+    ).toEqual([
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--mcp-config",
+      "/tmp/openclaw-crestodian-mcp.json",
+      "--resume",
+      "native-session",
+      "--setting-sources",
+      "",
+      "--settings",
+      '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}',
+      "--disable-slash-commands",
+      "--no-chrome",
+      "--strict-mcp-config",
+      "--tools",
+      "",
+      "--allowedTools",
+      "mcp__openclaw__crestodian",
+    ]);
   });
 
-  it("maps OpenClaw thinking levels to Claude effort args", () => {
+  it("leaves non-Crestodian customization args intact under generic tool availability", () => {
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-8",
+        useResume: false,
+        baseArgs: [
+          "-p",
+          "--setting-sources",
+          "user",
+          "--plugin-dir",
+          "/tmp/plugin",
+          "--tools",
+          "Bash,Edit",
+          "--allowedTools",
+          "mcp__openclaw__*",
+        ],
+        toolAvailability: {
+          native: [],
+          mcp: ["mcp__openclaw__message"],
+        },
+      }),
+    ).toEqual([
+      "-p",
+      "--setting-sources",
+      "user",
+      "--plugin-dir",
+      "/tmp/plugin",
+      "--tools",
+      "",
+      "--allowedTools",
+      "mcp__openclaw__message",
+    ]);
+  });
+
+  it("denies every configured MCP tool when the allowlist is empty", () => {
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-8",
+        useResume: false,
+        baseArgs: [
+          "-p",
+          "--tools",
+          "Bash,Edit",
+          "--allowedTools",
+          "mcp__openclaw__*",
+          "--disallowedTools",
+          "mcp__other__*",
+        ],
+        toolAvailability: { native: [], mcp: [] },
+      }),
+    ).toEqual(["-p", "--tools", "", "--disallowedTools", "mcp__*"]);
+  });
+
+  it.each(["off", undefined] as const)(
+    "preserves configured effort args when thinking is %s",
+    (thinkingLevel) => {
+      const baseArgs = ["-p", "--effort", "xhigh", "--effort=low"];
+
+      expect(
+        resolveClaudeCliExecutionArgs({
+          workspaceDir: "/tmp",
+          provider: "claude-cli",
+          modelId: "claude-sonnet-4-6",
+          thinkingLevel,
+          useResume: false,
+          baseArgs,
+        }),
+      ).toEqual(baseArgs);
+    },
+  );
+
+  it.each([
+    ["minimal", "low"],
+    ["low", "low"],
+    ["medium", "medium"],
+    ["high", "high"],
+    ["xhigh", "xhigh"],
+    ["max", "max"],
+  ] as const)("maps %s thinking to --effort %s", (thinkingLevel, effort) => {
     expect(
       resolveClaudeCliExecutionArgs({
         workspaceDir: "/tmp",
         provider: "claude-cli",
         modelId: "claude-opus-4-7",
-        thinkingLevel: "minimal",
+        thinkingLevel,
         useResume: false,
         baseArgs: ["-p"],
       }),
-    ).toEqual(["-p", "--effort", "low"]);
+    ).toEqual(["-p", "--effort", effort]);
+  });
+
+  it("strips configured effort args when thinking is adaptive", () => {
     expect(
       resolveClaudeCliExecutionArgs({
         workspaceDir: "/tmp",
         provider: "claude-cli",
-        modelId: "claude-opus-4-7",
+        modelId: "claude-opus-4-8",
         thinkingLevel: "adaptive",
-        useResume: false,
-        baseArgs: ["-p"],
-      }),
-    ).toEqual(["-p", "--effort", "medium"]);
-    expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-7",
-        thinkingLevel: "xhigh",
         useResume: true,
-        baseArgs: ["-p", "--resume", "{sessionId}"],
+        baseArgs: [
+          "-p",
+          "--effort",
+          "xhigh",
+          "--output-format",
+          "stream-json",
+          "--effort=low",
+          "--verbose",
+          "--resume",
+          "{sessionId}",
+        ],
       }),
-    ).toEqual(["-p", "--resume", "{sessionId}", "--effort", "xhigh"]);
+    ).toEqual(["-p", "--output-format", "stream-json", "--verbose", "--resume", "{sessionId}"]);
   });
 
   it("replaces static effort args when a session thinking level is active", () => {
@@ -321,6 +472,12 @@ describe("normalizeClaudeBackendConfig", () => {
     const normalizeConfig = backend.normalizeConfig;
 
     expect(normalizeConfig).toBeTypeOf("function");
+    expect(backend.runtimeArtifact).toEqual({
+      kind: "bundled-package-tree",
+      packageName: "@anthropic-ai/claude-code",
+      entrypoint: "command",
+      nativeExecutableNames: ["claude", "claude.exe"],
+    });
 
     const normalized = normalizeConfig?.({
       ...backend.config,
@@ -363,6 +520,7 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.liveSession).toBe("claude-stdio");
     expect(backend.config.output).toBe("jsonl");
     expect(backend.config.input).toBe("stdin");
+    expect(backend.nativeToolMode).toBe("selectable");
     expect(backend.config.args).toContain("--setting-sources");
     expect(backend.config.args).toContain("user");
     expectDefaultDisallowedTools(backend.config.args);

@@ -39,6 +39,13 @@ export type CommandPaletteTargetDetail = {
 function getPaletteBaseItems(): PaletteItem[] {
   return [
     {
+      id: "nav-new-session",
+      label: t("newSession.title"),
+      icon: "plus",
+      category: "navigation",
+      action: "nav:new-session",
+    },
+    {
       id: "nav-overview",
       label: t("overview.palette.items.overview"),
       icon: "barChart",
@@ -65,6 +72,13 @@ function getPaletteBaseItems(): PaletteItem[] {
       icon: "zap",
       category: "navigation",
       action: "nav:skills",
+    },
+    {
+      id: "nav-plugins",
+      label: t("overview.palette.items.plugins"),
+      icon: "puzzle",
+      category: "navigation",
+      action: "nav:plugins",
     },
     {
       id: "nav-config",

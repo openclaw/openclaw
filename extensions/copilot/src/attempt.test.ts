@@ -394,6 +394,11 @@ describe("runCopilotAttempt", () => {
   it("keeps generic compaction hooks attached through asynchronous SDK completion", async () => {
     const beforeCompaction = vi.fn();
     const afterCompaction = vi.fn();
+    let computerContextEpoch: CopilotToolBridgeInput["computerContextEpoch"];
+    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+      computerContextEpoch = input.computerContextEpoch;
+      return { sdkTools: [], sourceTools: [] };
+    });
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         { hookName: "before_compaction", handler: beforeCompaction },
@@ -411,7 +416,10 @@ describe("runCopilotAttempt", () => {
       },
     });
 
-    const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+    const attempt = runCopilotAttempt(makeParams(), {
+      createToolBridge,
+      pool: makeFakePool(sdk),
+    });
     await vi.waitFor(() => {
       expect(activeSession?.sendAndWait).toHaveBeenCalled();
     });
@@ -419,8 +427,15 @@ describe("runCopilotAttempt", () => {
     if (!activeSession) {
       throw new Error("expected Copilot session");
     }
+    expect(computerContextEpoch?.value).toBe(0);
+    if (!computerContextEpoch) {
+      throw new Error("expected computer context epoch");
+    }
+    computerContextEpoch.frameToolCallId = "shot-1";
+    computerContextEpoch.frameImageIdentity = "frame-digest";
     expect(activeSession.disconnect).not.toHaveBeenCalled();
     activeSession.emit("session.compaction_complete", { messagesRemoved: 4, success: true });
+    expect(computerContextEpoch).toEqual({ value: 1 });
 
     await attempt;
 
@@ -3349,6 +3364,21 @@ describe("runCopilotAttempt", () => {
       ]);
     });
 
+    it("keeps a host-scoped Crestodian create-session surface ring-zero", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      const sdkTools = [makeFakeSdkTool("crestodian")];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(makeParams({ toolsAllow: ["crestodian"] }), {
+        createToolBridge,
+        isHostScopedToolActive: (toolName) => toolName === "crestodian",
+        pool,
+      });
+
+      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual(["crestodian"]);
+    });
+
     it("forwards `[]` to the SDK when the bridge returns no tools (disable / raw / fully filtered)", async () => {
       const sdk = makeFakeSdk();
       const pool = makeFakePool(sdk);
@@ -3415,6 +3445,33 @@ describe("runCopilotAttempt", () => {
       const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
       const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
       expect(resumeCfg?.availableTools).toEqual(["read", "builtin:ask_user"]);
+    });
+
+    it("keeps a host-scoped Crestodian resume-session surface ring-zero", async () => {
+      const sdk = makeFakeSdk({
+        onResumeSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("resumed"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+      const sdkTools = [makeFakeSdkTool("crestodian")];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(
+        makeParams({
+          initialReplayState: { sdkSessionId: "sess-crestodian" },
+          toolsAllow: ["crestodian"],
+        } as never),
+        {
+          createToolBridge,
+          isHostScopedToolActive: (toolName) => toolName === "crestodian",
+          pool,
+        },
+      );
+
+      const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
+      const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
+      expect(resumeCfg?.availableTools).toEqual(["crestodian"]);
     });
 
     it("forwards `[]` to resumeSession when the bridge returns no tools", async () => {

@@ -4,8 +4,10 @@
  * Truncates and reshapes portable presentation blocks to match per-channel limits.
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   renderMessagePresentationChartFallbackText,
+  renderMessagePresentationTableFallbackText,
   resolveMessagePresentationActionValue,
 } from "../../../interactive/payload.js";
 import type {
@@ -70,10 +72,44 @@ function truncatePresentationText(value: string, limits: TextLimits | undefined)
     return truncateUtf8Bytes(value, limit);
   }
   if (limits?.encoding === "utf16-units") {
-    return value.length > limit ? value.slice(0, limit) : value;
+    return truncateUtf16Safe(value, limit);
   }
   const chars = Array.from(value);
   return chars.length > limit ? chars.slice(0, limit).join("") : value;
+}
+
+function splitPresentationText(value: string, limits: TextLimits | undefined): string[] {
+  const limit = positiveInteger(limits?.maxLength);
+  if (!limit || truncatePresentationText(value, limits) === value) {
+    return [value];
+  }
+  const chunks: string[] = [];
+  let remaining = value;
+  while (remaining) {
+    const prefix = truncatePresentationText(remaining, limits);
+    if (!prefix || prefix === remaining) {
+      chunks.push(remaining);
+      break;
+    }
+    // Keep complete fallback lines together when possible. Retain the newline
+    // itself so concatenating the blocks reconstructs every authored character.
+    const newlineIndex = prefix.lastIndexOf("\n");
+    const splitIndex = newlineIndex > 0 ? newlineIndex + 1 : prefix.length;
+    chunks.push(remaining.slice(0, splitIndex));
+    remaining = remaining.slice(splitIndex);
+  }
+  return chunks;
+}
+
+function fallbackTextBlocks(params: {
+  blockType: "context" | "text";
+  text: string;
+  limits?: TextLimits;
+}): MessagePresentationBlock[] {
+  return splitPresentationText(params.text, params.limits).map((text) => ({
+    type: params.blockType,
+    text,
+  }));
 }
 
 function utf8ByteLength(value: string): number {
@@ -486,10 +522,23 @@ export function adaptMessagePresentationForChannel(params: {
   const blocks: MessagePresentationBlock[] = [];
   for (const block of params.presentation.blocks) {
     if (block.type === "chart" && capabilities?.charts !== true) {
-      blocks.push({
-        type: fallbackBlockType,
-        text: renderMessagePresentationChartFallbackText(block),
-      });
+      blocks.push(
+        ...fallbackTextBlocks({
+          blockType: fallbackBlockType,
+          text: renderMessagePresentationChartFallbackText(block),
+          limits: limits?.text,
+        }),
+      );
+      continue;
+    }
+    if (block.type === "table" && capabilities?.tables !== true) {
+      blocks.push(
+        ...fallbackTextBlocks({
+          blockType: fallbackBlockType,
+          text: renderMessagePresentationTableFallbackText(block),
+          limits: limits?.text,
+        }),
+      );
       continue;
     }
     if (block.type === "buttons") {

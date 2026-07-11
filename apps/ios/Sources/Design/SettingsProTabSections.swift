@@ -399,7 +399,10 @@ extension SettingsProTab {
                 }
             } footer: {
                 Text(
-                    "The watch receives a one-time pairing code and stores its own device token. A reachable secure Gateway URL is required away from the iPhone.")
+                    """
+                    The watch receives a one-time pairing code and stores its own device token. \
+                    A reachable secure Gateway URL is required away from the iPhone.
+                    """)
                     .font(OpenClawType.footnote)
             }
 
@@ -583,12 +586,15 @@ extension SettingsProTab {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                Toggle("Notifications", isOn: self.notificationToggleBinding)
-                    .labelsHidden()
-                    .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
-                    .accessibilityIdentifier("settings-notifications-toggle")
-                    .accessibilityValue(self.notificationServingActive ? "On" : "Off")
-                    .accessibilityHint("Turns OpenClaw notification delivery on or off")
+                Toggle(isOn: self.notificationToggleBinding) {
+                    Text("Notifications")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                .labelsHidden()
+                .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
+                .accessibilityIdentifier("settings-notifications-toggle")
+                .accessibilityValue(self.notificationServingActive ? "On" : "Off")
+                .accessibilityHint("Turns OpenClaw notification delivery on or off")
             }
 
             HStack(alignment: .top, spacing: 10) {
@@ -688,7 +694,7 @@ extension SettingsProTab {
         Group {
             Section {
                 VStack(spacing: 12) {
-                    OpenClawProMark(size: 96, shadowRadius: 18)
+                    OpenClawProMark(size: 96, shadowRadius: 18, interactive: true)
                         .accessibilityHidden(true)
                     VStack(spacing: 2) {
                         Text("OpenClaw")
@@ -696,18 +702,19 @@ extension SettingsProTab {
                         Text("Personal AI on your devices")
                             .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
+                        SettingsBuildMetadataStrip(metadata: DeviceInfoHelper.buildMetadata())
+                            .padding(.top, 8)
                     }
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.top, 4)
-                .accessibilityElement(children: .combine)
+                .accessibilityElement(children: .contain)
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
             }
 
             // Concise public details only; deep hardware identifiers live in Diagnostics.
             detailListCard {
-                SettingsDetailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
                 SettingsDetailRow("Device", value: DeviceInfoHelper.deviceFamily())
                 SettingsDetailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
             }
@@ -1044,13 +1051,16 @@ extension SettingsProTab {
             TextField("Port", text: self.manualPortBinding)
                 .font(OpenClawType.body)
                 .keyboardType(.numberPad)
-            Picker("Connection security", selection: self.manualGatewayTLSBinding) {
+            Picker(selection: self.manualGatewayTLSBinding) {
                 Text("Unencrypted")
                     .font(OpenClawType.captionSemiBold)
                     .tag(false)
                 Text("Secure (TLS)")
                     .font(OpenClawType.captionSemiBold)
                     .tag(true)
+            } label: {
+                Text("Connection security")
+                    .font(OpenClawType.captionSemiBold)
             }
             .pickerStyle(.segmented)
             .disabled(self.manualGatewayTransport.requiresTLS)

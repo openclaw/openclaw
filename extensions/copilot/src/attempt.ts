@@ -11,6 +11,7 @@ import {
   buildAgentHookContextChannelFields,
   detectAndLoadAgentHarnessPromptImages,
   getModelProviderRequestTransport,
+  isHostScopedAgentToolActive,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveAttemptFsWorkspaceOnly,
   resolveAttemptSpawnWorkspaceDir,
@@ -164,6 +165,8 @@ interface CopilotAttemptDeps {
   pool: CopilotClientPool;
   now?: () => number;
   createToolBridge?: typeof createCopilotToolBridge;
+  /** Host fact resolver; injectable only for focused plugin contract tests. */
+  isHostScopedToolActive?: (toolName: string) => boolean;
   /**
    * Optional override for sandbox-context resolution. The default delegates to
    * `openclaw/plugin-sdk/agent-harness-runtime#resolveSandboxContext`, which is
@@ -368,6 +371,10 @@ export async function runCopilotAttempt(
   const attemptStartedAt = now();
   const input = params as AttemptParamsLike;
   const createToolBridge = deps.createToolBridge ?? createCopilotToolBridge;
+  const hostCrestodianActive =
+    deps.isHostScopedToolActive?.("crestodian") ?? isHostScopedAgentToolActive("crestodian");
+  const ringZeroCrestodianRun =
+    hostCrestodianActive && isCrestodianOnlyToolAllowlist(input.toolsAllow);
   const messages = getMessagesSnapshotInput(input);
   const modelRef = resolveModelRef(input);
   const resolvedWorkspaceForSandbox =
@@ -617,6 +624,11 @@ export async function runCopilotAttempt(
   // safe way to defer the binding without creating a circular dep.
   // See tool-bridge.ts CopilotSessionHolder.
   const sessionRef: { current: SessionLike | undefined } = { current: undefined };
+  const computerContextEpoch: {
+    value: number;
+    frameToolCallId?: string;
+    frameImageIdentity?: string;
+  } = { value: 0 };
 
   try {
     let sdkTools: SdkTool[];
@@ -643,6 +655,7 @@ export async function runCopilotAttempt(
         // channel/routing, model context, run hooks). See
         // tool-bridge.ts buildOpenClawCodingToolsOptions().
         attemptParams: input,
+        computerContextEpoch,
         sessionRef,
         onYieldDetected: () => {
           yieldDetected = true;
@@ -759,12 +772,15 @@ export async function runCopilotAttempt(
       effectiveWorkspaceDir,
       effectiveCwd,
       userInputBridge.onUserInputRequest,
-      hasNativePromptHook
-        ? {
-            onUserPromptSubmitted: ({ additionalContext, prompt }) =>
-              emitLlmInput(prompt, additionalContext),
-          }
-        : undefined,
+      {
+        hooksBridgeOptions: hasNativePromptHook
+          ? {
+              onUserPromptSubmitted: ({ additionalContext, prompt }) =>
+                emitLlmInput(prompt, additionalContext),
+            }
+          : undefined,
+        includeAskUser: !ringZeroCrestodianRun,
+      },
     );
     const compactionSessionConfig = byokProxy
       ? createSessionConfig(
@@ -777,12 +793,15 @@ export async function runCopilotAttempt(
           effectiveWorkspaceDir,
           effectiveCwd,
           userInputBridge.onUserInputRequest,
-          hasNativePromptHook
-            ? {
-                onUserPromptSubmitted: ({ additionalContext, prompt }) =>
-                  emitLlmInput(prompt, additionalContext),
-              }
-            : undefined,
+          {
+            hooksBridgeOptions: hasNativePromptHook
+              ? {
+                  onUserPromptSubmitted: ({ additionalContext, prompt }) =>
+                    emitLlmInput(prompt, additionalContext),
+                }
+              : undefined,
+            includeAskUser: !ringZeroCrestodianRun,
+          },
         )
       : sessionConfig;
     const replayDecision = decideReplayAction({
@@ -845,6 +864,11 @@ export async function runCopilotAttempt(
       onAssistantDelta: input.onAssistantDelta,
       onAgentEvent: input.onAgentEvent,
       onNativeSubagentEvent: (event) => nativeSubagentTaskMirror?.handleEvent(event),
+      onContextCompacted: () => {
+        computerContextEpoch.value += 1;
+        delete computerContextEpoch.frameToolCallId;
+        delete computerContextEpoch.frameImageIdentity;
+      },
       onCompactionStart: async () => {
         const sessionFile = readString(input.sessionFile);
         if (!sessionFile) {
@@ -1301,10 +1325,13 @@ function createSessionConfig(
   effectiveWorkspaceDir: string | undefined,
   effectiveCwd: string | undefined,
   onUserInputRequest: NonNullable<SessionConfig["onUserInputRequest"]>,
-  hooksBridgeOptions?: Parameters<typeof createHooksBridge>[1],
+  options: {
+    hooksBridgeOptions?: Parameters<typeof createHooksBridge>[1];
+    includeAskUser: boolean;
+  },
 ): CopilotSessionConfig {
   const permissionPolicy = params.permissionPolicy ?? rejectAllPolicy;
-  const hooks = createHooksBridge(params.hooksConfig, hooksBridgeOptions);
+  const hooks = createHooksBridge(params.hooksConfig, options.hooksBridgeOptions);
   const infiniteSessions = createInfiniteSessionConfig(params.infiniteSessionConfig);
   return {
     model: sdkModelId,
@@ -1353,8 +1380,8 @@ function createSessionConfig(
     reasoningEffort: params.reasoningEffort,
     tools: sdkTools,
     // Restrict the SDK's tool catalog to the bridged tool names returned
-    // by `createCopilotToolBridge` plus the built-in `ask_user` tool owned
-    // by `onUserInputRequest`. Without this, the SDK
+    // by `createCopilotToolBridge`, plus the built-in `ask_user` tool for
+    // normal runs. Ring-zero Crestodian runs expose only Crestodian. Without this, the SDK
     // would still expose its native read/write/shell/url/mcp/memory/
     // hook tools to the model alongside our overrides, which would
     // bypass OpenClaw's wrapped-tool enforcement under any permissive
@@ -1369,7 +1396,7 @@ function createSessionConfig(
     // `@github/copilot-sdk/dist/types.d.ts:1198` (it picks
     // `availableTools`, so the spread into `resumeSession` covers
     // the resume path too).
-    availableTools: buildCopilotAvailableTools(sdkTools),
+    availableTools: buildCopilotAvailableTools(sdkTools, options.includeAskUser),
     workingDirectory:
       effectiveCwd ?? effectiveWorkspaceDir ?? readResolvedAttemptPath(params.workspaceDir),
     // When a task runs from a sub-cwd, keep SDK-native project docs
@@ -1415,8 +1442,16 @@ function createSessionConfig(
   };
 }
 
-function buildCopilotAvailableTools(sdkTools: SdkTool[]): string[] {
-  return [...new Set([...sdkTools.map((tool) => tool.name), ...COPILOT_ASK_USER_AVAILABLE_TOOLS])];
+function buildCopilotAvailableTools(sdkTools: SdkTool[], includeAskUser: boolean): string[] {
+  const availableTools = sdkTools.map((tool) => tool.name);
+  if (includeAskUser) {
+    availableTools.push(...COPILOT_ASK_USER_AVAILABLE_TOOLS);
+  }
+  return [...new Set(availableTools)];
+}
+
+function isCrestodianOnlyToolAllowlist(toolsAllow: readonly string[] | undefined): boolean {
+  return toolsAllow?.length === 1 && toolsAllow[0]?.trim().toLowerCase() === "crestodian";
 }
 
 async function createMessageOptions(

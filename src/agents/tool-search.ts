@@ -657,13 +657,16 @@ function classifyTool(tool: CatalogTool): {
 } {
   const meta = getPluginToolMeta(tool as AnyAgentTool);
   const pluginId = meta?.pluginId?.trim();
-  if (pluginId === "bundle-mcp") {
-    const mcp = meta?.mcp;
+  const mcp = meta?.mcp;
+  if (mcp) {
     return {
       source: "mcp",
-      sourceName: pluginId,
-      ...(mcp ? { mcp } : {}),
+      sourceName: mcp.safeServerName || pluginId || "mcp",
+      mcp,
     };
+  }
+  if (pluginId === "bundle-mcp") {
+    return { source: "mcp", sourceName: pluginId };
   }
   if (pluginId) {
     return { source: "openclaw", sourceName: pluginId };
@@ -710,7 +713,7 @@ function shouldCatalogTool(tool: AnyAgentTool): boolean {
   if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
     return false;
   }
-  return true;
+  return tool.catalogMode !== "direct-only";
 }
 
 /**
@@ -1896,7 +1899,8 @@ export function applyToolCatalogCompaction(params: {
 
   const visible: AnyAgentTool[] = [];
   const catalog: ToolSearchCatalogEntry[] = [];
-  const shouldCatalog = params.shouldCatalogTool ?? shouldCatalogTool;
+  const shouldCatalog = (tool: AnyAgentTool) =>
+    shouldCatalogTool(tool) && (params.shouldCatalogTool?.(tool) ?? true);
   for (const tool of params.tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(tool);

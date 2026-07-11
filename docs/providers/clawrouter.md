@@ -125,6 +125,13 @@ credential, update the external Secret that supplies `CLAWROUTER_API_KEY` and
 restart the gateway workload so the new process environment is loaded. The
 config file and model reference do not change.
 
+For a source-built standalone Docker gateway, ClawRouter is already included in
+the root runtime. Select only the channel plugin that needs separate packaging,
+such as `OPENCLAW_EXTENSIONS=clickclack`, `slack`, or `msteams`; see
+[source-built images with selected plugins](/install/docker#source-built-images-with-selected-plugins).
+Archive/appliance deployments must package the same landed source through their
+own artifact pipeline rather than consuming the OCI image.
+
 ## Readiness and live proof
 
 These checks prove different boundaries; do not substitute one for another:
@@ -163,12 +170,21 @@ The existing metadata-only model transport diagnostics emit lines shaped like:
 ```
 
 The plugin sends bounded `X-ClawRouter-Client`, `X-ClawRouter-Agent-Id`, and
-`X-ClawRouter-Session-Id` headers when those identifiers are available. Static
-deployment metadata such as `X-ClawRouter-Project-Id` can be set in the
-provider `headers` map. Explicit configured headers win over automatic values.
-The transport diagnostic records routing and response metadata; it does not log
-credentials, request ids, prompts, or completions. ClawRouter's own audit event
-provides the selected upstream provider and content-retention state.
+`X-ClawRouter-Session-Id` headers when those identifiers are available. It also
+maps the model call's diagnostic `callId` (`<run-id>:model:<n>`) to
+`X-Request-ID`, so an OpenClaw model-call event can be joined to ClawRouter's
+metadata-only audit trail. Values within the 128-character request-id budget are
+identical. Longer values retain the `:model:<n>` suffix and a deterministic
+hash so distinct calls remain bounded and joinable. Static deployment metadata
+such as `X-ClawRouter-Project-Id` can be set in the provider `headers` map.
+Agent and session attribution headers retain their separate 256-character
+limit. Automatic request ids containing characters outside ClawRouter's ASCII
+identifier set use the same deterministic bounded form.
+Explicit configured headers, including any case variant of `X-Request-ID`, win
+over automatic values. The transport diagnostic records routing and response
+metadata; it does not log credentials, request ids, prompts, or completions.
+ClawRouter's own audit event provides the selected upstream provider and
+content-retention state.
 
 ## Model discovery
 
@@ -242,7 +258,7 @@ the same ClawRouter policy can change the remaining percentage.
 
 - Catalog discovery is scoped to the configured proxy key and cached per credential scope (agent dir, workspace dir, auth profile id, and base URL).
 - The proxy key is attached only at request dispatch; it is not stored in model metadata.
-- Automatic attribution values are trimmed, control-character rejected, and bounded to 256 characters before dispatch.
+- Automatic attribution and request-correlation values are trimmed and control-character rejected before dispatch. Attribution values are bounded to 256 characters; request ids are bounded to 128.
 - Model transport diagnostics contain metadata only and never include the proxy key or model content.
 - Native Anthropic and Gemini model ids are rewritten to their upstream ids only at dispatch.
 - Unsupported or ungranted catalog rows fail closed and are not selectable.

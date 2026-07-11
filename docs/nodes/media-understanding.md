@@ -40,20 +40,14 @@ Vendor plugins register capability metadata (which provider supports which media
   tools: {
     media: {
       concurrency: 2, // max concurrent capability runs (default)
-      models: [
-        /* shared list, gate with capabilities */
-      ],
-      image: {
-        /* optional overrides */
-      },
+      models: [/* shared list, gate with capabilities */],
+      image: {/* optional overrides */},
       audio: {
         /* optional overrides */
         echoTranscript: true,
         echoFormat: '📝 "{transcript}"',
       },
-      video: {
-        /* optional overrides */
-      },
+      video: {/* optional overrides */},
     },
   },
 }
@@ -88,7 +82,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
     {
       type: "provider", // default if omitted
       provider: "openai",
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       prompt: "Describe the image in <= 500 chars.",
       maxChars: 500,
       maxBytes: 10485760,
@@ -164,10 +158,14 @@ When `tools.media.<capability>.enabled` is not `false` and no models are configu
     Configured `models.providers.*` entries that support audio are tried before local CLIs. Bundled provider priority order (ties break alphabetically by provider id): Groq/OpenAI &rarr; xAI &rarr; Deepgram &rarr; OpenRouter &rarr; Google/SenseAudio &rarr; Deepinfra/ElevenLabs &rarr; Mistral.
   </Step>
   <Step title="Local CLIs (audio only)">
-    First installed local binary, in this order:
-    - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with `tokens.txt`/`encoder.onnx`/`decoder.onnx`/`joiner.onnx`)
-    - `whisper-cli` (`whisper-cpp`; uses `WHISPER_CPP_MODEL` or a bundled tiny model)
+    Ready local binaries become an ordered fallback list:
+    - `whisper-cli` first only after an earlier model invocation in the current process observed Metal or CUDA
+    - CPU-default `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with `tokens.txt`/`encoder.onnx`/`decoder.onnx`/`joiner.onnx`)
+    - `whisper-cli` when acceleration is merely build-capable or unobserved
+    - `parakeet-mlx` on Apple Silicon (MLX-capable, device use unobserved)
     - `whisper` (Python CLI; defaults to the `turbo` model, downloads automatically)
+
+    Backend capability inspection is cached and does not load a model. Build capability, requested backend flags, and backend observed from a real invocation remain separate. Auto-detected whisper.cpp leaves model-run logs enabled so the upstream selected-backend line can be recorded. Explicit CLI entries keep their configured order, backend flags, and output flags.
 
   </Step>
   <Step title="Provider auth (image/video)">
@@ -278,7 +276,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
       tools: {
         media: {
           models: [
-            { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
+            { provider: "openai", model: "gpt-5.6-sol", capabilities: ["image"] },
             {
               provider: "google",
               model: "gemini-3-flash-preview",
@@ -357,7 +355,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
             maxBytes: 10485760,
             maxChars: 500,
             models: [
-              { provider: "openai", model: "gpt-5.5" },
+              { provider: "openai", model: "gpt-5.6-sol" },
               { provider: "anthropic", model: "claude-opus-4-8" },
               {
                 type: "cli",
@@ -421,7 +419,13 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 When media understanding runs, `/status` includes a per-capability summary line:
 
 ```
-📎 Media: image ok (openai/gpt-5.5) · audio skipped (maxBytes)
+📎 Media: image ok (openai/gpt-5.6-sol) · audio ok (whisper-cli observed=metal)
+```
+
+For preflight inventory, run `openclaw capability audio providers`. Local rows show the local fallback winner separately from global provider selection, readiness, and separate capable/requested/observed backend fields. The same local selection is available as an informational doctor finding:
+
+```bash
+openclaw doctor --lint --only core/doctor/local-audio-acceleration --severity-min info
 ```
 
 ## Notes

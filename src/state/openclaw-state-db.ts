@@ -192,6 +192,19 @@ function repairLegacyTaskAgentAttribution(db: DatabaseSync): void {
   `);
 }
 
+function repairLegacyTaskDeliveryStatuses(db: DatabaseSync): void {
+  if (!tableExists(db, "task_runs") || !tableHasColumn(db, "task_runs", "delivery_status")) {
+    return;
+  }
+  // Successful sidecar imports archive their source, so database open must
+  // also canonicalize rows already copied by released migrations.
+  db.exec(`
+    UPDATE task_runs
+    SET delivery_status = 'not_applicable'
+    WHERE delivery_status = 'not-requested';
+  `);
+}
+
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
   if (!tableExists(db, "agent_databases")) {
     return true;
@@ -756,6 +769,7 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");
   ensureColumn(db, "device_pairing_paired", "approved_via TEXT");
+  ensureColumn(db, "device_pairing_paired", "operator_label TEXT");
   ensureColumn(db, "device_pairing_paired", "node_surface_json TEXT");
   ensureColumn(db, "device_pairing_paired", "pending_node_surface_json TEXT");
   ensureColumn(db, "cron_run_logs", "status TEXT");
@@ -925,8 +939,18 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
     if (addedTaskRequesterAgentId) {
       repairLegacyTaskAgentAttribution(db);
     }
+    repairLegacyTaskDeliveryStatuses(db);
   });
   ensureColumn(db, "subagent_runs", "task_name TEXT");
+  ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
+  ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
+  ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");
+  ensureColumn(db, "worker_environments", "ssh_host_key TEXT");
+  ensureColumn(
+    db,
+    "worker_environments",
+    "teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed'))",
+  );
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {

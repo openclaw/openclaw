@@ -3,6 +3,10 @@ import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
+  getDiagnosticSessionActivitySnapshot,
+  resolveRunStaleThresholdMs,
+} from "../../logging/diagnostic-run-activity.js";
+import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -12,7 +16,6 @@ import {
   isReplyRunEvidenceStale,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
-  resolveReplyRunStaleThresholdMs,
   replyRunRegistry,
   ReplyRunAlreadyActiveError,
   ReplyRunFollowupAdmissionBlockedError,
@@ -23,7 +26,7 @@ import {
 } from "./reply-run-registry.js";
 
 /** Kinds of turns that compete for one reply run slot per session. */
-export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup" | "control_abort";
+export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
 
 /** Admission result for a reply turn attempting to own the session run slot. */
 export type ReplyTurnAdmission =
@@ -78,9 +81,13 @@ function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): numb
     return REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS;
   }
   const ageMs = Date.now() - operation.lastActivityAtMs;
+  const activity = getDiagnosticSessionActivitySnapshot({
+    sessionId: operation.sessionId,
+    sessionKey: operation.key,
+  });
   const remainingMs = operation.result
     ? REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - ageMs
-    : resolveReplyRunStaleThresholdMs(operation) - ageMs;
+    : resolveRunStaleThresholdMs(activity) - ageMs;
   return Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, Math.max(1, remainingMs));
 }
 
@@ -282,10 +289,10 @@ export async function admitReplyTurn(params: {
       if (params.kind === "visible" && expireVisibleStaleOperation(activeOperation)) {
         continue;
       }
-      if (params.kind === "heartbeat" || params.kind === "control_abort") {
+      if (params.kind === "heartbeat") {
         return { status: "skipped", reason: "active-run", activeOperation };
       }
-      // Visible and queued turns may wait for active runs; control turns must stay immediate.
+      // Visible and queued turns may wait for active runs when waitForActive is set.
       if (params.waitForActive === false) {
         return { status: "skipped", reason: "active-run", activeOperation };
       }

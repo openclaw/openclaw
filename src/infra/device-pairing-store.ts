@@ -39,12 +39,19 @@ export function resolveDevicePairingStateDbOptions(baseDir?: string): OpenClawSt
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
 }
 
-const APPROVAL_KINDS: readonly PairedDeviceApprovalKind[] = [
-  "owner",
-  "silent",
-  "trusted-cidr",
-  "bootstrap",
-];
+// Read-back allowlist for the approved_via column. The Record type forces
+// every PairedDeviceApprovalKind to appear here at compile time: omit one and
+// this object is a type error, instead of the stored provenance silently
+// dropping to undefined on load (which mergeApprovalKind treats as a legacy
+// record). Keep this in sync when adding an approval kind.
+const APPROVAL_KIND_MEMBERS = {
+  owner: true,
+  silent: true,
+  "trusted-cidr": true,
+  "ssh-verified": true,
+  bootstrap: true,
+} satisfies Record<PairedDeviceApprovalKind, true>;
+const APPROVAL_KINDS = new Set(Object.keys(APPROVAL_KIND_MEMBERS));
 
 function toJsonColumn(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
@@ -112,6 +119,7 @@ function toPairedRow(device: PairedDevice): DevicePairingPaired {
     device_id: device.deviceId,
     public_key: device.publicKey,
     display_name: device.displayName ?? null,
+    operator_label: device.operatorLabel ?? null,
     platform: device.platform ?? null,
     device_family: device.deviceFamily ?? null,
     client_id: device.clientId ?? null,
@@ -133,9 +141,7 @@ function toPairedRow(device: PairedDevice): DevicePairingPaired {
 }
 
 function fromApprovedViaColumn(value: string | null): PairedDeviceApprovalKind | null {
-  return (APPROVAL_KINDS as readonly string[]).includes(value ?? "")
-    ? (value as PairedDeviceApprovalKind)
-    : null;
+  return value !== null && APPROVAL_KINDS.has(value) ? (value as PairedDeviceApprovalKind) : null;
 }
 
 function fromPairedRow(row: DevicePairingPaired): PairedDevice {
@@ -143,6 +149,7 @@ function fromPairedRow(row: DevicePairingPaired): PairedDevice {
     deviceId: row.device_id,
     publicKey: row.public_key,
     ...optional("displayName", row.display_name),
+    ...optional("operatorLabel", row.operator_label),
     ...optional("platform", row.platform),
     ...optional("deviceFamily", row.device_family),
     ...optional("clientId", row.client_id),

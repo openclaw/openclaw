@@ -1,12 +1,5 @@
 // Gateway Client module implements client behavior.
 import { randomUUID } from "node:crypto";
-import type {
-  ConnectParams,
-  ErrorShape,
-  EventFrame,
-  HelloOk,
-  RequestFrame,
-} from "@openclaw/gateway-protocol";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -22,8 +15,13 @@ import {
   type ConnectErrorRecoveryAdvice,
 } from "@openclaw/gateway-protocol/connect-error-details";
 import {
+  type ConnectParams,
+  type ErrorShape,
+  type EventFrame,
+  type HelloOk,
   isGatewayEventFrame,
   isGatewayResponseFrame,
+  type RequestFrame,
 } from "@openclaw/gateway-protocol/frame-guards";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
@@ -806,10 +804,14 @@ export class GatewayClient {
     if (this.pendingStop?.ws === ws) {
       return this.pendingStop;
     }
-    let resolve!: () => void;
+    const resolvers: Array<() => void> = [];
     const promise = new Promise<void>((res) => {
-      resolve = res;
+      resolvers.push(res);
     });
+    const resolve = resolvers.at(0);
+    if (!resolve) {
+      throw new Error("pending stop promise did not initialize its resolver");
+    }
     this.pendingStop = { ws, promise, resolve };
     return this.pendingStop;
   }
@@ -1539,7 +1541,12 @@ export class GatewayClient {
       if (!this.lastTick) {
         return;
       }
-      if (this.pending.size > 0) {
+      const allPendingRequestsHaveTimeouts =
+        this.pending.size > 0 &&
+        [...this.pending.values()].every((pending) => pending.timeout !== null);
+      // Finite requests own their deadline. One unbounded request keeps the
+      // transport watchdog active so a dead socket cannot strand it forever.
+      if (allPendingRequestsHaveTimeouts) {
         return;
       }
       const gap = Date.now() - this.lastTick;

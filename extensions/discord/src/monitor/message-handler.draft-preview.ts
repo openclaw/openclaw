@@ -4,7 +4,9 @@ import {
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
   resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewToolProgress,
+  resolveChannelStreamingProgressNarration,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -74,11 +76,22 @@ export function createDiscordDraftPreviewController(params: {
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
   let finalReplyDelivered = false;
-  // Final delivery cancels the compositor gate before Discord decides whether
-  // to edit the progress preview, so keep the pre-final eligibility bit.
+  // Final delivery can cancel the gate before Discord consumes collapse
+  // eligibility, so keep the pre-final state until that transition occurs.
   let progressDraftStartedBeforeFinal = false;
+  let progressDraftCollapsed = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
+  const narrationProgressEnabled =
+    Boolean(draftStream) &&
+    discordStreamMode === "progress" &&
+    resolveChannelStreamingProgressNarration(params.discordConfig);
+  // Narration model input follows the channel's command-text display policy:
+  // "status" hides raw exec/bash text from viewers, so it must not reach the
+  // utility model either.
+  const narrationHideCommandText =
+    narrationProgressEnabled &&
+    resolveChannelStreamingPreviewCommandText(params.discordConfig) === "status";
   const suppressDefaultToolProgressMessages =
     Boolean(draftStream) &&
     resolveChannelStreamingSuppressDefaultToolProgressMessages(params.discordConfig, {
@@ -135,13 +148,21 @@ export function createDiscordDraftPreviewController(params: {
   return {
     draftStream,
     previewToolProgressEnabled,
+    narrationProgressEnabled,
+    narrationHideCommandText,
     commentaryProgressEnabled: progressDraft.commentaryProgressEnabled,
     suppressDefaultToolProgressMessages,
     get isProgressMode() {
       return discordStreamMode === "progress";
     },
-    get hasProgressDraftStarted() {
-      return progressDraft.hasStarted || progressDraftStartedBeforeFinal;
+    get hasProgressDraftToCollapse() {
+      return (
+        !progressDraftCollapsed && (progressDraft.hasStarted || progressDraftStartedBeforeFinal)
+      );
+    },
+    markProgressDraftCollapsed() {
+      progressDraftCollapsed = true;
+      progressDraftStartedBeforeFinal = false;
     },
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
@@ -166,6 +187,9 @@ export function createDiscordDraftPreviewController(params: {
     },
     async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }) {
       await progressDraft.pushReasoningProgress(text, options);
+    },
+    async pushNarrationProgress(text?: string) {
+      await progressDraft.pushNarrationProgress(text);
     },
     async pushCommentaryProgress(text?: string, options?: { itemId?: string }) {
       await progressDraft.pushCommentaryProgress(text, options);
@@ -261,11 +285,21 @@ export function createDiscordDraftPreviewController(params: {
     },
     handleAssistantMessageBoundary() {
       // Queued/followup turns need a fresh progress draft after the primary final.
-      progressDraft.beginNewTurn();
+      const beganNewTurn = progressDraft.beginNewTurn();
+      if (beganNewTurn) {
+        progressDraftCollapsed = false;
+        progressDraftStartedBeforeFinal = false;
+        finalReplyDelivered = false;
+        finalizedViaPreviewMessage = false;
+      }
       if (discordStreamMode === "progress") {
-        return;
+        if (beganNewTurn) {
+          draftStream?.forceNewMessage("discard");
+        }
+        return beganNewTurn;
       }
       forceNewMessageIfNeeded();
+      return beganNewTurn;
     },
     async flush() {
       if (!draftStream) {
