@@ -722,11 +722,19 @@ final class OnboardingAISetupModel {
             } catch {
                 // The Gateway session survives socket loss; cancel by its known
                 // id before reporting failure so it cannot persist config later.
-                await GatewayConnection.shared.cancelWizardSession(
+                let cancellationConfirmed = await GatewayConnection.shared.cancelWizardSession(
                     authSessionID,
                     on: serverLease
                 )
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
+                if !cancellationConfirmed,
+                   await self.reconcileProviderAuthAfterUnknownOutcome(
+                       token: token,
+                       before: self.lastDetectedActivationState,
+                       originalServerLease: serverLease)
+                {
+                    return
+                }
                 self.authBusy = false
                 self.authError = Self.transportFailure(error.localizedDescription)
             }
@@ -800,11 +808,19 @@ final class OnboardingAISetupModel {
                     error: result.error
                 )
             } catch {
-                await GatewayConnection.shared.cancelWizardSession(
+                let cancellationConfirmed = await GatewayConnection.shared.cancelWizardSession(
                     sessionID,
                     on: serverLease
                 )
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
+                if !cancellationConfirmed,
+                   await self.reconcileProviderAuthAfterUnknownOutcome(
+                       token: token,
+                       before: self.lastDetectedActivationState,
+                       originalServerLease: serverLease)
+                {
+                    return
+                }
                 self.authBusy = false
                 self.authError = Self.transportFailure(error.localizedDescription)
             }
@@ -855,6 +871,51 @@ final class OnboardingAISetupModel {
         self.authSelection = max(0, options.firstIndex {
             anyCodableEqual($0.value, step?.initialvalue)
         } ?? 0)
+    }
+
+    private func reconcileProviderAuthAfterUnknownOutcome(
+        token: UUID,
+        before: PersistedActivationState?,
+        originalServerLease: GatewayConnection.ServerLease
+    ) async -> Bool {
+        guard let before else { return false }
+        let connection = GatewayConnection.shared
+        let lease: GatewayConnection.ServerLease
+        if await connection.isCurrentServerLease(originalServerLease) {
+            lease = originalServerLease
+        } else {
+            guard let replacement = try? await connection.acquireServerLease(
+                ifSameRouteAs: originalServerLease,
+                timeoutMs: 5000)
+            else { return false }
+            lease = replacement
+        }
+        guard let data = try? await connection.request(
+            method: "crestodian.setup.detect",
+            params: [:],
+            timeoutMs: 10000,
+            ifCurrentServerLease: lease
+        ),
+            token == self.attemptToken,
+            let result = try? JSONDecoder().decode(DetectResult.self, from: data),
+            let configuredModel = result.configuredModel,
+            Self.activationTransitionWasPersisted(
+                expectedModel: configuredModel,
+                before: before,
+                after: result.persistedActivationState)
+        else { return false }
+        self.serverLease = lease
+        self.clearProviderAuth()
+        self.finishConnected(
+            kind: "provider-auth",
+            result: ActivateResult(
+                ok: true,
+                modelRef: configuredModel,
+                latencyMs: nil,
+                lines: nil,
+                status: nil,
+                error: nil))
+        return true
     }
 
     private func clearProviderAuth() {
