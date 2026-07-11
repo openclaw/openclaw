@@ -422,10 +422,13 @@ describe("gateway server hooks", () => {
       await waitForCronIsolatedRuns(2);
       expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
 
-      cronIsolatedRun.mockResolvedValueOnce({
-        status: "error",
-        summary: "boom",
-        delivered: false,
+      cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
+        (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
+        return {
+          status: "error",
+          summary: "boom",
+          delivered: false,
+        };
       });
       const directFailure = await postHook(port, "/hooks/agent", {
         message: "Do it",
@@ -834,6 +837,46 @@ describe("gateway server hooks", () => {
       const thirdBody = (await third.json()) as { runId?: string };
       requireNonEmptyString(thirdBody.runId, "third hook run id");
       expect(thirdBody.runId).not.toBe(firstBody.runId);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  test("returns conflict when an agent hook fails before runner admission", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        summary: 'Session "agent:hooks:hook:symphony-kanban" changed while starting work. Retry.',
+      });
+      const failed = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "Dispatch", agentId: "hooks" },
+        { headers: { "Idempotency-Key": "startup-conflict" } },
+      );
+      expect(failed.status).toBe(409);
+      const failedBody = (await failed.json()) as { ok?: boolean; error?: string; runId?: string };
+      expect(failedBody.ok).toBe(false);
+      expect(failedBody.error).toContain("changed while starting work");
+      requireNonEmptyString(failedBody.runId, "failed hook run id");
+
+      cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
+        (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
+        return { status: "ok", summary: "done" };
+      });
+      const retry = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "Dispatch", agentId: "hooks" },
+        { headers: { "Idempotency-Key": "startup-conflict" } },
+      );
+      expect(retry.status).toBe(200);
+      const retryBody = (await retry.json()) as { ok?: boolean; runId?: string };
+      expect(retryBody.ok).toBe(true);
+      expect(retryBody.runId).not.toBe(failedBody.runId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
     });
   });
