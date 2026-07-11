@@ -834,8 +834,8 @@ describe("gateway restart deferral preflight", () => {
             noopPaths: [],
           },
           {},
-        ),
-      ).toBe(false);
+        ).status,
+      ).toBe("recovery-pending");
       expect(requestRecoveryRestart).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(1_000);
@@ -844,6 +844,52 @@ describe("gateway restart deferral preflight", () => {
       stopRestartRetries();
       restartTesting.resetSigusr1State();
       resetGatewayWorkAdmission();
+    }
+  });
+
+  it("retires only retries owned by a rejected config transaction", async () => {
+    const requestRecoveryRestart = vi
+      .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
+      .mockReturnValue({ status: "failed" });
+    const { requestGatewayRestart, retireRejectedRestartRequest, stopRestartRetries } =
+      createReloadHandlersForTest(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        requestRecoveryRestart,
+      );
+    const restartPlan = {
+      changedPaths: ["gateway.port"],
+      restartGateway: true,
+      restartReasons: ["gateway.port"],
+      hotReasons: [],
+      reloadHooks: false,
+      restartGmailWatcher: false,
+      restartCron: false,
+      restartHeartbeat: false,
+      restartHealthMonitor: false,
+      reloadPlugins: false,
+      restartChannels: new Set<ChannelKind>(),
+      disposeMcpRuntimes: false,
+      noopPaths: [],
+    } satisfies GatewayReloadPlan;
+    vi.useFakeTimers();
+
+    try {
+      const rejected = requestGatewayRestart(restartPlan, {});
+      rejected.settle("rejected");
+      retireRejectedRestartRequest();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(requestRecoveryRestart).toHaveBeenCalledTimes(1);
+
+      const committed = requestGatewayRestart(restartPlan, {});
+      committed.settle("committed");
+      retireRejectedRestartRequest();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(requestRecoveryRestart).toHaveBeenCalledTimes(3);
+    } finally {
+      stopRestartRetries();
     }
   });
 
@@ -880,8 +926,8 @@ describe("gateway restart deferral preflight", () => {
             noopPaths: [],
           },
           { gateway: { port: 18790 } },
-        ),
-      ).toBe(false);
+        ).status,
+      ).toBe("recovery-pending");
 
       expect(
         requestGatewayRestart(
@@ -901,8 +947,8 @@ describe("gateway restart deferral preflight", () => {
             noopPaths: [],
           },
           { gateway: { port: 18791 } },
-        ),
-      ).toBe(true);
+        ).status,
+      ).toBe("accepted");
       await vi.advanceTimersByTimeAsync(1_000);
 
       expect(requestRecoveryRestart).toHaveBeenCalledTimes(2);
@@ -937,8 +983,8 @@ describe("gateway restart deferral preflight", () => {
             noopPaths: [],
           },
           {},
-        ),
-      ).toBe(true);
+        ).status,
+      ).toBe("accepted");
 
       expect(signalSpy).toHaveBeenCalledOnce();
       expect(isGatewayWorkAdmissionClosed()).toBe(true);
@@ -988,8 +1034,8 @@ describe("gateway restart deferral preflight", () => {
             noopPaths: [],
           },
           {},
-        ),
-      ).toBe(true);
+        ).status,
+      ).toBe("accepted");
 
       expect(signalSpy).not.toHaveBeenCalled();
       expect(logReload.warn).toHaveBeenCalledWith(
@@ -1054,8 +1100,8 @@ describe("gateway restart deferral preflight", () => {
             noopPaths: [],
           },
           {},
-        ),
-      ).toBe(true);
+        ).status,
+      ).toBe("accepted");
 
       markExited(session, 0, null, "completed");
       await vi.advanceTimersByTimeAsync(500);
@@ -1072,6 +1118,65 @@ describe("gateway restart deferral preflight", () => {
       stopRestartRetries();
       restartTesting.resetSigusr1State();
       resetGatewayWorkAdmission();
+    }
+  });
+
+  it("retries a timed-out deferral with its original force intent", async () => {
+    const requestRecoveryRestart = vi
+      .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
+      .mockReturnValueOnce({ status: "failed" })
+      .mockReturnValueOnce({ status: "emitted" });
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const { requestGatewayRestart, stopRestartRetries } = createReloadHandlersForTest(
+      logReload,
+      undefined,
+      undefined,
+      undefined,
+      requestRecoveryRestart,
+    );
+    hoisted.activeTaskBlockers.push({
+      taskId: "force-intent-blocker",
+      status: "running",
+      runtime: "subagent",
+    });
+    vi.useFakeTimers();
+
+    try {
+      const transaction = requestGatewayRestart(
+        {
+          changedPaths: ["gateway.port"],
+          restartGateway: true,
+          restartReasons: ["gateway.port"],
+          hotReasons: [],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: false,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: false,
+          noopPaths: [],
+        },
+        { gateway: { reload: { deferralTimeoutMs: 500 } } },
+      );
+      transaction.settle("committed");
+
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(requestRecoveryRestart.mock.calls).toEqual([
+        ["config reload: gateway.port", { force: true, reason: "config reload forced restart" }],
+        ["config reload: gateway.port", { force: true, reason: "config reload forced restart" }],
+      ]);
+      expect(
+        logReload.warn.mock.calls.filter(([message]) =>
+          message.includes("deferring until 1 background task run(s) complete"),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      stopRestartRetries();
+      hoisted.activeTaskBlockers.length = 0;
     }
   });
 
@@ -1104,8 +1209,8 @@ describe("gateway restart deferral preflight", () => {
             noopPaths: [],
           },
           {},
-        ),
-      ).toBe(true);
+        ).status,
+      ).toBe("accepted");
       expect(signalSpy).not.toHaveBeenCalled();
       expect(logReload.warn).toHaveBeenCalledWith(
         "config change requires gateway restart (gateway.port) — deferring until 1 gateway request(s) complete",

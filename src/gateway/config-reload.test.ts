@@ -738,6 +738,7 @@ function createReloaderHarness(
   const onConfigApplied = vi.fn(
     async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {},
   );
+  const onConfigAccepted = vi.fn(async () => {});
   const onNoopConfigCommit = vi.fn(
     async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {},
   );
@@ -771,6 +772,7 @@ function createReloaderHarness(
     subscribeToWrites,
     onConfigChange,
     onConfigApplied,
+    onConfigAccepted,
     onNoopConfigCommit,
     onHotReload,
     onRestart,
@@ -782,6 +784,7 @@ function createReloaderHarness(
     watcher,
     onConfigChange,
     onConfigApplied,
+    onConfigAccepted,
     onNoopConfigCommit,
     onHotReload,
     onRestart,
@@ -834,6 +837,25 @@ describe("startGatewayConfigReloader", () => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("notifies lifecycle owners when a persisted edit reverts to the current baseline", async () => {
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 }, port: 18789 },
+    };
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({ config: initialConfig, hash: "reverted-restart-edit" }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+    expect(harness.onConfigApplied).not.toHaveBeenCalled();
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    await harness.reloader.stop();
   });
 
   it("notifies lifecycle owners for no-op sandbox policy changes", async () => {

@@ -112,8 +112,10 @@ export function startGatewayConfigReloader(opts: {
   initialInternalWriteHash?: string | null;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
   onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
-  /** Supersedes lifecycle-owned work from an older valid config transaction. */
+  /** Publishes runtime state after a hot or no-op config transaction. */
   onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  /** Retires rejected lifecycle work after any newer config transaction is accepted. */
+  onConfigAccepted?: () => void | Promise<void>;
   onNoopConfigCommit: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
@@ -255,14 +257,15 @@ export function startGatewayConfigReloader(opts: {
       ...pluginInstallRecordWholeRecordPaths,
     ];
     const nextSettings = resolveGatewayReloadSettings(nextConfig);
-    const commitReloadBaseline = () => {
+    const commitReloadBaseline = async () => {
+      await opts.onConfigAccepted?.();
       currentConfig = nextConfig;
       currentCompareConfig = nextCompareConfig;
       currentPluginInstallRecords = nextPluginInstallRecords;
       settings = nextSettings;
     };
     if (changedPaths.length === 0) {
-      commitReloadBaseline();
+      await commitReloadBaseline();
       return;
     }
 
@@ -280,7 +283,7 @@ export function startGatewayConfigReloader(opts: {
     opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
     if (followUp.mode === "none") {
       opts.log.info(`config reload skipped by writer intent (${followUp.reason})`);
-      commitReloadBaseline();
+      await commitReloadBaseline();
       return;
     }
     const plan = buildGatewayReloadPlan(changedPaths, {
@@ -289,7 +292,7 @@ export function startGatewayConfigReloader(opts: {
     });
     if (nextSettings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
-      commitReloadBaseline();
+      await commitReloadBaseline();
       return;
     }
     if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
@@ -298,7 +301,7 @@ export function startGatewayConfigReloader(opts: {
       // marking applied so getRuntimeConfig() readers do not stay stale until restart.
       await opts.onNoopConfigCommit(plan, nextConfig);
       await opts.onConfigApplied?.(plan, nextConfig);
-      commitReloadBaseline();
+      await commitReloadBaseline();
       return;
     }
     if (followUp.requiresRestart) {
@@ -309,13 +312,13 @@ export function startGatewayConfigReloader(opts: {
       };
       await opts.onConfigChange?.(restartPlan, nextConfig);
       await queueRestart(restartPlan, nextConfig);
-      commitReloadBaseline();
+      await commitReloadBaseline();
       return;
     }
     if (nextSettings.mode === "restart") {
       await opts.onConfigChange?.({ ...plan, restartGateway: true }, nextConfig);
       await queueRestart(plan, nextConfig);
-      commitReloadBaseline();
+      await commitReloadBaseline();
       return;
     }
     if (plan.restartGateway) {
@@ -325,19 +328,19 @@ export function startGatewayConfigReloader(opts: {
             ", ",
           )})`,
         );
-        commitReloadBaseline();
+        await commitReloadBaseline();
         return;
       }
       await opts.onConfigChange?.(plan, nextConfig);
       await queueRestart(plan, nextConfig);
-      commitReloadBaseline();
+      await commitReloadBaseline();
       return;
     }
 
     await opts.onConfigChange?.(plan, nextConfig);
     await opts.onHotReload(plan, nextConfig);
     await opts.onConfigApplied?.(plan, nextConfig);
-    commitReloadBaseline();
+    await commitReloadBaseline();
   };
 
   const promoteAcceptedSnapshot = async (snapshot: ConfigFileSnapshot, reason: string) => {

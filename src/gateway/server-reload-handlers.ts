@@ -25,6 +25,7 @@ import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   deferGatewayRestartUntilIdle,
   type GatewayRestartEmitter,
+  type GatewayRestartIntent,
   type RestartDeferralHandle,
   resolveGatewayRestartDeferralTimeoutMs,
   setGatewaySigusr1RestartPolicy,
@@ -108,6 +109,13 @@ type GatewayGmailRestartAbortController = {
 
 type GatewayHotReloadPublication = {
   publish: (commit: () => Promise<void>, isCommitted: () => boolean) => Promise<void>;
+};
+
+type GatewayRestartTransactionState = "pending" | "committed" | "rejected";
+
+type GatewayRestartTransactionResult = {
+  status: "accepted" | "recovery-pending";
+  settle: (state: Exclude<GatewayRestartTransactionState, "pending">) => void;
 };
 
 export class GatewayHotReloadCancelledError extends Error {
@@ -510,7 +518,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       try {
         // Reuse the config-restart path: it excludes this reload root while
         // draining other work and fences signal delivery until restart takes over.
-        requestGatewayRestart(
+        const restartTransaction = requestGatewayRestart(
           {
             ...plan,
             restartGateway: true,
@@ -518,6 +526,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           },
           nextConfig,
         );
+        restartTransaction.settle("committed");
         // Immediate emission failure already owns a lifecycle retry. The runtime
         // is committed, so keep this transaction accepted while that retry runs.
         recoveryRestartScheduled = true;
@@ -812,6 +821,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   let restartRetryTimer: ReturnType<typeof setTimeout> | null = null;
   let restartDeferral: RestartDeferralHandle | null = null;
   let restartRequestGeneration = 0;
+  let restartRequestTransaction: { state: GatewayRestartTransactionState } | null = null;
 
   const supersedeRestartRequest = () => {
     restartRequestGeneration += 1;
@@ -822,6 +832,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       clearTimeout(restartRetryTimer);
       restartRetryTimer = null;
     }
+    restartRequestTransaction = null;
   };
 
   const stopRestartRetries = () => {
@@ -829,37 +840,44 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     supersedeRestartRequest();
   };
 
-  const scheduleDeferredRestartRetry = (
-    plan: GatewayReloadPlan,
-    nextConfig: OpenClawConfig,
-    requestGeneration: number,
-  ) => {
+  const scheduleRestartEmissionRetry = (retry: {
+    reason: string;
+    intent?: GatewayRestartIntent;
+    requestGeneration: number;
+  }) => {
     if (
       restartRetryStopped ||
       restartRetryTimer ||
-      requestGeneration !== restartRequestGeneration ||
+      retry.requestGeneration !== restartRequestGeneration ||
       myGeneration !== currentReloadGeneration
     ) {
       return;
     }
-    // A deferred restart has already accepted its config transaction. Keep one
-    // lifecycle-owned retry alive until signal admission succeeds.
+    // Retry the exact failed emission. Re-entering request planning would start
+    // a fresh idle deferral and discard a timeout's force/deadline decision.
     restartPending = true;
     restartRetryTimer = setTimeout(() => {
       restartRetryTimer = null;
       if (
         restartRetryStopped ||
-        requestGeneration !== restartRequestGeneration ||
+        retry.requestGeneration !== restartRequestGeneration ||
         myGeneration !== currentReloadGeneration
       ) {
         return;
       }
       restartPending = false;
-      if (!requestGatewayRestartForGeneration(plan, nextConfig, requestGeneration)) {
-        scheduleDeferredRestartRetry(plan, nextConfig, requestGeneration);
+      const emitResult = params.requestRecoveryRestart?.(retry.reason, retry.intent);
+      if (!emitResult || emitResult.status === "failed") {
+        scheduleRestartEmissionRetry(retry);
       }
     }, RESTART_EMISSION_RETRY_MS);
     restartRetryTimer.unref?.();
+  };
+
+  const retireRejectedRestartRequest = () => {
+    if (restartRequestTransaction?.state === "rejected") {
+      supersedeRestartRequest();
+    }
   };
 
   const requestGatewayRestartForGeneration = (
@@ -898,6 +916,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         params.logReload.warn(`restart blocked by active background task run(s): ${taskBlockers}`);
       }
 
+      let failedEmission: { reason: string; intent?: GatewayRestartIntent } | undefined;
       restartDeferral = deferGatewayRestartUntilIdle({
         getPendingCount: () => getActiveCounts().totalActive,
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(
@@ -908,21 +927,31 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         emitHooks: {
           beforeEmit: () =>
             markActiveMainSessionsForRestart(nextConfig, "config reload forced restart"),
-          emitRestart: (reason, intent) =>
-            requestGeneration === restartRequestGeneration
-              ? requestRecoveryRestart(reason, intent)
-              : { status: "coalesced" },
-          afterEmitFailed: async () => {
+          emitRestart: (reason, intent) => {
             if (requestGeneration !== restartRequestGeneration) {
+              return { status: "coalesced" };
+            }
+            const resolvedReason = reason ?? restartReason;
+            const emitResult = requestRecoveryRestart(resolvedReason, intent);
+            failedEmission =
+              emitResult.status === "failed" ? { reason: resolvedReason, intent } : undefined;
+            return emitResult;
+          },
+          afterEmitFailed: async () => {
+            if (requestGeneration !== restartRequestGeneration || !failedEmission) {
               return;
             }
             params.logReload.warn("gateway restart recovery emission failed; retrying");
-            scheduleDeferredRestartRetry(plan, nextConfig, requestGeneration);
+            scheduleRestartEmissionRetry({
+              ...failedEmission,
+              requestGeneration,
+            });
           },
         },
         hooks: {
           onReady: () => {
             restartPending = false;
+            restartDeferral = null;
             params.logReload.info("all operations and replies completed; restarting gateway now");
           },
           onStillPending: (_pending, elapsedMs) => {
@@ -938,6 +967,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             const remaining = formatActiveDetails(getActiveCounts());
             const taskBlockersLocal = formatTaskBlockers();
             restartPending = false;
+            restartDeferral = null;
             params.logReload.warn(
               `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active${
                 taskBlockersLocal ? ` (${taskBlockersLocal})` : ""
@@ -946,6 +976,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           },
           onCheckError: (err) => {
             restartPending = false;
+            restartDeferral = null;
             params.logReload.warn(
               `restart deferral check failed (${String(err)}); restarting gateway now`,
             );
@@ -963,7 +994,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const emitResult = requestRecoveryRestart(restartReason);
     if (emitResult.status === "failed") {
       params.logReload.warn("gateway restart recovery emission failed");
-      scheduleDeferredRestartRetry(plan, nextConfig, requestGeneration);
+      scheduleRestartEmissionRetry({
+        reason: restartReason,
+        requestGeneration,
+      });
       return false;
     }
     if (emitResult.status === "coalesced") {
@@ -973,16 +1007,30 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     return true;
   };
 
-  const requestGatewayRestart = (plan: GatewayReloadPlan, nextConfig: OpenClawConfig): boolean => {
+  const requestGatewayRestart = (
+    plan: GatewayReloadPlan,
+    nextConfig: OpenClawConfig,
+  ): GatewayRestartTransactionResult => {
     // Only another restart requirement supersedes accepted restart work. A
     // duplicate, hot-only, or failed config transaction must preserve it.
     supersedeRestartRequest();
-    return requestGatewayRestartForGeneration(plan, nextConfig, restartRequestGeneration);
+    const transaction = { state: "pending" as GatewayRestartTransactionState };
+    restartRequestTransaction = transaction;
+    const accepted = requestGatewayRestartForGeneration(plan, nextConfig, restartRequestGeneration);
+    return {
+      status: accepted ? "accepted" : "recovery-pending",
+      settle: (state) => {
+        if (transaction.state === "pending") {
+          transaction.state = state;
+        }
+      },
+    };
   };
 
   return {
     applyHotReload,
     requestGatewayRestart,
+    retireRejectedRestartRequest,
     stopRestartRetries,
   };
 }
@@ -1010,39 +1058,42 @@ export function startManagedGatewayConfigReloader(
     activeGmailRestartAbortController = abortController;
     return abortController;
   };
-  const { applyHotReload, requestGatewayRestart, stopRestartRetries } = createGatewayReloadHandlers(
-    {
-      deps: params.deps,
-      broadcast: params.broadcast,
-      getState: params.getState,
-      setState: params.setState,
-      startChannel: params.startChannel,
-      stopChannel: params.stopChannel,
-      getChannelAutostartSuppression: params.getChannelAutostartSuppression,
-      stopPostReadySidecars: params.stopPostReadySidecars,
-      reloadPlugins: params.reloadPlugins,
-      logHooks: params.logHooks,
-      logChannels: params.logChannels,
-      logCron: params.logCron,
-      logReload: params.logReload,
-      cronReconciliation: params.cronReconciliation,
-      createGmailRestartAbortController,
-      clearGmailRestartAbortController: (abortController) => {
-        if (activeGmailRestartAbortController === abortController) {
-          activeGmailRestartAbortController = null;
-        }
-      },
-      ...(params.onCronRestart ? { onCronRestart: params.onCronRestart } : {}),
-      ...(params.requestRecoveryRestart
-        ? { requestRecoveryRestart: params.requestRecoveryRestart }
-        : {}),
-      createHealthMonitor: (config) =>
-        startGatewayChannelHealthMonitor({
-          cfg: config,
-          channelManager: params.channelManager,
-        }),
+  const {
+    applyHotReload,
+    requestGatewayRestart,
+    retireRejectedRestartRequest,
+    stopRestartRetries,
+  } = createGatewayReloadHandlers({
+    deps: params.deps,
+    broadcast: params.broadcast,
+    getState: params.getState,
+    setState: params.setState,
+    startChannel: params.startChannel,
+    stopChannel: params.stopChannel,
+    getChannelAutostartSuppression: params.getChannelAutostartSuppression,
+    stopPostReadySidecars: params.stopPostReadySidecars,
+    reloadPlugins: params.reloadPlugins,
+    logHooks: params.logHooks,
+    logChannels: params.logChannels,
+    logCron: params.logCron,
+    logReload: params.logReload,
+    cronReconciliation: params.cronReconciliation,
+    createGmailRestartAbortController,
+    clearGmailRestartAbortController: (abortController) => {
+      if (activeGmailRestartAbortController === abortController) {
+        activeGmailRestartAbortController = null;
+      }
     },
-  );
+    ...(params.onCronRestart ? { onCronRestart: params.onCronRestart } : {}),
+    ...(params.requestRecoveryRestart
+      ? { requestRecoveryRestart: params.requestRecoveryRestart }
+      : {}),
+    createHealthMonitor: (config) =>
+      startGatewayChannelHealthMonitor({
+        cfg: config,
+        channelManager: params.channelManager,
+      }),
+  });
 
   const configReloader = startGatewayConfigReloader({
     initialConfig: params.initialConfig,
@@ -1053,6 +1104,7 @@ export function startManagedGatewayConfigReloader(
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,
     onConfigChange: (plan, nextConfig) => params.reconcileTerminalSessions(plan, nextConfig),
+    onConfigAccepted: retireRejectedRestartRequest,
     onConfigApplied: () => params.commitTerminalConfig(),
     onNoopConfigCommit: async (_plan, nextConfig) => {
       await params.activateRuntimeSecrets(nextConfig, {
@@ -1213,6 +1265,7 @@ export function startManagedGatewayConfigReloader(
         params.sharedGatewaySessionGenerationState.required;
       const previousSharedGatewaySessionGeneration =
         params.sharedGatewaySessionGenerationState.current;
+      let restartTransaction: GatewayRestartTransactionResult | undefined;
       try {
         const prepared = await params.activateRuntimeSecrets(nextConfig, {
           reason: "restart-check",
@@ -1220,8 +1273,8 @@ export function startManagedGatewayConfigReloader(
         });
         const nextSharedGatewaySessionGeneration =
           params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
-        const restartQueued = requestGatewayRestart(plan, nextConfig);
-        if (!restartQueued) {
+        restartTransaction = requestGatewayRestart(plan, nextConfig);
+        if (restartTransaction.status === "recovery-pending") {
           throw new GatewayHotReloadRecoveryError("config restart");
         }
         if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
@@ -1233,7 +1286,9 @@ export function startManagedGatewayConfigReloader(
         } else {
           params.sharedGatewaySessionGenerationState.required = null;
         }
+        restartTransaction.settle("committed");
       } catch (error) {
+        restartTransaction?.settle("rejected");
         params.sharedGatewaySessionGenerationState.required =
           previousRequiredSharedGatewaySessionGeneration;
         throw error;
