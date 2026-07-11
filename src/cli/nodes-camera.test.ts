@@ -247,6 +247,20 @@ describe("nodes camera helpers", () => {
     });
   });
 
+  it("rejects malformed base64 payloads before writing", async () => {
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "x.bin");
+      await expect(writeBase64ToFile(out, "not-base64!")).rejects.toThrow(/invalid base64/i);
+      await expectPathMissing(out);
+      await expect(writeScreenRecordToFile(out, "not-base64!")).rejects.toThrow(/invalid base64/i);
+      await expectPathMissing(out);
+      await expect(writeScreenSnapshotToFile(out, "not-base64!")).rejects.toThrow(
+        /invalid base64/i,
+      );
+      await expectPathMissing(out);
+    });
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
