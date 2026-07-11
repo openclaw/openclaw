@@ -861,6 +861,7 @@ export function maintainMain(options, dependencies = {}) {
         runCommand(
           "env",
           [
+            "SKIP_TSC=1",
             "SKIP_UI_BUILD=1",
             "bash",
             "scripts/restart-mac.sh",
