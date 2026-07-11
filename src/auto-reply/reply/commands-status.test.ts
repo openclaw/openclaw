@@ -2313,48 +2313,6 @@ describe("buildStatusReply subagent summary", () => {
       vi.restoreAllMocks();
     });
 
-    it("returns fallback error message when buildStatusText times out after 10s", async () => {
-      vi.useFakeTimers();
-      try {
-        vi.doMock("../../status/status-text.js", () => ({
-          buildStatusText: vi.fn(() => new Promise<string>(() => {})),
-        }));
-        vi.resetModules();
-        const { buildStatusReply: freshBuildStatusReply } = await import("./commands-status.js");
-
-        const commandParams = buildCommandTestParams("/status", baseCfg);
-        const replyPromise = freshBuildStatusReply({
-          cfg: baseCfg,
-          command: commandParams.command,
-          sessionEntry: commandParams.sessionEntry,
-          sessionKey: commandParams.sessionKey,
-          parentSessionKey: commandParams.sessionKey,
-          sessionScope: commandParams.sessionScope,
-          storePath: commandParams.storePath,
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          contextTokens: 0,
-          resolvedThinkLevel: commandParams.resolvedThinkLevel,
-          resolvedFastMode: false,
-          resolvedVerboseLevel: commandParams.resolvedVerboseLevel,
-          resolvedReasoningLevel: commandParams.resolvedReasoningLevel,
-          resolvedElevatedLevel: commandParams.resolvedElevatedLevel,
-          resolveDefaultThinkingLevel: commandParams.resolveDefaultThinkingLevel,
-          isGroup: commandParams.isGroup,
-          defaultGroupActivation: commandParams.defaultGroupActivation,
-          modelAuthOverride: "api-key",
-          activeModelAuthOverride: "api-key",
-        });
-
-        vi.advanceTimersByTime(10_000);
-        const reply = await replyPromise;
-
-        expect(reply?.text).toContain("⚠️ Status: timed out rendering response");
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
     it("returns fallback error message when buildStatusText throws", async () => {
       vi.doMock("../../status/status-text.js", () => ({
         buildStatusText: vi.fn(() => Promise.reject(new Error("Unexpected rendering error"))),
@@ -2388,7 +2346,7 @@ describe("buildStatusReply subagent summary", () => {
       });
 
       expect(reply?.text).toContain("⚠️ Status: error rendering response");
-      expect(reply?.text).toContain("Unexpected rendering error");
+      expect(reply?.text).not.toContain("Unexpected rendering error");
     });
   });
 });

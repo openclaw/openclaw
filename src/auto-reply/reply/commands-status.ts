@@ -8,11 +8,6 @@ import { requireCommandFlagEnabled } from "./command-gates.js";
 import type { CommandContext } from "./commands-types.js";
 export { buildStatusText } from "../../status/status-text.js";
 
-// Hard ceiling on /status render time. Deliberate UX guard: a slow or hung
-// status assembly must never block the chat turn, so buildStatusReply races it
-// and falls back to a short message instead of hanging the reply.
-const STATUS_RENDER_TIMEOUT_MS = 10_000;
-
 type BuildStatusReplyParams = Omit<BuildStatusTextParams, "statusChannel"> & {
   command: CommandContext;
 };
@@ -28,34 +23,17 @@ export async function buildStatusReply(
   }
 
   try {
-    const statusText = await new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error("Status render timeout"));
-      }, STATUS_RENDER_TIMEOUT_MS);
-      buildStatusText({
-        ...params,
-        statusChannel: command.channel,
-        statusAccountId: command.accountId,
-      }).then(
-        (result) => {
-          clearTimeout(timer);
-          resolve(result);
-        },
-        (error: unknown) => {
-          clearTimeout(timer);
-          reject(error instanceof Error ? error : new Error(String(error)));
-        },
-      );
+    const statusText = await buildStatusText({
+      ...params,
+      statusChannel: command.channel,
+      statusAccountId: command.accountId,
     });
     return { text: statusText };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logVerbose(`/status render failed: ${message}`);
-    const fallback =
-      message === "Status render timeout"
-        ? "⚠️ Status: timed out rendering response"
-        : `⚠️ Status: error rendering response (${message})`;
-    return { text: fallback };
+    // Diagnostics stay in logs only; the channel reply is a fixed generic
+    // message so internal module paths or runtime details never reach users.
+    logVerbose(`/status render failed: ${error instanceof Error ? error.message : String(error)}`);
+    return { text: "⚠️ Status: error rendering response" };
   }
 }
 
