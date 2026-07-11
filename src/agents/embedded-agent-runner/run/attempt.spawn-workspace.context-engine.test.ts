@@ -399,6 +399,32 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     }
   });
 
+  it("forwards the configured session store path into embedded sessions", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        config: {
+          session: {
+            store: "/tmp/openclaw-sessions.json",
+          },
+        } as OpenClawConfig,
+      },
+    });
+
+    const sessionOptions = mockParams(
+      hoisted.createAgentSessionMock,
+      0,
+      "createAgentSession options",
+    );
+    expect(sessionOptions.storePath).toBe(path.resolve("/tmp/openclaw-sessions.json"));
+    expect(sessionOptions.sessionKey).toBe(sessionKey);
+  });
+
   it("defaults local-model lean embedded runs to Tool Search controls", async () => {
     await createContextEngineAttemptRunner({
       contextEngine: {

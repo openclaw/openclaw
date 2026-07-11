@@ -6,6 +6,7 @@ import os from "node:os";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createFileBackedCompactionCheckpointStore,
@@ -1388,6 +1389,10 @@ async function compactEmbeddedAgentSessionDirectOnce(
             sessionManager,
             settingsManager,
             resourceLoader,
+            storePath: resolveStorePath(params.config?.session?.store, {
+              agentId: sessionAgentId,
+            }),
+            sessionKey: params.sessionKey,
           });
           session = createdSession.session;
           session.setActiveToolsByName(sessionToolAllowlist);

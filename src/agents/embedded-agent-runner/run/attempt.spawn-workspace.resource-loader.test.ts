@@ -23,15 +23,21 @@ describe("runEmbeddedAttempt resource loader wiring", () => {
         sessionManager: {},
         settingsManager: {},
         resourceLoader,
+        storePath: "/tmp/sessions.json",
+        sessionKey: "main",
       },
     });
 
     expect(createAgentSession).toHaveBeenCalledOnce();
-    const calls = createAgentSession.mock.calls as unknown as Array<[{ resourceLoader?: unknown }]>;
+    const calls = createAgentSession.mock.calls as unknown as Array<
+      [{ resourceLoader?: unknown; storePath?: unknown; sessionKey?: unknown }]
+    >;
     const options = calls[0]?.[0];
     if (!options) {
       throw new Error("Expected createAgentSession options");
     }
     expect(options.resourceLoader).toBe(resourceLoader);
+    expect(options.storePath).toBe("/tmp/sessions.json");
+    expect(options.sessionKey).toBe("main");
   });
 });
