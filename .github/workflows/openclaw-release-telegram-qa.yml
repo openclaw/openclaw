@@ -1776,8 +1776,18 @@ jobs:
                     OPENCLAW_QA_PROC_CONTROL=visible sleep 30 &
                     control_pid="$!"
                     trap "kill ${control_pid} >/dev/null 2>&1 || true" EXIT
-                    tr "\0" "\n" <"/proc/${control_pid}/environ" |
-                      grep -Fxq "OPENCLAW_QA_PROC_CONTROL=visible"
+                    proc_marker_visible=false
+                    # The child PID exists before execve publishes command-scoped env.
+                    for _ in {1..100}; do
+                      if tr "\0" "\n" <"/proc/${control_pid}/environ" |
+                        grep -Fxq "OPENCLAW_QA_PROC_CONTROL=visible"; then
+                        proc_marker_visible=true
+                        break
+                      fi
+                      kill -0 "$control_pid" >/dev/null 2>&1 || break
+                      sleep 0.01
+                    done
+                    [[ "$proc_marker_visible" == "true" ]]
                     # Reading the marker is the proof; the probe may exit before cleanup.
                     kill "$control_pid" >/dev/null 2>&1 || true
                     wait "$control_pid" || true
