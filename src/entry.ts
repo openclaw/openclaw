@@ -115,6 +115,8 @@ if (
       const normalizedEntryArgv = normalizeRootHelpTargetArgv(
         normalizeRootNoColorArgv(parsed.argv),
       );
+      // Deferred activation only honors inherited control env.
+      // Profile state/config selection intentionally happens after this wait.
       await runEntryAfterDeferredGatewayActivation(normalizedEntryArgv, async () => undefined, {
         hasContainerTarget: containerTargetName !== null,
       });

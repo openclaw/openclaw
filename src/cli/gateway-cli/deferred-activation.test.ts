@@ -654,6 +654,49 @@ describe("waitForDeferredGatewayActivation", () => {
   });
 
   it.each(["SIGTERM", "SIGINT"] as const)(
+    "does not re-signal %s when a prior listener already received the real signal",
+    async (signal) => {
+      const externalListener = vi.fn();
+      process.on(signal, externalListener);
+      const signalListeners = captureSignalListeners();
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid) => {
+        expect(pid).toBe(process.pid);
+        return true;
+      }) as typeof process.kill);
+      const port = await reserveLoopbackPort();
+      const { waiting } = await waitForParkedGateway(port);
+
+      try {
+        expect(countAddedSignalListeners(signalListeners)).toEqual({
+          SIGTERM: 1,
+          SIGINT: 1,
+        });
+
+        const addedSignalListener = findAddedSignalListener(signal, signalListeners[signal]);
+        expect(addedSignalListener).not.toBeNull();
+
+        externalListener();
+        addedSignalListener?.();
+
+        await expect(waiting).rejects.toThrow(`deferred activation interrupted by ${signal}`);
+        expect(externalListener).toHaveBeenCalledTimes(1);
+        expect(killSpy).not.toHaveBeenCalled();
+        expect(countAddedSignalListeners(signalListeners)).toEqual({
+          SIGTERM: 0,
+          SIGINT: 0,
+        });
+        await expectLoopbackListenerClosed(port);
+        await expectFreshProcessEquivalentCanReuseControlPort(
+          port,
+          `restart-no-resignal-${signal}`,
+        );
+      } finally {
+        process.removeListener(signal, externalListener);
+      }
+    },
+  );
+
+  it.each(["SIGTERM", "SIGINT"] as const)(
     "rejects %s immediately after waitForDeferredGatewayActivation returns, before any listening await",
     async (signal) => {
       const signalListeners = captureSignalListeners();

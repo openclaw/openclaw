@@ -435,6 +435,41 @@ describe("runEntryAfterDeferredGatewayActivation", () => {
     expect(loadAfterGateCalls).toBe(1);
   });
 
+  it("waits for deferred gateway activation for profiled gateway run invocations before profile env is applied", async () => {
+    const { runEntryAfterDeferredGatewayActivation } =
+      (await import("./entry.js")) as EntryDeferredActivationModule;
+
+    expect(runEntryAfterDeferredGatewayActivation).toBeTypeOf("function");
+
+    const deferred = createDeferred<void>();
+    let waitCalls = 0;
+    let loadAfterGateCalls = 0;
+
+    const runPromise = runEntryAfterDeferredGatewayActivation!(
+      ["node", "openclaw", "--profile", "demo", "gateway", "run", "--force"],
+      async () => {
+        loadAfterGateCalls += 1;
+        return "loaded";
+      },
+      {
+        waitForDeferredGatewayActivation: async () => {
+          waitCalls += 1;
+          await deferred.promise;
+        },
+      },
+    );
+
+    await Promise.resolve();
+
+    expect(waitCalls).toBe(1);
+    expect(loadAfterGateCalls).toBe(0);
+
+    deferred.resolve();
+
+    await expect(runPromise).resolves.toBe("loaded");
+    expect(loadAfterGateCalls).toBe(1);
+  });
+
   it.each([
     {
       name: "gateway help",

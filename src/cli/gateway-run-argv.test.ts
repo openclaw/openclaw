@@ -16,6 +16,17 @@ describe("isGatewayRunInvocationArgv", () => {
     expect(
       isGatewayRunInvocationArgv!(["node", "openclaw", "--no-color", "gateway", "run", "--force"]),
     ).toBe(true);
+    expect(
+      isGatewayRunInvocationArgv!([
+        "node",
+        "openclaw",
+        "--profile",
+        "demo",
+        "gateway",
+        "run",
+        "--force",
+      ]),
+    ).toBe(true);
     expect(isGatewayRunInvocationArgv!(["node", "openclaw", "gateway", "--bind", "loopback"])).toBe(
       true,
     );

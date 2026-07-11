@@ -145,6 +145,7 @@ async function waitForDeferredGatewayActivationOnce(
   return await new Promise<DeferredActivationResult>((resolve, reject) => {
     let state: "open" | "closing" | "accepted" | "settled" = "open";
     const signalHandlers = new Map<ShutdownSignal, () => void>();
+    const signalHadPreexistingListeners = new Map<ShutdownSignal, boolean>();
     const trackedSockets = new Set<Socket>();
 
     const settleResolve = (result: DeferredActivationResult) => {
@@ -257,10 +258,15 @@ async function waitForDeferredGatewayActivationOnce(
       if (state !== "open") {
         return;
       }
-      closeServerAndReject(new Error(`deferred activation interrupted by ${signal}`), signal);
+      const hadPreexistingListeners = signalHadPreexistingListeners.get(signal) ?? false;
+      closeServerAndReject(
+        new Error(`deferred activation interrupted by ${signal}`),
+        hadPreexistingListeners ? undefined : signal,
+      );
     };
 
     for (const signal of SIGNALS) {
+      signalHadPreexistingListeners.set(signal, process.listenerCount(signal) > 0);
       const handler = () => handleSignal(signal);
       signalHandlers.set(signal, handler);
       process.on(signal, handler);
