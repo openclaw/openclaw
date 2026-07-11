@@ -31,6 +31,7 @@ actor TalkMLXSpeechSynthesizer {
     private var transport: (any MLXTTSTransport)?
     private var activeID: String?
     private var cancelRequestedID: String?
+    private var fallbackRequiredID: String?
     private var cancelEscalationTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
     private var memoryPressureMonitor: MLXMemoryPressureMonitor?
@@ -96,7 +97,11 @@ actor TalkMLXSpeechSynthesizer {
                 self.finishRequest(id: id)
                 return try Self.makeWAV(audio: audio)
             } catch let error as SynthesizeError {
+                let requiresFallback = self.fallbackRequiredID == id
                 self.finishRequest(id: id)
+                if requiresFallback {
+                    throw SynthesizeError.audioGenerationFailed
+                }
                 throw error
             } catch is CancellationError {
                 try? await self.transport?.send(.cancel(id: id))
@@ -107,6 +112,10 @@ actor TalkMLXSpeechSynthesizer {
                 self.logger.error(
                     "talk mlx helper transport failed attempt=\(attempt + 1, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 await self.discardTransport()
+                if self.fallbackRequiredID == id {
+                    self.finishRequest(id: id)
+                    throw SynthesizeError.audioGenerationFailed
+                }
                 if self.cancelRequestedID == id {
                     self.finishRequest(id: id)
                     throw SynthesizeError.canceled
@@ -197,6 +206,9 @@ actor TalkMLXSpeechSynthesizer {
     }
 
     private func finishRequest(id: String) {
+        if self.fallbackRequiredID == id {
+            self.fallbackRequiredID = nil
+        }
         guard self.activeID == id else { return }
         self.activeID = nil
         self.cancelRequestedID = nil
@@ -252,8 +264,9 @@ actor TalkMLXSpeechSynthesizer {
         }
     }
 
-    private func handleMemoryPressure() async {
+    func handleMemoryPressure() async {
         self.logger.info("talk mlx helper memory-pressure shutdown")
+        self.fallbackRequiredID = self.activeID
         await self.shutdown()
     }
 

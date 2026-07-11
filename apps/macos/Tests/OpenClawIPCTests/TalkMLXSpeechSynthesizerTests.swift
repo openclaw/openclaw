@@ -149,6 +149,33 @@ struct TalkMLXSpeechSynthesizerTests {
     }
 
     @Test
+    func `memory pressure during synthesis preserves fallback`() async throws {
+        let transport = TestMLXTransport(mode: .ignoreCancel)
+        let factory = TestMLXTransportFactory([transport])
+        let synthesizer = TalkMLXSpeechSynthesizer(
+            transportFactory: { try await factory.make() },
+            idleDuration: .seconds(60))
+
+        let synthesis = Task {
+            try await synthesizer.synthesize(
+                text: "fall back after pressure",
+                modelRepo: nil,
+                language: nil,
+                voicePreset: nil)
+        }
+        await transport.waitForSynthesisRequest()
+        await synthesizer.handleMemoryPressure()
+
+        do {
+            _ = try await synthesis.value
+            Issue.record("expected generation failure")
+        } catch TalkMLXSpeechSynthesizer.SynthesizeError.audioGenerationFailed {
+            #expect(await transport.closeCount == 1)
+            #expect(await transport.sent.contains(.shutdown))
+        }
+    }
+
+    @Test
     func `cancel can terminate helper before ready`() async throws {
         let transport = TestMLXTransport(mode: .startupHang)
         let factory = TestMLXTransportFactory([transport])
