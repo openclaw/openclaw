@@ -9,7 +9,9 @@ import {
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
 
 type ComputerUseHealthMonitor = {
+  fingerprint: string;
   intervalMs: number;
+  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
   timer: ReturnType<typeof setInterval>;
   disposeCloseHandler: () => void;
   running: boolean;
@@ -36,27 +38,35 @@ export function startCodexComputerUseHealthMonitor(params: {
   config: ResolvedCodexComputerUseConfig;
   repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
 }): { started: boolean; intervalMs?: number; reason?: string } {
-  if (!params.config.enabled) {
-    return { started: false, reason: "disabled" };
-  }
-  if (!params.config.healthCheckEnabled) {
-    return { started: false, reason: "health_disabled" };
-  }
-  const repairComputerUseMcpChildren =
-    params.repairComputerUseMcpChildren ??
-    (() => killStaleComputerUseMcpChildren({ ancestorPid: params.client.getTransportPid() }));
-  const intervalMs = params.config.healthCheckIntervalMinutes * 60_000;
   const state = getComputerUseHealthMonitorState();
   const existing = state.monitors.get(params.client);
-  if (existing?.intervalMs === intervalMs) {
+  if (!params.config.enabled || !params.config.healthCheckEnabled) {
+    if (existing) {
+      clearComputerUseHealthMonitor(params.client, existing);
+    }
+    return {
+      started: false,
+      reason: params.config.enabled ? "health_disabled" : "disabled",
+    };
+  }
+  const fingerprint = buildComputerUseHealthMonitorFingerprint(params.config);
+  const intervalMs = params.config.healthCheckIntervalMinutes * 60_000;
+  if (
+    existing?.fingerprint === fingerprint &&
+    existing.repairComputerUseMcpChildren === params.repairComputerUseMcpChildren
+  ) {
     return { started: false, intervalMs, reason: "already_started" };
   }
   if (existing) {
     clearComputerUseHealthMonitor(params.client, existing);
   }
-
+  const repairComputerUseMcpChildren =
+    params.repairComputerUseMcpChildren ??
+    (() => killStaleComputerUseMcpChildren({ ancestorPid: params.client.getTransportPid() }));
   const monitor: ComputerUseHealthMonitor = {
+    fingerprint,
     intervalMs,
+    repairComputerUseMcpChildren: params.repairComputerUseMcpChildren,
     timer: setInterval(() => {
       void runCodexComputerUseHealthProbe(params.client, params.config, monitor, {
         repairComputerUseMcpChildren,
@@ -74,6 +84,16 @@ export function startCodexComputerUseHealthMonitor(params: {
   });
   state.monitors.set(params.client, monitor);
   return { started: true, intervalMs };
+}
+
+function buildComputerUseHealthMonitorFingerprint(config: ResolvedCodexComputerUseConfig): string {
+  return JSON.stringify({
+    autoRepair: config.autoRepair,
+    healthCheckIntervalMinutes: config.healthCheckIntervalMinutes,
+    liveTestTimeoutMs: config.liveTestTimeoutMs,
+    mcpServerName: config.mcpServerName,
+    toolCallTimeoutMs: config.toolCallTimeoutMs,
+  });
 }
 
 async function runCodexComputerUseHealthProbe(

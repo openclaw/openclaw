@@ -69,6 +69,61 @@ describe("Codex Computer Use periodic health", () => {
     expect(repairComputerUseMcpChildren).toHaveBeenCalledTimes(1);
   });
 
+  it("stops an existing monitor when health checks are disabled", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+
+    startCodexComputerUseHealthMonitor({
+      client: client.client,
+      config: computerUseConfig({ healthCheckEnabled: true, healthCheckIntervalMinutes: 30 }),
+    });
+    expect(
+      startCodexComputerUseHealthMonitor({
+        client: client.client,
+        config: computerUseConfig({ healthCheckEnabled: false }),
+      }),
+    ).toEqual({ started: false, reason: "health_disabled" });
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("replaces a same-interval monitor when probe configuration changes", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+
+    startCodexComputerUseHealthMonitor({
+      client: client.client,
+      config: computerUseConfig({ healthCheckEnabled: true, healthCheckIntervalMinutes: 30 }),
+    });
+    expect(
+      startCodexComputerUseHealthMonitor({
+        client: client.client,
+        config: computerUseConfig({
+          healthCheckEnabled: true,
+          healthCheckIntervalMinutes: 30,
+          mcpServerName: "replacement-computer-use",
+          toolCallTimeoutMs: 45_000,
+        }),
+      }),
+    ).toEqual({ started: true, intervalMs: 30 * 60_000 });
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(client.request).toHaveBeenCalledWith(
+      "mcpServer/tool/call",
+      {
+        threadId: "health-probe-thread-1",
+        server: "replacement-computer-use",
+        tool: "list_apps",
+        arguments: {},
+      },
+      { timeoutMs: 45_000 },
+    );
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call"),
+    ).toHaveLength(1);
+  });
+
   it("does not start when Computer Use is disabled", () => {
     const client = createClient();
 
@@ -108,12 +163,6 @@ function createClient(options: { liveTestFailures?: number } = {}) {
       };
     }
     if (method === "mcpServer/tool/call") {
-      expect(params).toEqual({
-        threadId: `health-probe-thread-${threadStarts}`,
-        server: "computer-use",
-        tool: "list_apps",
-        arguments: {},
-      });
       if (liveTestFailures > 0) {
         liveTestFailures -= 1;
         throw new Error("hung");
