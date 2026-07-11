@@ -286,9 +286,15 @@ describe("environment gateway methods", () => {
     );
 
     expect(listResult[0]).toBe(true);
-    expect(listResult[1]).toMatchObject({
-      environments: [expect.objectContaining({ id: "gateway" })],
-    });
+    const listed = (listResult[1] as { environments: Array<{ id: string; type: string }> })
+      .environments;
+    // Gateway/node inventory survives a damaged worker store; worker rows are omitted.
+    expect(listed.map((entry) => entry.id)).toEqual([
+      "gateway",
+      "node:node-live",
+      "node:node-offline",
+    ]);
+    expect(listed.every((entry) => entry.type !== "worker")).toBe(true);
     expect(statusResult[2]).toEqual({
       code: ErrorCodes.UNAVAILABLE,
       message: "environment status unavailable",

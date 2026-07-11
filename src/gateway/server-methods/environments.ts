@@ -48,6 +48,8 @@ function rejectInvalid(
   return respondInvalidParams({ respond, method, validator });
 }
 function summarizeNodeEnvironment(node: NodeListNode): EnvironmentSummary {
+  // Expose both declared capabilities and command names so older node
+  // runtimes still advertise useful execution surfaces in one stable list.
   const capabilities = uniqueSortedStrings(node.caps, node.commands);
   return {
     id: `node:${node.nodeId}`,
