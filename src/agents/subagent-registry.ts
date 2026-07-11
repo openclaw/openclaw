@@ -1194,6 +1194,14 @@ async function sweepSubagentRuns() {
         }
         continue;
       }
+      const deliveryHealth = classifyHealthForSweep({ run: entry, now });
+      if (
+        deliveryHealth.status === "delivery_failed" &&
+        deliveryHealth.nextAction === "retry_delivery"
+      ) {
+        resumeSubagentRun(runId);
+        continue;
+      }
       if (typeof entry.endedAt !== "number") {
         const hasLiveRunContext = Boolean(getAgentRunContext(runId));
         const activeAgeMs = now - (entry.startedAt ?? entry.createdAt);

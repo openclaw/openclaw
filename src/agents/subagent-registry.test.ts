@@ -5070,6 +5070,53 @@ describe("subagent registry seam flow", () => {
     ).toBeUndefined();
   });
 
+  it("retries failed keep-mode completion delivery during sweep", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    const runId = "run-sweep-retry-delivery";
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "retry failed completion delivery",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      createdAt: now - 10_000,
+      startedAt: now - 9_000,
+      endedAt: now - 1_000,
+      outcome: { status: "ok" },
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      completion: { required: true, resultText: "finished", capturedAt: now - 1_000 },
+      delivery: {
+        status: "failed",
+        createdAt: now - 1_000,
+        lastAttemptAt: now - 1_000,
+        attemptCount: 1,
+        lastError: "delivery failed",
+      },
+      execution: {
+        status: "terminal",
+        startedAt: now - 9_000,
+        endedAt: now - 1_000,
+        outcome: { status: "ok" },
+      },
+    });
+
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1));
+    expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "swept delivery retry"),
+      {
+        childRunId: runId,
+        childSessionKey: "agent:main:subagent:child",
+        requesterSessionKey: "agent:main:main",
+        roundOneReply: "finished",
+      },
+      "swept delivery retry",
+    );
+  });
+
   it("suspends retry-budgeted successful keep-mode completion deliveries during resume", async () => {
     mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
       runs: Map<string, unknown>;
