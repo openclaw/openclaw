@@ -170,6 +170,42 @@ struct ExecApprovalsSocketAuthTests {
     }
 
     @Test
+    func `companion denylist provenance rejects newly current matching rule`() throws {
+        let binding = ExecHostDenylistAuthorizationSnapshot(
+            command: "echo ok",
+            analysisOk: true,
+            configDenylist: [ExecHostDenylistEntry(pattern: "echo *", reason: "stop")],
+            approvedRuleKeys: [],
+            denylisted: false)
+
+        #expect(binding.requiresFreshApproval(command: ["/bin/echo", "ok"]))
+    }
+
+    @Test
+    func `companion denylist provenance accepts already approved matching rule`() throws {
+        let binding = ExecHostDenylistAuthorizationSnapshot(
+            command: "echo ok",
+            analysisOk: true,
+            configDenylist: [ExecHostDenylistEntry(pattern: "echo *", reason: "stop")],
+            approvedRuleKeys: ["echo *\u{0}stop"],
+            denylisted: true)
+
+        #expect(!binding.requiresFreshApproval(command: ["/bin/echo", "ok"]))
+    }
+
+    @Test
+    func `companion denylist provenance fails closed when analysis was not possible`() throws {
+        let binding = ExecHostDenylistAuthorizationSnapshot(
+            command: "opaque",
+            analysisOk: false,
+            configDenylist: [ExecHostDenylistEntry(pattern: "echo *", reason: nil)],
+            approvedRuleKeys: [],
+            denylisted: false)
+
+        #expect(binding.requiresFreshApproval(command: ["/bin/echo", "ok"]))
+    }
+
+    @Test
     func `socket decodes TypeScript auto review policy snapshot`() throws {
         let requestJSON = Data(#"""
         {

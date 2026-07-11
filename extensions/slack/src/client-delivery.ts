@@ -11,12 +11,6 @@ import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-r
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  appendSlackDataVisualizationFallbackText,
-  hasSlackDataVisualizationBlock,
-  isSlackInvalidBlocksError,
-} from "./data-visualization.js";
-import { SLACK_TEXT_LIMIT } from "./limits.js";
-import {
   postSlackMessageWithIdentityFallback,
   type SlackPostMessageIdentity,
 } from "./post-message-identity.js";
@@ -26,7 +20,6 @@ import {
   type SlackUnfurlOptions,
 } from "./post-message-payload.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
-import { truncateSlackText } from "./truncate.js";
 
 const SLACK_COMMERCIAL_API_HOSTNAME = "slack.com";
 const SLACK_COMMERCIAL_UPLOAD_HOSTNAME = "files.slack.com";
@@ -227,40 +220,15 @@ export async function postSlackMessageBestEffort(params: {
   identity?: SlackPostMessageIdentity;
   blocks?: (Block | KnownBlock)[];
   metadata?: MessageMetadata;
+  mrkdwn?: boolean;
   unfurl?: SlackUnfurlOptions;
 }) {
   const basePayload = buildSlackPostMessagePayload(params);
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
-  const post = async (payload: SlackPostMessagePayload, identity?: SlackPostMessageIdentity) => {
-    try {
-      return {
-        response: await withSlackDnsRequestRetry("chat.postMessage", () =>
-          postChatMessage(payload),
-        ),
-        identity,
-      };
-    } catch (error) {
-      if (!hasSlackDataVisualizationBlock(payload.blocks) || !isSlackInvalidBlocksError(error)) {
-        throw error;
-      }
-      const { blocks, ...textPayload } = payload;
-      // Slack rejects unsupported chart blocks before posting, so one text-only
-      // retry preserves the complete accessible summary without duplicating a send.
-      logVerbose("slack send: data visualization rejected, retrying with text fallback");
-      return {
-        response: await withSlackDnsRequestRetry("chat.postMessage", () =>
-          postChatMessage({
-            ...textPayload,
-            text: truncateSlackText(
-              appendSlackDataVisualizationFallbackText(payload.text ?? "", blocks),
-              SLACK_TEXT_LIMIT,
-            ),
-          }),
-        ),
-        identity,
-      };
-    }
-  };
+  const post = async (payload: SlackPostMessagePayload, identity?: SlackPostMessageIdentity) => ({
+    response: await withSlackDnsRequestRetry("chat.postMessage", () => postChatMessage(payload)),
+    identity,
+  });
   return await postSlackMessageWithIdentityFallback({
     basePayload,
     identity: params.identity,

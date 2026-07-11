@@ -687,7 +687,7 @@ describe("chat compaction divider", () => {
 });
 
 describe("direct thread avatar mode", () => {
-  function sessionsListWithKind(sessionKey: string, kind: "direct" | "group") {
+  function sessionsListWithKind(sessionKey: string, kind: "direct" | "group" | "global") {
     return {
       ts: 0,
       path: "",
@@ -771,6 +771,101 @@ describe("direct thread avatar mode", () => {
     });
     expect(
       requireElement(group, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps avatars when a main alias selects the canonical global row", () => {
+    // scope=global: sessions.list only carries the literal "global" row while
+    // the pane navigates via agent:<id>:main; the host resolves the alias.
+    const aliasedGlobal = renderChatView({
+      sessionKey: "agent:work:main",
+      sessions: sessionsListWithKind("global", "global"),
+      sessionHost: {
+        agentsList: { defaultId: "work", mainKey: "main", scope: "global" },
+        hello: null,
+      },
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(aliasedGlobal, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
+  it("classifies global-scope main aliases without a listed global row", () => {
+    // The capped list can omit the canonical global row (or it may not exist
+    // before the first persisted turn); configured scope alone decides.
+    const aliased = renderChatView({
+      sessionKey: "agent:work:main",
+      sessionHost: {
+        agentsList: { defaultId: "work", mainKey: "main", scope: "global" },
+        hello: null,
+      },
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(aliased, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores stray global rows for main aliases outside global scope", () => {
+    // per-sender scope: a listed global row must not reclassify a direct main
+    // thread whose exact row is missing from the capped list.
+    const direct = renderChatView({
+      sessionKey: "agent:work:main",
+      sessions: sessionsListWithKind("global", "global"),
+      sessionHost: {
+        agentsList: { defaultId: "work", mainKey: "main", scope: "per-sender" },
+        hello: null,
+      },
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(direct, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
+  });
+
+  it("prefers the equivalent direct row over a global row for main aliases", () => {
+    const sessions = {
+      ts: 0,
+      path: "",
+      count: 2,
+      defaults: { modelProvider: "openai", model: "gpt-5.5", contextTokens: 200_000 },
+      sessions: [
+        { key: "global", kind: "global" as const, updatedAt: 2 },
+        { key: "agent:work:main", kind: "direct" as const, updatedAt: 1 },
+      ],
+    };
+    const direct = renderChatView({
+      sessionKey: "agent:work:main",
+      sessions,
+      sessionHost: {
+        agentsList: { defaultId: "work", mainKey: "main", scope: "global" },
+        hello: null,
+      },
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(direct, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats explicit agent global keys as global even without a session row", () => {
+    const globalAlias = renderChatView({
+      sessionKey: "agent:work:global",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(globalAlias, ".chat-thread", "chat thread").classList.contains(
         "chat-thread--direct",
       ),
     ).toBe(false);
@@ -1368,7 +1463,7 @@ describe("chat composer workbench", () => {
 
     // A collapsed rail renders nothing — no icon strip in the layout.
     expect(container.querySelector(".chat-workspace-rail")).toBeNull();
-    const toggle = container.querySelector<HTMLButtonElement>(".chat-workspace-open");
+    const toggle = container.querySelector<HTMLButtonElement>(".chat-workspace-toggle");
     expect(toggle?.getAttribute("aria-label")).toBe("Show session files");
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(toggle?.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+B");
@@ -1377,6 +1472,29 @@ describe("chat composer workbench", () => {
     toggle?.click();
 
     expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the split-view opener in the floating toggle cluster", () => {
+    const onOpenSplitView = vi.fn();
+    const container = renderChatView({ onOpenSplitView });
+
+    const cluster = container.querySelector(".chat-floating-toggles");
+    const opener = cluster?.querySelector<HTMLButtonElement>(".chat-open-split-view");
+    expect(opener?.getAttribute("aria-label")).toBe("Open split view");
+
+    opener?.click();
+    expect(onOpenSplitView).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the split-view opener while the detail sidebar is open", () => {
+    const container = renderChatView({
+      onOpenSplitView: () => undefined,
+      sidebarOpen: true,
+      sidebarContent: { kind: "markdown", content: "detail" },
+      onCloseSidebar: () => undefined,
+    });
+
+    expect(container.querySelector(".chat-open-split-view")).toBeNull();
   });
 
   it("suppresses the floating workspace toggle when a pane header hosts it", () => {
@@ -1405,7 +1523,7 @@ describe("chat composer workbench", () => {
       },
     });
 
-    expect(container.querySelector(".chat-workspace-open")).toBeNull();
+    expect(container.querySelector(".chat-workspace-toggle")).toBeNull();
     expect(container.querySelector(".chat-workspace-rail")).toBeNull();
   });
 
@@ -3566,6 +3684,146 @@ describe("chat model controls", () => {
     modelOption?.click();
 
     expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
+  });
+
+  it("hides model choices for locked sessions while preserving reasoning and speed", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+      ],
+      thinkingDefault: "high",
+    });
+    state.sessionsResult = createSessionsListResult({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai",
+      defaultsThinkingDefault: "high",
+      defaultsThinkingLevels: [
+        { id: "low", label: "low" },
+        { id: "high", label: "high" },
+      ],
+    });
+    const onModelSelect = vi.fn(async () => true);
+    const onThinkingSelect = vi.fn(async () => true);
+    const onFastModeSelect = vi.fn(async () => true);
+    const container = document.createElement("div");
+    render(
+      renderChatModelControls({
+        ...createChatModelControlsProps(state),
+        modelSelectionLocked: true,
+        modelSelectionRuntimeId: "codex",
+        onFastModeSelect,
+        onModelSelect,
+        onThinkingSelect,
+      }),
+      container,
+    );
+
+    const modelSelect = getChatModelSelect(container);
+    expect(modelSelect.dataset.chatModelLocked).toBe("true");
+    expect(modelSelect.getAttribute("aria-disabled")).toBe("false");
+    expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
+      "Codex-controlled model",
+    );
+    expect(
+      container.querySelector(".chat-controls__inline-select-label")?.textContent,
+    ).not.toContain("GPT-5.5");
+    expect(container.querySelectorAll("[data-chat-model-provider]")).toHaveLength(0);
+    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
+    expect(onModelSelect).not.toHaveBeenCalled();
+
+    const slider = getThinkingSlider(container);
+    expect(slider).toBeInstanceOf(HTMLInputElement);
+    if (slider) {
+      slider.value = "0";
+      slider.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
+
+    const speedToggle = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]");
+    expect(speedToggle).toBeInstanceOf(HTMLButtonElement);
+    speedToggle?.click();
+    expect(onFastModeSelect).toHaveBeenCalledWith("on", "main");
+  });
+
+  it("labels a locked session without native model metadata", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+    });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai",
+    });
+    const container = document.createElement("div");
+    render(
+      renderChatModelControls({
+        ...createChatModelControlsProps(state),
+        modelSelectionLocked: true,
+        modelSelectionRuntimeId: "codex",
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
+      "Codex-controlled model",
+    );
+    expect(container.querySelector(".chat-controls__inline-select-label")?.textContent).toContain(
+      "Codex-controlled model",
+    );
+  });
+
+  it("uses a neutral model label for non-Codex locked sessions", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+    });
+    const container = document.createElement("div");
+    render(
+      renderChatModelControls({
+        ...createChatModelControlsProps(state),
+        modelSelectionLocked: true,
+        modelSelectionRuntimeId: "openclaw",
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
+      "Session model",
+    );
+    expect(container.textContent).not.toContain("Codex-controlled model");
+  });
+
+  it("does not patch the model for a locked session", async () => {
+    const { state, request } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ],
+    });
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        modelSelectionLocked: true,
+        updatedAt: 1,
+      },
+    ]);
+
+    await expect(
+      switchChatModel(state as unknown as Parameters<typeof switchChatModel>[0], "openai/gpt-5.4"),
+    ).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("ignores model clicks while a run is active", () => {

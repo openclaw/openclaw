@@ -708,6 +708,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/clawtributors-map.json", ["test/scripts/update-clawtributors.test.ts"]],
   ["scripts/tsconfig.json", ["test/scripts/oxlint-config.test.ts"]],
+  [
+    "tsconfig.scripts.json",
+    ["test/scripts/changed-lanes.test.ts", "test/scripts/test-projects.test.ts"],
+  ],
   ["scripts/build-all.mjs", ["test/scripts/build-all.test.ts"]],
   ["scripts/build-stamp.mjs", ["src/infra/build-stamp.test.ts"]],
   ["scripts/crabbox-wrapper-providers.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
@@ -844,11 +848,16 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
     [
       "test/scripts/docker-e2e-crestodian.test.ts",
+      "src/cli/program/register.onboard.test.ts",
       "src/cli/run-main.test.ts",
       "src/cli/run-main.exit.test.ts",
+      "src/commands/crestodian-with-inference.test.ts",
+      "src/crestodian/assistant.configured.test.ts",
+      "src/crestodian/assistant.test.ts",
       "src/crestodian/crestodian.test.ts",
       "src/crestodian/operations.test.ts",
       "src/crestodian/overview.test.ts",
+      "src/crestodian/setup-inference.test.ts",
       "src/crestodian/audit.test.ts",
     ],
   ],
@@ -856,24 +865,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/e2e/crestodian-first-run-spec.json",
     [
       "test/scripts/docker-e2e-crestodian.test.ts",
-      "src/crestodian/operations.test.ts",
-      "src/crestodian/audit.test.ts",
-    ],
-  ],
-  [
-    "scripts/e2e/crestodian-planner-docker.sh",
-    [
-      "test/scripts/docker-build-helper.test.ts",
-      "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/docker-e2e-crestodian.test.ts",
-    ],
-  ],
-  [
-    "scripts/e2e/crestodian-planner-docker-client.mjs",
-    [
-      "test/scripts/docker-e2e-crestodian.test.ts",
-      "src/crestodian/assistant.test.ts",
-      "src/crestodian/crestodian.test.ts",
       "src/crestodian/operations.test.ts",
       "src/crestodian/audit.test.ts",
     ],
@@ -2384,6 +2375,7 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
       "src/channels/plugins/contracts/plugins-core.resolve-config-writes.contract.test.ts",
       "src/channels/plugins/contracts/registry.contract.test.ts",
       "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+      "src/channels/plugins/contracts/thread-binding-artifact.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-d.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-h.contract.test.ts",
     ],
@@ -3753,6 +3745,12 @@ function classifyTarget(arg, cwd) {
   }
   if (isPathAtOrUnder(relative, "src/gateway")) {
     return "gateway";
+  }
+  if (
+    isPathAtOrUnder(relative, "packages/gateway-client") ||
+    isPathAtOrUnder(relative, "packages/gateway-protocol")
+  ) {
+    return "gatewayClient";
   }
   if (isPathAtOrUnder(relative, "src/hooks")) {
     return "hooks";

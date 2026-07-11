@@ -44,6 +44,11 @@ export const BUILD_ALL_STEPS = [
     kind: "node",
     args: ["scripts/check-cli-bootstrap-imports.mjs"],
   },
+  {
+    label: "plugins:assets:copy",
+    kind: "pnpm",
+    pnpmArgs: ["plugins:assets:copy"],
+  },
   { label: "runtime-postbuild", kind: "node", args: ["scripts/runtime-postbuild.mjs"] },
   { label: "build-stamp", kind: "node", args: ["scripts/build-stamp.mjs"] },
   {
@@ -69,11 +74,6 @@ export const BUILD_ALL_STEPS = [
     label: "check-plugin-sdk-exports",
     kind: "node",
     args: ["scripts/check-plugin-sdk-exports.mjs"],
-  },
-  {
-    label: "plugins:assets:copy",
-    kind: "pnpm",
-    pnpmArgs: ["plugins:assets:copy"],
   },
   {
     label: "copy-hook-metadata",
@@ -126,12 +126,12 @@ export const BUILD_ALL_PROFILES = {
     "plugins:assets:build",
     "tsdown",
     "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
-    "plugins:assets:copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
     "ui:build",
@@ -150,9 +150,21 @@ export const BUILD_ALL_PROFILES = {
     "plugins:assets:build",
     "tsdown",
     "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
+  ],
+  sourcePerformance: [
+    "plugins:assets:build",
+    "tsdown",
+    "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
+    "runtime-postbuild",
+    "build-stamp",
+    "runtime-postbuild-stamp",
+    "write-cli-startup-metadata",
+    "write-cli-compat",
   ],
   cliStartup: [
     "tsdown",
@@ -188,6 +200,12 @@ export const BUILD_ALL_PROFILE_STEP_ENV = {
   qaRuntime: {
     tsdown: {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    },
+  },
+  sourcePerformance: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
   },
   cliStartup: {

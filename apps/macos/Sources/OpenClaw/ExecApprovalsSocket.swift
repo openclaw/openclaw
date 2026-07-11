@@ -5,6 +5,8 @@ import Foundation
 import OpenClawKit
 import OSLog
 
+private let execApprovalsSocketTimeoutMs = 15000
+
 struct ExecApprovalPromptRequest: Codable {
     var command: String
     var cwd: String?
@@ -115,17 +117,57 @@ private struct ExecHostSocketRequest: Codable {
     var requestJson: String
 }
 
-struct ExecHostDenylistEntry: Codable, Equatable {
+struct ExecHostDenylistEntry: Codable, Equatable, Sendable {
     var pattern: String
     var reason: String?
 }
 
-struct ExecHostDenylistAuthorizationSnapshot: Codable, Equatable {
+struct ExecHostDenylistAuthorizationSnapshot: Codable, Equatable, Sendable {
     var command: String
     var analysisOk: Bool
     var configDenylist: [ExecHostDenylistEntry]
     var approvedRuleKeys: [String]
     var denylisted: Bool?
+
+    func requiresFreshApproval(command: [String]) -> Bool {
+        let approvedRuleKeys = Set(self.approvedRuleKeys)
+        let newlyCurrent = self.configDenylist.filter { entry in
+            !approvedRuleKeys.contains(Self.ruleKey(entry))
+        }
+        guard !newlyCurrent.isEmpty else { return false }
+        if !self.analysisOk {
+            return true
+        }
+
+        let targets = Self.denylistTargets(command: command, canonicalCommand: self.command)
+        return newlyCurrent.contains { entry in
+            targets.contains { target in
+                fnmatch(entry.pattern, target, FNM_PATHNAME) == 0
+            }
+        }
+    }
+
+    private static func ruleKey(_ entry: ExecHostDenylistEntry) -> String {
+        "\(entry.pattern)\u{0}\(entry.reason ?? "")"
+    }
+
+    private static func denylistTargets(command: [String], canonicalCommand: String) -> [String] {
+        var targets: [String] = []
+        var seen = Set<String>()
+        func add(_ value: String) {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return }
+            targets.append(trimmed)
+        }
+
+        add(canonicalCommand)
+        guard let executable = command.first else { return targets }
+        add(command.joined(separator: " "))
+        var basenameCommand = command
+        basenameCommand[0] = URL(fileURLWithPath: executable).lastPathComponent
+        add(basenameCommand.joined(separator: " "))
+        return targets
+    }
 }
 
 struct ExecHostRequest: Codable {
@@ -405,7 +447,9 @@ final class ExecApprovalsPromptServer {
             return (approvals.socketPath, approvals.token)
         },
         onPrompt: @escaping @Sendable (ExecApprovalPromptRequest) async -> ExecApprovalDecision? = { request in
-            await ExecApprovalsPromptPresenter.prompt(request)
+            await ExecApprovalsPromptPresenter.prompt(
+                request,
+                timeoutMs: execApprovalsSocketTimeoutMs)
         })
     {
         self.retryDelay = retryDelay
@@ -625,8 +669,62 @@ final class ExecApprovalsPromptServer {
 }
 
 enum ExecApprovalsPromptPresenter {
+    private struct PendingPrompt {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+
     @MainActor
-    static func prompt(_ request: ExecApprovalPromptRequest) -> ExecApprovalDecision? {
+    private static var activePrompt: (id: UUID, alert: NSAlert?, cancelled: Bool)?
+    @MainActor
+    private static var pendingPrompts: [PendingPrompt] = []
+
+    @MainActor
+    static func prompt(
+        _ request: ExecApprovalPromptRequest,
+        timeoutMs: Int? = nil) async -> ExecApprovalDecision?
+    {
+        if let timeoutMs, timeoutMs <= 0 { return nil }
+        let promptID = UUID()
+        let timeoutWorkItem = timeoutMs.map { _ in
+            DispatchWorkItem {
+                MainActor.assumeIsolated {
+                    self.cancelPrompt(id: promptID)
+                }
+            }
+        }
+        if let timeoutMs, let timeoutWorkItem {
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + .milliseconds(timeoutMs),
+                execute: timeoutWorkItem)
+        }
+        defer { timeoutWorkItem?.cancel() }
+        return await withTaskCancellationHandler {
+            guard !Task.isCancelled, await self.acquirePrompt(id: promptID) else { return nil }
+            guard !Task.isCancelled, self.activePrompt?.cancelled != true else {
+                self.releasePrompt(id: promptID)
+                return nil
+            }
+            let decision = self.runPrompt(request, id: promptID)
+            let cancelled = self.activePrompt?.id == promptID && self.activePrompt?.cancelled == true
+            self.releasePrompt(id: promptID)
+            return Task.isCancelled || cancelled ? nil : decision
+        } onCancel: {
+            // Caller deadlines cancel the prompt task. Abort the matching modal
+            // session so an expired approval cannot outlive or block later requests.
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.cancelPrompt(id: promptID)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private static func runPrompt(
+        _ request: ExecApprovalPromptRequest,
+        id: UUID) -> ExecApprovalDecision?
+    {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -645,7 +743,49 @@ enum ExecApprovalsPromptPresenter {
             alert.buttons[denyIndex].hasDestructiveAction = true
         }
 
+        guard self.activePrompt?.id == id else { return nil }
+        self.activePrompt?.alert = alert
+        defer { self.activePrompt?.alert = nil }
         return self.decision(forModalResponse: alert.runModal(), decisions: decisions)
+    }
+
+    @MainActor
+    private static func acquirePrompt(id: UUID) async -> Bool {
+        // AppKit cannot cancel nested modal loops independently. Queue behind one
+        // active alert; caller cancellation and deadlines remove expired waiters.
+        if self.activePrompt == nil {
+            self.activePrompt = (id: id, alert: nil, cancelled: false)
+            return true
+        }
+        return await withCheckedContinuation { continuation in
+            self.pendingPrompts.append(PendingPrompt(id: id, continuation: continuation))
+        }
+    }
+
+    @MainActor
+    private static func releasePrompt(id: UUID) {
+        guard self.activePrompt?.id == id else { return }
+        self.activePrompt = nil
+        guard !self.pendingPrompts.isEmpty else { return }
+        let next = self.pendingPrompts.removeFirst()
+        self.activePrompt = (id: next.id, alert: nil, cancelled: false)
+        next.continuation.resume(returning: true)
+    }
+
+    @MainActor
+    private static func cancelPrompt(id: UUID) {
+        if self.activePrompt?.id == id {
+            self.activePrompt?.cancelled = true
+            guard let alert = self.activePrompt?.alert else { return }
+            if NSApp.modalWindow === alert.window {
+                NSApp.abortModal()
+            }
+            alert.window.close()
+            return
+        }
+        guard let index = self.pendingPrompts.firstIndex(where: { $0.id == id }) else { return }
+        let pending = self.pendingPrompts.remove(at: index)
+        pending.continuation.resume(returning: false)
     }
 
     static func decision(
@@ -793,6 +933,28 @@ enum ExecApprovalsPromptPresenter {
     }
 }
 
+#if DEBUG
+extension ExecApprovalsPromptPresenter {
+    @MainActor
+    static func reservePromptForTesting() -> UUID? {
+        guard self.activePrompt == nil else { return nil }
+        let id = UUID()
+        self.activePrompt = (id: id, alert: nil, cancelled: false)
+        return id
+    }
+
+    @MainActor
+    static func releasePromptForTesting(id: UUID) {
+        self.releasePrompt(id: id)
+    }
+
+    @MainActor
+    static var pendingPromptCountForTesting: Int {
+        self.pendingPrompts.count
+    }
+}
+#endif
+
 @MainActor
 private enum ExecHostExecutor {
     static func handle(_ request: ExecHostRequest) async -> ExecHostResponse {
@@ -831,7 +993,7 @@ private enum ExecHostExecutor {
         case .allow:
             break
         case .requiresPrompt:
-            guard let decision = ExecApprovalsPromptPresenter.prompt(
+            guard let decision = await ExecApprovalsPromptPresenter.prompt(
                 ExecApprovalPromptRequest(
                     command: context.displayCommand,
                     cwd: request.cwd,
@@ -843,7 +1005,8 @@ private enum ExecHostExecutor {
                     sessionKey: request.sessionKey,
                     allowedDecisions: ExecApprovalPromptRequest.allowedDecisions(
                         forAsk: context.ask.rawValue,
-                        allowAlwaysEligible: context.canPersistAllowAlways)))
+                        allowAlwaysEligible: context.canPersistAllowAlways)),
+                timeoutMs: execApprovalsSocketTimeoutMs)
             else {
                 return self.errorResponse(
                     code: "UNAVAILABLE",
@@ -906,10 +1069,12 @@ private enum ExecHostExecutor {
 
         let executionCommit = ExecApprovalExecutionCommit.build(
             context: context,
+            executionCommand: validatedRequest.command,
             effectiveSecurity: security,
             approvalSource: approvalSource,
             explicitlyApproved: explicitlyApproved,
             persistAllowlist: persistAllowlist,
+            denylistBinding: request.denylistBinding,
             delayedPolicySnapshot: validatedRequest.delayedPolicySnapshot)
         let timeoutSec = request.timeoutMs.flatMap { Double($0) / 1000.0 }
         let cwd = request.cwd
@@ -1098,7 +1263,7 @@ private final class ExecApprovalsSocketLifecycleLease: @unchecked Sendable {
     }
 
     private static func releaseProcessReservation(_ path: String) {
-        self.processLock.withLock {
+        _ = self.processLock.withLock {
             self.reservedPaths.remove(path)
         }
     }
@@ -1426,7 +1591,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
                 try self.sendApprovalResponse(handle: handle, id: UUID().uuidString, decision: .deny)
                 return
             }
-            try configureSocketTimeouts(fd, timeoutMs: 15000)
+            try configureSocketTimeouts(fd, timeoutMs: execApprovalsSocketTimeoutMs)
             guard let line = try readLineFromSocket(fd, maxBytes: 256_000),
                   let data = line.data(using: .utf8)
             else {
