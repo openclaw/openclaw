@@ -343,6 +343,7 @@ export function bindAuthorizationResource(
         parent_resource_type: parent?.type ?? null,
         parent_resource_id: parent?.id ?? null,
         retired_at: null,
+        retired_by_principal_id: null,
         created_at: now,
         updated_at: now,
       }),
@@ -508,7 +509,11 @@ export function retireAuthorizationResource(
       db,
       kysely
         .updateTable("authorization_resources")
-        .set({ retired_at: now, updated_at: now })
+        .set({
+          retired_at: now,
+          retired_by_principal_id: retiredByPrincipalId,
+          updated_at: now,
+        })
         .where("domain_id", "=", domainId)
         .where("namespace", "=", resource.namespace)
         .where("resource_type", "=", resource.type)

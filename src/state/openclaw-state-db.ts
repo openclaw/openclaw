@@ -1535,6 +1535,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "authorization_resources", "parent_resource_type TEXT");
   ensureColumn(db, "authorization_resources", "parent_resource_id TEXT");
   ensureColumn(db, "authorization_resources", "retired_at INTEGER");
+  ensureColumn(db, "authorization_resources", "retired_by_principal_id TEXT");
   ensureColumn(db, "authorization_resources", "updated_at INTEGER NOT NULL DEFAULT 0");
   const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
   if (addedTaskRequesterAgentId) {
@@ -1561,6 +1562,33 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureOperatorApprovalResolutionRefs(db);
 }
 
+function replaceAuthorizationResourceRetirementTrigger(db: DatabaseSync, pathname: string): void {
+  if (
+    !tableExists(db, "authorization_resources") ||
+    !tableHasColumn(db, "authorization_resources", "retired_by_principal_id")
+  ) {
+    return;
+  }
+  const ambiguousRetirement = db
+    .prepare(
+      `SELECT 1 AS found
+         FROM authorization_resources
+        WHERE retired_at IS NOT NULL
+          AND retired_by_principal_id IS NULL
+        LIMIT 1`,
+    )
+    .get() as { found?: number } | undefined;
+  if (ambiguousRetirement) {
+    throw new Error(
+      `noncanonical authorization retirement provenance in ${pathname}; rebuild this unpublished authorization state before continuing`,
+    );
+  }
+  // The prior dormant schema used this trigger name with an older column list.
+  // CREATE TRIGGER IF NOT EXISTS cannot upgrade it, so replace it deliberately;
+  // the canonical schema execution immediately below recreates the current guard.
+  db.exec("DROP TRIGGER IF EXISTS authorization_resources_retirement_monotonic;");
+}
+
 function ensureSchema(db: DatabaseSync, pathname: string): void {
   const now = Date.now();
   const kysely = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(db);
@@ -1570,6 +1598,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
       assertSupportedSchemaVersion(db, pathname);
       ensureAdditiveStateColumns(db);
       assertCanonicalStateSchemaShape(db, pathname);
+      replaceAuthorizationResourceRetirementTrigger(db, pathname);
       db.exec(OPENCLAW_STATE_SCHEMA_SQL);
       repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES);
       // Retired node_pairing_* tables were created by earlier schema revisions but
