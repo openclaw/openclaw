@@ -3534,13 +3534,14 @@ describe("deferred channel reload abort generation", () => {
 
     try {
       const reloadPromise = applyHotReload(abortChannelReloadPlan, {});
+      const reloadRejected = expect(reloadPromise).rejects.toThrow(
+        "config hot reload cancelled by in-process restart",
+      );
       await vi.advanceTimersByTimeAsync(10); // enter wait loop (before 500ms sleep)
 
       abortPendingChannelReloads();
       await vi.advanceTimersByTimeAsync(500); // wake from poll sleep → abort check
-      await expect(reloadPromise).rejects.toThrow(
-        "config hot reload cancelled by in-process restart",
-      );
+      await reloadRejected;
 
       expect(channels.start).not.toHaveBeenCalled();
       expect(logChannels.info).toHaveBeenCalledWith(
@@ -3566,14 +3567,10 @@ describe("deferred channel reload abort generation", () => {
     };
     const commitTerminalConfig = vi.fn();
     const promoteSnapshot = vi.fn(async () => true);
-    let recordReloadError: ((message: string) => void) | undefined;
-    const reloadError = new Promise<string>((resolve) => {
-      recordReloadError = resolve;
-    });
     const logReload = {
       info: vi.fn(),
       warn: vi.fn(),
-      error: vi.fn((message: string) => recordReloadError?.(message)),
+      error: vi.fn(),
     };
     const reloader = startManagedGatewayConfigReloader({
       minimalTestGateway: false,
@@ -3642,6 +3639,7 @@ describe("deferred channel reload abort generation", () => {
       runtime: "subagent",
     });
     vi.useFakeTimers();
+    let reloaderStopped = false;
 
     try {
       registeredWriteListener({
@@ -3657,16 +3655,19 @@ describe("deferred channel reload abort generation", () => {
       await vi.advanceTimersByTimeAsync(10);
       abortPendingChannelReloads();
       await vi.advanceTimersByTimeAsync(500);
+      await reloader.stop();
+      reloaderStopped = true;
 
       const expectedError =
         "config reload failed: GatewayHotReloadCancelledError: config hot reload cancelled by in-process restart";
-      expect(await reloadError).toBe(expectedError);
       expect(commitTerminalConfig).not.toHaveBeenCalled();
       expect(promoteSnapshot).not.toHaveBeenCalled();
       expect(logReload.error).toHaveBeenCalledWith(expectedError);
     } finally {
       hoisted.activeTaskBlockers.length = 0;
-      await reloader.stop();
+      if (!reloaderStopped) {
+        await reloader.stop();
+      }
     }
   });
 
@@ -3790,14 +3791,15 @@ describe("deferred channel reload abort generation", () => {
 
     try {
       const reloadPromise = applyHotReload(pluginReloadPlan, {});
+      const reloadRejected = expect(reloadPromise).rejects.toThrow(
+        "config hot reload cancelled by in-process restart",
+      );
       // Advance into the waitForActiveWorkBeforeChannelReload poll loop
       await vi.advanceTimersByTimeAsync(100);
       abortPendingChannelReloads();
       // Advance past the 500ms sleep → abort check fires
       await vi.advanceTimersByTimeAsync(500);
-      await expect(reloadPromise).rejects.toThrow(
-        "config hot reload cancelled by in-process restart",
-      );
+      await reloadRejected;
 
       // reloadPlugins should receive the isAborted callback
       expect(receivedIsAborted).toBe(true);
