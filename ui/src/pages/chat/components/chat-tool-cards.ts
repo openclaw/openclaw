@@ -481,10 +481,12 @@ export function renderDiffBlock(
     >
       ${lines.map((line) => {
         if (line.kind === "skip") {
+          // Skip rows may carry a caller-formatted gap label ("N unmodified
+          // lines", session diff panel); tool cards leave text empty.
           return html`<div class="chat-diff__row chat-diff__row--skip">
             ${hasLineNumbers ? html`<span class="chat-diff__gutter"></span>` : nothing}
             <span class="chat-diff__sign"></span>
-            <span class="chat-diff__text">⋯</span>
+            <span class="chat-diff__text">${line.text || "⋯"}</span>
           </div>`;
         }
         const kindClass =
