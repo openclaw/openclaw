@@ -741,6 +741,7 @@ function createDispatcher(): ReplyDispatcher {
       await Promise.all(beforeDeliverTasks);
     }),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getCancelledCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };
@@ -5539,6 +5540,56 @@ describe("dispatchReplyFromConfig", () => {
         replyKind: "final",
       }),
     );
+  });
+
+  it("flushes buffered failed progress when a direct final is cancelled", async () => {
+    const deliver = vi.fn(async () => undefined);
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      beforeDeliver: (payload, info) => (info.kind === "final" ? null : payload),
+    });
+
+    const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeReply({
+      dispatcher,
+      replyKind: "final",
+    });
+
+    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
+    expect(dispatcher.getCancelledCounts?.().final).toBe(1);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("flushes buffered failed progress when direct final delivery fails", async () => {
+    const deliver = vi.fn(async () => {
+      throw new Error("delivery failed");
+    });
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeReply({
+      dispatcher,
+      replyKind: "final",
+    });
+
+    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
+    expect(dispatcher.getFailedCounts().final).toBe(1);
+    expect(deliver).toHaveBeenCalledWith({ text: "visible answer" }, { kind: "final" });
+  });
+
+  it("flushes buffered failed progress when direct block and TTS delivery are cancelled", async () => {
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const deliver = vi.fn(async () => undefined);
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      beforeDeliver: () => null,
+    });
+
+    const { failedCommand, onCommandOutput } = await dispatchFailedCommandProgressBeforeReply({
+      dispatcher,
+    });
+
+    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
+    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 1, final: 1 });
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("flushes buffered failed progress when routed block and TTS delivery are suppressed", async () => {

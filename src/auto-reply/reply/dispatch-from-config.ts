@@ -865,6 +865,14 @@ export function getDispatcherFinalOutcomeCounts(dispatcher: DispatcherOutcomeCou
   };
 }
 
+function getUnsuccessfulDispatcherFinalCount(
+  dispatcher: DispatcherOutcomeCountsView,
+): number | undefined {
+  const cancelled = dispatcher.getCancelledCounts?.();
+  const failed = dispatcher.getFailedCounts?.();
+  return cancelled && failed ? cancelled.final + failed.final : undefined;
+}
+
 function transcriptMirrorForDeliveredPayload(
   metadata: TranscriptMirror,
   payload: ReplyPayload,
@@ -2662,7 +2670,11 @@ export async function dispatchReplyFromConfig(
     const sendFinalPayload = async (
       payload: ReplyPayload,
       options: { abortSignal?: AbortSignal; deliveryId?: string } = {},
-    ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+    ): Promise<{
+      queuedFinal: boolean;
+      routedFinalCount: number;
+      directFinalOutcomeBefore?: number;
+    }> => {
       const abortSignal = options.abortSignal ?? getDispatchAbortSignal();
       const throwIfFinalDeliveryAborted = () => {
         if (abortSignal?.aborted) {
@@ -2774,6 +2786,7 @@ export async function dispatchReplyFromConfig(
       const finalOutcomeBefore = transcriptMirror
         ? getDispatcherFinalOutcomeCounts(dispatcher)
         : undefined;
+      const unsuccessfulFinalCountBefore = getUnsuccessfulDispatcherFinalCount(dispatcher);
       const finalDeliveryCapture = transcriptMirror ? {} : undefined;
       const deliveredTranscriptMirror = transcriptMirror
         ? captureDeliveredTranscriptMirror({
@@ -2803,6 +2816,9 @@ export async function dispatchReplyFromConfig(
       return {
         queuedFinal,
         routedFinalCount: 0,
+        ...(queuedFinal && unsuccessfulFinalCountBefore !== undefined
+          ? { directFinalOutcomeBefore: unsuccessfulFinalCountBefore }
+          : {}),
       };
     };
 
@@ -3971,9 +3987,11 @@ export async function dispatchReplyFromConfig(
     let queuedFinal = false;
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
-    let attemptedCleanFinalDelivery = false;
     let finalDeliveryFailed = false;
     let cleanFinalDeliverySucceeded = false;
+    let cleanDirectFinalOutcomeBefore: number | undefined;
+    let queuedCleanDirectFinalCount = 0;
+    let completedReplyOperationBeforeFinalSettlement = false;
     // Explicit command turns (native or authorized text-slash like /compact) are
     // user-initiated, so a marked terminal reply for the command bypasses
     // room_event suppression. Ambient marked notices (no CommandTurn) stay
@@ -4019,18 +4037,21 @@ export async function dispatchReplyFromConfig(
       }
       sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
       attemptedFinalDelivery = true;
-      if (reply.isError !== true && hasOutboundReplyContent(reply, { trimText: true })) {
-        attemptedCleanFinalDelivery = true;
-      }
+      const isCleanFinalDelivery =
+        reply.isError !== true && hasOutboundReplyContent(reply, { trimText: true });
       const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
+      if (isCleanFinalDelivery && finalReply.routedFinalCount > 0) {
+        cleanFinalDeliverySucceeded = true;
+      }
+      if (isCleanFinalDelivery && finalReply.directFinalOutcomeBefore !== undefined) {
+        cleanDirectFinalOutcomeBefore ??= finalReply.directFinalOutcomeBefore;
+        queuedCleanDirectFinalCount += 1;
+      }
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
         finalDeliveryFailed = true;
       }
-    }
-    if (attemptedCleanFinalDelivery && !finalDeliveryFailed) {
-      cleanFinalDeliverySucceeded = true;
     }
 
     if (attemptedFinalDelivery && !finalDeliveryFailed) {
@@ -4109,9 +4130,13 @@ export async function dispatchReplyFromConfig(
             } else {
               throwIfDispatchOperationAborted();
               markInboundDedupeReplayUnsafe();
+              const unsuccessfulFinalCountBefore = getUnsuccessfulDispatcherFinalCount(dispatcher);
               const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
               queuedFinal = didQueue || queuedFinal;
-              cleanFinalDeliverySucceeded = didQueue || cleanFinalDeliverySucceeded;
+              if (didQueue && unsuccessfulFinalCountBefore !== undefined) {
+                cleanDirectFinalOutcomeBefore ??= unsuccessfulFinalCountBefore;
+                queuedCleanDirectFinalCount += 1;
+              }
             }
           }
         } catch (err) {
@@ -4138,6 +4163,27 @@ export async function dispatchReplyFromConfig(
         cleanBlockDeliverySucceeded = queuedCleanBlockDeliveryCount > unsuccessfulQueuedBlockCount;
       }
     }
+    if (
+      cleanDirectFinalOutcomeBefore !== undefined &&
+      pendingFailedProgressDeliveries.length > 0 &&
+      !cleanFinalDeliverySucceeded &&
+      !observedReplyDelivery &&
+      !cleanBlockDeliverySucceeded
+    ) {
+      // A same-session queued turn can be upstream of final delivery. Clear this
+      // operation before waiting so settlement cannot deadlock follow-up admission.
+      completeDispatchReplyOperation();
+      completedReplyOperationBeforeFinalSettlement = true;
+      await waitForReplyDispatcherIdle(dispatcher);
+      const unsuccessfulFinalCountAfter = getUnsuccessfulDispatcherFinalCount(dispatcher);
+      if (unsuccessfulFinalCountAfter !== undefined) {
+        const unsuccessfulQueuedFinalCount = Math.max(
+          0,
+          unsuccessfulFinalCountAfter - cleanDirectFinalOutcomeBefore,
+        );
+        cleanFinalDeliverySucceeded = queuedCleanDirectFinalCount > unsuccessfulQueuedFinalCount;
+      }
+    }
     if (cleanFinalDeliverySucceeded || observedReplyDelivery || cleanBlockDeliverySucceeded) {
       discardPendingFailedProgressDeliveries();
     } else {
@@ -4152,7 +4198,9 @@ export async function dispatchReplyFromConfig(
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
     );
     markIdle("message_completed");
-    completeDispatchReplyOperation();
+    if (!completedReplyOperationBeforeFinalSettlement) {
+      completeDispatchReplyOperation();
+    }
     return attachSourceReplyDeliveryMode({
       queuedFinal,
       counts,
