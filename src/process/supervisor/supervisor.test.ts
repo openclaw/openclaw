@@ -345,21 +345,25 @@ describe("process supervisor", () => {
     expect(exit.stdout).toBe("");
   });
 
-  it("bounds retained stdout and stderr while streaming full chunks", async () => {
+  it("bounds retained output on UTF-16 boundaries while streaming full chunks", async () => {
     const adapter = createStubChildAdapter();
     createChildAdapterMock.mockResolvedValue(adapter);
 
     const supervisor = createProcessSupervisor();
     let streamedStdout = "";
     let streamedStderr = "";
-    const stdoutChunk = `${"a".repeat(300)}stdout-tail`;
-    const stderrChunk = `${"b".repeat(300)}stderr-tail`;
+    const maxCapturedOutputChars = 256;
+    const stdoutMarker = `[openclaw: captured stdout truncated to last ${maxCapturedOutputChars} chars]\n`;
+    const stderrMarker = `[openclaw: captured stderr truncated to last ${maxCapturedOutputChars} chars]\n`;
+    const retainedChars = maxCapturedOutputChars - stdoutMarker.length - 1;
+    const stdoutChunk = `${"a".repeat(stdoutMarker.length)}😀${"s".repeat(retainedChars)}`;
+    const stderrChunk = `${"b".repeat(stderrMarker.length)}😀${"e".repeat(retainedChars)}`;
     const run = await spawnChild(supervisor, {
       sessionId: "s-capture-cap",
       argv: createWriteStdoutArgv(stdoutChunk),
       timeoutMs: 1_000,
       stdinMode: "pipe-closed",
-      maxCapturedOutputChars: 256,
+      maxCapturedOutputChars,
       onStdout: (chunk) => {
         streamedStdout += chunk;
       },
@@ -375,44 +379,7 @@ describe("process supervisor", () => {
     const exit = await run.wait();
     expect(streamedStdout).toBe(stdoutChunk);
     expect(streamedStderr).toBe(stderrChunk);
-    expect(exit.stdout.length).toBeLessThanOrEqual(256);
-    expect(exit.stderr.length).toBeLessThanOrEqual(256);
-    expect(exit.stdout).toContain("captured stdout truncated");
-    expect(exit.stderr).toContain("captured stderr truncated");
-    expect(exit.stdout.endsWith("stdout-tail")).toBe(true);
-    expect(exit.stderr.endsWith("stderr-tail")).toBe(true);
-  });
-
-  it("keeps retained stdout and stderr tails on complete UTF-16 boundaries", async () => {
-    const adapter = createStubChildAdapter();
-    createChildAdapterMock.mockResolvedValue(adapter);
-
-    const supervisor = createProcessSupervisor();
-    const maxCapturedOutputChars = 256;
-    const marker = `[openclaw: captured stdout truncated to last ${maxCapturedOutputChars} chars]\n`;
-    const tailChars = maxCapturedOutputChars - marker.length;
-    const evictedPrefixChars = marker.length + 1;
-    const boundaryChunk = "a".repeat(evictedPrefixChars - 1) + "😀" + "z".repeat(tailChars - 1);
-    const run = await spawnChild(supervisor, {
-      sessionId: "s-capture-unicode",
-      argv: createWriteStdoutArgv(boundaryChunk),
-      timeoutMs: 1_000,
-      stdinMode: "pipe-closed",
-      maxCapturedOutputChars,
-    });
-
-    adapter.emitStdout(boundaryChunk);
-    adapter.emitStderr(boundaryChunk);
-    adapter.settle(0);
-
-    const exit = await run.wait();
-    const unpairedSurrogate =
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
-    expect(exit.stdout).not.toMatch(unpairedSurrogate);
-    expect(exit.stderr).not.toMatch(unpairedSurrogate);
-    expect(exit.stdout).not.toContain("\uFFFD");
-    expect(exit.stderr).not.toContain("\uFFFD");
-    expect(exit.stdout.length).toBeLessThanOrEqual(maxCapturedOutputChars);
-    expect(exit.stderr.length).toBeLessThanOrEqual(maxCapturedOutputChars);
+    expect(exit.stdout).toBe(`${stdoutMarker}${"s".repeat(retainedChars)}`);
+    expect(exit.stderr).toBe(`${stderrMarker}${"e".repeat(retainedChars)}`);
   });
 });
