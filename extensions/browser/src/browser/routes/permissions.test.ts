@@ -31,6 +31,21 @@ const pwMocks = vi.hoisted(() => ({
   })),
 }));
 
+const navigationGuardMocks = vi.hoisted(() => ({
+  assertBrowserNavigationAllowed: vi.fn(async (_opts: Record<string, unknown>) => {}),
+  withBrowserNavigationPolicy: vi.fn(
+    (
+      ssrfPolicy?: Record<string, unknown>,
+      opts?: { browserProxyMode?: "direct" | "explicit-browser-proxy" },
+    ) => ({
+      ...(ssrfPolicy ? { ssrfPolicy } : {}),
+      ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
+        ? { browserProxyMode: opts.browserProxyMode }
+        : {}),
+    }),
+  ),
+}));
+
 vi.mock("../chrome.js", () => ({
   getChromeWebSocketUrl: cdpMocks.getChromeWebSocketUrl,
 }));
@@ -38,6 +53,8 @@ vi.mock("../chrome.js", () => ({
 vi.mock("../cdp.helpers.js", () => ({
   withCdpSocket: cdpMocks.withCdpSocket,
 }));
+
+vi.mock("../navigation-guard.js", () => navigationGuardMocks);
 
 const { registerBrowserPermissionRoutes, testing } = await import("./permissions.js");
 
@@ -71,7 +88,7 @@ function createRouteContext(
   ssrfPolicy: Record<string, unknown> = { allowPrivateNetwork: false },
 ) {
   return {
-    state: () => ({ resolved: { ssrfPolicy } }),
+    state: () => ({ resolved: { ssrfPolicy, extraArgs: [] } }),
     forProfile: () => profileCtx,
     listProfiles: vi.fn(async () => []),
     mapTabError: vi.fn(() => null),
@@ -110,6 +127,8 @@ describe("browser permission routes", () => {
     pwMocks.getPwAiModule.mockReset().mockResolvedValue(null);
     pwMocks.getPageForTargetId.mockClear();
     pwMocks.grantPermissions.mockClear();
+    navigationGuardMocks.assertBrowserNavigationAllowed.mockReset().mockResolvedValue(undefined);
+    navigationGuardMocks.withBrowserNavigationPolicy.mockClear();
   });
 
   it("uses Playwright context permissions for attached pages when available", async () => {
@@ -170,6 +189,28 @@ describe("browser permission routes", () => {
       origin: "https://meet.google.com",
       permissions: ["audioCapture", "videoCapture", "speakerSelection"],
     });
+  });
+
+  it("blocks policy-disallowed origins before granting permissions", async () => {
+    const blockedOriginError = new Error("Navigation blocked: test policy");
+    blockedOriginError.name = "InvalidBrowserNavigationUrlError";
+    navigationGuardMocks.assertBrowserNavigationAllowed.mockRejectedValueOnce(blockedOriginError);
+
+    const { response, profileCtx } = await callGrant({
+      origin: "http://169.254.169.254/latest/meta-data",
+      permissions: ["audioCapture"],
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toStrictEqual({ error: "Navigation blocked: test policy" });
+    expect(navigationGuardMocks.assertBrowserNavigationAllowed).toHaveBeenCalledWith({
+      url: "http://169.254.169.254",
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+    expect(profileCtx.ensureBrowserAvailable).not.toHaveBeenCalled();
+    expect(cdpMocks.getChromeWebSocketUrl).not.toHaveBeenCalled();
+    expect(cdpMocks.send).not.toHaveBeenCalled();
+    expect(pwMocks.getPwAiModule).not.toHaveBeenCalled();
   });
 
   it("preserves structured browser availability errors", async () => {

@@ -7,10 +7,15 @@
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import { resolveCdpControlPolicy } from "../cdp-reachability-policy.js";
 import { withCdpSocket } from "../cdp.helpers.js";
 import { getChromeWebSocketUrl } from "../chrome.js";
 import { toBrowserErrorResponse } from "../errors.js";
+import {
+  assertBrowserNavigationAllowed,
+  withBrowserNavigationPolicy,
+} from "../navigation-guard.js";
 import { getPwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { ProfileContext } from "../server-context.js";
@@ -153,6 +158,16 @@ function toPlaywrightPermission(permission: string): string | undefined {
   }
 }
 
+function permissionOriginNavigationPolicy(ctx: BrowserRouteContext, profileCtx: ProfileContext) {
+  const resolved = ctx.state().resolved;
+  return withBrowserNavigationPolicy(resolved.ssrfPolicy, {
+    browserProxyMode: resolveBrowserNavigationProxyMode({
+      resolved,
+      profile: profileCtx.profile,
+    }),
+  });
+}
+
 /** Register permission grant endpoints on the browser control server. */
 export function registerBrowserPermissionRoutes(
   app: BrowserRouteRegistrar,
@@ -185,6 +200,10 @@ export function registerBrowserPermissionRoutes(
       }
 
       try {
+        await assertBrowserNavigationAllowed({
+          url: origin,
+          ...permissionOriginNavigationPolicy(ctx, profileCtx),
+        });
         await profileCtx.ensureBrowserAvailable();
         const cdpPolicy = resolveCdpControlPolicy(
           profileCtx.profile,
