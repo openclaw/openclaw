@@ -14,7 +14,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function makeManualLoopbackProfile() {
+function makeLoopbackProfile(attachOnly: boolean) {
   return makeBrowserProfile({
     name: "manual-cdp",
     cdpUrl: "http://127.0.0.1:9222",
@@ -22,14 +22,14 @@ function makeManualLoopbackProfile() {
     cdpIsLoopback: true,
     cdpPort: 9222,
     color: "#00AA00",
-    attachOnly: true,
+    attachOnly,
   });
 }
 
 describe("browser tab routes attachOnly loopback profiles", () => {
   it("lists tabs for manual loopback CDP profiles under strict SSRF", async () => {
     const state = makeBrowserServerState({
-      profile: makeManualLoopbackProfile(),
+      profile: makeLoopbackProfile(true),
       resolvedOverrides: {
         defaultProfile: "manual-cdp",
         ssrfPolicy: {},
@@ -89,13 +89,22 @@ describe("browser tab routes attachOnly loopback profiles", () => {
   });
 
   it.each([
-    { allowPrivateNetwork: false, expectedUrl: "" },
-    { allowPrivateNetwork: true, expectedUrl: "http://93.184.216.34/proxy-routed" },
+    { attachOnly: false, allowPrivateNetwork: false, expectedUrl: "" },
+    {
+      attachOnly: false,
+      allowPrivateNetwork: true,
+      expectedUrl: "http://93.184.216.34/proxy-routed",
+    },
+    {
+      attachOnly: true,
+      allowPrivateNetwork: false,
+      expectedUrl: "http://93.184.216.34/proxy-routed",
+    },
   ])(
-    "applies explicit browser proxy policy to tab list URLs (allowPrivateNetwork=$allowPrivateNetwork)",
-    async ({ allowPrivateNetwork, expectedUrl }) => {
+    "applies managed browser proxy policy to tab list URLs (attachOnly=$attachOnly, allowPrivateNetwork=$allowPrivateNetwork)",
+    async ({ attachOnly, allowPrivateNetwork, expectedUrl }) => {
       const state = makeBrowserServerState({
-        profile: makeManualLoopbackProfile(),
+        profile: makeLoopbackProfile(attachOnly),
         resolvedOverrides: {
           defaultProfile: "manual-cdp",
           extraArgs: ["--proxy-server=http://proxy.example.test:8080"],
