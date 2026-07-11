@@ -494,6 +494,9 @@ export function createWriteToolDefinition(
           } else {
             await ops.writeFile(absolutePath, content);
           }
+          if (signal?.aborted) {
+            throw new Error("Operation aborted");
+          }
           return {
             content: [
               {

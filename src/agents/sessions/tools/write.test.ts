@@ -22,10 +22,14 @@ describe("write tool", () => {
     return path.join(tmpDir, name);
   }
 
-  function createRecoverableOperations(writeFile: WriteOperations["writeFile"]): WriteOperations {
+  function createRecoverableOperations(
+    writeFile: WriteOperations["writeFile"],
+    appendFile?: WriteOperations["appendFile"],
+  ): WriteOperations {
     return {
       mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
       writeFile,
+      appendFile,
       readFile: (absolutePath) => fs.readFile(absolutePath),
       statFile: async (absolutePath) => {
         try {
@@ -73,6 +77,59 @@ describe("write tool", () => {
       type: "text",
       text: `Successfully wrote ${"finished\n".length} bytes to ${filePath}`,
     });
+  });
+
+  it("recovers success after appendFile lands but the caller aborts", async () => {
+    // Regression: post-mutation abort check routes append-abort through
+    // recoverSuccessfulWrite with isRecoveredAppendContent so the model
+    // sees "Successfully appended" instead of a false failure.
+    const filePath = await createTempPath("append-abort.txt");
+    await fs.writeFile(filePath, "seed\n", "utf-8");
+    const controller = new AbortController();
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(
+        async () => {},
+        async (absolutePath, content) => {
+          await fs.appendFile(absolutePath, content, "utf-8");
+          controller.abort();
+        },
+      ),
+    });
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "more\n", append: true },
+      controller.signal,
+    );
+    expect(
+      "text" in (result.content[0] ?? {}) ? (result.content[0] as { text: string }).text : "",
+    ).toContain("Successfully appended");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("seed\nmore\n");
+  });
+
+  it("surfaces the abort when appendFile returned but did not actually write", async () => {
+    // Counter-case: appendFile succeeds (no throw) but the backend did not
+    // persist. Without the post-mutation abort check this would silently
+    // report success — readback during recovery must confirm the content
+    // actually landed, or the abort surfaces as a real error.
+    const filePath = await createTempPath("append-noop.txt");
+    await fs.writeFile(filePath, "seed\n", "utf-8");
+    const controller = new AbortController();
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(
+        async () => {},
+        async () => {
+          controller.abort();
+        },
+      ),
+    });
+    await expect(
+      tool.execute(
+        "call-1",
+        { path: filePath, content: "more\n", append: true },
+        controller.signal,
+      ),
+    ).rejects.toThrow("Operation aborted");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("seed\n");
   });
 
   it("keeps the original abort when the file already matched before execution", async () => {
