@@ -1495,6 +1495,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Structured health checks
   - H2: Check selection
   - H2: Post-upgrade mode
+  - H2: Session SQLite migration
+  - H3: Downgrading After Session SQLite Migration
   - H2: Notes
   - H2: macOS: launchctl env overrides
   - H2: Related
@@ -8438,6 +8440,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Design contract
   - H2: Subpath exports
 
+## reference/path3-live-sqlite-e2e-harness.md
+
+- Route: /reference/path3-live-sqlite-e2e-harness
+- Headings:
+  - H2: Command shape
+  - H2: Isolated built-CLI proof
+  - H2: Preflight
+  - H2: Agent-driven scenario
+  - H2: Per-step assertions
+  - H2: Evidence artifact
+  - H2: Safety rules
+  - H2: Passing result
+
 ## reference/prompt-caching.md
 
 - Route: /reference/prompt-caching
@@ -8527,11 +8542,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Two persistence layers
   - H2: On-disk locations
   - H2: Store maintenance and disk controls
+  - H3: Downgrading After The SQLite Flip
   - H2: Cron sessions and run logs
   - H2: Session keys (sessionKey)
   - H2: Session ids (sessionId)
-  - H2: Session store schema (sessions.json)
-  - H2: Transcript structure (.jsonl)
+  - H2: Session store schema
+  - H2: Transcript event structure
   - H2: Context windows vs tracked tokens
   - H2: Compaction: what it is
   - H3: Chunk boundaries and tool pairing
@@ -9931,7 +9947,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Access
   - H2: What gets recorded
   - H2: Bundle files
-  - H2: Capture location
+  - H2: Capture storage
   - H2: Disable capture
   - H2: Tune flush timeout
   - H2: Privacy and limits
