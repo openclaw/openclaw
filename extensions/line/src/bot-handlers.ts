@@ -499,12 +499,31 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
   const groupQueueKey = isGroup ? (groupId ?? roomId) : undefined;
 
-  // Runs `fn` serialized behind this group's pending-media lock when the
-  // pending-media queue feature is enabled for a group/room source; runs it
-  // directly (no serialization) for DMs or when the feature is disabled, so
-  // unrelated traffic never pays for a lock it doesn't need.
+  // Resolve the group's config up front (same pattern as
+  // `shouldProcessLineEvent`) so the lock only engages for groups that
+  // actually use the pending-media feature. Without this, every LINE group
+  // -- including ones that never opted into `requireMentionForNonText` /
+  // `pendingMediaLimit` -- would be routed through the per-group keyed lock,
+  // serializing all webhook deliveries for that group by default. See PR
+  // #103761 review (confidence 0.98): "pendingMediaQueues always constructed
+  // + lock guard doesn't check whether the feature is enabled",
+  // extensions/line/src/bot-handlers.ts:507-509.
+  const groupConfig = groupQueueKey
+    ? resolveLineGroupConfig({ config: account.config, groupId, roomId })
+    : undefined;
+  const pendingMediaFeatureActive = Boolean(
+    groupConfig?.requireMentionForNonText === true ||
+    (groupQueueKey && (context.pendingMediaQueues?.get(groupQueueKey)?.length ?? 0) > 0),
+  );
+
+  // Runs `fn` serialized behind this group's pending-media lock only when
+  // the pending-media feature is actually active for this group (opted in
+  // via `requireMentionForNonText`, or the group already has media queued
+  // from before); runs it directly (no serialization) for DMs, or for
+  // default/unconfigured groups, so unrelated traffic never pays for a lock
+  // it doesn't need.
   const runPendingMediaGuarded = <T>(fn: () => Promise<T>): Promise<T> => {
-    if (groupQueueKey && context.pendingMediaQueues) {
+    if (groupQueueKey && context.pendingMediaQueues && pendingMediaFeatureActive) {
       return getPendingMediaLock(context.pendingMediaQueues).enqueue(groupQueueKey, fn);
     }
     return fn();
@@ -547,11 +566,6 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         return;
       }
       const pendingMediaQueues = context.pendingMediaQueues;
-      const groupConfig = resolveLineGroupConfig({
-        config: account.config,
-        groupId,
-        roomId,
-      });
       try {
         const originalFilename =
           message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;

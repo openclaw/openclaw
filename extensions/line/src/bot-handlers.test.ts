@@ -1816,5 +1816,77 @@ describe("handleLineWebhookEvents", () => {
       // mentioned turn's completion before the skipped image's write ran.
       expect(finalHistory?.some((entry) => entry.body === "earlier message")).toBe(false);
     });
+
+    it("does not engage the pending-media lock for a default group, so overlapping deliveries run concurrently (PR #103761 review, confidence 0.98)", async () => {
+      // Default group: no requireMentionForNonText, no pendingMediaLimit,
+      // and no pre-existing queued media for this group. The lock must not
+      // engage at all here -- two overlapping handleLineWebhookEvents calls
+      // for the SAME group must interleave (not serialize), proving the fix
+      // for extensions/line/src/bot-handlers.ts:507-509 (lock previously
+      // engaged for every group regardless of feature opt-in).
+      let releaseFirst: (() => void) | undefined;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const callOrder: string[] = [];
+      let callCount = 0;
+      const processMessage = vi.fn(async () => {
+        callCount += 1;
+        if (callCount === 1) {
+          callOrder.push("first-start");
+          await firstGate;
+          callOrder.push("first-end");
+        } else {
+          callOrder.push("second-start");
+          callOrder.push("second-end");
+        }
+      });
+      // Note: no requireMentionForNonText, no pendingMediaLimit -- this is a
+      // fully default/unconfigured group.
+      const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+      const context = createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+        pendingMediaQueues,
+      });
+
+      const firstRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-default-concurrent",
+            userId: "user-default-concurrent",
+            messageId: "m-default-concurrent-1",
+            webhookEventId: "evt-default-concurrent-1",
+          }),
+        ],
+        context,
+      );
+      await vi.waitFor(() => {
+        expect(processMessage).toHaveBeenCalledTimes(1);
+      });
+      const secondRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-default-concurrent",
+            userId: "user-default-concurrent",
+            messageId: "m-default-concurrent-2",
+            webhookEventId: "evt-default-concurrent-2",
+          }),
+        ],
+        context,
+      );
+
+      // Without the lock engaging, the second delivery for the same default
+      // group must run to completion even while the first is still blocked
+      // -- proving no serialization happened.
+      await secondRun;
+      expect(callOrder).toEqual(["first-start", "second-start", "second-end"]);
+
+      releaseFirst?.();
+      await firstRun;
+      expect(callOrder).toEqual(["first-start", "second-start", "second-end", "first-end"]);
+      expect(processMessage).toHaveBeenCalledTimes(2);
+    });
   });
 });
