@@ -122,12 +122,12 @@ export function usesOpenClawMockKeychain(userDataDir: string): boolean {
   return readDefaultProfileInfo(localState)?.openclaw_mock_keychain === true;
 }
 
-/** Disable speculative DNS and socket setup in OpenClaw-managed Chrome profiles. */
+/** Disable Chromium network prediction in an OpenClaw-managed Chrome profile. */
 export function ensureProfileNetworkPredictionDisabled(userDataDir: string) {
   const preferencesPath = path.join(userDataDir, "Default", "Preferences");
   const prefs = safeReadJson(preferencesPath) ?? {};
-  // Chromium can preconnect before CDP Fetch interception. Keep managed
-  // automation request-bound so policy-denied navigations do not touch targets.
+  // Chromium can preconnect before CDP Fetch interception. Disable that source
+  // of target contact before each fresh managed-browser launch.
   setDeep(prefs, ["net", "network_prediction_options"], CHROME_NETWORK_PREDICTION_DISABLED);
   safeWriteJson(preferencesPath, prefs);
 }
