@@ -402,6 +402,7 @@ describe("refreshChat", () => {
     expect(host.chatLoading).toBe(true);
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "main",
+      offset: 0,
       limit: 100,
     });
     expect(request).not.toHaveBeenCalledWith("models.list", { view: "configured" });
@@ -430,6 +431,7 @@ describe("refreshChat", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "global",
       agentId: "work",
+      offset: 0,
       limit: 100,
     });
     expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
@@ -450,6 +452,7 @@ describe("refreshChat", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "agent:work:main",
       agentId: "work",
+      offset: 0,
       limit: 100,
     });
     expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
@@ -469,6 +472,7 @@ describe("refreshChat", () => {
     expect(outcome).toBe("resolved");
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "agent:work:dashboard",
+      offset: 0,
       limit: 100,
     });
     expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
@@ -494,6 +498,7 @@ describe("refreshChat", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "global",
       agentId: "ops",
+      offset: 0,
       limit: 100,
     });
     expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
@@ -514,6 +519,7 @@ describe("refreshChat", () => {
     expect(outcome).toBe("resolved");
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "unknown",
+      offset: 0,
       limit: 100,
     });
     expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
@@ -6496,6 +6502,7 @@ describe("handleSendChat", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "global",
       agentId: "work",
+      offset: 0,
       limit: 100,
     });
     expect(host.chatMessages).toStrictEqual([]);
@@ -6631,6 +6638,7 @@ describe("handleSendChat", () => {
     expect(host.lastError).toContain("clear request may have completed");
     expect(replacementRequest).toHaveBeenCalledWith("chat.history", {
       sessionKey: "agent:main",
+      offset: 0,
       limit: 100,
     });
 
@@ -6683,6 +6691,7 @@ describe("handleSendChat", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "global",
       agentId: "work",
+      offset: 0,
       limit: 100,
     });
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);

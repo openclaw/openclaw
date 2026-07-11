@@ -57,7 +57,6 @@ import {
 import {
   chatScopedEventSessionMatches,
   loadChatHistory,
-  loadOlderChatHistory,
   type ChatMetadataResult,
   type ChatState,
 } from "./chat-history.ts";

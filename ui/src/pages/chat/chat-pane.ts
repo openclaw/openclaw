@@ -50,6 +50,7 @@ import {
   applyChatAgentsList,
   clearChatHistory,
   loadChatHistory,
+  loadOlderChatHistory,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";

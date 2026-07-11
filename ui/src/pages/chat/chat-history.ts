@@ -564,7 +564,7 @@ function readChatHistoryMessageIdentity(message: unknown): string | null {
     return null;
   }
   const record = message as Record<string, unknown>;
-  const openclaw = record.__openclaw;
+  const openclaw = record["__openclaw"];
   if (openclaw && typeof openclaw === "object") {
     const meta = openclaw as Record<string, unknown>;
     if (typeof meta.seq === "number" && Number.isSafeInteger(meta.seq) && meta.seq > 0) {
