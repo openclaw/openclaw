@@ -583,12 +583,22 @@ describe("trajectory cleanup", () => {
       const pointerArchiveGate = new Promise<void>((resolve) => {
         releasePointerArchive = resolve;
       });
+      // Resolves the instant delete's turn reaches the paused pointer archive —
+      // the exact event the assertion below waits for. The runtime file's own
+      // rename ahead of it is real disk I/O of unbounded duration, so a fixed
+      // event-loop-tick budget (the previous wait) could expire before this
+      // point under CI load and wrongly observe order === [] (the reported flake).
+      let signalPointerArchiveStarted: () => void = () => {};
+      const pointerArchiveStarted = new Promise<void>((resolve) => {
+        signalPointerArchiveStarted = resolve;
+      });
       const renameSpy = vi
         .spyOn(nodeFs.promises, "rename")
         .mockImplementation(async (src: nodeFs.PathLike, dest: nodeFs.PathLike) => {
           const isPointerTarget = String(src) === pointerPath;
           if (isPointerTarget) {
             order.push("pointer-archive-start");
+            signalPointerArchiveStarted();
             await pointerArchiveGate;
           }
           const result = await originalRename(src, dest);
@@ -607,17 +617,12 @@ describe("trajectory cleanup", () => {
           disposal: { mode: "tombstone", reason: "deleted" },
         });
 
-        // Let delete's locked turn archive the runtime file and reach the
-        // paused pointer archive — still inside the SAME turn once fixed —
-        // before attempting a concurrent re-acquisition for the same
-        // session (ordering (B) from the round-4 finding). The runtime
-        // file's own (unpaused) rename is real disk I/O, so poll rather
-        // than assume a fixed number of ticks.
-        for (let attempt = 0; attempt < 50 && order.length === 0; attempt += 1) {
-          await new Promise<void>((resolve) => {
-            setImmediate(() => resolve());
-          });
-        }
+        // Wait for delete's locked turn to actually reach the paused pointer
+        // archive (ordering (B) from the round-4 finding) before attempting a
+        // concurrent re-acquisition for the same session. Awaiting the mock's
+        // own start signal is deterministic regardless of how long the runtime
+        // file's (unpaused, real-I/O) rename ahead of it takes.
+        await pointerArchiveStarted;
         expect(order).toEqual(["pointer-archive-start"]);
 
         const recorderPromise = createTrajectoryRuntimeRecorder({ sessionId, sessionFile });
