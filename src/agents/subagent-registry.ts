@@ -1203,6 +1203,14 @@ async function sweepSubagentRuns() {
         continue;
       }
       if (
+        typeof entry.endedAt === "number" &&
+        deliveryHealth.status === "delivery_pending" &&
+        deliveryHealth.nextAction === "retry_delivery"
+      ) {
+        resumeSubagentRun(runId);
+        continue;
+      }
+      if (
         deliveryHealth.status === "cleanup_pending" &&
         deliveryHealth.nextAction === "resume_cleanup" &&
         entry.cleanup === "keep" &&

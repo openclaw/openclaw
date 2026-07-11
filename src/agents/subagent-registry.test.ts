@@ -5117,6 +5117,52 @@ describe("subagent registry seam flow", () => {
     );
   });
 
+  it("retries stale pending keep-mode completion delivery during sweep", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    const runId = "run-sweep-retry-pending-delivery";
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "retry stale pending delivery",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      createdAt: now - 120_000,
+      startedAt: now - 119_000,
+      endedAt: now - 90_000,
+      outcome: { status: "ok" },
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      completion: { required: true, resultText: "finished", capturedAt: now - 90_000 },
+      delivery: {
+        status: "pending",
+        createdAt: now - 90_000,
+        lastAttemptAt: now - 90_000,
+        attemptCount: 1,
+      },
+      execution: {
+        status: "terminal",
+        startedAt: now - 119_000,
+        endedAt: now - 90_000,
+        outcome: { status: "ok" },
+      },
+    });
+
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1));
+    expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "swept pending delivery retry"),
+      {
+        childRunId: runId,
+        childSessionKey: "agent:main:subagent:child",
+        requesterSessionKey: "agent:main:main",
+        roundOneReply: "finished",
+      },
+      "swept pending delivery retry",
+    );
+  });
+
   it("resumes stale keep-mode cleanup during sweep", async () => {
     const now = Date.parse("2026-03-24T12:00:00Z");
     const runId = "run-sweep-resume-cleanup";
