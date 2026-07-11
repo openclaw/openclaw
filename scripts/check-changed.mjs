@@ -381,6 +381,7 @@ export function createChangedCheckPlan(result, options = {}) {
 
   if (lanes.core) {
     addTypecheck("typecheck core", ["tsgo:core"]);
+    addTypecheck("typecheck ui", ["tsgo:ui"]);
   }
   if (lanes.coreTests) {
     addTypecheck("typecheck core tests", ["tsgo:core:test"]);
