@@ -33,6 +33,7 @@ const MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS = 120_000;
 const MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES = 20 * 1024 * 1024;
 const MAX_SECRET_PROVIDER_EXEC_PASS_ENV = 128;
 const SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER = "${node}";
+const CORE_RESERVED_PLUGIN_IDS = new Set(["node-mcp"]);
 
 type PluginManifestLoadCacheEntry = {
   result: PluginManifestLoadResult;
@@ -436,6 +437,7 @@ export type PluginManifestContracts = {
   webContentExtractors?: string[];
   webFetchProviders?: string[];
   webSearchProviders?: string[];
+  workerProviders?: string[];
   /** Provider ids whose plugin owns usage auth and snapshot hooks. */
   usageProviders?: string[];
   migrationProviders?: string[];
@@ -895,6 +897,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const webContentExtractors = normalizeTrimmedStringList(value.webContentExtractors);
   const webFetchProviders = normalizeTrimmedStringList(value.webFetchProviders);
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
+  const workerProviders = normalizeTrimmedStringList(value.workerProviders);
   const usageProviders = normalizeTrimmedStringList(value.usageProviders);
   const migrationProviders = normalizeTrimmedStringList(value.migrationProviders);
   const gatewayMethodDispatch = normalizeTrimmedStringList(value.gatewayMethodDispatch);
@@ -918,6 +921,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(webContentExtractors.length > 0 ? { webContentExtractors } : {}),
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
+    ...(workerProviders.length > 0 ? { workerProviders } : {}),
     ...(usageProviders.length > 0 ? { usageProviders } : {}),
     ...(migrationProviders.length > 0 ? { migrationProviders } : {}),
     ...(gatewayMethodDispatch.length > 0 ? { gatewayMethodDispatch } : {}),
@@ -1781,6 +1785,13 @@ export function loadPluginManifest(
   const id = normalizeOptionalString(raw.id) ?? "";
   if (!id) {
     return cacheResult({ ok: false, error: "plugin manifest requires id", manifestPath });
+  }
+  if (CORE_RESERVED_PLUGIN_IDS.has(id)) {
+    return cacheResult({
+      ok: false,
+      error: `plugin manifest id "${id}" is reserved by OpenClaw core`,
+      manifestPath,
+    });
   }
   const configSchema = isRecord(raw.configSchema) ? raw.configSchema : null;
   if (!configSchema) {

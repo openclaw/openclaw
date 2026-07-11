@@ -19,6 +19,10 @@ describe("Codex agent harness supports()", () => {
     });
   });
 
+  it("delegates locked-session execution only to the voice-call plugin", () => {
+    expect(harness.delegatedExecutionPluginIds).toEqual(["voice-call"]);
+  });
+
   it("supports openai as the primary OpenClaw routing id", () => {
     expect(harness.supports({ provider: "openai", requestedRuntime: "codex" })).toEqual({
       supported: true,
@@ -53,6 +57,18 @@ describe("Codex agent harness supports()", () => {
     });
     const result = narrowHarness.supports({ provider: "openai", requestedRuntime: "codex" });
     expect(result.supported).toBe(false);
+  });
+
+  it("exposes the fail-closed exact runtime artifact validator", async () => {
+    if (!harness.runtimeArtifact) {
+      throw new Error("expected Codex runtime artifact capability");
+    }
+    await expect(
+      harness.runtimeArtifact.validate({
+        id: "codex-app-server:v1:malformed",
+        fingerprint: "0".repeat(64),
+      }),
+    ).resolves.toBe(false);
   });
 });
 
