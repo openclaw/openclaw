@@ -78,7 +78,7 @@ export function resolveRequestedLocalAudioBackend(params: {
 }
 
 function observationKey(params: { command: string; args: readonly string[] }): string {
-  return `${commandId(params.command)}\0${resolveRequestedLocalAudioBackend(params) ?? "default"}`;
+  return `${params.command.trim()}\0${resolveRequestedLocalAudioBackend(params) ?? "default"}`;
 }
 
 export function recordLocalAudioBackendObservation(params: {
@@ -337,97 +337,99 @@ export async function inspectLocalAudioSelection(
     "{{MediaPath}}",
   ];
 
-  const candidates: LocalAudioCandidate[] = [
-    {
-      id: "parakeet-mlx",
-      command: "parakeet-mlx",
-      resolvedCommand: parakeetCommand ?? undefined,
-      available: Boolean(parakeetCommand),
-      ready: parakeetReady,
-      capableBackend: parakeetReady ? "mlx" : undefined,
-      evidence: parakeetReady
-        ? "parakeet-mlx is an MLX runtime on Apple Silicon; device use is unobserved"
-        : "parakeet-mlx acceleration is only supported on Apple Silicon",
-      selected: false,
-      reason: parakeetCommand
-        ? parakeetReady
-          ? undefined
-          : "unsupported platform for MLX acceleration"
-        : "command not found",
-      entry: parakeetReady
-        ? {
-            type: "cli",
-            command: "parakeet-mlx",
-            args: parakeetArgs,
-          }
-        : undefined,
-    },
-    {
-      id: "whisper-cli",
-      command: "whisper-cli",
-      resolvedCommand: whisperCommand ?? undefined,
-      available: Boolean(whisperCommand),
-      ready: whisperReady,
-      ...whisperBackend,
-      requestedBackend: resolveRequestedLocalAudioBackend({
+  const candidates = (
+    [
+      {
+        id: "parakeet-mlx",
+        command: "parakeet-mlx",
+        resolvedCommand: parakeetCommand ?? undefined,
+        available: Boolean(parakeetCommand),
+        ready: parakeetReady,
+        capableBackend: parakeetReady ? "mlx" : undefined,
+        evidence: parakeetReady
+          ? "parakeet-mlx is an MLX runtime on Apple Silicon; device use is unobserved"
+          : "parakeet-mlx acceleration is only supported on Apple Silicon",
+        selected: false,
+        reason: parakeetCommand
+          ? parakeetReady
+            ? undefined
+            : "unsupported platform for MLX acceleration"
+          : "command not found",
+        entry: parakeetReady
+          ? {
+              type: "cli",
+              command: "parakeet-mlx",
+              args: parakeetArgs,
+            }
+          : undefined,
+      },
+      {
+        id: "whisper-cli",
         command: "whisper-cli",
-        args: whisperArgs,
-      }),
-      observedBackend: getObservedBackend({ command: "whisper-cli", args: whisperArgs }),
-      selected: false,
-      reason: whisperCommand
-        ? whisperReady
-          ? undefined
-          : "model file not found"
-        : "command not found",
-      entry: whisperReady
-        ? {
-            type: "cli",
-            command: "whisper-cli",
-            args: whisperArgs,
-          }
-        : undefined,
-    },
-    {
-      id: "sherpa-onnx-offline",
-      command: "sherpa-onnx-offline",
-      resolvedCommand: sherpaCommand ?? undefined,
-      available: Boolean(sherpaCommand),
-      ready: sherpaReady,
-      requestedBackend: "cpu",
-      evidence: "OpenClaw auto args omit --provider, so sherpa-onnx uses its CPU default",
-      selected: false,
-      reason: sherpaCommand
-        ? sherpaReady
-          ? undefined
-          : "SHERPA_ONNX_MODEL_DIR is missing required model files"
-        : "command not found",
-      entry: sherpaReady
-        ? {
-            type: "cli",
-            command: "sherpa-onnx-offline",
-            args: sherpaArgs,
-          }
-        : undefined,
-    },
-    {
-      id: "whisper",
-      command: "whisper",
-      resolvedCommand: pythonCommand ?? undefined,
-      available: Boolean(pythonCommand),
-      ready: Boolean(pythonCommand),
-      evidence: "Python Whisper chooses its runtime device when the model loads",
-      selected: false,
-      reason: pythonCommand ? undefined : "command not found",
-      entry: pythonCommand
-        ? {
-            type: "cli",
-            command: "whisper",
-            args: pythonArgs,
-          }
-        : undefined,
-    },
-  ].toSorted((left, right) => rank(left) - rank(right));
+        resolvedCommand: whisperCommand ?? undefined,
+        available: Boolean(whisperCommand),
+        ready: whisperReady,
+        ...whisperBackend,
+        requestedBackend: resolveRequestedLocalAudioBackend({
+          command: "whisper-cli",
+          args: whisperArgs,
+        }),
+        observedBackend: getObservedBackend({ command: "whisper-cli", args: whisperArgs }),
+        selected: false,
+        reason: whisperCommand
+          ? whisperReady
+            ? undefined
+            : "model file not found"
+          : "command not found",
+        entry: whisperReady
+          ? {
+              type: "cli",
+              command: "whisper-cli",
+              args: whisperArgs,
+            }
+          : undefined,
+      },
+      {
+        id: "sherpa-onnx-offline",
+        command: "sherpa-onnx-offline",
+        resolvedCommand: sherpaCommand ?? undefined,
+        available: Boolean(sherpaCommand),
+        ready: sherpaReady,
+        requestedBackend: "cpu",
+        evidence: "OpenClaw auto args omit --provider, so sherpa-onnx uses its CPU default",
+        selected: false,
+        reason: sherpaCommand
+          ? sherpaReady
+            ? undefined
+            : "SHERPA_ONNX_MODEL_DIR is missing required model files"
+          : "command not found",
+        entry: sherpaReady
+          ? {
+              type: "cli",
+              command: "sherpa-onnx-offline",
+              args: sherpaArgs,
+            }
+          : undefined,
+      },
+      {
+        id: "whisper",
+        command: "whisper",
+        resolvedCommand: pythonCommand ?? undefined,
+        available: Boolean(pythonCommand),
+        ready: Boolean(pythonCommand),
+        evidence: "Python Whisper chooses its runtime device when the model loads",
+        selected: false,
+        reason: pythonCommand ? undefined : "command not found",
+        entry: pythonCommand
+          ? {
+              type: "cli",
+              command: "whisper",
+              args: pythonArgs,
+            }
+          : undefined,
+      },
+    ] satisfies LocalAudioCandidate[]
+  ).toSorted((left, right) => rank(left) - rank(right));
   const selected = candidates.find((candidate) => candidate.ready && candidate.entry);
   if (selected) {
     selected.selected = true;

@@ -92,6 +92,29 @@ describe("local audio selection", () => {
     ]);
 
     recordLocalAudioBackendObservation({
+      command: "/custom/bin/whisper-cli",
+      args: ["-m", modelPath, "-otxt", "-of", "{{OutputBase}}", "-nt", "{{MediaPath}}"],
+      output: "whisper_backend_init_gpu: using MTL0 backend",
+    });
+    const mismatchedCommandSelection = await inspectLocalAudioSelection({
+      env: {
+        WHISPER_CPP_MODEL: modelPath,
+        SHERPA_ONNX_MODEL_DIR: sherpaDir,
+      },
+      platform: "darwin",
+      arch: "arm64",
+      resolveBinary: async (name) =>
+        name === "whisper-cli"
+          ? "/opt/homebrew/bin/whisper-cli"
+          : name === "sherpa-onnx-offline"
+            ? "/usr/local/bin/sherpa-onnx-offline"
+            : null,
+      resolveRealpath: async () => "/opt/homebrew/Cellar/whisper-cpp/1.9.1/bin/whisper-cli",
+      inspectLinkedLibraries: async () => null,
+    });
+    expect(mismatchedCommandSelection.selected).toMatchObject({ id: "sherpa-onnx-offline" });
+
+    recordLocalAudioBackendObservation({
       command: "whisper-cli",
       args: ["-m", modelPath, "-otxt", "-of", "{{OutputBase}}", "-nt", "{{MediaPath}}"],
       output: "whisper_backend_init_gpu: using MTL0 backend",
