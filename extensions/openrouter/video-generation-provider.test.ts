@@ -28,12 +28,27 @@ const {
     const request = params.request as
       | {
           allowPrivateNetwork?: boolean;
+          auth?:
+            | { mode: "provider-default" }
+            | { mode: "authorization-bearer"; token: string }
+            | {
+                mode: "header";
+                headerName: string;
+                value: string;
+                prefix?: string;
+              };
           headers?: Record<string, string>;
         }
       | undefined;
     const headers = new Headers(params.defaultHeaders as HeadersInit | undefined);
     for (const [key, value] of Object.entries(request?.headers ?? {})) {
       headers.set(key, value);
+    }
+    if (request?.auth?.mode === "authorization-bearer") {
+      headers.set("Authorization", `Bearer ${request.auth.token}`);
+    } else if (request?.auth?.mode === "header") {
+      headers.delete("Authorization");
+      headers.set(request.auth.headerName, `${request.auth.prefix ?? ""}${request.auth.value}`);
     }
     return {
       baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
@@ -338,6 +353,44 @@ describe("openrouter video generation provider", () => {
       enabled: true,
       maxInputImages: 2,
     });
+  });
+
+  it("lets configured auth replace the OpenRouter catalog default", async () => {
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(releasedJson({ data: [] }));
+
+    await listOpenRouterVideoModelCatalog({
+      config: {
+        models: {
+          providers: {
+            openrouter: {
+              request: {
+                auth: {
+                  mode: "authorization-bearer",
+                  token: ["test", "auth"].join("-"),
+                },
+              },
+            },
+          },
+        },
+      } as never,
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: "key", discoveryApiKey: "test-key" }),
+      resolveProviderAuth: () => ({
+        apiKey: "key",
+        discoveryApiKey: "test-key",
+        mode: "api_key" as const,
+        source: "env" as const,
+      }),
+    });
+
+    const requestConfig = requireRecord(
+      requireMockCallArg(resolveProviderHttpRequestConfigMock.mock.calls, 0, 0, "request config"),
+      "request config",
+    );
+    expect(requireRecord(requestConfig.defaultHeaders, "default headers").Authorization).toBe(
+      "Bearer test-key",
+    );
+    expect(requireFetchCallHeaders(0).get("authorization")).toBe("Bearer test-auth");
   });
 
   it("keys live OpenRouter video catalog cache by request policy", async () => {
