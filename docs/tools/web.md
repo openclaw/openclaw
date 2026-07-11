@@ -155,11 +155,11 @@ select them explicitly with `tools.web.search.provider` or through
 `web_search` queries to a key-free provider just because no API-backed
 provider is configured.
 
-OpenAI Responses models are an exception: while `tools.web.search.provider`
-is unset, they use OpenAI's native web search instead of the managed
-providers above (see below). Set `tools.web.search.provider` to
-`parallel-free` (or another provider) to route them through the managed path
-instead.
+Direct OpenAI Responses models and verified GitHub Copilot Responses models on
+accounts with Editor preview features enabled are exceptions: while
+`tools.web.search.provider` is unset, they use provider-native search. Other
+Copilot models keep the managed route. Set the provider to `parallel-free` (or
+another provider) to force the managed path.
 
 <Note>
   All provider key fields support SecretRef objects. Plugin-scoped SecretRefs

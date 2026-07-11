@@ -28,6 +28,40 @@ function requireFirstStreamOptions(mock: ReturnType<typeof vi.fn>, label: string
   return options as { headers?: Record<string, unknown>; onPayload?: unknown };
 }
 
+const nativeResponsesModel = {
+  provider: "github-copilot",
+  api: "openai-responses",
+  id: "gpt-5.5",
+  compat: { nativeWebSearchTool: true },
+};
+const managedWebSearchTools = [{ type: "function", name: "web_search" }];
+const codeModeTools = [
+  { type: "function", name: "exec" },
+  { type: "function", name: "wait" },
+];
+
+async function runCopilotProviderPayload(params: {
+  payload: Record<string, unknown>;
+  ctx?: Record<string, unknown>;
+  model?: Record<string, unknown>;
+  options?: Record<string, unknown>;
+}): Promise<Record<string, unknown>> {
+  let finalPayload: unknown = params.payload;
+  const baseStreamFn = vi.fn(async (model, _context, options) => {
+    finalPayload = (await options?.onPayload?.(params.payload, model)) ?? params.payload;
+    return { async *[Symbol.asyncIterator]() {} } as never;
+  });
+  const wrapped = requireStreamFn(
+    wrapCopilotProviderStream({ streamFn: baseStreamFn, ...params.ctx } as never),
+  );
+  await wrapped(
+    (params.model ?? nativeResponsesModel) as never,
+    { messages: [{ role: "user", content: "hi" }] } as never,
+    params.options as never,
+  );
+  return finalPayload as Record<string, unknown>;
+}
+
 describe("wrapCopilotAnthropicStream", () => {
   it("adds Copilot headers, strips thinking replay, and marks cache for Claude payloads", () => {
     const payloads: Array<{
@@ -239,33 +273,44 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(payloads[0]?.input[2]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
   });
 
-  it("rewrites Copilot Responses IDs returned by an existing payload hook", async () => {
+  it("preserves Copilot payload invariants in replacement payloads", async () => {
     const connectionBoundId = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
-    let returnedPayload: unknown;
-    const baseStreamFn = vi.fn(async (_model, _context, options) => {
-      returnedPayload = await options?.onPayload?.({ input: [] }, _model);
-      return {
-        async *[Symbol.asyncIterator]() {},
-      } as never;
+    const returnedPayload = await runCopilotProviderPayload({
+      payload: { input: [] },
+      options: {
+        onPayload: async () => ({
+          input: [{ id: connectionBoundId, type: "message" }],
+          tools: managedWebSearchTools,
+        }),
+      },
     });
 
-    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
+    expect(returnedPayload).toMatchObject({
+      input: [{ id: expect.stringMatching(/^msg_[a-f0-9]{16}$/) }],
+      tools: [{ type: "web_search" }],
+    });
+  });
 
-    await wrapped(
-      {
-        provider: "github-copilot",
-        api: "openai-responses",
-        id: "gpt-5.4",
-      } as never,
-      { messages: [{ role: "user", content: "hi" }] } as never,
-      {
-        onPayload: () => ({ input: [{ id: connectionBoundId, type: "message" }] }),
-      } as never,
-    );
+  it("does not restore native search after an outer hook filters the final payload", async () => {
+    const returnedPayload = await runCopilotProviderPayload({
+      payload: {
+        reasoning: { effort: "minimal" },
+        tools: managedWebSearchTools,
+      },
+      options: {
+        openclawCodeModeToolSurface: true,
+        onPayload: async (payload: unknown) => {
+          const finalPayload = payload as Record<string, unknown>;
+          finalPayload.tools = codeModeTools;
+          return finalPayload;
+        },
+      },
+    });
 
-    expect((returnedPayload as { input: Array<Record<string, unknown>> }).input[0]?.id).toMatch(
-      /^msg_[a-f0-9]{16}$/,
-    );
+    expect(returnedPayload).toEqual({
+      reasoning: { effort: "minimal" },
+      tools: codeModeTools,
+    });
   });
 
   it("adds Copilot headers for Chat Completions models", () => {
@@ -324,6 +369,27 @@ describe("wrapCopilotAnthropicStream", () => {
     );
 
     expect(baseStreamFn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps managed web search when native search is not eligible", async () => {
+    const cases = [
+      { ctx: { nativeWebSearchAllowedByToolPolicy: false } },
+      { ctx: { config: { tools: { web: { search: { provider: "brave" } } } } } },
+      { model: { provider: "github-copilot", api: "openai-responses", id: "gpt-future" } },
+      { payload: { tools: [] } },
+    ];
+    const results = await Promise.all(
+      cases.map(async (entry) => {
+        const payload = entry.payload ?? { tools: managedWebSearchTools };
+        return (await runCopilotProviderPayload({ ...entry, payload })).tools;
+      }),
+    );
+    expect(results).toEqual([
+      managedWebSearchTools,
+      managedWebSearchTools,
+      managedWebSearchTools,
+      [],
+    ]);
   });
 
   it("does not claim provider transport before OpenClaw chooses one", () => {

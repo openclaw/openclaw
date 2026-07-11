@@ -144,6 +144,31 @@ type CopilotApiModelEntry = {
 
 const COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS = 10_000;
 const COPILOT_ROUTER_ID_PREFIX = "accounts/";
+// Copilot's exchanged token carries editor preview policy as a key/value flag.
+// Unknown accounts or newly added catalog rows keep managed search.
+const COPILOT_NATIVE_WEB_SEARCH_MODEL_IDS = new Set([
+  "gpt-5-mini",
+  "gpt-5.3-codex",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gpt-5.5",
+  "gpt-5.6-luna",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+]);
+
+export function hasCopilotEditorPreviewFeatures(copilotApiToken: string): boolean {
+  return /(?:^|;)\s*editor_preview_features=1(?=;|:|$)/i.test(copilotApiToken);
+}
+
+export function hasCopilotNativeWebSearchCapability(
+  modelId: unknown,
+  accountEnabled: boolean,
+): boolean {
+  const id = normalizeOptionalLowercaseString(modelId);
+  return accountEnabled && id !== undefined && COPILOT_NATIVE_WEB_SEARCH_MODEL_IDS.has(id);
+}
 
 function resolveCopilotApiForVendor(
   vendor: string | undefined,
@@ -195,6 +220,7 @@ function resolveCopilotThinkingLevelMap(
 
 function mapCopilotApiModelToDefinition(
   entry: CopilotApiModelEntry,
+  nativeWebSearchAccountEnabled: boolean,
 ): ModelDefinitionConfig | undefined {
   const id = entry.id?.trim();
   if (!id) {
@@ -223,7 +249,13 @@ function mapCopilotApiModelToDefinition(
     asPositiveSafeInteger(limits?.max_context_window_tokens) ?? DEFAULT_CONTEXT_WINDOW;
   const contextTokens = asPositiveSafeInteger(limits?.max_prompt_tokens);
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
-  const compat = mergeCopilotCompat(resolveCopilotModelCompat(id), supports?.reasoning_effort);
+  const baseCompat = resolveCopilotModelCompat(id);
+  const compat = mergeCopilotCompat(
+    hasCopilotNativeWebSearchCapability(id, nativeWebSearchAccountEnabled)
+      ? { ...baseCompat, nativeWebSearchTool: true }
+      : baseCompat,
+    supports?.reasoning_effort,
+  );
   const api = resolveCopilotApiForVendor(entry.vendor, id);
   const thinkingLevelMap = resolveCopilotThinkingLevelMap(api, id, compat);
 
@@ -288,6 +320,7 @@ export async function fetchCopilotModelCatalog(
     ? setTimeout(() => controller.abort(), COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS)
     : undefined;
   try {
+    const signal = params.signal ?? controller?.signal;
     const res = await fetchImpl(url, {
       method: "GET",
       headers: {
@@ -296,17 +329,18 @@ export async function fetchCopilotModelCatalog(
         ...buildCopilotIdeHeaders(),
         "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
       },
-      signal: params.signal ?? controller?.signal,
+      signal,
     });
     if (!res.ok) {
       throw new Error(`Copilot /models fetch failed: HTTP ${res.status}`);
     }
     const data = await readProviderJsonArrayFieldResponse(res, "Copilot /models", "data");
+    const nativeWebSearchAccountEnabled = hasCopilotEditorPreviewFeatures(params.copilotApiToken);
     const seen = new Set<string>();
     const out: ModelDefinitionConfig[] = [];
     for (const rawEntry of data) {
       const entry = asCopilotApiModelEntry(rawEntry);
-      const def = mapCopilotApiModelToDefinition(entry);
+      const def = mapCopilotApiModelToDefinition(entry, nativeWebSearchAccountEnabled);
       if (!def) {
         continue;
       }
