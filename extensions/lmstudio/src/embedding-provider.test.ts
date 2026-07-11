@@ -185,7 +185,7 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
 
   it("does not lease a configured local service for a remote endpoint override", async () => {
     const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
-    const { provider } = await createLmstudioEmbeddingProvider({
+    const options = {
       config: {
         models: {
           providers: {
@@ -202,7 +202,8 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       fallback: "none",
       remote: { baseUrl: "http://memory.local:1234/v1" },
       acquireLocalService,
-    });
+    };
+    const { provider } = await createLmstudioEmbeddingProvider(options);
 
     await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
     expect(acquireLocalService).not.toHaveBeenCalled();
