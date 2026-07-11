@@ -556,6 +556,21 @@ export type GatewayWsMessageHandlerParams = {
   logWsControl: SubsystemLogger;
 };
 
+function claimsWorkerConnectionIdentity(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const connect = value as { role?: unknown; client?: unknown };
+  if (connect.role === "worker") {
+    return true;
+  }
+  if (!connect.client || typeof connect.client !== "object") {
+    return false;
+  }
+  const client = connect.client as { id?: unknown; mode?: unknown };
+  return client.id === GATEWAY_CLIENT_IDS.WORKER || client.mode === GATEWAY_CLIENT_MODES.WORKER;
+}
+
 export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
   const {
     socket,
@@ -756,6 +771,20 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     };
     try {
       const parsed = JSON.parse(text);
+      const client = getClient();
+      if (
+        !client &&
+        parsed !== null &&
+        typeof parsed === "object" &&
+        "params" in parsed &&
+        claimsWorkerConnectionIdentity(parsed.params)
+      ) {
+        setHandshakeState("failed");
+        setCloseCause("invalid-handshake", { handshakeError: "invalid worker handshake" });
+        logWsControl.warn("worker admission rejected reason=invalid-handshake");
+        close(1008, "invalid-handshake");
+        return;
+      }
       const frameType =
         parsed && typeof parsed === "object" && "type" in parsed
           ? typeof (parsed as { type?: unknown }).type === "string"
@@ -778,7 +807,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         setLastFrameMeta({ type: frameType, method: frameMethod, id: frameId });
       }
 
-      const client = getClient();
       if (!client) {
         // Handshake must be a normal request:
         // { type:"req", method:"connect", params: ConnectParams }.
@@ -2253,6 +2281,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           socket,
           connect: connectParams,
           connId,
+          connectionKind: "gateway",
           isDeviceTokenAuth: authMethod === "device-token",
           usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
           sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
