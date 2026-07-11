@@ -37,6 +37,7 @@ type CliProcessDiagnostics = {
 export type CliTerminalFailure = {
   reason: "max_turns";
   limit?: number;
+  toolActionsMayHaveRun?: true;
 };
 
 /** Normalized result from a CLI-backed model provider turn. */
@@ -65,7 +66,6 @@ function normalizeCliContextValue(value: string | undefined): string | undefined
   return normalized ? normalized.slice(0, 200) : undefined;
 }
 
-/** Formats structured CLI terminal failures with run/session attribution and recovery guidance. */
 export function formatCliOutputError(
   output: CliOutput,
   attribution: { runId?: string; sessionId?: string } = {},
@@ -86,7 +86,9 @@ export function formatCliOutputError(
   return [
     `Claude CLI stopped after reaching the maximum number of turns${limit ? ` (limit: ${limit})` : ""}.`,
     ...context,
-    "Tool actions may already have run; verify their effects before retrying.",
+    ...(output.terminalFailure.toolActionsMayHaveRun
+      ? ["Tool actions may already have run; verify their effects before retrying."]
+      : []),
     "Retry with a higher --max-turns value or a narrower task.",
   ].join(" ");
 }
@@ -156,6 +158,16 @@ function isGeminiStreamJsonDialect(params: {
   return (
     params.backend.jsonlDialect === "gemini-stream-json" || isGeminiCliProvider(params.providerId)
   );
+}
+
+function isClaudeStreamJsonDialect(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+}): boolean {
+  if (params.backend.jsonlDialect) {
+    return params.backend.jsonlDialect === "claude-stream-json";
+  }
+  return isClaudeCliProvider(params.providerId);
 }
 
 function isStreamJsonDialect(params: { backend: CliBackendConfig; providerId: string }): boolean {
@@ -425,6 +437,7 @@ function readClaudeMaxTurnsFailure(
   if (subtype !== "error_max_turns" && terminalReason !== "max_turns") {
     return undefined;
   }
+  const toolActionsMayHaveRun = parsed.stop_reason === "tool_use" ? true : undefined;
   const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
   for (const error of errors) {
     if (typeof error !== "string") {
@@ -434,11 +447,18 @@ function readClaudeMaxTurnsFailure(
     if (match) {
       const limit = Number.parseInt(match[1] ?? "", 10);
       if (Number.isSafeInteger(limit) && limit > 0) {
-        return { reason: "max_turns", limit };
+        return {
+          reason: "max_turns",
+          limit,
+          ...(toolActionsMayHaveRun ? { toolActionsMayHaveRun } : {}),
+        };
       }
     }
   }
-  return { reason: "max_turns" };
+  return {
+    reason: "max_turns",
+    ...(toolActionsMayHaveRun ? { toolActionsMayHaveRun } : {}),
+  };
 }
 
 function readClaudeMaxTurnsErrorText(parsed: Record<string, unknown>): string | undefined {
@@ -451,6 +471,17 @@ function readClaudeMaxTurnsErrorText(parsed: Record<string, unknown>): string | 
     }
   }
   return undefined;
+}
+
+function resolveCliTerminalErrorText(
+  parsed: Record<string, unknown>,
+  terminalFailure: CliTerminalFailure | undefined,
+): string {
+  const explicitErrorText = collectExplicitCliErrorText(parsed);
+  return (
+    ((terminalFailure ? readClaudeMaxTurnsErrorText(parsed) : undefined) ?? explicitErrorText) ||
+    (terminalFailure ? "Reached maximum number of turns." : "")
+  );
 }
 
 function pickCliSessionId(
@@ -605,10 +636,10 @@ function parseClaudeCliJsonlResult(params: {
     return null;
   }
   if (typeof params.parsed.type === "string" && params.parsed.type === "result") {
-    const terminalFailure = readClaudeMaxTurnsFailure(params.parsed);
-    const errorText =
-      (terminalFailure ? readClaudeMaxTurnsErrorText(params.parsed) : undefined) ??
-      collectExplicitCliErrorText(params.parsed);
+    const terminalFailure = isClaudeStreamJsonDialect(params)
+      ? readClaudeMaxTurnsFailure(params.parsed)
+      : undefined;
+    const errorText = resolveCliTerminalErrorText(params.parsed, terminalFailure);
     if (errorText) {
       return {
         text: "",

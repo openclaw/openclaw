@@ -958,6 +958,7 @@ describe("parseCliJsonl", () => {
       terminalFailure: {
         reason: "max_turns",
         limit: 1,
+        toolActionsMayHaveRun: true,
       },
     });
     expect(
@@ -971,6 +972,54 @@ describe("parseCliJsonl", () => {
         "Claude session: session-max-turns. Tool actions may already have run; verify their effects before retrying. " +
         "Retry with a higher --max-turns value or a narrower task.",
     );
+  });
+
+  it("keeps terminal_reason-only max-turn results actionable without a tool warning", () => {
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        session_id: "session-terminal-reason-only",
+        terminal_reason: "max_turns",
+      }),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-terminal-reason-only",
+      usage: undefined,
+      errorText: "Reached maximum number of turns.",
+      terminalFailure: { reason: "max_turns" },
+    });
+    expect(formatCliOutputError(result!)).toBe(
+      "Claude CLI stopped after reaching the maximum number of turns. " +
+        "Claude session: session-terminal-reason-only. " +
+        "Retry with a higher --max-turns value or a narrower task.",
+    );
+  });
+
+  it("does not apply Claude terminal semantics to an explicit Gemini dialect", () => {
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        terminal_reason: "max_turns",
+        errors: ["Reached maximum number of turns (1)"],
+      }),
+      {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+      },
+      "claude-cli",
+    );
+
+    expect(result?.terminalFailure).toBeUndefined();
   });
 });
 

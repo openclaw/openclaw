@@ -90,7 +90,6 @@ export function isFailoverError(err: unknown): err is FailoverError {
   );
 }
 
-/** Return true when a CLI run stopped at its configured turn limit. */
 export function isCliMaxTurnsError(err: unknown): err is FailoverError {
   return isFailoverError(err) && err.code === "cli_max_turns";
 }
