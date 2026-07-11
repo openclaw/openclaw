@@ -17,6 +17,12 @@ export type StoredConversationReference = {
   user?: { id?: string; name?: string; aadObjectId?: string };
   /** Agent/bot that received the message */
   agent?: { id?: string; name?: string; aadObjectId?: string } | null;
+  /**
+   * Read-only legacy field: pre-Agents-SDK rows imported raw from the year-TTL
+   * msteams-conversations.json store may carry `bot` without `agent`. Writers
+   * are canonical (`agent`); drop this once those imported rows age out.
+   */
+  bot?: { id?: string; name?: string };
   /** Conversation details */
   conversation?: { id?: string; conversationType?: string; tenantId?: string };
   /**
