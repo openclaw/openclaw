@@ -43,6 +43,7 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
+import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
@@ -75,6 +76,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
+import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import {
   interruptSessionWorkAdmissions,
   isSessionLifecycleMutationActive,
@@ -82,6 +85,10 @@ import {
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
+import {
+  handleSessionStateSessionDeleted,
+  recordSessionCompacted,
+} from "../../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
@@ -135,7 +142,7 @@ import {
 } from "../session-utils.js";
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
-import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
+import { setGatewayDedupeEntry } from "./agent-job.js";
 import { chatHandlers } from "./chat.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
 import {
@@ -156,6 +163,8 @@ import { assertValidParams } from "./validation.js";
 const log = createSubsystemLogger("gateway/sessions");
 
 const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
+const MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE =
+  "Checkpoint branch and restore are unavailable while model selection is locked.";
 
 function filterSessionStoreToConfiguredAgents(
   cfg: OpenClawConfig,
@@ -1607,6 +1616,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (branchedSession.status === "model-selection-locked") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE),
+      );
+      return;
+    }
     if (branchedSession.status === "failed") {
       respond(
         false,
@@ -1706,6 +1723,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     ];
     let admittedWorkReleased = true;
     let restoreTargetStillCurrent = true;
+    let restoreBlockedByModelLock = false;
     // Restore replaces the active transcript identity. Hold the same lifecycle fence as
     // compaction so neither operation can publish state from the other's obsolete session.
     await runExclusiveSessionLifecycleMutation({
@@ -1719,6 +1737,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           getSessionCompactionCheckpoint({ entry: current.entry, checkpointId }),
         );
         if (!restoreTargetStillCurrent) {
+          return;
+        }
+        restoreBlockedByModelLock = current.entry?.modelSelectionLocked === true;
+        if (restoreBlockedByModelLock) {
           return;
         }
         clearSessionQueues([
@@ -1746,6 +1768,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        if (restoreBlockedByModelLock) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE),
+          );
+          return;
+        }
         if (!admittedWorkReleased) {
           respond(
             false,
@@ -1760,6 +1790,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             false,
             undefined,
             errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
+          );
+          return;
+        }
+        if (current.entry.modelSelectionLocked === true) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE),
           );
           return;
         }
@@ -1808,6 +1846,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             false,
             undefined,
             errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
+          );
+          return;
+        }
+        if (restoredSession.status === "model-selection-locked") {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE),
           );
           return;
         }
@@ -2060,6 +2106,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     });
     const canonicalKey = target.canonicalKey ?? key;
     const lifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
+    const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
+      canonicalKey,
+      lifecycleEntry,
+    );
+    if (missingHarnessSessionError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError));
+      return;
+    }
     const lifecycleIdentities = [canonicalKey, key, lifecycleEntry?.sessionId];
     if (p.archived === true && isSessionLifecycleMutationActive(storePath, lifecycleIdentities)) {
       respond(
@@ -2384,6 +2438,23 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const initialDeleteEntry = loadSessionEntry(key, {
       agentId: requestedAgentId,
     }).entry;
+    const rejectModelSelectionLockedDelete = (entry: SessionEntry | undefined): boolean => {
+      if (!isModelSelectionLocked(entry)) {
+        return false;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "This session cannot be deleted while model selection is locked.",
+        ),
+      );
+      return true;
+    };
+    if (rejectModelSelectionLockedDelete(initialDeleteEntry)) {
+      return;
+    }
     // archivedOnly is the archive-then-delete contract: the dispatcher grants
     // it to write-scope operators, so the target must actually be archived.
     if (p.archivedOnly === true && initialDeleteEntry?.archivedAt === undefined) {
@@ -2455,13 +2526,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     ];
     let admittedWorkReleased = true;
     let expectedSessionStillCurrent = true;
+    let deleteBlockedByModelLock = false;
     const deletion = await runExclusiveSessionLifecycleMutation({
       scope: storePath,
       identities: deleteLifecycleIdentities,
       prepare: async () => {
-        expectedSessionStillCurrent = !rejectExpectedSessionMismatch(
-          loadSessionEntry(key, { agentId: requestedAgentId }).entry,
-        );
+        const preparedEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
+        deleteBlockedByModelLock = rejectModelSelectionLockedDelete(preparedEntry);
+        if (deleteBlockedByModelLock) {
+          return;
+        }
+        expectedSessionStillCurrent = !rejectExpectedSessionMismatch(preparedEntry);
         if (!expectedSessionStillCurrent) {
           return;
         }
@@ -2472,7 +2547,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         });
       },
       run: async () => {
-        if (!expectedSessionStillCurrent) {
+        if (deleteBlockedByModelLock || !expectedSessionStillCurrent) {
           return undefined;
         }
         if (!admittedWorkReleased) {
@@ -2486,6 +2561,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const { entry, legacyKey, canonicalKey } = loadSessionEntry(key, {
           agentId: requestedAgentId,
         });
+        if (rejectModelSelectionLockedDelete(entry)) {
+          return undefined;
+        }
         if (rejectExpectedSessionMismatch(entry)) {
           return undefined;
         }
@@ -2583,6 +2661,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     // operator UIs can point at the preserved checkout instead of orphaning it.
     let worktreePreserved: { id: string; branch: string; path: string } | undefined;
     if (deleted) {
+      // requestedAgentId wins: "global" canonical keys resolve to the default store
+      // agent, which would purge the wrong agent's rows for explicit-agent deletes.
+      handleSessionStateSessionDeleted(
+        target.canonicalKey ?? key,
+        requestedAgentId ?? resolveSessionStoreAgentId(cfg, target.canonicalKey ?? key),
+      );
       try {
         const worktree = managedWorktrees.findLiveByOwner("session", target.canonicalKey);
         if (worktree && !(await managedWorktrees.removeIfLossless(worktree.id))) {
@@ -2940,6 +3024,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             return;
           }
 
+          const operationId = randomUUID();
           if (maxLines !== undefined) {
             const trimResult = await trimSessionTranscriptForManualCompact(
               {
@@ -2965,6 +3050,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               undefined,
             );
             if (trimResult.compacted) {
+              recordSessionCompacted({
+                sessionKey: target.canonicalKey,
+                operationId,
+                sessionId,
+                agentId: target.agentId ?? requestedAgentId,
+              });
               emitSessionsChanged(context, {
                 sessionKey: target.canonicalKey,
                 ...(target.canonicalKey === "global" && target.agentId
@@ -3004,7 +3095,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               workspaceDir: latestEntry.spawnedWorkspaceDir,
               cwd: latestEntry.spawnedCwd,
             }) ?? resolveAgentWorkspaceDir(cfg, target.agentId);
-          const operationId = randomUUID();
           emitSessionOperation(context, {
             operationId,
             operation: "compact",
@@ -3040,7 +3130,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               provider: resolvedModel.provider,
               model: resolvedModel.model,
               authProfileId: latestEntry.authProfileOverride,
-              agentHarnessId: latestEntry.agentHarnessId,
+              agentHarnessId:
+                latestEntry.modelSelectionLocked === true
+                  ? resolvePersistedSessionRuntimeId(latestEntry)
+                  : latestEntry.agentHarnessId,
+              modelSelectionLocked: latestEntry.modelSelectionLocked === true,
               thinkLevel: normalizeThinkLevel(latestEntry.thinkingLevel),
               reasoningLevel: normalizeReasoningLevel(latestEntry.reasoningLevel),
               bashElevated: {
@@ -3117,6 +3211,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               );
               return;
             }
+            recordSessionCompacted({
+              sessionKey: target.canonicalKey,
+              operationId,
+              sessionId: result.result?.sessionId ?? sessionId,
+              agentId: target.agentId ?? requestedAgentId,
+            });
           }
 
           emitCompactionEnd(result.ok && result.compacted, result.reason);

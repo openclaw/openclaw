@@ -519,6 +519,16 @@ export interface ExecApprovalsConfig {
   updated_at_ms: number;
 }
 
+export interface FleetCells {
+  container_name: string;
+  created_at_ms: number;
+  data_dir: string;
+  host_port: number;
+  image: string;
+  runtime: string;
+  tenant_id: string;
+}
+
 export interface FlowRuns {
   blocked_summary: string | null;
   blocked_task_id: string | null;
@@ -791,6 +801,38 @@ export interface SessionGroups {
   position: number;
 }
 
+export interface SessionStateEvents {
+  actor_id: string | null;
+  actor_type: string;
+  agent_id: string;
+  dedupe_key: string | null;
+  kind: string;
+  occurred_at: number;
+  payload_json: string | null;
+  run_id: string | null;
+  sequence: Generated<number>;
+  session_id: string | null;
+  session_key: string;
+  summary: string;
+}
+
+export interface SessionStateHeads {
+  agent_id: string;
+  last_sequence: number;
+  pruned_max_sequence: Generated<number>;
+  session_key: string;
+  updated_at: number;
+}
+
+export interface SessionWatchCursors {
+  last_seen_sequence: Generated<number>;
+  material_sequence: Generated<number>;
+  notified_sequence: Generated<number>;
+  target_session_key: string;
+  updated_at: number;
+  watcher_session_key: string;
+}
+
 export interface SkillCuratorState {
   id: Generated<number>;
   last_attempt_at_ms: number;
@@ -1001,6 +1043,32 @@ export interface WebPushVapidKeys {
   updated_at_ms: number;
 }
 
+export interface WorkerEnvironments {
+  attached_session_ids_json: Generated<string>;
+  bootstrap_bundle_hash: string | null;
+  bootstrap_openclaw_version: string | null;
+  bootstrap_protocol_features_json: string | null;
+  created_at_ms: number;
+  destroy_requested_at_ms: number | null;
+  environment_id: string;
+  idle_since_at_ms: number | null;
+  last_error: string | null;
+  lease_id: string | null;
+  profile_id: string;
+  profile_snapshot_json: string;
+  provider_id: string;
+  provision_operation_id: string;
+  ssh_host: string | null;
+  ssh_host_key: string | null;
+  ssh_key_ref_json: string | null;
+  ssh_port: number | null;
+  ssh_user: string | null;
+  state: string;
+  state_changed_at_ms: number;
+  teardown_terminal_state: string | null;
+  updated_at_ms: number;
+}
+
 export interface WorkspaceSetupState {
   bootstrap_seeded_at: string | null;
   setup_completed_at: string | null;
@@ -1060,6 +1128,7 @@ export interface DB {
   diagnostic_events: DiagnosticEvents;
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
+  fleet_cells: FleetCells;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;
   gateway_restart_handoff: GatewayRestartHandoff;
@@ -1081,6 +1150,9 @@ export interface DB {
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
   session_groups: SessionGroups;
+  session_state_events: SessionStateEvents;
+  session_state_heads: SessionStateHeads;
+  session_watch_cursors: SessionWatchCursors;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
   skill_uploads: SkillUploads;
@@ -1096,6 +1168,7 @@ export interface DB {
   voicewake_triggers: VoicewakeTriggers;
   web_push_subscriptions: WebPushSubscriptions;
   web_push_vapid_keys: WebPushVapidKeys;
+  worker_environments: WorkerEnvironments;
   workspace_setup_state: WorkspaceSetupState;
   worktrees: Worktrees;
 }

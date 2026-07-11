@@ -213,12 +213,23 @@ const MAX_RECENT_DIALOGS = 20;
 const OBSERVED_DIALOG_TIMEOUT_MS = 120_000;
 
 type PendingBrowserConnection = {
-  attempt: { cancelled: boolean };
+  attempt: { cancelled: boolean; retired?: ConnectedBrowser };
   promise: Promise<ConnectedBrowser>;
+};
+
+export type PlaywrightConnectionRetirement = {
+  readonly retired: boolean;
+  /** Capture handles created by already-admitted work before cleanup begins. */
+  refresh?: () => boolean;
+  close: () => Promise<void>;
 };
 
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, PendingBrowserConnection>();
+const retainedClosingByCdpUrl = new Map<string, Set<ConnectedBrowser>>();
+const closeConnectionPromises = new WeakMap<ConnectedBrowser, Promise<void>>();
+const closedConnections = new WeakSet<ConnectedBrowser>();
+const PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS = 2_000;
 const blockedTargetsByCdpUrl = new Set<string>();
 const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
 let cdpConnectRetryDelayMsForTests: number | undefined;
@@ -599,13 +610,165 @@ function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser
   return cur;
 }
 
+function retainClosingPlaywrightConnection(connection: ConnectedBrowser): void {
+  const retained = retainedClosingByCdpUrl.get(connection.cdpUrl) ?? new Set<ConnectedBrowser>();
+  retained.add(connection);
+  retainedClosingByCdpUrl.set(connection.cdpUrl, retained);
+}
+
+function releaseClosingPlaywrightConnection(connection: ConnectedBrowser): void {
+  const retained = retainedClosingByCdpUrl.get(connection.cdpUrl);
+  retained?.delete(connection);
+  if (retained?.size === 0) {
+    retainedClosingByCdpUrl.delete(connection.cdpUrl);
+  }
+}
+
+async function closeTrackedPlaywrightConnection(connection: ConnectedBrowser): Promise<void> {
+  if (closedConnections.has(connection)) {
+    return;
+  }
+  const existing = closeConnectionPromises.get(connection);
+  if (existing) {
+    return await existing;
+  }
+  retainClosingPlaywrightConnection(connection);
+  const closing = (async () => {
+    try {
+      await connection.browser.close();
+      closedConnections.add(connection);
+      releaseClosingPlaywrightConnection(connection);
+    } finally {
+      closeConnectionPromises.delete(connection);
+    }
+  })();
+  closeConnectionPromises.set(connection, closing);
+  return await closing;
+}
+
+async function withPlaywrightCloseTimeout(task: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      task,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Playwright adapter disconnect timed out.")),
+          PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS,
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/** Capture and retire only the adapter handles currently owned by one lifecycle transition. */
+export function retirePlaywrightBrowserConnectionExact(opts: {
+  cdpUrl: string;
+}): PlaywrightConnectionRetirement {
+  const normalized = normalizeCdpUrl(opts.cdpUrl);
+  clearBlockedTargetsForCdpUrl(normalized);
+  clearBlockedPageRefsForCdpUrl(normalized);
+  const connections = new Set<ConnectedBrowser>();
+  const closeAttempts = new Map<ConnectedBrowser, Promise<void>>();
+  const pendingCollections = new Set<Promise<void>>();
+  let retired = false;
+  const startClosing = () => {
+    for (const connection of connections) {
+      if (closeAttempts.has(connection)) {
+        continue;
+      }
+      const closing = closeTrackedPlaywrightConnection(connection);
+      closeAttempts.set(connection, closing);
+      void closing.catch(() => {});
+    }
+  };
+  const awaitClosing = async () => {
+    const attempts = [...closeAttempts];
+    const results = await Promise.allSettled(attempts.map(([, closing]) => closing));
+    let firstError: Error | undefined;
+    for (const [index, result] of results.entries()) {
+      if (result.status === "rejected") {
+        const [connection, closing] = attempts[index] ?? [];
+        if (connection && closeAttempts.get(connection) === closing) {
+          closeAttempts.delete(connection);
+        }
+        firstError ??= toLintErrorObject(result.reason, "Playwright adapter disconnect failed.");
+      }
+    }
+    if (firstError) {
+      throw firstError;
+    }
+  };
+  const capture = () => {
+    const pending = connectingByCdpUrl.get(normalized);
+    const cached = takeCachedPlaywrightBrowserConnection(normalized);
+    for (const connection of retainedClosingByCdpUrl.get(normalized) ?? []) {
+      connections.add(connection);
+    }
+    if (cached) {
+      connections.add(cached);
+      retainClosingPlaywrightConnection(cached);
+    }
+    if (pending) {
+      const collection = pending.promise.then(
+        (connection) => {
+          connections.add(connection);
+        },
+        () => {
+          if (pending.attempt.retired) {
+            connections.add(pending.attempt.retired);
+          }
+        },
+      );
+      pendingCollections.add(collection);
+      void collection.then(() => {
+        pendingCollections.delete(collection);
+        startClosing();
+      });
+    }
+    startClosing();
+    const captured = Boolean(pending || connections.size > 0);
+    retired ||= captured;
+    return captured;
+  };
+  capture();
+  return {
+    get retired() {
+      return retired;
+    },
+    refresh: capture,
+    close: async () => {
+      await withPlaywrightCloseTimeout(
+        (async () => {
+          startClosing();
+          await Promise.all(pendingCollections);
+          startClosing();
+          await awaitClosing();
+        })(),
+      );
+    },
+  };
+}
+
+/** Retire a scoped adapter immediately; its CDP disconnect may settle later. */
+export function retirePlaywrightBrowserConnection(opts: { cdpUrl: string }): boolean {
+  return retirePlaywrightBrowserConnectionExact(opts).retired;
+}
+
 function evictStalePlaywrightBrowserConnection(cdpUrl: string, expectedBrowser?: Browser): void {
   const current = cachedByCdpUrl.get(normalizeCdpUrl(cdpUrl));
   if (expectedBrowser && current?.browser !== expectedBrowser) {
     return;
   }
   const cur = takeCachedPlaywrightBrowserConnection(cdpUrl);
-  cur?.browser.close().catch(() => {});
+  if (cur) {
+    void closeTrackedPlaywrightConnection(cur).catch(() => {});
+  }
 }
 
 function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
@@ -1043,7 +1206,7 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
     return await connecting.promise;
   }
 
-  const connectionAttempt = { cancelled: false };
+  const connectionAttempt: PendingBrowserConnection["attempt"] = { cancelled: false };
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -1080,7 +1243,8 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
           browser = await connectEndpoint(normalized);
         }
         if (connectionAttempt.cancelled) {
-          browser.close().catch(() => {});
+          connectionAttempt.retired = { browser, cdpUrl: normalized };
+          void closeTrackedPlaywrightConnection(connectionAttempt.retired).catch(() => {});
           throw new Error("Playwright connection attempt was superseded.");
         }
         const onDisconnected = () => {
@@ -1222,66 +1386,47 @@ export async function getPageForTargetId(opts: {
     if (!isRecoverableStalePageSelectionError(err, reusedCachedBrowser)) {
       throw err;
     }
-    await closePlaywrightBrowserConnection({ cdpUrl: opts.cdpUrl });
+    retirePlaywrightBrowserConnection({ cdpUrl: opts.cdpUrl });
     return await getPageForTargetIdOnce(opts);
   }
 }
 
-function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
-  let sameMainFrame;
+export type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
+
+/** Classify requests that can navigate the selected page or one of its frames. */
+export function classifyBrowserDocumentNavigationRequest(
+  page: Page,
+  request: Request,
+): BrowserDocumentNavigationRequestKind | null {
+  let kind: BrowserDocumentNavigationRequestKind;
+  let frameResolutionFailed = false;
   try {
-    sameMainFrame = request.frame() === page.mainFrame();
+    kind = request.frame() === page.mainFrame() ? "top-level" : "subframe";
   } catch {
-    // Frame resolution can fail during redirect/renderer churn; fail closed.
-    sameMainFrame = true;
-  }
-  if (!sameMainFrame) {
-    return false;
+    // Preserve the navigate-owner fail-closed contract during renderer churn:
+    // an unresolved document request may be the selected main frame.
+    kind = "top-level";
+    frameResolutionFailed = true;
   }
 
   try {
     if (request.isNavigationRequest()) {
-      return true;
-    }
-  } catch {
-    // Ignore and fall back to resource-type check below.
-  }
-
-  try {
-    return request.resourceType() === "document";
-  } catch {
-    return false;
-  }
-}
-
-function isSubframeDocumentNavigationRequest(page: Page, request: Request): boolean {
-  let sameMainFrame;
-  try {
-    sameMainFrame = request.frame() === page.mainFrame();
-  } catch {
-    // Fail closed: if frame resolution throws after the top-level check already
-    // determined this is NOT the main frame, treat it as a subframe document
-    // navigation so the SSRF guard still fires. Returning false here would let
-    // transient renderer churn skip the policy check entirely.
-    return true;
-  }
-  if (sameMainFrame) {
-    return false;
-  }
-
-  try {
-    if (request.isNavigationRequest()) {
-      return true;
+      return kind;
     }
   } catch {
     // Fall through to the resource-type check.
   }
 
   try {
-    return request.resourceType() === "document";
+    if (request.resourceType() === "document") {
+      return kind;
+    }
   } catch {
-    return false;
+    // Fall through to the unresolved-frame result below.
   }
+  // Match the previous two-step classifier: known non-doc requests fall
+  // through, while an unresolved frame remains guarded as a subframe.
+  return frameResolutionFailed ? "subframe" : null;
 }
 
 /** Return true when an error is a browser navigation policy denial. */
@@ -1370,6 +1515,276 @@ async function continueRouteSafely(route: Route): Promise<void> {
   }
 }
 
+async function fallbackRouteSafely(route: Route): Promise<void> {
+  try {
+    await route.fallback();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    if (message.includes("Route is already handled")) {
+      return;
+    }
+    throw err;
+  }
+}
+
+const sourcePreservedPolicyDenials = new WeakSet<object>();
+
+async function removePageNavigationRequestGuard(
+  page: Page,
+  handler: (route: Route, request: Request) => Promise<void>,
+): Promise<unknown> {
+  try {
+    await page.unroute("**", handler);
+  } catch (err) {
+    // A closed page owns no remaining route. Preserve close-triggering actions,
+    // but surface cleanup failures while the page is still usable.
+    try {
+      if (page.isClosed()) {
+        return undefined;
+      }
+    } catch {
+      // Keep the original cleanup failure when page state is unavailable.
+    }
+    return err;
+  }
+  return undefined;
+}
+
+/** Return true when policy denial left the selected page on its source document. */
+export function wasBrowserNavigationSourcePreservedAfterPolicyDenial(err: unknown): boolean {
+  return typeof err === "object" && err !== null && sourcePreservedPolicyDenials.has(err);
+}
+
+/** Run one selected-page action while guarding document requests. */
+export async function withPageNavigationRequestGuard<T>(
+  opts: {
+    action: (baselineUrl: string) => Promise<T>;
+    onPolicyCheckStarted?: (check: Promise<void>) => void;
+    onPolicyDenied?: (
+      event:
+        | { state: "detected"; error: unknown }
+        | { state: "handled"; error: unknown; sourcePreserved: boolean },
+    ) => void;
+    page: Page;
+  } & BrowserNavigationPolicyOptions,
+): Promise<T> {
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
+  if (!navigationPolicy.ssrfPolicy && !navigationPolicy.browserProxyMode) {
+    return await opts.action(opts.page.url());
+  }
+
+  const inFlight = new Set<Promise<void>>();
+  let hasGuardError = false;
+  let firstGuardError: unknown;
+  let deniedDocumentCount = 0;
+  let fulfilledDeniedDocumentCount = 0;
+  let pendingDeniedDocumentCount = 0;
+  let unpreservedDocumentCount = 0;
+  let policyDeniedDetected = false;
+  let lastNotifiedSourcePreserved: boolean | undefined;
+
+  const recordGuardError = (err: unknown) => {
+    if (hasGuardError) {
+      if (!isPolicyDenyNavigationError(firstGuardError) && isPolicyDenyNavigationError(err)) {
+        firstGuardError = err;
+      }
+      return;
+    }
+    hasGuardError = true;
+    firstGuardError = err;
+  };
+  const emitPolicyDenied = (
+    event:
+      | { state: "detected"; error: unknown }
+      | { state: "handled"; error: unknown; sourcePreserved: boolean },
+  ) => {
+    try {
+      opts.onPolicyDenied?.(event);
+    } catch {
+      // Notification only exposes state already owned by this guard.
+    }
+  };
+  const updateImmediateSourcePreservation = () => {
+    if (typeof firstGuardError !== "object" || firstGuardError === null) {
+      return;
+    }
+    let sourcePreserved: boolean | undefined;
+    if (unpreservedDocumentCount > 0) {
+      sourcePreserved = false;
+    } else if (
+      isPolicyDenyNavigationError(firstGuardError) &&
+      deniedDocumentCount > 0 &&
+      pendingDeniedDocumentCount === 0 &&
+      fulfilledDeniedDocumentCount === deniedDocumentCount
+    ) {
+      sourcePreserved = true;
+    }
+    if (sourcePreserved === undefined) {
+      sourcePreservedPolicyDenials.delete(firstGuardError);
+      return;
+    }
+    if (sourcePreserved) {
+      sourcePreservedPolicyDenials.add(firstGuardError);
+    } else {
+      sourcePreservedPolicyDenials.delete(firstGuardError);
+    }
+    if (policyDeniedDetected && sourcePreserved !== lastNotifiedSourcePreserved) {
+      lastNotifiedSourcePreserved = sourcePreserved;
+      emitPolicyDenied({ state: "handled", error: firstGuardError, sourcePreserved });
+    }
+  };
+  const notifyPolicyDeniedDetected = () => {
+    if (policyDeniedDetected || !isPolicyDenyNavigationError(firstGuardError)) {
+      return;
+    }
+    policyDeniedDetected = true;
+    emitPolicyDenied({ state: "detected", error: firstGuardError });
+  };
+  const stopGuardedRoute = async (
+    route: Route,
+    preserveDocument: boolean,
+    requestError: unknown,
+  ) => {
+    if (preserveDocument && isPolicyDenyNavigationError(requestError)) {
+      deniedDocumentCount += 1;
+      pendingDeniedDocumentCount += 1;
+      try {
+        // A synthetic 204 stops the document load while Chromium keeps the
+        // selected page's current document. route.abort() commits an error page.
+        await route.fulfill({ status: 204, body: "" });
+        fulfilledDeniedDocumentCount += 1;
+        pendingDeniedDocumentCount -= 1;
+        updateImmediateSourcePreservation();
+        return;
+      } catch {
+        pendingDeniedDocumentCount -= 1;
+        // Abort still stops the document load, but the source may no longer be usable.
+      }
+    }
+    if (preserveDocument) {
+      unpreservedDocumentCount += 1;
+      updateImmediateSourcePreservation();
+    }
+    await route.abort().catch(() => {});
+  };
+  const handleRoute = async (route: Route, request: Request) => {
+    if (!classifyBrowserDocumentNavigationRequest(opts.page, request)) {
+      try {
+        await fallbackRouteSafely(route);
+      } catch (err) {
+        recordGuardError(err);
+        await stopGuardedRoute(route, false, err);
+      }
+      return;
+    }
+    const policyCheck = assertBrowserNavigationAllowed({
+      url: request.url(),
+      ...navigationPolicy,
+    });
+    try {
+      opts.onPolicyCheckStarted?.(policyCheck);
+    } catch {
+      // Observation cannot change the policy decision owned by this guard.
+    }
+    try {
+      await policyCheck;
+    } catch (err) {
+      recordGuardError(err);
+      notifyPolicyDeniedDetected();
+      await stopGuardedRoute(route, true, err);
+      return;
+    }
+    try {
+      await fallbackRouteSafely(route);
+    } catch (err) {
+      recordGuardError(err);
+      await stopGuardedRoute(route, true, err);
+    }
+  };
+  const handler = (route: Route, request: Request) => {
+    const operation = handleRoute(route, request).catch(async (err: unknown) => {
+      recordGuardError(err);
+      await stopGuardedRoute(route, true, err);
+    });
+    inFlight.add(operation);
+    void operation.finally(() => inFlight.delete(operation));
+    return operation;
+  };
+
+  try {
+    await opts.page.route("**", handler);
+  } catch (err) {
+    // Playwright can register the client handler before browser-side setup
+    // rejects, so roll back that exact handler even on setup failure.
+    await removePageNavigationRequestGuard(opts.page, handler);
+    throw err;
+  }
+
+  let result: T | undefined;
+  let actionFailed = false;
+  let actionError: unknown;
+  try {
+    let baselineUrl = opts.page.url();
+    await assertBrowserNavigationResultAllowed({ url: baselineUrl, ...navigationPolicy });
+    const latestUrl = opts.page.url();
+    if (latestUrl !== baselineUrl) {
+      // The route is already installed, so any later document request remains
+      // intercepted. Revalidate the one URL that could commit during preflight.
+      await assertBrowserNavigationResultAllowed({ url: latestUrl, ...navigationPolicy });
+      baselineUrl = latestUrl;
+    }
+    result = await opts.action(baselineUrl);
+  } catch (err) {
+    actionFailed = true;
+    actionError = err;
+    if (isPolicyDenyNavigationError(err)) {
+      // Preflight/postflight policy errors describe committed or otherwise
+      // unpreserved state. Notify before cleanup can stall on active routes.
+      recordGuardError(err);
+      notifyPolicyDeniedDetected();
+      unpreservedDocumentCount += 1;
+      updateImmediateSourcePreservation();
+    }
+  }
+
+  // Remove admission first so a busy page cannot add work indefinitely. Active
+  // RouteHandler callbacks retain their exact invocation and are drained below.
+  const cleanupError = await removePageNavigationRequestGuard(opts.page, handler);
+  while (inFlight.size > 0) {
+    await Promise.allSettled(inFlight);
+  }
+
+  // Request-policy denial wins over locator/action/cleanup errors. Only 204
+  // responses prove that every denied document was intercepted and source-preserved.
+  if (hasGuardError) {
+    const sourcePreserved =
+      isPolicyDenyNavigationError(firstGuardError) &&
+      deniedDocumentCount > 0 &&
+      fulfilledDeniedDocumentCount === deniedDocumentCount &&
+      unpreservedDocumentCount === 0 &&
+      !(actionFailed && isPolicyDenyNavigationError(actionError)) &&
+      typeof firstGuardError === "object" &&
+      firstGuardError !== null;
+    if (typeof firstGuardError === "object" && firstGuardError !== null) {
+      if (sourcePreserved) {
+        sourcePreservedPolicyDenials.add(firstGuardError);
+      } else {
+        sourcePreservedPolicyDenials.delete(firstGuardError);
+      }
+    }
+    throw toLintErrorObject(firstGuardError, "Non-Error thrown");
+  }
+  if (actionFailed) {
+    throw toLintErrorObject(actionError, "Non-Error thrown");
+  }
+  if (cleanupError !== undefined) {
+    throw toLintErrorObject(cleanupError, "Non-Error thrown");
+  }
+  return result as T;
+}
+
 /** Navigate a page while guarding requested URL and redirect chain. */
 export async function gotoPageWithNavigationGuard(
   opts: {
@@ -1390,10 +1805,8 @@ export async function gotoPageWithNavigationGuard(
       await route.abort().catch(() => {});
       return;
     }
-    const isTopLevel = isTopLevelNavigationRequest(opts.page, request);
-    const isSubframeDocument =
-      !isTopLevel && isSubframeDocumentNavigationRequest(opts.page, request);
-    if (!isTopLevel && !isSubframeDocument) {
+    const requestKind = classifyBrowserDocumentNavigationRequest(opts.page, request);
+    if (!requestKind) {
       await continueRouteSafely(route);
       return;
     }
@@ -1404,7 +1817,7 @@ export async function gotoPageWithNavigationGuard(
       });
     } catch (err) {
       if (isPolicyDenyNavigationError(err)) {
-        if (isTopLevel) {
+        if (requestKind === "top-level") {
           blockedError = err;
         }
         await route.abort().catch(() => {});
@@ -1510,29 +1923,27 @@ export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string 
   const normalized = opts?.cdpUrl ? normalizeCdpUrl(opts.cdpUrl) : null;
 
   if (normalized) {
-    clearBlockedTargetsForCdpUrl(normalized);
-    clearBlockedPageRefsForCdpUrl(normalized);
-    const cur = takeCachedPlaywrightBrowserConnection(normalized);
-    if (!cur) {
-      return;
-    }
-    await cur.browser.close().catch(() => {});
+    await retirePlaywrightBrowserConnectionExact({ cdpUrl: normalized }).close();
     return;
   }
 
-  const connections = Array.from(cachedByCdpUrl.values());
-  for (const pending of connectingByCdpUrl.values()) {
-    pending.attempt.cancelled = true;
-  }
+  const cdpUrls = new Set([
+    ...cachedByCdpUrl.keys(),
+    ...connectingByCdpUrl.keys(),
+    ...retainedClosingByCdpUrl.keys(),
+  ]);
   clearBlockedTargetsForCdpUrl();
   clearBlockedPageRefsForCdpUrl();
-  cachedByCdpUrl.clear();
-  connectingByCdpUrl.clear();
-  for (const cur of connections) {
-    if (cur.onDisconnected && typeof cur.browser.off === "function") {
-      cur.browser.off("disconnected", cur.onDisconnected);
-    }
-    await cur.browser.close().catch(() => {});
+  const results = await Promise.allSettled(
+    [...cdpUrls].map(
+      async (cdpUrl) => await retirePlaywrightBrowserConnectionExact({ cdpUrl }).close(),
+    ),
+  );
+  const failed = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failed) {
+    throw failed.reason;
   }
 }
 
@@ -1667,7 +2078,7 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   }
 
   // Fire-and-forget: don't await because browser.close() may hang on the stuck CDP pipe.
-  cur.browser.close().catch(() => {});
+  void closeTrackedPlaywrightConnection(cur).catch(() => {});
 }
 
 async function withPlaywrightSafeReadReconnect<T>(

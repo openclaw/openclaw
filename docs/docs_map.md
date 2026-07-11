@@ -862,6 +862,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Media, chunking, and delivery
   - H2: Commands and slash behavior
   - H2: Native charts
+  - H2: Native tables
   - H2: Interactive replies
   - H3: Plugin-owned modal submissions
   - H2: Native approvals in Slack
@@ -1375,7 +1376,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What Crestodian shows
   - H2: Examples
   - H2: Operations and approval
-  - H3: Switching to the menu wizards
+  - H3: Switching to masked channel setup
   - H2: Setup bootstrap
   - H2: AI conversation
   - H3: CLI harness trust model
@@ -1496,6 +1497,25 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Post-upgrade mode
   - H2: Notes
   - H2: macOS: launchctl env overrides
+  - H2: Related
+
+## cli/fleet.md
+
+- Route: /cli/fleet
+- Headings:
+  - H1: openclaw fleet
+  - H2: Quick start
+  - H2: Tenant IDs
+  - H2: fleet create
+  - H3: Create options
+  - H2: fleet list
+  - H2: fleet status
+  - H2: fleet start, fleet stop, and fleet restart
+  - H2: fleet upgrade
+  - H2: fleet rm
+  - H2: Storage and container layout
+  - H2: Security profile
+  - H2: Token handling
   - H2: Related
 
 ## cli/flows.md
@@ -2839,6 +2859,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Listing and reading sessions
   - H2: Sending cross-session messages
   - H2: Status and orchestration helpers
+  - H2: Session state changes
   - H2: Spawning sub-agents
   - H2: Visibility
   - H2: Further reading
@@ -3244,6 +3265,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Multi-instance isolation
   - H3: gateway.tls
   - H3: gateway.reload
+  - H2: Cloud worker environments
+  - H3: Crabbox profile
+  - H3: Static SSH development profile
   - H2: Hooks
   - H3: Gmail integration
   - H2: Canvas plugin host
@@ -3459,6 +3483,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Console formatting (subsystem logging)
   - H2: Related
 
+## gateway/multi-tenant-hosting.md
+
+- Route: /gateway/multi-tenant-hosting
+- Headings:
+  - H1: Multi-tenant hosting
+  - H2: Why each tenant needs a cell
+  - H2: Architecture
+  - H2: Trust boundary
+  - H2: Isolation ladder
+  - H2: Quick start
+  - H2: Deferred from the MVP
+  - H2: Related
+
 ## gateway/multiple-gateways.md
 
 - Route: /gateway/multiple-gateways
@@ -3589,6 +3626,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: API surface (gateway protocol)
   - H2: Node command gating (2026.3.31+)
   - H2: Node event trust boundaries (2026.3.31+)
+  - H2: SSH-verified device auto-approval (default)
   - H2: Auto-approval (macOS app)
   - H2: Trusted-CIDR device auto-approval
   - H2: Silent pairing supersede cleanup
@@ -3620,6 +3658,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Client capabilities
   - H3: Node connect example
   - H2: Roles and scopes
+  - H3: Caps/commands/permissions (node)
   - H2: Presence
   - H3: Node background alive event
   - H2: Broadcast event scoping
@@ -4124,6 +4163,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /
 - Headings:
   - H1: OpenClaw 🦞
+  - H2: Browse docs
   - H2: What is OpenClaw?
   - H2: How it works
   - H2: Key capabilities
@@ -4677,6 +4717,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Provider-only (SenseAudio)
   - H3: Echo transcript to chat (opt-in)
   - H2: Notes and limits
+  - H3: Resident local STT
   - H3: Proxy environment support
   - H2: Mention detection in groups
   - H2: Gotchas
@@ -4738,11 +4779,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Remote gateway via SSH tunnel (loopback bind)
   - H3: Start a node host (service)
   - H3: Pair + name
+  - H3: Node-hosted MCP servers
+  - H3: Node-hosted skills
   - H3: Headless identity state
   - H3: Allowlist the commands
   - H3: Point exec at the node
   - H3: Local model inference
-  - H3: Codex session catalog
+  - H3: Codex sessions and transcripts
+  - H3: Claude sessions and transcripts
   - H2: Invoking commands
   - H2: Command policy
   - H2: Config (openclaw.json)
@@ -4847,6 +4891,32 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /perplexity
 - Headings:
   - H2: Related
+
+## plan/cloud-workers.md
+
+- Route: /plan/cloud-workers
+- Headings:
+  - H2: Status
+  - H2: Problem
+  - H2: Goals
+  - H2: Non-goals (v1)
+  - H2: Prior art (what we copy, what we invert)
+  - H2: Architecture decision: loop on the worker, inference through the gateway
+  - H2: Components
+  - H3: 1. Environment state machine + provider contract
+  - H3: 2. Worker bootstrap: install OpenClaw on the box
+  - H3: 3. Transport: everything over SSH
+  - H3: 4. Worker protocol (dedicated; not the node protocol)
+  - H3: 5. Session backend RPCs
+  - H3: 6. Workspace sync
+  - H3: 7. Placement state machine, sessions, and UI
+  - H2: Dispatch and handoff
+  - H2: Security model
+  - H2: Capacity
+  - H2: Lifecycle
+  - H2: Configuration surface
+  - H2: Milestones
+  - H2: Open questions
 
 ## plan/ui-channels.md
 
@@ -5173,7 +5243,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Download
   - H2: First run
+  - H2: Updates
   - H2: Open dashboard links
+  - H2: Import browser logins
   - H2: Choose a Gateway mode
   - H2: What the app owns
   - H2: macOS detail pages
@@ -5370,6 +5442,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Commands
   - H2: Marketplace choices
   - H2: Bundled macOS marketplace
+  - H3: Shared plugin cache
   - H2: Remote catalog limit
   - H2: Configuration reference
   - H2: What OpenClaw checks
@@ -5382,6 +5455,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/codex-harness-reference
 - Headings:
   - H2: Plugin config surface
+  - H2: Supervision
   - H2: App-server transport
   - H2: Approval and sandbox modes
   - H2: Sandboxed native execution
@@ -5399,6 +5473,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Overview
   - H2: Thread bindings and model changes
+  - H2: Supervision and safe continuation
   - H2: Visible replies and heartbeats
   - H2: Hook boundaries
   - H2: V1 support contract
@@ -5416,6 +5491,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Requirements
   - H2: Quickstart
   - H2: Share threads with Codex Desktop and CLI
+  - H2: Supervise Codex sessions
   - H2: Configuration
   - H3: Compaction
   - H2: Verify Codex runtime
@@ -5452,6 +5528,21 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Connected account apps
   - H2: Thread app config
   - H2: Destructive action policy
+  - H2: Troubleshooting
+  - H2: Related
+
+## plugins/codex-supervision.md
+
+- Route: /plugins/codex-supervision
+- Headings:
+  - H2: Before you begin
+  - H2: Enable supervision
+  - H2: Use the operator CLI
+  - H2: Branch from a local session
+  - H2: Archive a local session
+  - H2: Understand paired-node limits
+  - H2: Metadata and permissions
+  - H3: Compatibility tools
   - H2: Troubleshooting
   - H2: Related
 
@@ -5561,6 +5652,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Message hooks
   - H2: Install hooks
   - H2: Gateway lifecycle
+  - H3: Safe external cron projection
   - H2: Upcoming deprecations
   - H2: Related
 
@@ -5578,6 +5670,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Configuration
   - H2: Native Runtime
+  - H2: Runtime diagnostics
   - H2: Troubleshooting
 
 ## plugins/logbook.md
@@ -5922,20 +6015,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
-## plugins/reference/codex-supervisor.md
-
-- Route: /plugins/reference/codex-supervisor
-- Headings:
-  - H1: Codex Supervisor plugin
-  - H2: Distribution
-  - H2: Surface
-  - H2: Enable the plugin
-  - H2: App Server selection
-  - H2: List sessions from the CLI
-  - H2: Use the Control UI
-  - H2: Metadata and security boundary
-  - H2: Supervisor agent session listing
-
 ## plugins/reference/codex.md
 
 - Route: /plugins/reference/codex
@@ -5979,6 +6058,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
+
+## plugins/reference/crabbox.md
+
+- Route: /plugins/reference/crabbox
+- Headings:
+  - H1: Crabbox plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Configure
 
 ## plugins/reference/deepgram.md
 
@@ -6911,6 +6999,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/workspaces.md
+
+- Route: /plugins/reference/workspaces
+- Headings:
+  - H1: Workspaces plugin
+  - H2: Distribution
+  - H2: Surface
+
 ## plugins/reference/xai.md
 
 - Route: /plugins/reference/xai
@@ -6963,7 +7059,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: When to use a harness
   - H2: What core still owns
   - H3: Harness-owned auth bootstrap
+  - H3: Verified setup runtime artifacts
   - H2: Register a harness
+  - H3: Delegated execution
   - H2: Selection policy
   - H2: Provider plus harness pairing
   - H3: Tool-result middleware
@@ -7006,6 +7104,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/sdk-channel-outbound
 - Headings:
   - H2: Adapter
+  - H2: Plain-text sanitization
   - H2: Delivery Evidence
   - H2: Existing outbound adapters
   - H2: Durable sends
@@ -7317,6 +7416,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Usage and cost tracking
   - H2: Getting started
+  - H2: Claude sessions across computers
   - H2: Thinking defaults (Claude Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
   - H2: Safety refusal fallback (Claude Fable 5)
   - H3: Why this exists
@@ -8760,25 +8860,24 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Recommended blocked destinations
   - H2: Limits
 
-## specs/claw-supervisor.md
+## specs/codex-supervision.md
 
-- Route: /specs/claw-supervisor
+- Route: /specs/codex-supervision
 - Headings:
-  - H1: Claw Supervisor
+  - H1: Codex supervision
   - H2: Goal
-  - H2: Product Model
-  - H2: Architecture
-  - H2: Federated Session Catalog
-  - H2: Codex App-Server Contract
-  - H2: Session Registry
-  - H2: MCP Surface For Codex
-  - H2: Claw Control Surface
-  - H2: Launch Flow
-  - H2: Deployment
-  - H2: Security
-  - H2: Implementation Plan
-  - H2: Acceptance Tests
-  - H2: Open Questions
+  - H2: Product boundary
+  - H2: Ownership
+  - H2: Catalog flow
+  - H2: Operator CLI boundary
+  - H2: Local continuation
+  - H2: Archive behavior
+  - H2: Active thread safety
+  - H2: Paired-node boundary
+  - H2: Permissions
+  - H2: Compatibility
+  - H2: Future work
+  - H2: Acceptance tests
 
 ## start/bootstrapping.md
 
@@ -9139,6 +9238,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does not do
   - H2: Delivery model
   - H2: Surface behavior
+  - H2: Selection popup (Control UI)
   - H2: When to use it
   - H2: Related
 
@@ -9669,6 +9769,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/skills
 - Headings:
   - H2: Loading order
+  - H2: Node-hosted skills
   - H2: Per-agent vs shared skills
   - H2: Agent allowlists
   - H2: Plugins and skills
@@ -9946,11 +10047,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Appearance themes
   - H2: Manage plugins
   - H2: Sidebar navigation
-  - H2: New session dialog
+  - H2: New session page
   - H2: What it can do (today)
   - H2: MCP page
   - H2: Activity tab
   - H2: Operator terminal
+  - H2: Browser panel
   - H2: Chat behavior
   - H2: Connection loss and reconnect
   - H2: PWA install and web push
@@ -10035,3 +10137,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Remote use
   - H2: Configuration reference (WebChat)
   - H2: Related
+
+## web/workspaces.md
+
+- Route: /web/workspaces
+- Headings:
+  - H2: Enable Workspaces
+  - H2: The default workspace
+  - H2: Built-in widgets
+  - H2: Provenance
+  - H2: Custom widgets
+  - H2: CLI
+  - H2: Storage

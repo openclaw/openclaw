@@ -103,6 +103,53 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_kind_sequence
 CREATE INDEX IF NOT EXISTS idx_audit_events_status_sequence
   ON audit_events(status, sequence DESC);
 
+CREATE TABLE IF NOT EXISTS session_state_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  dedupe_key TEXT UNIQUE,
+  session_key TEXT NOT NULL,
+  session_id TEXT,
+  agent_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT,
+  run_id TEXT,
+  occurred_at INTEGER NOT NULL,
+  summary TEXT NOT NULL,
+  payload_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_state_events_session_sequence
+  ON session_state_events(session_key, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_session_state_events_time
+  ON session_state_events(occurred_at DESC, sequence DESC);
+
+CREATE TABLE IF NOT EXISTS session_state_heads (
+  session_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  last_sequence INTEGER NOT NULL,
+  pruned_max_sequence INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, agent_id)
+);
+
+-- Watcher identity is the bare session key, matching the process-local system-event
+-- queue it feeds. Producers only create rows for agent-qualified watcher keys;
+-- bare keys (session.scope="global") are ambiguous across agents and are excluded
+-- from the notice protocol until watcher identity is agent-scoped end-to-end.
+CREATE TABLE IF NOT EXISTS session_watch_cursors (
+  watcher_session_key TEXT NOT NULL,
+  target_session_key TEXT NOT NULL,
+  last_seen_sequence INTEGER NOT NULL DEFAULT 0,
+  notified_sequence INTEGER NOT NULL DEFAULT 0,
+  material_sequence INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (watcher_session_key, target_session_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_watch_cursors_target
+  ON session_watch_cursors(target_session_key);
+
 CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
   bundle_key TEXT NOT NULL PRIMARY KEY,
   reason TEXT NOT NULL,
@@ -1333,4 +1380,60 @@ CREATE TABLE IF NOT EXISTS session_groups (
   name TEXT NOT NULL PRIMARY KEY,
   position INTEGER NOT NULL,
   created_at INTEGER NOT NULL
+);
+
+-- Gateway-owned durable cloud worker lifecycle. Provider-specific execution
+-- stays in plugins; this table records only core reconciliation facts.
+CREATE TABLE IF NOT EXISTS worker_environments (
+  environment_id TEXT NOT NULL PRIMARY KEY,
+  provider_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  profile_snapshot_json TEXT NOT NULL,
+  provision_operation_id TEXT NOT NULL UNIQUE,
+  lease_id TEXT,
+  ssh_host TEXT,
+  ssh_port INTEGER CHECK (ssh_port IS NULL OR (ssh_port >= 1 AND ssh_port <= 65535)),
+  ssh_user TEXT,
+  ssh_host_key TEXT,
+  ssh_key_ref_json TEXT,
+  state TEXT NOT NULL CHECK (
+    state IN (
+      'requested',
+      'provisioning',
+      'bootstrapping',
+      'ready',
+      'attached',
+      'idle',
+      'draining',
+      'destroying',
+      'destroyed',
+      'failed',
+      'orphaned'
+    )
+  ),
+  bootstrap_bundle_hash TEXT,
+  bootstrap_openclaw_version TEXT,
+  bootstrap_protocol_features_json TEXT,
+  teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed')),
+  attached_session_ids_json TEXT NOT NULL DEFAULT '[]',
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  state_changed_at_ms INTEGER NOT NULL,
+  idle_since_at_ms INTEGER,
+  destroy_requested_at_ms INTEGER,
+  last_error TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
+  ON worker_environments(provider_id, lease_id)
+  WHERE lease_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS fleet_cells (
+  tenant_id TEXT NOT NULL PRIMARY KEY,
+  created_at_ms INTEGER NOT NULL,
+  image TEXT NOT NULL,
+  runtime TEXT NOT NULL,
+  host_port INTEGER NOT NULL,
+  container_name TEXT NOT NULL,
+  data_dir TEXT NOT NULL
 );\n`;

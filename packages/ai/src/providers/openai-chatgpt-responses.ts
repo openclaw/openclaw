@@ -60,13 +60,13 @@ import {
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
   convertResponsesMessages,
   convertResponsesToolPayload,
   processResponsesStream,
   resolveResponsesReasoningEffort,
 } from "./openai-responses-shared.js";
-import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import { buildBaseOptions } from "./simple-options.js";
 
 // ============================================================================
@@ -1438,8 +1438,9 @@ async function* parseWebSocket(
       if (signal?.aborted) {
         throw new Error("Request was aborted");
       }
-      if (queue.length > 0) {
-        yield queue.shift()!;
+      const next = queue.shift();
+      if (next !== undefined) {
+        yield next;
         continue;
       }
       if (done) {

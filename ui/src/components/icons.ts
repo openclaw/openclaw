@@ -118,6 +118,13 @@ export const icons = {
       />
     </svg>
   `,
+  folderOpen: html`
+    <svg viewBox="0 0 24 24">
+      <path
+        d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"
+      />
+    </svg>
+  `,
   kanban: html`
     <svg viewBox="0 0 24 24">
       <rect width="18" height="18" x="3" y="3" rx="2" />
@@ -617,6 +624,12 @@ export const icons = {
       <rect x="3" y="3" width="18" height="18" rx="2" />
       <path d="M15 3v18" stroke-linecap="round" />
       <path d="M8 10l3 2-3 2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
+  columns2: html`
+    <svg viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M12 3v18" stroke-linecap="round" />
     </svg>
   `,
   panelBottomOpen: html`

@@ -26,13 +26,6 @@ export type GatewaySuspendStatusResult = SchemaType<"GatewaySuspendStatusResult"
 export type GatewaySuspendResumeParams = SchemaType<"GatewaySuspendResumeParams">;
 export type GatewaySuspendResumeResult = SchemaType<"GatewaySuspendResumeResult">;
 
-/** Environment status RPC payloads used by CLI and Control UI surfaces. */
-export type EnvironmentStatus = SchemaType<"EnvironmentStatus">;
-export type EnvironmentSummary = SchemaType<"EnvironmentSummary">;
-export type EnvironmentsListParams = SchemaType<"EnvironmentsListParams">;
-export type EnvironmentsListResult = SchemaType<"EnvironmentsListResult">;
-export type EnvironmentsStatusParams = SchemaType<"EnvironmentsStatusParams">;
-export type EnvironmentsStatusResult = SchemaType<"EnvironmentsStatusResult">;
 export type SystemInfoParams = SchemaType<"SystemInfoParams">;
 export type SystemInfoResult = SchemaType<"SystemInfoResult">;
 export type TaskSuggestion = SchemaType<"TaskSuggestion">;
@@ -58,6 +51,9 @@ export type WorktreesGcResult = SchemaType<"WorktreesGcResult">;
 export type WorktreeBranch = SchemaType<"WorktreeBranch">;
 export type WorktreesBranchesParams = SchemaType<"WorktreesBranchesParams">;
 export type WorktreesBranchesResult = SchemaType<"WorktreesBranchesResult">;
+export type FsDirEntry = SchemaType<"FsDirEntry">;
+export type FsListDirParams = SchemaType<"FsListDirParams">;
+export type FsListDirResult = SchemaType<"FsListDirResult">;
 
 /** Agent activity, identity, send, poll, wait, and wake protocol payloads. */
 export type AgentEvent = SchemaType<"AgentEvent">;
@@ -75,6 +71,9 @@ export type NodePairRejectParams = SchemaType<"NodePairRejectParams">;
 export type NodePairRemoveParams = SchemaType<"NodePairRemoveParams">;
 export type NodeRenameParams = SchemaType<"NodeRenameParams">;
 export type NodeListParams = SchemaType<"NodeListParams">;
+// NodePluginToolDescriptor / NodeSkillDescriptor and their update params are
+// plugin-SDK-reachable, so nodes.ts exports them directly; routing them through
+// ProtocolSchemas would retain the whole registry in the public plugin-sdk dts.
 export type NodePendingAckParams = SchemaType<"NodePendingAckParams">;
 export type NodeDescribeParams = SchemaType<"NodeDescribeParams">;
 export type NodeInvokeParams = SchemaType<"NodeInvokeParams">;
@@ -159,6 +158,8 @@ export type CrestodianChatParams = SchemaType<"CrestodianChatParams">;
 export type CrestodianChatResult = SchemaType<"CrestodianChatResult">;
 export type CrestodianSetupDetectParams = SchemaType<"CrestodianSetupDetectParams">;
 export type CrestodianSetupDetectResult = SchemaType<"CrestodianSetupDetectResult">;
+export type CrestodianSetupVerifyParams = SchemaType<"CrestodianSetupVerifyParams">;
+export type CrestodianSetupVerifyResult = SchemaType<"CrestodianSetupVerifyResult">;
 export type CrestodianSetupActivateParams = SchemaType<"CrestodianSetupActivateParams">;
 export type CrestodianSetupActivateResult = SchemaType<"CrestodianSetupActivateResult">;
 
@@ -242,6 +243,10 @@ export type SessionsFilesListParams = SchemaType<"SessionsFilesListParams">;
 export type SessionsFilesListResult = SchemaType<"SessionsFilesListResult">;
 export type SessionsFilesGetParams = SchemaType<"SessionsFilesGetParams">;
 export type SessionsFilesGetResult = SchemaType<"SessionsFilesGetResult">;
+export type SessionDiffFileStatus = SchemaType<"SessionDiffFileStatus">;
+export type SessionDiffFile = SchemaType<"SessionDiffFile">;
+export type SessionsDiffParams = SchemaType<"SessionsDiffParams">;
+export type SessionsDiffResult = SchemaType<"SessionsDiffResult">;
 export type ArtifactSummary = SchemaType<"ArtifactSummary">;
 export type ArtifactsListParams = SchemaType<"ArtifactsListParams">;
 export type ArtifactsListResult = SchemaType<"ArtifactsListResult">;

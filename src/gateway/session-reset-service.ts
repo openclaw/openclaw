@@ -56,6 +56,11 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { resolveMissingAgentHarnessSessionError } from "../sessions/agent-harness-session-key.js";
+import {
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+} from "../sessions/model-overrides.js";
 import {
   hasOnlySessionLifecycleMutationKindActive,
   interruptSessionWorkAdmissions,
@@ -63,6 +68,7 @@ import {
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
+import { handleSessionStateSessionReset } from "../sessions/session-state-events.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
@@ -920,6 +926,24 @@ export async function performGatewaySessionReset(params: {
     params.key,
     resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
   ).entry;
+  const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
+    resetTarget.target.canonicalKey,
+    initialResetEntry,
+  );
+  if (missingHarnessSessionError) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError),
+    };
+  }
+  // Reject before interrupting admitted work or firing reset hooks. The model lock is
+  // session-id scoped, so rotating first would silently detach native harness ownership.
+  if (isModelSelectionLocked(initialResetEntry)) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
+    };
+  }
   const resetLifecycleIdentities = [
     resetTarget.target.canonicalKey,
     params.key,
@@ -977,6 +1001,12 @@ export async function performGatewaySessionReset(params: {
         return {
           ok: false,
           error: errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError),
+        };
+      }
+      if (isModelSelectionLocked(entry)) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
         };
       }
       const hadExistingEntry = Boolean(entry);
@@ -1223,6 +1253,7 @@ export async function performGatewaySessionReset(params: {
           });
         },
       });
+      handleSessionStateSessionReset(target.canonicalKey ?? params.key);
       const next = lifecycle.nextEntry;
       const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);
       const resolved = {
