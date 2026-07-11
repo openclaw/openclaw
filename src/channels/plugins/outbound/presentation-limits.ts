@@ -87,9 +87,18 @@ function splitPresentationText(value: string, limits: TextLimits | undefined): s
   let remaining = value;
   while (remaining) {
     const prefix = truncatePresentationText(remaining, limits);
-    if (!prefix || prefix === remaining) {
+    if (prefix === remaining) {
       chunks.push(remaining);
       break;
+    }
+    if (!prefix) {
+      // The first character(s) could not fit within the limit (e.g., a
+      // supplementary-plane emoji at a utf16-units limit of 1). Advance
+      // past one full code point rather than producing an empty chunk or
+      // bailing out with the entire untruncated text.
+      const firstCodePoint = [...remaining][0];
+      remaining = remaining.slice(firstCodePoint?.length ?? remaining.length);
+      continue;
     }
     // Keep complete fallback lines together when possible. Retain the newline
     // itself so concatenating the blocks reconstructs every authored character.
