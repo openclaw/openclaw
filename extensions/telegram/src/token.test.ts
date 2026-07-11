@@ -4,7 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveTelegramToken } from "./token.js";
+import { resolveTelegramBotUserIdFromToken, resolveTelegramToken } from "./token.js";
+
+describe("resolveTelegramBotUserIdFromToken", () => {
+  it.each([
+    ["123456:secret", 123456],
+    ["not-a-bot:secret", undefined],
+    ["0:secret", undefined],
+    ["9007199254740992:secret", undefined],
+    ["+123:secret", undefined],
+    ["123 :secret", undefined],
+  ])("parses %j as %j", (token, expected) => {
+    expect(resolveTelegramBotUserIdFromToken(token)).toBe(expected);
+  });
+});
 
 describe("resolveTelegramToken", () => {
   const tempDirs: string[] = [];
@@ -89,6 +102,37 @@ describe("resolveTelegramToken", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", envToken);
     const res = resolveTelegramToken(resolveCfg ? resolveCfg() : cfg);
     expect(res).toEqual(expected);
+  });
+
+  it("resolves the configured defaultAccount token when accountId is omitted (#61012)", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
+    const cfg = {
+      channels: {
+        telegram: {
+          defaultAccount: "kitt",
+          accounts: {
+            kitt: { botToken: "kitt-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveTelegramToken(cfg);
+    expect(res).toEqual({ token: "kitt-token", source: "config" });
+  });
+
+  it("keeps the env token for omitted accountId when no defaultAccount is configured", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            kitt: { botToken: "kitt-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveTelegramToken(cfg);
+    expect(res).toEqual({ token: "env-token", source: "env" });
   });
 
   it.runIf(process.platform !== "win32")("rejects symlinked tokenFile paths", () => {

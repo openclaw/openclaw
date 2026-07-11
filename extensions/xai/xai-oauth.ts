@@ -12,22 +12,25 @@ import {
   type OAuthCredential,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
 const PROVIDER_ID = "xai";
-export const XAI_OAUTH_METHOD_ID = "oauth";
-export const XAI_OAUTH_CHOICE_ID = "xai-oauth";
-export const XAI_DEVICE_CODE_METHOD_ID = "device-code";
-export const XAI_DEVICE_CODE_CHOICE_ID = "xai-device-code";
+const XAI_OAUTH_METHOD_ID = "oauth";
+const XAI_OAUTH_CHOICE_ID = "xai-oauth";
+const XAI_DEVICE_CODE_METHOD_ID = "device-code";
+const XAI_DEVICE_CODE_CHOICE_ID = "xai-device-code";
 export const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 export const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
-export const XAI_OAUTH_ISSUER = "https://auth.x.ai";
+const XAI_OAUTH_ISSUER = "https://auth.x.ai";
 export const XAI_OAUTH_DISCOVERY_URL = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
 const XAI_LEGACY_OAUTH_TOKEN_ENDPOINT = `${XAI_OAUTH_ISSUER}/oauth/token`;
 
 const XAI_OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
 const XAI_OAUTH_FETCH_TIMEOUT_MS = 30 * 1000;
+const XAI_OAUTH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const XAI_OAUTH_REFRESH_MAX_ATTEMPTS = 3;
 const XAI_OAUTH_REFRESH_RETRY_DELAY_MS = 250;
 const XAI_DEVICE_CODE_DEFAULT_INTERVAL_MS = 5 * 1000;
@@ -111,7 +114,10 @@ function readStringRecord(value: unknown): Record<string, unknown> {
 }
 
 async function readResponseBody(response: Response): Promise<XaiOAuthResponseBody> {
-  const text = await response.text();
+  const buffer = await readResponseWithLimit(response, XAI_OAUTH_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ maxBytes }) => new Error(`xAI OAuth response exceeds ${maxBytes} bytes`),
+  });
+  const text = new TextDecoder().decode(buffer);
   let json: unknown;
   try {
     json = JSON.parse(text);
@@ -294,12 +300,6 @@ function describeXaiOAuthTokenFailure(params: {
   };
 }
 
-async function sleep(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 async function exchangeXaiOAuthToken(
   params: {
     tokenEndpoint: string;
@@ -449,7 +449,11 @@ async function pollXaiDeviceCodeToken(
     );
     let body: unknown;
     try {
-      body = await response.json();
+      const buffer = await readResponseWithLimit(response, XAI_OAUTH_RESPONSE_MAX_BYTES, {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`xAI device code response exceeds ${maxBytes} bytes`),
+      });
+      body = JSON.parse(new TextDecoder().decode(buffer));
     } catch {
       body = null;
     }

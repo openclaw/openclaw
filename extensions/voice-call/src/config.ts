@@ -11,10 +11,11 @@ import {
   canonicalizeMainSessionAlias,
   type SessionScope,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
-import { normalizePath } from "./path-utils.js";
+import { TWILIO_REGIONS } from "./providers/twilio-region.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 // -----------------------------------------------------------------------------
@@ -66,6 +67,8 @@ const TwilioConfigSchema = z
     accountSid: z.string().min(1).optional(),
     /** Twilio Auth Token */
     authToken: SecretInputSchema.optional(),
+    /** Twilio processing Region (for example, ie1) */
+    region: z.enum(TWILIO_REGIONS).optional(),
   })
   .strict();
 
@@ -97,7 +100,7 @@ const VoiceCallNumberRouteConfigSchema = z
     responseTimeoutMs: z.number().int().positive().optional(),
   })
   .strict();
-export type VoiceCallNumberRouteConfig = z.infer<typeof VoiceCallNumberRouteConfigSchema>;
+type VoiceCallNumberRouteConfig = z.infer<typeof VoiceCallNumberRouteConfigSchema>;
 
 // -----------------------------------------------------------------------------
 // Webhook Server Configuration
@@ -287,7 +290,7 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     files: ["SOUL.md", "IDENTITY.md", "USER.md"],
   });
 
-export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
+const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "off",
   "minimal",
   "low",
@@ -296,6 +299,7 @@ export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "xhigh",
   "adaptive",
   "max",
+  "ultra",
 ]);
 
 const VoiceCallStreamingProvidersConfigSchema = z
@@ -503,7 +507,7 @@ export const VoiceCallConfigSchema = z
   .strict();
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
-export type VoiceCallEffectiveConfigResult = {
+type VoiceCallEffectiveConfigResult = {
   config: VoiceCallConfig;
   numberRouteKey?: string;
 };
@@ -528,7 +532,7 @@ function cloneDefaultVoiceCallConfig(): VoiceCallConfig {
 }
 
 function defaultRealtimeStreamPathForServePath(servePath: string): string {
-  const normalized = normalizePath(servePath);
+  const normalized = normalizeWebhookPath(servePath);
   if (normalized.endsWith("/webhook")) {
     return `${normalized.slice(0, -"/webhook".length)}/stream/realtime`;
   }
@@ -924,10 +928,11 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     config.realtime.enabled &&
     config.provider &&
     config.provider !== "twilio" &&
-    config.provider !== "telnyx"
+    config.provider !== "telnyx" &&
+    config.provider !== "mock"
   ) {
     errors.push(
-      'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+      'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "mock" when realtime.enabled is true',
     );
   }
 

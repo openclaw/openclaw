@@ -63,13 +63,13 @@ import {
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
-import {
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-  updateLastRoute,
-} from "../../config/sessions.js";
+import { resolveStorePath } from "../../config/sessions.js";
 import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
-import { readSessionUpdatedAt } from "../../config/sessions/session-accessor.js";
+import {
+  readSessionUpdatedAt,
+  recordInboundSessionMeta,
+  updateSessionLastRoute,
+} from "../../config/sessions/session-accessor.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import {
   fetchRemoteMedia,
@@ -91,9 +91,11 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
   const sessionRuntime = {
     resolveStorePath,
     readSessionUpdatedAt,
-    recordSessionMetaFromInbound,
+    // Plugin runtime property names are a shipped contract; the implementations
+    // route through the session accessor boundary.
+    recordSessionMetaFromInbound: recordInboundSessionMeta,
     recordInboundSession,
-    updateLastRoute,
+    updateLastRoute: updateSessionLastRoute,
     resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
   };
   const channelRuntime = {

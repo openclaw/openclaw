@@ -1,13 +1,10 @@
 // Feishu plugin module implements monitor.message handler behavior.
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import { claimUnprocessedFeishuMessage, releaseFeishuMessageProcessing } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { isMentionForwardRequest } from "./mention.js";
-import {
-  releaseFeishuMessageProcessing,
-  tryBeginFeishuMessageProcessing,
-} from "./processing-claims.js";
 import { createSequentialQueue } from "./sequential-queue.js";
 import type { FeishuChatType } from "./types.js";
 
@@ -53,6 +50,12 @@ type FeishuMessageReceiveHandlerContext = {
     botOpenId?: string;
     botName?: string;
   }) => string;
+  /**
+   * Optional status sink. When provided, the handler will publish `lastEventAt`
+   * on every inbound message for message recency. Transport liveness is
+   * published by the transport layer.
+   */
+  statusSink?: import("./monitor.js").FeishuStatusSink;
 };
 
 function normalizeFeishuChatType(value: unknown): FeishuChatType | undefined {
@@ -170,6 +173,7 @@ export function createFeishuMessageReceiveHandler({
   getBotName = () => undefined,
   resolveSequentialKey = ({ accountId: accountIdLocal, event }) =>
     `feishu:${accountIdLocal}:${event.message.chat_id?.trim() || "unknown"}`,
+  statusSink,
 }: FeishuMessageReceiveHandlerContext): (data: unknown) => Promise<void> {
   const inboundDebounceMs = channelRuntime.debounce.resolveInboundDebounceMs({
     cfg,
@@ -318,6 +322,13 @@ export function createFeishuMessageReceiveHandler({
   });
 
   return async (data) => {
+    // Publish message recency before dedupe/debounce; transport liveness is
+    // owned by the WebSocket/Webhook lifecycle monitors.
+    const inboundAt = Date.now();
+    statusSink?.({
+      lastEventAt: inboundAt,
+    });
+
     const event = parseFeishuMessageEventPayload(data);
     if (!event) {
       error(`feishu[${accountId}]: ignoring malformed message event payload`);
@@ -333,8 +344,13 @@ export function createFeishuMessageReceiveHandler({
       return;
     }
     const messageDedupeKey = resolveFeishuMessageDedupeKey(event);
-    if (!tryBeginFeishuMessageProcessing(messageDedupeKey, accountId)) {
-      log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
+    const claim = await claimUnprocessedFeishuMessage({
+      messageId: messageDedupeKey,
+      namespace: accountId,
+      log,
+    });
+    if (claim !== "claimed") {
+      log(`feishu[${accountId}]: dropping ${claim} event for message ${messageId}`);
       return;
     }
     const processMessage = async () => {

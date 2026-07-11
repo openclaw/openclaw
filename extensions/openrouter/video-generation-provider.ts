@@ -1,4 +1,5 @@
 // Openrouter provider module implements model/runtime integration.
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -118,8 +119,7 @@ function readOpenRouterVideoResponse(payload: Record<string, unknown>): OpenRout
 
 function toDataUrl(asset: VideoGenerationSourceAsset): string {
   if (asset.buffer) {
-    const mimeType = normalizeOptionalString(asset.mimeType) ?? "image/png";
-    return `data:${mimeType};base64,${asset.buffer.toString("base64")}`;
+    return toImageDataUrl({ ...asset, buffer: asset.buffer, defaultMimeType: "image/png" });
   }
   const url = normalizeOptionalString(asset.url);
   if (url) {

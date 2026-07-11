@@ -99,6 +99,11 @@ print_install_audit() {
   fi
 }
 
+verify_candidate_ai_runtime() {
+  echo "==> Verify installed AI runtime"
+  OPENCLAW_ALLOW_ROOT=1 openclaw infer image providers --json >/dev/null
+}
+
 run_with_heartbeat() {
   local label="$1"
   shift
@@ -278,6 +283,7 @@ run_install_smoke() {
       fi
     fi
     verify_installed_cli "$PACKAGE_NAME" "$FRESH_VERSION"
+    verify_candidate_ai_runtime
 
     echo "OK"
     return 0
@@ -475,11 +481,26 @@ if (Number(updateStep.exitCode ?? 1) !== 0) {
 if (typeof updateStep.command !== "string" || !updateStep.command.includes(expectedUrl)) {
   throw new Error(`global update step missing expected tgz URL: ${JSON.stringify(updateStep)}`);
 }
+const doctorStep = steps.find((step) => step?.name === "openclaw doctor");
+// Every baseline that passes verify_installed_cli implements this contract;
+// the sole earlier npm artifact has no CLI and cannot reach this parser.
+if (!doctorStep) {
+  throw new Error("missing openclaw doctor step in update JSON");
+}
+// Exit 86 is the updater's explicit recoverable post-install doctor contract.
+const doctorSucceeded = doctorStep.exitCode === 0;
+const doctorWasAdvisory =
+  doctorStep.exitCode === 86 &&
+  doctorStep.advisory?.kind === "package-post-install-doctor";
+if (!doctorSucceeded && !doctorWasAdvisory) {
+  throw new Error(`openclaw doctor step failed: ${JSON.stringify(doctorStep)}`);
+}
 NODE
 
   echo "==> Verify updated version"
   print_install_audit "updated install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION"
+  verify_candidate_ai_runtime
 
   echo "OK"
 }

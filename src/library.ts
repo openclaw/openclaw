@@ -20,6 +20,7 @@ import type {
   runCommandWithTimeout as runCommandWithTimeoutRuntime,
   runExec as runExecRuntime,
 } from "./process/exec.js";
+import { createLazyRuntimeModule } from "./shared/lazy-runtime.js";
 import { normalizeE164 } from "./utils.js";
 
 type GetReplyFromConfig = typeof getReplyFromConfigRuntime;
@@ -29,38 +30,13 @@ type RunExec = typeof runExecRuntime;
 type RunCommandWithTimeout = typeof runCommandWithTimeoutRuntime;
 type MonitorWebChannel = typeof monitorWebChannelRuntime;
 
-let replyRuntimePromise: Promise<typeof import("./auto-reply/reply.runtime.js")> | null = null;
-let promptRuntimePromise: Promise<typeof import("./cli/prompt.js")> | null = null;
-let binariesRuntimePromise: Promise<typeof import("./infra/binaries.js")> | null = null;
-let execRuntimePromise: Promise<typeof import("./process/exec.js")> | null = null;
-let webChannelRuntimePromise: Promise<
-  typeof import("./plugins/runtime/runtime-web-channel-plugin.js")
-> | null = null;
-
-function loadReplyRuntime() {
-  replyRuntimePromise ??= import("./auto-reply/reply.runtime.js");
-  return replyRuntimePromise;
-}
-
-function loadPromptRuntime() {
-  promptRuntimePromise ??= import("./cli/prompt.js");
-  return promptRuntimePromise;
-}
-
-function loadBinariesRuntime() {
-  binariesRuntimePromise ??= import("./infra/binaries.js");
-  return binariesRuntimePromise;
-}
-
-function loadExecRuntime() {
-  execRuntimePromise ??= import("./process/exec.js");
-  return execRuntimePromise;
-}
-
-function loadWebChannelRuntime() {
-  webChannelRuntimePromise ??= import("./plugins/runtime/runtime-web-channel-plugin.js");
-  return webChannelRuntimePromise;
-}
+const loadReplyRuntime = createLazyRuntimeModule(() => import("./auto-reply/reply.runtime.js"));
+const loadPromptRuntime = createLazyRuntimeModule(() => import("./cli/prompt.js"));
+const loadBinariesRuntime = createLazyRuntimeModule(() => import("./infra/binaries.js"));
+const loadExecRuntime = createLazyRuntimeModule(() => import("./process/exec.js"));
+const loadWebChannelRuntime = createLazyRuntimeModule(
+  () => import("./plugins/runtime/runtime-web-channel-plugin.js"),
+);
 
 export const getReplyFromConfig: GetReplyFromConfig = async (...args) =>
   (await loadReplyRuntime()).getReplyFromConfig(...args);

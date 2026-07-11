@@ -21,7 +21,12 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import type { CodexAppServerClient } from "./client.js";
-import type { CodexAppServerStartOptions } from "./config.js";
+import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
+import {
+  resolveCodexAppServerUserHomeDir,
+  resolveCodexComputerUseConfig,
+  type CodexAppServerStartOptions,
+} from "./config.js";
 import type {
   CodexChatgptAuthTokensRefreshResponse,
   CodexGetAccountResponse,
@@ -61,16 +66,18 @@ export async function bridgeCodexAppServerStartOptions(params: {
   authProfileId?: string | null;
   authProfileStore?: AuthProfileStore;
   config?: AuthProfileOrderConfig;
+  pluginConfig?: unknown;
 }): Promise<CodexAppServerStartOptions> {
   if (params.startOptions.transport !== "stdio") {
     return params.startOptions;
   }
-  const isolatedStartOptions = await withAgentCodexHomeEnvironment(
+  const scopedStartOptions = await withCodexHomeEnvironment(
     params.startOptions,
     params.agentDir,
+    params.pluginConfig,
   );
   if (params.authProfileId === null) {
-    return isolatedStartOptions;
+    return scopedStartOptions;
   }
   const store = resolveCodexAppServerAuthProfileStore({
     agentDir: params.agentDir,
@@ -89,8 +96,8 @@ export async function bridgeCodexAppServerStartOptions(params: {
     config: params.config,
   });
   return shouldClearInheritedOpenAiApiKey
-    ? withClearedEnvironmentVariables(isolatedStartOptions, CODEX_APP_SERVER_API_KEY_ENV_VARS)
-    : isolatedStartOptions;
+    ? withClearedEnvironmentVariables(scopedStartOptions, CODEX_APP_SERVER_API_KEY_ENV_VARS)
+    : scopedStartOptions;
 }
 
 export function resolveCodexAppServerAuthProfileId(params: {
@@ -333,17 +340,24 @@ export function resolveCodexAppServerNativeHomeDir(agentDir: string): string {
   return path.join(resolveCodexAppServerHomeDir(agentDir), CODEX_APP_SERVER_NATIVE_HOME_DIRNAME);
 }
 
-async function withAgentCodexHomeEnvironment(
+async function withCodexHomeEnvironment(
   startOptions: CodexAppServerStartOptions,
   agentDir: string,
+  pluginConfig?: unknown,
 ): Promise<CodexAppServerStartOptions> {
   const codexHome = startOptions.env?.[CODEX_HOME_ENV_VAR]?.trim()
     ? startOptions.env[CODEX_HOME_ENV_VAR]
-    : resolveCodexAppServerHomeDir(agentDir);
+    : startOptions.homeScope === "user"
+      ? resolveCodexAppServerUserHomeDir(process.env)
+      : resolveCodexAppServerHomeDir(agentDir);
   const nativeHome = startOptions.env?.[HOME_ENV_VAR]?.trim()
     ? startOptions.env[HOME_ENV_VAR]
     : undefined;
   await fs.mkdir(codexHome, { recursive: true });
+  await ensureCodexComputerUseSharedPluginCache({
+    codexHome,
+    config: resolveCodexComputerUseConfig({ pluginConfig }),
+  });
   if (nativeHome) {
     await fs.mkdir(nativeHome, { recursive: true });
   }

@@ -4,15 +4,12 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // Disabled `channels.imessage.catchup` blocks are retired. Enabled blocks stay
 // as a compatibility contract: older configs that opted into replay still get
 // downtime recovery, while new/default installs use the always-on recovery
 // cursor plus stale-backlog fence.
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function isEnabledCatchup(value: unknown): boolean {
   return isRecord(value) && value.enabled === true;
 }

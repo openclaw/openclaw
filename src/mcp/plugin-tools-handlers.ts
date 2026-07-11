@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Plugin MCP tool handlers route plugin tool calls through the active runtime.
 import {
   isToolWrappedWithBeforeToolCallHook,
@@ -12,10 +13,6 @@ type CallPluginToolParams = {
   name: string;
   arguments?: unknown;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function toMcpContentBlock(block: unknown): unknown {
   if (!isRecord(block)) {

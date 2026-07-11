@@ -1,8 +1,9 @@
 // Cron doctor repair planning helpers for previewing and merging legacy rows.
 import { isDeepStrictEqual } from "node:util";
-import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { normalizeOptionalStringifiedId } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { normalizeCronJobInput } from "../../../cron/normalize.js";
 import type { CronJob } from "../../../cron/types.js";
+import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 
 type CronLegacyIssueCounts = Partial<Record<string, number>>;
 
@@ -119,7 +120,11 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
 }
 
 function cronJobMigrationKey(job: Record<string, unknown>): string | undefined {
-  return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
+  return (
+    normalizeOptionalStringifiedId(job.id) ??
+    normalizeOptionalStringifiedId(job.jobId) ??
+    resolveLegacyCronMigrationId(job)
+  );
 }
 
 /** Merge legacy JSON jobs into current jobs without duplicating matching ids/jobIds. */

@@ -7,7 +7,7 @@ extension CritterStatusLabel {
     }
 
     private var effectiveAnimationsEnabled: Bool {
-        self.animationsEnabled && !self.isSleeping
+        self.animationsEnabled && !self.isSleeping && !self.isPaused
     }
 
     var body: some View {
@@ -24,10 +24,14 @@ extension CritterStatusLabel {
                         return
                     }
 
+                    await MainActor.run { self.rescheduleElapsedAnimationTimers(from: Date()) }
                     while !Task.isCancelled {
                         let now = Date()
-                        await MainActor.run { self.tick(now) }
-                        try? await Task.sleep(nanoseconds: 350_000_000)
+                        let delay = await MainActor.run {
+                            self.tick(now)
+                            return self.nextTickDelay(after: now)
+                        }
+                        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     }
                 }
                 .onChange(of: self.isPaused) { _, _ in self.resetMotion() }
@@ -77,7 +81,27 @@ extension CritterStatusLabel {
 
     private var tickTaskID: Int {
         // Ensure SwiftUI restarts (and cancels) the task when these change.
-        (self.effectiveAnimationsEnabled ? 1 : 0) | (self.earBoostActive ? 2 : 0)
+        (self.effectiveAnimationsEnabled ? 1 : 0) |
+            (self.earBoostActive ? 2 : 0) |
+            (self.isWorkingNow ? 4 : 0)
+    }
+
+    private func nextTickDelay(after now: Date) -> TimeInterval {
+        Self.nextAnimationTickDelay(
+            now: now,
+            isWorking: self.isWorkingNow,
+            deadlines: [self.nextBlink, self.nextWiggle, self.nextLegWiggle, self.nextEarWiggle])
+    }
+
+    static func nextAnimationTickDelay(
+        now: Date,
+        isWorking: Bool,
+        deadlines: [Date]) -> TimeInterval
+    {
+        // Working motion needs a steady cadence; idle motion only wakes for its next visible event.
+        if isWorking { return 0.35 }
+        guard let nextDeadline = deadlines.min() else { return 1 }
+        return max(0.05, nextDeadline.timeIntervalSince(now))
     }
 
     private func tick(_ now: Date) {
@@ -213,6 +237,12 @@ extension CritterStatusLabel {
         self.nextWiggle = date.addingTimeInterval(Double.random(in: 6.5...14))
         self.nextLegWiggle = date.addingTimeInterval(Double.random(in: 5.0...11.0))
         self.nextEarWiggle = date.addingTimeInterval(Double.random(in: 7.0...14.0))
+    }
+
+    private func rescheduleElapsedAnimationTimers(from date: Date) {
+        let deadlines = [self.nextBlink, self.nextWiggle, self.nextLegWiggle, self.nextEarWiggle]
+        guard deadlines.contains(where: { $0 <= date }) else { return }
+        self.scheduleRandomTimers(from: date)
     }
 
     private var gatewayNeedsAttention: Bool {

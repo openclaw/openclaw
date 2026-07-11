@@ -8,11 +8,12 @@ import {
 describe("agent run terminal outcome", () => {
   it("treats provider/preflight/post-turn timeout phases as hard run timeouts", () => {
     expect(
-      ["preflight", "provider", "post_turn", "queue", "gateway_draining"].map((timeoutPhase) =>
-        buildAgentRunTerminalOutcome({
-          status: "timeout",
-          timeoutPhase,
-        }).reason
+      ["preflight", "provider", "post_turn", "queue", "gateway_draining"].map(
+        (timeoutPhase) =>
+          buildAgentRunTerminalOutcome({
+            status: "timeout",
+            timeoutPhase,
+          }).reason,
       ),
     ).toEqual(["hard_timeout", "hard_timeout", "hard_timeout", "timed_out", "timed_out"]);
   });
@@ -51,7 +52,7 @@ describe("agent run terminal outcome", () => {
     });
 
     expect(rpcCancel.reason).toBe("cancelled");
-    expect(rpcCancel.status).toBe("timeout");
+    expect(rpcCancel.status).toBe("error");
     expect(mergeAgentRunTerminalOutcome(rpcCancel, lateCompletion)).toBe(rpcCancel);
     expect(
       buildAgentRunTerminalOutcome({
@@ -77,7 +78,7 @@ describe("agent run terminal outcome", () => {
 
     expect(restartCancel).toMatchObject({
       reason: "cancelled",
-      status: "timeout",
+      status: "error",
       stopReason: "restart",
     });
     expect(mergeAgentRunTerminalOutcome(restartCancel, lateCompletion)).toBe(restartCancel);
@@ -202,6 +203,35 @@ describe("agent run terminal outcome", () => {
       status: "timeout",
       error: "provider request timed out",
       livenessState: "blocked",
+    });
+  });
+
+  it("classifies abandoned successful waits as incomplete failures", () => {
+    expect(
+      buildAgentRunTerminalOutcome({
+        status: "ok",
+        livenessState: "abandoned",
+      }),
+    ).toEqual({
+      reason: "abandoned",
+      status: "error",
+      error: "Agent run ended before producing a complete result.",
+      livenessState: "abandoned",
+    });
+  });
+
+  it("keeps explicit cancellation ahead of abandoned liveness", () => {
+    expect(
+      buildAgentRunTerminalOutcome({
+        status: "error",
+        stopReason: "stop",
+        livenessState: "abandoned",
+      }),
+    ).toEqual({
+      reason: "cancelled",
+      status: "error",
+      stopReason: "stop",
+      livenessState: "abandoned",
     });
   });
 

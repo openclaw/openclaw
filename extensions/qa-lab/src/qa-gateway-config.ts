@@ -23,7 +23,7 @@ export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
 ]);
 
 export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["acpx", "memory-core"]);
-export const QA_LAB_PLUGIN_ID = "qa-lab";
+const QA_LAB_PLUGIN_ID = "qa-lab";
 
 export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])

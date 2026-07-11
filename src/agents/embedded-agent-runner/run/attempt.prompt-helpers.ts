@@ -1,3 +1,4 @@
+import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/internal/shared";
 /**
  * Builds and repairs prompt inputs for embedded-agent attempts.
  */
@@ -16,16 +17,17 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { truncateUtf16Safe } from "../../../utils.js";
 import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
-import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
-import { derivePromptTokens, type NormalizedUsage } from "../../usage.js";
+import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
@@ -108,19 +110,28 @@ export async function resolvePromptBuildHookResult(params: {
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
   beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  bootstrapContextRunKind?: EmbeddedRunAttemptParams["bootstrapContextRunKind"];
 }): Promise<PluginHookBeforePromptBuildResult> {
   const runId = params.hookCtx.runId;
   const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
-  const queuedContext = cachedInjections
+  const commitmentOnly = params.bootstrapContextRunKind === "commitment-only";
+  // Commitment fan-out must leave global queued context intact for the next
+  // normal turn and must not inherit heartbeat-wide prompt policy.
+  const queuedContext = commitmentOnly
     ? {
-        queuedInjections: cachedInjections,
-        ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedInjections }),
+        queuedInjections: [],
+        ...buildPluginAgentTurnPrepareContext({ queuedInjections: [] }),
       }
-    : await drainPluginNextTurnInjectionContext({
-        cfg: params.config,
-        sessionKey: params.hookCtx.sessionKey,
-      });
-  if (runId && !cachedInjections) {
+    : cachedInjections
+      ? {
+          queuedInjections: cachedInjections,
+          ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedInjections }),
+        }
+      : await drainPluginNextTurnInjectionContext({
+          cfg: params.config,
+          sessionKey: params.hookCtx.sessionKey,
+        });
+  if (runId && !commitmentOnly && !cachedInjections) {
     rememberDrainedInjections(runId, queuedContext.queuedInjections);
   }
   // Hook ordering mirrors the prompt assembly boundary: queued injections first,
@@ -143,6 +154,7 @@ export async function resolvePromptBuildHookResult(params: {
       : undefined;
   const heartbeatContribution =
     params.hookCtx.trigger === "heartbeat" &&
+    !commitmentOnly &&
     params.hookRunner?.runHeartbeatPromptContribution &&
     params.hookRunner.hasHooks("heartbeat_prompt_contribution")
       ? await params.hookRunner
@@ -236,9 +248,11 @@ export function shouldInjectHeartbeatPrompt(params: {
   defaultAgentId?: string;
   isDefaultAgent: boolean;
   trigger?: EmbeddedRunAttemptParams["trigger"];
+  bootstrapContextRunKind?: EmbeddedRunAttemptParams["bootstrapContextRunKind"];
 }): boolean {
   return (
     params.isDefaultAgent &&
+    params.bootstrapContextRunKind !== "commitment-only" &&
     shouldInjectHeartbeatPromptForTrigger(params.trigger) &&
     Boolean(
       resolveHeartbeatPromptForSystemPrompt({
@@ -304,7 +318,8 @@ function hasNonEmptyContent(content: unknown): boolean {
 }
 
 const QUEUED_USER_MESSAGE_MARKER =
-  "[Queued user message that arrived while the previous turn was still active]";
+  "[Queued user message from a previous active turn; preserved as context only. " +
+  "Continue with the active prompt below.]";
 const MAX_STRUCTURED_MEDIA_REF_CHARS = 300;
 const MAX_STRUCTURED_JSON_STRING_CHARS = 300;
 const MAX_STRUCTURED_JSON_DEPTH = 4;
@@ -325,7 +340,7 @@ function summarizeStructuredMediaRef(label: string, value: unknown): string | un
     return `[${label}] inline data URI (${mimeType}, ${trimmed.length} chars)`;
   }
   if (trimmed.length > MAX_STRUCTURED_MEDIA_REF_CHARS) {
-    return `[${label}] ${trimmed.slice(0, MAX_STRUCTURED_MEDIA_REF_CHARS)}... (${trimmed.length} chars)`;
+    return `[${label}] ${truncateUtf16Safe(trimmed, MAX_STRUCTURED_MEDIA_REF_CHARS)}... (${trimmed.length} chars)`;
   }
   return `[${label}] ${trimmed}`;
 }
@@ -337,7 +352,7 @@ function summarizeStructuredJsonString(value: string): string {
   }
   const trimmed = value.trim();
   if (trimmed.length > MAX_STRUCTURED_JSON_STRING_CHARS) {
-    return `${trimmed.slice(0, MAX_STRUCTURED_JSON_STRING_CHARS)}... (${trimmed.length} chars)`;
+    return `${truncateUtf16Safe(trimmed, MAX_STRUCTURED_JSON_STRING_CHARS)}... (${trimmed.length} chars)`;
   }
   return value;
 }
@@ -406,7 +421,7 @@ function stringifyStructuredJsonFallback(part: unknown): string | undefined {
       (match) => `[inline data URI: ${match.length} chars]`,
     );
     return withoutInlineData.length > 1_000
-      ? `${withoutInlineData.slice(0, 1_000)}... (${withoutInlineData.length} chars)`
+      ? `${truncateUtf16Safe(withoutInlineData, 1_000)}... (${withoutInlineData.length} chars)`
       : withoutInlineData;
   } catch {
     return undefined;
@@ -484,6 +499,16 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
   );
 }
 
+function shouldDropStaleInternalOrphanedUserPrompt(params: {
+  prompt: string;
+  leafMessage: { provenance?: unknown };
+}): boolean {
+  return (
+    params.prompt.trim().length > 0 &&
+    shouldPreserveUserFacingSessionStateForInputProvenance(params.leafMessage.provenance)
+  );
+}
+
 /**
  * Merges a trailing user message that was queued in transcript history but not
  * present in the active prompt. The leaf is removed whether merged or already
@@ -492,13 +517,21 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
-  leafMessage: { content?: unknown };
+  leafMessage: { content?: unknown; provenance?: unknown };
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
   if (!orphanText) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
   if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
+    return { prompt: params.prompt, merged: false, removeLeaf: true };
+  }
+  if (
+    shouldDropStaleInternalOrphanedUserPrompt({
+      prompt: params.prompt,
+      leafMessage: params.leafMessage,
+    })
+  ) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
 
@@ -560,6 +593,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "provider"
   | "modelId"
   | "agentHarnessId"
+  | "modelSelectionLocked"
   | "thinkLevel"
   | "reasoningLevel"
   | "bashElevated"
@@ -601,6 +635,7 @@ export function buildAfterTurnRuntimeContext(params: {
       provider: params.attempt.provider,
       modelId: params.attempt.modelId,
       harnessRuntime: params.attempt.agentHarnessId,
+      modelSelectionLocked: params.attempt.modelSelectionLocked,
       thinkLevel: params.attempt.thinkLevel,
       reasoningLevel: params.attempt.reasoningLevel,
       bashElevated: params.attempt.bashElevated,
@@ -643,6 +678,6 @@ export function buildAfterTurnRuntimeContextFromUsage(
 ): ContextEngineRuntimeContext {
   return buildAfterTurnRuntimeContext({
     ...params,
-    currentTokenCount: derivePromptTokens(params.lastCallUsage),
+    currentTokenCount: deriveContextPromptTokens({ lastCallUsage: params.lastCallUsage }),
   });
 }

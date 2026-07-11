@@ -7,6 +7,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import {
   testing,
   addClientToolsToToolSearchCatalog,
@@ -18,6 +19,7 @@ import {
   createToolSearchTools,
   estimateToolSchemaDirectoryToolNames,
   projectToolSearchTargetTranscriptMessages,
+  registerHeadlessToolSearchCatalog,
   resolveToolSearchCatalogTool,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -50,6 +52,25 @@ function pluginTool(name: string, description: string, pluginId = "fake-catalog"
   return tool;
 }
 
+function directOnlyTool(name: string, description: string): AnyAgentTool {
+  return { ...fakeTool(name, description), catalogMode: "direct-only" };
+}
+
+function mcpPluginTool(name: string, description: string, pluginId = "fake-catalog"): AnyAgentTool {
+  const tool = fakeTool(name, description);
+  setPluginToolMeta(tool, {
+    pluginId,
+    optional: true,
+    mcp: {
+      serverName: "remote-demo",
+      safeServerName: "remoteDemo",
+      toolName: "echo",
+      operation: "tool",
+    },
+  });
+  return tool;
+}
+
 function resultDetails(result: { details?: unknown }): Record<string, unknown> {
   if (!result.details || typeof result.details !== "object") {
     throw new Error("Expected result details");
@@ -66,6 +87,82 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] 
 }
 
 describe("Tool Search", () => {
+  it("keeps direct-only tools visible and out of the structured catalog", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const computer = directOnlyTool("computer", "Control a desktop");
+    const lookup = pluginTool("fake_lookup", "Look up a record");
+    const compacted = applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        computer,
+        lookup,
+      ],
+      config: { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never,
+      catalogRef,
+      // Caller-specific selection may narrow eligibility, never widen it.
+      shouldCatalogTool: () => true,
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_DESCRIBE_RAW_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
+      "computer",
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
+  });
+
+  it("keeps direct-only tools visible in schema-directory mode", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const compacted = applyToolSchemaDirectoryCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        directOnlyTool("computer", "Control a desktop"),
+        pluginTool("fake_lookup", "Look up a record"),
+      ],
+      config: { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never,
+      catalogRef,
+      hydrateToolNames: [],
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_DESCRIBE_RAW_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
+      "computer",
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
+  });
+
+  it("omits direct-only tools from headless catalogs", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [
+        directOnlyTool("computer", "Control a desktop"),
+        pluginTool("fake_lookup", "Look up a record"),
+      ],
+    });
+
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
+  });
+
+  it("keeps bounded directory descriptions UTF-16 well-formed", () => {
+    const sessionId = "session-utf16-directory";
+    const config = { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never;
+    const searchTool = fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search");
+    const target = pluginTool("fake_utf16", `${"x".repeat(176)}🚀tail`);
+    applyToolSchemaDirectoryCatalog({ tools: [searchTool, target], config, sessionId });
+
+    const directory = buildToolSchemaDirectoryPrompt({ sessionId, config });
+
+    expect(directory).toContain(`${"x".repeat(176)}...`);
+    expect(directory).not.toContain("\uD83D");
+  });
   afterEach(() => {
     testing.setToolSearchCodeModeSupportedForTest(undefined);
     testing.setToolSearchMinCodeTimeoutMsForTest(undefined);
@@ -1014,6 +1111,31 @@ describe("Tool Search", () => {
     expect(thirdCall[4]).toBeUndefined();
   });
 
+  it("classifies plugin tools with MCP metadata as MCP catalog entries", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const target = mcpPluginTool("remote_echo", "Echo through remote MCP", "remote-demo");
+
+    applyToolSearchCatalog({
+      tools: [codeTool, target],
+      config: { tools: { toolSearch: true } } as never,
+      sessionId: "session-mcp-node",
+    });
+
+    const entry = testing.sessionCatalogs
+      .get("session:session-mcp-node")
+      ?.entries.find((candidate) => candidate.name === "remote_echo");
+    expect(entry).toMatchObject({
+      id: "mcp:remoteDemo:remote_echo",
+      source: "mcp",
+      sourceName: "remoteDemo",
+      mcp: {
+        serverName: "remote-demo",
+        safeServerName: "remoteDemo",
+        toolName: "echo",
+      },
+    });
+  });
+
   it("routes bridged calls through the configured catalog executor", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const target = pluginTool("fake_lifecycle", "Run through lifecycle executor");
@@ -1522,6 +1644,7 @@ describe("Tool Search", () => {
   }, 5_000);
 
   it("aborts already-started bridged calls when code mode times out", async () => {
+    testing.setToolSearchMinCodeTimeoutMsForTest(50);
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const target = pluginTool("fake_abort_on_timeout", "Long-running target tool");
     let observedSignal: AbortSignal | undefined;
@@ -1554,7 +1677,7 @@ describe("Tool Search", () => {
 
     const config = {
       tools: {
-        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 1_000 },
+        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 100 },
       },
     } as never;
     applyToolSearchCatalog({
@@ -1724,5 +1847,19 @@ describe("Tool Search", () => {
       sessionId,
     });
     expect(second.catalogReused).toBe(false);
+  });
+
+  it("bounds tool_search_code stderr accumulation to the session tool tail limit", () => {
+    let stderrTail = "";
+    stderrTail = testing.appendToolSearchCodeStderrTail(
+      stderrTail,
+      `HEAD_OVERFLOW_${"x".repeat(SESSION_TOOL_STDERR_TAIL_BYTES + 10_000)}TAIL`,
+    );
+
+    expect(stderrTail).not.toContain("HEAD_OVERFLOW_");
+    expect(stderrTail.endsWith("TAIL")).toBe(true);
+    expect(Buffer.byteLength(stderrTail, "utf8")).toBeLessThanOrEqual(
+      SESSION_TOOL_STDERR_TAIL_BYTES,
+    );
   });
 });

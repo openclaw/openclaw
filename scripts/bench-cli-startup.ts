@@ -105,10 +105,20 @@ type CliOptions = {
 const DEFAULT_RUNS = 5;
 const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
-const TIMEOUT_KILL_GRACE_MS = 1_000;
+const DEFAULT_TIMEOUT_KILL_GRACE_MS = 1_000;
+const TIMEOUT_KILL_GRACE_MS = resolveTimeoutKillGraceMs(process.env);
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const DEFAULT_ENTRY = "openclaw.mjs";
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+
+function resolveTimeoutKillGraceMs(env: NodeJS.ProcessEnv): number {
+  const raw = env.VITEST ? env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS : undefined;
+  if (!raw || !/^\d+$/u.test(raw)) {
+    return DEFAULT_TIMEOUT_KILL_GRACE_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : DEFAULT_TIMEOUT_KILL_GRACE_MS;
+}
 const VALUE_FLAGS = new Set([
   "--case",
   "--compare-baseline",

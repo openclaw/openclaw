@@ -4070,6 +4070,46 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("disables the LLM reranker (rerank:false) for vsearch mode via mcporter", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "vsearch",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    let captured: Record<string, unknown> | null = null;
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        captured = JSON.parse(args[args.indexOf("--args") + 1]);
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+    await manager.close();
+
+    expect(captured).not.toBeNull();
+    const sentArgs = captured as unknown as Record<string, unknown>;
+    // vsearch is a vector-only mode (see buildV2Searches) — it must NOT trigger
+    // QMD's LLM reranker, which the "query" tool enables by default.
+    expect(sentArgs.rerank).toBe(false);
+    const searchTypes = (sentArgs.searches as Array<{ type?: unknown }>).map((s) => s.type);
+    expect(searchTypes).toEqual(["vec"]);
+  });
+
   it("keeps hyphenated tokens in lexical QMD searches while normalizing semantic searches", async () => {
     cfg = {
       ...cfg,
@@ -4141,6 +4181,41 @@ describe("QmdMemoryManager", () => {
     await manager.search("sqlite-vec backend health", {
       sessionKey: "agent:main:slack:dm:u123",
     });
+    await manager.close();
+  });
+
+  it("wraps non-JSON mcporter stdout as a typed error instead of a raw SyntaxError", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        // mcporter exits 0 but prints non-JSON to stdout (daemon warning, truncated
+        // output, or CLI flag mismatch). Without the guard this throws a raw
+        // SyntaxError out of runQmdSearchViaMcporter; the guard wraps it.
+        emitAndClose(child, "stdout", "mcporter: daemon warning: connection unstable\n");
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await expect(
+      manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).rejects.toThrow(/non-JSON stdout/i);
     await manager.close();
   });
 
@@ -4318,6 +4393,75 @@ describe("QmdMemoryManager", () => {
     ]);
 
     await manager.close();
+  });
+
+  it("keeps per-result and aggregate QMD snippet limits UTF-16 safe", async () => {
+    const expectedDocId = "unicode-boundary";
+    const snippet = "@@ -1,1\nabc😀tail";
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify({
+            results: [
+              {
+                docid: expectedDocId,
+                score: 0.91,
+                collection: "workspace-main",
+                snippet,
+              },
+            ],
+          }),
+        );
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const searchWithLimits = async (limits: {
+      maxSnippetChars: number;
+      maxInjectedChars: number;
+    }) => {
+      const testConfig = {
+        ...cfg,
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            searchMode: "query",
+            update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+            paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+            limits,
+            mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+          },
+        },
+      } as OpenClawConfig;
+      const { manager } = await createManager({ cfg: testConfig });
+      const inner = manager as unknown as {
+        db: { prepare: () => { all: () => unknown }; close: () => void };
+      };
+      inner.db = {
+        prepare: () => ({
+          all: () => [{ collection: "workspace-main", path: "notes/unicode.md" }],
+        }),
+        close: () => {},
+      };
+      const results = await manager.search("unicode", {
+        sessionKey: "agent:main:slack:dm:u123",
+      });
+      await manager.close();
+      return results;
+    };
+
+    await expect(searchWithLimits({ maxSnippetChars: 12, maxInjectedChars: 100 })).resolves.toEqual(
+      [expect.objectContaining({ snippet: "@@ -1,1\nabc" })],
+    );
+    await expect(searchWithLimits({ maxSnippetChars: 100, maxInjectedChars: 12 })).resolves.toEqual(
+      [expect.objectContaining({ snippet: "@@ -1,1\nabc" })],
+    );
   });
 
   it("uses snippet header width when mcporter only returns a start line", async () => {

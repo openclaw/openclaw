@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "../../../shared/lazy-runtime.js";
 // PTY adapter wraps pseudo-terminal processes for the process supervisor.
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
@@ -36,12 +37,9 @@ type PtyModule = {
 
 export type PtyAdapter = SpawnProcessAdapter;
 
-let ptyModulePromise: Promise<PtyModule> | null = null;
-
-async function loadPtyModule(): Promise<PtyModule> {
-  ptyModulePromise ??= import("@lydell/node-pty") as Promise<unknown> as Promise<PtyModule>;
-  return ptyModulePromise;
-}
+const loadPtyModule = createLazyRuntimeModule(
+  () => import("@lydell/node-pty") as Promise<unknown> as Promise<PtyModule>,
+);
 
 export async function createPtyAdapter(params: {
   shell: string;

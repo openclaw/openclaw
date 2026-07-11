@@ -1,5 +1,6 @@
 // Oxlint Config tests cover oxlint config script behavior.
 import fs from "node:fs";
+import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 
 type OxlintConfig = {
@@ -95,7 +96,7 @@ const ZERO_BASELINE_RULES = [
 ];
 
 function readJson(path: string): unknown {
-  return JSON.parse(fs.readFileSync(path, "utf8")) as unknown;
+  return JSON5.parse(fs.readFileSync(path, "utf8"));
 }
 
 describe("oxlint config", () => {
@@ -140,15 +141,14 @@ describe("oxlint config", () => {
       "dist/",
       "dist-runtime/",
       "docs/_layouts/",
+      "**/a2ui.bundle.js",
       "extensions/diffs/assets/viewer-runtime.js",
       "extensions/diffs-language-pack/assets/viewer-runtime.js",
-      "extensions/canvas/src/host/a2ui/a2ui.bundle.js",
       "node_modules/",
       "patches/",
       "pnpm-lock.yaml",
       "skills/**",
       "src/auto-reply/reply/export-html/template.js",
-      "src/canvas-host/a2ui/a2ui.bundle.js",
       "vendor/",
       "**/.cache/**",
       "**/.openclaw-runtime-deps-copy-*/**",
@@ -160,10 +160,34 @@ describe("oxlint config", () => {
     ]);
   });
 
-  it("keeps lint overrides limited to the explicit test-file carve-out", () => {
+  it("keeps lint overrides limited to the strict-ratchet and test-file policies", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
 
     expect(config.overrides).toEqual([
+      {
+        files: [
+          "packages/markdown-core/**/*.ts",
+          "packages/net-policy/**/*.ts",
+          "packages/media-understanding-common/**/*.ts",
+          "packages/terminal-core/**/*.ts",
+          "packages/normalization-core/**/*.ts",
+          "packages/model-catalog-core/**/*.ts",
+          "packages/web-content-core/**/*.ts",
+          "packages/agent-core/**/*.ts",
+          "packages/acp-core/**/*.ts",
+          "packages/ai/**/*.ts",
+          "packages/gateway-client/**/*.ts",
+          "packages/gateway-protocol/**/*.ts",
+          "packages/llm-core/**/*.ts",
+          "packages/media-core/**/*.ts",
+          "packages/media-generation-core/**/*.ts",
+          "packages/plugin-package-contract/**/*.ts",
+          "packages/sdk/**/*.ts",
+        ],
+        rules: {
+          "typescript/no-non-null-assertion": "error",
+        },
+      },
       {
         files: [
           "**/*.test.ts",

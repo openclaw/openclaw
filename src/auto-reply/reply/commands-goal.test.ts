@@ -81,6 +81,10 @@ describe("goal commands", () => {
       action: "pause",
       text: "waiting on CI",
     });
+    expect(parseGoalCommand("/goal edit ship the fix and docs")).toEqual({
+      action: "edit",
+      text: "ship the fix and docs",
+    });
   });
 
   it("formats command-looking continuation prompts so inline directives leave them intact", () => {
@@ -219,6 +223,60 @@ describe("goal commands", () => {
     expect(directives.cleaned).toBe(prompt);
     expect(directives.hasFastDirective).toBe(false);
     expect(getSessionEntry({ storePath, sessionKey })?.goal?.status).toBe("active");
+  });
+
+  it("edits the objective in place and replies without continuing", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        goal: {
+          schemaVersion: 1,
+          id: "goal-1",
+          objective: "finish the migration",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokenStartFresh: true,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        },
+      },
+    });
+
+    const params = buildGoalParams("/goal edit finish the migration and update docs", storePath);
+    const result = await handleGoalCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("Goal updated: finish the migration and update docs");
+    const goal = getSessionEntry({ storePath, sessionKey })?.goal;
+    expect(goal?.objective).toBe("finish the migration and update docs");
+    expect(goal?.status).toBe("active");
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
+      { sessionKey, reason: "command-metadata" },
+    ]);
+  });
+
+  it("rejects goal edit without a goal or new objective", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "sess-main", updatedAt: 1 },
+    });
+
+    const usage = await handleGoalCommand(buildGoalParams("/goal edit", storePath), true);
+    expect(usage?.reply?.text).toBe("Usage: /goal edit <objective>");
+
+    const missing = await handleGoalCommand(
+      buildGoalParams("/goal edit new target", storePath),
+      true,
+    );
+    expect(missing?.reply?.text).toBe("Goal error: goal not found");
   });
 
   it("renders status without persisting derived budget state", async () => {

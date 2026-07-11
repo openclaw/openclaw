@@ -514,6 +514,101 @@ describe("windows command wrapper behavior", () => {
     }
   });
 
+  it("gracefully then force-kills the Windows process tree when requested", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild({ autoClose: false });
+    child.exitCode = null;
+    const gracefulTaskkillChild = createMockChild();
+    const forcedTaskkillChild = createMockChild();
+
+    spawnMock
+      .mockImplementationOnce(() => child)
+      .mockImplementationOnce(() => gracefulTaskkillChild)
+      .mockImplementationOnce(() => forcedTaskkillChild);
+
+    try {
+      await withMockedWindowsPlatform(async () => {
+        const resultPromise = runCommandWithTimeout(["node", "idle.js"], {
+          killProcessTree: true,
+          timeoutMs: 80,
+        });
+
+        await vi.advanceTimersByTimeAsync(81);
+        expect(requireSpawnCall(1)[1]).toEqual(["/PID", "1234", "/T"]);
+
+        await vi.advanceTimersByTimeAsync(300);
+        expect(requireSpawnCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
+        expect(child.kill).not.toHaveBeenCalled();
+
+        child.emit("close", null, "SIGKILL");
+        const result = await resultPromise;
+        expect(result.termination).toBe("timeout");
+        expect(result.code).toBe(124);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to direct child kill when forced Windows taskkill emits a spawn error", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild({ autoClose: false });
+    child.exitCode = null;
+    const taskkillChild = createMockChild({ autoClose: false });
+
+    spawnMock.mockImplementationOnce(() => child).mockImplementationOnce(() => taskkillChild);
+
+    try {
+      await withMockedWindowsPlatform(async () => {
+        const resultPromise = runCommandWithTimeout(["node", "idle.js"], { timeoutMs: 80 });
+
+        await vi.advanceTimersByTimeAsync(81);
+        taskkillChild.emit("error", Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }));
+
+        expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+
+        child.emit("close", null, "SIGKILL");
+        const result = await resultPromise;
+        expect(result.termination).toBe("timeout");
+        expect(result.code).toBe(124);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to direct child kill when graceful Windows taskkill emits a spawn error", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild({ autoClose: false });
+    child.exitCode = null;
+    const taskkillChild = createMockChild({ autoClose: false });
+
+    spawnMock.mockImplementationOnce(() => child).mockImplementationOnce(() => taskkillChild);
+
+    try {
+      await withMockedWindowsPlatform(async () => {
+        const resultPromise = runCommandWithTimeout(["node", "idle.js"], {
+          killProcessTree: true,
+          timeoutMs: 80,
+        });
+
+        await vi.advanceTimersByTimeAsync(81);
+        taskkillChild.emit("error", Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }));
+
+        expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+        await vi.advanceTimersByTimeAsync(300);
+        expect(spawnMock).toHaveBeenCalledTimes(2);
+
+        child.emit("close", null, "SIGKILL");
+        const result = await resultPromise;
+        expect(result.termination).toBe("timeout");
+        expect(result.code).toBe(124);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("decodes GBK stdout and stderr from runExec on Windows", async () => {
     const stdout = Buffer.from([0xb2, 0xe2, 0xca, 0xd4]);
     const stderr = Buffer.from([0xa3, 0xbb]);

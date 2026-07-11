@@ -4,11 +4,11 @@
  * Selects models, wires built-in/custom tools, loads resources, and creates AgentSession instances.
  */
 import { join } from "node:path";
+import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../auto-reply/thinking.js";
-import { clampThinkingLevel } from "../../llm/model-utils.js";
 import { streamSimple } from "../../llm/stream.js";
 import type { Message, Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
