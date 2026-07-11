@@ -1613,6 +1613,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       authBootstrap: "harness",
       runAttempt: pluginRunAttempt,
     });
+    mockedEnsureAuthProfileStore.mockReturnValueOnce(codexAuthStore);
     mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValueOnce(codexAuthStore);
     mockedResolveModelAsync.mockResolvedValueOnce({
       model: {
@@ -1631,7 +1632,14 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         ...overflowBaseRunParams,
         provider: "openai",
         model: "gpt-5.4",
-        config: { agents: { defaults: { agentRuntime: { id: "codex" } } } },
+        config: {
+          agents: { defaults: { agentRuntime: { id: "codex" } } },
+          auth: {
+            profiles: {
+              "openai:work": { provider: "openai", mode: "api_key" },
+            },
+          },
+        },
         authProfileId: "openai:work",
         authProfileIdSource: "user",
         runId: "harness-secretref-auth-binding",
@@ -3205,6 +3213,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   });
 
   it("keeps implicit Codex overflow recovery out of generic compaction without a native compactor", async () => {
+    useOpenAIPlatformAuthFixture();
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const overflowError = makeOverflowError();
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
@@ -3234,6 +3243,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
               providers: {
                 openai: {
                   api: "openai-responses",
+                  apiKey: "test-key",
                   baseUrl: "https://api.openai.com/v1",
                   models: [],
                 },
