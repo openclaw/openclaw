@@ -1735,3 +1735,151 @@
     min-width: 0;
   }
 }
+
+/* ── Session diff panel (sessions.diff sidebar content) ── */
+
+/* Floating opener stacks under the workspace (10px) and tasks (48px) ones. */
+.chat-diff-open {
+  position: absolute;
+  top: 86px;
+  right: 10px;
+  z-index: 12;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.session-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.session-diff__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 2px;
+}
+
+.session-diff__branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-weight: 600;
+  font-size: var(--control-ui-text-sm);
+}
+
+.session-diff__branch svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.session-diff__branch-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+
+.session-diff__refresh {
+  margin-left: auto;
+}
+
+.session-diff__file {
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.session-diff__file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-diff__chevron {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 120ms ease;
+}
+
+.session-diff__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-diff__chevron--open {
+  transform: rotate(90deg);
+}
+
+.session-diff__status {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.session-diff__status--added {
+  background: var(--ok, #22c55e);
+}
+
+.session-diff__status--deleted {
+  background: var(--destructive, #ef4444);
+}
+
+.session-diff__status--renamed {
+  background: var(--accent, #a855f7);
+}
+
+.session-diff__status--modified {
+  background: var(--warning, #eab308);
+}
+
+.session-diff__path {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+}
+
+.session-diff__old-path {
+  color: var(--muted);
+}
+
+.session-diff__badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  color: var(--muted);
+  font-size: calc(var(--control-ui-text-sm) - 2px);
+}
+
+.session-diff__file .chat-diff {
+  margin-top: 0;
+  border-radius: 0;
+  max-height: none;
+}
+
+.session-diff__note {
+  padding: 2px 2px 4px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}

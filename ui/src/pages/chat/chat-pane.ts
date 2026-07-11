@@ -96,6 +96,7 @@ import {
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
+  renderSessionDiffToggle,
   renderSessionWorkspaceToggle,
   revealSessionWorkspaceFile,
   toggleSessionWorkspace,
@@ -1205,6 +1206,7 @@ class ChatPane extends OpenClawLightDomElement {
              drag-and-drop. -->
         <span class="chat-pane__session-title" title=${this.paneTitle}>${this.paneTitle}</span>
         <div class="chat-pane__actions">
+          ${renderSessionDiffToggle(sessionWorkspace, "pane-header")}
           ${renderBackgroundTasksToggle(backgroundTasks, "pane-header")}
           ${renderSessionWorkspaceToggle(sessionWorkspace, "pane-header")}
           ${!this.narrow
