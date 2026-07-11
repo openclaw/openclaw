@@ -88,6 +88,25 @@ describe("Codex Computer Use periodic health", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("stops an existing monitor when Computer Use is disabled", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+
+    startCodexComputerUseHealthMonitor({
+      client: client.client,
+      config: computerUseConfig({ healthCheckEnabled: true, healthCheckIntervalMinutes: 30 }),
+    });
+    expect(
+      startCodexComputerUseHealthMonitor({
+        client: client.client,
+        config: computerUseConfig({ enabled: false, healthCheckEnabled: true }),
+      }),
+    ).toEqual({ started: false, reason: "disabled" });
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
   it("replaces a same-interval monitor when probe configuration changes", async () => {
     vi.useFakeTimers();
     const client = createClient();
