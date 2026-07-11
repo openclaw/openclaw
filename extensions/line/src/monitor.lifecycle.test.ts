@@ -129,6 +129,7 @@ vi.mock("./send.js", () => ({
   createQuickReplyItems: vi.fn(),
   createTextMessageWithQuickReplies: vi.fn(),
   getUserDisplayName: vi.fn(),
+  logLineChannelQuota: vi.fn(async () => {}),
   pushMessageLine: vi.fn(),
   pushMessagesLine: vi.fn(),
   pushTextMessageWithQuickReplies: vi.fn(),

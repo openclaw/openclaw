@@ -6,24 +6,31 @@ const {
   replyMessageMock,
   showLoadingAnimationMock,
   getProfileMock,
+  getMessageQuotaMock,
+  getMessageQuotaConsumptionMock,
   MessagingApiClientMock,
   requireRuntimeConfigMock,
   resolveLineAccountMock,
   resolveLineChannelAccessTokenMock,
   recordChannelActivityMock,
   logVerboseMock,
+  logErrorMock,
   resolvePinnedHostnameWithPolicyMock,
 } = vi.hoisted(() => {
   const pushMessageMockLocal = vi.fn();
   const replyMessageMockLocal = vi.fn();
   const showLoadingAnimationMockLocal = vi.fn();
   const getProfileMockLocal = vi.fn();
+  const getMessageQuotaMockLocal = vi.fn();
+  const getMessageQuotaConsumptionMockLocal = vi.fn();
   const MessagingApiClientMockLocal = vi.fn(function () {
     return {
       pushMessage: pushMessageMockLocal,
       replyMessage: replyMessageMockLocal,
       showLoadingAnimation: showLoadingAnimationMockLocal,
       getProfile: getProfileMockLocal,
+      getMessageQuota: getMessageQuotaMockLocal,
+      getMessageQuotaConsumption: getMessageQuotaConsumptionMockLocal,
     };
   });
   const requireRuntimeConfigMockLocal = vi.fn((cfg: unknown) => cfg ?? {});
@@ -31,18 +38,22 @@ const {
   const resolveLineChannelAccessTokenMockLocal = vi.fn(() => "line-token");
   const recordChannelActivityMockLocal = vi.fn();
   const logVerboseMockLocal = vi.fn();
+  const logErrorMockLocal = vi.fn();
   const resolvePinnedHostnameWithPolicyMockLocal = vi.fn();
   return {
     pushMessageMock: pushMessageMockLocal,
     replyMessageMock: replyMessageMockLocal,
     showLoadingAnimationMock: showLoadingAnimationMockLocal,
     getProfileMock: getProfileMockLocal,
+    getMessageQuotaMock: getMessageQuotaMockLocal,
+    getMessageQuotaConsumptionMock: getMessageQuotaConsumptionMockLocal,
     MessagingApiClientMock: MessagingApiClientMockLocal,
     requireRuntimeConfigMock: requireRuntimeConfigMockLocal,
     resolveLineAccountMock: resolveLineAccountMockLocal,
     resolveLineChannelAccessTokenMock: resolveLineChannelAccessTokenMockLocal,
     recordChannelActivityMock: recordChannelActivityMockLocal,
     logVerboseMock: logVerboseMockLocal,
+    logErrorMock: logErrorMockLocal,
     resolvePinnedHostnameWithPolicyMock: resolvePinnedHostnameWithPolicyMockLocal,
   };
 });
@@ -74,6 +85,16 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   return {
     ...actual,
     logVerbose: logVerboseMock,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/logging-core", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/logging-core")>(
+    "openclaw/plugin-sdk/logging-core",
+  );
+  return {
+    ...actual,
+    logError: logErrorMock,
   };
 });
 
@@ -117,12 +138,15 @@ describe("LINE send helpers", () => {
     replyMessageMock.mockReset();
     showLoadingAnimationMock.mockReset();
     getProfileMock.mockReset();
+    getMessageQuotaMock.mockReset();
+    getMessageQuotaConsumptionMock.mockReset();
     MessagingApiClientMock.mockReset();
     requireRuntimeConfigMock.mockClear();
     resolveLineAccountMock.mockReset();
     resolveLineChannelAccessTokenMock.mockReset();
     recordChannelActivityMock.mockReset();
     logVerboseMock.mockReset();
+    logErrorMock.mockReset();
     resolvePinnedHostnameWithPolicyMock.mockReset();
 
     MessagingApiClientMock.mockImplementation(function () {
@@ -131,6 +155,8 @@ describe("LINE send helpers", () => {
         replyMessage: replyMessageMock,
         showLoadingAnimation: showLoadingAnimationMock,
         getProfile: getProfileMock,
+        getMessageQuota: getMessageQuotaMock,
+        getMessageQuotaConsumption: getMessageQuotaConsumptionMock,
       };
     });
     requireRuntimeConfigMock.mockImplementation((cfg: unknown) => cfg ?? LINE_TEST_CFG);
@@ -174,16 +200,19 @@ describe("LINE send helpers", () => {
       { cfg: LINE_TEST_CFG, verbose: true },
     );
 
-    expect(pushMessageMock).toHaveBeenCalledWith({
-      to: "U123",
-      messages: [
-        {
-          type: "image",
-          originalContentUrl: "https://example.com/original.jpg",
-          previewImageUrl: "https://example.com/original.jpg",
-        },
-      ],
-    });
+    expect(pushMessageMock).toHaveBeenCalledWith(
+      {
+        to: "U123",
+        messages: [
+          {
+            type: "image",
+            originalContentUrl: "https://example.com/original.jpg",
+            previewImageUrl: "https://example.com/original.jpg",
+          },
+        ],
+      },
+      expect.any(String),
+    );
     expect(recordChannelActivityMock).toHaveBeenCalledWith({
       channel: "line",
       accountId: "default",
@@ -296,21 +325,24 @@ describe("LINE send helpers", () => {
       trackingId: "track-1",
     });
 
-    expect(pushMessageMock).toHaveBeenCalledWith({
-      to: "U100",
-      messages: [
-        {
-          type: "video",
-          originalContentUrl: "https://example.com/video.mp4",
-          previewImageUrl: "https://example.com/preview.jpg",
-          trackingId: "track-1",
-        },
-        {
-          type: "text",
-          text: "Video",
-        },
-      ],
-    });
+    expect(pushMessageMock).toHaveBeenCalledWith(
+      {
+        to: "U100",
+        messages: [
+          {
+            type: "video",
+            originalContentUrl: "https://example.com/video.mp4",
+            previewImageUrl: "https://example.com/preview.jpg",
+            trackingId: "track-1",
+          },
+          {
+            type: "text",
+            text: "Video",
+          },
+        ],
+      },
+      expect.any(String),
+    );
   });
 
   it("throws when video preview URL is missing", async () => {
@@ -347,20 +379,23 @@ describe("LINE send helpers", () => {
       trackingId: "track-group",
     });
 
-    expect(pushMessageMock).toHaveBeenCalledWith({
-      to: "C100",
-      messages: [
-        {
-          type: "video",
-          originalContentUrl: "https://example.com/video.mp4",
-          previewImageUrl: "https://example.com/preview.jpg",
-        },
-        {
-          type: "text",
-          text: "Video",
-        },
-      ],
-    });
+    expect(pushMessageMock).toHaveBeenCalledWith(
+      {
+        to: "C100",
+        messages: [
+          {
+            type: "video",
+            originalContentUrl: "https://example.com/video.mp4",
+            previewImageUrl: "https://example.com/preview.jpg",
+          },
+          {
+            type: "text",
+            text: "Video",
+          },
+        ],
+      },
+      expect.any(String),
+    );
   });
 
   it("throws when push messages are empty", async () => {
@@ -390,19 +425,59 @@ describe("LINE send helpers", () => {
       [{ type: "text", text: "hello" }],
       { cfg: LINE_TEST_CFG },
     );
-    expect(pushMessageMock).toHaveBeenCalledWith({
-      to: "Cabcdef0123456789abcdef0123456789",
-      messages: [{ type: "text", text: "hello" }],
+    expect(pushMessageMock).toHaveBeenCalledWith(
+      {
+        to: "Cabcdef0123456789abcdef0123456789",
+        messages: [{ type: "text", text: "hello" }],
+      },
+      expect.any(String),
+    );
+  });
+
+  it("retries on 5xx push errors and succeeds", async () => {
+    pushMessageMock
+      .mockRejectedValueOnce({ statusCode: 502, statusText: "Bad Gateway" })
+      .mockResolvedValueOnce({});
+
+    await sendModule.pushMessagesLine("U999", [{ type: "text", text: "hello" }], {
+      cfg: LINE_TEST_CFG,
     });
+
+    expect(pushMessageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts immediately on non-retryable push errors (400)", async () => {
+    const err = { statusCode: 400, statusText: "Bad Request", body: "invalid" };
+    pushMessageMock.mockRejectedValueOnce(err);
+
+    await expect(
+      sendModule.pushMessagesLine("U999", [{ type: "text", text: "hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    ).rejects.toMatchObject(err);
+
+    expect(pushMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("exhausts retries on persistent 5xx push errors", async () => {
+    pushMessageMock.mockRejectedValue({ statusCode: 503, statusText: "Service Unavailable" });
+
+    await expect(
+      sendModule.pushMessagesLine("U999", [{ type: "text", text: "hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    ).rejects.toMatchObject({ statusCode: 503 });
+
+    expect(pushMessageMock).toHaveBeenCalledTimes(5);
   });
 
   it("logs HTTP body when push fails", async () => {
     const err = new Error("LINE push failed") as Error & {
-      status: number;
+      statusCode: number;
       statusText: string;
       body: string;
     };
-    err.status = 400;
+    err.statusCode = 400;
     err.statusText = "Bad Request";
     err.body = "invalid flex payload";
     pushMessageMock.mockRejectedValueOnce(err);
@@ -413,7 +488,7 @@ describe("LINE send helpers", () => {
       }),
     ).rejects.toThrow("LINE push failed");
 
-    expect(logVerboseMock).toHaveBeenCalledWith(
+    expect(logErrorMock).toHaveBeenCalledWith(
       "line: push message failed (400 Bad Request): invalid flex payload",
     );
   });
@@ -444,6 +519,49 @@ describe("LINE send helpers", () => {
 
     expect(logVerboseMock).toHaveBeenCalledWith(
       "line: loading animation failed (non-fatal): Error: unsupported",
+    );
+  });
+
+  it("logLineChannelQuota logs limited quota", async () => {
+    getMessageQuotaMock.mockResolvedValue({ type: "limited", value: 5000 });
+    getMessageQuotaConsumptionMock.mockResolvedValue({ totalUsage: 1200 });
+
+    await sendModule.logLineChannelQuota({ cfg: LINE_TEST_CFG });
+
+    expect(getMessageQuotaMock).toHaveBeenCalledTimes(1);
+    expect(getMessageQuotaConsumptionMock).toHaveBeenCalledTimes(1);
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      "line: quota type=limited, 1200/5000 used (3800 remaining, 24%)",
+    );
+  });
+
+  it("logLineChannelQuota logs unlimited quota", async () => {
+    getMessageQuotaMock.mockResolvedValue({ type: "none" });
+    getMessageQuotaConsumptionMock.mockResolvedValue({ totalUsage: 0 });
+
+    await sendModule.logLineChannelQuota({ cfg: LINE_TEST_CFG });
+
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      "line: quota type=none (unlimited plan, no monthly cap)",
+    );
+  });
+
+  it("logLineChannelQuota handles API error gracefully", async () => {
+    getMessageQuotaMock.mockRejectedValue(new Error("API error"));
+
+    await sendModule.logLineChannelQuota({ cfg: LINE_TEST_CFG });
+
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      expect.stringMatching(/line: failed to query quota info/),
+    );
+  });
+
+  it("throws when push message text is empty", async () => {
+    await expect(sendModule.pushMessageLine("U999", "", { cfg: LINE_TEST_CFG })).rejects.toThrow(
+      "Message text must be non-empty for LINE push",
+    );
+    await expect(sendModule.pushMessageLine("U999", "   ", { cfg: LINE_TEST_CFG })).rejects.toThrow(
+      "Message text must be non-empty for LINE push",
     );
   });
 

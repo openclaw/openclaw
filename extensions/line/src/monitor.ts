@@ -35,11 +35,11 @@ import {
   createQuickReplyItems,
   createTextMessageWithQuickReplies,
   getUserDisplayName,
-  pushMessageLine,
   pushMessagesLine,
   pushTextMessageWithQuickReplies,
   replyMessageLine,
   showLoadingAnimation,
+  logLineChannelQuota,
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
@@ -251,61 +251,66 @@ export async function monitorLineProvider(
                 deliver: async (payload) => {
                   const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
 
-                  if (ctx.userId && !ctx.isGroup) {
-                    void showLoadingAnimation(ctx.userId, {
-                      cfg: config,
+                  const stopDeliveryLoading =
+                    ctx.userId && !ctx.isGroup
+                      ? startLineLoadingKeepalive({
+                          cfg: config,
+                          userId: ctx.userId,
+                          accountId: ctx.accountId,
+                        })
+                      : null;
+
+                  try {
+                    const deliveryResult = await deliverLineAutoReply({
+                      payload,
+                      lineData,
+                      to: ctxPayload.From,
+                      replyToken,
+                      replyTokenUsed,
                       accountId: ctx.accountId,
-                    }).catch(() => {});
-                  }
-
-                  const deliveryResult = await deliverLineAutoReply({
-                    payload,
-                    lineData,
-                    to: ctxPayload.From,
-                    replyToken,
-                    replyTokenUsed,
-                    accountId: ctx.accountId,
-                    cfg: config,
-                    textLimit,
-                    deps: {
-                      buildTemplateMessageFromPayload,
-                      processLineMessage,
-                      chunkMarkdownText,
-                      sendLineReplyChunks,
-                      replyMessageLine,
-                      pushMessageLine,
-                      pushTextMessageWithQuickReplies,
-                      createQuickReplyItems,
-                      createTextMessageWithQuickReplies,
-                      pushMessagesLine,
-                      createFlexMessage,
-                      createImageMessage,
-                      createLocationMessage,
-                      onReplyError: (replyErr) => {
-                        logVerbose(
-                          `line: reply token failed, falling back to push: ${String(replyErr)}`,
-                        );
+                      cfg: config,
+                      textLimit,
+                      deps: {
+                        buildTemplateMessageFromPayload,
+                        processLineMessage,
+                        chunkMarkdownText,
+                        sendLineReplyChunks,
+                        replyMessageLine,
+                        pushTextMessageWithQuickReplies,
+                        createQuickReplyItems,
+                        createTextMessageWithQuickReplies,
+                        pushMessagesLine,
+                        createFlexMessage,
+                        createImageMessage,
+                        createLocationMessage,
+                        onReplyError: (replyErr) => {
+                          logVerbose(
+                            `line: reply token failed, falling back to push: ${String(replyErr)}`,
+                          );
+                        },
                       },
-                    },
-                  });
-                  replyTokenUsed = deliveryResult.replyTokenUsed;
+                    });
+                    replyTokenUsed = deliveryResult.replyTokenUsed;
 
-                  if (deliveryResult.status === "partial") {
-                    // Text reached the user but a rich/media bubble did not.
-                    // Surface the tagged partial failure after adopting the
-                    // consumed reply-token state so later blocks in this turn
-                    // route correctly; recordChannelRuntimeState is skipped
-                    // because this delivery was not a clean success.
-                    throw deliveryResult.error;
+                    if (deliveryResult.status === "partial") {
+                      // Text reached the user but a rich/media bubble did not.
+                      // Surface the tagged partial failure after adopting the
+                      // consumed reply-token state so later blocks in this turn
+                      // route correctly; recordChannelRuntimeState is skipped
+                      // because this delivery was not a clean success.
+                      throw deliveryResult.error;
+                    }
+
+                    recordChannelRuntimeState({
+                      channel: "line",
+                      accountId: resolvedAccountId,
+                      state: {
+                        lastOutboundAt: Date.now(),
+                      },
+                    });
+                  } finally {
+                    stopDeliveryLoading?.();
                   }
-
-                  recordChannelRuntimeState({
-                    channel: "line",
-                    accountId: resolvedAccountId,
-                    state: {
-                      lastOutboundAt: Date.now(),
-                    },
-                  });
                 },
                 onError: (err, info) => {
                   runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
@@ -483,6 +488,9 @@ export async function monitorLineProvider(
   });
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
+
+  // One-time quota check on startup (non-blocking)
+  void logLineChannelQuota({ cfg: config, accountId: resolvedAccountId });
 
   let stopped = false;
   const stopHandler = () => {

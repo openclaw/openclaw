@@ -40,7 +40,6 @@ describe("deliverLineAutoReply", () => {
 
   function createDeps(overrides?: Partial<LineAutoReplyDeps>) {
     const replyMessageLine = vi.fn(async () => ({}));
-    const pushMessageLine = vi.fn(async () => ({}));
     const pushTextMessageWithQuickReplies = vi.fn(async () => ({}));
     const createTextMessageWithQuickReplies = vi.fn((text: string) => ({
       type: "text" as const,
@@ -59,7 +58,6 @@ describe("deliverLineAutoReply", () => {
       chunkMarkdownText: (text) => [text],
       sendLineReplyChunks,
       replyMessageLine,
-      pushMessageLine,
       pushTextMessageWithQuickReplies,
       createTextMessageWithQuickReplies,
       createQuickReplyItems: createQuickReplyItems as LineAutoReplyDeps["createQuickReplyItems"],
@@ -73,7 +71,6 @@ describe("deliverLineAutoReply", () => {
     return {
       deps,
       replyMessageLine,
-      pushMessageLine,
       pushTextMessageWithQuickReplies,
       createTextMessageWithQuickReplies,
       createQuickReplyItems,
