@@ -2,11 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
+import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 import type {
   CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgs,
-  CliBackendRuntimeArtifactPolicy,
   CliBundleMcpMode,
 } from "../plugins/types.js";
 import {

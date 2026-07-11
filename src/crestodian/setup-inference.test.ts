@@ -62,7 +62,8 @@ vi.mock("./audit.js", () => ({
   appendCrestodianAuditEntry: mocks.appendAudit,
 }));
 
-vi.mock("../agents/harness/runtime-plugin.js", () => ({
+vi.mock("../agents/harness/runtime-plugin.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/harness/runtime-plugin.js")>()),
   ensureSelectedAgentHarnessPlugin: mocks.ensureSelectedAgentHarnessPlugin,
 }));
 
@@ -303,7 +304,6 @@ describe("detectSetupInference", () => {
     expect(detection.candidates).toHaveLength(2);
     expect(detection.candidates[0]).toMatchObject({ kind: "claude-cli", recommended: false });
     expect(detection.candidates[1]).toMatchObject({ kind: "codex-cli", recommended: false });
-    expect(detection.codexAppServerDetected).toBe(true);
     expect(detection.setupComplete).toBe(false);
     expect(detection.workspace.length).toBeGreaterThan(0);
     expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
@@ -440,6 +440,7 @@ describe("detectSetupInference", () => {
 async function runCodexSetupWithFinalConfig(params: {
   initialConfig?: OpenClawConfig;
   currentConfig: OpenClawConfig;
+  currentRuntimeConfig?: OpenClawConfig;
   sourceConfig: OpenClawConfig;
 }) {
   const initialConfig = params.initialConfig ?? params.sourceConfig;
@@ -464,14 +465,15 @@ async function runCodexSetupWithFinalConfig(params: {
         },
       ) => Promise<{ nextConfig: OpenClawConfig }> | { nextConfig: OpenClawConfig };
     }) => {
+      const runtimeConfig = params.currentRuntimeConfig ?? params.sourceConfig;
       const transformed = await input.transform(persistedConfig, {
         snapshot: {
           exists: true,
           valid: true,
           path: "/tmp/openclaw.json",
-          config: params.sourceConfig,
-          sourceConfig: params.sourceConfig,
-          runtimeConfig: params.sourceConfig,
+          config: runtimeConfig,
+          sourceConfig: persistedConfig,
+          runtimeConfig,
         },
         previousHash: null,
         attempt: 0,
@@ -3643,7 +3645,7 @@ describe("activateSetupInference", () => {
       "stopped before its Codex runtime package could be retained safely",
     );
     expect(markRetainedInstall).toHaveBeenCalledTimes(2);
-    expect(refreshPluginRegistry).toHaveBeenCalledOnce();
+    expect(refreshPluginRegistry).toHaveBeenCalledTimes(2);
     expect(tempDir).toBeDefined();
     await expect(fs.stat(tempDir!)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -3831,7 +3833,7 @@ describe("activateSetupInference", () => {
       await expect(fs.stat(packageDir)).resolves.toBeDefined();
       expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(true);
       expect(transformConfig).not.toHaveBeenCalled();
-      expect(refreshPluginRegistry).toHaveBeenCalledOnce();
+      expect(refreshPluginRegistry).toHaveBeenCalledTimes(2);
     } finally {
       await fs.rm(installProjectDir, { recursive: true, force: true });
     }
@@ -4344,7 +4346,8 @@ describe("activateSetupInference Codex configuration", () => {
     const { result, persistedConfig } = await runCodexSetupWithFinalConfig({
       initialConfig: resolvedSource,
       currentConfig: {},
-      sourceConfig: resolvedSource,
+      currentRuntimeConfig: resolvedSource,
+      sourceConfig: {},
     });
 
     expect(result.ok).toBe(true);

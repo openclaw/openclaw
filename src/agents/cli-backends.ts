@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
+import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import {
   resolvePluginSetupCliBackend,
@@ -19,7 +20,6 @@ import type {
   CliBundleMcpMode,
   CliBackendPlugin,
   CliBackendNativeToolMode,
-  CliBackendRuntimeArtifactPolicy,
   CliBackendSideQuestionToolMode,
   PluginTextTransforms,
 } from "../plugins/types.js";

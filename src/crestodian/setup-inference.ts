@@ -114,8 +114,6 @@ export type SetupInferenceManualProvider = {
 
 export type SetupInferenceDetection = {
   candidates: SetupInferenceCandidate[];
-  /** A native Codex binary can provide inference and later supervision. */
-  codexAppServerDetected: boolean;
   /** Text-inference key/token methods exposed by installed provider manifests. */
   manualProviders: SetupInferenceManualProvider[];
   /** Resolved workspace the setup apply would use (display + default). */
@@ -311,7 +309,6 @@ export async function detectSetupInference(
   }).filter((choice) => enablePluginInConfig(cfg, choice.pluginId).enabled);
   return {
     candidates,
-    codexAppServerDetected: candidates.some((candidate) => candidate.kind === "codex-cli"),
     manualProviders: listSetupInferenceManualProviders(authChoices),
     workspace,
     ...(configuredModel ? { configuredModel } : {}),
@@ -1635,6 +1632,9 @@ async function activateSetupInferenceUnredacted(
           afterWrite: { mode: "none", reason: "Crestodian activates verified inference" },
           transform: async (current, context) => {
             const latestRuntime = context.snapshot.runtimeConfig ?? context.snapshot.config;
+            // Validate that the candidate is still admissible before reporting
+            // broader route drift, so policy revocations retain their actionable error.
+            const stagedRuntime = stageCandidate(latestRuntime);
             const latestBaseline = await projectDefaultInferenceRoute(latestRuntime);
             if (!sameDefaultInferenceRoute(latestBaseline, baselineRoute)) {
               throw new Error(
@@ -1651,7 +1651,6 @@ async function activateSetupInferenceUnredacted(
                 "The target model metadata changed during its live inference test, so the verified candidate was not saved. Review the current model settings and retry.",
               );
             }
-            const stagedRuntime = stageCandidate(latestRuntime);
             const currentRoute = await projectDefaultInferenceRoute(stagedRuntime);
             if (!sameDefaultInferenceRoute(currentRoute, verifiedRoute)) {
               throw new Error(
