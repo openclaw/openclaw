@@ -687,27 +687,69 @@ describe("chat compaction divider", () => {
 });
 
 describe("direct thread avatar mode", () => {
-  it("marks label-free threads direct and labeled threads as group", () => {
+  function sessionsListWithKind(sessionKey: string, kind: "direct" | "group") {
+    return {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5.5", contextTokens: 200_000 },
+      sessions: [{ key: sessionKey, kind, updatedAt: 1 }],
+    };
+  }
+
+  const labeledHistory = [
+    { role: "user", content: "hi", timestamp: 1 },
+    { role: "assistant", content: "hello", timestamp: 2 },
+    { role: "user", content: "me too", senderLabel: "Mario", timestamp: 3 },
+  ];
+
+  it("classifies by canonical session kind even when DM rows carry sender labels", () => {
     const direct = renderChatView({
-      sessionKey: "direct-avatar-mode",
-      messages: [
-        { role: "user", content: "hi", timestamp: 1 },
-        { role: "assistant", content: "hello", timestamp: 2 },
-      ],
+      sessionKey: "kind-direct",
+      sessions: sessionsListWithKind("kind-direct", "direct"),
+      messages: labeledHistory,
     });
-    const directThread = requireElement(direct, ".chat-thread", "chat thread");
-    expect(directThread.classList.contains("chat-thread--direct")).toBe(true);
+    expect(
+      requireElement(direct, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
 
     const group = renderChatView({
-      sessionKey: "group-avatar-mode",
+      sessionKey: "kind-group",
+      sessions: sessionsListWithKind("kind-group", "group"),
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(group, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
+  it("falls back to sender-label history when session metadata is missing", () => {
+    const direct = renderChatView({
+      sessionKey: "fallback-direct",
       messages: [
         { role: "user", content: "hi", timestamp: 1 },
         { role: "assistant", content: "hello", timestamp: 2 },
-        { role: "user", content: "me too", senderLabel: "Mario", timestamp: 3 },
       ],
     });
-    const groupThread = requireElement(group, ".chat-thread", "chat thread");
-    expect(groupThread.classList.contains("chat-thread--direct")).toBe(false);
+    expect(
+      requireElement(direct, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(true);
+
+    const group = renderChatView({
+      sessionKey: "fallback-group",
+      messages: labeledHistory,
+    });
+    expect(
+      requireElement(group, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
   });
 });
 

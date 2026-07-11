@@ -707,15 +707,22 @@ export function renderChatThread(props: ChatThreadProps) {
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
-  // 1:1 sessions (no labeled foreign sender anywhere in the thread) drop the
-  // avatar gutter entirely; group threads keep avatars as the always-visible
-  // identity marker. Scan the full raw history, not chatItems: the rendered
-  // window (last ~30, search-filtered) could misclassify a group thread whose
-  // labeled senders scrolled out of view and flip the layout mid-scroll.
-  const isDirectThread = !props.messages.some((message) => {
-    const label = (message as { senderLabel?: unknown } | null)?.senderLabel;
-    return typeof label === "string" && label.trim() !== "";
-  });
+  // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
+  // as the always-visible identity marker. The canonical session kind decides:
+  // channel DMs also carry senderLabel on user rows (gateway sanitization), so
+  // message labels alone would misclassify them. Only when session metadata is
+  // missing do we fall back to scanning the full raw history for labeled
+  // senders — chatItems would be wrong here, its render window is truncated.
+  const sessionKind = activeSession?.kind;
+  const isDirectThread =
+    sessionKind === "group"
+      ? false
+      : sessionKind && sessionKind !== "unknown"
+        ? true
+        : !props.messages.some((message) => {
+            const label = (message as { senderLabel?: unknown } | null)?.senderLabel;
+            return typeof label === "string" && label.trim() !== "";
+          });
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
