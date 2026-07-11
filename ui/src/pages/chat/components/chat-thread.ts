@@ -20,7 +20,6 @@ import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
-  isUiGlobalSessionKey,
   parseAgentSessionKey,
   resolveUiGlobalAliasAgentId,
   type UiSessionDefaultsHost,
@@ -694,25 +693,15 @@ export function renderChatThread(props: ChatThreadProps) {
   const activeSession = props.sessions?.sessions?.find((row) =>
     areUiSessionKeysEquivalent(row.key, props.sessionKey),
   );
-  // Kind-only fallback: global-scope fleets select the canonical "global" row
-  // via alias keys (agent:<id>:global, or the configured main alias); strict
-  // opts mirror chat-history's subscription matching. Gated on configured
-  // global scope because stray global rows can coexist with per-sender
-  // sessions, and kept separate from activeSession because the shared
-  // sessions list can belong to another agent's scope — the kind is safe to
-  // borrow, reasoning/context metadata is not.
-  const sessionKindRow =
-    activeSession ??
-    (sessionHost && isUiGlobalScopeConfigured(sessionHost)
-      ? props.sessions?.sessions?.find(
-          (row) =>
-            isUiGlobalSessionKey(row.key) &&
-            resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey, {
-              rowKind: row.kind,
-              requireGlobalRowForMainAlias: true,
-            }) !== null,
-        )
-      : undefined);
+  // Global-alias detection needs no session row: under configured global
+  // scope, agent:<id>:global and configured-main aliases route to the global
+  // stream even when the capped sessions list omits the canonical row (or it
+  // does not exist yet). The scope gate keeps per-sender main threads direct.
+  const isGlobalAliasKey =
+    parseAgentSessionKey(props.sessionKey)?.rest === "global" ||
+    (sessionHost !== null &&
+      isUiGlobalScopeConfigured(sessionHost) &&
+      resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
@@ -744,15 +733,15 @@ export function renderChatThread(props: ChatThreadProps) {
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
   // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
   // as the always-visible identity marker. The canonical session kind decides;
-  // the sessions list is capped, so absent/unknown rows classify by key shape:
-  // agent:<id>:global keys are the global stream even without a row, the rest
-  // uses the same core helper the gateway uses. Message senderLabels are not a
-  // signal here: gateway sanitization labels 1:1 channel DM rows too.
-  const rowKind = sessionKindRow?.kind;
+  // the sessions list is capped, so absent/unknown rows classify by key:
+  // global aliases first, then the same core key-shape helper the gateway
+  // uses. Message senderLabels are not a signal here: gateway sanitization
+  // labels 1:1 channel DM rows too.
+  const rowKind = activeSession?.kind;
   const sessionKind =
     rowKind && rowKind !== "unknown"
       ? rowKind
-      : parseAgentSessionKey(props.sessionKey)?.rest === "global"
+      : isGlobalAliasKey
         ? "global"
         : classifySessionKind(props.sessionKey);
   // Only agent-solo kinds qualify: "global" aggregates every inbound context

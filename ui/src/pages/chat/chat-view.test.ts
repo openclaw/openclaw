@@ -795,6 +795,24 @@ describe("direct thread avatar mode", () => {
     ).toBe(false);
   });
 
+  it("classifies global-scope main aliases without a listed global row", () => {
+    // The capped list can omit the canonical global row (or it may not exist
+    // before the first persisted turn); configured scope alone decides.
+    const aliased = renderChatView({
+      sessionKey: "agent:work:main",
+      sessionHost: {
+        agentsList: { defaultId: "work", mainKey: "main", scope: "global" },
+        hello: null,
+      },
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(
+      requireElement(aliased, ".chat-thread", "chat thread").classList.contains(
+        "chat-thread--direct",
+      ),
+    ).toBe(false);
+  });
+
   it("ignores stray global rows for main aliases outside global scope", () => {
     // per-sender scope: a listed global row must not reclassify a direct main
     // thread whose exact row is missing from the capped list.
