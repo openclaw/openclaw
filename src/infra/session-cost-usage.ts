@@ -23,6 +23,7 @@ import {
 import {
   listSessionEntries,
   loadTranscriptEventsSync,
+  readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.js";
 import {
   formatSqliteSessionFileMarker,
@@ -423,13 +424,6 @@ async function listUsageCountedTranscriptFileStats(
   return results.filter((file): file is UsageCostTranscriptFile => Boolean(file));
 }
 
-function estimateSqliteTranscriptByteSize(events: unknown[]): number {
-  return events.reduce<number>(
-    (sum, event) => sum + Buffer.byteLength(JSON.stringify(event)) + 1,
-    0,
-  );
-}
-
 function listUsageCountedSqliteTranscriptStats(
   agentId?: string,
   params?: { minMtimeMs?: number; sessionsDir?: string },
@@ -448,7 +442,9 @@ function listUsageCountedSqliteTranscriptStats(
     if (params?.minMtimeMs !== undefined && mtimeMs < params.minMtimeMs) {
       continue;
     }
-    const events = loadTranscriptEventsSync({
+    // Usage scans run across every session on hot paths; byte sizes come from
+    // a SQL aggregate so no transcript row is materialized (#86718 class).
+    const stats = readTranscriptStatsSync({
       agentId: marker.agentId,
       sessionId: marker.sessionId,
       storePath: marker.storePath,
@@ -457,7 +453,7 @@ function listUsageCountedSqliteTranscriptStats(
       filePath: formatSqliteSessionFileMarker(marker),
       mtimeMs,
       sessionId: marker.sessionId,
-      size: estimateSqliteTranscriptByteSize(events),
+      size: stats.sizeBytes,
     });
   }
   return files;
@@ -492,7 +488,7 @@ async function resolveUsageCostTranscriptFile(
     const entry = listSessionEntries({ storePath: marker.storePath }).find(
       ({ entry: sessionEntry }) => sessionEntry.sessionId === marker.sessionId,
     )?.entry;
-    const events = loadTranscriptEventsSync({
+    const stats = readTranscriptStatsSync({
       agentId: marker.agentId,
       sessionId: marker.sessionId,
       storePath: marker.storePath,
@@ -501,7 +497,7 @@ async function resolveUsageCostTranscriptFile(
       filePath: formatSqliteSessionFileMarker(marker),
       mtimeMs: asFiniteNumber(entry?.updatedAt) ?? 0,
       sessionId: marker.sessionId,
-      size: estimateSqliteTranscriptByteSize(events),
+      size: stats.sizeBytes,
     };
   }
   const stats = await fs.promises.stat(sessionFile).catch(() => null);
