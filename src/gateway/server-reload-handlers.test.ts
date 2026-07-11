@@ -38,9 +38,34 @@ import {
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import {
   abortPendingChannelReloads,
-  createGatewayReloadHandlers,
-  startManagedGatewayConfigReloader,
+  createGatewayReloadHandlers as createGatewayReloadHandlersImpl,
+  startManagedGatewayConfigReloader as startManagedGatewayConfigReloaderImpl,
 } from "./server-reload-handlers.js";
+
+type ReloadHandlerParams = Parameters<typeof createGatewayReloadHandlersImpl>[0];
+type ManagedReloaderParams = Parameters<typeof startManagedGatewayConfigReloaderImpl>[0];
+
+function createGatewayReloadHandlers(
+  params: Omit<ReloadHandlerParams, "cronReconciliation"> & {
+    cronReconciliation?: ReloadHandlerParams["cronReconciliation"];
+  },
+) {
+  return createGatewayReloadHandlersImpl({
+    ...params,
+    cronReconciliation: params.cronReconciliation ?? createTestCronReconciliation(),
+  });
+}
+
+function startManagedGatewayConfigReloader(
+  params: Omit<ManagedReloaderParams, "cronReconciliation"> & {
+    cronReconciliation?: ManagedReloaderParams["cronReconciliation"];
+  },
+) {
+  return startManagedGatewayConfigReloaderImpl({
+    ...params,
+    cronReconciliation: params.cronReconciliation ?? createTestCronReconciliation(),
+  });
+}
 
 type GmailWatcherRestartParams = {
   cfg: OpenClawConfig;
@@ -189,6 +214,33 @@ vi.mock("./server-cron.js", async () => {
   };
 });
 
+function createTestCronReconciliation() {
+  const complete = vi.fn<() => Promise<void>>(async () => {});
+  return {
+    arm: vi.fn<() => { complete: () => Promise<void> }>(() => ({ complete })),
+    complete,
+    invalidate: vi.fn(),
+  };
+}
+
+function createCronRestartPlan(): GatewayReloadPlan {
+  return {
+    changedPaths: ["cron"],
+    restartGateway: false,
+    restartReasons: [],
+    hotReasons: ["cron"],
+    reloadHooks: false,
+    restartGmailWatcher: false,
+    restartCron: true,
+    restartHeartbeat: false,
+    restartHealthMonitor: false,
+    reloadPlugins: false,
+    restartChannels: new Set(),
+    disposeMcpRuntimes: false,
+    noopPaths: [],
+  };
+}
+
 function createReloadHandlersForTest(
   logReload = { info: vi.fn(), warn: vi.fn() },
   channels?: {
@@ -203,6 +255,7 @@ function createReloadHandlersForTest(
     updateConfig: vi.fn(),
   };
   const setState = vi.fn();
+  const cronReconciliation = createTestCronReconciliation();
   const handlers = createGatewayReloadHandlers({
     deps: {} as never,
     broadcast: vi.fn(),
@@ -232,9 +285,17 @@ function createReloadHandlersForTest(
     logChannels: { info: vi.fn(), error: vi.fn() },
     logCron: { error: vi.fn() },
     logReload,
+    cronReconciliation,
     createHealthMonitor: () => null,
   });
-  return { ...handlers, cron, heartbeatRunner, setState, stopExitWatchers };
+  return {
+    ...handlers,
+    cron,
+    cronReconciliation,
+    heartbeatRunner,
+    setState,
+    stopExitWatchers,
+  };
 }
 
 // Other gateway test helpers (test-helpers.mocks.ts, test-helpers.server.ts)
@@ -273,8 +334,16 @@ afterEach(() => {
 
 describe("gateway hot reload model state", () => {
   it("stops old cron exit watchers and reconciles rebuilt ones after cron restart", async () => {
-    const newCron = { start: vi.fn(async () => {}), stop: vi.fn() };
-    const newReconcileExitWatchers = vi.fn(async () => {});
+    const order: string[] = [];
+    const newCron = {
+      start: vi.fn(async () => {
+        order.push("start-new");
+      }),
+      stop: vi.fn(),
+    };
+    const newReconcileExitWatchers = vi.fn(async () => {
+      order.push("reconcile-watchers");
+    });
     const rebuiltCronState = {
       cron: newCron,
       storePath: "/tmp/rebuilt-cron.json",
@@ -282,37 +351,76 @@ describe("gateway hot reload model state", () => {
       reconcileExitWatchers: newReconcileExitWatchers,
       stopExitWatchers: vi.fn(),
     };
-    hoisted.buildGatewayCronService.mockReturnValueOnce(rebuiltCronState);
-    const { applyHotReload, cron, setState, stopExitWatchers } = createReloadHandlersForTest();
-
-    await applyHotReload(
-      {
-        changedPaths: ["cron"],
-        restartGateway: false,
-        restartReasons: [],
-        hotReasons: ["cron"],
-        reloadHooks: false,
-        restartGmailWatcher: false,
-        restartCron: true,
-        restartHeartbeat: false,
-        restartHealthMonitor: false,
-        reloadPlugins: false,
-        restartChannels: new Set(),
-        disposeMcpRuntimes: false,
-        noopPaths: [],
+    hoisted.buildGatewayCronService.mockImplementationOnce(() => {
+      order.push("build-new");
+      return rebuiltCronState;
+    });
+    const { applyHotReload, cron, cronReconciliation, setState, stopExitWatchers } =
+      createReloadHandlersForTest();
+    cron.stop.mockImplementation(() => {
+      order.push("stop-old");
+    });
+    stopExitWatchers.mockImplementation(() => {
+      order.push("stop-old-watchers");
+    });
+    cronReconciliation.invalidate.mockImplementation(() => {
+      order.push("invalidate-old");
+    });
+    cronReconciliation.arm.mockImplementation(() => ({
+      complete: async () => {
+        order.push("hook");
       },
-      {} as OpenClawConfig,
-    );
+    }));
+    const nextConfig = { cron: { enabled: true } } as OpenClawConfig;
+
+    await applyHotReload(createCronRestartPlan(), nextConfig);
 
     expect(cron.stop).toHaveBeenCalledTimes(1);
     expect(stopExitWatchers).toHaveBeenCalledTimes(1);
     expect(newCron.start).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(newReconcileExitWatchers).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(order.at(-1)).toBe("hook"));
+    expect(order).toEqual([
+      "invalidate-old",
+      "stop-old",
+      "stop-old-watchers",
+      "build-new",
+      "start-new",
+      "reconcile-watchers",
+      "hook",
+    ]);
+    expect(cronReconciliation.arm).toHaveBeenCalledWith({
+      reason: "reload",
+      config: nextConfig,
+      cronState: rebuiltCronState,
+    });
     expect(setState).toHaveBeenCalledWith(
       expect.objectContaining({
         cronState: rebuiltCronState,
       }),
     );
+  });
+
+  it("completes reload reconciliation when the replacement scheduler is disabled", async () => {
+    const rebuiltCronState = {
+      cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+      storePath: "/tmp/rebuilt-cron.json",
+      cronEnabled: false,
+      reconcileExitWatchers: vi.fn(async () => {}),
+      stopExitWatchers: vi.fn(),
+    };
+    hoisted.buildGatewayCronService.mockReturnValueOnce(rebuiltCronState);
+    const { applyHotReload, cronReconciliation } = createReloadHandlersForTest();
+    const nextConfig = { cron: { enabled: false } } as OpenClawConfig;
+
+    await applyHotReload(createCronRestartPlan(), nextConfig);
+
+    await vi.waitFor(() => expect(cronReconciliation.complete).toHaveBeenCalledTimes(1));
+    expect(cronReconciliation.arm).toHaveBeenCalledWith({
+      reason: "reload",
+      config: nextConfig,
+      cronState: rebuiltCronState,
+    });
   });
 
   it("resets prepared model runtime state for every hot reload and rewarms after plugin reload", async () => {
