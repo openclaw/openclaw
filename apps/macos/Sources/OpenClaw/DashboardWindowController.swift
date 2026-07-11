@@ -537,12 +537,30 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return button
     }
 
+    func navigateBack() {
+        self.activeNavigationWebView.goBack()
+    }
+
+    func navigateForward() {
+        self.activeNavigationWebView.goForward()
+    }
+
     @objc private func navigateBack(_: Any?) {
         self.webView.goBack()
     }
 
     @objc private func navigateForward(_: Any?) {
         self.webView.goForward()
+    }
+
+    private var activeNavigationWebView: WKWebView {
+        guard let linkWebView = self.linkBrowser.activeWebView,
+              let firstResponder = self.window?.firstResponder as? NSView,
+              firstResponder === linkWebView || firstResponder.isDescendant(of: linkWebView)
+        else {
+            return self.webView
+        }
+        return linkWebView
     }
 
     private static func makeWindow(contentView: NSView) -> NSWindow {
@@ -1035,6 +1053,19 @@ extension DashboardWindowController {
 
     var _testAllowsBackForwardGestures: Bool {
         self.webView.allowsBackForwardNavigationGestures
+    }
+
+    var _testNavigationWebViewIdentity: ObjectIdentifier {
+        ObjectIdentifier(self.activeNavigationWebView)
+    }
+
+    var _testDashboardWebViewIdentity: ObjectIdentifier {
+        ObjectIdentifier(self.webView)
+    }
+
+    func _testFocusLinkBrowser() -> Bool {
+        guard let webView = self.linkBrowser.activeWebView else { return false }
+        return self.window?.makeFirstResponder(webView) == true
     }
 }
 #endif

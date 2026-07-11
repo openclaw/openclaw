@@ -163,6 +163,16 @@ final class DashboardManager {
         self.controller?.closeDashboard()
     }
 
+    func navigateBack() {
+        guard self.controller?.window?.isKeyWindow == true else { return }
+        self.controller?.navigateBack()
+    }
+
+    func navigateForward() {
+        guard self.controller?.window?.isKeyWindow == true else { return }
+        self.controller?.navigateForward()
+    }
+
     private static func websocketURLString(for dashboardURL: URL) -> String {
         guard var components = URLComponents(url: dashboardURL, resolvingAgainstBaseURL: false) else {
             return dashboardURL.absoluteString
