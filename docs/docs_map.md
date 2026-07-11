@@ -3007,6 +3007,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## gateway/agent-runtime-boundary.md
+
+- Route: /gateway/agent-runtime-boundary
+- Headings:
+  - H1: Agent runtime boundary
+  - H2: Host-level coding-agent CLIs
+  - H3: Rules for temporary host agents
+  - H2: Process cleanup
+  - H2: Verification
+  - H2: See also
+
 ## gateway/authentication.md
 
 - Route: /gateway/authentication
