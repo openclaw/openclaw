@@ -9,7 +9,9 @@ import type { CrestodianOverview } from "./overview.js";
  * returned backend config is scoped to the workspace being repaired.
  */
 const CRESTODIAN_CLAUDE_CLI_MODEL = "claude-opus-4-8";
-const CRESTODIAN_CODEX_MODEL = "gpt-5.5";
+// Backport of #103581: fresh Codex planner turns use the exact Sol catalog
+// ref; the native Codex catalog has no bare `gpt-5.6` direct-API alias.
+const CRESTODIAN_CODEX_MODEL = "gpt-5.6-sol";
 
 type CrestodianLocalPlannerBackend = {
   kind: "claude-cli" | "codex-app-server";
