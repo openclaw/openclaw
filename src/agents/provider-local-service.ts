@@ -339,26 +339,28 @@ async function startAndWaitForLocalService(params: {
   const child = managed.process;
   diagnostics.pid = child.pid;
   managed.lastExit = undefined;
-  child.stdout?.on("data", (chunk: Buffer | string) => {
+  const captureStdout = (chunk: Buffer | string) => {
     diagnostics.stdoutTail = appendLocalServiceOutputTail(
       diagnostics.stdoutTail,
       chunk,
       service.env,
     );
-  });
-  child.stderr?.on("data", (chunk: Buffer | string) => {
+  };
+  const captureStderr = (chunk: Buffer | string) => {
     diagnostics.stderrTail = appendLocalServiceOutputTail(
       diagnostics.stderrTail,
       chunk,
       service.env,
     );
-  });
+  };
+  child.stdout?.on("data", captureStdout);
+  child.stderr?.on("data", captureStderr);
   child.unref();
   child.once("exit", (code, signalLocal) => {
     const exit = { code, signal: signalLocal };
     diagnostics.lastExit = exit;
     log.info(
-      `${provider} local service exited: ${signalLocal ? `signal=${signalLocal}` : `code=${code ?? 0}`}${diagnostics.stderrTail ? ` stderr=${diagnostics.stderrTail}` : ""}`,
+      `${provider} local service exited: ${signalLocal ? `signal=${signalLocal}` : `code=${code ?? 0}`}`,
     );
     if (managed.process === child) {
       managed.lastExit = exit;
@@ -383,7 +385,11 @@ async function startAndWaitForLocalService(params: {
       diagnostics.readyAt = Date.now();
       diagnostics.lastHealthyAt = diagnostics.readyAt;
       // Pipes keep startup alive while readiness is pending, then stop
-      // diagnostics from pinning one-shot hosts after the lease is usable.
+      // diagnostics from retaining runtime output or pinning one-shot hosts.
+      child.stdout?.off("data", captureStdout);
+      child.stderr?.off("data", captureStderr);
+      diagnostics.stdoutTail = "";
+      diagnostics.stderrTail = "";
       unrefLocalServiceOutput(child.stdout);
       unrefLocalServiceOutput(child.stderr);
       log.info(
