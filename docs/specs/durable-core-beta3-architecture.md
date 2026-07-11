@@ -1,33 +1,35 @@
 ---
 title: Durable Core Beta 3 Architecture
-summary: "Review anchor for the opt-in durable runtime architecture, boundaries, stack order, and PR body language on the beta 3 line."
+summary: "Architecture anchor for opt-in durable runtime invariants and boundaries on the beta 3 line."
 read_when:
-  - Reviewing the durable runtime beta 3 stack
-  - Checking the durable core boundary before implementation PRs
-  - Writing or reviewing cumulative durable-runtime PR bodies
+  - Reviewing durable runtime beta 3 architecture
+  - Checking durable runtime owner boundaries before implementation
+  - Auditing recovery, wake, and delivery invariants
 ---
 
 # Durable Core Beta 3 Architecture
 
-This page is the PR1 docs/RFC anchor for the beta 3 durable-runtime stack. It
-describes the intended architecture and review boundary only. It does not claim
-that runtime behavior, external delivery, replay, worker recovery, or CLI/Gateway
-control behavior has landed in this PR.
+This page is the beta 3 durable-runtime architecture anchor. It describes the
+intended architecture and review boundary only. It does not claim that runtime
+behavior, external delivery, replay, worker recovery, or CLI/Gateway control
+behavior has landed from this document.
 
 ## General Durable Runtime RFC
 
 Durable core is the shared, opt-in runtime substrate beneath OpenClaw agent,
-session, subagent, task, channel, and operator surfaces. Its job is to record
-runtime facts that must survive process restarts: accepted work identity,
-ordered steps and events, parent/child links, bounded refs, leases, recovery
-states, wake/attention obligations, delivery evidence, and read-only inspection
-state.
+session, subagent, task, channel, and operator surfaces. Its job is to define
+the cross-owner invariants for runtime facts that must survive process restarts:
+accepted work identity, ordered steps and events, parent/child links, bounded
+refs, leases, recovery states, wake/attention obligations, delivery evidence,
+and read-only inspection state.
 
-The durable runtime layer exists because no single product surface can safely
-own those facts. Task Flow, Workboard, channel UI, plugins, and session UX may
-project from durable facts, but they must not define the persistence boundary.
-The core must remain useful when those products are disabled, absent, or
-changing independently.
+The durable runtime layer builds on the existing local state owners in
+`openclaw.sqlite`. The target base already persists audit events, state leases,
+task and subagent runs, durable delivery queues, task delivery state, and flow
+runs. This RFC is not a competing ledger for those owners. It names the residual
+contracts needed when facts cross owner boundaries: stable refs, append-only
+event evidence, lease expiry, terminal immutability, wake/attention routing,
+dedupe, inspection, and fail-closed recovery.
 
 The RFC boundary is intentionally conservative:
 
@@ -45,15 +47,18 @@ The RFC boundary is intentionally conservative:
 
 OpenClaw is no longer only a synchronous chat loop. It now spans long-running
 agent turns, subagents, tool calls, channel delivery, local operator inspection,
-and process restarts. Without a durable substrate, the only common record is the
-transcript plus process-local memory. That is not enough to prove whether a
-child run was spawned, whether a side effect already happened, whether a parent
-is waiting on fan-in, or what a restart may safely reclaim.
+and process restarts. Existing durable owners already record important parts of
+that work in `openclaw.sqlite`, including audit events, leases, task/subagent
+state, delivery queue entries, task delivery state, and flow runs.
 
-Durable core gives OpenClaw a local-first operational record for those runtime
-facts. The record is meant to answer what OpenClaw accepted, what ran, what is
-waiting, what failed, what became stale after restart, and which bounded recovery
-action is safe to present to an owner or operator.
+The remaining architecture problem is cross-owner consistency. A task row,
+subagent run, delivery queue entry, flow run, and audit event can each be valid
+on its own while still leaving unclear whether a parent is waiting on fan-in,
+whether a side effect already happened, whether a wake was delivered, or what a
+restart may safely reclaim. Durable core gives those owners shared invariants so
+OpenClaw can answer what it accepted, what ran, what is waiting, what failed,
+what became stale after restart, and which bounded recovery action is safe to
+present to an owner or operator.
 
 ## Why Beta 3 Needs This Foundation
 
@@ -64,7 +69,7 @@ message did not arrive"; it is that OpenClaw can accept work, delegate it, defer
 it, or route it through a channel without a durable obligation that later code
 can inspect, recover, acknowledge, or fail closed.
 
-The root causes PR2 through PR5 must address are:
+The remaining root causes implementation work must address are:
 
 - **Coordinator silence:** a coordinator can promise later progress or
   completion, then depend on transcript intent and voluntary follow-up instead
@@ -86,24 +91,21 @@ The root causes PR2 through PR5 must address are:
   unsafe unless idempotency and authority gates prove it.
 
 This foundation lets beta 3 treat those cases as inspectable runtime states
-instead of as unrelated prompt, channel, or UI bugs. PR1 only documents that
-boundary and proof model; implementation and runtime claims remain deferred to
-the later PRs that add and validate code.
+instead of as unrelated prompt, channel, or UI bugs. This page documents the
+boundary and proof model; implementation and runtime claims belong to the
+changes that add and validate code.
 
-## Stack Position
+## Implementation Position
 
-PR1 is the docs/RFC/boundary anchor for a cumulative five-PR stack:
+Durable runtime implementation should extend the existing state owners where
+they already own the fact, then add shared contracts only for cross-owner
+questions those tables cannot answer alone. New records should be source-backed
+by a concrete invariant, migration, recovery path, or inspection need.
 
-| PR  | Scope                                                             | Boundary                                                                    |
-| --- | ----------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| PR1 | Architecture, boundary, reviewer language, and test plan          | Docs-only review anchor; no runtime behavior claim                          |
-| PR2 | Runtime foundation, SQLite store, and terminal immutability guard | Durable primitives and storage invariants                                   |
-| PR3 | Wake targets, producers, replay/resume semantics                  | Attention obligation and idempotent recovery paths                          |
-| PR4 | Controls, inspection, CLI, and Gateway surface                    | Read/control APIs over durable facts                                        |
-| PR5 | Internal session delivery handoff and final hardening             | Cumulative durable core; internal handoff only unless external proof exists |
-
-Every later branch must be based on the previous PR head. PR5 is therefore the
-cumulative top of the stack, not a standalone handoff-only patch.
+Architecture review should check whether each proposed durable fact has a clear
+owner, retention posture, privacy posture, disabled-runtime behavior, stale-owner
+handling, and read path. If an existing owner can answer the question without a
+new shared record, prefer the existing owner.
 
 ## Durable Core Boundary
 
@@ -167,12 +169,13 @@ user, or create new work.
 
 Internal session delivery-queue handoff satisfies the durable-core delivery
 boundary only for a resolved session target. External channel transport remains a
-separate delivery claim and must not be implied by PR1 or by the internal handoff
-unless a later PR implements and proves it.
+separate delivery claim and must not be implied by this RFC or by the internal
+handoff unless implementation work proves it directly.
 
 ## Non Goals
 
-- No runtime code, schema, worker, CLI, Gateway, or transport changes in PR1.
+- No runtime code, schema, worker, CLI, Gateway, or transport changes from this
+  docs-only RFC.
 - No default-on durable runtime behavior in beta 3.
 - No product-specific task-card or Workboard policy in durable core.
 - No raw prompt, task, or tool-payload persistence by default.
@@ -180,26 +183,6 @@ unless a later PR implements and proves it.
   authority gates.
 - No external delivery claim without direct implementation and live or
   maintainer-grade proof.
-
-## PR Body Requirements
-
-Every PR in the durable stack should keep stable reviewer-facing headings so
-ClawSweeper and human reviewers can compare scope and proof across exact heads:
-
-- `Context capsule`
-- `Stack position`
-- `What Problem This Solves`
-- `Why This Change Was Made`
-- `User Impact`
-- `Proof matrix`
-- `Live proof`
-- `ClawSweeper requirements`
-- `Evidence`
-
-Each body must name root cause and stack context, record base/head SHAs, describe
-non-scope, state data-model and upgrade/default posture, and say which downstream
-PR owns deferred behavior. PR1 should explicitly say live/runtime proof is not
-applicable because the branch is docs-only.
 
 ## Related
 
