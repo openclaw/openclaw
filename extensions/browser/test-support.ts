@@ -2,8 +2,8 @@
  * Browser test-support re-exports from shared plugin-sdk test fixtures.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 export {
   createCliRuntimeCapture,
@@ -31,7 +31,7 @@ export function useAutoCleanupTempDirTracker(registerCleanup: (cleanup: () => vo
   });
   return {
     make(prefix: string): string {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+      const dir = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), prefix));
       dirs.add(dir);
       return dir;
     },
