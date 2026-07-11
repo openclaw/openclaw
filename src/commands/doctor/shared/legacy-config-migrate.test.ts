@@ -1981,6 +1981,9 @@ describe("legacy Codex Supervisor config migrate", () => {
         allow: [" CODEX-SUPERVISOR ", "codex"],
         deny: [" codex-supervisor "],
         entries: {
+          " CODEX ": {
+            config: { appServer: { transport: "stdio" } },
+          },
           " CODEX-SUPERVISOR ": {
             enabled: true,
             config: { allowWriteControls: true },
@@ -1992,9 +1995,15 @@ describe("legacy Codex Supervisor config migrate", () => {
     expect(res.config?.plugins?.allow).toEqual(["codex"]);
     expect(res.config?.plugins?.deny).toEqual([]);
     expect(res.config?.plugins?.entries).not.toHaveProperty(" CODEX-SUPERVISOR ");
-    expect(res.config?.plugins?.entries?.codex?.config?.supervision).toEqual({
-      enabled: false,
-      allowWriteControls: true,
+    expect(res.config?.plugins?.entries).not.toHaveProperty("codex");
+    expect(res.config?.plugins?.entries?.[" CODEX "]).toEqual({
+      config: {
+        appServer: { transport: "stdio" },
+        supervision: {
+          enabled: false,
+          allowWriteControls: true,
+        },
+      },
     });
   });
 

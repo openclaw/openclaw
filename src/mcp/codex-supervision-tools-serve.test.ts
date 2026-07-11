@@ -3,10 +3,20 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { createCodexSupervisionToolsMcpServer } from "./codex-supervision-tools-serve.js";
+import {
+  createCodexSupervisionToolsMcpServer,
+  serveCodexSupervisionToolsMcp,
+} from "./codex-supervision-tools-serve.js";
 
 const ensureStandalonePluginToolRegistryLoadedMock = vi.hoisted(() => vi.fn(() => ({})));
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
+const connectToolsMcpServerToStdioMock = vi.hoisted(() => vi.fn(async () => {}));
+const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
+
+vi.mock("../agents/harness/registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/harness/registry.js")>();
+  return { ...actual, disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock };
+});
 
 vi.mock("../plugins/tools.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/tools.js")>();
@@ -15,6 +25,11 @@ vi.mock("../plugins/tools.js", async (importOriginal) => {
     ensureStandalonePluginToolRegistryLoaded: ensureStandalonePluginToolRegistryLoadedMock,
     resolvePluginTools: resolvePluginToolsMock,
   };
+});
+
+vi.mock("./tools-stdio-server.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./tools-stdio-server.js")>();
+  return { ...actual, connectToolsMcpServerToStdio: connectToolsMcpServerToStdioMock };
 });
 
 const TOOL_NAMES = [
@@ -43,6 +58,8 @@ describe("createCodexSupervisionToolsMcpServer", () => {
     ensureStandalonePluginToolRegistryLoadedMock.mockClear();
     resolvePluginToolsMock.mockReset();
     resolvePluginToolsMock.mockReturnValue([]);
+    connectToolsMcpServerToStdioMock.mockClear();
+    disposeRegisteredAgentHarnessesMock.mockClear();
   });
 
   it("fails closed when the external Codex plugin tools are unavailable", () => {
@@ -81,5 +98,16 @@ describe("createCodexSupervisionToolsMcpServer", () => {
       await client.close();
       await server.close();
     }
+  });
+
+  it("disposes the Codex harness when the stdio bridge shuts down", async () => {
+    resolvePluginToolsMock.mockReturnValue(createTools());
+
+    await serveCodexSupervisionToolsMcp();
+
+    const shutdown = connectToolsMcpServerToStdioMock.mock.calls[0]?.[1]?.onShutdown;
+    expect(shutdown).toBe(disposeRegisteredAgentHarnessesMock);
+    await shutdown?.();
+    expect(disposeRegisteredAgentHarnessesMock).toHaveBeenCalledOnce();
   });
 });

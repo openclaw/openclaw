@@ -22,12 +22,19 @@ export function createToolsMcpServer(params: { name: string; tools: AnyAgentTool
   return server;
 }
 
-export async function connectToolsMcpServerToStdio(server: Server): Promise<void> {
+export async function connectToolsMcpServerToStdio(
+  server: Server,
+  options: { onShutdown?: () => Promise<void> | void } = {},
+): Promise<void> {
   // MCP stdio requires stdout to stay protocol-only.
   routeLogsToStderr();
 
   const transport = new StdioServerTransport();
   let shuttingDown = false;
+  let resolveShutdown: (() => void) | undefined;
+  const shutdownComplete = new Promise<void>((resolve) => {
+    resolveShutdown = resolve;
+  });
   const shutdown = () => {
     if (shuttingDown) {
       return;
@@ -37,7 +44,14 @@ export async function connectToolsMcpServerToStdio(server: Server): Promise<void
     process.stdin.off("close", shutdown);
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
-    void server.close();
+    void (async () => {
+      try {
+        await server.close();
+        await options.onShutdown?.();
+      } finally {
+        resolveShutdown?.();
+      }
+    })();
   };
 
   process.stdin.once("end", shutdown);
@@ -46,4 +60,7 @@ export async function connectToolsMcpServerToStdio(server: Server): Promise<void
   process.once("SIGTERM", shutdown);
 
   await server.connect(transport);
+  if (options.onShutdown) {
+    await shutdownComplete;
+  }
 }

@@ -6,6 +6,7 @@
  */
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -104,7 +105,9 @@ export async function serveCodexSupervisionToolsMcp(): Promise<void> {
   routeLogsToStderr();
   const config = withCodexSupervisionEnabled(getRuntimeConfig());
   const tools = resolveCodexSupervisionTools(config);
-  await connectToolsMcpServerToStdio(createCodexSupervisionToolsMcpServer({ config, tools }));
+  await connectToolsMcpServerToStdio(createCodexSupervisionToolsMcpServer({ config, tools }), {
+    onShutdown: disposeRegisteredAgentHarnesses,
+  });
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

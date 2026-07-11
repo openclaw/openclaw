@@ -152,13 +152,16 @@ function migrateLegacyCodexSupervisorEntry(
   const legacyEntry = rawLegacyEntry;
   const migratedEnabled = legacyEntry.enabled === true && !legacySupervisorDenied;
 
-  const rawCodexEntry = entries[CODEX_PLUGIN_ID];
+  const codexEntryKey =
+    Object.keys(entries).find((key) => normalizePluginIdForMigration(key) === CODEX_PLUGIN_ID) ??
+    CODEX_PLUGIN_ID;
+  const rawCodexEntry = entries[codexEntryKey];
   let codexEntry: Record<string, unknown>;
   if (isRecord(rawCodexEntry)) {
     codexEntry = rawCodexEntry;
   } else {
     codexEntry = {};
-    entries[CODEX_PLUGIN_ID] = codexEntry;
+    entries[codexEntryKey] = codexEntry;
   }
   // Top-level false disables the Codex harness too; inactive supervision must
   // stay nested while active migrated supervision explicitly activates Codex.
