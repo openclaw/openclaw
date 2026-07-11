@@ -438,7 +438,8 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
                 aborted: decoded.aborted)
         } catch {
             webChatSwiftLogger.warning(
-                "agent.wait failed runId=\(runId, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                "agent.wait failed runId=\(runId, privacy: .public) "
+                    + "error=\(error.localizedDescription, privacy: .public)")
             return .unavailable
         }
     }
