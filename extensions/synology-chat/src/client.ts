@@ -350,3 +350,9 @@ function doPost(url: string, body: string, allowInsecureSsl = false): Promise<bo
     req.end();
   });
 }
+
+export const testing = {
+  chatUserCache,
+  CACHE_TTL_MS,
+};
+export { testing as __testing };

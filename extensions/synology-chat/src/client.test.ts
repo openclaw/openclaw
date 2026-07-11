@@ -442,4 +442,39 @@ describe("fetchChatUsers", () => {
     const firstCall = firstHttpsGetCall();
     expect(firstCall[1]?.rejectUnauthorized).toBe(true);
   });
+  it("evicts stale cache entries when inserting a fresh one", async () => {
+    // The module-level chatUserCache only evicts stale entries on
+    // successful insert. Verify that stale entries are removed from
+    // the Map so a caller rotating through many webhook URLs cannot
+    // grow the cache without bound.
+    const clientModule = await import("./client.js");
+    const { chatUserCache, CACHE_TTL_MS } = clientModule.testing;
+    const listUrlA =
+      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=user_list&version=2&token=%22regression-a%22";
+    const listUrlB =
+      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=user_list&version=2&token=%22regression-b%22";
+
+    // Populate cache with a fresh entry for urlA
+    chatUserCache.set(listUrlA, {
+      users: [{ user_id: 1, username: "alice", nickname: "a" }],
+      cachedAt: fakeNowMs,
+    });
+
+    // Advance past TTL so urlA entry is stale
+    fakeNowMs += CACHE_TTL_MS + 1;
+    vi.setSystemTime(fakeNowMs);
+
+    // Insert urlB via fetchChatUsers — the eviction pass must
+    // delete stale urlA from the Map
+    mockUserListResponse([{ user_id: 2, username: "bob", nickname: "b" }]);
+    await fetchChatUsers(
+      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22regression-b%22",
+    );
+
+    // Verify stale urlA was evicted
+    expect(chatUserCache.has(listUrlA)).toBe(false);
+
+    // Verify fresh urlB is still present
+    expect(chatUserCache.has(listUrlB)).toBe(true);
+  });
 });
