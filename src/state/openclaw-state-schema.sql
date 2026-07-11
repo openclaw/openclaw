@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
   source_id TEXT NOT NULL UNIQUE,
+  schema_version INTEGER NOT NULL DEFAULT 1,
   source_sequence INTEGER NOT NULL,
   occurred_at INTEGER NOT NULL,
   kind TEXT NOT NULL,
@@ -72,12 +73,25 @@ CREATE TABLE IF NOT EXISTS audit_events (
   error_code TEXT,
   actor_type TEXT NOT NULL,
   actor_id TEXT NOT NULL,
-  agent_id TEXT NOT NULL,
+  agent_id TEXT,
   session_key TEXT,
   session_id TEXT,
-  run_id TEXT NOT NULL,
+  run_id TEXT,
   tool_call_id TEXT,
-  tool_name TEXT
+  tool_name TEXT,
+  direction TEXT,
+  channel TEXT,
+  conversation_kind TEXT,
+  message_outcome TEXT,
+  reason_code TEXT,
+  delivery_kind TEXT,
+  failure_stage TEXT,
+  duration_ms INTEGER,
+  result_count INTEGER,
+  account_ref TEXT,
+  conversation_ref TEXT,
+  message_ref TEXT,
+  target_ref TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_time
@@ -97,6 +111,19 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_kind_sequence
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_status_sequence
   ON audit_events(status, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_channel_sequence
+  ON audit_events(channel, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_direction_sequence
+  ON audit_events(direction, sequence DESC);
+
+CREATE TABLE IF NOT EXISTS audit_identity_keys (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  key_id TEXT NOT NULL,
+  key BLOB NOT NULL,
+  created_at INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS session_state_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,

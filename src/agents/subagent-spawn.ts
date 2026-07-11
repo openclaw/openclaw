@@ -831,7 +831,10 @@ function resolveRequesterBoundConversationRef(params: {
     return undefined;
   }
   if (activeBindings.length === 1) {
-    const conversation = activeBindings[0].conversation;
+    const conversation = activeBindings.at(0)?.conversation;
+    if (!conversation) {
+      return undefined;
+    }
     return {
       conversationId: conversation.conversationId,
       ...(conversation.parentConversationId
@@ -847,7 +850,10 @@ function resolveRequesterBoundConversationRef(params: {
           normalizeOptionalString(params.fallback?.parentConversationId),
     );
     if (matched.length === 1) {
-      const conversation = matched[0].conversation;
+      const conversation = matched.at(0)?.conversation;
+      if (!conversation) {
+        return undefined;
+      }
       return {
         conversationId: conversation.conversationId,
         ...(conversation.parentConversationId

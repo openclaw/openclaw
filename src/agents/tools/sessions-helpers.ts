@@ -158,8 +158,10 @@ export function deriveChannel(params: {
     return lastChannel;
   }
   const parts = params.key.split(":").filter(Boolean);
-  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
-    return parts[0];
+  const scope = parts.at(1);
+  const keyChannel = parts.at(0);
+  if (parts.length >= 3 && keyChannel && (scope === "group" || scope === "channel")) {
+    return keyChannel;
   }
   return "unknown";
 }
