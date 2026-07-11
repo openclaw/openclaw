@@ -7,7 +7,6 @@ import {
   createSubsystemLogger,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveGlobalSingleton,
   resolveMemorySearchConfig,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
@@ -30,7 +29,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
+import {
+  resolveMemoryCoreLocalServiceHostIdentity,
+  type MemoryCoreAcquireLocalService,
+} from "./embedding-local-service.js";
 import {
   createEmbeddingProvider,
   resolveEmbeddingProviderAdapterTransport,
@@ -100,9 +102,6 @@ const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const PATH_FTS_TABLE = MEMORY_INDEX_PATHS_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
-const MEMORY_LOCAL_SERVICE_HOST_IDENTITIES_KEY = Symbol.for(
-  "openclaw.memoryLocalServiceHostIdentities",
-);
 export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const EXACT_PATH_CANDIDATE_LIMIT = 200;
@@ -116,15 +115,6 @@ type MemoryEmbeddingProviderRequirement = {
 
 const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
   resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
-// The manager cache survives module reloads, so hook identities must survive too.
-// Otherwise a new runtime can collide with a cached manager owned by another host.
-const LOCAL_SERVICE_HOST_IDENTITIES = resolveGlobalSingleton<{
-  ids: WeakMap<MemoryCoreAcquireLocalService, number>;
-  nextId: number;
-}>(MEMORY_LOCAL_SERVICE_HOST_IDENTITIES_KEY, () => ({
-  ids: new WeakMap(),
-  nextId: 1,
-}));
 
 type EmbeddingProbeCacheEntry = {
   result: MemoryEmbeddingProbeResult;
@@ -258,22 +248,12 @@ function resolveMemoryIndexManagerCacheKey(params: {
   purpose: MemoryIndexManagerPurpose;
   acquireLocalService?: MemoryCoreAcquireLocalService;
 }): string {
-  let localServiceHostId = "none";
-  if (params.acquireLocalService) {
-    let id = LOCAL_SERVICE_HOST_IDENTITIES.ids.get(params.acquireLocalService);
-    if (id === undefined) {
-      id = LOCAL_SERVICE_HOST_IDENTITIES.nextId;
-      LOCAL_SERVICE_HOST_IDENTITIES.nextId += 1;
-      LOCAL_SERVICE_HOST_IDENTITIES.ids.set(params.acquireLocalService, id);
-    }
-    localServiceHostId = String(id);
-  }
   return [
     params.agentId,
     params.workspaceDir,
     JSON.stringify(params.settings),
     JSON.stringify(params.providerRequirement),
-    localServiceHostId,
+    resolveMemoryCoreLocalServiceHostIdentity(params.acquireLocalService),
     params.purpose,
   ].join(":");
 }

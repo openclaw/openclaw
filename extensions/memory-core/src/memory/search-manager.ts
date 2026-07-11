@@ -25,7 +25,10 @@ import {
   type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
+import {
+  resolveMemoryCoreLocalServiceHostIdentity,
+  type MemoryCoreAcquireLocalService,
+} from "./embedding-local-service.js";
 
 const MEMORY_SEARCH_MANAGER_CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
 type Maybe<T> = T | null;
@@ -211,7 +214,12 @@ export async function getMemorySearchManager(
     const { workspaceDir } = runtimeConfig;
     const transient = params.purpose === "status" || params.purpose === "cli";
     const scopeKey = buildQmdManagerScopeKey(normalizedAgentId);
-    const identityKey = buildQmdManagerIdentityKey(normalizedAgentId, qmdResolved, runtimeConfig);
+    const identityKey = buildQmdManagerIdentityKey(
+      normalizedAgentId,
+      qmdResolved,
+      runtimeConfig,
+      params.acquireLocalService,
+    );
     const debugIdentityHash = hashQmdManagerIdentity(identityKey);
 
     const createPrimaryQmdManager = async (
@@ -759,10 +767,12 @@ function buildQmdManagerIdentityKey(
   agentId: string,
   config: ResolvedQmdConfig,
   runtimeConfig: QmdManagerRuntimeConfig,
+  acquireLocalService: MemoryCoreAcquireLocalService | undefined,
 ): string {
   // ResolvedQmdConfig is assembled in a stable field order in resolveMemoryBackendConfig.
   // Fast stringify avoids deep key-sorting overhead on this hot path.
-  return `${agentId}:${JSON.stringify(config)}:${JSON.stringify(runtimeConfig.syncSettings ?? null)}:${JSON.stringify(runtimeConfig.contextLimits ?? null)}:${runtimeConfig.workspaceDir}`;
+  const localServiceHostId = resolveMemoryCoreLocalServiceHostIdentity(acquireLocalService);
+  return `${agentId}:${JSON.stringify(config)}:${JSON.stringify(runtimeConfig.syncSettings ?? null)}:${JSON.stringify(runtimeConfig.contextLimits ?? null)}:${runtimeConfig.workspaceDir}:${localServiceHostId}`;
 }
 
 function resolveQmdManagerRuntimeConfig(
