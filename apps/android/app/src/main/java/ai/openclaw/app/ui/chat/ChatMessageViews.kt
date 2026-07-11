@@ -10,6 +10,7 @@ import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
 import ai.openclaw.app.tools.ToolDisplayRegistry
 import ai.openclaw.app.ui.MobileColorsAccessor
+import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentSoft
 import ai.openclaw.app.ui.mobileBorder
@@ -28,18 +29,25 @@ import ai.openclaw.app.ui.mobileWarning
 import ai.openclaw.app.ui.mobileWarningSoft
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -53,7 +61,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
@@ -63,6 +74,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import java.util.Locale
 
 private data class ChatBubbleStyle(
@@ -278,39 +291,59 @@ private fun ChatLinkPreview(
   LaunchedEffect(messageId, url) {
     result = chatLinkPreviewStore.get(url)
   }
+  val imageUrl = (result as? LinkPreviewResult.Loaded)?.metadata?.imageUrl
+  var previewImage by remember(messageId, url, imageUrl) { mutableStateOf<ImageBitmap?>(null) }
+  LaunchedEffect(imageUrl) {
+    previewImage =
+      when (val image = imageUrl?.let { chatLinkPreviewImageStore.get(it) }) {
+        is LinkPreviewImageResult.Loaded -> image.bitmap.asImageBitmap()
+        LinkPreviewImageResult.Failed, null -> null
+      }
+  }
   val uriHandler = LocalUriHandler.current
+  val cardShape = RoundedCornerShape(ClawTheme.radii.sheet)
   Surface(
     onClick = { uriHandler.openUri(url) },
-    shape = RoundedCornerShape(10.dp),
+    shape = cardShape,
     color = mobileCardSurface,
     border = BorderStroke(1.dp, mobileBorder),
   ) {
-    Column(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
-      verticalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-      Text(domain, style = mobileCaption2, color = mobileTextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      when (val preview = result) {
-        null -> Text("Loading preview…", style = mobileCaption1, color = mobileTextSecondary)
-        LinkPreviewResult.Failed -> Text("No preview available", style = mobileCallout, color = mobileTextSecondary)
-        is LinkPreviewResult.Loaded -> {
-          preview.metadata.title?.let { title ->
-            Text(
-              text = title,
-              style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
-              color = mobileText,
-              maxLines = 2,
-              overflow = TextOverflow.Ellipsis,
-            )
-          }
-          preview.metadata.description?.let { description ->
-            Text(
-              text = description,
-              style = mobileCaption1,
-              color = mobileTextSecondary,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
+    Column(modifier = Modifier.fillMaxWidth()) {
+      previewImage?.let { image ->
+        Image(
+          bitmap = image,
+          contentDescription = null,
+          contentScale = ContentScale.Crop,
+          modifier = Modifier.fillMaxWidth().heightIn(max = 120.dp).clip(cardShape),
+        )
+      }
+      Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+      ) {
+        Text(domain, style = mobileCaption2, color = mobileTextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        when (val preview = result) {
+          null -> Text("Loading preview…", style = mobileCaption1, color = mobileTextSecondary)
+          LinkPreviewResult.Failed -> Text("No preview available", style = mobileCallout, color = mobileTextSecondary)
+          is LinkPreviewResult.Loaded -> {
+            preview.metadata.title?.let { title ->
+              Text(
+                text = title,
+                style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
+                color = mobileText,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+            preview.metadata.description?.let { description ->
+              Text(
+                text = description,
+                style = mobileCaption1,
+                color = mobileTextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
           }
         }
       }
@@ -399,6 +432,7 @@ fun ChatOutboxBubble(
     when (item.status) {
       ChatOutboxStatus.Queued -> "Queued — sends when reconnected"
       ChatOutboxStatus.Sending -> "Sending…"
+      ChatOutboxStatus.Accepted -> "Sent — confirming delivery…"
       ChatOutboxStatus.Failed ->
         item.lastError
           ?.trim()
@@ -410,7 +444,16 @@ fun ChatOutboxBubble(
     style = bubbleStyle("user").copy(borderColor = statusColor.copy(alpha = 0.6f)),
     roleLabel = "You",
   ) {
-    ChatMarkdown(text = item.text, textColor = mobileText)
+    if (item.text.isNotBlank()) {
+      ChatMarkdown(text = item.text, textColor = mobileText)
+    }
+    item.attachments.forEach { attachment ->
+      Text(
+        text = "📎 ${attachment.fileName}",
+        style = mobileCaption1,
+        color = mobileTextSecondary,
+      )
+    }
     Row(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -424,7 +467,9 @@ fun ChatOutboxBubble(
       if (failed) {
         ChatOutboxAction(label = "Retry", color = mobileAccent, onClick = onRetry)
       }
-      if (item.status != ChatOutboxStatus.Sending) {
+      // Sending rows are mid-dispatch and accepted rows may already be delivered; both stay
+      // action-free until reconciliation resolves them, so a delete can never race a send.
+      if (item.status == ChatOutboxStatus.Queued || failed) {
         ChatOutboxAction(label = "Delete", color = mobileTextSecondary, onClick = onDelete)
       }
     }
@@ -499,26 +544,77 @@ private fun roleLabel(role: String): String =
   }
 
 @Composable
-private fun ChatBase64Image(
+internal fun ChatBase64Image(
   base64: String,
   mimeType: String?,
 ) {
   val imageState = rememberBase64ImageState(base64)
+  var previewVisible by rememberSaveable(base64) { mutableStateOf(false) }
   val image = imageState.image
 
   if (image != null) {
     Surface(
+      onClick = { previewVisible = true },
       shape = RoundedCornerShape(10.dp),
       border = BorderStroke(1.dp, mobileBorder),
       color = mobileCardSurface,
       modifier = Modifier.fillMaxWidth(),
     ) {
-      Image(
-        bitmap = image,
-        contentDescription = mimeType ?: "attachment",
-        contentScale = ContentScale.Fit,
-        modifier = Modifier.fillMaxWidth(),
-      )
+      Box {
+        Image(
+          bitmap = image,
+          contentDescription = mimeType ?: "attachment",
+          contentScale = ContentScale.Fit,
+          modifier = Modifier.fillMaxWidth(),
+        )
+        Surface(
+          modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp).size(32.dp),
+          shape = CircleShape,
+          color = Color.Black.copy(alpha = 0.62f),
+          contentColor = Color.White,
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = Icons.Default.OpenInFull,
+              contentDescription = "Open image preview",
+              modifier = Modifier.size(17.dp),
+            )
+          }
+        }
+      }
+    }
+    if (previewVisible) {
+      Dialog(
+        onDismissRequest = { previewVisible = false },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+      ) {
+        Box(
+          modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.96f)).clickable { previewVisible = false },
+          contentAlignment = Alignment.Center,
+        ) {
+          Image(
+            bitmap = image,
+            contentDescription = "Image preview",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize().padding(20.dp),
+          )
+          Surface(
+            onClick = { previewVisible = false },
+            modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).size(44.dp),
+            shape = CircleShape,
+            color = Color.Black.copy(alpha = 0.62f),
+            contentColor = Color.White,
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "Close image preview",
+                modifier = Modifier.size(22.dp),
+              )
+            }
+          }
+        }
+      }
     }
   } else if (imageState.failed) {
     Text("Unsupported attachment", style = mobileCaption1, color = mobileTextSecondary)

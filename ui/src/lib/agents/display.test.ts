@@ -1,6 +1,8 @@
 // Control UI tests cover agents utils behavior.
 import { describe, expect, it } from "vitest";
+import { AVATAR_MAX_DATA_URL_CHARS } from "../../../../src/shared/avatar-limits.js";
 import {
+  isRenderableControlUiAvatarUrl,
   resolveAgentAvatarUrl,
   resolveAssistantTextAvatar,
   resolveChatAvatarRenderUrl,
@@ -9,9 +11,7 @@ import {
   assistantAvatarFallbackUrl,
   buildAgentContext,
   formatBytes,
-  resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
-  sortLocaleStrings,
 } from "./display.ts";
 
 describe("formatBytes", () => {
@@ -64,60 +64,6 @@ describe("resolveEffectiveModelFallbacks", () => {
   });
 });
 
-describe("resolveConfiguredCronModelSuggestions", () => {
-  it("collects defaults primary/fallbacks, alias map keys, and per-agent model entries", () => {
-    const result = resolveConfiguredCronModelSuggestions({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.2",
-            fallbacks: ["google/gemini-2.5-pro", "openai/gpt-5.2-mini"],
-          },
-          models: {
-            "anthropic/claude-sonnet-4-5": { alias: "smart" },
-            "openai/gpt-5.2": { alias: "main" },
-          },
-        },
-        list: {
-          writer: {
-            model: { primary: "xai/grok-4", fallbacks: ["openai/gpt-5.2-mini"] },
-          },
-          planner: {
-            model: "google/gemini-2.5-flash",
-          },
-        },
-      },
-    });
-
-    expect(result).toEqual([
-      "anthropic/claude-sonnet-4-5",
-      "google/gemini-2.5-flash",
-      "google/gemini-2.5-pro",
-      "openai/gpt-5.2",
-      "openai/gpt-5.2-mini",
-      "xai/grok-4",
-    ]);
-  });
-
-  it("returns empty array for invalid or missing config shape", () => {
-    expect(resolveConfiguredCronModelSuggestions(null)).toStrictEqual([]);
-    expect(resolveConfiguredCronModelSuggestions({})).toStrictEqual([]);
-    expect(
-      resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } }),
-    ).toStrictEqual([]);
-  });
-});
-
-describe("sortLocaleStrings", () => {
-  it("sorts values using localeCompare without relying on Array.prototype.toSorted", () => {
-    expect(sortLocaleStrings(["z", "b", "a"])).toEqual(["a", "b", "z"]);
-  });
-
-  it("accepts any iterable input, including sets", () => {
-    expect(sortLocaleStrings(new Set(["beta", "alpha"]))).toEqual(["alpha", "beta"]);
-  });
-});
-
 describe("assistantAvatarFallbackUrl", () => {
   it("uses the bundled Molty png for assistant profile fallbacks", () => {
     expect(assistantAvatarFallbackUrl("/ui")).toBe("/ui/apple-touch-icon.png");
@@ -135,6 +81,15 @@ describe("resolveAssistantTextAvatar", () => {
 });
 
 describe("resolveAgentAvatarUrl", () => {
+  it("accepts image data URLs only through the shared encoded-size boundary", () => {
+    const prefix = "data:image/svg+xml;base64,";
+    const exact = `${prefix}${"A".repeat(AVATAR_MAX_DATA_URL_CHARS - prefix.length)}`;
+
+    expect(isRenderableControlUiAvatarUrl(exact)).toBe(true);
+    expect(isRenderableControlUiAvatarUrl(`${exact}A`)).toBe(false);
+    expect(isRenderableControlUiAvatarUrl("data:text/plain,avatar")).toBe(false);
+  });
+
   it("prefers a runtime avatar URL over non-URL identity avatars", () => {
     expect(
       resolveAgentAvatarUrl(

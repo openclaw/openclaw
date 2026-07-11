@@ -4,6 +4,8 @@ import {
   normalizeOptionalString,
   normalizeOptionalThreadValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
+import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
@@ -301,6 +303,25 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
     throw new Error(
       'isolated/current/session cron jobs require payload.kind="agentTurn" or "command"',
     );
+  }
+}
+
+function assertTriggerSupport(
+  job: Pick<CronJob, "schedule" | "trigger">,
+  opts?: { cronConfig?: CronConfig; requireEnabled?: boolean },
+) {
+  if (!job.trigger) {
+    return;
+  }
+  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled !== true) {
+    throw new Error("cron triggers are disabled; set cron.triggers.enabled=true");
+  }
+  if (job.schedule.kind !== "every" && job.schedule.kind !== "cron") {
+    throw new Error("cron triggers require an every or cron schedule");
+  }
+  const minIntervalMs = resolveCronTriggerMinIntervalMs(opts?.cronConfig);
+  if (job.schedule.kind === "every" && job.schedule.everyMs < minIntervalMs) {
+    throw new Error(`cron trigger every interval must be at least ${minIntervalMs}ms`);
   }
 }
 
@@ -883,11 +904,16 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     payload: input.payload,
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
+    ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
     state: {
       ...input.state,
     },
   };
   assertSupportedJobSpec(job);
+  assertTriggerSupport(job, {
+    cronConfig: state.deps.cronConfig,
+    requireEnabled: job.trigger !== undefined,
+  });
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
@@ -900,7 +926,11 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
 export function applyJobPatch(
   job: CronJob,
   patch: CronJobPatch,
-  opts?: { defaultAgentId?: string; scheduleValidationNowMs?: number },
+  opts?: {
+    defaultAgentId?: string;
+    scheduleValidationNowMs?: number;
+    cronConfig?: CronConfig;
+  },
 ) {
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
@@ -950,6 +980,13 @@ export function applyJobPatch(
       job.schedule = patch.schedule;
     }
   }
+  if ("trigger" in patch) {
+    if (patch.trigger === null || patch.trigger === undefined) {
+      delete job.trigger;
+    } else {
+      job.trigger = structuredClone(patch.trigger);
+    }
+  }
   if (patch.sessionTarget) {
     job.sessionTarget = patch.sessionTarget;
   }
@@ -994,6 +1031,10 @@ export function applyJobPatch(
     job.sessionKey = normalizeOptionalString((patch as { sessionKey?: unknown }).sessionKey);
   }
   assertSupportedJobSpec(job);
+  assertTriggerSupport(job, {
+    cronConfig: opts?.cronConfig,
+    requireEnabled: patch.trigger !== null && patch.trigger !== undefined,
+  });
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
@@ -1009,7 +1050,12 @@ export function applyJobPatch(
 export function applyDeclarativeJobSpec(
   job: CronJob,
   input: CronJobCreate,
-  opts: { defaultAgentId?: string; enabledExplicit: boolean; nowMs: number },
+  opts: {
+    defaultAgentId?: string;
+    enabledExplicit: boolean;
+    nowMs: number;
+    cronConfig?: CronConfig;
+  },
 ) {
   // Name, target, routing, owner, and run policy remain outside declaration
   // convergence; changing those uses cron.update and cannot retarget an identity.
@@ -1052,6 +1098,11 @@ export function applyDeclarativeJobSpec(
     job.schedule = structuredClone(input.schedule);
   }
   job.payload = structuredClone(input.payload);
+  if (input.trigger) {
+    job.trigger = structuredClone(input.trigger);
+  } else {
+    delete job.trigger;
+  }
   const delivery = resolveInitialCronDelivery(input);
   if (delivery) {
     job.delivery = structuredClone(delivery);
@@ -1061,6 +1112,10 @@ export function applyDeclarativeJobSpec(
   if (opts.enabledExplicit) {
     job.enabled = input.enabled;
   }
+  assertTriggerSupport(job, {
+    cronConfig: opts.cronConfig,
+    requireEnabled: input.trigger !== undefined,
+  });
 
   assertSupportedJobSpec(job);
   assertMainSessionAgentId(job, opts.defaultAgentId);

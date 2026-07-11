@@ -1,12 +1,7 @@
 // Policy doctor fix metadata classifies findings before patch builders exist.
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./metadata.js";
 
-export type PolicyFixClass =
-  | "automatic"
-  | "reviewRequired"
-  | "manual"
-  | "validateOnly"
-  | "unsupported";
+type PolicyFixClass = "automatic" | "reviewRequired" | "manual" | "validateOnly" | "unsupported";
 
 export type PolicyFixMetadata = {
   readonly checkId: (typeof POLICY_CHECK_IDS)[number];
@@ -145,7 +140,7 @@ export const POLICY_FIX_METADATA = [
   ),
   m(
     CHECK_IDS.policyGatewayHttpEndpointEnabled,
-    "reviewRequired",
+    "automatic",
     "Disable denied Gateway HTTP endpoints.",
     { policyPath: ["gateway", "http", "denyEndpoints"], configTargets: ["gateway.http"] },
   ),

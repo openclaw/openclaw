@@ -255,7 +255,25 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes live command retry helper changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/ci-live-command-retry.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/ci-live-command-retry.test.ts"],
+    });
+  });
+
   it("routes release wrapper changes through their owner tests", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/apple-release-source-check.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/apple-release-source-check.test.ts"],
+    });
+    expect(resolveChangedTestTargetPlan(["scripts/ios-release-prepare.sh"])).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/ios-release-prepare.test.ts",
+        "test/scripts/ios-release-wrapper-args.test.ts",
+      ],
+    });
     expect(resolveChangedTestTargetPlan(["scripts/android-release.sh"])).toEqual({
       mode: "targets",
       targets: ["test/scripts/android-release-wrapper-args.test.ts"],
@@ -474,6 +492,13 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("keeps shared PR worktree helper edits on the full tooling owner suite", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/pr-lib/worktree.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/vitest/vitest.tooling.config.ts"],
+    });
+  });
+
   it("routes nested e2e shell helpers through their sourced owner tests", () => {
     const expectedTargets = new Map([
       [
@@ -497,7 +522,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       [
         "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs",
-        ["test/scripts/docker-build-helper.test.ts"],
+        [
+          "test/scripts/codex-install-assertions.test.ts",
+          "test/scripts/docker-build-helper.test.ts",
+        ],
       ],
       [
         "scripts/e2e/lib/codex-install-utils.mjs",
@@ -606,11 +634,16 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
         [
           "test/scripts/docker-e2e-crestodian.test.ts",
+          "src/cli/program/register.onboard.test.ts",
           "src/cli/run-main.test.ts",
           "src/cli/run-main.exit.test.ts",
+          "src/commands/crestodian-with-inference.test.ts",
+          "src/crestodian/assistant.configured.test.ts",
+          "src/crestodian/assistant.test.ts",
           "src/crestodian/crestodian.test.ts",
           "src/crestodian/operations.test.ts",
           "src/crestodian/overview.test.ts",
+          "src/crestodian/setup-inference.test.ts",
           "src/crestodian/audit.test.ts",
         ],
       ],
@@ -618,24 +651,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/e2e/crestodian-first-run-spec.json",
         [
           "test/scripts/docker-e2e-crestodian.test.ts",
-          "src/crestodian/operations.test.ts",
-          "src/crestodian/audit.test.ts",
-        ],
-      ],
-      [
-        "scripts/e2e/crestodian-planner-docker.sh",
-        [
-          "test/scripts/docker-build-helper.test.ts",
-          "test/scripts/docker-e2e-plan.test.ts",
-          "test/scripts/docker-e2e-crestodian.test.ts",
-        ],
-      ],
-      [
-        "scripts/e2e/crestodian-planner-docker-client.mjs",
-        [
-          "test/scripts/docker-e2e-crestodian.test.ts",
-          "src/crestodian/assistant.test.ts",
-          "src/crestodian/crestodian.test.ts",
           "src/crestodian/operations.test.ts",
           "src/crestodian/audit.test.ts",
         ],
@@ -1169,6 +1184,13 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("keeps the scripts typecheck project on its routing tests", () => {
+    expect(resolveChangedTestTargetPlan(["tsconfig.scripts.json"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/changed-lanes.test.ts", "test/scripts/test-projects.test.ts"],
+    });
+  });
+
   it("keeps docs i18n behavior fixture edits on behavior baseline tests", () => {
     for (const fixturePath of [
       "scripts/docs-i18n/testdata/behavior/fenced-singleton-retry/case.json",
@@ -1181,15 +1203,19 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
-  it("keeps docs i18n Go module edits on Go module tests", () => {
-    for (const modulePath of [
-      "scripts/docs-i18n/main.go",
-      "scripts/docs-i18n/main_test.go",
-      "scripts/docs-i18n/go.mod",
-    ]) {
+  it("keeps docs i18n Go edits on their module and workflow guards", () => {
+    const cases = [
+      ["scripts/docs-i18n/main.go", ["test/scripts/docs-i18n.test.ts"]],
+      ["scripts/docs-i18n/main_test.go", ["test/scripts/docs-i18n.test.ts"]],
+      [
+        "scripts/docs-i18n/go.mod",
+        ["test/scripts/docs-i18n.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+      ],
+    ] as const;
+    for (const [modulePath, targets] of cases) {
       expect(resolveChangedTestTargetPlan([modulePath]), modulePath).toEqual({
         mode: "targets",
-        targets: ["test/scripts/docs-i18n.test.ts"],
+        targets,
       });
     }
   });
@@ -1238,6 +1264,22 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-prerelease-test-plan.test.ts",
         "test/scripts/verify-pr-hosted-gates.test.ts",
       ],
+    });
+  });
+
+  it("keeps generated locale publisher and inventory edits on workflow guards", () => {
+    for (const actionPath of [
+      ".github/actions/create-generated-pr-tokens/action.yml",
+      ".github/actions/publish-generated-pr/action.yml",
+    ]) {
+      expect(resolveChangedTestTargetPlan([actionPath])).toEqual({
+        mode: "targets",
+        targets: ["test/scripts/ci-workflow-guards.test.ts"],
+      });
+    }
+    expect(resolveChangedTestTargetPlan(["scripts/native-app-i18n.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/native-app-i18n.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
     });
   });
 
@@ -1300,6 +1342,14 @@ describe("scripts/test-projects changed-target routing", () => {
         ".github/workflows/mantis-telegram-desktop-proof.yml",
         [
           "test/scripts/mantis-telegram-desktop-proof-workflow.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+        ],
+      ],
+      [
+        ".github/workflows/mantis-web-ui-chat-proof.yml",
+        [
+          "test/scripts/mantis-web-ui-chat-proof-workflow.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
         ],
@@ -1467,10 +1517,21 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts"],
       ],
       ["scripts/ios-run.sh", ["test/scripts/ios-run.test.ts"]],
+      ["scripts/ios-write-version-xcconfig.sh", ["test/scripts/ios-version.test.ts"]],
       ["scripts/create-dmg.sh", ["test/scripts/create-dmg.test.ts"]],
       ["scripts/make_appcast.sh", ["test/scripts/make-appcast.test.ts"]],
       ["scripts/package-mac-app.sh", ["test/scripts/package-mac-app.test.ts"]],
       ["scripts/package-mac-dist.sh", ["test/scripts/package-mac-dist.test.ts"]],
+      [
+        "scripts/lib/build-metadata.sh",
+        [
+          "src/docker-setup.e2e.test.ts",
+          "test/scripts/apple-release-source-check.test.ts",
+          "test/scripts/ios-version.test.ts",
+          "test/scripts/package-mac-app.test.ts",
+          "test/scripts/test-install-sh-docker.test.ts",
+        ],
+      ],
       [
         "scripts/lib/swift-toolchain.sh",
         ["test/scripts/package-mac-app.test.ts", "test/scripts/package-mac-dist.test.ts"],
@@ -1565,7 +1626,12 @@ describe("scripts/test-projects changed-target routing", () => {
     const expectedTargets = new Map([
       ["scripts/committer", ["test/scripts/committer.test.ts"]],
       ["scripts/gh-read", ["test/scripts/gh-read.test.ts"]],
-      ["scripts/pr", ["test/scripts/pr-wrappers.test.ts"]],
+      [
+        "scripts/pr",
+        ["test/scripts/pr-operation-lock.test.ts", "test/scripts/pr-wrappers.test.ts"],
+      ],
+      ["scripts/pr-lib/operation-lock.sh", ["test/scripts/pr-operation-lock.test.ts"]],
+      ["scripts/pr-lib/process-group-runner.mjs", ["test/scripts/pr-operation-lock.test.ts"]],
       ["scripts/pr-merge", ["test/scripts/pr-wrappers.test.ts"]],
       ["scripts/pr-prepare", ["test/scripts/pr-wrappers.test.ts"]],
       ["scripts/pr-review", ["test/scripts/pr-wrappers.test.ts"]],
@@ -1962,6 +2028,16 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       ],
       [
+        "scripts/lib/build-metadata.sh",
+        [
+          "src/docker-setup.e2e.test.ts",
+          "test/scripts/apple-release-source-check.test.ts",
+          "test/scripts/ios-version.test.ts",
+          "test/scripts/package-mac-app.test.ts",
+          "test/scripts/test-install-sh-docker.test.ts",
+        ],
+      ],
+      [
         "scripts/lib/plistbuddy.sh",
         [
           "test/scripts/create-dmg.test.ts",
@@ -2227,6 +2303,25 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.commands.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/commands/onboarding-plugin-install.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes gateway package targets through the gateway-client lane", () => {
+    expect(
+      buildVitestRunPlans([
+        "packages/gateway-client/src/timeouts.test.ts",
+        "packages/gateway-protocol/src/frame-guards.test.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.gateway-client.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "packages/gateway-client/src/timeouts.test.ts",
+          "packages/gateway-protocol/src/frame-guards.test.ts",
+        ],
         watchMode: false,
       },
     ]);
@@ -2528,8 +2623,6 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/e2e/crestodian-first-run-docker.sh",
       "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
       "scripts/e2e/crestodian-first-run-spec.json",
-      "scripts/e2e/crestodian-planner-docker.sh",
-      "scripts/e2e/crestodian-planner-docker-client.mjs",
       "scripts/e2e/crestodian-rescue-docker.sh",
       "scripts/e2e/crestodian-rescue-docker-client.ts",
     ];
@@ -2541,13 +2634,17 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/docker-build-helper.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",
         "test/scripts/docker-e2e-crestodian.test.ts",
+        "src/cli/program/register.onboard.test.ts",
         "src/cli/run-main.test.ts",
         "src/cli/run-main.exit.test.ts",
+        "src/commands/crestodian-with-inference.test.ts",
+        "src/crestodian/assistant.configured.test.ts",
+        "src/crestodian/assistant.test.ts",
         "src/crestodian/crestodian.test.ts",
         "src/crestodian/operations.test.ts",
         "src/crestodian/overview.test.ts",
+        "src/crestodian/setup-inference.test.ts",
         "src/crestodian/audit.test.ts",
-        "src/crestodian/assistant.test.ts",
         "src/crestodian/rescue-policy.test.ts",
         "src/crestodian/rescue-message.test.ts",
       ],
@@ -2839,6 +2936,33 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.contracts-plugin.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/plugins/contracts/loader.contract.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("fans contract directory targets out to the owning contract lanes", () => {
+    // Regression: the generic channels project excludes contracts/**, so the
+    // directory target used to run zero tests and exit green.
+    const plans = buildVitestRunPlans(["src/channels/plugins/contracts"]);
+
+    expect(plans.map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.contracts-channel-surface.config.ts",
+      "test/vitest/vitest.contracts-channel-config.config.ts",
+      "test/vitest/vitest.contracts-channel-registry.config.ts",
+      "test/vitest/vitest.contracts-channel-session.config.ts",
+    ]);
+    expect(plans.every((plan) => plan.includePatterns === null)).toBe(true);
+  });
+
+  it("routes the plugin contracts directory to the plugin contracts lane", () => {
+    const plans = buildVitestRunPlans(["src/plugins/contracts"]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.contracts-plugin.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
         watchMode: false,
       },
     ]);

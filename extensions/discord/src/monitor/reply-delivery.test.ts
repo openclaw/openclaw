@@ -572,4 +572,38 @@ describe("deliverDiscordReply", () => {
     expect(session.key).toBe("agent:main:subagent:child");
     expect(session.agentId).toBe("main");
   });
+
+  it("keeps bound thread persona names on a UTF-16 boundary", async () => {
+    const threadBindings = {
+      listBySessionKey: vi.fn(() => [
+        {
+          accountId: "default",
+          channelId: "parent-1",
+          threadId: "thread-1",
+          targetSessionKey: "agent:main:subagent:child",
+          agentId: "main",
+          label: `${"a".repeat(76)}🚀tail`,
+          webhookId: "wh_1",
+          webhookToken: "tok_1",
+        },
+      ]),
+    };
+
+    await deliverDiscordReply({
+      replies: [{ text: "Hello from subagent" }],
+      target: "channel:thread-1",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      sessionKey: "agent:main:subagent:child",
+      threadBindings,
+      kind: "final",
+    });
+
+    expect(recordField(firstDeliverParams().identity, "identity").name).toBe(
+      `🤖 ${"a".repeat(76)}`,
+    );
+  });
 });

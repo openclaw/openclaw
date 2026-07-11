@@ -49,8 +49,10 @@ export {
   browserCloseTab,
   browserDoctor,
   browserFocusTab,
+  browserImportProfile,
   browserOpenTab,
   browserProfiles,
+  browserSystemProfiles,
   browserSnapshot,
   browserStart,
   browserStatus,
@@ -62,6 +64,7 @@ export { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 export { resolveExistingUploadPaths } from "./browser/paths.js";
 export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 export { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./browser/proxy-files.js";
+export { stageBrowserScreenshotForSharing } from "./browser/screenshot-sharing.js";
 export {
   touchSessionBrowserTab,
   trackSessionBrowserTab,

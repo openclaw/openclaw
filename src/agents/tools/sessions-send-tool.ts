@@ -235,7 +235,10 @@ function shouldFallbackCronRunScopedActiveDelivery(
   outcome: EmbeddedAgentQueueMessageOutcome,
 ): boolean {
   return (
-    !outcome.queued && (outcome.reason === "not_streaming" || outcome.reason === "no_active_run")
+    !outcome.queued &&
+    (outcome.reason === "not_streaming" ||
+      outcome.reason === "no_active_run" ||
+      outcome.reason === "stale_run")
   );
 }
 
@@ -552,7 +555,7 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
-      const requesterSessionKey = opts?.agentSessionKey;
+      const requesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const requesterChannel = opts?.agentChannel;
       const sameSessionA2A = requesterSessionKey === resolvedKey;
       const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
@@ -594,14 +597,14 @@ export function createSessionsSendTool(opts?: {
           : undefined;
 
       const agentMessageContext = buildAgentToAgentMessageContext({
-        requesterSessionKey: opts?.agentSessionKey,
-        requesterChannel: opts?.agentChannel,
+        requesterSessionKey,
+        requesterChannel,
         targetSessionKey: displayKey,
       });
       const inputProvenance = {
         kind: "inter_session" as const,
-        sourceSessionKey: opts?.agentSessionKey,
-        sourceChannel: opts?.agentChannel,
+        sourceSessionKey: requesterSessionKey,
+        sourceChannel: requesterChannel,
         sourceTool: "sessions_send",
       };
       const sendParams = {

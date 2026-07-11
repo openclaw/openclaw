@@ -3,6 +3,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { killProcessTree } from "../../process/kill-tree.js";
 import { waitForChildProcess } from "../utils/child-process.js";
 
@@ -63,9 +64,12 @@ function appendCapturedOutput(
       truncatedChars: current.truncatedChars,
     };
   }
+  const nextText = truncateTail
+    ? sliceUtf16Safe(combined, overflowChars)
+    : sliceUtf16Safe(combined, 0, maxOutputChars);
   return {
-    text: truncateTail ? combined.slice(overflowChars) : combined.slice(0, maxOutputChars),
-    truncatedChars: current.truncatedChars + overflowChars,
+    text: nextText,
+    truncatedChars: current.truncatedChars + combined.length - nextText.length,
   };
 }
 

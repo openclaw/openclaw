@@ -19,6 +19,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
+import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
 import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -79,6 +80,10 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   degradedReason?: string | null;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
+  /** Capture a local harness implementation only for setup/verified continuations. */
+  captureRuntimeArtifact?: boolean;
+  /** Exact implementation that must own the attempt before it creates a native thread. */
+  expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
   runtimePlan?: AgentRuntimePlan;
   /** Host-issued scope for harnesses that mirror native child runs into task state. */
@@ -160,6 +165,10 @@ export type EmbeddedRunAttemptResult = {
   sessionFileUsed?: string;
   diagnosticTrace?: DiagnosticTraceContext;
   agentHarnessId?: string;
+  /** Exact credential material fingerprint reported by a harness-owned auth boundary. */
+  authBindingFingerprint?: string;
+  /** Exact local implementation used by a plugin-owned harness attempt. */
+  runtimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   promptTimeoutOutcome?: {
     message?: string;
@@ -171,7 +180,7 @@ export type EmbeddedRunAttemptResult = {
   codexAppServerFailure?: {
     kind: "client_closed_before_turn_completed" | "turn_completion_idle_timeout";
     turnWatchTimeoutKind?: "progress" | "completion" | "terminal";
-    transport: "stdio" | "websocket";
+    transport: "stdio" | "unix" | "websocket";
     threadId?: string;
     turnId?: string;
     replaySafe: boolean;
@@ -209,6 +218,7 @@ export type EmbeddedRunAttemptResult = {
     toolName: string;
     meta?: string;
     replaySafe?: boolean;
+    isError?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -247,6 +257,11 @@ export type EmbeddedRunAttemptResult = {
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
   replayMetadata: EmbeddedRunReplayMetadata;
+  /**
+   * Replay metadata for this attempt before prior session state is accumulated.
+   * Older harnesses may omit it and retain conservative cumulative retry gating.
+   */
+  currentAttemptReplayMetadata?: EmbeddedRunReplayMetadata;
   itemLifecycle: {
     startedCount: number;
     completedCount: number;

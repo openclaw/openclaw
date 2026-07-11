@@ -38,4 +38,22 @@ describe("browser tool schema", () => {
     expect(properties.action.enum).toEqual(expect.arrayContaining(["download", "waitfordownload"]));
     expect(properties.path).toBeDefined();
   });
+
+  it("exposes scrollIntoView on nested and flattened act params", () => {
+    const properties = BrowserToolSchema.properties as BrowserSchemaRecord;
+    const requestProperties = properties.request.properties as BrowserSchemaRecord;
+
+    expect(properties.kind.enum).toContain("scrollIntoView");
+    expect(requestProperties.kind.enum).toContain("scrollIntoView");
+  });
+
+  it("exposes batch actions on nested and flattened act params", () => {
+    const properties = BrowserToolSchema.properties as BrowserSchemaRecord;
+    const requestProperties = properties.request.properties as BrowserSchemaRecord;
+
+    expect(properties.kind.enum).toContain("batch");
+    expect(properties.actions).toBeDefined();
+    expect(requestProperties.kind.enum).toContain("batch");
+    expect(requestProperties.actions).toBeDefined();
+  });
 });

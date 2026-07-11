@@ -22,6 +22,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
@@ -589,31 +590,8 @@ class GatewayBootstrapAuthTest {
 
   @Test
   fun refreshGatewayConnection_reconnectsSavedManualEndpointAfterDisconnect() {
-    val app = RuntimeEnvironment.getApplication()
-    val securePrefs =
-      app.getSharedPreferences(
-        "openclaw.node.secure.test.${UUID.randomUUID()}",
-        android.content.Context.MODE_PRIVATE,
-      )
-    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
-    prefs.setManualEnabled(true)
-    prefs.setManualHost("127.0.0.1")
-    prefs.setManualPort(18789)
-    prefs.setManualTls(false)
-    val savedEndpoint = GatewayEndpoint.manual(host = "127.0.0.1", port = 18789)
-    prefs.gatewayRegistry.upsert(
-      GatewayRegistryEntry(
-        stableId = savedEndpoint.stableId,
-        kind = GatewayRegistryEntryKind.MANUAL,
-        name = savedEndpoint.name,
-        host = savedEndpoint.host,
-        port = savedEndpoint.port,
-        tls = false,
-      ),
-    )
-    prefs.gatewayRegistry.setActive(savedEndpoint.stableId)
-    prefs.saveGatewayCredentials(savedEndpoint.stableId, token = "shared-token")
-    val runtime = NodeRuntime(app, prefs)
+    val (runtime, prefs) = createNeutralizedRuntime()
+    armSavedActiveManualGateway(prefs)
 
     runtime.connect(
       GatewayEndpoint.manual(host = "127.0.0.1", port = 18789),
@@ -624,7 +602,7 @@ class GatewayBootstrapAuthTest {
 
     runtime.refreshGatewayConnection()
 
-    val desired = desiredConnection(runtime, "nodeSession") ?: error("Expected desired node connection")
+    val desired = waitForDesiredConnection(runtime, "nodeSession")
     val endpoint = readField<GatewayEndpoint>(desired, "endpoint")
     assertEquals("127.0.0.1", endpoint.host)
     assertEquals(18789, endpoint.port)
@@ -652,7 +630,7 @@ class GatewayBootstrapAuthTest {
     )
 
     assertEquals(
-      "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
+      "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
       waitForStatusText(runtime),
     )
     assertNull(runtime.pendingGatewayTrust.value)
@@ -723,6 +701,7 @@ class GatewayBootstrapAuthTest {
       )
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
     val runtime = NodeRuntime(app, prefs)
+    neutralizeColdStartAutoConnect(runtime)
     val current = GatewayEndpoint.manual("127.0.0.1", 18789)
     val missingStableId = "bonjour-missing"
     prefs.gatewayRegistry.upsert(
@@ -1151,6 +1130,78 @@ class GatewayBootstrapAuthTest {
     assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
   }
 
+  @Test
+  fun coldStartAutoConnectConnectsSavedActiveGatewayWhenNoExplicitIntentExists() {
+    val (runtime, prefs) = createNeutralizedRuntime()
+    armSavedActiveManualGateway(prefs)
+
+    invokeAutoConnectIfNeeded(runtime)
+
+    val desired = desiredConnection(runtime, "nodeSession") ?: error("Expected desired node connection")
+    assertEquals("127.0.0.1", readField<GatewayEndpoint>(desired, "endpoint").host)
+    assertEquals("shared-token", readField<String?>(desired, "token"))
+  }
+
+  @Test
+  fun coldStartAutoConnectStandsDownAfterExplicitLifecycleIntent() {
+    val (runtime, prefs) = createNeutralizedRuntime()
+    armSavedActiveManualGateway(prefs)
+    runtime.disconnect()
+
+    invokeAutoConnectIfNeeded(runtime)
+
+    assertNull(desiredConnection(runtime, "nodeSession"))
+  }
+
+  // Arms the registry only after the runtime's background work is neutralized, so the real
+  // discovery collector can never observe an auto-connectable active gateway.
+  private fun createNeutralizedRuntime(): Pair<NodeRuntime, SecurePrefs> {
+    val app = RuntimeEnvironment.getApplication()
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.secure.test.${UUID.randomUUID()}",
+        android.content.Context.MODE_PRIVATE,
+      )
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
+    val runtime = NodeRuntime(app, prefs)
+    neutralizeColdStartAutoConnect(runtime)
+    return runtime to prefs
+  }
+
+  private fun armSavedActiveManualGateway(prefs: SecurePrefs) {
+    prefs.setManualEnabled(true)
+    prefs.setManualHost("127.0.0.1")
+    prefs.setManualPort(18789)
+    prefs.setManualTls(false)
+    val savedEndpoint = GatewayEndpoint.manual(host = "127.0.0.1", port = 18789)
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(
+        stableId = savedEndpoint.stableId,
+        kind = GatewayRegistryEntryKind.MANUAL,
+        name = savedEndpoint.name,
+        host = savedEndpoint.host,
+        port = savedEndpoint.port,
+        tls = false,
+      ),
+    )
+    prefs.gatewayRegistry.setActive(savedEndpoint.stableId)
+    prefs.saveGatewayCredentials(savedEndpoint.stableId, token = "shared-token")
+  }
+
+  private fun invokeAutoConnectIfNeeded(runtime: NodeRuntime) {
+    val method = runtime.javaClass.getDeclaredMethod("autoConnectIfNeeded")
+    method.isAccessible = true
+    method.invoke(runtime)
+  }
+
+  // NodeRuntime's init collects gateway discovery on a background dispatcher and auto-connects
+  // the saved active gateway whenever that collector happens to run, racing scripted lifecycle
+  // steps (observed as CI-only flakes on loaded Linux runners). Cancel and join all runtime-scope
+  // work so nothing runs in the background; arm the registry only afterwards.
+  private fun neutralizeColdStartAutoConnect(runtime: NodeRuntime) {
+    runBlocking { readField<CoroutineScope>(runtime, "scope").coroutineContext[Job]?.cancelAndJoin() }
+  }
+
   private fun waitForGatewayTrustPrompt(runtime: NodeRuntime): NodeRuntime.GatewayTrustPrompt {
     repeat(50) {
       runtime.pendingGatewayTrust.value?.let { return it }
@@ -1193,6 +1244,17 @@ class GatewayBootstrapAuthTest {
   ): Any? {
     val session = readField<GatewaySession>(runtime, sessionFieldName)
     return readField(session, "desired")
+  }
+
+  private fun waitForDesiredConnection(
+    runtime: NodeRuntime,
+    sessionFieldName: String,
+  ): Any {
+    repeat(50) {
+      desiredConnection(runtime, sessionFieldName)?.let { return it }
+      Thread.sleep(10)
+    }
+    error("Expected desired connection for $sessionFieldName")
   }
 
   private fun invokeMaybeStartOperatorSessionAfterNodeConnect(

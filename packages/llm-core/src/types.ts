@@ -92,6 +92,11 @@ export interface StreamOptions {
    */
   sessionId?: string;
   /**
+   * Opaque per-model-call identifier for provider transport correlation.
+   * Providers that do not expose request correlation ignore it.
+   */
+  requestId?: string;
+  /**
    * Optional provider prompt-cache affinity key, distinct from transcript/session identity.
    * Providers that do not support separate cache affinity ignore it.
    */
@@ -470,6 +475,8 @@ export interface OpenAICompletionsCompat {
 
 /** Compatibility settings for OpenAI Responses APIs. */
 export interface OpenAIResponsesCompat {
+  /** Whether the model accepts the `temperature` parameter. Default: true. */
+  supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
   sendSessionIdHeader?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */

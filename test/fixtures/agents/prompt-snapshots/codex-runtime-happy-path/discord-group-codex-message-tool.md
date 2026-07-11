@@ -41,7 +41,6 @@
   "agents": {
     "defaults": {
       "heartbeat": {
-        "enabled": true,
         "every": "30m"
       }
     }
@@ -49,23 +48,6 @@
   "messages": {
     "groupChat": {
       "visibleReplies": "message_tool"
-    }
-  },
-  "tools": {
-    "profiles": {
-      "coding": {
-        "allow": [
-          "message",
-          "heartbeat_respond",
-          "sessions_spawn",
-          "sessions_list",
-          "sessions_yield",
-          "cron",
-          "memory_search",
-          "memory_get",
-          "session_status"
-        ]
-      }
     }
   }
 }
@@ -225,8 +207,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 51940,
-    "roughTokens": 12985
+    "chars": 53750,
+    "roughTokens": 13438
   },
   "openClawDeveloperInstructions": {
     "chars": 3245,
@@ -237,8 +219,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6943
   },
   "totalWithDynamicToolsJson": {
-    "chars": 79712,
-    "roughTokens": 19928
+    "chars": 81522,
+    "roughTokens": 20381
   },
   "userInputText": {
     "chars": 1442,

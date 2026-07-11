@@ -1,7 +1,7 @@
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { visibleSessionMatches, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import type { ChatEventPayload } from "./chat-history.ts";
-import { readChatQueueForSession } from "./chat-queue.ts";
+import { readChatQueueForScope } from "./chat-queue.ts";
 import type { ChatSendAck, ChatSendTimingEntry } from "./chat-send-contract.ts";
 import {
   controlUiNowMs,
@@ -9,6 +9,7 @@ import {
   roundedControlUiDurationMs,
   scheduleControlUiAfterPaint,
 } from "./performance.ts";
+import type { RenderLifecycle } from "./render-lifecycle.ts";
 
 type ChatSendTimingPhase =
   | "pending-visible"
@@ -32,10 +33,10 @@ type ChatSendTimingHost = SessionScopeHost & {
   sessionKey: string;
   chatStream: string | null;
   chatQueue: ChatQueueItem[];
-  chatQueueBySession?: Record<string, ChatQueueItem[]>;
+  chatQueueByScope?: Record<string, ChatQueueItem[]>;
   chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
   eventLogBuffer?: unknown[];
-  updateComplete?: Promise<unknown>;
+  renderLifecycle?: RenderLifecycle;
 };
 
 type ChatSendServerTimingPhase =
@@ -333,6 +334,7 @@ function shouldRecordPendingSendPaint(item: ChatQueueItem): boolean {
   return (
     typeof item.sendSubmittedAtMs === "number" &&
     (item.sendState === "waiting-model" ||
+      item.sendState === "waiting-idle" ||
       item.sendState === "sending" ||
       item.sendState === "waiting-reconnect")
   );
@@ -352,7 +354,7 @@ export function schedulePendingSendPaintTiming(
     if (!visibleSessionMatches(host, sessionKey, item.agentId)) {
       return;
     }
-    const queued = readChatQueueForSession(host, sessionKey).find(
+    const queued = readChatQueueForScope(host, sessionKey, item.agentId).find(
       (entry) => entry.id === item.id && entry.sendRunId === sendRunId,
     );
     if (!queued || !shouldRecordPendingSendPaint(queued)) {

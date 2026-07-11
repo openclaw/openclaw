@@ -54,10 +54,15 @@ function normalizeMockProviderId(providerId?: string): string {
 
 type SessionManagerMocks = {
   getLeafEntry: UnknownMock;
+  getEntry: UnknownMock;
   branch: UnknownMock;
   resetLeaf: UnknownMock;
   buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
+  appendThinkingLevelChange: UnknownMock;
+  appendModelChange: UnknownMock;
   appendCustomEntry: UnknownMock;
+  appendSessionInfo: UnknownMock;
+  appendLabelChange: UnknownMock;
   rewriteFile: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
@@ -66,6 +71,7 @@ type SessionManagerMocks = {
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
   createAgentSessionMock: UnknownMock;
+  applyExtraParamsToAgentMock: UnknownMock;
   sessionManagerOpenMock: UnknownMock;
   defaultResourceLoaderInitMock: UnknownMock;
   resolveSandboxContextMock: UnknownMock;
@@ -146,6 +152,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   // runEmbeddedAttempt captures these dependencies at module load.
   const spawnSubagentDirectMock = vi.fn();
   const createAgentSessionMock = vi.fn();
+  const applyExtraParamsToAgentMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
   const defaultResourceLoaderInitMock = vi.fn();
   const resolveSandboxContextMock = vi.fn();
@@ -207,10 +214,15 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const embeddedSystemPromptInputs: unknown[] = [];
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
+    getEntry: vi.fn(() => undefined),
     branch: vi.fn(),
     resetLeaf: vi.fn(),
     buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
+    appendThinkingLevelChange: vi.fn(),
+    appendModelChange: vi.fn(),
     appendCustomEntry: vi.fn(),
+    appendSessionInfo: vi.fn(),
+    appendLabelChange: vi.fn(),
     rewriteFile: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
@@ -219,6 +231,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   return {
     spawnSubagentDirectMock,
     createAgentSessionMock,
+    applyExtraParamsToAgentMock,
     sessionManagerOpenMock,
     defaultResourceLoaderInitMock,
     resolveSandboxContextMock,
@@ -576,7 +589,10 @@ vi.mock("../extra-params.js", async () => {
   const actual = await vi.importActual<typeof import("../extra-params.js")>("../extra-params.js");
   return {
     ...actual,
-    applyExtraParamsToAgent: () => ({ effectiveExtraParams: {} }),
+    applyExtraParamsToAgent: (...args: unknown[]) => {
+      hoisted.applyExtraParamsToAgentMock(...args);
+      return { effectiveExtraParams: {} };
+    },
     resolvePreparedExtraParams: (params: {
       cfg?: unknown;
       provider: string;
@@ -841,10 +857,13 @@ vi.mock("../tool-split.js", () => ({
   }),
 }));
 
-vi.mock("../utils.js", () => ({
-  describeUnknownError: (error: unknown) => formatErrorMessage(error),
-  mapThinkingLevel: () => undefined,
-}));
+vi.mock("../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
+  return {
+    ...actual,
+    describeUnknownError: (error: unknown) => formatErrorMessage(error),
+  };
+});
 
 vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
   hasActiveCompactionRetryWork: ({
@@ -968,6 +987,7 @@ export function resetEmbeddedAttemptHarness(
     });
   }
   hoisted.createAgentSessionMock.mockReset();
+  hoisted.applyExtraParamsToAgentMock.mockReset();
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
   hoisted.defaultResourceLoaderInitMock.mockReset();
   hoisted.resolveSandboxContextMock.mockReset();
@@ -1040,12 +1060,17 @@ export function resetEmbeddedAttemptHarness(
   hoisted.systemPromptTexts.length = 0;
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
+  hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();
   hoisted.sessionManager.buildSessionContext
     .mockReset()
     .mockReturnValue({ messages: params.sessionMessages ?? [] });
+  hoisted.sessionManager.appendThinkingLevelChange.mockReset();
+  hoisted.sessionManager.appendModelChange.mockReset();
   hoisted.sessionManager.appendCustomEntry.mockReset();
+  hoisted.sessionManager.appendSessionInfo.mockReset();
+  hoisted.sessionManager.appendLabelChange.mockReset();
   hoisted.sessionManager.rewriteFile.mockReset();
   if (params.subscribeImpl) {
     hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
@@ -1234,6 +1259,7 @@ export async function createContextEngineAttemptRunner(params: {
   attemptOverrides?: Partial<Parameters<Awaited<ReturnType<typeof loadRunEmbeddedAttempt>>>[0]>;
   createSession?: () => MutableSession;
   sessionMessages?: AgentMessage[];
+  sessionMessagesAfterRepair?: AgentMessage[];
   sessionPrompt?: SessionPromptOverride;
   sessionKey: string;
   tempPaths: string[];
@@ -1264,7 +1290,7 @@ export async function createContextEngineAttemptRunner(params: {
 
   hoisted.sessionManager.buildSessionContext
     .mockReset()
-    .mockReturnValue({ messages: seedMessages });
+    .mockReturnValue({ messages: params.sessionMessagesAfterRepair ?? seedMessages });
 
   hoisted.createAgentSessionMock.mockImplementation(async () => ({
     session:

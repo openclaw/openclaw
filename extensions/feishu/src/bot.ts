@@ -50,7 +50,8 @@ import type { ClawdbotConfig, RuntimeEnv } from "./bot-runtime-api.js";
 import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sender-name.js";
 import { getChatInfo } from "./chat.js";
 import { createFeishuClient } from "./client.js";
-import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
+import { resolveConfiguredFeishuGroupSessionScope } from "./conversation-id.js";
+import { finalizeFeishuMessageProcessing, recordProcessedFeishuMessage } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
@@ -88,8 +89,6 @@ const groupNameCache = new Map<string, { name: string; expiresAt: number }>();
 const GROUP_NAME_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const GROUP_NAME_CACHE_MAX_SIZE = 500; // hard cap
 
-type FeishuGroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
-
 function shouldSendNoVisibleReplyFallback(dispatchResult: {
   counts: { final?: number };
   failedCounts?: { final?: number };
@@ -112,26 +111,9 @@ function shouldSendNoVisibleReplyFallback(dispatchResult: {
   );
 }
 
-function resolveConfiguredFeishuGroupSessionScope(params: {
-  groupConfig?: {
-    groupSessionScope?: FeishuGroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-  };
-  feishuCfg?: {
-    groupSessionScope?: FeishuGroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-  };
-}): FeishuGroupSessionScope {
-  const legacyTopicSessionMode =
-    params.groupConfig?.topicSessionMode ?? params.feishuCfg?.topicSessionMode ?? "disabled";
-  return (
-    params.groupConfig?.groupSessionScope ??
-    params.feishuCfg?.groupSessionScope ??
-    (legacyTopicSessionMode === "enabled" ? "group_topic" : "group")
-  );
-}
-
-function isFeishuTopicSessionScope(scope: FeishuGroupSessionScope): boolean {
+function isFeishuTopicSessionScope(
+  scope: ReturnType<typeof resolveConfiguredFeishuGroupSessionScope>,
+): boolean {
   return scope === "group_topic" || scope === "group_topic_sender";
 }
 
@@ -1434,6 +1416,7 @@ export async function handleFeishuMessage(params: {
         conversation: {
           kind: isGroup ? "group" : "direct",
           id: ctx.chatId,
+          nativeChannelId: ctx.chatId,
           label: isGroup && groupName && !isTopicSessionForThread ? groupName : undefined,
           threadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
         },
@@ -1551,7 +1534,7 @@ export async function handleFeishuMessage(params: {
       // Uses a shared "broadcast" namespace (not per-account) so the first handler
       // to reach this point claims the message; subsequent accounts skip.
       if (
-        !(await tryRecordMessagePersistent(messageDedupeKey ?? ctx.messageId, "broadcast", log))
+        !(await recordProcessedFeishuMessage(messageDedupeKey ?? ctx.messageId, "broadcast", log))
       ) {
         log(
           `feishu[${account.accountId}]: broadcast already claimed by another account for message ${ctx.messageId}; skipping`,

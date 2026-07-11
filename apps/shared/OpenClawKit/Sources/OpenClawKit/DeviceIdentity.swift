@@ -36,9 +36,9 @@ public struct DeviceIdentity: Codable, Sendable {
     public var deviceId: String
     public var publicKey: String
     public var privateKey: String
-    public var createdAtMs: Int
+    public var createdAtMs: Int64
 
-    public init(deviceId: String, publicKey: String, privateKey: String, createdAtMs: Int) {
+    public init(deviceId: String, publicKey: String, privateKey: String, createdAtMs: Int64) {
         self.deviceId = deviceId
         self.publicKey = publicKey
         self.privateKey = privateKey
@@ -151,17 +151,22 @@ enum DeviceIdentityPaths {
         self.appGroupMigrationSource(
             appGroupStateDirURL: self.appGroupStateDirURL(),
             appGroupStateDirAvailable: self.appGroupStateDirAvailable,
+            stateDirOverridden: self.stateDirOverrideURL() != nil,
             profile: profile)
     }
 
     /// Non-nil only for unentitled builds whose store selection fell back to legacy storage;
     /// entitled builds keep using the App Group container and must never migrate out of it.
+    /// An explicit OPENCLAW_STATE_DIR override selects a caller-chosen store, not the legacy
+    /// fallback; importing container identity/tokens there would leak the machine's real
+    /// pairing into unrelated stores (test dirs, relocated installs).
     static func appGroupMigrationSource(
         appGroupStateDirURL: URL?,
         appGroupStateDirAvailable: Bool,
+        stateDirOverridden: Bool,
         profile: GatewayDeviceIdentityProfile) -> AppGroupMigrationSource?
     {
-        guard !appGroupStateDirAvailable, let appGroupStateDirURL else {
+        guard !stateDirOverridden, !appGroupStateDirAvailable, let appGroupStateDirURL else {
             return nil
         }
         let identityDirURL = appGroupStateDirURL.appendingPathComponent("identity", isDirectory: true)
@@ -191,6 +196,15 @@ public enum DeviceIdentityStore {
             migrationSource: DeviceIdentityPaths.appGroupMigrationSource(profile: profile))
     }
 
+    /// Loads or creates an identity, returning nil unless its key material was durably persisted.
+    public static func loadOrCreatePersisted(
+        profile: GatewayDeviceIdentityProfile = .primary) -> DeviceIdentity?
+    {
+        self.loadOrCreatePersisted(
+            fileURL: self.fileURL(profile: profile),
+            migrationSource: DeviceIdentityPaths.appGroupMigrationSource(profile: profile))
+    }
+
     static func loadOrCreate(
         fileURL url: URL,
         migrationSource: DeviceIdentityPaths.AppGroupMigrationSource? = nil) -> DeviceIdentity
@@ -214,6 +228,22 @@ public enum DeviceIdentityStore {
         let identity = self.generate()
         self.save(identity, to: url)
         return identity
+    }
+
+    static func loadOrCreatePersisted(
+        fileURL url: URL,
+        migrationSource: DeviceIdentityPaths.AppGroupMigrationSource? = nil) -> DeviceIdentity?
+    {
+        let identity = self.loadOrCreate(fileURL: url, migrationSource: migrationSource)
+        guard let data = try? Data(contentsOf: url),
+              case let .identity(stored) = self.decodeStoredIdentity(data),
+              stored.deviceId == identity.deviceId,
+              stored.publicKey == identity.publicKey,
+              stored.privateKey == identity.privateKey
+        else {
+            return nil
+        }
+        return stored
     }
 
     /// One-time upgrade path for builds that lost App Group storage: it runs only while the
@@ -309,7 +339,7 @@ public enum DeviceIdentityStore {
             deviceId: deviceId,
             publicKey: publicKeyData.base64EncodedString(),
             privateKey: privateKeyData.base64EncodedString(),
-            createdAtMs: Int(Date().timeIntervalSince1970 * 1000))
+            createdAtMs: Int64(Date().timeIntervalSince1970 * 1000))
     }
 
     private static func base64UrlEncode(_ data: Data) -> String {
@@ -412,5 +442,5 @@ private struct PemDeviceIdentity: Codable {
     var deviceId: String
     var publicKeyPem: String
     var privateKeyPem: String
-    var createdAtMs: Int
+    var createdAtMs: Int64
 }

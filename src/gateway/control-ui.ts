@@ -9,15 +9,20 @@ import {
   asDateTimestampMs,
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
-import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "../agents/identity-avatar.js";
+import {
+  type AgentAvatarResolution,
+  resolvePublicAgentAvatarSource,
+} from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import {
   isPackageProvenControlUiRootSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
+import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
-import { openLocalFileSafely, FsSafeError, readSecureFile } from "../infra/fs-safe.js";
+import { readFileDescriptorBounded } from "../infra/file-descriptor-read.js";
+import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
@@ -28,9 +33,10 @@ import {
   resolveMediaReferenceLocalPathInfo,
 } from "../media/media-reference.js";
 import { extractOriginalFilename } from "../media/store.js";
-import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
+import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { openGatewayAssistantAvatar, resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
@@ -39,6 +45,7 @@ import {
 } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
+  CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
@@ -54,7 +61,6 @@ import {
   buildControlUiAvatarUrl,
   CONTROL_UI_AVATAR_PREFIX,
   normalizeControlUiBasePath,
-  resolveAssistantAvatarUrl,
 } from "./control-ui-shared.js";
 import { buildMissingScopeForbiddenBody, sendGatewayAuthFailure } from "./http-common.js";
 import {
@@ -173,7 +179,7 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
 ]);
 
 /** Rewrites root-absolute Control UI public asset hrefs for configured base paths. */
-export function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
+function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
   const normalized = normalizeControlUiBasePath(basePath);
   if (!normalized) {
     return html;
@@ -187,22 +193,25 @@ export function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath
   return next;
 }
 
-type ControlUiAvatarResolution =
-  | { kind: "none"; reason: string; source?: string | null }
-  | { kind: "local"; filePath: string; source?: string | null }
-  | { kind: "remote"; url: string; source?: string | null }
-  | { kind: "data"; url: string; source?: string | null };
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("'", "&#39;");
+}
 
 type ControlUiAvatarMeta = {
   avatarUrl: string | null;
   avatarSource: string | null;
-  avatarStatus: ControlUiAvatarResolution["kind"];
+  avatarStatus: AgentAvatarResolution["kind"] | null;
   avatarReason: string | null;
 };
 
-function controlUiAvatarResolutionMeta(resolved: ControlUiAvatarResolution | null): {
+function controlUiAvatarResolutionMeta(resolved: AgentAvatarResolution | null): {
   avatarSource: string | null;
-  avatarStatus: ControlUiAvatarResolution["kind"] | null;
+  avatarStatus: AgentAvatarResolution["kind"] | null;
   avatarReason: string | null;
 } {
   if (!resolved) {
@@ -688,7 +697,7 @@ export async function handleControlUiAvatarRequest(
   res: ServerResponse,
   opts: {
     basePath?: string;
-    resolveAvatar: (agentId: string) => ControlUiAvatarResolution;
+    config: OpenClawConfig;
     auth?: ResolvedGatewayAuth;
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
@@ -732,41 +741,55 @@ export async function handleControlUiAvatarRequest(
     return true;
   }
 
+  const identity = resolveAssistantIdentity({ cfg: opts.config, agentId });
+  const projection = openGatewayAssistantAvatar({ cfg: opts.config, identity });
+  const resolved = projection.resolution;
+
   if (url.searchParams.get("meta") === "1") {
-    const resolved = opts.resolveAvatar(agentId);
-    const meta = controlUiAvatarResolutionMeta(resolved);
-    const avatarUrl =
-      resolved.kind === "local"
-        ? buildControlUiAvatarUrl(basePath, agentId)
-        : resolved.kind === "remote" || resolved.kind === "data"
-          ? resolved.url
-          : null;
-    sendJson(res, 200, {
-      avatarUrl,
-      avatarSource: meta.avatarSource,
-      avatarStatus: meta.avatarStatus ?? resolved.kind,
-      avatarReason: meta.avatarReason,
-    } satisfies ControlUiAvatarMeta);
+    try {
+      const meta = controlUiAvatarResolutionMeta(resolved);
+      const avatarUrl =
+        resolved?.kind === "local"
+          ? buildControlUiAvatarUrl(basePath, agentId)
+          : resolved?.kind === "remote" || resolved?.kind === "data"
+            ? resolved.url
+            : null;
+      sendJson(res, 200, {
+        avatarUrl,
+        avatarSource: meta.avatarSource,
+        avatarStatus: meta.avatarStatus,
+        avatarReason: meta.avatarReason,
+      } satisfies ControlUiAvatarMeta);
+    } finally {
+      if (projection.openedFile) {
+        fs.closeSync(projection.openedFile.fd);
+      }
+    }
     return true;
   }
 
-  const resolved = opts.resolveAvatar(agentId);
-  if (resolved.kind !== "local") {
+  if (resolved?.kind !== "local" || !projection.openedFile) {
     respondControlUiNotFound(res);
     return true;
   }
 
-  const safeAvatar = await resolveSafeAvatarFile(resolved.filePath);
-  if (!safeAvatar) {
+  try {
+    res.setHeader("Content-Type", resolveAvatarMime(projection.openedFile.path));
+    res.setHeader("Cache-Control", "no-cache");
+    if (req.method === "HEAD") {
+      res.statusCode = 200;
+      res.end();
+      return true;
+    }
+    const body = await readFileDescriptorBounded(projection.openedFile.fd, AVATAR_MAX_BYTES);
+    res.end(body);
+    return true;
+  } catch {
     respondControlUiNotFound(res);
     return true;
+  } finally {
+    fs.closeSync(projection.openedFile.fd);
   }
-  if (respondHeadForFile(req, res, safeAvatar.path)) {
-    return true;
-  }
-
-  serveResolvedFile(res, safeAvatar.path, safeAvatar.buffer);
-  return true;
 }
 
 function setStaticFileHeaders(res: ServerResponse, filePath: string) {
@@ -788,12 +811,16 @@ function serveResolvedIndexHtml(
   basePath?: string,
   allowWasm?: boolean,
 ) {
-  const withBasePath = rewriteControlUiIndexHtmlPublicAssetHrefs(body, basePath ?? "");
+  const normalizedBasePath = normalizeControlUiBasePath(basePath);
+  const withBasePath = rewriteControlUiIndexHtmlPublicAssetHrefs(body, normalizedBasePath);
+  const basePathAttribute = normalizedBasePath
+    ? ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtmlAttribute(normalizedBasePath)}"`
+    : "";
   // Let the app initialize fail-closed without guessing whether this document
   // was served with the terminal's WASM CSP allowance.
   const prepared = withBasePath.replace(
     /<html\b/i,
-    `<html ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"`,
+    `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"`,
   );
   const hashes = computeInlineScriptHashes(prepared);
   // Always set the document CSP here (the index carries inline scripts) so the
@@ -827,22 +854,6 @@ function isExpectedSafePathError(error: unknown): boolean {
   const code =
     typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
   return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
-}
-
-async function resolveSafeAvatarFile(
-  filePath: string,
-): Promise<{ path: string; buffer: Buffer } | null> {
-  try {
-    const read = await readSecureFile({
-      filePath,
-      label: "Control UI avatar",
-      permissions: { allowInsecure: true, allowReadableByOthers: true },
-      io: { maxBytes: AVATAR_MAX_BYTES },
-    });
-    return { path: read.realPath, buffer: read.buffer };
-  } catch {
-    return null;
-  }
 }
 
 function resolveSafeControlUiFile(
@@ -995,20 +1006,6 @@ export async function handleControlUiHttpRequest(
     ) {
       return true;
     }
-    const config = opts?.config;
-    const identity = config
-      ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
-      : DEFAULT_ASSISTANT_IDENTITY;
-    const avatarValue = resolveAssistantAvatarUrl({
-      avatar: identity.avatar,
-      agentId: identity.agentId,
-      basePath,
-    });
-    const avatarMeta = config
-      ? controlUiAvatarResolutionMeta(
-          resolveAgentAvatar(config, identity.agentId, { includeUiOverride: true }),
-        )
-      : controlUiAvatarResolutionMeta(null);
     if (req.method === "HEAD") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -1016,15 +1013,24 @@ export async function handleControlUiHttpRequest(
       res.end();
       return true;
     }
+    const config = opts?.config;
+    const identity = config
+      ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
+      : DEFAULT_ASSISTANT_IDENTITY;
+    const avatarProjection = config
+      ? resolveGatewayAssistantAvatar({ cfg: config, identity })
+      : { avatar: identity.avatar, resolution: null };
+    const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
     sendJson(res, 200, {
       basePath,
       assistantName: identity.name,
-      assistantAvatar: avatarValue ?? identity.avatar,
+      assistantAvatar: avatarProjection.avatar,
       assistantAvatarSource: avatarMeta.avatarSource,
       assistantAvatarStatus: avatarMeta.avatarStatus,
       assistantAvatarReason: avatarMeta.avatarReason,
       assistantAgentId: identity.agentId,
       serverVersion: resolveRuntimeServiceVersion(process.env),
+      devGitBranch: (await resolveDevInstallGitBranch()) ?? undefined,
       localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, identity.agentId)],
       embedSandbox:
         config?.gateway?.controlUi?.embedSandbox === "trusted"

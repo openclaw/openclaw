@@ -185,7 +185,7 @@ function openAiDefaultRouteKeepsCodexUnavailable(cfg: OpenClawConfig): boolean {
  * Route-specific Codex selections still win; this only answers the missing-plugin
  * diagnostic question for OpenAI defaults and OpenAI-compatible proxy configs.
  */
-export function configExplicitlyKeepsCodexUnavailableForOpenAi(cfg: OpenClawConfig): boolean {
+function configExplicitlyKeepsCodexUnavailableForOpenAi(cfg: OpenClawConfig): boolean {
   if (openAiHasCodexDefaultRuntimePolicy(cfg)) {
     return false;
   }

@@ -5,6 +5,7 @@ import {
   MAX_DATE_TIMESTAMP_MS,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -2039,7 +2040,7 @@ function capText(value: string | undefined, max: number): string | undefined {
   if (!value) {
     return undefined;
   }
-  return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
+  return value.length <= max ? value : `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
 }
 
 function cardBoardId(card: WorkboardCard): string {
@@ -2560,12 +2561,6 @@ export class WorkboardStore {
       automation,
     );
     const normalizedPosition = normalizePosition(input.position, Number.NaN);
-    const position = Number.isFinite(normalizedPosition)
-      ? normalizedPosition
-      : Math.max(
-          0,
-          ...cards.filter((card) => card.status === status).map((card) => card.position),
-        ) + POSITION_STEP;
     const notes = normalizeNotes(input.notes);
     const agentId = normalizeOptionalString(input.agentId);
     const sessionKey = normalizeOptionalString(input.sessionKey);
@@ -2600,6 +2595,15 @@ export class WorkboardStore {
     const syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),
     );
+    const boardId = syncedMetadata.automation?.boardId ?? "default";
+    const position = Number.isFinite(normalizedPosition)
+      ? normalizedPosition
+      : Math.max(
+          0,
+          ...cards
+            .filter((card) => card.status === status && cardBoardId(card) === boardId)
+            .map((card) => card.position),
+        ) + POSITION_STEP;
     let card: WorkboardCard = {
       id: randomUUID(),
       title: normalizeTitle(input.title),

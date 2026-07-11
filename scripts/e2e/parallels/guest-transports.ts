@@ -6,13 +6,13 @@ import type { PhaseRunner } from "./phase-runner.ts";
 import { encodePowerShell, psSingleQuote } from "./powershell.ts";
 import type { CommandResult } from "./types.ts";
 
-export interface GuestExecOptions {
+interface GuestExecOptions {
   check?: boolean;
   input?: string;
   timeoutMs?: number;
 }
 
-export interface WindowsBackgroundPowerShellOptions {
+interface WindowsBackgroundPowerShellOptions {
   append?: (chunk: string | Uint8Array) => void;
   beforeLaunchAttempt?: () => void;
   completedLogDrainGraceMs?: number;
@@ -475,7 +475,7 @@ export class LinuxGuest {
   }
 }
 
-export interface MacosGuestOptions extends GuestExecOptions {
+interface MacosGuestOptions extends GuestExecOptions {
   env?: Record<string, string>;
 }
 

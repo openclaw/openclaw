@@ -14,10 +14,11 @@ type MSTeamsAccountRef = {
   aadObjectId?: string;
 };
 
-export type MSTeamsSdkReferenceSource = {
+type MSTeamsSdkReferenceSource = {
   activityId?: string;
   user?: MSTeamsAccountRef;
   agent?: MSTeamsAccountRef | null;
+  /** Legacy imported rows may only carry `bot`; see StoredConversationReference.bot. */
   bot?: MSTeamsAccountRef | null;
   conversation: { id: string; conversationType?: string; tenantId?: string };
   channelId?: string;

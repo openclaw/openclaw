@@ -24,6 +24,7 @@ import {
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../../sessions/model-overrides.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
@@ -38,7 +39,7 @@ import { createSessionConversationTestRegistry } from "../../test-utils/session-
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
-import { initSessionState } from "./session.js";
+import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
@@ -54,7 +55,7 @@ const browserMaintenanceMocks = vi.hoisted(() => ({
 
 type ForkSessionParamsForTest = {
   parentEntry: SessionEntry;
-  sessionsDir: string;
+  storePath: string;
 };
 
 vi.mock("./session-fork.js", () => ({
@@ -79,7 +80,6 @@ vi.mock("./session-fork.js", () => ({
       entry: SessionEntry;
       parentEntry: SessionEntry;
     }) => Partial<SessionEntry>;
-    sessionsDir: string;
   }) => {
     const store = JSON.parse(await fs.readFile(params.storePath, "utf-8")) as Record<
       string,
@@ -116,7 +116,7 @@ vi.mock("./session-fork.js", () => ({
     }
     const fork = await sessionForkMocks.forkSessionFromParent({
       parentEntry,
-      sessionsDir: params.sessionsDir,
+      storePath: params.storePath,
     });
     if (!fork) {
       return { status: "failed" };
@@ -280,6 +280,75 @@ async function writeSessionStoreFast(
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 }
+
+describe("resolveReplySessionPreprocessingState", () => {
+  const sessionKey = "agent:main:harness:codex:supervision:media-preflight";
+
+  function resolvePreprocessingState(storePath: string) {
+    return resolveReplySessionPreprocessingState({
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      ctx: {
+        Body: "<media:audio>",
+        RawBody: "<media:audio>",
+        CommandBody: "<media:audio>",
+        From: "media-preflight",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    });
+  }
+
+  it("returns the valid durable harness owner lock before preprocessing", async () => {
+    const storePath = await createStorePath("openclaw-media-preflight-valid-");
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "native-media-session",
+        updatedAt: Date.now(),
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    });
+
+    expect(resolvePreprocessingState(storePath)).toMatchObject({
+      sessionKey,
+      storePath,
+      sessionEntry: {
+        sessionId: "native-media-session",
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    });
+  });
+
+  it.each([
+    ["missing row", undefined],
+    [
+      "wrong owner",
+      {
+        sessionId: "native-media-session",
+        updatedAt: 1,
+        agentHarnessId: "other",
+        modelSelectionLocked: true,
+      },
+    ],
+    [
+      "missing session id",
+      {
+        updatedAt: 1,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    ],
+  ] as const)("rejects a reserved %s before preprocessing", async (_label, entry) => {
+    const storePath = await createStorePath(`openclaw-media-preflight-invalid-${_label}-`);
+    await writeSessionStoreFast(storePath, entry ? { [sessionKey]: entry } : {});
+
+    expect(() => resolvePreprocessingState(storePath)).toThrow();
+  });
+});
 
 async function writeTerminalTranscriptSessionStore(params: {
   storePath: string;
@@ -450,10 +519,11 @@ beforeEach(() => {
   });
   sessionForkMocks.forkSessionFromParent
     .mockReset()
-    .mockImplementation(async ({ parentEntry, sessionsDir }: ForkSessionParamsForTest) => {
+    .mockImplementation(async ({ parentEntry, storePath }: ForkSessionParamsForTest) => {
       if (!parentEntry.sessionFile) {
         return null;
       }
+      const sessionsDir = path.dirname(storePath);
       await fs.mkdir(sessionsDir, { recursive: true });
       const sessionId = `forked-session-${++sessionForkMocks.nextSessionId}`;
       const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
@@ -1289,6 +1359,48 @@ describe("initSessionState RawBody", () => {
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
     expect(result.sessionEntry.responseUsage).toBe("full");
+  });
+
+  it("preserves user labels across dashboard session stale rollover (#101451)", async () => {
+    const root = await makeCaseDir("openclaw-dashboard-rollover-label-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:dashboard:8c0b2b68-05e1-4b25-a8c2-ef6f43a01f77";
+    const existingSessionId = "dashboard-session-before-rollover";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        label: "Other",
+        displayName: "Dashboard Chat",
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "continue",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.label).toBe("Other");
+    expect(result.sessionEntry.displayName).toBe("Dashboard Chat");
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { label?: string; displayName?: string }
+    >;
+    expect(store[sessionKey]?.label).toBe("Other");
+    expect(store[sessionKey]?.displayName).toBe("Dashboard Chat");
   });
 
   it("clears an auto-fallback model override on an implicit daily stale rollover (#90119)", async () => {
@@ -3114,6 +3226,101 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       },
     });
   }
+
+  it("rejects explicit resets without replacing a model-locked session", async () => {
+    const storePath = await createStorePath("openclaw-reset-model-locked-");
+    const sessionKey = "agent:main:telegram:dm:model-locked";
+    const existingSessionId = "existing-model-locked-session";
+
+    for (const body of ["/new", "/reset openai/gpt-5.5 continue"] as const) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: {
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+          pluginExtensions: {
+            codex: { threadId: "codex-thread-1" },
+          },
+        },
+      });
+
+      await expect(
+        initSessionState({
+          ctx: {
+            Body: body,
+            RawBody: body,
+            CommandBody: body,
+            From: "model-locked",
+            To: "bot",
+            ChatType: "direct",
+            SessionKey: sessionKey,
+            Provider: "telegram",
+            Surface: "telegram",
+          },
+          cfg: {
+            session: { store: storePath, idleMinutes: 999 },
+          } as OpenClawConfig,
+          commandAuthorized: true,
+        }),
+      ).rejects.toThrow(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+
+      expect(readSessionStoreForTest(storePath)[sessionKey]).toMatchObject({
+        sessionId: existingSessionId,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        pluginExtensions: {
+          codex: { threadId: "codex-thread-1" },
+        },
+      });
+    }
+  });
+
+  it("does not implicitly expire a model-locked session", async () => {
+    const storePath = await createStorePath("openclaw-expiry-model-locked-");
+    const sessionKey = "agent:main:telegram:dm:model-locked-expiry";
+    const existingSessionId = "existing-model-locked-expiry-session";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now() - 60 * 60 * 1000,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        pluginExtensions: {
+          codex: { threadId: "codex-thread-expiry" },
+        },
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "continue",
+        RawBody: "continue",
+        CommandBody: "continue",
+        From: "model-locked-expiry",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg: {
+        session: { store: storePath, idleMinutes: 1 },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(result.sessionEntry).toMatchObject({
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        codex: { threadId: "codex-thread-expiry" },
+      },
+    });
+  });
 
   it("preserves behavior overrides across /new and /reset", async () => {
     const storePath = await createStorePath("openclaw-reset-overrides-");

@@ -1,6 +1,7 @@
 // Control UI view renders agents screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import "../../components/agent-select.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -14,12 +15,9 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import {
-  agentBadgeText,
-  buildAgentContext,
-  normalizeAgentLabel,
-} from "../../lib/agents/display.ts";
+import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
+import "./memory/memory-panel.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
 import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
 import { renderAgentTools, renderAgentSkills } from "./panels-tools-skills.ts";
@@ -77,6 +75,7 @@ type ToolsEffectiveState = {
 
 type AgentsProps = {
   basePath: string;
+  authToken: string | null;
   loading: boolean;
   error: string | null;
   agentsList: AgentsListResult | null;
@@ -150,24 +149,15 @@ export function renderAgents(props: AgentsProps) {
       <section class="agents-toolbar">
         <div class="agents-toolbar-row">
           <div class="agents-control-select">
-            <select
-              class="agents-select"
-              .value=${selectedId ?? ""}
-              ?disabled=${props.loading || agents.length === 0}
-              @change=${(e: Event) => props.onSelectAgent((e.target as HTMLSelectElement).value)}
-            >
-              ${agents.length === 0
-                ? html` <option value="">${t("agents.noAgents")}</option> `
-                : agents.map(
-                    (agent) => html`
-                      <option value=${agent.id} ?selected=${agent.id === selectedId}>
-                        ${normalizeAgentLabel(agent)}${agentBadgeText(agent.id, defaultId)
-                          ? ` (${agentBadgeText(agent.id, defaultId)})`
-                          : ""}
-                      </option>
-                    `,
-                  )}
-            </select>
+            <openclaw-agent-select
+              .agents=${agents}
+              .selectedId=${selectedId}
+              .defaultId=${defaultId}
+              .identityById=${props.agentIdentityById}
+              .authToken=${props.authToken}
+              .disabled=${props.loading}
+              .onSelect=${props.onSelectAgent}
+            ></openclaw-agent-select>
           </div>
           <div class="agents-toolbar-actions">
             ${selectedAgent
@@ -338,6 +328,11 @@ export function renderAgents(props: AgentsProps) {
                     onSelectPanel: props.onSelectPanel,
                   })
                 : nothing}
+              ${props.activePanel === "memory"
+                ? html`<openclaw-agent-memory-panel
+                    .agentId=${selectedAgent.id}
+                  ></openclaw-agent-memory-panel>`
+                : nothing}
             `}
       </section>
     </div>
@@ -356,6 +351,7 @@ function renderAgentTabs(
     { id: "skills", label: t("agents.tabs.skills") },
     { id: "channels", label: t("agents.tabs.channels") },
     { id: "cron", label: t("agents.tabs.cronJobs") },
+    { id: "memory", label: t("agents.tabs.memory") },
   ];
   return html`
     <div class="agent-tabs">

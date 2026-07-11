@@ -2,6 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 
 const streamSimpleMock = vi.fn();
 const readFileMock = vi.fn();
@@ -73,6 +74,7 @@ vi.mock("./embedded-agent-runner/model.js", () => ({
 }));
 
 vi.mock("./model-auth.js", () => ({
+  applySecretRefHeaderSentinels: (model: unknown) => model,
   ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
   ensureAuthProfileStoreWithoutExternalProfiles: (...args: unknown[]) =>
     ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
@@ -604,7 +606,10 @@ describe("runBtwSideQuestion", () => {
     registerAgentHarness({
       id: "codex",
       label: "Codex test harness",
-      supports: () => ({ supported: true, priority: 100 }),
+      supports: ({ provider }) =>
+        provider === "openai"
+          ? { supported: true, priority: 100 }
+          : { supported: false, reason: "Codex only supports OpenAI providers" },
       runAttempt: vi.fn(),
       runSideQuestion: codexSideQuestionMock,
     });
@@ -681,6 +686,44 @@ describe("runBtwSideQuestion", () => {
     ).toContain("session-1.jsonl");
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a model-locked session on its persisted harness for BTW", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Locked Codex answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+
+    const result = await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      },
+      sessionEntry: createSessionEntry({
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      }),
+    });
+
+    expect(result).toEqual({ text: "Locked Codex answer." });
+    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
+    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentHarnessId: "codex" }),
+    );
+    expect(ensureSelectedAgentHarnessPluginMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ agentHarnessRuntimeOverride: expect.anything() }),
+    );
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
   });
 
   it("reselects the Codex hook after resolving legacy openai-codex route state", async () => {
@@ -1341,7 +1384,10 @@ describe("runBtwSideQuestion", () => {
       id: "gpt-5.4",
       baseUrl: "https://api.enterprise.githubcopilot.com",
     });
-    expectRecordFields(streamOptions, { apiKey: "copilot-runtime-token" });
+    const streamKey = (streamOptions as { apiKey?: string }).apiKey ?? "";
+    expect(looksLikeSecretSentinel(streamKey)).toBe(true);
+    expect(streamKey).not.toBe("copilot-runtime-token");
+    expect(resolveSecretSentinel(streamKey)).toBe("copilot-runtime-token");
   });
 
   it("uses the provider's stream fn when registered so provider URL construction runs (#68336)", async () => {

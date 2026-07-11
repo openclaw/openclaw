@@ -377,6 +377,9 @@ describe("createPdfTool", () => {
 
       const [, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
       expectFields(loadOptions, { maxBytes: 524_288 });
+      expect(modelAuth.getApiKeyForModel).toHaveBeenCalledWith(
+        expect.objectContaining({ secretSentinels: true }),
+      );
     });
   });
 

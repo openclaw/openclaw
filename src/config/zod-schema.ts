@@ -7,6 +7,7 @@ import {
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { base64UrlDecode, normalizeEd25519PublicKeyBase64Url } from "../infra/ed25519-signature.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   isValidControlUiChatMessageMaxWidth,
@@ -18,6 +19,7 @@ import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import { ChannelsSchema } from "./zod-schema.channels-config.js";
+import { CloudWorkersConfigSchema } from "./zod-schema.cloud-workers.js";
 import {
   HexColorSchema,
   ModelsConfigSchema,
@@ -37,19 +39,6 @@ import {
 const BrowserSnapshotDefaultsSchema = z
   .object({
     mode: z.literal("efficient").optional(),
-  })
-  .strict()
-  .optional();
-
-const NodeHostSchema = z
-  .object({
-    browserProxy: z
-      .object({
-        enabled: z.boolean().optional(),
-        allowProfiles: z.array(z.string()).optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict()
   .optional();
@@ -354,7 +343,7 @@ const TalkSchema = z
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     realtime: TalkRealtimeSchema.optional(),
     consultThinkingLevel: z
-      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
       .optional(),
     consultFastMode: z.boolean().optional(),
     speechLocale: z.string().optional(),
@@ -383,12 +372,17 @@ const TalkSchema = z
     }
   });
 
-const McpServerSchema = z
+export const McpServerSchema = z
   .object({
     enabled: z.boolean().optional(),
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
-    env: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+    env: z
+      .record(
+        z.string(),
+        z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
+      )
+      .optional(),
     cwd: z.string().optional(),
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
@@ -411,6 +405,7 @@ const McpServerSchema = z
     auth: z.literal("oauth").optional(),
     oauth: z
       .object({
+        authProfileId: z.string().trim().min(1).optional(),
         scope: z.string().trim().min(1).optional(),
         redirectUrl: HttpUrlSchema.optional(),
         clientMetadataUrl: McpOAuthClientMetadataUrlSchema.optional(),
@@ -470,6 +465,38 @@ const McpConfigSchema = z
   .strict()
   .optional();
 
+const NodeHostMcpServerNameSchema = z
+  .string()
+  .refine(
+    (value) => value.length > 0 && value === value.trim(),
+    "MCP server name must be non-empty and must not have surrounding whitespace",
+  );
+
+const NodeHostSchema = z
+  .object({
+    browserProxy: z
+      .object({
+        enabled: z.boolean().optional(),
+        allowProfiles: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+    mcp: z
+      .object({
+        servers: z.record(NodeHostMcpServerNameSchema, McpServerSchema).optional(),
+      })
+      .strict()
+      .optional(),
+    skills: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 const CrestodianSchema = z
   .object({
     rescue: z
@@ -493,11 +520,86 @@ function isPlainHttpsUrl(value: string): boolean {
   }
 }
 
-const MarketplaceVerificationSchema = z
+function isEd25519PublicKeyConfig(value: string): boolean {
+  if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value)) {
+    return false;
+  }
+  if (!value.includes("BEGIN") && !/^[A-Za-z0-9_-]{43}$/.test(value)) {
+    return false;
+  }
+  try {
+    const normalized = normalizeEd25519PublicKeyBase64Url(value);
+    return normalized ? base64UrlDecode(normalized).length === 32 : false;
+  } catch {
+    return false;
+  }
+}
+
+const MarketplaceFeedTrustedPublicKeySchema = z
   .object({
-    mode: z.literal("unsigned"),
+    keyId: z.string().trim().min(1),
+    publicKey: z
+      .string()
+      .trim()
+      .min(1)
+      .refine(
+        (value) => isEd25519PublicKeyConfig(value),
+        "Expected Ed25519 public key as PEM or raw base64url",
+      ),
   })
   .strict();
+
+const MarketplaceVerificationSchema = z.union([
+  z
+    .object({
+      mode: z.literal("unsigned"),
+    })
+    .strict(),
+  z
+    .object({
+      mode: z.literal("signed"),
+      keys: z.array(MarketplaceFeedTrustedPublicKeySchema).min(1),
+      threshold: z.number().int().positive().optional(),
+    })
+    .strict()
+    .superRefine((value, ctx) => {
+      const seenKeyIds = new Map<string, number>();
+      const seenPublicKeys = new Map<string, number>();
+      value.keys.forEach((key, index) => {
+        const previousKeyIdIndex = seenKeyIds.get(key.keyId);
+        if (previousKeyIdIndex !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["keys", index, "keyId"],
+            message: "Signed marketplace feed publisher key IDs must be unique",
+          });
+        } else {
+          seenKeyIds.set(key.keyId, index);
+        }
+        const normalizedPublicKey = normalizeEd25519PublicKeyBase64Url(key.publicKey);
+        if (!normalizedPublicKey) {
+          return;
+        }
+        const previousPublicKeyIndex = seenPublicKeys.get(normalizedPublicKey);
+        if (previousPublicKeyIndex !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["keys", index, "publicKey"],
+            message: "Signed marketplace feed publisher public keys must be unique",
+          });
+        } else {
+          seenPublicKeys.set(normalizedPublicKey, index);
+        }
+      });
+      if (value.threshold !== undefined && value.threshold > value.keys.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["threshold"],
+          message: "Signed marketplace feed threshold cannot exceed configured key count",
+        });
+      }
+    }),
+]);
 
 const MarketplaceFeedProfileSchema = z
   .object({
@@ -645,6 +747,7 @@ export const OpenClawSchema = z
     audit: z
       .object({
         enabled: z.boolean().optional(),
+        messages: z.union([z.literal("off"), z.literal("direct"), z.literal("all")]).optional(),
       })
       .strict()
       .optional(),
@@ -702,6 +805,7 @@ export const OpenClawSchema = z
     browser: z
       .object({
         enabled: z.boolean().optional(),
+        allowSystemProfileImport: z.boolean().optional(),
         evaluateEnabled: z.boolean().optional(),
         cdpUrl: z.string().optional(),
         remoteCdpTimeoutMs: z.number().int().nonnegative().optional(),
@@ -921,6 +1025,13 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         store: z.string().optional(),
         maxConcurrentRuns: z.number().int().positive().optional(),
+        triggers: z
+          .object({
+            enabled: z.boolean().optional(),
+            minIntervalMs: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
         retry: z
           .object({
             maxAttempts: z.number().int().min(0).max(10).optional(),
@@ -1098,6 +1209,7 @@ export const OpenClawSchema = z
             enabled: z.boolean().optional(),
             basePath: z.string().optional(),
             root: z.string().optional(),
+            toolTitles: z.boolean().optional(),
             embedSandbox: z
               .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
               .optional(),
@@ -1307,6 +1419,31 @@ export const OpenClawSchema = z
             pairing: z
               .object({
                 autoApproveCidrs: z.array(z.string()).optional(),
+                sshVerify: z
+                  .union([
+                    z.boolean(),
+                    z
+                      .object({
+                        user: z.string().optional(),
+                        identity: z.string().optional(),
+                        timeoutMs: z.number().int().positive().optional(),
+                        cidrs: z.array(z.string()).optional(),
+                      })
+                      .strict(),
+                  ])
+                  .optional(),
+              })
+              .strict()
+              .optional(),
+            pluginTools: z
+              .object({
+                enabled: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            skills: z
+              .object({
+                enabled: z.boolean().optional(),
               })
               .strict()
               .optional(),
@@ -1333,6 +1470,7 @@ export const OpenClawSchema = z
         }
       })
       .optional(),
+    cloudWorkers: CloudWorkersConfigSchema,
     memory: MemorySchema,
     mcp: McpConfigSchema,
     skills: z

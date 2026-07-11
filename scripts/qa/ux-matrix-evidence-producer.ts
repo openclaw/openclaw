@@ -647,7 +647,7 @@ async function writeProducerMetadata(params: {
   );
 }
 
-export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
+async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
   await fs.mkdir(options.artifactBase, { recursive: true });
   await writePreflight(options.artifactBase);
 
@@ -703,7 +703,10 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
           : []),
       ],
       coverageIds: ["ui.control", "gateway.control-ui-hosting"],
-      failureReason: matrixScreenshotResult.failureReason,
+      failureReason:
+        "failureReason" in matrixScreenshotResult
+          ? matrixScreenshotResult.failureReason
+          : undefined,
       stage: "screenshot-artifact",
       status: matrixScreenshotResult.status,
       surface: "control-ui",
@@ -781,7 +784,8 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
           : []),
       ],
       coverageIds: ["qa.artifact-safety", "tools.evidence", "workspace.artifacts"],
-      failureReason: fixtureProofResult.failureReason,
+      failureReason:
+        "failureReason" in fixtureProofResult ? fixtureProofResult.failureReason : undefined,
       stage: "producer-artifact-fixture",
       status: fixtureProofResult.status,
       surface: "qa-lab",

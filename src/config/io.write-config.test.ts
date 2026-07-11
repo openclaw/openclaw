@@ -16,7 +16,7 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { hashConfigIncludeRaw } from "./includes.js";
 import {
-  createConfigIO,
+  createConfigIO as createObservedConfigIO,
   getRuntimeConfigSourceSnapshot,
   readConfigFileSnapshotForWrite,
   registerConfigWriteListener,
@@ -75,6 +75,12 @@ vi.mock("./backup-rotation.js", async (importOriginal) => {
     maintainConfigBackups: mockMaintainConfigBackups,
   };
 });
+
+type ConfigIoOptions = Parameters<typeof createObservedConfigIO>[0];
+
+function createConfigIO(options: ConfigIoOptions = {}) {
+  return createObservedConfigIO({ observe: false, ...options });
+}
 
 describe("config io write", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-io-" });
@@ -213,6 +219,7 @@ describe("config io write", () => {
         env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
         homedir: () => home,
         logger: { warn, error: vi.fn() },
+        observe: true,
       });
 
       const snapshot = await io.readConfigFileSnapshot();
@@ -2866,6 +2873,46 @@ describe("config io write", () => {
           ).rejects.toThrow(/active SecretRef resolution failed: missing included secret/);
 
           expect(observedSource?.gateway?.port).toBe(19001);
+          await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+        });
+      } finally {
+        setRuntimeConfigSnapshotRefreshHandler(null);
+      }
+    });
+  });
+
+  it("runs a caller commit guard after runtime preflight and before the root write", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const initialRaw = `${JSON.stringify({ gateway: { mode: "local" } }, null, 2)}\n`;
+      const events: string[] = [];
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, initialRaw, "utf-8");
+
+      try {
+        await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
+          setRuntimeConfigSnapshotRefreshHandler({
+            preflight: () => {
+              events.push("runtime");
+            },
+            refresh: () => true,
+          });
+
+          await expect(
+            writeConfigFile(
+              { gateway: { mode: "local", port: 19001 } },
+              {
+                preCommitRuntimePreflight: async (sourceConfig) => {
+                  events.push(`caller:${String(sourceConfig.gateway?.port)}`);
+                  await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+                  throw new Error("authority changed");
+                },
+              },
+            ),
+          ).rejects.toThrow("authority changed");
+
+          expect(events).toEqual(["runtime", "caller:19001"]);
           await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
         });
       } finally {

@@ -38,6 +38,7 @@ import { markdownToSignalTextChunks } from "./format.js";
 import { signalMessageActions } from "./message-actions.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
+import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import {
@@ -199,10 +200,14 @@ function resolveSignalOutboundSessionRoute(params: {
   target: string;
   resolvedTarget?: { to: string };
 }) {
-  const resolved = resolveSignalOutboundTarget(params.resolvedTarget?.to ?? params.target);
+  const target = params.resolvedTarget?.to ?? params.target;
+  const resolved = resolveSignalOutboundTarget(target);
   if (!resolved) {
     return null;
   }
+  const normalizedTarget = target.replace(/^signal:/i, "").trim();
+  const recipientSessionExact: true | "direct-alias" =
+    resolved.chatType === "group" || /^\+?\d{3,15}$/.test(normalizedTarget) ? true : "direct-alias";
   const baseSessionKey = buildSignalBaseSessionKey({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -212,6 +217,7 @@ function resolveSignalOutboundSessionRoute(params: {
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
+    recipientSessionExact,
     ...resolved,
   };
 }
@@ -356,11 +362,12 @@ async function renderSignalApprovalPayloadForReactions(
   }
   const { addSignalApprovalReactionHintToStructuredPayload } =
     await loadSignalApprovalReactionsModule();
+  const payload = materializeSignalPresentationFallback(params.payload, params.presentation);
   return addSignalApprovalReactionHintToStructuredPayload({
     cfg: params.ctx.cfg,
     accountId: params.ctx.accountId ?? undefined,
     to: params.ctx.to,
-    payload: params.payload,
+    payload,
     targetAuthor,
     targetAuthorUuid,
   });

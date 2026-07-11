@@ -601,6 +601,18 @@ describe("registerSlackInteractionEvents", () => {
           ts: "100.200",
           text: "fallback",
           blocks: [
+            { type: "divider" },
+            {
+              type: "actions",
+              block_id: "deploy_row",
+              elements: [
+                {
+                  type: "button",
+                  action_id: "deploy_all_services",
+                  text: { type: "plain_text", text: "Deploy all services" },
+                },
+              ],
+            },
             {
               type: "actions",
               block_id: "verify_block",
@@ -643,6 +655,33 @@ describe("registerSlackInteractionEvents", () => {
     });
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+    expectRecordFields(chatUpdateCall(app), {
+      channel: "C1",
+      ts: "100.200",
+      blocks: [
+        { type: "divider" },
+        {
+          type: "actions",
+          block_id: "deploy_row",
+          elements: [
+            {
+              type: "button",
+              action_id: "deploy_all_services",
+              text: { type: "plain_text", text: "Deploy all services" },
+            },
+          ],
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: ":white_check_mark: *Approve* selected by <@U123>",
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("registers a matcher that accepts plugin action ids beyond the OpenClaw prefix", () => {
@@ -1920,6 +1959,79 @@ describe("registerSlackInteractionEvents", () => {
       text: "You are not authorized to use this control.",
       response_type: "ephemeral",
     });
+  });
+
+  it("blocks MPIM block actions when sender is outside configured allowFrom", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, app, getHandler } = createContext({
+      allowFrom: ["U_OWNER"],
+      resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      respond,
+      body: {
+        user: { id: "U_ATTACKER" },
+        channel: { id: "G_MPIM" },
+        message: {
+          ts: "311.312",
+          blocks: [{ type: "actions", block_id: "verify_block", elements: [] }],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:verify",
+        block_id: "verify_block",
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(app.client.chat.update).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith({
+      text: "You are not authorized to use this control.",
+      response_type: "ephemeral",
+    });
+  });
+
+  it("allows MPIM block actions when sender is in configured allowFrom", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, app, getHandler } = createContext({
+      allowFrom: ["U_OWNER"],
+      resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      respond,
+      body: {
+        user: { id: "U_OWNER" },
+        channel: { id: "G_MPIM" },
+        message: {
+          ts: "313.314",
+          blocks: [{ type: "actions", block_id: "verify_block", elements: [] }],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:verify",
+        block_id: "verify_block",
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+    expect(respond).not.toHaveBeenCalled();
   });
 
   it("ignores malformed action payloads after ack and logs warning", async () => {

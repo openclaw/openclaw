@@ -106,7 +106,15 @@ afterEach(() => {
 
 describe("parallels npm update smoke", () => {
   it("accepts one prepared tarball target for update and fresh install", () => {
-    expect(parseArgs(["--target-tarball", "/tmp/openclaw-candidate.tgz"])).toMatchObject({
+    expect(
+      parseArgs([
+        "--target-tarball",
+        "/tmp/openclaw-candidate.tgz",
+        "--dependency-tarball",
+        "/tmp/openclaw-ai-candidate.tgz",
+      ]),
+    ).toMatchObject({
+      dependencyTarballs: ["/tmp/openclaw-ai-candidate.tgz"],
       targetTarball: "/tmp/openclaw-candidate.tgz",
       updateTarget: "",
       freshTargetSpec: undefined,
@@ -114,6 +122,9 @@ describe("parallels npm update smoke", () => {
     expect(() =>
       parseArgs(["--target-tarball", "/tmp/openclaw-candidate.tgz", "--update-target", "beta"]),
     ).toThrow("--target-tarball cannot be combined");
+    expect(() => parseArgs(["--dependency-tarball", "/tmp/openclaw-ai-candidate.tgz"])).toThrow(
+      "--dependency-tarball requires --target-tarball",
+    );
   });
 
   it("stops the host artifact server when the wrapper fails mid-run", async () => {
@@ -142,6 +153,7 @@ describe("parallels npm update smoke", () => {
     await withEnvAsync({ OPENAI_API_KEY: "test-key" }, async () => {
       const smoke = new FailingNpmUpdateSmoke({
         ...TEST_AUTH,
+        dependencyTarballs: [],
         json: false,
         packageSpec: "openclaw@latest",
         platforms: new Set<Platform>(["linux"]),
@@ -191,6 +203,7 @@ exit 1
       () => {
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["linux"]),
@@ -231,16 +244,31 @@ exit 1
     expect(script).toContain("freshTargetStatus");
   });
 
-  it("host-serves a prepared candidate tarball for both proof phases", () => {
+  it("serves a prepared package set for both proof phases", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain("--target-tarball <path>");
+    expect(script).toContain("--dependency-tarball <path>");
     expect(script).toContain('label: "prepared candidate tgz"');
     expect(script).toContain("await copyFile(this.targetTarballPath, hostedTarballPath)");
-    expect(script).toContain("dir: this.tgzDir");
-    expect(script).toContain("this.updateTargetEffective = targetUrl");
-    expect(script).toContain("this.freshTargetSpec = targetUrl");
+    expect(script).toContain("startNpmRegistryServer");
+    expect(script).toContain("this.updateTargetEffective = this.targetTarballVersion");
+    expect(script).toContain("this.freshTargetSpec = this.updateTargetTarball");
     expect(script).toContain("this.updateExpectedNeedle = this.targetTarballVersion");
+  });
+
+  it("routes update installs through the prepared package registry", () => {
+    const registry = "http://192.0.2.2:48123";
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.1-beta.3",
+      npmRegistry: registry,
+      updateTarget: "2026.7.1-beta.3",
+    };
+
+    expect(macosUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
+    expect(linuxUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
+    expect(windowsUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY = '${registry}'`);
   });
 
   it("accepts keyed and nested npm metadata for published update targets", () => {
@@ -514,6 +542,7 @@ exit 1
       () =>
         new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["linux"]),
@@ -554,6 +583,7 @@ exit 1
         () =>
           new NpmUpdateSmoke({
             ...TEST_AUTH,
+            dependencyTarballs: [],
             json: false,
             packageSpec: "openclaw@latest",
             platforms: new Set<Platform>(["linux"]),
@@ -623,7 +653,7 @@ exit 1
       const decoded = decodePowerShellFromArgs(args);
       decodedCommands.push(decoded);
       if (options?.input) {
-        inputs.push(String(options.input));
+        inputs.push(options.input);
       }
       if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
         return { status: 0, stderr: "", stdout: "started\n" };
@@ -786,6 +816,7 @@ exit 7
       () => {
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["macos"]),
@@ -827,6 +858,7 @@ exit 7
       () => {
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["macos"]),

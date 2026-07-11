@@ -355,7 +355,6 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("retries reply session initialization conflicts from debounce flush", async () => {
-    vi.useFakeTimers();
     dispatchInboundMessageMock.mockRejectedValueOnce(
       new Error("Signal dispatch failed", {
         cause: new Error(
@@ -366,7 +365,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
         cfg: {
-          messages: { inbound: { debounceMs: 10 } },
+          messages: { inbound: { debounceMs: 1 } },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
         } as any,
         historyLimit: 0,
@@ -386,13 +385,16 @@ describe("signal createSignalEventHandler inbound context", () => {
 
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(10);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(250);
       await vi.waitFor(() => {
-        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       });
+
+      await vi.waitFor(
+        () => {
+          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+        },
+        { timeout: 1_500 },
+      );
       const context = requireCapturedContext();
       expect(context.Body).toContain("retry this message");
     } finally {

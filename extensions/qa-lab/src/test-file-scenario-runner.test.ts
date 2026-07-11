@@ -54,6 +54,7 @@ async function waitForDead(pid: number, timeoutMs: number) {
 function makeTestFileScenario(
   executionKind: "script" | "vitest" | "playwright",
   pathLocal: string,
+  testNamePattern?: string,
 ): QaSeedScenarioWithSource {
   return {
     id: `scenario-${executionKind}`,
@@ -75,6 +76,7 @@ function makeTestFileScenario(
     execution: {
       kind: executionKind,
       path: pathLocal,
+      ...(testNamePattern ? { testNamePattern } : {}),
       ...(executionKind === "script"
         ? { args: ["--once", "--artifact-base", "${outputDir}"] }
         : {}),
@@ -163,8 +165,14 @@ describe("qa test file scenario runner", () => {
       repoRoot,
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
-      scenarios: [makeTestFileScenario("playwright", "ui/src/e2e/chat-flow.e2e.test.ts")],
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios: [
+        makeTestFileScenario(
+          "playwright",
+          "ui/src/e2e/chat-flow.e2e.test.ts",
+          "sends a chat turn through the GUI",
+        ),
+      ],
       runCommand: async (command) => {
         commands.push(command);
         return {
@@ -190,6 +198,8 @@ describe("qa test file scenario runner", () => {
         "runner",
         "ui/src/e2e/chat-flow.e2e.test.ts",
         "--reporter=verbose",
+        "--testNamePattern",
+        "sends a chat turn through the GUI",
       ],
     ]);
     expect(commands.map((command) => command.timeoutMs)).toEqual([undefined, undefined]);
@@ -248,7 +258,7 @@ describe("qa test file scenario runner", () => {
       repoRoot,
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios: [makeTestFileScenario("playwright", "ui/src/e2e/chat-flow.e2e.test.ts")],
       writeEvidenceFile: false,
       runCommand: async () => ({
@@ -269,7 +279,7 @@ describe("qa test file scenario runner", () => {
       repoRoot,
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-vitest"),
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios: [makeTestFileScenario("vitest", "extensions/qa-lab/src/coverage-report.test.ts")],
       runCommand: async (command) => {
         commands.push(command);
@@ -337,7 +347,7 @@ describe("qa test file scenario runner", () => {
       repoRoot,
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script"),
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
       runCommand: async (command) => {
         commands.push(command);
@@ -472,7 +482,7 @@ describe("qa test file scenario runner", () => {
       repoRoot,
       outputDir,
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios: [scenario],
       commandTimeoutMs: 30 * 60_000,
       runCommand: async (command) => {
@@ -530,7 +540,7 @@ describe("qa test file scenario runner", () => {
         repoRoot: process.cwd(),
         outputDir: path.join(tempRoot, "out"),
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
         scenarios: [makeTestFileScenario("script", scriptPath)],
         commandTimeoutMs,
       });
@@ -616,7 +626,7 @@ describe("qa test file scenario runner", () => {
       repoRoot,
       outputDir: path.join(tempRoot, "out"),
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios: [makeTestFileScenario("script", scriptPath)],
       commandTimeoutMs: 100,
     });
@@ -631,7 +641,7 @@ describe("qa test file scenario runner", () => {
       repoRoot,
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-failed"),
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
       runCommand: async () => {
         const scenarioArtifactBase = path.join(
@@ -762,7 +772,7 @@ describe("qa test file scenario runner", () => {
       repoRoot,
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-producer-fail"),
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
       runCommand: async () => {
         const scenarioArtifactBase = path.join(
@@ -868,7 +878,7 @@ describe("qa test file scenario runner", () => {
       repoRoot,
       outputDir,
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
       runCommand: async () => {
         await writeScriptProducerEvidence({
@@ -911,7 +921,7 @@ describe("qa test file scenario runner", () => {
       repoRoot,
       outputDir,
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios: [scenario],
       runCommand: async () => {
         await writeScriptProducerEvidence({
@@ -953,7 +963,7 @@ describe("qa test file scenario runner", () => {
       repoRoot,
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-profile"),
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
       runCommand: async () => {
         const scenarioOutputDir = path.join(
@@ -1007,7 +1017,7 @@ describe("qa test file scenario runner", () => {
       repoRoot,
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-external"),
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
       runCommand: async () => {
         const scenarioOutputDir = path.join(
@@ -1086,7 +1096,7 @@ describe("qa test file scenario runner", () => {
         repoRoot: process.cwd(),
         outputDir,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
         scenarios: [scenario],
         env: {
           OPENCLAW_QA_REF: "scenario-ref",

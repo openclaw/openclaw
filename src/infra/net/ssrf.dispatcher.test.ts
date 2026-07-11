@@ -276,6 +276,75 @@ describe("createPinnedDispatcher", () => {
     ).toThrow(/private|internal|blocked/i);
   });
 
+  it("rejects a trusted private hostname override rebound to loopback", () => {
+    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
+    const pinned: PinnedHostname = {
+      hostname: "model.lan",
+      addresses: ["192.168.1.25"],
+      lookup,
+    };
+
+    expect(() =>
+      createPinnedDispatcher(
+        pinned,
+        {
+          mode: "direct",
+          pinnedHostname: {
+            hostname: "model.lan",
+            addresses: ["64:ff9b::127.0.0.1"],
+          },
+        },
+        { allowedHostnames: ["model.lan"] },
+      ),
+    ).toThrow(/private|internal|blocked/i);
+  });
+
+  it("rejects a trusted private hostname override rebound to an unspecified address", () => {
+    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
+    const pinned: PinnedHostname = {
+      hostname: "model.lan",
+      addresses: ["192.168.1.25"],
+      lookup,
+    };
+
+    expect(() =>
+      createPinnedDispatcher(
+        pinned,
+        {
+          mode: "direct",
+          pinnedHostname: {
+            hostname: "model.lan",
+            addresses: ["0.0.0.0"],
+          },
+        },
+        { allowedHostnames: ["model.lan"] },
+      ),
+    ).toThrow(/private|internal|blocked/i);
+  });
+
+  it("allows an explicitly trusted localhost.localdomain override", () => {
+    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
+    const pinned: PinnedHostname = {
+      hostname: "localhost.localdomain",
+      addresses: ["127.0.0.1"],
+      lookup,
+    };
+
+    expect(() =>
+      createPinnedDispatcher(
+        pinned,
+        {
+          mode: "direct",
+          pinnedHostname: {
+            hostname: "localhost.localdomain",
+            addresses: ["127.0.0.1"],
+          },
+        },
+        { allowedHostnames: ["localhost.localdomain"] },
+      ),
+    ).not.toThrow();
+  });
+
   it("keeps env proxy route while pinning the direct no-proxy path", () => {
     const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
     const pinned: PinnedHostname = {

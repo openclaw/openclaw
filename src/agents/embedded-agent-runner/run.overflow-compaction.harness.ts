@@ -277,9 +277,12 @@ export const mockedGetApiKeyForModel = vi.fn(
   }),
 );
 export const mockedMarkAuthProfileFailure = vi.fn(async () => {});
-export const mockedEnsureAuthProfileStore = vi.fn(() => ({}));
+export const mockedEnsureAuthProfileStore = vi.fn(() => ({ version: 1 as const, profiles: {} }));
 export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn(
-  (_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => ({}),
+  (_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => ({
+    version: 1 as const,
+    profiles: {},
+  }),
 );
 export const mockedResolveAuthProfileOrder = vi.fn<(_params?: unknown) => string[]>(
   (_params?: unknown) => [],
@@ -482,9 +485,12 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedMarkAuthProfileFailure.mockReset();
   mockedMarkAuthProfileFailure.mockResolvedValue(undefined);
   mockedEnsureAuthProfileStore.mockReset();
-  mockedEnsureAuthProfileStore.mockReturnValue({});
+  mockedEnsureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
   mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReset();
-  mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({});
+  mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+    version: 1,
+    profiles: {},
+  });
   mockedResolveAuthProfileOrder.mockReset();
   mockedResolveAuthProfileOrder.mockReturnValue([]);
   mockedMarkAuthProfileSuccess.mockReset();
@@ -799,14 +805,18 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
   }));
 
-  vi.doMock("./utils.js", () => ({
-    describeUnknownError: vi.fn((err: unknown) => {
-      if (err instanceof Error) {
-        return err.message;
-      }
-      return String(err);
-    }),
-  }));
+  vi.doMock("./utils.js", async () => {
+    const actual = await vi.importActual<typeof import("./utils.js")>("./utils.js");
+    return {
+      ...actual,
+      describeUnknownError: vi.fn((err: unknown) => {
+        if (err instanceof Error) {
+          return err.message;
+        }
+        return String(err);
+      }),
+    };
+  });
 
   const { runEmbeddedAgent } = await import("./run.js");
   return { runEmbeddedAgent };

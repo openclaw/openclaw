@@ -3,6 +3,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import {
   approvalRequestExplicitlyUnavailable,
@@ -665,7 +666,7 @@ function sanitizeOptionalDisplayText(value: string | undefined): string | undefi
 }
 
 function sanitizeDisplayText(value: string): string {
-  const scanned = value.slice(0, DISPLAY_TEXT_SCAN_MAX_LENGTH);
+  const scanned = sliceUtf16Safe(value, 0, DISPLAY_TEXT_SCAN_MAX_LENGTH);
   const clipped = value.length > DISPLAY_TEXT_SCAN_MAX_LENGTH;
   const sanitized = scanned
     .replace(ANSI_OSC_SEQUENCE_RE, "")
@@ -680,7 +681,7 @@ function sanitizeDisplayText(value: string): string {
 }
 
 function truncateDisplayText(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+  return value.length <= maxLength ? value : `${truncateUtf16Safe(value, maxLength - 3)}...`;
 }
 
 async function requestPluginApprovalOutcome(params: {

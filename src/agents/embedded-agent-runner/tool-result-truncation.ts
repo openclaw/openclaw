@@ -1,8 +1,10 @@
 /**
  * Truncates oversized tool-result content in messages and transcripts.
  */
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
@@ -18,6 +20,7 @@ import { SessionManager } from "../sessions/index.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
+import type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
 import {
   persistTranscriptStateMutation,
   readTranscriptFileState,
@@ -139,11 +142,12 @@ function appendBoundedTruncationSuffix(params: {
       return finalText;
     }
     if (keptText.length === 0) {
-      return finalText.slice(0, params.maxChars);
+      return truncateUtf16Safe(finalText, params.maxChars);
     }
     const overflow = finalText.length - params.maxChars;
-    const nextKeptText = keptText.slice(0, Math.max(0, keptText.length - overflow));
-    keptText = nextKeptText.length < keptText.length ? nextKeptText : keptText.slice(0, -1);
+    const nextKeptText = sliceUtf16Safe(keptText, 0, Math.max(0, keptText.length - overflow));
+    keptText =
+      nextKeptText.length < keptText.length ? nextKeptText : sliceUtf16Safe(keptText, 0, -1);
   }
 }
 
@@ -158,8 +162,8 @@ const MIDDLE_OMISSION_MARKER =
  * which should be preserved during truncation.
  */
 function hasImportantTail(text: string): boolean {
-  // Check last ~2000 chars for error-like patterns
-  const tail = normalizeLowercaseStringOrEmpty(text.slice(-2000));
+  // Check last ~2000 chars for error-like patterns without splitting a surrogate pair.
+  const tail = normalizeLowercaseStringOrEmpty(sliceUtf16Safe(text, -2000));
   return (
     /\b(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)\b/.test(tail) ||
     // JSON closing — if the output is JSON, the tail has closing structure
@@ -213,7 +217,8 @@ export function truncateToolResultText(
         tailStart = tailNewline + 1;
       }
 
-      const keptText = text.slice(0, headCut) + MIDDLE_OMISSION_MARKER + text.slice(tailStart);
+      const keptText =
+        sliceUtf16Safe(text, 0, headCut) + MIDDLE_OMISSION_MARKER + sliceUtf16Safe(text, tailStart);
       return appendBoundedTruncationSuffix({
         keptText,
         originalTextLength: text.length,
@@ -229,7 +234,7 @@ export function truncateToolResultText(
   if (lastNewline > budget * 0.8) {
     cutPoint = lastNewline;
   }
-  const keptText = text.slice(0, cutPoint);
+  const keptText = sliceUtf16Safe(text, 0, cutPoint);
   return appendBoundedTruncationSuffix({
     keptText,
     originalTextLength: text.length,
@@ -548,6 +553,7 @@ export function truncateOversizedToolResultsInMessages(
   const projectionKeys = projectionState
     ? getToolResultProjectionKeys(messages, projectionState)
     : [];
+  const hasFrozenProjectionBaseline = (projectionState?.frozen.size ?? 0) > 0;
   const branch = messages.map((message, index) => {
     const projectionKey = projectionKeys[index];
     const projectedMessage = projectionKey
@@ -571,6 +577,13 @@ export function truncateOversizedToolResultsInMessages(
         !projectionKey ||
         !projectionState?.frozen.has(projectionKey) ||
         (projectedMessage !== undefined && mergedMessage === message),
+      // Steering and follow-up messages can follow fresh tool results before dispatch.
+      // Reduce frozen history first so message position cannot make fresh output disappear.
+      deferAggregateRecovery:
+        projectionKey !== undefined &&
+        projectionState !== undefined &&
+        hasFrozenProjectionBaseline &&
+        !projectionState.frozen.has(projectionKey),
     };
   });
   const plan = buildToolResultReplacementPlan({
@@ -656,6 +669,7 @@ type ToolResultBranchEntry = {
   type: string;
   message?: AgentMessage;
   aggregateEligible?: boolean;
+  deferAggregateRecovery?: boolean;
 };
 
 type ToolResultReplacement = {
@@ -663,12 +677,7 @@ type ToolResultReplacement = {
   message: AgentMessage;
 };
 
-export type ToolResultPromptProjectionState = {
-  replacements: Map<string, AgentMessage>;
-  frozen: Set<string>;
-  ambiguousBaseKeys: Set<string>;
-  sourceTextByKey: Map<string, string[]>;
-};
+export type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
 
 export function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
   return {
@@ -709,16 +718,27 @@ function getToolResultProjectionKeys(
     }
   }
   const occurrences = new Map<string, number>();
-  return baseKeys.map((baseKey) => {
-    if (!baseKey) {
+  return baseKeys.map((baseKey, index) => {
+    if (baseKey && !projectionState.ambiguousBaseKeys.has(baseKey)) {
+      return baseKey;
+    }
+    const message = messages[index];
+    if (!message || message.role !== "toolResult") {
       return undefined;
     }
-    if (projectionState.ambiguousBaseKeys.has(baseKey)) {
-      return undefined;
-    }
-    const occurrence = occurrences.get(baseKey) ?? 0;
-    occurrences.set(baseKey, occurrence + 1);
-    return `${baseKey}:${occurrence}`;
+    // Ambiguous/missing tool ids still need a stable frozen identity; otherwise
+    // each request rewrites their prompt-cache tail projection (#99495).
+    const messageId = (message as { id?: unknown }).id;
+    const sourceIdentity =
+      typeof messageId === "string" && messageId.length > 0
+        ? `id:${messageId}`
+        : `text:${createHash("sha256")
+            .update(JSON.stringify(getToolResultTextBlocks(message)))
+            .digest("base64url")}`;
+    const fallbackBase = `fallback:${baseKey ?? "tool"}:${sourceIdentity}`;
+    const occurrence = occurrences.get(fallbackBase) ?? 0;
+    occurrences.set(fallbackBase, occurrence + 1);
+    return `${fallbackBase}:${occurrence}`;
   });
 }
 
@@ -797,7 +817,13 @@ function buildAggregateToolResultReplacements(params: {
       (
         item,
       ): item is {
-        entry: { id: string; type: string; message: AgentMessage; aggregateEligible?: boolean };
+        entry: {
+          id: string;
+          type: string;
+          message: AgentMessage;
+          aggregateEligible?: boolean;
+          deferAggregateRecovery?: boolean;
+        };
         index: number;
       } =>
         item.entry.type === "message" &&
@@ -811,7 +837,8 @@ function buildAggregateToolResultReplacements(params: {
       spillSourceMessage: params.spillSourceBranch?.[item.index]?.message ?? item.entry.message,
       textLength: getToolResultTextLength(item.entry.message),
       aggregateEligible: item.entry.aggregateEligible !== false,
-      protectedFromAggregateRecovery: protectedEntryIds.has(item.entry.id),
+      deferredByFreshProjection: item.entry.deferAggregateRecovery === true,
+      protectedByTrailingBatch: protectedEntryIds.has(item.entry.id),
     }))
     .filter((item) => item.textLength > 0);
 
@@ -834,7 +861,7 @@ function buildAggregateToolResultReplacements(params: {
   let remainingReduction = totalChars - params.aggregateBudgetChars;
   const replacements: Array<{ entryId: string; message: AgentMessage }> = [];
   const aggregateRecoveryCandidates = candidates
-    .filter((item) => !item.protectedFromAggregateRecovery)
+    .filter((item) => !item.deferredByFreshProjection && !item.protectedByTrailingBatch)
     .toSorted((a, b) => {
       if (a.index !== b.index) {
         return a.index - b.index;
@@ -843,9 +870,12 @@ function buildAggregateToolResultReplacements(params: {
     });
   const recoveryCandidates = [
     ...aggregateRecoveryCandidates.filter((item) => item.aggregateEligible),
-    ...(protectedEntryIds.size > 0
-      ? aggregateRecoveryCandidates.filter((item) => !item.aggregateEligible)
-      : []),
+    // Start from frozen projections before touching deferred fresh results. Reusing their
+    // projected text keeps this shrink-only and preserves prompt-cache stability.
+    ...aggregateRecoveryCandidates.filter((item) => !item.aggregateEligible),
+    ...candidates.filter(
+      (item) => item.deferredByFreshProjection && !item.protectedByTrailingBatch,
+    ),
   ];
 
   // Spend aggregate reduction on older entries first so fresh tool output stays intact.

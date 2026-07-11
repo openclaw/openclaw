@@ -28,7 +28,7 @@ Options:
 `;
 }
 
-export function parsePluginSdkSurfaceReportArgs(argv) {
+function parsePluginSdkSurfaceReportArgs(argv) {
   const args = { check: false, help: false };
   for (const arg of argv) {
     if (arg === "--check") {
@@ -49,7 +49,7 @@ const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoin
 const deprecatedBarrelEntrypointSet = new Set(deprecatedBarrelPluginSdkEntrypoints);
 const forbiddenPublicSubpaths = new Set(["test-utils"]);
 
-export function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env) {
+function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env) {
   const raw = env[name];
   if (raw === undefined) {
     return fallback;
@@ -65,7 +65,7 @@ export function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env)
   return parsed;
 }
 
-export function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
+function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
   const raw = env[name];
   if (raw === undefined) {
     return fallback;
@@ -90,7 +90,7 @@ export function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.e
   return Object.freeze({ ...fallback, ...overrides });
 }
 
-export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
+const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
   health: 1,
   lmstudio: 1,
@@ -101,11 +101,11 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "runtime-logger": 3,
   "runtime-secret-resolution": 5,
   "setup-adapter-runtime": 1,
-  "channel-streaming": 48,
+  "channel-streaming": 49,
   "approval-reply-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  "config-types": 421,
+  "config-types": 424,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 33,
@@ -147,8 +147,8 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-mention-gating": 7,
   "channel-lifecycle": 23,
   "channel-ingress": 8,
-  "channel-message": 229,
-  "channel-message-runtime": 226,
+  "channel-message": 231,
+  "channel-message-runtime": 228,
   "channel-pairing-paths": 1,
   "channel-policy": 8,
   "channel-route": 5,
@@ -195,22 +195,22 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10463,
+      10540,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5220,
+      5250,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3263,
+      3274,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      212,
+      211,
       env,
     ),
   };

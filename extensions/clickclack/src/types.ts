@@ -25,7 +25,7 @@ export type ClickClackAccountConfig = {
 };
 
 /** Root ClickClack channel config with optional named accounts. */
-export type ClickClackConfig = ClickClackAccountConfig & {
+type ClickClackConfig = ClickClackAccountConfig & {
   accounts?: Record<string, Partial<ClickClackAccountConfig>>;
   defaultAccount?: string;
 };

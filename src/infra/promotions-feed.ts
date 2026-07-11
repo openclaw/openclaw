@@ -194,7 +194,7 @@ export function markPromotionSlugsNotified(slugs: Iterable<string>): void {
   }
 }
 
-export function isPromotionWindowLive(
+function isPromotionWindowLive(
   entry: Pick<ClawHubPromotionsFeedEntry, "startsAt" | "endsAt">,
   nowMs: number,
 ): boolean {

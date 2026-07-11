@@ -26,6 +26,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   cloneFirstTemplateModel,
+  modelCostsEqual,
   NATIVE_ANTHROPIC_REPLAY_HOOKS,
   type ProviderPlugin,
   resolveClaudeFable5ModelIdentity,
@@ -53,6 +54,11 @@ import {
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import {
+  createClaudeSessionNodeHostCommands,
+  createClaudeSessionNodeInvokePolicies,
+  registerClaudeSessionCatalog,
+} from "./session-catalog.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
@@ -592,12 +598,7 @@ function applyAnthropicSonnet5Cost(params: {
     return undefined;
   }
   const cost = resolveAnthropicSonnet5Cost();
-  if (
-    params.model.cost.input === cost.input &&
-    params.model.cost.output === cost.output &&
-    params.model.cost.cacheRead === cost.cacheRead &&
-    params.model.cost.cacheWrite === cost.cacheWrite
-  ) {
+  if (modelCostsEqual(params.model.cost, cost)) {
     return undefined;
   }
   return { ...params.model, cost };
@@ -927,4 +928,11 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   api.registerCliBackend(buildAnthropicCliBackend());
   api.registerProvider(buildAnthropicProvider());
   api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
+  registerClaudeSessionCatalog(api);
+  for (const command of createClaudeSessionNodeHostCommands()) {
+    api.registerNodeHostCommand(command);
+  }
+  for (const policy of createClaudeSessionNodeInvokePolicies()) {
+    api.registerNodeInvokePolicy(policy);
+  }
 }

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -9,6 +8,7 @@ import {
   type ErrorShape,
   errorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -16,13 +16,18 @@ import {
 } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   forkSessionFromParent,
+  MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE,
   resolveParentForkDecision,
 } from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.js";
+import {
+  createSessionEntryWithTranscript,
+  resolveSessionEntryAccessTarget,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -35,6 +40,12 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
+import {
+  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+  isAgentHarnessSessionKey,
+  isAgentHarnessSessionKeyOwnedBy,
+} from "../sessions/agent-harness-session-key.js";
+import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
@@ -107,9 +118,7 @@ export function buildDashboardSessionKey(agentId: string): string {
   return `agent:${agentId}:dashboard:${randomUUID()}`;
 }
 
-function inheritSessionRuntimeSelection(
-  parentEntry: SessionEntry | undefined,
-): Partial<SessionEntry> {
+function inheritSessionSelection(parentEntry: SessionEntry | undefined): Partial<SessionEntry> {
   if (!parentEntry) {
     return {};
   }
@@ -122,8 +131,6 @@ function inheritSessionRuntimeSelection(
     ...(parentEntry.agentRuntimeOverride
       ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
       : {}),
-    ...(parentEntry.modelProvider ? { modelProvider: parentEntry.modelProvider } : {}),
-    ...(parentEntry.model ? { model: parentEntry.model } : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
     ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
     ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
@@ -146,12 +153,20 @@ type CreatedGatewaySession = {
   storePath: string;
 };
 
+type TrustedInitialSessionEntry = {
+  agentHarnessId: NonNullable<SessionEntry["agentHarnessId"]>;
+  initializationPending?: true;
+  modelSelectionLocked?: true;
+  pluginExtensions?: SessionEntry["pluginExtensions"];
+};
+
 type CreateGatewaySessionResult =
   | {
       ok: true;
       key: string;
       agentId: string;
       entry: SessionEntry;
+      resolved: { modelProvider: string; model: string };
       resetExisting: boolean;
     }
   | { ok: false; error: ErrorShape };
@@ -164,12 +179,20 @@ export async function createGatewaySession(params: {
   model?: string;
   parentSessionKey?: string;
   spawnedCwd?: string;
+  /** Managed worktree bound to the new session; persisted alongside spawnedCwd. */
+  worktree?: { id: string; branch: string; repoRoot: string };
+  /** Bind session exec to host=node with this node id; caller scope-checks. */
+  execNode?: string;
   clearSpawnedCwd?: boolean;
   fork?: boolean;
   emitCommandHooks?: boolean;
   resetMainWhenUnspecified?: boolean;
   commandSource: string;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  /** Trusted in-process initializer; never populated from public Gateway params. */
+  initialEntry?: TrustedInitialSessionEntry;
+  /** Exact harness namespace authorized by the scoped plugin runtime. */
+  authorizedAgentHarnessId?: string;
   afterCreate?: (created: CreatedGatewaySession) => Promise<void>;
 }): Promise<CreateGatewaySessionResult> {
   const requestedKey = normalizeOptionalString(params.key);
@@ -202,6 +225,29 @@ export async function createGatewaySession(params: {
           mainKey: params.cfg.session?.mainKey,
         })
     : undefined;
+
+  const authorizedHarnessCreation = Boolean(
+    explicitTargetKey &&
+    params.initialEntry &&
+    normalizeOptionalAgentRuntimeId(params.authorizedAgentHarnessId) ===
+      normalizeOptionalAgentRuntimeId(params.initialEntry.agentHarnessId) &&
+    isAgentHarnessSessionKeyOwnedBy(explicitTargetKey, params.authorizedAgentHarnessId),
+  );
+  const existingHarnessEntry =
+    explicitTargetKey && isAgentHarnessSessionKey(explicitTargetKey)
+      ? resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey: explicitTargetKey }).entry
+      : undefined;
+  if (
+    explicitTargetKey &&
+    isAgentHarnessSessionKey(explicitTargetKey) &&
+    !authorizedHarnessCreation &&
+    (!existingHarnessEntry || existingHarnessEntry.modelSelectionLocked === true)
+  ) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE),
+    };
+  }
 
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   if (params.fork === true && !parentSessionKey) {
@@ -241,6 +287,12 @@ export async function createGatewaySession(params: {
           ErrorCodes.INVALID_REQUEST,
           `unknown parent session: ${parentSessionKey}`,
         ),
+      };
+    }
+    if (isModelSelectionLocked(parent.entry)) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE),
       };
     }
     canonicalParentSessionKey = parent.canonicalKey;
@@ -293,6 +345,8 @@ export async function createGatewaySession(params: {
         reason: "new",
         commandSource: params.commandSource,
         ...(spawnedCwd ? { spawnedCwd } : {}),
+        ...(params.worktree ? { worktree: params.worktree } : {}),
+        ...(params.execNode ? { execNode: params.execNode } : {}),
         ...(params.clearSpawnedCwd && !spawnedCwd ? { clearSpawnedCwd: true } : {}),
       });
       if (!resetResult.ok) {
@@ -303,6 +357,7 @@ export async function createGatewaySession(params: {
         key: resetResult.key,
         agentId: resetResult.agentId,
         entry: resetResult.entry,
+        resolved: resetResult.resolved,
         resetExisting: true,
       };
     }
@@ -334,6 +389,12 @@ export async function createGatewaySession(params: {
         };
       }
       currentParentSessionEntry = currentParentEntry;
+      if (isModelSelectionLocked(currentParentEntry)) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE),
+        };
+      }
       const parentHasActiveWork =
         isEmbeddedAgentRunActive(currentParentEntry.sessionId) ||
         isSessionWorkAdmissionActive(parentSessionTarget.storePath, [
@@ -389,7 +450,38 @@ export async function createGatewaySession(params: {
         sessionKey: target.canonicalKey,
         storePath: target.storePath,
       },
-      async ({ sessionEntries }) => {
+      async ({ existingEntry, sessionEntries }) => {
+        if (
+          isAgentHarnessSessionKey(target.canonicalKey) &&
+          !authorizedHarnessCreation &&
+          (!existingEntry || existingEntry.modelSelectionLocked === true)
+        ) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+            ),
+          };
+        }
+        if (!params.initialEntry && existingEntry?.initializationPending === true) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.UNAVAILABLE,
+              `Session ${target.canonicalKey} is still initializing; retry creation later.`,
+            ),
+          };
+        }
+        if (params.initialEntry && existingEntry !== undefined) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "trusted initial session state requires a new session",
+            ),
+          };
+        }
         const patched = await applySessionsPatchToStore({
           cfg: params.cfg,
           store: sessionEntries,
@@ -401,27 +493,70 @@ export async function createGatewaySession(params: {
             model: normalizeOptionalString(params.model),
           },
           loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+          authorizedAgentHarnessId: params.authorizedAgentHarnessId,
         });
+        if (!patched.ok) {
+          return patched;
+        }
         const spawnedCwd = normalizeOptionalString(params.spawnedCwd);
-        if (patched.ok && spawnedCwd) {
+        const execNode = normalizeOptionalString(params.execNode);
+        const initialAgentHarnessId = params.initialEntry
+          ? normalizeOptionalString(params.initialEntry.agentHarnessId)
+          : undefined;
+        if (params.initialEntry && !initialAgentHarnessId) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "initial agentHarnessId must be non-empty",
+            ),
+          };
+        }
+        if (
+          params.initialEntry?.modelSelectionLocked !== undefined &&
+          !params.initialEntry.modelSelectionLocked
+        ) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "initial modelSelectionLocked must be true when provided",
+            ),
+          };
+        }
+        const initializedEntry: SessionEntry = {
+          ...patched.entry,
           // Session worktrees adopt cwd only during admin-gated creation; public patching stays
           // restricted to spawned subagent and ACP lineage.
-          patched.entry.spawnedCwd = spawnedCwd;
-          sessionEntries[target.canonicalKey] = patched.entry;
-        }
-        if (!patched.ok || !canonicalParentSessionKey) {
-          return patched;
+          ...(spawnedCwd ? { spawnedCwd } : {}),
+          ...(params.worktree ? { worktree: params.worktree } : {}),
+          ...(execNode ? { execHost: "node", execNode } : {}),
+          ...(initialAgentHarnessId ? { agentHarnessId: initialAgentHarnessId } : {}),
+          ...(params.initialEntry?.initializationPending === true
+            ? { initializationPending: true }
+            : {}),
+          ...(params.initialEntry?.modelSelectionLocked === true
+            ? { modelSelectionLocked: true }
+            : {}),
+          ...(params.initialEntry?.pluginExtensions !== undefined
+            ? { pluginExtensions: structuredClone(params.initialEntry.pluginExtensions) }
+            : {}),
+        };
+        sessionEntries[target.canonicalKey] = initializedEntry;
+        const initialized = { ...patched, entry: initializedEntry };
+        if (!canonicalParentSessionKey) {
+          return initialized;
         }
         const inheritedSelection = normalizeOptionalString(params.model)
           ? {}
-          : inheritSessionRuntimeSelection(currentParentSessionEntry);
+          : inheritSessionSelection(currentParentSessionEntry);
         const entry: SessionEntry = {
-          ...patched.entry,
+          ...initializedEntry,
           ...inheritedSelection,
           parentSessionKey: canonicalParentSessionKey,
         };
         if (params.fork !== true) {
-          return { ...patched, entry };
+          return { ...initialized, entry };
         }
         if (!currentParentSessionEntry || !parentSessionTarget) {
           return {
@@ -449,9 +584,11 @@ export async function createGatewaySession(params: {
         const fork = await forkSessionFromParent({
           parentEntry: currentParentSessionEntry,
           agentId: parentSessionTarget.agentId,
-          sessionsDir: path.dirname(parentSessionTarget.storePath),
+          parentSessionKey: canonicalParentSessionKey,
+          sessionKey: target.canonicalKey,
+          storePath: parentSessionTarget.storePath,
           // Keep the fork transcript owned by the child store across agent boundaries.
-          targetSessionsDir: path.dirname(target.storePath),
+          targetStorePath: target.storePath,
         });
         if (!fork) {
           return {
@@ -460,7 +597,7 @@ export async function createGatewaySession(params: {
           };
         }
         return {
-          ...patched,
+          ...initialized,
           entry: {
             ...entry,
             sessionId: fork.sessionId,
@@ -471,6 +608,12 @@ export async function createGatewaySession(params: {
           },
         };
       },
+      params.initialEntry
+        ? {
+            activeSessionKey: target.canonicalKey,
+            requireWriteSuccess: true,
+          }
+        : undefined,
     );
     if (!created.ok) {
       return {
@@ -518,11 +661,17 @@ export async function createGatewaySession(params: {
       });
     }
 
+    const selectedModel = resolveSessionModelRef(params.cfg, created.entry, target.agentId);
+
     return {
       ok: true,
       key: target.canonicalKey,
       agentId: target.agentId,
       entry: created.entry,
+      resolved: {
+        modelProvider: selectedModel.provider,
+        model: selectedModel.model,
+      },
       resetExisting: false,
     };
   };

@@ -6,6 +6,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   createActiveRun,
@@ -171,6 +172,12 @@ async function createTranscriptFixture(prefix: string) {
   const sessionId = "sess-main";
   const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
   await writeTranscriptHeader(transcriptPath, sessionId);
+  // The accessor resolves transcript targets from the persisted store, so the
+  // fixture seeds a real entry instead of relying on the mocked gateway wrapper.
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: "main", storePath: path.join(dir, "sessions.json") },
+    { sessionId, sessionFile: transcriptPath, updatedAt: Date.now() },
+  );
   setMockSessionEntry(transcriptPath, sessionId);
   return { transcriptPath, sessionId };
 }

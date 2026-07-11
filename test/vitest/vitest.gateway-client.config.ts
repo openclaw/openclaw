@@ -1,7 +1,7 @@
 // Vitest gateway client config wires the gateway client test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
-export function createGatewayClientVitestConfig(env?: Record<string, string | undefined>) {
+function createGatewayClientVitestConfig(env?: Record<string, string | undefined>) {
   return createScopedVitestConfig(
     [
       "packages/gateway-client/src/**/*.test.ts",

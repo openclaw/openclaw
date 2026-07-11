@@ -78,8 +78,8 @@ struct LocalChatFixture {
         subject: "Mobile command center",
         workspace: "OpenClaw",
         modelProvider: "openai",
-        modelID: "gpt-5.5",
-        modelName: "GPT-5.5",
+        modelID: "gpt-5.6-sol",
+        modelName: "GPT-5.6 Sol",
         responsePrefix: "OpenClaw is connected to your gateway.",
         seedMessages: ProcessInfo.processInfo.arguments.contains("--openclaw-empty-chat-fixture")
             ? []
@@ -91,7 +91,7 @@ struct LocalChatFixture {
                 identity: ["emoji": AnyCodable("M")],
                 workspace: "OpenClaw",
                 workspacegit: false,
-                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.5")],
+                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.6-sol")],
                 agentruntime: ["kind": AnyCodable("gateway")],
                 thinkinglevels: nil,
                 thinkingoptions: ["auto", "low", "medium", "high"],
@@ -102,7 +102,7 @@ struct LocalChatFixture {
                 identity: ["emoji": AnyCodable("RS")],
                 workspace: "OpenClaw",
                 workspacegit: false,
-                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.5")],
+                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.6-sol")],
                 agentruntime: ["kind": AnyCodable("gateway")],
                 thinkinglevels: nil,
                 thinkingoptions: ["auto", "low", "medium", "high"],
@@ -113,7 +113,7 @@ struct LocalChatFixture {
                 identity: ["emoji": AnyCodable("AU")],
                 workspace: "OpenClaw",
                 workspacegit: false,
-                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.5")],
+                model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.6-sol")],
                 agentruntime: ["kind": AnyCodable("gateway")],
                 thinkinglevels: nil,
                 thinkingoptions: ["auto", "low", "medium", "high"],
@@ -270,6 +270,17 @@ struct AppleReviewDemoChatTransport: OpenClawChatTransport {
 
     func setSessionModel(sessionKey: String, model: String?) async throws {
         try await self.transport.setSessionModel(sessionKey: sessionKey, model: model)
+    }
+
+    func patchSessionModel(
+        sessionKey: String,
+        agentID: String?,
+        model: String?) async throws -> OpenClawChatModelPatchResult?
+    {
+        try await self.transport.patchSessionModel(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            model: model)
     }
 
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws {
