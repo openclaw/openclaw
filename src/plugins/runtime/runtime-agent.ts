@@ -24,6 +24,7 @@ import {
   patchSessionEntry as patchAccessorSessionEntry,
   replaceSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
+  rollbackPluginOwnedSessionEntryLifecycle,
   type SessionAccessScope,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -374,11 +375,16 @@ async function createSessionEntry(
               storeKeys: [callbackContext.key],
             },
           };
-          // Locked rows require the narrow harness rollback capability. Unlocked
+          // Locked rows require owner-specific rollback capabilities. Unlocked
           // initializers stay on the ordinary guarded lifecycle deletion path.
           const rolledBack =
             expectedEntry.modelSelectionLocked === true
-              ? await rollbackAgentHarnessSessionEntryLifecycle(rollbackParams)
+              ? expectedEntry.agentHarnessId
+                ? await rollbackAgentHarnessSessionEntryLifecycle(rollbackParams)
+                : await rollbackPluginOwnedSessionEntryLifecycle({
+                    ...rollbackParams,
+                    expectedPluginOwnerId: cliInitial?.pluginOwnerId ?? "",
+                  })
               : await deleteSessionEntryLifecycle(rollbackParams);
           if (!rolledBack.deleted) {
             throw new Error(`created session ${callbackContext.key} changed before rollback`, {

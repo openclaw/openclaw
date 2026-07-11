@@ -66,6 +66,7 @@ import {
   resolveSqliteSessionKeyBySessionId,
   resolveSqliteSessionParentForkDecision,
   rollbackSqliteAgentHarnessSessionEntryLifecycle,
+  rollbackSqlitePluginOwnedSessionEntryLifecycle,
   resetSqliteSessionEntryLifecycle,
   updateSqliteSessionEntry,
   upsertSqliteSessionEntry,
@@ -1899,6 +1900,16 @@ export async function rollbackAgentHarnessSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams & { expectedEntry: SessionEntry },
 ): Promise<DeleteSessionEntryLifecycleResult> {
   return await rollbackSqliteAgentHarnessSessionEntryLifecycle(params);
+}
+
+/** Internal exact-row rollback for failed trusted plugin-owned CLI initialization. */
+export async function rollbackPluginOwnedSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams & {
+    expectedEntry: SessionEntry;
+    expectedPluginOwnerId: string;
+  },
+): Promise<DeleteSessionEntryLifecycleResult> {
+  return await rollbackSqlitePluginOwnedSessionEntryLifecycle(params);
 }
 
 /** Applies exact entry lifecycle mutations and artifact cleanup at the storage boundary. */

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql, type Selectable } from "kysely";
 import type { AgentMessage } from "../../agents/runtime/index.js";
@@ -24,6 +25,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import {
+  isAgentHarnessSessionKey,
   isValidAgentHarnessSessionStoreEntry,
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
@@ -1020,6 +1022,32 @@ export async function rollbackSqliteAgentHarnessSessionEntryLifecycle(
     !isValidAgentHarnessSessionStoreEntry(params.target.canonicalKey, params.expectedEntry)
   ) {
     throw new Error(expectedEntryError ?? MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+  }
+  return await deleteSqliteSessionEntryLifecycleInternal(params, true);
+}
+
+/** Rolls back one exact locked CLI row created by a failed plugin initializer. */
+export async function rollbackSqlitePluginOwnedSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams & {
+    expectedEntry: SessionEntry;
+    expectedPluginOwnerId: string;
+  },
+): Promise<DeleteSessionEntryLifecycleResult> {
+  const hasExactTarget =
+    params.target.storeKeys.length === 1 &&
+    params.target.storeKeys[0] === params.target.canonicalKey;
+  const expectedEntry = params.expectedEntry;
+  const validPluginOwner = normalizeOptionalString(expectedEntry.pluginOwnerId);
+  const expectedPluginOwner = normalizeOptionalString(params.expectedPluginOwnerId);
+  if (
+    !hasExactTarget ||
+    isAgentHarnessSessionKey(params.target.canonicalKey) ||
+    expectedEntry.agentHarnessId !== undefined ||
+    expectedEntry.modelSelectionLocked !== true ||
+    !validPluginOwner ||
+    validPluginOwner !== expectedPluginOwner
+  ) {
+    throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
   return await deleteSqliteSessionEntryLifecycleInternal(params, true);
 }
