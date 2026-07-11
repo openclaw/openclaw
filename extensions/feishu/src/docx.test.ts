@@ -447,6 +447,32 @@ describe("feishu_doc image fetch hardening", () => {
     consoleErrorSpy.mockRestore();
   });
 
+  it("uses the selected account timeout for markdown image URL reads", async () => {
+    resolveFeishuToolAccountMock.mockReturnValue({
+      config: { mediaMaxMb: 30, httpTimeoutMs: 1_234 },
+    });
+    readRemoteMediaBufferMock.mockResolvedValueOnce({
+      buffer: Buffer.from("remote image", "utf8"),
+      fileName: "remote.png",
+    });
+
+    const feishuDocTool = resolveFeishuDocTool();
+
+    await executeFeishuDocTool(feishuDocTool, {
+      action: "write",
+      doc_token: "doc_1",
+      content: "![x](https://x.test/non-default-timeout.png)",
+    });
+
+    expect(readRemoteMediaBufferMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://x.test/non-default-timeout.png",
+        timeoutMs: 1_234,
+        readIdleTimeoutMs: 1_234,
+      }),
+    );
+  });
+
   it("create grants permission only to trusted Feishu requester", async () => {
     const feishuDocTool = resolveFeishuDocTool({
       messageChannel: "feishu",

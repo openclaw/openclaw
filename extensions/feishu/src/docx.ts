@@ -11,7 +11,7 @@ import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
-import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
+import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
 import { BATCH_SIZE, insertBlocksInBatches } from "./docx-batch-insert.js";
 import { updateColorText } from "./docx-color-text.js";
@@ -508,17 +508,21 @@ async function uploadImageToDocx(
   return fileToken;
 }
 
-async function downloadImage(url: string, maxBytes: number): Promise<Buffer> {
-  const fetched = await readRemoteDocxImage(url, maxBytes);
+async function downloadImage(
+  url: string,
+  maxBytes: number,
+  imageReadTimeoutMs: number,
+): Promise<Buffer> {
+  const fetched = await readRemoteDocxImage(url, maxBytes, imageReadTimeoutMs);
   return fetched.buffer;
 }
 
-async function readRemoteDocxImage(url: string, maxBytes: number) {
+async function readRemoteDocxImage(url: string, maxBytes: number, imageReadTimeoutMs: number) {
   return await getFeishuRuntime().channel.media.readRemoteMediaBuffer({
     url,
     maxBytes,
-    timeoutMs: FEISHU_HTTP_TIMEOUT_MS,
-    readIdleTimeoutMs: FEISHU_HTTP_TIMEOUT_MS,
+    timeoutMs: imageReadTimeoutMs,
+    readIdleTimeoutMs: imageReadTimeoutMs,
   });
 }
 
@@ -676,6 +680,7 @@ async function processImages(
   markdown: string,
   insertedBlocks: FeishuDocxBlockChild[],
   maxBytes: number,
+  imageReadTimeoutMs: number,
 ): Promise<number> {
   const imageUrls = extractImageUrls(markdown);
   if (imageUrls.length === 0) {
@@ -693,7 +698,7 @@ async function processImages(
     }
 
     try {
-      const buffer = await downloadImage(url, maxBytes);
+      const buffer = await downloadImage(url, maxBytes, imageReadTimeoutMs);
       const urlPath = new URL(url).pathname;
       const fileName = urlPath.split("/").pop() || `image_${i}.png`;
       const fileToken = await uploadImageToDocx(client, blockId, buffer, fileName, docToken);
@@ -718,6 +723,7 @@ async function uploadImageBlock(
   client: Lark.Client,
   docToken: string,
   maxBytes: number,
+  imageReadTimeoutMs: number,
   localRoots?: readonly string[],
   url?: string,
   filePath?: string,
@@ -748,7 +754,8 @@ async function uploadImageBlock(
     maxBytes,
     localRoots,
     filename,
-    readRemoteDocxImage,
+    (remoteUrl, remoteMaxBytes) =>
+      readRemoteDocxImage(remoteUrl, remoteMaxBytes, imageReadTimeoutMs),
     imageInput,
   );
   const fileToken = await uploadImageToDocx(
@@ -972,6 +979,7 @@ async function writeDoc(
   docToken: string,
   markdown: string,
   maxBytes: number,
+  imageReadTimeoutMs: number,
   logger?: Logger,
 ) {
   const deleted = await clearDocumentContent(client, docToken);
@@ -987,7 +995,14 @@ async function writeDoc(
     blocks.length > BATCH_SIZE
       ? await insertBlocksInBatches(client, docToken, orderedBlocks, rootIds, logger)
       : await insertBlocksWithDescendant(client, docToken, orderedBlocks, rootIds);
-  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
+  const imagesProcessed = await processImages(
+    client,
+    docToken,
+    markdown,
+    inserted,
+    maxBytes,
+    imageReadTimeoutMs,
+  );
   logger?.info?.(`feishu_doc: Done (${blocks.length} blocks, ${imagesProcessed} images)`);
 
   return {
@@ -1003,6 +1018,7 @@ async function appendDoc(
   docToken: string,
   markdown: string,
   maxBytes: number,
+  imageReadTimeoutMs: number,
   logger?: Logger,
 ) {
   logger?.info?.("feishu_doc: Converting markdown...");
@@ -1017,7 +1033,14 @@ async function appendDoc(
     blocks.length > BATCH_SIZE
       ? await insertBlocksInBatches(client, docToken, orderedBlocks, rootIds, logger)
       : await insertBlocksWithDescendant(client, docToken, orderedBlocks, rootIds);
-  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
+  const imagesProcessed = await processImages(
+    client,
+    docToken,
+    markdown,
+    inserted,
+    maxBytes,
+    imageReadTimeoutMs,
+  );
   logger?.info?.(`feishu_doc: Done (${blocks.length} blocks, ${imagesProcessed} images)`);
 
   return {
@@ -1034,6 +1057,7 @@ async function insertDoc(
   markdown: string,
   afterBlockId: string,
   maxBytes: number,
+  imageReadTimeoutMs: number,
   logger?: Logger,
 ) {
   const blockInfo = await client.docx.documentBlock.get({
@@ -1097,7 +1121,14 @@ async function insertDoc(
           index: insertIndex,
         });
 
-  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
+  const imagesProcessed = await processImages(
+    client,
+    docToken,
+    markdown,
+    inserted,
+    maxBytes,
+    imageReadTimeoutMs,
+  );
   logger?.info?.(`feishu_doc: Done (${blocks.length} blocks, ${imagesProcessed} images)`);
 
   return {
@@ -1423,6 +1454,19 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     1024 *
     1024;
 
+  const getImageReadTimeoutMs = (
+    params: { accountId?: string } | undefined,
+    defaultAccountId?: string,
+  ) =>
+    resolveConfiguredHttpTimeoutMs(
+      resolveFeishuToolAccount({
+        api,
+        executeParams: params,
+        defaultAccountId,
+        requiredTool: { family: "doc", label: "Doc" },
+      }),
+    );
+
   // Main document tool with action-based dispatch
   if (toolsCfg.doc) {
     api.registerTool(
@@ -1453,6 +1497,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       p.doc_token,
                       p.content,
                       getMediaMaxBytes(p, defaultAccountId),
+                      getImageReadTimeoutMs(p, defaultAccountId),
                       api.logger,
                     ),
                   );
@@ -1463,6 +1508,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       p.doc_token,
                       p.content,
                       getMediaMaxBytes(p, defaultAccountId),
+                      getImageReadTimeoutMs(p, defaultAccountId),
                       api.logger,
                     ),
                   );
@@ -1474,6 +1520,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       p.content,
                       p.after_block_id,
                       getMediaMaxBytes(p, defaultAccountId),
+                      getImageReadTimeoutMs(p, defaultAccountId),
                       api.logger,
                     ),
                   );
@@ -1525,6 +1572,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       client,
                       p.doc_token,
                       getMediaMaxBytes(p, defaultAccountId),
+                      getImageReadTimeoutMs(p, defaultAccountId),
                       mediaLocalRoots,
                       p.url,
                       p.file_path,
