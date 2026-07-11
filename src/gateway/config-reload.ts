@@ -98,6 +98,14 @@ type GatewayConfigReloader = {
 
 type PluginInstallRecords = Record<string, PluginInstallRecord>;
 
+type InProcessConfigCandidate = {
+  config: OpenClawConfig;
+  compareConfig: OpenClawConfig;
+  persistedHash: string;
+  afterWrite?: ConfigWriteNotification["afterWrite"];
+  epoch: number;
+};
+
 export type GatewayConfigReloadTransactionOwnership = {
   isCurrent: () => boolean;
 };
@@ -168,13 +176,9 @@ export function startGatewayConfigReloader(opts: {
   const activeReloads = new Set<Promise<void>>();
   let missingConfigRetries = 0;
   let configWriteEpoch = 0;
-  let pendingInProcessConfig: {
-    config: OpenClawConfig;
-    compareConfig: OpenClawConfig;
-    persistedHash: string;
-    afterWrite?: ConfigWriteNotification["afterWrite"];
-    epoch: number;
-  } | null = null;
+  let pendingInProcessConfig: InProcessConfigCandidate | null = null;
+  let activeInProcessConfig: InProcessConfigCandidate | null = null;
+  let watcherIntentCandidate: InProcessConfigCandidate | null = null;
   let lastAppliedWriteHash = opts.initialInternalWriteHash ?? null;
   let currentPluginInstallRecords =
     opts.initialPluginInstallRecords ?? loadInstalledPluginIndexInstallRecordsSync();
@@ -436,6 +440,7 @@ export function startGatewayConfigReloader(opts: {
       if (pendingInProcessConfig) {
         const pendingWrite = pendingInProcessConfig;
         pendingInProcessConfig = null;
+        activeInProcessConfig = pendingWrite;
         missingConfigRetries = 0;
         try {
           await runAcceptedTransaction(async () => {
@@ -445,26 +450,81 @@ export function startGatewayConfigReloader(opts: {
               pendingWrite.afterWrite,
               pendingWrite.epoch,
             );
+            if (activeInProcessConfig === pendingWrite) {
+              activeInProcessConfig = null;
+            }
             await promoteAcceptedInProcessWrite(pendingWrite.persistedHash);
           });
         } catch (err) {
           if (lastAppliedWriteHash === pendingWrite.persistedHash) {
             lastAppliedWriteHash = null;
           }
+          if (
+            configWriteEpoch === pendingWrite.epoch &&
+            !pendingInProcessConfig &&
+            !watcherIntentCandidate
+          ) {
+            watcherIntentCandidate = pendingWrite;
+          }
           throw err;
+        } finally {
+          if (activeInProcessConfig === pendingWrite) {
+            activeInProcessConfig = null;
+          }
         }
         return;
       }
       const transactionEpoch = configWriteEpoch;
+      const intentCandidate = watcherIntentCandidate;
       const snapshot = await opts.readSnapshot();
+      if (configWriteEpoch !== transactionEpoch) {
+        throw new GatewayConfigReloadSupersededError();
+      }
+      if (handleMissingSnapshot(snapshot)) {
+        return;
+      }
+      if (
+        intentCandidate &&
+        snapshot.valid &&
+        snapshot.hash === intentCandidate.persistedHash &&
+        diffConfigPaths(intentCandidate.compareConfig, snapshot.sourceConfig).length === 0
+      ) {
+        lastAppliedWriteHash = intentCandidate.persistedHash;
+        try {
+          await runAcceptedTransaction(async () => {
+            await applySnapshot(
+              intentCandidate.config,
+              intentCandidate.compareConfig,
+              intentCandidate.afterWrite,
+              transactionEpoch,
+            );
+            if (watcherIntentCandidate === intentCandidate) {
+              watcherIntentCandidate = null;
+            }
+            await promoteAcceptedSnapshot(snapshot, "in-process-write");
+          });
+        } catch (err) {
+          if (lastAppliedWriteHash === intentCandidate.persistedHash) {
+            lastAppliedWriteHash = null;
+          }
+          if (configWriteEpoch === transactionEpoch && !watcherIntentCandidate) {
+            watcherIntentCandidate = intentCandidate;
+          }
+          throw err;
+        }
+        return;
+      }
+      if (watcherIntentCandidate === intentCandidate) {
+        watcherIntentCandidate = null;
+      }
+      if (intentCandidate && lastAppliedWriteHash === intentCandidate.persistedHash) {
+        lastAppliedWriteHash = null;
+      }
       if (lastAppliedWriteHash && typeof snapshot.hash === "string") {
         if (snapshot.hash === lastAppliedWriteHash) {
           return;
         }
         lastAppliedWriteHash = null;
-      }
-      if (handleMissingSnapshot(snapshot)) {
-        return;
       }
       if (!snapshot.valid) {
         handleInvalidSnapshot(snapshot);
@@ -500,10 +560,19 @@ export function startGatewayConfigReloader(opts: {
     // Revoke the transaction synchronously. The debounced reread owns this new
     // epoch; a slow prior reload must not publish after a newer disk write.
     configWriteEpoch += 1;
+    const pendingCandidate = pendingInProcessConfig;
+    const activeCandidate = activeInProcessConfig;
+    const newestLiveCandidate =
+      pendingCandidate && (!activeCandidate || pendingCandidate.epoch > activeCandidate.epoch)
+        ? pendingCandidate
+        : activeCandidate;
+    if (
+      newestLiveCandidate &&
+      (!watcherIntentCandidate || newestLiveCandidate.epoch > watcherIntentCandidate.epoch)
+    ) {
+      watcherIntentCandidate = newestLiveCandidate;
+    }
     if (pendingInProcessConfig) {
-      if (lastAppliedWriteHash === pendingInProcessConfig.persistedHash) {
-        lastAppliedWriteHash = null;
-      }
       pendingInProcessConfig = null;
     }
     schedule();
@@ -515,6 +584,7 @@ export function startGatewayConfigReloader(opts: {
         return;
       }
       configWriteEpoch += 1;
+      watcherIntentCandidate = null;
       pendingInProcessConfig = {
         config: event.runtimeConfig,
         compareConfig: event.sourceConfig,

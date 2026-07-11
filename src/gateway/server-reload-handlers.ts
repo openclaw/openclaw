@@ -566,6 +566,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             restartReasons: [`hot reload recovery: ${surface}`],
           },
           nextConfig,
+          // Recovery debt represents a failed runtime surface, not every path
+          // in the hot plan. Keep it until a replacement restart commits.
+          { retainDebtAcrossConfigChanges: true },
         );
         restartTransaction.settle("committed");
         // Immediate emission failure already owns a lifecycle retry. The runtime
@@ -874,6 +877,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     plan: GatewayReloadPlan;
     nextConfig: OpenClawConfig;
     restartOwnedPaths: string[];
+    retainDebtAcrossConfigChanges: boolean;
   };
   let restartRequestDetails: RestartRequestDetails | null = null;
   let pausedRestartDebt: RestartRequestDetails | null = null;
@@ -951,18 +955,19 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const retainsRestartDebt =
       debt &&
       acceptedConfig &&
-      debt.restartOwnedPaths.every((path) =>
-        isDeepStrictEqual(
-          getConfigValueAtPath(
-            debt.nextConfig as unknown as Record<string, unknown>,
-            path.split("."),
+      (debt.retainDebtAcrossConfigChanges ||
+        debt.restartOwnedPaths.every((path) =>
+          isDeepStrictEqual(
+            getConfigValueAtPath(
+              debt.nextConfig as unknown as Record<string, unknown>,
+              path.split("."),
+            ),
+            getConfigValueAtPath(
+              acceptedConfig as unknown as Record<string, unknown>,
+              path.split("."),
+            ),
           ),
-          getConfigValueAtPath(
-            acceptedConfig as unknown as Record<string, unknown>,
-            path.split("."),
-          ),
-        ),
-      );
+        ));
     if (retainsRestartDebt) {
       return { retireRejectedRestart: false, debt };
     }
@@ -1132,6 +1137,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   const requestGatewayRestart = (
     plan: GatewayReloadPlan,
     nextConfig: OpenClawConfig,
+    options?: { retainDebtAcrossConfigChanges?: boolean },
   ): GatewayRestartTransactionResult => {
     // Only another restart requirement supersedes accepted restart work. A
     // duplicate, hot-only, or failed config transaction must preserve it.
@@ -1147,6 +1153,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       nextConfig,
       restartOwnedPaths:
         explicitRestartPaths.length > 0 ? explicitRestartPaths : [...plan.changedPaths],
+      retainDebtAcrossConfigChanges: options?.retainDebtAcrossConfigChanges === true,
     };
     const accepted = requestGatewayRestartForGeneration(plan, nextConfig, restartRequestGeneration);
     return {
@@ -1234,6 +1241,7 @@ export function startManagedGatewayConfigReloader(
     plan: GatewayReloadPlan,
     nextConfig: OpenClawConfig,
     transactionOwnership: GatewayConfigReloadTransactionOwnership,
+    restartOptions?: { retainDebtAcrossConfigChanges?: boolean },
   ) => {
     const restartLifecycle = beginGatewayRestartLifecycle();
     let preparation:
@@ -1292,7 +1300,7 @@ export function startManagedGatewayConfigReloader(
     let requiredOwnership: SharedGatewaySessionGenerationOwnership | null = null;
     try {
       params.reconcileTerminalSessions(plan, nextConfig);
-      restartTransaction = requestGatewayRestart(plan, nextConfig);
+      restartTransaction = requestGatewayRestart(plan, nextConfig, restartOptions);
       if (restartTransaction.status === "recovery-pending") {
         throw new GatewayHotReloadRecoveryError("config restart");
       }
@@ -1340,7 +1348,9 @@ export function startManagedGatewayConfigReloader(
     onConfigAccepted: async (nextConfig, transactionOwnership) => {
       const acceptedRestart = acceptRestartConfig(nextConfig);
       if (acceptedRestart.debt) {
-        await runManagedRestart(acceptedRestart.debt.plan, nextConfig, transactionOwnership);
+        await runManagedRestart(acceptedRestart.debt.plan, nextConfig, transactionOwnership, {
+          retainDebtAcrossConfigChanges: acceptedRestart.debt.retainDebtAcrossConfigChanges,
+        });
       }
       params.acceptTerminalConfig({
         retireRejectedRestart: acceptedRestart.retireRejectedRestart,

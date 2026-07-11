@@ -1526,6 +1526,89 @@ describe("gateway restart deferral preflight", () => {
     }
   });
 
+  it("preserves deferred hot-recovery debt across unrelated accepted config changes", async () => {
+    const requestRecoveryRestart = vi.fn<
+      NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>
+    >(() => ({ status: "emitted" }));
+    const channels = {
+      stop: vi.fn(async () => {}),
+      start: vi.fn(async () => {
+        hoisted.activeTaskBlockers.push({
+          taskId: "discord-recovery-blocker",
+          status: "running",
+          runtime: "subagent",
+        });
+        throw new Error("discord restart failed");
+      }),
+    };
+    const {
+      acceptRestartConfig,
+      applyHotReload,
+      beginGatewayRestartLifecycle,
+      requestGatewayRestart,
+      stopRestartRetries,
+    } = createReloadHandlersForTest(
+      undefined,
+      channels,
+      undefined,
+      undefined,
+      requestRecoveryRestart,
+    );
+    const configA = {
+      channels: { discord: { token: "discord-token-a" } },
+      logging: { level: "info" },
+    } as OpenClawConfig;
+    const configC = {
+      ...configA,
+      logging: { level: "debug" },
+    } as OpenClawConfig;
+    const plan = {
+      changedPaths: ["channels.discord.token", "logging.level"],
+      restartGateway: false,
+      restartReasons: [],
+      hotReasons: ["channels.discord.token"],
+      reloadHooks: false,
+      restartGmailWatcher: false,
+      restartCron: false,
+      restartHeartbeat: false,
+      restartHealthMonitor: false,
+      reloadPlugins: false,
+      restartChannels: new Set<ChannelKind>(["discord"]),
+      disposeMcpRuntimes: false,
+      noopPaths: ["logging.level"],
+    } satisfies GatewayReloadPlan;
+    vi.useFakeTimers();
+
+    try {
+      await applyHotReload(plan, configA);
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+
+      const rejectedReplacement = beginGatewayRestartLifecycle();
+      rejectedReplacement.settle("rejected");
+      hoisted.activeTaskBlockers.length = 0;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+
+      const accepted = acceptRestartConfig(configC);
+      expect(accepted.retireRejectedRestart).toBe(false);
+      expect(accepted.debt).toBeDefined();
+      if (!accepted.debt) {
+        throw new Error("Expected hot-recovery restart debt");
+      }
+      const rearmed = requestGatewayRestart(accepted.debt.plan, configC, {
+        retainDebtAcrossConfigChanges: accepted.debt.retainDebtAcrossConfigChanges,
+      });
+      rearmed.settle("committed");
+
+      expect(requestRecoveryRestart.mock.calls).toEqual([
+        ["config reload: hot reload recovery: channel restart (discord)"],
+      ]);
+    } finally {
+      hoisted.activeTaskBlockers.length = 0;
+      stopRestartRetries();
+    }
+  });
+
   it("cancels a failed restart retry when a newer restart supersedes it", async () => {
     const requestRecoveryRestart = vi
       .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()

@@ -1894,6 +1894,333 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it.each([
+    {
+      label: "none",
+      afterWrite: { mode: "none" as const, reason: "caller handles follow-up" },
+    },
+    {
+      label: "restart",
+      afterWrite: { mode: "restart" as const, reason: "plugin runtime contract changed" },
+    },
+  ])("preserves slow in-process $label intent across its watcher echo", async (testCase) => {
+    const hash = `slow-${testCase.label}`;
+    let releasePluginRead = () => {};
+    let recordPluginReadStarted: (() => void) | undefined;
+    const pluginReadStarted = new Promise<void>((resolve) => {
+      recordPluginReadStarted = resolve;
+    });
+    const pluginReadGate = new Promise<void>((resolve) => {
+      releasePluginRead = resolve;
+    });
+    const readPluginInstallRecords = vi.fn(async () => {
+      recordPluginReadStarted?.();
+      await pluginReadGate;
+      return {};
+    });
+    const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot(hash));
+    const promoteSnapshot = vi.fn(async () => true);
+    const harness = createReloaderHarness(readSnapshot, {
+      promoteSnapshot,
+      readPluginInstallRecords,
+    });
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite(hash),
+      afterWrite: testCase.afterWrite,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await pluginReadStarted;
+
+    harness.watcher.emit("change");
+    releasePluginRead();
+    await vi.runAllTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledOnce();
+    expect(readPluginInstallRecords).toHaveBeenCalledTimes(2);
+    expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+    expect(promoteSnapshot).toHaveBeenCalledOnce();
+    expect(promoteSnapshot.mock.calls[0]?.[1]).toBe("in-process-write");
+    if (testCase.afterWrite.mode === "none") {
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      expect(harness.onRestart).not.toHaveBeenCalled();
+      expect(harness.log.info).toHaveBeenCalledWith(
+        "config reload skipped by writer intent (caller handles follow-up)",
+      );
+    } else {
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      const [plan] = getOnlyRestartCall(harness);
+      expect(plan.restartReasons).toEqual(["plugin runtime contract changed"]);
+    }
+
+    await harness.reloader.stop();
+  });
+
+  it("discards slow in-process intent when the watcher proves different bytes", async () => {
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+    } satisfies OpenClawConfig;
+    let releasePluginRead = () => {};
+    let recordPluginReadStarted: (() => void) | undefined;
+    const pluginReadStarted = new Promise<void>((resolve) => {
+      recordPluginReadStarted = resolve;
+    });
+    const pluginReadGate = new Promise<void>((resolve) => {
+      releasePluginRead = resolve;
+    });
+    const readPluginInstallRecords = vi.fn(async () => {
+      recordPluginReadStarted?.();
+      await pluginReadGate;
+      return {};
+    });
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({ config: initialConfig, hash: "external-b" }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialConfig,
+      readPluginInstallRecords,
+    });
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("slow-restart-a"),
+      afterWrite: { mode: "restart", reason: "must not survive external B" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await pluginReadStarted;
+
+    harness.watcher.emit("change");
+    releasePluginRead();
+    await vi.runAllTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledOnce();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+    expect(harness.onConfigAccepted.mock.calls[0]?.[0]).toEqual(initialConfig);
+
+    await harness.reloader.stop();
+  });
+
+  it("uses a freshly resolved snapshot when the root hash still matches writer intent", async () => {
+    const freshConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: false },
+    } satisfies OpenClawConfig;
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({
+        config: freshConfig,
+        sourceConfig: freshConfig,
+        runtimeConfig: freshConfig,
+        hash: "same-root-hash",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot);
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("same-root-hash"),
+      afterWrite: { mode: "none", reason: "stale resolved intent" },
+    });
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    const [, hotConfig] = getOnlyHotReloadCall(harness);
+    expect(hotConfig).toEqual(freshConfig);
+    expect(harness.onConfigAccepted).toHaveBeenCalledWith(freshConfig, expect.any(Object));
+    expect(harness.log.info).not.toHaveBeenCalledWith(
+      "config reload skipped by writer intent (stale resolved intent)",
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("preserves writer intent when the runtime notification contains resolved secrets", async () => {
+    const secretRef = {
+      source: "env" as const,
+      provider: "default",
+      id: "GATEWAY_RELOAD_TEST_TOKEN",
+    };
+    const sourceConfig = {
+      gateway: {
+        reload: { debounceMs: 0 },
+        auth: { mode: "token" as const, token: secretRef },
+      },
+    } satisfies OpenClawConfig;
+    const runtimeConfig = {
+      gateway: {
+        reload: { debounceMs: 0 },
+        auth: { mode: "token" as const, token: "resolved-test-token" },
+      },
+    } satisfies OpenClawConfig;
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({
+        config: sourceConfig,
+        sourceConfig,
+        runtimeConfig: sourceConfig,
+        hash: "secret-ref-write",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot);
+
+    harness.emitWrite({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig,
+      runtimeConfig,
+      persistedHash: "secret-ref-write",
+      revision: 1,
+      fingerprint: "runtime-secret-ref-write",
+      sourceFingerprint: "source-secret-ref-write",
+      writtenAtMs: Date.now(),
+      afterWrite: { mode: "none", reason: "secret-aware writer intent" },
+    });
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(harness.onConfigAccepted).toHaveBeenCalledWith(runtimeConfig, expect.any(Object));
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.log.info).toHaveBeenCalledWith(
+      "config reload skipped by writer intent (secret-aware writer intent)",
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("rejects an invalid resolved snapshot even when the root hash matches writer intent", async () => {
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({
+        valid: false,
+        hash: "same-invalid-root-hash",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot);
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("same-invalid-root-hash"),
+      afterWrite: { mode: "restart", reason: "must not replay invalid config" },
+    });
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(harness.onConfigAccepted).not.toHaveBeenCalled();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+
+    await harness.reloader.stop();
+  });
+
+  it("preserves the newest pending write when a watcher supersedes a slow write", async () => {
+    let releasePluginRead = () => {};
+    let recordPluginReadStarted: (() => void) | undefined;
+    const pluginReadStarted = new Promise<void>((resolve) => {
+      recordPluginReadStarted = resolve;
+    });
+    const pluginReadGate = new Promise<void>((resolve) => {
+      releasePluginRead = resolve;
+    });
+    const readPluginInstallRecords = vi.fn(async () => {
+      recordPluginReadStarted?.();
+      await pluginReadGate;
+      return {};
+    });
+    const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot("newer-b"));
+    const harness = createReloaderHarness(readSnapshot, { readPluginInstallRecords });
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("older-a"),
+      afterWrite: { mode: "restart", reason: "obsolete A intent" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await pluginReadStarted;
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("newer-b"),
+      afterWrite: { mode: "none", reason: "newest B intent" },
+    });
+    harness.watcher.emit("change");
+    releasePluginRead();
+    await vi.runAllTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledOnce();
+    expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.log.info).toHaveBeenCalledWith(
+      "config reload skipped by writer intent (newest B intent)",
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("preserves in-process intent through a transient missing-file retry", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(makeSnapshot({ exists: false, valid: false }))
+      .mockResolvedValueOnce(makeZeroDebounceHookSnapshot("missing-retry"));
+    const harness = createReloaderHarness(readSnapshot);
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("missing-retry"),
+      afterWrite: { mode: "none", reason: "intent survives missing file" },
+    });
+    harness.watcher.emit("unlink");
+    await vi.runAllTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.log.info).toHaveBeenCalledWith(
+      "config reload skipped by writer intent (intent survives missing file)",
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("retries failed watcher-replayed intent with the same persisted hash", async () => {
+    const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot("replay-retry"));
+    const harness = createReloaderHarness(readSnapshot);
+    harness.onRestart.mockRejectedValueOnce(new Error("restart admission failed"));
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("replay-retry"),
+      afterWrite: { mode: "restart", reason: "retry original intent" },
+    });
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(harness.onRestart).toHaveBeenCalledTimes(2);
+    expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+
+    await harness.reloader.stop();
+  });
+
+  it("preserves intent when the direct in-process reload fails before its watcher echo", async () => {
+    const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot("direct-retry"));
+    const harness = createReloaderHarness(readSnapshot);
+    harness.onRestart.mockRejectedValueOnce(new Error("restart admission failed"));
+
+    harness.emitWrite({
+      ...makeZeroDebounceHookWrite("direct-retry"),
+      afterWrite: { mode: "restart", reason: "retry direct intent" },
+    });
+    await vi.runAllTimersAsync();
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledOnce();
+    expect(harness.onRestart).toHaveBeenCalledTimes(2);
+    expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+
+    await harness.reloader.stop();
+  });
+
   it("plans in-process reloads from source config and ignores runtime materialized paths", async () => {
     const baseInstall = {
       source: "npm" as const,
