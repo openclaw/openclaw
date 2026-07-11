@@ -611,7 +611,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
             },
           ),
         plannedTarget.surface === "origin" ? "send-approval-channel" : "send-approval",
-        { nonIdempotent: true },
+        { safety: "nonce-protected-create" },
       )) as { id: string; channel_id: string };
       if (!message?.id) {
         if (plannedTarget.surface === "origin") {

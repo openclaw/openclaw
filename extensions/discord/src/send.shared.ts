@@ -372,7 +372,7 @@ async function sendDiscordText(params: DiscordTextSendParams) {
     const result = (await request(
       () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
       "text",
-      { nonIdempotent: true },
+      { safety: "nonce-protected-create" },
     )) as { id: string; channel_id: string };
     return { result, replyToId: chunkReplyTo };
   };
@@ -472,7 +472,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     res = (await request(
       () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
       "media",
-      { nonIdempotent: true },
+      { safety: "nonce-protected-create" },
     )) as { id: string; channel_id: string };
   } catch (err) {
     if (!isDiscordUploadTooLargeError(err)) {

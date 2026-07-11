@@ -487,7 +487,7 @@ export async function sendDiscordVoiceMessage(
         body: messagePayload,
       }) as Promise<{ id: string; channel_id: string }>,
     "voice-message",
-    { nonIdempotent: true },
+    { safety: "nonce-protected-create" },
   )) as { id: string; channel_id: string };
 
   return res;

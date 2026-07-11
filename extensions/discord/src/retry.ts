@@ -47,10 +47,12 @@ const DISCORD_PRECONNECT_ERROR_CODES = new Set([
 ]);
 const log = createSubsystemLogger("discord/retry");
 
+export type DiscordRetrySafety = "idempotent" | "nonce-protected-create" | "non-idempotent-create";
+
 export type DiscordRetryRunner = <T>(
   fn: () => Promise<T>,
   label?: string,
-  options?: { nonIdempotent?: boolean; retryOn502?: boolean },
+  options?: { safety: DiscordRetrySafety },
 ) => Promise<T>;
 
 function readDiscordErrorStatus(err: unknown): number | undefined {
@@ -114,7 +116,7 @@ export function isRetryableDiscordPreConnectError(err: unknown): boolean {
   return false;
 }
 
-export function isRetryableDiscordNonIdempotentError(err: unknown): boolean {
+export function isRetryableDiscordNonceProtectedCreateError(err: unknown): boolean {
   if (
     collectErrorGraphCandidates(err, (current) => [current.cause, current.error]).some(
       (candidate) => readDiscordErrorStatus(candidate) === 502,
@@ -123,6 +125,19 @@ export function isRetryableDiscordNonIdempotentError(err: unknown): boolean {
     return true;
   }
   return isRetryableDiscordPreConnectError(err);
+}
+
+function resolveDiscordRetryPredicate(safety: DiscordRetrySafety) {
+  switch (safety) {
+    case "idempotent":
+      return isRetryableDiscordTransientError;
+    case "nonce-protected-create":
+      // Discord can deduplicate an ambiguous 502 only for Create Message requests
+      // carrying a stable enforced nonce. Other post-connect failures stay fail-closed.
+      return isRetryableDiscordNonceProtectedCreateError;
+    case "non-idempotent-create":
+      return isRetryableDiscordPreConnectError;
+  }
 }
 
 function isRetryableDiscordGatewayTransportError(err: unknown): boolean {
@@ -151,16 +166,8 @@ export function createDiscordRetryRunner(params: {
       ? retryConfig.attempts + DISCORD_GATEWAY_RECONNECT_EXTRA_ATTEMPTS
       : retryConfig.attempts;
 
-  return <T>(
-    fn: () => Promise<T>,
-    label?: string,
-    options?: { nonIdempotent?: boolean; retryOn502?: boolean },
-  ) => {
-    const isRetryable = !options?.nonIdempotent
-      ? isRetryableDiscordTransientError
-      : options.retryOn502 === false
-        ? isRetryableDiscordPreConnectError
-        : isRetryableDiscordNonIdempotentError;
+  return <T>(fn: () => Promise<T>, label?: string, options?: { safety: DiscordRetrySafety }) => {
+    const isRetryable = resolveDiscordRetryPredicate(options?.safety ?? "idempotent");
     let observedGatewayDisconnect = false;
     const runRequest = async () => {
       observedGatewayDisconnect ||= params.isGatewayDisconnected?.() === true;

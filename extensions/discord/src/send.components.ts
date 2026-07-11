@@ -259,8 +259,6 @@ async function buildDiscordComponentPayload(params: {
   const body = stripUndefinedFields({
     ...serializePayload(payload),
     ...(messageReference ? { message_reference: messageReference } : {}),
-    nonce: createDiscordMessageNonce(),
-    enforce_nonce: true,
   });
 
   return { body, buildResult };
@@ -306,11 +304,17 @@ export async function sendDiscordComponentMessage(
     throw new Error("Discord components are not supported in forum-style channels");
   }
 
-  const { body, buildResult } = await buildDiscordComponentPayload({
+  const { body: componentBody, buildResult } = await buildDiscordComponentPayload({
     spec,
     opts,
     accountId: accountInfo.accountId,
   });
+  // Nonce enforcement belongs to Create Message; the shared builder also serves edits.
+  const body = {
+    ...componentBody,
+    nonce: createDiscordMessageNonce(),
+    enforce_nonce: true,
+  };
 
   let result: { id: string; channel_id: string };
   try {
@@ -320,7 +324,7 @@ export async function sendDiscordComponentMessage(
           body,
         }),
       "components",
-      { nonIdempotent: true },
+      { safety: "nonce-protected-create" },
     )) as { id: string; channel_id: string };
   } catch (err) {
     throw await buildDiscordSendError(err, {

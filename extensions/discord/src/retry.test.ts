@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "./internal/discord.js";
 import {
   createDiscordRetryRunner,
-  isRetryableDiscordNonIdempotentError,
+  isRetryableDiscordNonceProtectedCreateError,
   isRetryableDiscordPreConnectError,
   isRetryableDiscordTransientError,
 } from "./retry.js";
@@ -58,7 +58,7 @@ describe("isRetryableDiscordTransientError", () => {
   });
 });
 
-describe("isRetryableDiscordNonIdempotentError", () => {
+describe("isRetryableDiscordNonceProtectedCreateError", () => {
   it.each([
     ["rate limit", createRateLimitError()],
     ["429 status", Object.assign(new Error("rate limited"), { status: 429 })],
@@ -71,7 +71,7 @@ describe("isRetryableDiscordNonIdempotentError", () => {
       Object.assign(new Error("connect"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
     ],
   ])("retries %s", (_name, err) => {
-    expect(isRetryableDiscordNonIdempotentError(err)).toBe(true);
+    expect(isRetryableDiscordNonceProtectedCreateError(err)).toBe(true);
   });
 
   it.each([
@@ -83,7 +83,7 @@ describe("isRetryableDiscordNonIdempotentError", () => {
     ["socket", Object.assign(new Error("socket"), { code: "UND_ERR_SOCKET" })],
     ["fetch failed", new TypeError("fetch failed")],
   ])("does not retry %s", (_name, err) => {
-    expect(isRetryableDiscordNonIdempotentError(err)).toBe(false);
+    expect(isRetryableDiscordNonceProtectedCreateError(err)).toBe(false);
   });
 });
 
@@ -103,7 +103,7 @@ describe("isRetryableDiscordPreConnectError", () => {
   });
 });
 
-describe("createDiscordRetryRunner nonIdempotent", () => {
+describe("createDiscordRetryRunner create safety", () => {
   it("does not retry post-connect-ambiguous errors for non-idempotent sends", async () => {
     const fn = vi
       .fn()
@@ -111,7 +111,9 @@ describe("createDiscordRetryRunner nonIdempotent", () => {
       .mockResolvedValue("ok");
     const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
 
-    await expect(runner(fn, "text", { nonIdempotent: true })).rejects.toThrow("aborted");
+    await expect(runner(fn, "text", { safety: "nonce-protected-create" })).rejects.toThrow(
+      "aborted",
+    );
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
@@ -122,7 +124,7 @@ describe("createDiscordRetryRunner nonIdempotent", () => {
       .mockResolvedValue("ok");
     const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
 
-    await expect(runner(fn, "text", { nonIdempotent: true })).resolves.toBe("ok");
+    await expect(runner(fn, "text", { safety: "nonce-protected-create" })).resolves.toBe("ok");
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
@@ -133,7 +135,7 @@ describe("createDiscordRetryRunner nonIdempotent", () => {
       .mockResolvedValue("ok");
     const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
 
-    await expect(runner(fn, "text", { nonIdempotent: true })).resolves.toBe("ok");
+    await expect(runner(fn, "text", { safety: "nonce-protected-create" })).resolves.toBe("ok");
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
@@ -144,9 +146,9 @@ describe("createDiscordRetryRunner nonIdempotent", () => {
       .mockResolvedValue("ok");
     const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
 
-    await expect(
-      runner(fn, "forum-thread", { nonIdempotent: true, retryOn502: false }),
-    ).rejects.toThrow("bad gateway");
+    await expect(runner(fn, "forum-thread", { safety: "non-idempotent-create" })).rejects.toThrow(
+      "bad gateway",
+    );
     expect(fn).toHaveBeenCalledTimes(1);
   });
 

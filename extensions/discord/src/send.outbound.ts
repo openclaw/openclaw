@@ -250,7 +250,7 @@ export async function sendMessageDiscord(
             },
           ),
         "forum-thread",
-        { nonIdempotent: true, retryOn502: false },
+        { safety: "non-idempotent-create" },
       )) as { id: string; message?: { id: string; channel_id: string } };
     } catch (err) {
       throw await buildDiscordSendError(err, {
@@ -446,7 +446,7 @@ export async function sendStickerDiscord(
   const res = (await request(
     () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
     "sticker",
-    { nonIdempotent: true },
+    { safety: "nonce-protected-create" },
   )) as { id: string; channel_id: string };
   return toDiscordSendResult(res, channelId, { kind: "card" });
 }
@@ -473,7 +473,7 @@ export async function sendPollDiscord(
   const res = (await request(
     () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
     "poll",
-    { nonIdempotent: true },
+    { safety: "nonce-protected-create" },
   )) as { id: string; channel_id: string };
   return toDiscordSendResult(res, channelId, { kind: "card" });
 }
