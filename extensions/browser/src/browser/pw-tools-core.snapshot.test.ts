@@ -8,11 +8,6 @@ const withPageScopedCdpClient = vi.fn();
 const markBackendDomRefsOnPage = vi.fn();
 const formatAriaSnapshot = vi.fn();
 const gotoPageWithNavigationGuard = vi.fn();
-const assertBrowserDownloadSaveAllowed = vi.fn(async () => {});
-const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
-const runGuardedPlaywrightPageAction = vi.fn(
-  async <T>({ action }: { action: () => Promise<T> }): Promise<T> => await action(),
-);
 const createDownloadCaptureForPage = vi.fn(() => ({
   armed: true,
   promise: new Promise(() => {}),
@@ -23,10 +18,9 @@ vi.mock("./pw-session.js", () => ({
   assertPageNavigationCompletedSafely: vi.fn(),
   closeBlockedNavigationTarget: vi.fn(),
   ensurePageState,
-  forceDisconnectPlaywrightForTarget,
+  forceDisconnectPlaywrightForTarget: vi.fn(),
   getPageForTargetId,
   gotoPageWithNavigationGuard,
-  isBrowserObservedDialogBlockedError: vi.fn(() => false),
   isDownloadStartingNavigationError: vi.fn(() => false),
   isPolicyDenyNavigationError: vi.fn(() => false),
   storeRoleRefsForTarget,
@@ -34,42 +28,6 @@ vi.mock("./pw-session.js", () => ({
 
 vi.mock("./pw-download-capture.js", () => ({
   createDownloadCaptureForPage,
-}));
-
-vi.mock("./pw-interaction-navigation-guard.js", () => ({
-  assertBrowserDownloadSaveAllowed,
-  createAbortPromiseWithListener: (signal?: AbortSignal, onAbort?: () => void) => {
-    if (!signal) {
-      return { cleanup: () => {} };
-    }
-    let listener: (() => void) | undefined;
-    const abortError = () =>
-      signal.reason instanceof Error
-        ? signal.reason
-        : new Error("Snapshot request aborted", { cause: signal.reason });
-    const abortPromise = signal.aborted
-      ? (() => {
-          onAbort?.();
-          return Promise.reject(abortError());
-        })()
-      : new Promise<never>((_, reject) => {
-          listener = () => {
-            onAbort?.();
-            reject(abortError());
-          };
-          signal.addEventListener("abort", listener, { once: true });
-        });
-    void abortPromise.catch(() => {});
-    return {
-      abortPromise,
-      cleanup: () => {
-        if (listener) {
-          signal.removeEventListener("abort", listener);
-        }
-      },
-    };
-  },
-  runGuardedPlaywrightPageAction,
 }));
 
 vi.mock("./pw-session.page-cdp.js", () => ({
@@ -103,9 +61,6 @@ function requireScopedCdpClientOptions(): ScopedCdpClientOptions {
 describe("pw-tools-core aria snapshot storage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    runGuardedPlaywrightPageAction.mockImplementation(
-      async <T>({ action }: { action: () => Promise<T> }): Promise<T> => await action(),
-    );
   });
 
   it("reuses the resolved page when storing aria refs", async () => {
@@ -167,42 +122,9 @@ describe("pw-tools-core aria snapshot storage", () => {
       await vi.advanceTimersByTimeAsync(750);
 
       await expect(promise).rejects.toThrow(/Aria snapshot via Playwright timed out/);
-      expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
-        cdpUrl: "http://127.0.0.1:9222",
-        targetId: "tab-1",
-        ssrfPolicy: undefined,
-        reason: "aria snapshot interrupted",
-      });
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("retires a stuck aria CDP session when a policy-guarded request aborts", async () => {
-    const page = { id: "page-1" };
-    const controller = new AbortController();
-    const requestError = new Error("request aborted");
-    getPageForTargetId.mockResolvedValue(page);
-    withPageScopedCdpClient.mockImplementation(() => new Promise(() => {}));
-
-    const mod = await import("./pw-tools-core.snapshot.js");
-    const promise = mod.snapshotAriaViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      timeoutMs: 5_000,
-      signal: controller.signal,
-      ssrfPolicy: { allowPrivateNetwork: false },
-    });
-    void promise.catch(() => {});
-    controller.abort(requestError);
-
-    await expect(promise).rejects.toBe(requestError);
-    expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      ssrfPolicy: { allowPrivateNetwork: false },
-      reason: "aria snapshot interrupted",
-    });
   });
 
   it("uses the default aria node limit for non-finite limits", async () => {
@@ -289,95 +211,6 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(result.truncated).toBe(true);
   });
 
-  it("threads explicit proxy policy and abort ownership through AI snapshots", async () => {
-    const ctrl = new AbortController();
-    const ariaSnapshot = vi.fn(async () => "");
-    const page = { ariaSnapshot };
-    getPageForTargetId.mockResolvedValue(page);
-
-    const mod = await import("./pw-tools-core.snapshot.js");
-    await mod.snapshotAiViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      browserProxyMode: "explicit-browser-proxy",
-      signal: ctrl.signal,
-    });
-
-    expect(runGuardedPlaywrightPageAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: "http://127.0.0.1:9222",
-        page,
-        targetId: "tab-1",
-        browserProxyMode: "explicit-browser-proxy",
-        signal: ctrl.signal,
-        action: expect.any(Function),
-      }),
-    );
-    expect(ariaSnapshot).toHaveBeenCalledOnce();
-  });
-
-  it("guards PDF print lifecycle hooks with the snapshot navigation policy", async () => {
-    const ctrl = new AbortController();
-    const pdf = vi.fn(async () => Buffer.from("pdf"));
-    const page = { pdf };
-    getPageForTargetId.mockResolvedValue(page);
-
-    const mod = await import("./pw-tools-core.snapshot.js");
-    const result = await mod.pdfViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-      signal: ctrl.signal,
-    });
-
-    expect(result.buffer.toString()).toBe("pdf");
-    expect(runGuardedPlaywrightPageAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        page,
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-        signal: ctrl.signal,
-        action: expect.any(Function),
-      }),
-    );
-    expect(pdf).toHaveBeenCalledWith({ printBackground: true });
-  });
-
-  it("retires a stuck policy-guarded PDF operation when its request aborts", async () => {
-    const controller = new AbortController();
-    const retired = new Error("Playwright connection retired");
-    let rejectPdf!: (error: Error) => void;
-    const pdf = vi.fn(
-      () =>
-        new Promise<Buffer>((_, reject) => {
-          rejectPdf = reject;
-        }),
-    );
-    const page = { pdf };
-    getPageForTargetId.mockResolvedValue(page);
-    forceDisconnectPlaywrightForTarget.mockImplementationOnce(async () => {
-      rejectPdf(retired);
-    });
-
-    const mod = await import("./pw-tools-core.snapshot.js");
-    const promise = mod.pdfViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      ssrfPolicy: { allowPrivateNetwork: false },
-      signal: controller.signal,
-    });
-    void promise.catch(() => {});
-    await vi.waitFor(() => expect(pdf).toHaveBeenCalledOnce());
-    controller.abort(new Error("request aborted"));
-
-    await expect(promise).rejects.toBe(retired);
-    expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      ssrfPolicy: { allowPrivateNetwork: false },
-      reason: "pdf generation aborted",
-    });
-  });
-
   it("uses the default navigation timeout for non-finite timeouts", async () => {
     const page = { url: vi.fn(() => "http://127.0.0.1:31337/after") };
     getPageForTargetId.mockResolvedValue(page);
@@ -396,6 +229,38 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(gotoPageWithNavigationGuard).toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: 20_000 }),
     );
+  });
+
+  it("clamps non-finite viewport dimensions to the minimum size", async () => {
+    const page = { setViewportSize: vi.fn(async () => {}) };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    await mod.resizeViewportViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      width: Number.NaN,
+      height: Number.POSITIVE_INFINITY,
+    });
+
+    expect(page.setViewportSize).toHaveBeenCalledWith({ width: 1, height: 1 });
+  });
+
+  it("rejects excessive viewport dimensions before calling Playwright", async () => {
+    const page = { setViewportSize: vi.fn(async () => {}) };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    await expect(
+      mod.resizeViewportViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        width: Number.MAX_SAFE_INTEGER,
+        height: 768,
+      }),
+    ).rejects.toThrow("viewport width exceeds maximum of 8192");
+
+    expect(page.setViewportSize).not.toHaveBeenCalled();
   });
 
   it("stores role fallback metadata when backend markers are unavailable", async () => {

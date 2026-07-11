@@ -419,14 +419,10 @@ These are useful for "make the site behave like X" workflows:
 - `browser act kind=evaluate` / `openclaw browser evaluate` and `wait --fn`
   execute arbitrary JavaScript in the page context. Prompt injection can steer
   this. Disable it with `browser.evaluateEnabled=false` if you do not need it.
-- `openclaw browser evaluate --fn` and `openclaw browser wait --fn` accept a
-  function source, an expression, or a statement body. Statement bodies are
-  wrapped as async functions, so use `return` for the value you want back.
-  Wait predicates re-run false async results until their timeout. Use
-  `--timeout-ms <ms>` when the page-side function may need longer than the
-  default timeout. On Playwright-backed profiles, a timed-out or request-aborted
-  wait predicate closes its exact tab so unfinished page code cannot resume
-  outside the navigation guard.
+- `openclaw browser evaluate --fn` accepts a function source, an expression, or
+  a statement body. Statement bodies are wrapped as async functions, so use
+  `return` for the value you want back. Use `--timeout-ms <ms>` when the
+  page-side function may need longer than the default evaluate timeout.
 - For logins and anti-bot notes (X/Twitter, etc.), see [Browser login + X/Twitter posting](/tools/browser-login).
 - Keep the Gateway/node host private (loopback or tailnet-only).
 - Remote CDP endpoints are powerful; tunnel and protect them.

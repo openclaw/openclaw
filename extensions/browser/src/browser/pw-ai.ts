@@ -24,6 +24,8 @@ export {
   listPagesViaPlaywright,
   markObservedDialogsHandledRemotelyForPage,
   refLocator,
+  respondToObservedDialogOnPage,
+  respondToObservedDialogViaPlaywright,
 } from "./pw-session.js";
 
 export {
@@ -65,7 +67,6 @@ export {
   snapshotAiViaPlaywright,
   snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright,
-  snapshotRoleWithLabelsViaPlaywright,
   storeAriaSnapshotRefsViaPlaywright,
   screenshotWithLabelsViaPlaywright,
   storageClearViaPlaywright,

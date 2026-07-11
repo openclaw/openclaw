@@ -17,9 +17,15 @@ import {
   pressChromeMcpKey,
   resizeChromeMcpPage,
   type ChromeMcpOperationOptions,
+  type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
 import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
+import {
+  assertBrowserNavigationResultAllowed,
+  type BrowserNavigationPolicyOptions,
+  withBrowserNavigationPolicy,
+} from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { matchBrowserUrlPattern } from "../url-pattern.js";
@@ -29,16 +35,11 @@ import {
   browserEvaluateDisabledMessage,
   jsonActError,
 } from "./agent.act.errors.js";
-import {
-  type ExistingSessionOperation,
-  runExistingSessionActionWithNavigationGuard,
-} from "./agent.act.existing-session-navigation-guard.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
 import { type ActKind, isActKind } from "./agent.act.shared.js";
 import {
   readBody,
-  browserNavigationPolicyForProfile,
   requirePwAi,
   resolveTargetIdFromBody,
   resolveSafeRouteTabUrl,
@@ -50,6 +51,139 @@ import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { asyncBrowserRoute, jsonError, toStringOrEmpty } from "./utils.js";
+
+const EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS = [0, 250, 500] as const;
+
+type ExistingSessionOperation = ChromeMcpOperationOptions & {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+};
+
+async function readExistingSessionLocationHref(params: ExistingSessionOperation): Promise<string> {
+  const currentUrl = await evaluateChromeMcpScript({
+    ...params,
+    fn: "() => window.location.href",
+  });
+  if (typeof currentUrl !== "string") {
+    throw new Error("Location probe returned a non-string result");
+  }
+  const normalizedUrl = currentUrl.trim();
+  if (!normalizedUrl) {
+    throw new Error("Location probe returned an empty URL");
+  }
+  return normalizedUrl;
+}
+
+async function assertExistingSessionPostInteractionNavigationAllowed(
+  params: ExistingSessionOperation & {
+    ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+    listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
+    initialTabTargetIds: ReadonlySet<string>;
+  },
+): Promise<void> {
+  const ssrfPolicyOpts = withBrowserNavigationPolicy(params.ssrfPolicy);
+  if (!ssrfPolicyOpts.ssrfPolicy) {
+    return;
+  }
+  const listTabs = params.listTabs;
+  const initialTabTargetIds = params.initialTabTargetIds;
+
+  const assertNewTabsAllowed = async () => {
+    const tabs = await listTabs();
+    for (const tab of tabs) {
+      if (initialTabTargetIds.has(tab.targetId)) {
+        continue;
+      }
+      await assertBrowserNavigationResultAllowed({
+        url: tab.url,
+        ...ssrfPolicyOpts,
+      });
+    }
+  };
+
+  let lastObservedUrl: string | undefined;
+  let sawStableAllowedUrl = false;
+  for (const delayMs of EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS) {
+    if (delayMs > 0) {
+      await sleep(delayMs, undefined, { signal: params.signal });
+    }
+    let currentUrl: string;
+    try {
+      currentUrl = await readExistingSessionLocationHref(params);
+    } catch {
+      params.signal?.throwIfAborted();
+      sawStableAllowedUrl = false;
+      continue;
+    }
+    await assertBrowserNavigationResultAllowed({
+      url: currentUrl,
+      ...ssrfPolicyOpts,
+    });
+    if (currentUrl === lastObservedUrl) {
+      sawStableAllowedUrl = true;
+    } else {
+      sawStableAllowedUrl = false;
+    }
+    lastObservedUrl = currentUrl;
+  }
+
+  if (sawStableAllowedUrl) {
+    await assertNewTabsAllowed();
+    return;
+  }
+
+  // If the loop exhausted without confirming stability but we did observe
+  // at least one allowed URL, run a single follow-up probe so a late URL
+  // transition that has already settled is not treated as a false failure.
+  if (lastObservedUrl) {
+    const lastDelay =
+      EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS[
+        EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS.length - 1
+      ];
+    await sleep(lastDelay, undefined, { signal: params.signal });
+    try {
+      const followUpUrl = await readExistingSessionLocationHref(params);
+      await assertBrowserNavigationResultAllowed({
+        url: followUpUrl,
+        ...ssrfPolicyOpts,
+      });
+      if (followUpUrl === lastObservedUrl) {
+        await assertNewTabsAllowed();
+        return;
+      }
+    } catch {
+      params.signal?.throwIfAborted();
+      // Probe failed — fall through to throw
+    }
+  }
+
+  throw new Error("Unable to verify stable post-interaction navigation");
+}
+
+async function runExistingSessionActionWithNavigationGuard<T>(params: {
+  execute: () => Promise<T>;
+  guard?: Parameters<typeof assertExistingSessionPostInteractionNavigationAllowed>[0];
+}): Promise<T> {
+  let actionError: unknown;
+  let result: T | undefined;
+  try {
+    result = await params.execute();
+  } catch (error) {
+    actionError = error;
+  }
+
+  if (params.guard) {
+    await assertExistingSessionPostInteractionNavigationAllowed(params.guard);
+  }
+
+  if (actionError) {
+    throw toLintErrorObject(actionError, "Non-Error thrown");
+  }
+
+  return result as T;
+}
 
 function buildExistingSessionWaitPredicate(params: {
   text?: string;
@@ -74,8 +208,7 @@ function buildExistingSessionWaitPredicate(params: {
     checks.push(`document.readyState === "complete"`);
   }
   if (params.fn) {
-    const fnSource = normalizeBrowserEvaluateFunctionSource(params.fn);
-    checks.push(`Boolean(await (${fnSource})())`);
+    checks.push(`Boolean(await (${params.fn})())`);
   }
   if (checks.length === 0) {
     return null;
@@ -259,7 +392,7 @@ export function registerBrowserAgentActRoutes(
         enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
         run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
           const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
-          const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
+          const ssrfPolicy = ctx.state().resolved.ssrfPolicy;
           const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
           const requestedTimeoutMs =
             "timeoutMs" in action && typeof action.timeoutMs === "number"
@@ -270,7 +403,7 @@ export function registerBrowserAgentActRoutes(
             signal: req.signal,
           };
           const hasNavigationResultPolicy = Boolean(
-            navigationPolicy.ssrfPolicy || navigationPolicy.browserProxyMode,
+            withBrowserNavigationPolicy(ssrfPolicy).ssrfPolicy,
           );
           const jsonOk = async (
             extra?: Record<string, unknown>,
@@ -315,6 +448,25 @@ export function registerBrowserAgentActRoutes(
           }
           const profileName = profileCtx.profile.name;
           if (isExistingSession) {
+            const existingSessionTarget: ExistingSessionOperation = {
+              profileName,
+              profile: profileCtx.profile,
+              targetId: tab.targetId,
+              ...existingSessionCallOptions,
+            };
+            const initialTabTargetIds = hasNavigationResultPolicy
+              ? new Set(
+                  (await profileCtx.listTabs(existingSessionCallOptions)).map(
+                    (currentTab) => currentTab.targetId,
+                  ),
+                )
+              : new Set<string>();
+            const existingSessionNavigationGuard = {
+              ...existingSessionTarget,
+              ssrfPolicy,
+              listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
+              initialTabTargetIds,
+            };
             const unsupportedMessage = getExistingSessionUnsupportedMessage(action);
             if (unsupportedMessage) {
               return jsonActError(
@@ -324,17 +476,6 @@ export function registerBrowserAgentActRoutes(
                 unsupportedMessage,
               );
             }
-            const existingSessionTarget: ExistingSessionOperation = {
-              profileName,
-              profile: profileCtx.profile,
-              targetId: tab.targetId,
-              ...existingSessionCallOptions,
-            };
-            const existingSessionNavigationGuard = {
-              ...existingSessionTarget,
-              ...navigationPolicy,
-              listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
-            };
             switch (action.kind) {
               case "click":
                 await runExistingSessionActionWithNavigationGuard({
@@ -446,35 +587,22 @@ export function registerBrowserAgentActRoutes(
                 });
                 return await jsonOk();
               case "resize":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    resizeChromeMcpPage({
-                      ...existingSessionTarget,
-                      width: action.width,
-                      height: action.height,
-                    }),
-                  // Resize is deliberately allowed on an already-open private tab;
-                  // only a changed destination or newly opened tab is policy-checked.
-                  guard: {
-                    ...existingSessionNavigationGuard,
-                    allowUnchangedCurrentPageUrlForResize: true,
-                  },
+                await resizeChromeMcpPage({
+                  ...existingSessionTarget,
+                  width: action.width,
+                  height: action.height,
                 });
                 return await jsonOk();
               case "wait":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    waitForExistingSessionCondition({
-                      ...existingSessionTarget,
-                      timeMs: action.timeMs,
-                      text: action.text,
-                      textGone: action.textGone,
-                      selector: action.selector,
-                      url: action.url,
-                      loadState: action.loadState,
-                      fn: action.fn,
-                    }),
-                  guard: existingSessionNavigationGuard,
+                await waitForExistingSessionCondition({
+                  ...existingSessionTarget,
+                  timeMs: action.timeMs,
+                  text: action.text,
+                  textGone: action.textGone,
+                  selector: action.selector,
+                  url: action.url,
+                  loadState: action.loadState,
+                  fn: action.fn,
                 });
                 return await jsonOk();
               case "evaluate": {
@@ -517,7 +645,7 @@ export function registerBrowserAgentActRoutes(
             action,
             targetId: tab.targetId,
             evaluateEnabled,
-            ...navigationPolicy,
+            ssrfPolicy,
             signal: req.signal,
           });
           if (result.blockedByDialog) {
@@ -635,44 +763,28 @@ export function registerBrowserAgentActRoutes(
             });
           };
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-            const callOptions = {
-              timeoutMs: ctx.state().resolved.actionTimeoutMs,
-              signal: req.signal,
-            };
-            const existingSessionTarget = {
+            await evaluateChromeMcpScript({
               profileName: profileCtx.profile.name,
               profile: profileCtx.profile,
               targetId: tab.targetId,
-              ...callOptions,
-            };
-            await runExistingSessionActionWithNavigationGuard({
-              execute: () =>
-                evaluateChromeMcpScript({
-                  ...existingSessionTarget,
-                  args: [ref],
-                  fn: `async (el) => {
-                  if (!(el instanceof Element)) {
-                    return false;
-                  }
-                  el.scrollIntoView({ block: "center", inline: "center" });
-                  const previousOutline = el.style.outline;
-                  const previousOffset = el.style.outlineOffset;
-                  el.style.outline = "3px solid #FF4500";
-                  el.style.outlineOffset = "2px";
-                  try {
-                    await new Promise((resolve) => setTimeout(resolve, 2000));
-                  } finally {
-                    el.style.outline = previousOutline;
-                    el.style.outlineOffset = previousOffset;
-                  }
-                  return true;
-                }`,
-                }),
-              guard: {
-                ...existingSessionTarget,
-                ...browserNavigationPolicyForProfile(ctx, profileCtx),
-                listTabs: () => profileCtx.listTabs(callOptions),
-              },
+              args: [ref],
+              timeoutMs: ctx.state().resolved.actionTimeoutMs,
+              signal: req.signal,
+              fn: `(el) => {
+              if (!(el instanceof Element)) {
+                return false;
+              }
+              el.scrollIntoView({ block: "center", inline: "center" });
+              const previousOutline = el.style.outline;
+              const previousOffset = el.style.outlineOffset;
+              el.style.outline = "3px solid #FF4500";
+              el.style.outlineOffset = "2px";
+              setTimeout(() => {
+                el.style.outline = previousOutline;
+                el.style.outlineOffset = previousOffset;
+              }, 2000);
+              return true;
+            }`,
             });
             return await jsonOk();
           }
@@ -683,13 +795,25 @@ export function registerBrowserAgentActRoutes(
           await pw.highlightViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
-            ...browserNavigationPolicyForProfile(ctx, profileCtx),
             ref,
-            signal: req.signal,
           });
           await jsonOk();
         },
       });
     }),
   );
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

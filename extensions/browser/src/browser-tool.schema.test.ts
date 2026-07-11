@@ -1,4 +1,3 @@
-import { Value } from "typebox/value";
 // Browser tests cover browser tool.schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
@@ -38,22 +37,5 @@ describe("browser tool schema", () => {
 
     expect(properties.action.enum).toEqual(expect.arrayContaining(["download", "waitfordownload"]));
     expect(properties.path).toBeDefined();
-  });
-
-  it("exposes scrollIntoView in flattened and nested act kinds", () => {
-    const properties = BrowserToolSchema.properties as BrowserSchemaRecord;
-    const requestProperties = properties.request.properties as BrowserSchemaRecord;
-
-    expect(properties.kind.enum).toContain("scrollIntoView");
-    expect(requestProperties.kind.enum).toContain("scrollIntoView");
-    expect(
-      Value.Check(BrowserToolSchema, { action: "act", kind: "scrollIntoView", ref: "e1" }),
-    ).toBe(true);
-    expect(
-      Value.Check(BrowserToolSchema, {
-        action: "act",
-        request: { kind: "scrollIntoView", ref: "e1" },
-      }),
-    ).toBe(true);
   });
 });

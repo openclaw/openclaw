@@ -61,7 +61,6 @@ function fakePage(): {
   const page = {
     on,
     off,
-    url: vi.fn(() => "https://93.184.216.34/downloads"),
     getByRole,
     frameLocator,
     locator,
@@ -236,29 +235,6 @@ describe("pw-session ensurePageState", () => {
     } finally {
       process.off("unhandledRejection", onUnhandled);
     }
-  });
-
-  it("retains page policy for downloads that start after an action capture ends", async () => {
-    const { page, handlers } = fakePage();
-    const state = ensurePageState(page);
-    state.downloadNavigationPolicy = {
-      browserProxyMode: "explicit-browser-proxy",
-    };
-    const capture = beginActionDownloadCaptureOnPage(page);
-    capture.dispose();
-    const saveAs = vi.fn(async () => {});
-    const download: MutableDownload = {
-      url: () => "http://169.254.169.254/latest/meta-data",
-      suggestedFilename: () => "metadata.txt",
-      saveAs,
-    };
-
-    handlers.get("download")?.[0]?.(download);
-
-    await expect(download.path?.()).rejects.toThrow(
-      "strict browser SSRF policy cannot be enforced while this browser profile is proxy-routed",
-    );
-    expect(saveAs).not.toHaveBeenCalled();
   });
 
   it("leaves unmanaged download handling to explicit waiters while armed", () => {

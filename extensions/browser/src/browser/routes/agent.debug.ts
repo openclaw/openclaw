@@ -10,7 +10,6 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { PwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
-  browserNavigationPolicyForProfile,
   readBody,
   resolveTargetIdFromBody,
   resolveTargetIdFromQuery,
@@ -140,11 +139,11 @@ export function registerBrowserAgentDebugRoutes(
         targetId,
         feature: "dialog state",
         enforceCurrentUrlAllowed: true,
-        run: async ({ profileCtx, cdpUrl, tab, pw, resolveTabUrl }) => {
+        run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
           const browserState = await pw.getObservedBrowserStateViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
-            ...browserNavigationPolicyForProfile(ctx, profileCtx),
+            ssrfPolicy: ctx.state().resolved.ssrfPolicy,
           });
           const url = await resolveTabUrl(tab.url);
           res.json({ ...browserDebugTargetPayload(tab.targetId, url), browserState });

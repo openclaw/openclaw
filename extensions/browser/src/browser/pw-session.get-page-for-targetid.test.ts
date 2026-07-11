@@ -1,31 +1,19 @@
 // Browser tests cover exact Playwright page selection by CDP target id.
-import { chromium, type Request, type Route } from "playwright-core";
+import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
-import { assertBrowserNavigationResultAllowed } from "./navigation-guard.js";
 import {
   closePageByTargetIdViaPlaywright,
   closePlaywrightBrowserConnection,
-  ensurePageState,
   focusPageByTargetIdViaPlaywright,
-  getObservedBrowserStateViaPlaywright,
   getPageForTargetId,
   listPagesViaPlaywright,
   setCdpConnectRetryDelayMsForTests,
 } from "./pw-session.js";
 
-vi.mock("./navigation-guard.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
-  };
-});
-
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
-const navigationResultAllowedMock = vi.mocked(assertBrowserNavigationResultAllowed);
 
 type MockPageSpec = {
   targetId?: string;
@@ -41,8 +29,6 @@ type BrowserMockBundle = {
   pageActions: Array<{
     bringToFront: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
-    route: ReturnType<typeof vi.fn>;
-    unroute: ReturnType<typeof vi.fn>;
   }>;
 };
 
@@ -52,19 +38,12 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
   const pageActions = pages.map(() => ({
     bringToFront: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
-    route: vi.fn(async () => {}),
-    unroute: vi.fn(async () => {}),
   }));
 
   const pageObjects = pages.map((spec, index) => {
     const actions = pageActions[index]!;
-    const mainFrame = {};
     const page = {
       on: vi.fn(),
-      route: actions.route,
-      unroute: actions.unroute,
-      isClosed: vi.fn(() => false),
-      mainFrame: vi.fn(() => mainFrame),
       context: () => context,
       title: vi.fn(async () => spec.title ?? spec.targetId ?? `page-${index + 1}`),
       url: vi.fn(() => spec.url ?? `https://page-${index + 1}.example`),
@@ -115,32 +94,11 @@ function installBrowser(pages: MockPageSpec[]): BrowserMockBundle {
 afterEach(async () => {
   connectOverCdpSpy.mockReset();
   getChromeWebSocketUrlSpy.mockReset();
-  navigationResultAllowedMock.mockReset();
-  navigationResultAllowedMock.mockImplementation(async () => {});
   setCdpConnectRetryDelayMsForTests();
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 
 describe("pw-session getPageForTargetId", () => {
-  it("retains the active download policy for every page on the connected context", async () => {
-    const { pages } = installBrowser([
-      { targetId: "TARGET_A", url: "https://93.184.216.34/a" },
-      { targetId: "TARGET_B", url: "https://93.184.216.34/b" },
-    ]);
-
-    await getPageForTargetId({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "TARGET_A",
-      pageNavigationPolicy: { browserProxyMode: "explicit-browser-proxy" },
-    });
-
-    for (const page of pages) {
-      expect(ensurePageState(page).downloadNavigationPolicy).toEqual({
-        browserProxyMode: "explicit-browser-proxy",
-      });
-    }
-  });
-
   it("keeps no-target selection when Playwright cannot resolve target ids", async () => {
     const { pages } = installBrowser([{ targetLookupError: "Not allowed" }]);
 
@@ -200,61 +158,6 @@ describe("pw-session getPageForTargetId", () => {
     });
 
     expect(resolved).toBe(pages[1]);
-  });
-
-  it("guards navigation while the exact dialog-state URL check is pending", async () => {
-    const safeUrl = "https://93.184.216.34/start";
-    const blockedUrl = "http://169.254.169.254/latest/meta-data";
-    const { pages, pageActions } = installBrowser([{ targetId: "TARGET_A", url: safeUrl }]);
-    const page = pages[0]!;
-    const pageAction = pageActions[0]!;
-    let releaseFirstCheck!: () => void;
-    navigationResultAllowedMock.mockImplementationOnce(
-      async () =>
-        await new Promise<void>((resolve) => {
-          releaseFirstCheck = resolve;
-        }),
-    );
-
-    const state = getObservedBrowserStateViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "TARGET_A",
-      browserProxyMode: "explicit-browser-proxy",
-    });
-    await vi.waitFor(() => expect(navigationResultAllowedMock).toHaveBeenCalledTimes(1));
-    expect(pageAction.route).toHaveBeenCalledOnce();
-    const routeHandler = pageAction.route.mock.calls[0]?.[1];
-    if (!routeHandler) {
-      throw new Error("Expected a page navigation route handler");
-    }
-    const routeActions = {
-      fulfill: vi.fn(async () => {}),
-      abort: vi.fn(async () => {}),
-      fallback: vi.fn(async () => {}),
-    };
-    const route = {
-      fulfill: routeActions.fulfill,
-      abort: routeActions.abort,
-      fallback: routeActions.fallback,
-    } as unknown as Route;
-    const request = {
-      frame: () => page.mainFrame(),
-      isNavigationRequest: () => true,
-      resourceType: () => "document",
-      url: () => blockedUrl,
-    } as unknown as Request;
-    await routeHandler(route, request);
-
-    await expect(state).rejects.toThrow(
-      "strict browser SSRF policy cannot be enforced while this browser profile is proxy-routed",
-    );
-    expect(routeActions.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
-    expect(navigationResultAllowedMock).toHaveBeenNthCalledWith(1, {
-      url: safeUrl,
-      browserProxyMode: "explicit-browser-proxy",
-    });
-    releaseFirstCheck();
-    await vi.waitFor(() => expect(pageAction.unroute).toHaveBeenCalledOnce());
   });
 
   it("focuses and closes only the exact target when URLs are identical", async () => {

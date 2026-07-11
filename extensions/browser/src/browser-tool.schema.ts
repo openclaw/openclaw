@@ -20,7 +20,6 @@ const BROWSER_ACT_KINDS = [
   "type",
   "press",
   "hover",
-  "scrollIntoView",
   "drag",
   "select",
   "fill",

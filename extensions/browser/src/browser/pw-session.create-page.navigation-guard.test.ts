@@ -9,7 +9,6 @@ import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import * as navigationGuardModule from "./navigation-guard.js";
 import {
   BlockedBrowserTargetError,
-  BrowserObservedDialogBlockedError,
   classifyBrowserDocumentNavigationRequest,
   closePlaywrightBrowserConnection,
   createPageViaPlaywright,
@@ -17,10 +16,6 @@ import {
   getPageForTargetId,
   gotoPageWithNavigationGuard,
   listPagesViaPlaywright,
-  quarantineBlockedNavigationTarget,
-  quarantineBlockedNavigationTargetForError,
-  replacePendingBrowserInteractionActionError,
-  trackPendingBrowserInteractionAction,
   wasBrowserNavigationRequestBlockedBeforeDispatch,
   withPageNavigationRequestGuard,
 } from "./pw-session.js";
@@ -40,7 +35,7 @@ const PROXY_ENV_KEYS = [
 type MockRoute = {
   continue: () => Promise<void>;
   fallback: () => Promise<void>;
-  fulfill: (options: { status: number; body: string }) => Promise<void>;
+  fulfill: (response: { status: number; body: string }) => Promise<void>;
   abort: () => Promise<void>;
 };
 type MockRequest = {
@@ -52,12 +47,7 @@ type MockRequest = {
 type MockRouteHandler = (route: MockRoute, request: MockRequest) => Promise<void>;
 
 function installBrowserMocks() {
-  let downloadHandler: ((download: unknown) => void) | undefined;
-  const pageOn = vi.fn((event: string, handler: (download: unknown) => void) => {
-    if (event === "download") {
-      downloadHandler = handler;
-    }
-  });
+  const pageOn = vi.fn();
   let routeHandler: MockRouteHandler | null = null;
   const pageGoto = vi.fn<
     (...args: unknown[]) => Promise<null | { request: () => Record<string, unknown> }>
@@ -90,10 +80,6 @@ function installBrowserMocks() {
     return {};
   });
   const sessionDetach = vi.fn(async () => {});
-  const contextNewCDPSession = vi.fn(async () => ({
-    send: sessionSend,
-    detach: sessionDetach,
-  }));
 
   const context = {
     pages: () => openPages,
@@ -102,7 +88,10 @@ function installBrowserMocks() {
       openPages.push(page);
       return page;
     }),
-    newCDPSession: contextNewCDPSession,
+    newCDPSession: vi.fn(async () => ({
+      send: sessionSend,
+      detach: sessionDetach,
+    })),
   } as unknown as import("playwright-core").BrowserContext;
 
   const page = {
@@ -133,17 +122,15 @@ function installBrowserMocks() {
 
   return {
     pageGoto,
-    pageUrl,
     page,
     pageRoute,
     pageUnroute,
+    pageUrl,
     browserClose,
     pageClose,
-    contextNewCDPSession,
     sessionSend,
     getBrowserDisconnectedHandler,
     getRouteHandler: () => routeHandler,
-    getDownloadHandler: () => downloadHandler,
     mainFrame,
     pushOpenPage: () => {
       openPages.push(page);
@@ -167,6 +154,7 @@ async function dispatchMockNavigation(params: {
   mainFrame: object;
   url: string;
   frame?: object;
+  frameError?: Error;
   isNavigationRequest?: boolean;
   resourceType?: string;
   route?: Partial<MockRoute>;
@@ -178,7 +166,12 @@ async function dispatchMockNavigation(params: {
   const { resourceType } = params;
   await handler(createMockRoute(params.route), {
     isNavigationRequest: () => params.isNavigationRequest ?? true,
-    frame: () => params.frame ?? params.mainFrame,
+    frame: () => {
+      if (params.frameError) {
+        throw params.frameError;
+      }
+      return params.frame ?? params.mainFrame;
+    },
     ...(resourceType ? { resourceType: () => resourceType } : {}),
     url: () => params.url,
   });
@@ -224,46 +217,6 @@ afterEach(async () => {
 });
 
 describe("pw-session createPageViaPlaywright navigation guard", () => {
-  it("quarantines a known target without waiting on a stuck identity lookup", async () => {
-    const { page, sessionSend } = installBrowserMocks();
-    sessionSend.mockImplementationOnce(() => new Promise(() => {}));
-
-    await quarantineBlockedNavigationTarget({
-      cdpUrl: "http://127.0.0.1:18792",
-      page,
-      targetId: "TARGET_1",
-    });
-
-    await expect(
-      getPageForTargetId({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "TARGET_1",
-      }),
-    ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
-  });
-
-  it("coalesces concurrent quarantine work for the same error and page", async () => {
-    const { contextNewCDPSession, page, sessionSend } = installBrowserMocks();
-    let releaseTargetInfo!: () => void;
-    const targetInfoPending = new Promise<void>((resolve) => {
-      releaseTargetInfo = resolve;
-    });
-    sessionSend.mockImplementationOnce(async () => {
-      await targetInfoPending;
-      return { targetInfo: { targetId: "TARGET_1" } };
-    });
-    const error = new SsrFBlockedError("blocked by policy");
-    const opts = { cdpUrl: "http://127.0.0.1:18792", error, page };
-
-    const first = quarantineBlockedNavigationTargetForError(opts);
-    const second = quarantineBlockedNavigationTargetForError(opts);
-
-    await vi.waitFor(() => expect(contextNewCDPSession).toHaveBeenCalledTimes(1));
-    releaseTargetInfo();
-    await Promise.all([first, second]);
-    expect(contextNewCDPSession).toHaveBeenCalledTimes(1);
-  });
-
   it("blocks unsupported non-network URLs", async () => {
     const { pageGoto } = installBrowserMocks();
 
@@ -287,32 +240,6 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
     expect(created.targetId).toBe("TARGET_1");
     expect(pageGoto).not.toHaveBeenCalled();
-  });
-
-  it("applies the download policy before a newly created page can save a file", async () => {
-    const { getDownloadHandler, pageUrl } = installBrowserMocks();
-    await createPageViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      url: "about:blank",
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-    });
-    pageUrl.mockReturnValue("https://93.184.216.34/page");
-    const downloadHandler = getDownloadHandler();
-    if (!downloadHandler) {
-      throw new Error("expected passive download handler");
-    }
-    const saveAs = vi.fn(async () => {});
-    const download = {
-      url: () => "http://127.0.0.1/private.bin",
-      suggestedFilename: () => "private.bin",
-      saveAs,
-      path: async () => "",
-    };
-
-    downloadHandler(download);
-
-    await expect(download.path()).rejects.toBeInstanceOf(SsrFBlockedError);
-    expect(saveAs).not.toHaveBeenCalled();
   });
 
   it("blocks hostname navigation when strict SSRF policy is configured", async () => {
@@ -362,6 +289,28 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     ).rejects.toBeInstanceOf(SsrFBlockedError);
 
     expect(pageGoto).toHaveBeenCalledTimes(1);
+    expect(pageClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed as a top-level navigation when request frame resolution throws", async () => {
+    const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+    pageGoto.mockImplementationOnce(async () => {
+      await dispatchMockNavigation({
+        getRouteHandler,
+        mainFrame,
+        frameError: new Error("frame detached"),
+        url: "http://127.0.0.1:18080/internal-hop",
+      });
+      throw new Error("Navigation aborted");
+    });
+
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://93.184.216.34/start",
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+
     expect(pageClose).toHaveBeenCalledTimes(1);
   });
 
@@ -792,114 +741,125 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
   });
 });
 
-describe("pw-session page-scoped interaction request guard", () => {
+describe("pw-session selected-page interaction request guard", () => {
   const strictPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
 
-  it("classifies top-level, subframe, and non-document requests", () => {
+  it("classifies top-level, subframe, non-document, and unresolved-frame requests", () => {
     const { mainFrame, page } = installBrowserMocks();
-    const topLevelDocument = {
+    const request = (overrides: Partial<MockRequest>): MockRequest => ({
       frame: () => mainFrame,
       isNavigationRequest: () => false,
       resourceType: () => "document",
-    };
-    const subframeDocument = {
-      frame: () => ({}),
-      isNavigationRequest: () => true,
-      resourceType: () => "document",
-    };
-    const image = {
-      frame: () => mainFrame,
-      isNavigationRequest: () => false,
-      resourceType: () => "image",
-    };
-    const unresolvedFrame = {
-      frame: () => {
-        throw new Error("frame detached");
-      },
-      isNavigationRequest: () => {
-        throw new Error("request detached");
-      },
-      resourceType: () => {
-        throw new Error("request detached");
-      },
-    };
+      url: () => "https://example.com",
+      ...overrides,
+    });
 
-    expect(classifyBrowserDocumentNavigationRequest(page, topLevelDocument as never)).toBe(
-      "top-level",
-    );
-    expect(classifyBrowserDocumentNavigationRequest(page, subframeDocument as never)).toBe(
-      "subframe",
-    );
-    expect(classifyBrowserDocumentNavigationRequest(page, image as never)).toBeNull();
-    expect(classifyBrowserDocumentNavigationRequest(page, unresolvedFrame as never)).toBe(
-      "subframe",
-    );
-  });
-
-  it("preserves no-policy callers without installing a page route", async () => {
-    const { page, pageRoute, pageUnroute } = installBrowserMocks();
-
-    await expect(
-      withPageNavigationRequestGuard({
+    expect(classifyBrowserDocumentNavigationRequest(page, request({}) as never)).toBe("top-level");
+    expect(
+      classifyBrowserDocumentNavigationRequest(
         page,
-        action: async () => "ok",
-      }),
-    ).resolves.toBe("ok");
-
-    expect(pageRoute).not.toHaveBeenCalled();
-    expect(pageUnroute).not.toHaveBeenCalled();
-  });
-
-  it("treats direct proxy mode alone as no policy", async () => {
-    const { page, pageRoute, pageUnroute } = installBrowserMocks();
-
-    await expect(
-      withPageNavigationRequestGuard({
+        request({ frame: () => ({}), isNavigationRequest: () => true }) as never,
+      ),
+    ).toBe("subframe");
+    expect(
+      classifyBrowserDocumentNavigationRequest(
         page,
-        browserProxyMode: "direct",
-        action: async () => "ok",
-      }),
-    ).resolves.toBe("ok");
-
-    expect(pageRoute).not.toHaveBeenCalled();
-    expect(pageUnroute).not.toHaveBeenCalled();
-  });
-
-  it("fails closed for explicit browser proxy mode without an SSRF policy", async () => {
-    const { getRouteHandler, mainFrame, page } = installBrowserMocks();
-    const blocked = new InvalidBrowserNavigationUrlError("proxy-routed navigation blocked");
-    const assertNavigationAllowedSpy = vi
-      .spyOn(navigationGuardModule, "assertBrowserNavigationAllowed")
-      .mockRejectedValueOnce(blocked);
-    const route = createMockRoute();
-
-    try {
-      await expect(
-        withPageNavigationRequestGuard({
-          page,
-          browserProxyMode: "explicit-browser-proxy",
-          action: async () => {
-            await dispatchMockNavigation({
-              getRouteHandler,
-              mainFrame,
-              url: "https://example.com/private-via-proxy",
-              route,
-            });
+        request({ resourceType: () => "image" }) as never,
+      ),
+    ).toBeNull();
+    expect(
+      classifyBrowserDocumentNavigationRequest(
+        page,
+        request({
+          frame: () => {
+            throw new Error("frame detached");
           },
-        }),
-      ).rejects.toBe(blocked);
-      expect(route.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
-      expect(route.abort).not.toHaveBeenCalled();
-      expect(wasBrowserNavigationRequestBlockedBeforeDispatch(blocked)).toBe(true);
-    } finally {
-      assertNavigationAllowedSpy.mockRestore();
-    }
+        }) as never,
+      ),
+    ).toBe("top-level");
+    expect(
+      classifyBrowserDocumentNavigationRequest(
+        page,
+        request({
+          frame: () => {
+            throw new Error("frame detached");
+          },
+          resourceType: () => "image",
+        }) as never,
+      ),
+    ).toBe("subframe");
   });
 
-  it("falls through allowed documents and non-document requests, then removes its exact route", async () => {
+  it("preserves policy-free callers without installing a route", async () => {
+    const { page, pageRoute, pageUnroute } = installBrowserMocks();
+
+    await expect(withPageNavigationRequestGuard({ page, action: async () => "ok" })).resolves.toBe(
+      "ok",
+    );
+
+    expect(pageRoute).not.toHaveBeenCalled();
+    expect(pageUnroute).not.toHaveBeenCalled();
+  });
+
+  it("revalidates the current URL after route setup before starting the action", async () => {
+    const { page, pageRoute, pageUnroute, pageUrl } = installBrowserMocks();
+    const installRoute = pageRoute.getMockImplementation();
+    pageRoute.mockImplementationOnce(async (...args) => {
+      await installRoute?.(...args);
+      pageUrl.mockReturnValue("http://127.0.0.1:18080/private-before-action");
+    });
+    const action = vi.fn(async () => "unsafe");
+
+    await expect(
+      withPageNavigationRequestGuard({ page, ssrfPolicy: strictPolicy, action }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+
+    expect(action).not.toHaveBeenCalled();
+    expect(pageUnroute).toHaveBeenCalledWith("**", pageRoute.mock.calls[0]?.[1]);
+  });
+
+  it("reports an unsafe preflight before route cleanup settles", async () => {
+    const { page, pageRoute, pageUnroute, pageUrl } = installBrowserMocks();
+    const installRoute = pageRoute.getMockImplementation();
+    pageRoute.mockImplementationOnce(async (...args) => {
+      await installRoute?.(...args);
+      pageUrl.mockReturnValue("http://127.0.0.1:18080/private-before-action");
+    });
+    let releaseCleanup!: () => void;
+    const cleanupPending = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const originalUnroute = pageUnroute.getMockImplementation();
+    pageUnroute.mockImplementationOnce(async (...args) => {
+      await cleanupPending;
+      await originalUnroute?.(...args);
+    });
+    const events: string[] = [];
+    const action = vi.fn(async () => "unsafe");
+
+    const guarded = withPageNavigationRequestGuard({
+      page,
+      ssrfPolicy: strictPolicy,
+      action,
+      onPolicyDenied: (event) => {
+        events.push(
+          event.state === "detected"
+            ? event.state
+            : `${event.state}:${String(event.sourcePreserved)}`,
+        );
+      },
+    });
+
+    await vi.waitFor(() => expect(events).toEqual(["detected", "handled:false"]));
+    expect(action).not.toHaveBeenCalled();
+    releaseCleanup();
+    await expect(guarded).rejects.toBeInstanceOf(SsrFBlockedError);
+  });
+
+  it("falls through allowed documents and subresources, then removes only its handler", async () => {
     const { getRouteHandler, mainFrame, page, pageRoute, pageUnroute } = installBrowserMocks();
-    const allowedDocument = createMockRoute();
-    const image = createMockRoute();
+    const documentRoute = createMockRoute();
+    const imageRoute = createMockRoute();
 
     await expect(
       withPageNavigationRequestGuard({
@@ -910,38 +870,36 @@ describe("pw-session page-scoped interaction request guard", () => {
             getRouteHandler,
             mainFrame,
             url: "https://93.184.216.34/page",
-            route: allowedDocument,
+            route: documentRoute,
           });
           await dispatchMockNavigation({
             getRouteHandler,
             mainFrame,
-            url: "http://127.0.0.1/secret.png",
+            url: "http://127.0.0.1/ignored-subresource.png",
             isNavigationRequest: false,
             resourceType: "image",
-            route: image,
+            route: imageRoute,
           });
           return "ok";
         },
       }),
     ).resolves.toBe("ok");
 
-    expect(allowedDocument.fallback).toHaveBeenCalledTimes(1);
-    expect(image.fallback).toHaveBeenCalledTimes(1);
-    expect(allowedDocument.fulfill).not.toHaveBeenCalled();
-    expect(image.fulfill).not.toHaveBeenCalled();
-    expect(allowedDocument.continue).not.toHaveBeenCalled();
-    expect(image.continue).not.toHaveBeenCalled();
+    expect(documentRoute.fallback).toHaveBeenCalledTimes(1);
+    expect(imageRoute.fallback).toHaveBeenCalledTimes(1);
+    expect(documentRoute.continue).not.toHaveBeenCalled();
+    expect(imageRoute.continue).not.toHaveBeenCalled();
     const handler = pageRoute.mock.calls[0]?.[1];
     expect(pageRoute).toHaveBeenCalledWith("**", handler);
     expect(pageUnroute).toHaveBeenCalledWith("**", handler);
   });
 
   it.each([
-    { name: "top-level", subframe: false },
-    { name: "subframe", subframe: true },
+    { name: "top-level", frame: undefined },
+    { name: "subframe", frame: {} },
   ])(
-    "blocks a $name document with a 204 and returns policy denial ahead of the action error",
-    async ({ subframe }) => {
+    "answers a denied $name document before dispatch and preserves the source",
+    async ({ frame }) => {
       const { getRouteHandler, mainFrame, page } = installBrowserMocks();
       const route = createMockRoute();
       let caught: unknown;
@@ -954,7 +912,7 @@ describe("pw-session page-scoped interaction request guard", () => {
             await dispatchMockNavigation({
               getRouteHandler,
               mainFrame,
-              frame: subframe ? {} : mainFrame,
+              frame,
               url: "http://127.0.0.1:18080/private",
               route,
             });
@@ -970,38 +928,158 @@ describe("pw-session page-scoped interaction request guard", () => {
       expect(route.abort).not.toHaveBeenCalled();
       expect(route.fallback).not.toHaveBeenCalled();
       expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(true);
+      expect(page.url()).toBe("about:blank");
     },
   );
 
-  it("drains policy checks added while cleanup is waiting before removing the route", async () => {
-    const { getRouteHandler, mainFrame, page, pageUnroute } = installBrowserMocks();
-    let releaseFirstPolicy!: () => void;
-    const firstPolicyPending = new Promise<void>((resolve) => {
-      releaseFirstPolicy = resolve;
+  it("does not claim preservation when postflight also finds a policy violation", async () => {
+    const { getRouteHandler, mainFrame, page } = installBrowserMocks();
+    const route = createMockRoute();
+    const committedSubframeBlock = new SsrFBlockedError("blocked committed subframe");
+    let caught: unknown;
+
+    try {
+      await withPageNavigationRequestGuard({
+        page,
+        ssrfPolicy: strictPolicy,
+        action: async () => {
+          await dispatchMockNavigation({
+            getRouteHandler,
+            mainFrame,
+            frame: {},
+            url: "http://127.0.0.1:18080/private",
+            route,
+          });
+          throw committedSubframeBlock;
+        },
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(SsrFBlockedError);
+    expect(route.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
+    expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(false);
+  });
+
+  it("reports policy detection before a pending fulfillment settles", async () => {
+    const { getRouteHandler, mainFrame, page } = installBrowserMocks();
+    let releaseFulfill!: () => void;
+    const fulfillPending = new Promise<void>((resolve) => {
+      releaseFulfill = resolve;
     });
-    let releaseSecondPolicy!: () => void;
-    const secondPolicyPending = new Promise<void>((resolve) => {
-      releaseSecondPolicy = resolve;
+    const route = createMockRoute({ fulfill: vi.fn(async () => await fulfillPending) });
+    const events: string[] = [];
+
+    const guarded = withPageNavigationRequestGuard({
+      page,
+      ssrfPolicy: strictPolicy,
+      onPolicyDenied: (event) => {
+        events.push(
+          event.state === "detected"
+            ? event.state
+            : `${event.state}:${String(event.sourcePreserved)}`,
+        );
+      },
+      action: async () => {
+        await dispatchMockNavigation({
+          getRouteHandler,
+          mainFrame,
+          url: "http://127.0.0.1:18080/private",
+          route,
+        });
+      },
+    });
+
+    await vi.waitFor(() => expect(route.fulfill).toHaveBeenCalledTimes(1));
+    expect(events).toEqual(["detected"]);
+    releaseFulfill();
+    await expect(guarded).rejects.toBeInstanceOf(SsrFBlockedError);
+    expect(events).toEqual(["detected", "handled:true"]);
+  });
+
+  it("does not report an unsafe source while another denied fulfillment is pending", async () => {
+    const { getRouteHandler, mainFrame, page } = installBrowserMocks();
+    let releaseFirst!: () => void;
+    const firstPending = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let releaseSecond!: () => void;
+    const secondPending = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const firstRoute = createMockRoute({ fulfill: vi.fn(async () => await firstPending) });
+    const secondRoute = createMockRoute({ fulfill: vi.fn(async () => await secondPending) });
+    const events: string[] = [];
+
+    const guarded = withPageNavigationRequestGuard({
+      page,
+      ssrfPolicy: strictPolicy,
+      onPolicyDenied: (event) => {
+        events.push(
+          event.state === "detected"
+            ? event.state
+            : `${event.state}:${String(event.sourcePreserved)}`,
+        );
+      },
+      action: async () => {
+        await Promise.all([
+          dispatchMockNavigation({
+            getRouteHandler,
+            mainFrame,
+            url: "http://127.0.0.1:18080/first",
+            route: firstRoute,
+          }),
+          dispatchMockNavigation({
+            getRouteHandler,
+            mainFrame,
+            frame: {},
+            url: "http://127.0.0.1:18080/second",
+            route: secondRoute,
+          }),
+        ]);
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(firstRoute.fulfill).toHaveBeenCalledTimes(1);
+      expect(secondRoute.fulfill).toHaveBeenCalledTimes(1);
+    });
+    releaseSecond();
+    await Promise.resolve();
+    expect(events).toEqual(["detected"]);
+    releaseFirst();
+    await expect(guarded).rejects.toBeInstanceOf(SsrFBlockedError);
+    expect(events).toEqual(["detected", "handled:true"]);
+  });
+
+  it("waits for in-flight policy work before returning", async () => {
+    const { getRouteHandler, mainFrame, page, pageUnroute } = installBrowserMocks();
+    let releasePolicy!: () => void;
+    const policyPending = new Promise<void>((resolve) => {
+      releasePolicy = resolve;
     });
     const assertNavigationAllowedSpy = vi
       .spyOn(navigationGuardModule, "assertBrowserNavigationAllowed")
-      .mockImplementationOnce(async () => await firstPolicyPending)
-      .mockImplementationOnce(async () => await secondPolicyPending);
-    const firstRoute = createMockRoute();
-    const secondRoute = createMockRoute();
+      .mockImplementationOnce(async () => await policyPending);
+    const route = createMockRoute();
     let settled = false;
-    let firstDispatched: Promise<void> | undefined;
+    let dispatched: Promise<void> | undefined;
+    let observedPolicyCheck: Promise<void> | undefined;
 
     try {
       const guarded = withPageNavigationRequestGuard({
         page,
         ssrfPolicy: strictPolicy,
+        onPolicyCheckStarted: (check) => {
+          observedPolicyCheck = check;
+        },
         action: async () => {
-          firstDispatched = dispatchMockNavigation({
+          dispatched = dispatchMockNavigation({
             getRouteHandler,
             mainFrame,
             url: "https://93.184.216.34/page",
-            route: firstRoute,
+            route,
           });
           return "ok";
         },
@@ -1011,38 +1089,23 @@ describe("pw-session page-scoped interaction request guard", () => {
       });
 
       await vi.waitFor(() => expect(assertNavigationAllowedSpy).toHaveBeenCalledTimes(1));
-      const secondDispatched = dispatchMockNavigation({
-        getRouteHandler,
-        mainFrame,
-        url: "https://93.184.216.34/late",
-        route: secondRoute,
-      });
-      await vi.waitFor(() => expect(assertNavigationAllowedSpy).toHaveBeenCalledTimes(2));
-      expect(pageUnroute).not.toHaveBeenCalled();
-      expect(settled).toBe(false);
-
-      releaseFirstPolicy();
-      await firstDispatched;
-      await Promise.resolve();
-      expect(firstRoute.fallback).toHaveBeenCalledTimes(1);
-      expect(pageUnroute).not.toHaveBeenCalled();
-      expect(settled).toBe(false);
-
-      releaseSecondPolicy();
-      await expect(guarded).resolves.toBe("ok");
-      await secondDispatched;
+      expect(observedPolicyCheck).toBeInstanceOf(Promise);
       expect(pageUnroute).toHaveBeenCalledTimes(1);
-      expect(secondRoute.fallback).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+      releasePolicy();
+      await expect(guarded).resolves.toBe("ok");
+      await dispatched;
+      expect(route.fallback).toHaveBeenCalledTimes(1);
     } finally {
       assertNavigationAllowedSpy.mockRestore();
     }
   });
 
-  it("falls back to abort but does not claim source safety when route.fulfill fails", async () => {
+  it("does not claim source preservation when 204 fulfillment falls back to abort", async () => {
     const { getRouteHandler, mainFrame, page } = installBrowserMocks();
     const route = createMockRoute({
       fulfill: vi.fn(async () => {
-        throw new Error("Route is already handled");
+        throw new Error("fulfill failed");
       }),
     });
     let caught: unknown;
@@ -1065,21 +1128,18 @@ describe("pw-session page-scoped interaction request guard", () => {
     }
 
     expect(caught).toBeInstanceOf(SsrFBlockedError);
-    expect(route.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
     expect(route.abort).toHaveBeenCalledTimes(1);
     expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(false);
   });
 
-  it("leaves the denial unmarked when both route.fulfill and route.abort fail", async () => {
+  it("prefers a later policy denial over an earlier route failure", async () => {
     const { getRouteHandler, mainFrame, page } = installBrowserMocks();
-    const route = createMockRoute({
-      fulfill: vi.fn(async () => {
-        throw new Error("Route fulfill failed");
-      }),
-      abort: vi.fn(async () => {
-        throw new Error("Route abort failed");
+    const allowedRoute = createMockRoute({
+      fallback: vi.fn(async () => {
+        throw new Error("fallback transport failed");
       }),
     });
+    const deniedRoute = createMockRoute();
     let caught: unknown;
 
     try {
@@ -1090,8 +1150,14 @@ describe("pw-session page-scoped interaction request guard", () => {
           await dispatchMockNavigation({
             getRouteHandler,
             mainFrame,
+            url: "https://93.184.216.34/allowed",
+            route: allowedRoute,
+          });
+          await dispatchMockNavigation({
+            getRouteHandler,
+            mainFrame,
             url: "http://127.0.0.1:18080/private",
-            route,
+            route: deniedRoute,
           });
         },
       });
@@ -1100,107 +1166,12 @@ describe("pw-session page-scoped interaction request guard", () => {
     }
 
     expect(caught).toBeInstanceOf(SsrFBlockedError);
-    expect(route.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
-    expect(route.abort).toHaveBeenCalledTimes(1);
+    expect(allowedRoute.abort).toHaveBeenCalledTimes(1);
+    expect(deniedRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
     expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(false);
   });
 
-  it("keeps the first concurrent policy error stable and fulfills every denied route", async () => {
-    const { getRouteHandler, mainFrame, page } = installBrowserMocks();
-    const firstError = new InvalidBrowserNavigationUrlError("first denial");
-    const secondError = new InvalidBrowserNavigationUrlError("second denial");
-    let rejectSecond!: (error: Error) => void;
-    const secondCheck = new Promise<never>((_, reject) => {
-      rejectSecond = reject;
-    });
-    const assertNavigationAllowedSpy = vi
-      .spyOn(navigationGuardModule, "assertBrowserNavigationAllowed")
-      .mockRejectedValueOnce(firstError)
-      .mockImplementationOnce(async () => await secondCheck);
-    const firstRoute = createMockRoute();
-    const secondRoute = createMockRoute();
-    let caught: unknown;
-
-    try {
-      await withPageNavigationRequestGuard({
-        page,
-        ssrfPolicy: strictPolicy,
-        action: async () => {
-          const first = dispatchMockNavigation({
-            getRouteHandler,
-            mainFrame,
-            url: "http://127.0.0.1:18080/first",
-            route: firstRoute,
-          });
-          const second = dispatchMockNavigation({
-            getRouteHandler,
-            mainFrame,
-            url: "http://127.0.0.1:18080/second",
-            route: secondRoute,
-          });
-          await first;
-          rejectSecond(secondError);
-          await second;
-        },
-      });
-    } catch (err) {
-      caught = err;
-    } finally {
-      assertNavigationAllowedSpy.mockRestore();
-    }
-
-    expect(caught).toBe(firstError);
-    expect(firstRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
-    expect(secondRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
-    expect(firstRoute.abort).not.toHaveBeenCalled();
-    expect(secondRoute.abort).not.toHaveBeenCalled();
-    expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(true);
-  });
-
-  it("leaves concurrent denials unmarked when any denied route cannot fulfill", async () => {
-    const { getRouteHandler, mainFrame, page } = installBrowserMocks();
-    const firstRoute = createMockRoute();
-    const failedRoute = createMockRoute({
-      fulfill: vi.fn(async () => {
-        throw new Error("Route is already handled");
-      }),
-    });
-    let caught: unknown;
-
-    try {
-      await withPageNavigationRequestGuard({
-        page,
-        ssrfPolicy: strictPolicy,
-        action: async () => {
-          await Promise.all([
-            dispatchMockNavigation({
-              getRouteHandler,
-              mainFrame,
-              url: "http://127.0.0.1:18080/first",
-              route: firstRoute,
-            }),
-            dispatchMockNavigation({
-              getRouteHandler,
-              mainFrame,
-              url: "http://127.0.0.1:18080/second",
-              route: failedRoute,
-            }),
-          ]);
-        },
-      });
-    } catch (err) {
-      caught = err;
-    }
-
-    expect(caught).toBeInstanceOf(SsrFBlockedError);
-    expect(firstRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
-    expect(firstRoute.abort).not.toHaveBeenCalled();
-    expect(failedRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
-    expect(failedRoute.abort).toHaveBeenCalledTimes(1);
-    expect(wasBrowserNavigationRequestBlockedBeforeDispatch(caught)).toBe(false);
-  });
-
-  it("removes its exact route when the action fails before any request", async () => {
+  it("removes its exact route when the action fails before a request", async () => {
     const { page, pageRoute, pageUnroute } = installBrowserMocks();
 
     await expect(
@@ -1213,305 +1184,10 @@ describe("pw-session page-scoped interaction request guard", () => {
       }),
     ).rejects.toThrow("locator failed");
 
-    const handler = pageRoute.mock.calls[0]?.[1];
-    expect(pageUnroute).toHaveBeenCalledWith("**", handler);
+    expect(pageUnroute).toHaveBeenCalledWith("**", pageRoute.mock.calls[0]?.[1]);
   });
 
-  it("returns a policy denial before the guarded action settles", async () => {
-    const { getRouteHandler, mainFrame, page, pageUnroute } = installBrowserMocks();
-    let resolveAction!: () => void;
-    const actionPending = new Promise<void>((resolve) => {
-      resolveAction = resolve;
-    });
-    const guarded = withPageNavigationRequestGuard({
-      page,
-      ssrfPolicy: strictPolicy,
-      action: async () => await actionPending,
-    });
-
-    await vi.waitFor(() => expect(getRouteHandler()).not.toBeNull());
-    const deniedRoute = createMockRoute();
-    await dispatchMockNavigation({
-      getRouteHandler,
-      mainFrame,
-      url: "http://127.0.0.1:18080/while-waiting",
-      route: deniedRoute,
-    });
-
-    await expect(guarded).rejects.toBeInstanceOf(SsrFBlockedError);
-    expect(deniedRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
-    expect(pageUnroute).not.toHaveBeenCalled();
-
-    const allowedRoute = createMockRoute();
-    await dispatchMockNavigation({
-      getRouteHandler,
-      mainFrame,
-      url: "https://93.184.216.34/allowed-while-waiting",
-      route: allowedRoute,
-    });
-    expect(allowedRoute.fallback).toHaveBeenCalledTimes(1);
-    expect(allowedRoute.fulfill).not.toHaveBeenCalled();
-
-    resolveAction();
-    await vi.waitFor(() => expect(pageUnroute).toHaveBeenCalledTimes(1));
-  });
-
-  it("does not suppress an allowed document racing with a denied request", async () => {
-    const { getRouteHandler, mainFrame, page, pageUnroute } = installBrowserMocks();
-    const blocked = new SsrFBlockedError("blocked by policy");
-    const assertNavigationAllowedSpy = vi
-      .spyOn(navigationGuardModule, "assertBrowserNavigationAllowed")
-      .mockImplementation(async (opts) => {
-        if (opts.url.includes("blocked.example")) {
-          throw blocked;
-        }
-      });
-    let resolveAction!: () => void;
-    const actionPending = new Promise<void>((resolve) => {
-      resolveAction = resolve;
-    });
-    const guarded = withPageNavigationRequestGuard({
-      page,
-      ssrfPolicy: strictPolicy,
-      action: async () => await actionPending,
-    });
-
-    try {
-      await vi.waitFor(() => expect(getRouteHandler()).not.toBeNull());
-      const deniedRoute = createMockRoute();
-      const allowedRoute = createMockRoute();
-      await Promise.all([
-        dispatchMockNavigation({
-          getRouteHandler,
-          mainFrame,
-          url: "https://blocked.example/private",
-          route: deniedRoute,
-        }),
-        dispatchMockNavigation({
-          getRouteHandler,
-          mainFrame,
-          url: "https://allowed.example/page",
-          route: allowedRoute,
-        }),
-      ]);
-
-      await expect(guarded).rejects.toBe(blocked);
-      expect(deniedRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
-      expect(allowedRoute.fallback).toHaveBeenCalledTimes(1);
-      expect(allowedRoute.fulfill).not.toHaveBeenCalled();
-      expect(pageUnroute).not.toHaveBeenCalled();
-      resolveAction();
-      await vi.waitFor(() => expect(pageUnroute).toHaveBeenCalledTimes(1));
-    } finally {
-      resolveAction();
-      assertNavigationAllowedSpy.mockRestore();
-    }
-  });
-
-  it("retains its route through a nested Playwright action that outlives the wrapper", async () => {
-    const { getRouteHandler, mainFrame, page, pageUnroute } = installBrowserMocks();
-    let rejectWrapper!: (err: unknown) => void;
-    const wrapperPending = new Promise<void>((_, reject) => {
-      rejectWrapper = reject;
-    });
-    let resolvePlaywrightAction!: () => void;
-    const playwrightActionPending = new Promise<void>((resolve) => {
-      resolvePlaywrightAction = resolve;
-    });
-    const guarded = withPageNavigationRequestGuard({
-      page,
-      ssrfPolicy: strictPolicy,
-      action: async () => await wrapperPending,
-    });
-
-    await vi.waitFor(() => expect(getRouteHandler()).not.toBeNull());
-    await dispatchMockNavigation({
-      getRouteHandler,
-      mainFrame,
-      url: "http://127.0.0.1:18080/while-wrapper-pending",
-    });
-    await expect(guarded).rejects.toBeInstanceOf(SsrFBlockedError);
-
-    rejectWrapper(
-      trackPendingBrowserInteractionAction(new Error("wrapper aborted"), playwrightActionPending),
-    );
-    await Promise.resolve();
-    expect(pageUnroute).not.toHaveBeenCalled();
-
-    resolvePlaywrightAction();
-    await vi.waitFor(() => expect(pageUnroute).toHaveBeenCalledTimes(1));
-  });
-
-  it("keeps concurrent actions distinct when a dialog shares one abort reason", async () => {
-    const first = installBrowserMocks();
-    const second = installBrowserMocks();
-    let resolveFirst!: () => void;
-    const firstPending = new Promise<void>((resolve) => {
-      resolveFirst = resolve;
-    });
-    let resolveSecond!: () => void;
-    const secondPending = new Promise<void>((resolve) => {
-      resolveSecond = resolve;
-    });
-    const sharedDialogError = new BrowserObservedDialogBlockedError({
-      dialogs: { pending: [], recent: [] },
-    });
-    const firstError = trackPendingBrowserInteractionAction(sharedDialogError, firstPending);
-    const secondError = trackPendingBrowserInteractionAction(sharedDialogError, secondPending);
-
-    expect(firstError).not.toBe(sharedDialogError);
-    expect(secondError).not.toBe(sharedDialogError);
-    expect(firstError).not.toBe(secondError);
-
-    const firstGuard = withPageNavigationRequestGuard({
-      page: first.page,
-      ssrfPolicy: strictPolicy,
-      action: async () => {
-        throw firstError;
-      },
-    });
-    const secondGuard = withPageNavigationRequestGuard({
-      page: second.page,
-      ssrfPolicy: strictPolicy,
-      action: async () => {
-        throw secondError;
-      },
-    });
-    await expect(firstGuard).rejects.toBe(sharedDialogError);
-    await expect(secondGuard).rejects.toBe(sharedDialogError);
-    expect(first.pageUnroute).not.toHaveBeenCalled();
-    expect(second.pageUnroute).not.toHaveBeenCalled();
-
-    resolveFirst();
-    await vi.waitFor(() => expect(first.pageUnroute).toHaveBeenCalledTimes(1));
-    expect(second.pageUnroute).not.toHaveBeenCalled();
-    resolveSecond();
-    await vi.waitFor(() => expect(second.pageUnroute).toHaveBeenCalledTimes(1));
-  });
-
-  it("tracks a default AbortController reason without adopting its native prototype", async () => {
-    const { page, pageUnroute } = installBrowserMocks();
-    let resolveAction!: () => void;
-    const actionPending = new Promise<void>((resolve) => {
-      resolveAction = resolve;
-    });
-    const ctrl = new AbortController();
-    ctrl.abort();
-    const trackedError = trackPendingBrowserInteractionAction(ctrl.signal.reason, actionPending);
-
-    expect(trackedError).not.toBe(ctrl.signal.reason);
-    const guarded = withPageNavigationRequestGuard({
-      page,
-      ssrfPolicy: strictPolicy,
-      action: async () => {
-        throw trackedError;
-      },
-    });
-
-    await expect(guarded).rejects.toBe(ctrl.signal.reason);
-    expect(pageUnroute).not.toHaveBeenCalled();
-    resolveAction();
-    await vi.waitFor(() => expect(pageUnroute).toHaveBeenCalledTimes(1));
-  });
-
-  it("retains pending ownership when a policy error replaces an abort", async () => {
-    const { page, pageUnroute } = installBrowserMocks();
-    let resolveAction!: () => void;
-    const actionPending = new Promise<void>((resolve) => {
-      resolveAction = resolve;
-    });
-    const trackedError = trackPendingBrowserInteractionAction(new Error("aborted"), actionPending);
-    const policyError = new SsrFBlockedError("blocked after abort");
-
-    const guarded = withPageNavigationRequestGuard({
-      page,
-      ssrfPolicy: strictPolicy,
-      action: async () => {
-        throw replacePendingBrowserInteractionActionError(trackedError, policyError);
-      },
-    });
-
-    await expect(guarded).rejects.toBe(policyError);
-    expect(pageUnroute).not.toHaveBeenCalled();
-    resolveAction();
-    await vi.waitFor(() => expect(pageUnroute).toHaveBeenCalledTimes(1));
-  });
-
-  it("keeps its exact route until an aborted Playwright action actually settles", async () => {
-    const { getRouteHandler, mainFrame, page, pageUnroute } = installBrowserMocks();
-    let resolveAction!: () => void;
-    const actionPending = new Promise<void>((resolve) => {
-      resolveAction = resolve;
-    });
-    const abortError = new Error("dialog requires explicit handling");
-
-    const guarded = withPageNavigationRequestGuard({
-      page,
-      ssrfPolicy: strictPolicy,
-      action: async () => {
-        throw trackPendingBrowserInteractionAction(abortError, actionPending);
-      },
-    });
-
-    await expect(guarded).rejects.toMatchObject({ message: abortError.message });
-    expect(pageUnroute).not.toHaveBeenCalled();
-    expect(getRouteHandler()).not.toBeNull();
-
-    const lateRoute = createMockRoute();
-    await dispatchMockNavigation({
-      getRouteHandler,
-      mainFrame,
-      url: "http://127.0.0.1:18080/after-dialog",
-      route: lateRoute,
-    });
-    expect(lateRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
-    expect(lateRoute.abort).not.toHaveBeenCalled();
-
-    resolveAction();
-    await vi.waitFor(() => expect(pageUnroute).toHaveBeenCalledTimes(1));
-    expect(getRouteHandler()).toBeNull();
-  });
-
-  it("quarantines an unsafe late denial after an aborted action settles", async () => {
-    const { getRouteHandler, mainFrame, page, pageUnroute } = installBrowserMocks();
-    let resolveAction!: () => void;
-    const actionPending = new Promise<void>((resolve) => {
-      resolveAction = resolve;
-    });
-    const abortError = new Error("dialog requires explicit handling");
-    const onLateUnsafePolicyError = vi.fn(async (_err: unknown) => {});
-
-    const guarded = withPageNavigationRequestGuard({
-      page,
-      ssrfPolicy: strictPolicy,
-      onLateUnsafePolicyError,
-      action: async () => {
-        throw trackPendingBrowserInteractionAction(abortError, actionPending);
-      },
-    });
-
-    await expect(guarded).rejects.toMatchObject({ message: abortError.message });
-    const lateRoute = createMockRoute({
-      fulfill: vi.fn(async () => {
-        throw new Error("fulfill failed");
-      }),
-    });
-    await dispatchMockNavigation({
-      getRouteHandler,
-      mainFrame,
-      url: "http://127.0.0.1:18080/after-dialog",
-      route: lateRoute,
-    });
-    expect(lateRoute.abort).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(onLateUnsafePolicyError).toHaveBeenCalledTimes(1));
-    expect(pageUnroute).not.toHaveBeenCalled();
-
-    resolveAction();
-    await vi.waitFor(() => expect(pageUnroute).toHaveBeenCalledTimes(1));
-    expect(onLateUnsafePolicyError.mock.calls[0]?.[0]).toBeInstanceOf(SsrFBlockedError);
-  });
-
-  it("rolls back its exact handler when route setup rejects", async () => {
+  it("rolls back its exact route when setup rejects", async () => {
     const { getRouteHandler, page, pageRoute, pageUnroute } = installBrowserMocks();
     const installRoute = pageRoute.getMockImplementation();
     const setupError = new Error("route setup failed");
@@ -1522,47 +1198,15 @@ describe("pw-session page-scoped interaction request guard", () => {
     const action = vi.fn(async () => "unreachable");
 
     await expect(
-      withPageNavigationRequestGuard({
-        page,
-        ssrfPolicy: strictPolicy,
-        action,
-      }),
+      withPageNavigationRequestGuard({ page, ssrfPolicy: strictPolicy, action }),
     ).rejects.toBe(setupError);
 
-    const handler = pageRoute.mock.calls[0]?.[1];
-    expect(pageUnroute).toHaveBeenCalledWith("**", handler);
+    expect(pageUnroute).toHaveBeenCalledWith("**", pageRoute.mock.calls[0]?.[1]);
     expect(getRouteHandler()).toBeNull();
     expect(action).not.toHaveBeenCalled();
   });
 
-  it("retires the connection when route setup and rollback both fail", async () => {
-    const { page, pageRoute, pageUnroute } = installBrowserMocks();
-    Object.assign(page, { isClosed: () => false });
-    const installRoute = pageRoute.getMockImplementation();
-    const setupError = new Error("route setup failed");
-    const cleanupError = new Error("route rollback failed");
-    const onGuardCleanupError = vi.fn(async (_err: unknown) => {});
-    pageRoute.mockImplementationOnce(async (...args) => {
-      await installRoute?.(...args);
-      throw setupError;
-    });
-    pageUnroute.mockRejectedValueOnce(cleanupError);
-    const action = vi.fn(async () => "unreachable");
-
-    await expect(
-      withPageNavigationRequestGuard({
-        page,
-        ssrfPolicy: strictPolicy,
-        onGuardCleanupError,
-        action,
-      }),
-    ).rejects.toBe(setupError);
-
-    expect(onGuardCleanupError).toHaveBeenCalledWith(cleanupError);
-    expect(action).not.toHaveBeenCalled();
-  });
-
-  it("ignores exact-route cleanup failure after the action closes its page", async () => {
+  it("ignores cleanup failure only after the action closes its page", async () => {
     const { page, pageUnroute } = installBrowserMocks();
     let closed = false;
     Object.assign(page, { isClosed: () => closed });
@@ -1580,47 +1224,18 @@ describe("pw-session page-scoped interaction request guard", () => {
     ).resolves.toBe("closed");
   });
 
-  it("surfaces exact-route cleanup failure while the page remains open", async () => {
+  it("surfaces cleanup failure while the page remains open", async () => {
     const { page, pageUnroute } = installBrowserMocks();
     Object.assign(page, { isClosed: () => false });
     const cleanupError = new Error("route cleanup failed");
-    const onGuardCleanupError = vi.fn(async (_err: unknown) => {});
     pageUnroute.mockRejectedValueOnce(cleanupError);
 
     await expect(
       withPageNavigationRequestGuard({
         page,
         ssrfPolicy: strictPolicy,
-        onGuardCleanupError,
         action: async () => "ok",
       }),
     ).rejects.toBe(cleanupError);
-    expect(onGuardCleanupError).toHaveBeenCalledWith(cleanupError);
-  });
-
-  it("reports a deferred exact-route cleanup failure after an aborted action settles", async () => {
-    const { page, pageUnroute } = installBrowserMocks();
-    Object.assign(page, { isClosed: () => false });
-    const cleanupError = new Error("deferred route cleanup failed");
-    const onGuardCleanupError = vi.fn(async (_err: unknown) => {});
-    pageUnroute.mockRejectedValueOnce(cleanupError);
-    let resolveAction!: () => void;
-    const actionPending = new Promise<void>((resolve) => {
-      resolveAction = resolve;
-    });
-
-    const guarded = withPageNavigationRequestGuard({
-      page,
-      ssrfPolicy: strictPolicy,
-      onGuardCleanupError,
-      action: async () => {
-        throw trackPendingBrowserInteractionAction(new Error("aborted"), actionPending);
-      },
-    });
-
-    await expect(guarded).rejects.toThrow("aborted");
-    expect(pageUnroute).not.toHaveBeenCalled();
-    resolveAction();
-    await vi.waitFor(() => expect(onGuardCleanupError).toHaveBeenCalledWith(cleanupError));
   });
 });

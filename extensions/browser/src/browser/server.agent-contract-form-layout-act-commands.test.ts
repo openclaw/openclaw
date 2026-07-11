@@ -14,7 +14,6 @@ import {
 import {
   getBrowserControlServerTestState,
   getPwMocks,
-  setBrowserControlServerExtraArgs,
   setBrowserControlServerSsrFPolicy,
   setBrowserControlServerTabUrl,
 } from "./server.control-server.test-harness.js";
@@ -614,37 +613,6 @@ describe("browser control server", () => {
       type: "jpeg",
       timeoutMs: 3333,
     });
-  });
-
-  it("forwards explicit browser proxy policy through file-chooser interactions", async () => {
-    setBrowserControlServerExtraArgs(["--proxy-server=http://127.0.0.1:18888"]);
-    const base = await startServerAndBase();
-
-    const clickResponse = await postJson(`${base}/hooks/file-chooser`, {
-      paths: ["proxy-upload.txt"],
-      ref: "e12",
-    });
-    const inputResponse = await postJson(`${base}/hooks/file-chooser`, {
-      paths: ["proxy-input-upload.txt"],
-      inputRef: "e13",
-    });
-
-    expectOkResult(clickResponse);
-    expectOkResult(inputResponse);
-    expectBrowserCallFields(pwMocks.clickViaPlaywright, {
-      targetId: "abcd1234",
-      ref: "e12",
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-      browserProxyMode: "explicit-browser-proxy",
-    });
-    expectBrowserCallFields(pwMocks.setInputFilesViaPlaywright, {
-      targetId: "abcd1234",
-      inputRef: "e13",
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-      browserProxyMode: "explicit-browser-proxy",
-    });
-    const inputCall = requireMockArg(pwMocks.setInputFilesViaPlaywright);
-    expect(inputCall.signal).toEqual(expect.objectContaining({ aborted: false }));
   });
 
   it("blocks file chooser traversal / absolute paths outside uploads dir", async () => {

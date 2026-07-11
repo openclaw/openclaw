@@ -290,24 +290,8 @@ main model can read the screenshot directly.
 
 <Accordion title="SSRF policy">
 
-- Browser navigation and open-tab validate the requested URL before the direct
-  request and best-effort re-check the final `http(s)` URL afterwards. During a
-  Playwright-backed selected-page DOM action, screenshot, or file upload and its
-  short post-action grace window, direct main-frame and subframe document requests
-  visible to Playwright receive the same pre-request check. Download URLs are
-  re-checked before OpenClaw saves the file.
-- Existing-session Chrome MCP actions instead gate the exact current destination
-  immediately before execution, then re-check the selected URL and changed sibling
-  tabs after the action. The post-action check is detection after dispatch, not
-  request-time prevention. A dialog that is already pending uses Chrome MCP's native
-  exact-target response and the same full post-check. Arm-next uses a one-shot in-page
-  hook because Chrome MCP has no future-dialog subscription; only hook installation is
-  inside the bounded check, so a later autonomous invocation is outside that window.
-- The selected-page Playwright route does not cover later redirect hops,
-  popup-page traffic, Service Worker-handled requests, or page-script navigations
-  starting after the per-action guard window. Use network-level egress isolation
-  when browser traffic needs complete enforcement rather than this application-layer
-  guard.
+- Browser navigation, open-tab, and document requests triggered by guarded Playwright hover, drag, and scroll actions are SSRF-guarded before dispatch and best-effort re-checked on the final `http(s)` URL afterwards.
+- Playwright page routing does not intercept redirect hops, a popup's first request, or Service Worker traffic. Those paths retain best-effort post-navigation detection; do not treat the browser SSRF policy as complete browser egress isolation.
 - In strict SSRF mode, remote CDP endpoint discovery and `/json/version` probes (`cdpUrl`) are checked too.
 - Gateway/provider `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables do not automatically proxy the OpenClaw-managed browser. Managed Chrome launches direct by default so provider proxy settings do not weaken browser SSRF checks.
 - OpenClaw-managed local CDP readiness probes and DevTools WebSocket connections bypass the managed network proxy for the exact launched loopback endpoint, so `openclaw browser start` still works when an operator proxy blocks loopback egress.
@@ -803,7 +787,7 @@ Compared to the managed `openclaw` profile, existing-session drivers are more co
 
 - **Screenshots** - page captures and `--ref` element captures work; CSS `--element` selectors do not. Playwright is not required for page or ref-based element screenshots. (`--full-page` cannot combine with `--ref` or `--element` on any profile, not just existing-session.)
 - **Actions** - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only (no button overrides or modifiers). `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, `fill`, and `evaluate` do not support per-call `timeoutMs` overrides. `select` accepts a single value. `batch` is not supported; send actions individually.
-- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns (same as managed); `wait --load networkidle` is not supported on existing-session profiles (it works on managed and raw/remote CDP profiles). Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides or `dialogId`; pending dialogs use native exact-target handling, while arm-next remains a one-shot same-document page hook.
+- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns (same as managed); `wait --load networkidle` is not supported on existing-session profiles (it works on managed and raw/remote CDP profiles). Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides or `dialogId`.
 - **Dialog visibility** - Managed browser action responses include `blockedByDialog` and `browserState.dialogs.pending` when an action opens a modal dialog; snapshots also include pending dialog state. Respond with `browser dialog --accept/--dismiss --dialog-id <id>` while a dialog is pending. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - **Managed-only features** - PDF export, download interception, and `responsebody` still require the managed browser path.
 

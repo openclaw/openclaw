@@ -171,12 +171,10 @@ const CHROME_CONNECTION_TOOL_ERROR_RE =
   /(?:Could not connect to Chrome|DevToolsActivePort|ECONNREFUSED|ECONNRESET|websocket|timed out)/i;
 const STALE_SELECTED_PAGE_ERROR =
   "The selected page has been closed. Call list_pages to see open pages.";
-const CHROME_MCP_NO_OPEN_DIALOG_ERROR = "No open dialog found";
 const CHROME_MCP_SESSION_TARGET_PREFIX = "chrome-mcp:";
 const CHROME_MCP_SNAPSHOT_REF_PREFIX = "mcp-ref:";
 
 class ChromeMcpReconnectRequiredError extends Error {}
-class ChromeMcpNoOpenDialogError extends Error {}
 
 const execFileAsync = promisify(execFile);
 const sessions = new Map<string, ChromeMcpSession>();
@@ -1407,9 +1405,6 @@ async function callTool(
   // poisons it, so the outer pre-operation list may reconnect once.
   if (result.isError) {
     const message = extractToolErrorMessage(result, name);
-    if (name === "handle_dialog" && message === CHROME_MCP_NO_OPEN_DIALOG_ERROR) {
-      throw new ChromeMcpNoOpenDialogError(message);
-    }
     if (shouldReconnectForToolError(name, message)) {
       if (!lease.temporary) {
         const current = sessions.get(lease.cacheKey);
@@ -2009,29 +2004,6 @@ export async function pressChromeMcpKey(
   await callTargetTool(params, "press_key", {
     key: params.key,
   });
-}
-
-/** Respond to a currently open Chrome MCP dialog on the exact target. */
-export async function handleChromeMcpDialog(
-  params: ChromeMcpTargetOperation & {
-    accept: boolean;
-    promptText?: string;
-  },
-): Promise<boolean> {
-  try {
-    await callTargetTool(params, "handle_dialog", {
-      action: params.accept ? "accept" : "dismiss",
-      ...(params.accept && params.promptText !== undefined
-        ? { promptText: params.promptText }
-        : {}),
-    });
-    return true;
-  } catch (err) {
-    if (err instanceof ChromeMcpNoOpenDialogError) {
-      return false;
-    }
-    throw err;
-  }
 }
 
 /** Resize a Chrome MCP page viewport. */

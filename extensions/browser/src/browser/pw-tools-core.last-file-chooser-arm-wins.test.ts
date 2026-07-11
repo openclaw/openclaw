@@ -86,26 +86,31 @@ describe("pw-tools-core", () => {
       promptText: "x",
     });
 
-    expect(sessionMocks.respondOrArmObservedDialogOnPage).toHaveBeenCalledWith({
+    expect(sessionMocks.respondToObservedDialogOnPage).toHaveBeenCalledWith({
+      page,
+      accept: true,
+      promptText: "x",
+      closedBy: "agent",
+    });
+    expect(sessionMocks.armObservedDialogResponseOnPage).toHaveBeenCalledWith({
       page,
       accept: true,
       promptText: "x",
       timeoutMs: 120_000,
-      runResponse: expect.any(Function),
     });
 
-    sessionMocks.respondOrArmObservedDialogOnPage.mockClear();
+    sessionMocks.respondToObservedDialogOnPage.mockClear();
+    sessionMocks.armObservedDialogResponseOnPage.mockClear();
 
     await mod.armDialogViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       accept: false,
     });
 
-    expect(sessionMocks.respondOrArmObservedDialogOnPage).toHaveBeenCalledWith({
+    expect(sessionMocks.armObservedDialogResponseOnPage).toHaveBeenCalledWith({
       page,
       accept: false,
       timeoutMs: 120_000,
-      runResponse: expect.any(Function),
     });
   });
   it("waits for selector, url, load state, and function", async () => {
@@ -129,7 +134,6 @@ describe("pw-tools-core", () => {
 
     await mod.waitForViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
-      targetId: "tab-1",
       selector: "#main",
       url: "**/dash",
       loadState: "networkidle",
@@ -148,11 +152,9 @@ describe("pw-tools-core", () => {
     expect(waitForLoadState).toHaveBeenCalledWith("networkidle", {
       timeout: 1234,
     });
-    expect(waitForFunction).toHaveBeenCalledWith(
-      expect.any(Function),
-      expect.stringContaining("window.ready===true"),
-      { timeout: 1234 },
-    );
+    expect(waitForFunction).toHaveBeenCalledWith("window.ready===true", {
+      timeout: 1234,
+    });
   });
 
   it("clamps wait timeoutMs to 120000 for wait steps", async () => {

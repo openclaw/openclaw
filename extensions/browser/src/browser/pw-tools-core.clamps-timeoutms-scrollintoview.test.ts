@@ -10,46 +10,10 @@ installPwToolsCoreTestHooks();
 const mod = await import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
-  it("clamps non-finite viewport dimensions to the minimum size", async () => {
-    const setViewportSize = vi.fn(async () => {});
-    setPwToolsCoreCurrentPage({
-      setViewportSize,
-      url: vi.fn(() => "https://example.com"),
-    });
-
-    await mod.resizeViewportViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      width: Number.NaN,
-      height: Number.POSITIVE_INFINITY,
-    });
-
-    expect(setViewportSize).toHaveBeenCalledWith({ width: 1, height: 1 });
-  });
-
-  it("rejects excessive viewport dimensions before calling Playwright", async () => {
-    const setViewportSize = vi.fn(async () => {});
-    setPwToolsCoreCurrentPage({
-      setViewportSize,
-      url: vi.fn(() => "https://example.com"),
-    });
-
-    await expect(
-      mod.resizeViewportViaPlaywright({
-        cdpUrl: "http://127.0.0.1:9222",
-        targetId: "tab-1",
-        width: Number.MAX_SAFE_INTEGER,
-        height: 768,
-      }),
-    ).rejects.toThrow("viewport width exceeds maximum of 8192");
-
-    expect(setViewportSize).not.toHaveBeenCalled();
-  });
-
   it("clamps timeoutMs for scrollIntoView", async () => {
     const scrollIntoViewIfNeeded = vi.fn(async () => {});
     setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded });
-    setPwToolsCoreCurrentPage({ url: vi.fn(() => "https://example.com") });
+    setPwToolsCoreCurrentPage({});
 
     await mod.scrollIntoViewViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -76,7 +40,7 @@ describe("pw-tools-core", () => {
       throw new Error(errorMessage);
     });
     setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded });
-    setPwToolsCoreCurrentPage({ url: vi.fn(() => "https://example.com") });
+    setPwToolsCoreCurrentPage({});
 
     await expect(
       mod.scrollIntoViewViaPlaywright({

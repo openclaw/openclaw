@@ -5,10 +5,6 @@ let page: { evaluate: ReturnType<typeof vi.fn>; url: ReturnType<typeof vi.fn> } 
 let locator: { evaluate: ReturnType<typeof vi.fn> } | null = null;
 
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
-const finalizePendingBrowserInteractionAction = vi.fn((error: unknown) => ({
-  error: error instanceof Error ? error : new Error("pending interaction failed"),
-  deferred: false,
-}));
 const getPageForTargetId = vi.fn(async () => {
   if (!page) {
     throw new Error("test: page not set");
@@ -21,24 +17,7 @@ const restoreRoleRefsForTarget = vi.fn(() => {});
 const isBrowserObservedDialogBlockedError = vi.fn(
   (err: unknown) => err instanceof Error && err.name === "BrowserObservedDialogBlockedError",
 );
-const isPolicyDenyNavigationError = vi.fn(() => false);
 const markObservedDialogsHandledRemotelyForPage = vi.fn(() => ({}));
-const quarantineBlockedNavigationTarget = vi.fn(async () => {});
-const quarantineBlockedNavigationTargetForError = vi.fn(async () => {});
-const wasBrowserNavigationRequestBlockedBeforeDispatch = vi.fn(() => false);
-const trackPendingBrowserInteractionAction = vi.fn(
-  (err: unknown, actionPromise: Promise<unknown>, onActionResolved?: () => void) => {
-    void actionPromise.then(onActionResolved, () => {});
-    return err instanceof Error ? err : new Error("aborted");
-  },
-);
-const replacePendingBrowserInteractionActionError = vi.fn(
-  (_current: unknown, replacement: unknown) =>
-    replacement instanceof Error ? replacement : new Error("replacement error"),
-);
-const withPageNavigationRequestGuard = vi.fn(
-  async <T>({ action }: { action: () => Promise<T> }): Promise<T> => await action(),
-);
 const refLocator = vi.fn(() => {
   if (!locator) {
     throw new Error("test: locator not set");
@@ -51,19 +30,21 @@ vi.mock("./pw-session.js", () => {
     assertPageNavigationCompletedSafely,
     ensurePageState,
     forceDisconnectPlaywrightForTarget,
-    finalizePendingBrowserInteractionAction,
     getPageForTargetId,
     isBrowserObservedDialogBlockedError,
-    isPolicyDenyNavigationError,
     markObservedDialogsHandledRemotelyForPage,
-    quarantineBlockedNavigationTarget,
-    quarantineBlockedNavigationTargetForError,
     refLocator,
-    replacePendingBrowserInteractionActionError,
     restoreRoleRefsForTarget,
-    trackPendingBrowserInteractionAction,
-    wasBrowserNavigationRequestBlockedBeforeDispatch,
-    withPageNavigationRequestGuard,
+    wasBrowserNavigationRequestBlockedBeforeDispatch: vi.fn(() => false),
+    withPageNavigationRequestGuard: vi.fn(
+      async ({
+        action,
+        page,
+      }: {
+        action: (url: string) => Promise<unknown>;
+        page: { url: () => string };
+      }) => await action(page.url()),
+    ),
   };
 });
 
@@ -105,7 +86,7 @@ describe("evaluateViaPlaywright (abort)", () => {
         }
         return pendingPromise;
       }),
-      url: vi.fn(() => "https://93.184.216.34/current"),
+      url: vi.fn(() => "https://example.com/current"),
     };
     locator = {
       evaluate: vi.fn(() => {
@@ -136,36 +117,6 @@ describe("evaluateViaPlaywright (abort)", () => {
     });
   });
 
-  it.each([
-    { label: "page.evaluate", fn: "() => 1" },
-    { label: "locator.evaluate", fn: "(el) => el.textContent", ref: "e1" },
-  ])("installs the request guard before starting $label", async ({ fn, ref }) => {
-    page = {
-      evaluate: vi.fn(async () => "page result"),
-      url: vi.fn(() => "https://93.184.216.34/current"),
-    };
-    locator = {
-      evaluate: vi.fn(async () => "locator result"),
-    };
-    const evaluate = ref ? locator.evaluate : page.evaluate;
-    withPageNavigationRequestGuard.mockImplementationOnce(
-      async <T>({ action }: { action: () => Promise<T> }): Promise<T> => {
-        expect(evaluate).not.toHaveBeenCalled();
-        return await action();
-      },
-    );
-
-    await evaluateViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      fn,
-      ref,
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-    });
-
-    expect(withPageNavigationRequestGuard).toHaveBeenCalledTimes(1);
-    expect(evaluate).toHaveBeenCalledTimes(1);
-  });
-
   it("does not disconnect when evaluate is blocked by an observed dialog", async () => {
     const ctrl = new AbortController();
     const pending = createPendingEval();
@@ -178,7 +129,7 @@ describe("evaluateViaPlaywright (abort)", () => {
         pending.resolveEvalCalled();
         return pendingPromise;
       }),
-      url: vi.fn(() => "https://93.184.216.34/current"),
+      url: vi.fn(() => "https://example.com/current"),
     };
 
     const p = evaluateViaPlaywright({

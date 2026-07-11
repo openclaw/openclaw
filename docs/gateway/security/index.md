@@ -477,28 +477,12 @@ Enabling browser control gives the model a real browser. If that profile already
 ### Browser SSRF policy (strict by default)
 
 Private/internal destinations stay blocked unless you explicitly opt in.
-This is defense in depth inside the Gateway's single trusted-operator boundary:
-it constrains model- or page-influenced destinations, not access between agents.
-Use separate Gateways, preferably with separate OS users or hosts, for mutually
-untrusted users or workloads.
 
 - Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` unset, so private/internal/special-use destinations stay blocked. Legacy alias `allowPrivateNetwork` still accepted.
 - Opt-in: set `dangerouslyAllowPrivateNetwork: true` to allow those destinations.
 - In strict mode, use `hostnameAllowlist` (patterns like `*.example.com`) and `allowedHostnames` (exact host exceptions, including otherwise-blocked names like `localhost`) for explicit exceptions.
-- Requested navigation URLs are checked before dispatch. During a Playwright-backed
-  selected-page DOM action, screenshot, or file upload and its short post-action grace
-  window, direct document requests visible to Playwright receive the same check.
-  Download URLs are re-checked before OpenClaw saves the file. Existing-session Chrome
-  MCP actions instead gate the exact current destination immediately before execution,
-  then re-check the selected URL and changed sibling tabs after the action; the latter
-  detects a resulting policy violation but cannot prevent its request before dispatch.
-  Pending Chrome MCP dialogs use native exact-target handling and the same post-check.
-  Chrome MCP has no native future-dialog subscription, so the retained arm-next page
-  hook can run later, outside the bounded action window. Final `http(s)` URLs are
-  best-effort re-checked after navigation. Later redirect hops, popup-page traffic,
-  Service Worker-handled requests, and page-script navigations starting after the
-  guard window are outside this bounded interception. Use network-level egress
-  isolation when complete browser enforcement is required.
+- Direct navigation and document requests triggered by guarded Playwright hover, drag, and scroll actions are checked before dispatch, then best-effort re-checked on the final `http(s)` URL.
+- Page routing cannot prevent every browser egress path: redirect hops, a popup's first request, and Service Worker traffic can bypass Playwright interception. Final-URL checks remain detection/quarantine defense for those cases; complete prevention requires owner-side egress isolation or a filtering proxy.
 
 ```json5
 {

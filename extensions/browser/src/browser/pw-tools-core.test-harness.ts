@@ -34,9 +34,7 @@ let pageState: {
 
 const sessionMocks = vi.hoisted(() => ({
   assertPageNavigationCompletedSafely: vi.fn(async () => {}),
-  beginActionDownloadCaptureOnPage: vi.fn<
-    typeof import("./pw-session.js").beginActionDownloadCaptureOnPage
-  >(() => ({
+  beginActionDownloadCaptureOnPage: vi.fn(() => ({
     drain: vi.fn(async (): Promise<HarnessManagedDownload[] | undefined> => undefined),
     dispose: vi.fn(() => {}),
   })),
@@ -49,12 +47,6 @@ const sessionMocks = vi.hoisted(() => ({
   }),
   ensurePageState: vi.fn(() => pageState),
   forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
-  finalizePendingBrowserInteractionAction: vi.fn<
-    typeof import("./pw-session.js").finalizePendingBrowserInteractionAction
-  >((error) => ({
-    error: error instanceof Error ? error : new Error("pending interaction failed"),
-    deferred: false,
-  })),
   gotoPageWithNavigationGuard: vi.fn(
     async (opts: {
       url: string;
@@ -76,43 +68,24 @@ const sessionMocks = vi.hoisted(() => ({
       normalizedUrl && message.includes("net::err_aborted") && message.includes(normalizedUrl),
     );
   }),
-  isPolicyDenyNavigationError: vi.fn<typeof import("./pw-session.js").isPolicyDenyNavigationError>(
-    (err) => {
-      if (!(err instanceof Error)) {
-        return false;
-      }
-      return err.name === "SsrFBlockedError" || err.name === "InvalidBrowserNavigationUrlError";
-    },
-  ),
-  quarantineBlockedNavigationTargetForError: vi.fn(async () => {}),
-  withPageNavigationRequestGuard: vi.fn(
-    async <T>({ action }: { action: () => Promise<T> }): Promise<T> => await action(),
-  ),
-  wasBrowserNavigationRequestBlockedBeforeDispatch: vi.fn(() => false),
-  quarantineBlockedNavigationTarget: vi.fn(async () => {}),
+  isPolicyDenyNavigationError: vi.fn((err: unknown) => {
+    if (!(err instanceof Error)) {
+      return false;
+    }
+    return err.name === "SsrFBlockedError" || err.name === "InvalidBrowserNavigationUrlError";
+  }),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   respondToObservedDialogOnPage: vi.fn(async () => {
     throw new Error("No dialog is pending.");
   }),
-  respondOrArmObservedDialogOnPage: vi.fn<
-    typeof import("./pw-session.js").respondOrArmObservedDialogOnPage
-  >(() => ({ kind: "armed" })),
   armObservedDialogResponseOnPage: vi.fn(() => {}),
   createObservedDialogAbortSignalForPage: vi.fn((opts?: { parentSignal?: AbortSignal }) => ({
     signal: opts?.parentSignal ?? new AbortController().signal,
     cleanup: vi.fn(() => {}),
   })),
   isBrowserObservedDialogBlockedError: vi.fn(() => false),
+  quarantineBlockedNavigationTarget: vi.fn(async () => {}),
   storeRoleRefsForTarget: vi.fn(() => {}),
-  trackPendingBrowserInteractionAction: vi.fn(
-    (err: unknown, actionPromise: Promise<unknown>, onActionResolved?: () => void) => {
-      void actionPromise.then(onActionResolved, () => {});
-      return err instanceof Error ? err : new Error("aborted");
-    },
-  ),
-  replacePendingBrowserInteractionActionError: vi.fn((_current: unknown, replacement: unknown) =>
-    replacement instanceof Error ? replacement : new Error("replacement error"),
-  ),
   refLocator: vi.fn(() => {
     if (!currentRefLocator) {
       throw new Error("missing locator");
@@ -120,6 +93,16 @@ const sessionMocks = vi.hoisted(() => ({
     return currentRefLocator;
   }),
   rememberRoleRefsForTarget: vi.fn(() => {}),
+  wasBrowserNavigationRequestBlockedBeforeDispatch: vi.fn(() => false),
+  withPageNavigationRequestGuard: vi.fn(
+    async ({
+      action,
+      page,
+    }: {
+      action: (url: string) => Promise<unknown>;
+      page: { url: () => string };
+    }) => await action(page.url()),
+  ),
 }));
 
 const downloadCaptureMocks = vi.hoisted(() => ({
@@ -127,17 +110,8 @@ const downloadCaptureMocks = vi.hoisted(() => ({
 }));
 
 const navigationGuardMocks = vi.hoisted(() => ({
-  assertBrowserNavigationResultAllowed: vi.fn<
-    typeof import("./navigation-guard.js").assertBrowserNavigationResultAllowed
-  >(async () => {}),
-  withBrowserNavigationPolicy: vi.fn<
-    typeof import("./navigation-guard.js").withBrowserNavigationPolicy
-  >((ssrfPolicy, opts) => ({
-    ...(ssrfPolicy ? { ssrfPolicy } : {}),
-    ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
-      ? { browserProxyMode: opts.browserProxyMode }
-      : {}),
-  })),
+  assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
+  withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => ({ ssrfPolicy })),
 }));
 
 vi.mock("./pw-session.js", () => sessionMocks);
@@ -192,6 +166,7 @@ export function setPwToolsCoreCurrentPage(page: Record<string, unknown> | null) 
   if (page) {
     page.on ??= vi.fn();
     page.off ??= vi.fn();
+    page.url ??= vi.fn(() => "about:blank");
   }
   currentPage = page;
 }
@@ -225,14 +200,7 @@ export function installPwToolsCoreTestHooks() {
       fn.mockClear();
     }
     for (const fn of Object.values(navigationGuardMocks)) {
-      fn.mockReset();
+      fn.mockClear();
     }
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(async () => {});
-    navigationGuardMocks.withBrowserNavigationPolicy.mockImplementation((ssrfPolicy, opts) => ({
-      ...(ssrfPolicy ? { ssrfPolicy } : {}),
-      ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
-        ? { browserProxyMode: opts.browserProxyMode }
-        : {}),
-    }));
   });
 }

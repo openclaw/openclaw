@@ -1,5 +1,5 @@
 // Browser tests cover agent.existing session plugin behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import {
   createExistingSessionAgentSharedModule,
@@ -16,7 +16,6 @@ const chromeMcpMocks = vi.hoisted(() => ({
     async (_params: { profileName: string; targetId: string; fn: string }) => true,
   ),
   fillChromeMcpElement: vi.fn(async () => {}),
-  handleChromeMcpDialog: vi.fn(async () => false),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({
@@ -29,9 +28,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
 
 const navigationGuardMocks = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
-  assertBrowserNavigationResultAllowed: vi.fn(
-    async (_params?: { url: string; ssrfPolicy?: unknown }) => {},
-  ),
+  assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
@@ -43,7 +40,6 @@ vi.mock("../chrome-mcp.js", () => ({
   evaluateChromeMcpScript: chromeMcpMocks.evaluateChromeMcpScript,
   fillChromeMcpElement: chromeMcpMocks.fillChromeMcpElement,
   fillChromeMcpForm: vi.fn(async () => {}),
-  handleChromeMcpDialog: chromeMcpMocks.handleChromeMcpDialog,
   hoverChromeMcpElement: vi.fn(async () => {}),
   navigateChromeMcpPage: chromeMcpMocks.navigateChromeMcpPage,
   pressChromeMcpKey: vi.fn(async () => {}),
@@ -147,72 +143,23 @@ function expectExistingSessionProfile(value: unknown) {
 
 describe("existing-session browser routes", () => {
   beforeEach(() => {
-    routeState.tab.url = "https://example.com";
     routeState.profileCtx.closeTab.mockClear();
     routeState.profileCtx.ensureTabAvailable.mockClear();
-    routeState.profileCtx.listTabs.mockReset();
-    routeState.profileCtx.listTabs.mockResolvedValue([
-      { targetId: "7", url: "https://example.com" },
-    ]);
+    routeState.profileCtx.listTabs.mockClear();
     chromeMcpMocks.clickChromeMcpCoords.mockClear();
     chromeMcpMocks.clickChromeMcpElement.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript.mockReset();
     chromeMcpMocks.fillChromeMcpElement.mockClear();
     chromeMcpMocks.navigateChromeMcpPage.mockClear();
-    chromeMcpMocks.takeChromeMcpScreenshot.mockReset();
-    chromeMcpMocks.takeChromeMcpScreenshot.mockResolvedValue(Buffer.from("png"));
+    chromeMcpMocks.takeChromeMcpScreenshot.mockClear();
     chromeMcpMocks.takeChromeMcpSnapshot.mockClear();
     navigationGuardMocks.assertBrowserNavigationAllowed.mockClear();
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockReset();
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
     navigationGuardMocks.withBrowserNavigationPolicy.mockClear();
-    chromeMcpMocks.evaluateChromeMcpScript.mockImplementation(async (params) => {
-      if (params.fn === "() => window.location.href") {
-        return routeState.tab.url as never;
-      }
-      if (params.fn.includes("return { labels, skipped };")) {
-        return { labels: 1, skipped: 0 } as never;
-      }
-      return true;
-    });
+    chromeMcpMocks.evaluateChromeMcpScript
+      .mockResolvedValueOnce({ labels: 1, skipped: 0 } as never)
+      .mockResolvedValueOnce(true);
   });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  function startRefScreenshotWithTimers() {
-    vi.useFakeTimers();
-    const handler = getSnapshotPostHandler({ allowPrivateNetwork: false });
-    const response = createBrowserRouteResponse();
-    const pending =
-      handler?.(
-        {
-          params: {},
-          query: {},
-          body: { ref: "btn-1", type: "jpeg" },
-        },
-        response.res,
-      ) ?? Promise.resolve();
-    return { pending, response };
-  }
-
-  async function runRefScreenshotWithTimers() {
-    const { pending, response } = startRefScreenshotWithTimers();
-    await vi.runAllTimersAsync();
-    await pending;
-    return response;
-  }
-
-  async function expectRefScreenshotToThrow(message: string) {
-    const { pending } = startRefScreenshotWithTimers();
-    void pending.catch(() => {});
-    const completion = (async () => {
-      await vi.runAllTimersAsync();
-      await pending;
-    })();
-    await expect(completion).rejects.toThrow(message);
-  }
 
   it("allows labeled AI snapshots for existing-session profiles", async () => {
     const handler = getSnapshotGetHandler();
@@ -282,54 +229,6 @@ describe("existing-session browser routes", () => {
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
 
-  it("guards the complete labeled ref screenshot lifecycle on existing-session profiles", async () => {
-    vi.useFakeTimers();
-    const handler = getSnapshotPostHandler({ allowPrivateNetwork: false });
-    const response = createBrowserRouteResponse();
-    const pending = handler?.(
-      {
-        params: {},
-        query: {},
-        body: { ref: "btn-1", labels: true, type: "png" },
-      },
-      response.res,
-    );
-
-    await vi.runAllTimersAsync();
-    await pending;
-
-    expect(response.statusCode).toBe(200);
-    const screenshotParams = requireRecord(
-      callArg(chromeMcpMocks.takeChromeMcpScreenshot, 0, 0, "labeled screenshot params"),
-      "labeled screenshot params",
-    );
-    expect(screenshotParams.uid).toBe("btn-1");
-    expect(chromeMcpMocks.takeChromeMcpSnapshot).not.toHaveBeenCalled();
-    expect(routeState.profileCtx.listTabs).toHaveBeenCalledTimes(2);
-    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
-      url: "https://example.com",
-      ssrfPolicy: { allowPrivateNetwork: false },
-    });
-    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: ["btn-1"],
-        fn: expect.stringContaining('el.scrollIntoView({ block: "center", inline: "center" })'),
-      }),
-    );
-    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: ["btn-1"],
-        fn: expect.stringContaining('isCapturedElement ? "none" : "translateY(-100%)"'),
-      }),
-    );
-    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
-      expect.objectContaining({
-        fn: expect.stringContaining("data-openclaw-mcp-overlay"),
-        signal: undefined,
-      }),
-    );
-  });
-
   it("checks existing-session snapshot URL when SSRF policy is configured", async () => {
     const handler = getSnapshotGetHandler({ allowPrivateNetwork: false });
     const response = createBrowserRouteResponse();
@@ -343,54 +242,6 @@ describe("existing-session browser routes", () => {
       ssrfPolicy: { allowPrivateNetwork: false },
     });
     expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalled();
-  });
-
-  it("blocks a private URL observed immediately before a raw snapshot read", async () => {
-    const privateUrl = "http://169.254.169.254/latest/meta-data/";
-    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValue(privateUrl as never);
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
-      async (opts?: { url: string }) => {
-        if (opts?.url === privateUrl) {
-          throw new Error("blocked snapshot preflight");
-        }
-      },
-    );
-    const handler = getSnapshotGetHandler({ allowPrivateNetwork: false });
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "ai" } }, response.res);
-
-    expect(response.statusCode).toBe(400);
-    expect(response.body).toEqual({ error: "blocked snapshot preflight" });
-    expect(chromeMcpMocks.takeChromeMcpSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("blocks a raw snapshot when capture races to a private page", async () => {
-    const privateUrl = "http://169.254.169.254/latest/meta-data/";
-    chromeMcpMocks.takeChromeMcpSnapshot.mockImplementationOnce(async () => {
-      routeState.tab.url = privateUrl;
-      return {
-        id: "root",
-        role: "document",
-        name: "Private",
-        children: [],
-      };
-    });
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
-      async (opts?: { url: string }) => {
-        if (opts?.url === privateUrl) {
-          throw new Error("blocked snapshot postflight");
-        }
-      },
-    );
-    const handler = getSnapshotGetHandler({ allowPrivateNetwork: false });
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "ai" } }, response.res);
-
-    expect(response.statusCode).toBe(400);
-    expect(response.body).toEqual({ error: "blocked snapshot postflight" });
-    expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalledOnce();
   });
 
   it("routes close through profile selection state with exact call options", async () => {
@@ -473,111 +324,22 @@ describe("existing-session browser routes", () => {
   });
 
   it("checks existing-session screenshot URL when SSRF policy is configured", async () => {
-    const response = await runRefScreenshotWithTimers();
+    const handler = getSnapshotPostHandler({ allowPrivateNetwork: false });
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { ref: "btn-1", type: "jpeg" },
+      },
+      response.res,
+    );
 
     expect(response.statusCode).toBe(200);
-    expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalledOnce();
-    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledTimes(5);
-    for (const [params] of navigationGuardMocks.assertBrowserNavigationResultAllowed.mock.calls) {
-      expect(params).toEqual({
-        url: "https://example.com",
-        ssrfPolicy: { allowPrivateNetwork: false },
-      });
-    }
-  });
-
-  it("gates a plain screenshot without the delayed post-action polling window", async () => {
-    const handler = getSnapshotPostHandler({ allowPrivateNetwork: false });
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: {}, body: { type: "png" } }, response.res);
-
-    expect(response.statusCode).toBe(200);
-    expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalledOnce();
-    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledTimes(3);
-    expect(routeState.profileCtx.listTabs).toHaveBeenCalledTimes(2);
-  });
-
-  it("blocks a private URL observed immediately before a plain screenshot", async () => {
-    const privateUrl = "http://169.254.169.254/latest/meta-data/";
-    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValue(privateUrl as never);
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
-      async (opts?: { url: string }) => {
-        if (opts?.url === privateUrl) {
-          throw new Error("blocked screenshot preflight");
-        }
-      },
-    );
-    const handler = getSnapshotPostHandler({ allowPrivateNetwork: false });
-    const response = createBrowserRouteResponse();
-
-    await expect(
-      handler?.({ params: {}, query: {}, body: { type: "png" } }, response.res),
-    ).rejects.toThrow("blocked screenshot preflight");
-
-    expect(chromeMcpMocks.takeChromeMcpScreenshot).not.toHaveBeenCalled();
-  });
-
-  it("blocks a plain screenshot when capture races to a private page", async () => {
-    const privateUrl = "http://169.254.169.254/latest/meta-data/";
-    chromeMcpMocks.takeChromeMcpScreenshot.mockImplementationOnce(async () => {
-      routeState.tab.url = privateUrl;
-      return Buffer.from("private");
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+      url: "https://example.com",
+      ssrfPolicy: { allowPrivateNetwork: false },
     });
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
-      async (opts?: { url: string }) => {
-        if (opts?.url === privateUrl) {
-          throw new Error("blocked screenshot postflight");
-        }
-      },
-    );
-    const handler = getSnapshotPostHandler({ allowPrivateNetwork: false });
-    const response = createBrowserRouteResponse();
-
-    await expect(
-      handler?.({ params: {}, query: {}, body: { type: "png" } }, response.res),
-    ).rejects.toThrow("blocked screenshot postflight");
-
-    expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalledOnce();
-    expect(response.body).toBeUndefined();
-  });
-
-  it("blocks a ref screenshot that changes the selected page to a private URL", async () => {
-    const blockedUrl = "http://169.254.169.254/latest/meta-data/";
-    chromeMcpMocks.takeChromeMcpScreenshot.mockImplementationOnce(async () => {
-      routeState.tab.url = blockedUrl;
-      return Buffer.from("png");
-    });
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
-      async (opts?: { url: string }) => {
-        if (opts?.url === blockedUrl) {
-          throw new Error("blocked screenshot destination");
-        }
-      },
-    );
-
-    await expectRefScreenshotToThrow("blocked screenshot destination");
-    expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalledOnce();
-  });
-
-  it("blocks a new private tab opened by an existing-session ref screenshot", async () => {
-    const blockedUrl = "http://169.254.169.254/latest/meta-data/";
-    routeState.profileCtx.listTabs
-      .mockResolvedValueOnce([{ targetId: "7", url: "https://example.com" }])
-      .mockResolvedValueOnce([
-        { targetId: "7", url: "https://example.com" },
-        { targetId: "8", url: blockedUrl },
-      ]);
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
-      async (opts?: { url: string }) => {
-        if (opts?.url === blockedUrl) {
-          throw new Error("blocked screenshot popup");
-        }
-      },
-    );
-
-    await expectRefScreenshotToThrow("blocked screenshot popup");
-    expect(routeState.profileCtx.listTabs).toHaveBeenCalledTimes(2);
   });
 
   it("rejects selector-based element screenshots for existing-session profiles", async () => {

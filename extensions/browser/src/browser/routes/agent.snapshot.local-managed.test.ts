@@ -4,10 +4,6 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 import type { BrowserRequest } from "./types.js";
 
 const routeState = vi.hoisted(() => ({
-  ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } as {
-    dangerouslyAllowPrivateNetwork?: boolean;
-    hostnameAllowlist?: string[];
-  },
   profileCtx: {
     profile: {
       driver: "openclaw" as const,
@@ -77,7 +73,7 @@ vi.mock("../../media/store.js", () => ({
 
 vi.mock("./agent.shared.js", () => ({
   browserNavigationPolicyForProfile: vi.fn(() => ({
-    ssrfPolicy: routeState.ssrfPolicy,
+    ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
   })),
   getPwAiModule: vi.fn(async () => null),
   handleRouteError: vi.fn(
@@ -118,7 +114,6 @@ function getSnapshotGetHandler() {
 
 describe("local-managed browser snapshot routes", () => {
   beforeEach(() => {
-    routeState.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
     routeState.profileCtx.ensureTabAvailable.mockClear();
     cdpMocks.snapshotAria.mockClear();
     cdpMocks.snapshotRoleViaCdp.mockClear();
@@ -159,26 +154,5 @@ describe("local-managed browser snapshot routes", () => {
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
     });
     expect(cdpMocks.snapshotRoleViaCdp).not.toHaveBeenCalled();
-  });
-
-  it("enforces hostname restrictions even when private network access is enabled", async () => {
-    routeState.ssrfPolicy = {
-      dangerouslyAllowPrivateNetwork: true,
-      hostnameAllowlist: ["*.trusted.example"],
-    };
-    const handler = getSnapshotGetHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: { format: "aria" } }, response.res);
-
-    expect(response.statusCode).toBe(400);
-    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
-      url: "http://127.0.0.1:8080/admin",
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-        hostnameAllowlist: ["*.trusted.example"],
-      },
-    });
-    expect(cdpMocks.snapshotAria).not.toHaveBeenCalled();
   });
 });

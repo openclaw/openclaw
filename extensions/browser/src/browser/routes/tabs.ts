@@ -286,10 +286,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             throw new BrowserTabNotFoundError({ input: id });
           }
           const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
-          if (
-            ssrfPolicyOpts.ssrfPolicy ||
-            ssrfPolicyOpts.browserProxyMode === "explicit-browser-proxy"
-          ) {
+          if (ssrfPolicyOpts.ssrfPolicy) {
             await assertBrowserNavigationResultAllowed({
               url: tab.url,
               ...ssrfPolicyOpts,
@@ -408,10 +405,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
               throw new BrowserTabNotFoundError();
             }
             const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
-            if (
-              ssrfPolicyOpts.ssrfPolicy ||
-              ssrfPolicyOpts.browserProxyMode === "explicit-browser-proxy"
-            ) {
+            if (ssrfPolicyOpts.ssrfPolicy) {
               await assertBrowserNavigationResultAllowed({
                 url: target.url,
                 ...ssrfPolicyOpts,

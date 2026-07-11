@@ -199,11 +199,9 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       url: vi.fn(() => "https://93.184.216.34/start"),
     };
     setPwToolsCoreCurrentPage(page);
-    getPwToolsCoreNavigationGuardMocks()
-      .assertBrowserNavigationResultAllowed.mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(
-        new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address"),
-      );
+    getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
+      new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address"),
+    );
 
     await expect(
       mod.navigateViaPlaywright({
@@ -214,114 +212,6 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       }),
     ).rejects.toBeInstanceOf(SsrFBlockedError);
 
-    expect(getPwToolsCoreSessionMocks().closeBlockedNavigationTarget).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18792",
-      page,
-      targetId: "tab-1",
-    });
-    expect(
-      getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed,
-    ).toHaveBeenCalledWith({
-      url: download.url,
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-    });
-  });
-
-  it("rechecks the owning page before saving a data navigation download", async () => {
-    const download = {
-      url: "data:text/plain,report",
-      suggestedFilename: "report.txt",
-      path: "/tmp/openclaw/downloads/report.txt",
-    };
-    setPwToolsCoreDownloadCapture({
-      armed: true,
-      promise: Promise.resolve(download),
-      cancel: vi.fn(),
-    });
-    const page = {
-      goto: vi.fn(async () => {
-        throw new Error("page.goto: Download is starting");
-      }),
-      url: vi
-        .fn<() => string>()
-        .mockReturnValueOnce("https://93.184.216.34/start")
-        .mockReturnValue("http://127.0.0.1/private"),
-    };
-    setPwToolsCoreCurrentPage(page);
-    const blocked = new SsrFBlockedError(
-      "Blocked hostname or private/internal/special-use IP address",
-    );
-    getPwToolsCoreNavigationGuardMocks()
-      .assertBrowserNavigationResultAllowed.mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(blocked);
-
-    await expect(
-      mod.navigateViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "tab-1",
-        url: "https://93.184.216.34/report.txt",
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-      }),
-    ).rejects.toBe(blocked);
-
-    expect(
-      getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed,
-    ).toHaveBeenNthCalledWith(3, {
-      url: "http://127.0.0.1/private",
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-    });
-    expect(getPwToolsCoreSessionMocks().closeBlockedNavigationTarget).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18792",
-      page,
-      targetId: "tab-1",
-    });
-  });
-
-  it("delegates blob navigation downloads to the embedded-origin-aware policy", async () => {
-    const download = {
-      url: "blob:http://127.0.0.1/private-id",
-      suggestedFilename: "report.txt",
-      path: "/tmp/openclaw/downloads/report.txt",
-    };
-    setPwToolsCoreDownloadCapture({
-      armed: true,
-      promise: Promise.resolve(download),
-      cancel: vi.fn(),
-    });
-    const page = {
-      goto: vi.fn(async () => {
-        throw new Error("page.goto: Download is starting");
-      }),
-      url: vi.fn(() => "https://93.184.216.34/start"),
-    };
-    setPwToolsCoreCurrentPage(page);
-    const blocked = new SsrFBlockedError(
-      "Blocked hostname or private/internal/special-use IP address",
-    );
-    getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed.mockImplementation(
-      async ({ url }: { url: string }) => {
-        if (url === download.url) {
-          throw blocked;
-        }
-      },
-    );
-
-    await expect(
-      mod.navigateViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "tab-1",
-        url: "https://93.184.216.34/report.txt",
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-      }),
-    ).rejects.toBe(blocked);
-
-    expect(
-      getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed,
-    ).toHaveBeenCalledWith({
-      url: "blob:http://127.0.0.1/private-id",
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-    });
     expect(getPwToolsCoreSessionMocks().closeBlockedNavigationTarget).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
       page,

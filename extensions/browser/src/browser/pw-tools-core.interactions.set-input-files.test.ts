@@ -21,48 +21,29 @@ const refLocator = vi.fn(() => {
   return locator;
 });
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
-const finalizePendingBrowserInteractionAction = vi.fn((error: unknown) => ({
-  error: error instanceof Error ? error : new Error("pending interaction failed"),
-  deferred: false,
-}));
-const assertPageNavigationCompletedSafely = vi.fn(async () => {});
-const isPolicyDenyNavigationError = vi.fn(() => false);
-const quarantineBlockedNavigationTargetForError = vi.fn(async () => {});
-const wasBrowserNavigationRequestBlockedBeforeDispatch = vi.fn(() => false);
-const trackPendingBrowserInteractionAction = vi.fn(
-  (err: unknown, actionPromise: Promise<unknown>, onActionResolved?: () => void) => {
-    void actionPromise.then(onActionResolved, () => {});
-    return err instanceof Error ? err : new Error("aborted");
-  },
-);
-const replacePendingBrowserInteractionActionError = vi.fn(
-  (_current: unknown, replacement: unknown) =>
-    replacement instanceof Error ? replacement : new Error("replacement error"),
-);
-const withPageNavigationRequestGuard = vi.fn(
-  async <T>({ action }: { action: () => Promise<T> }): Promise<T> => await action(),
-);
 
 const resolveStrictExistingUploadPaths =
   vi.fn<typeof import("./paths.js").resolveStrictExistingUploadPaths>();
 
 vi.mock("./pw-session.js", () => {
   return {
-    assertPageNavigationCompletedSafely,
     ensurePageState,
     forceDisconnectPlaywrightForTarget,
-    finalizePendingBrowserInteractionAction,
     getPageForTargetId,
     isBrowserObservedDialogBlockedError,
-    isPolicyDenyNavigationError,
     markObservedDialogsHandledRemotelyForPage,
-    quarantineBlockedNavigationTargetForError,
     refLocator,
-    replacePendingBrowserInteractionActionError,
     restoreRoleRefsForTarget,
-    trackPendingBrowserInteractionAction,
-    wasBrowserNavigationRequestBlockedBeforeDispatch,
-    withPageNavigationRequestGuard,
+    wasBrowserNavigationRequestBlockedBeforeDispatch: vi.fn(() => false),
+    withPageNavigationRequestGuard: vi.fn(
+      async ({
+        action,
+        page,
+      }: {
+        action: (url: string) => Promise<unknown>;
+        page: { url: () => string };
+      }) => await action(page.url()),
+    ),
   };
 });
 
@@ -74,8 +55,10 @@ vi.mock("./paths.js", () => {
 
 const { setInputFilesViaPlaywright } = await import("./pw-tools-core.interactions.js");
 
-function seedSingleLocatorPage() {
-  let currentUrl = "https://example.com/form";
+function seedSingleLocatorPage(): {
+  setInputFiles: ReturnType<typeof vi.fn>;
+  elementHandle: ReturnType<typeof vi.fn>;
+} {
   const setInputFiles = vi.fn(async () => {});
   const elementHandle = vi.fn(async () => {
     throw new Error("manual upload event dispatch is forbidden");
@@ -86,15 +69,8 @@ function seedSingleLocatorPage() {
   };
   page = {
     locator: vi.fn(() => ({ first: () => locator })),
-    url: vi.fn(() => currentUrl),
   };
-  return {
-    setInputFiles,
-    elementHandle,
-    setUrl: (url: string) => {
-      currentUrl = url;
-    },
-  };
+  return { setInputFiles, elementHandle };
 }
 
 describe("setInputFilesViaPlaywright", () => {
@@ -145,61 +121,5 @@ describe("setInputFilesViaPlaywright", () => {
     ).rejects.toThrow("Invalid path: must stay within inbound media directory");
 
     expect(setInputFiles).not.toHaveBeenCalled();
-  });
-
-  it("rechecks the current page inside the upload request guard", async () => {
-    const { setInputFiles } = seedSingleLocatorPage();
-
-    await expect(
-      setInputFilesViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
-        element: "input[type=file]",
-        paths: ["/tmp/openclaw/uploads/ok.txt"],
-        ssrfPolicy: { allowPrivateNetwork: false },
-        browserProxyMode: "explicit-browser-proxy",
-      }),
-    ).rejects.toThrow("strict browser SSRF policy cannot be enforced");
-
-    expect(withPageNavigationRequestGuard).toHaveBeenCalledOnce();
-    expect(setInputFiles).not.toHaveBeenCalled();
-  });
-
-  it("guards the upload dispatch and checks its resulting navigation", async () => {
-    const { setInputFiles, setUrl } = seedSingleLocatorPage();
-    const requestSignal = new AbortController().signal;
-    setInputFiles.mockImplementationOnce(async () => {
-      setUrl("https://example.com/uploaded");
-    });
-
-    await setInputFilesViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      element: "input[type=file]",
-      paths: ["/tmp/openclaw/uploads/ok.txt"],
-      ssrfPolicy: { allowPrivateNetwork: true },
-      browserProxyMode: "explicit-browser-proxy",
-      signal: requestSignal,
-    });
-
-    expect(withPageNavigationRequestGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        page,
-        ssrfPolicy: { allowPrivateNetwork: true },
-        browserProxyMode: "explicit-browser-proxy",
-        action: expect.any(Function),
-      }),
-    );
-    expect(withPageNavigationRequestGuard.mock.invocationCallOrder[0]).toBeLessThan(
-      setInputFiles.mock.invocationCallOrder[0]!,
-    );
-    expect(assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18792",
-      page,
-      response: null,
-      ssrfPolicy: { allowPrivateNetwork: true },
-      browserProxyMode: "explicit-browser-proxy",
-      targetId: "T1",
-    });
   });
 });

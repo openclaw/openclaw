@@ -5,20 +5,11 @@
  * OpenClaw profiles and Chrome MCP existing-session profiles.
  */
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  evaluateChromeMcpScript,
-  handleChromeMcpDialog,
-  uploadChromeMcpFile,
-} from "../chrome-mcp.js";
+import { evaluateChromeMcpScript, uploadChromeMcpFile } from "../chrome-mcp.js";
 import { resolveExistingUploadPaths } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
-  runExistingSessionActionWithNavigationGuard,
-  runExistingSessionDialogResponseWithNavigationGuard,
-} from "./agent.act.existing-session-navigation-guard.js";
-import {
-  browserNavigationPolicyForProfile,
   readBody,
   requirePwAi,
   resolveTargetIdFromBody,
@@ -64,11 +55,7 @@ export function registerBrowserAgentActHookRoutes(
         res,
         ctx,
         targetId,
-        // Upload exposes an operator-selected local file to the selected page.
-        // Reject a disallowed current destination before resolving or sending it.
-        enforceCurrentUrlAllowed: true,
         run: async ({ profileCtx, cdpUrl, tab }) => {
-          const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
           const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
           if (!resolvedResult.ok) {
             res.status(400).json({ error: resolvedResult.error });
@@ -87,28 +74,14 @@ export function registerBrowserAgentActHookRoutes(
             if (!uid) {
               return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.uploadRefRequired);
             }
-            const existingSessionCallOptions = {
-              timeoutMs: timeoutMs ?? ctx.state().resolved.actionTimeoutMs,
-              signal: req.signal,
-            };
-            const existingSessionTarget = {
+            await uploadChromeMcpFile({
               profileName: profileCtx.profile.name,
               profile: profileCtx.profile,
               targetId: tab.targetId,
-              ...existingSessionCallOptions,
-            };
-            await runExistingSessionActionWithNavigationGuard({
-              execute: () =>
-                uploadChromeMcpFile({
-                  ...existingSessionTarget,
-                  uid,
-                  filePath: resolvedPaths[0] ?? "",
-                }),
-              guard: {
-                ...existingSessionTarget,
-                ...navigationPolicy,
-                listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
-              },
+              uid,
+              filePath: resolvedPaths[0] ?? "",
+              timeoutMs: timeoutMs ?? ctx.state().resolved.actionTimeoutMs,
+              signal: req.signal,
             });
             return res.json({ ok: true });
           }
@@ -128,8 +101,6 @@ export function registerBrowserAgentActHookRoutes(
               inputRef,
               element,
               paths: resolvedPaths,
-              ...navigationPolicy,
-              signal: req.signal,
             });
           } else {
             await pw.armFileUploadViaPlaywright({
@@ -137,15 +108,13 @@ export function registerBrowserAgentActHookRoutes(
               targetId: tab.targetId,
               paths: resolvedPaths,
               timeoutMs: timeoutMs ?? undefined,
-              ...navigationPolicy,
             });
             if (ref) {
               await pw.clickViaPlaywright({
                 cdpUrl,
                 targetId: tab.targetId,
-                ...navigationPolicy,
+                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                 ref,
-                signal: req.signal,
               });
             }
           }
@@ -179,7 +148,6 @@ export function registerBrowserAgentActHookRoutes(
         ctx,
         targetId,
         run: async ({ profileCtx, cdpUrl, tab }) => {
-          const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             if (dialogId) {
               return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogId);
@@ -187,42 +155,15 @@ export function registerBrowserAgentActHookRoutes(
             if (timeoutMs) {
               return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogTimeout);
             }
-            const existingSessionCallOptions = {
-              timeoutMs: ctx.state().resolved.actionTimeoutMs,
-              signal: req.signal,
-            };
-            const existingSessionTarget = {
+            await evaluateChromeMcpScript({
               profileName: profileCtx.profile.name,
               profile: profileCtx.profile,
               targetId: tab.targetId,
-              ...existingSessionCallOptions,
-            };
-            const existingSessionGuard = {
-              ...existingSessionTarget,
-              ...navigationPolicy,
-              listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
-            };
-            const handledPendingDialog = await runExistingSessionDialogResponseWithNavigationGuard({
-              execute: () =>
-                handleChromeMcpDialog({
-                  ...existingSessionTarget,
-                  accept,
-                  ...(promptText !== undefined ? { promptText } : {}),
-                }),
-              guard: existingSessionGuard,
-            });
-            if (handledPendingDialog) {
-              return res.json({ ok: true });
-            }
-
-            // Chrome MCP has no arm-next primitive. Preserve the one-shot page
-            // hook, but only its installation is inside this bounded guard; a
-            // later invocation is checked only by any action then in progress.
-            await runExistingSessionActionWithNavigationGuard({
-              execute: () =>
-                evaluateChromeMcpScript({
-                  ...existingSessionTarget,
-                  fn: `() => {
+              timeoutMs: ctx.state().resolved.actionTimeoutMs,
+              signal: req.signal,
+              // Existing-session Chrome MCP has no dialog hook primitive. Patch
+              // one-shot window dialog functions in-page, then restore them.
+              fn: `() => {
               const state = (window.__openclawDialogHook ??= {});
               if (!state.originals) {
                 state.originals = {
@@ -261,8 +202,6 @@ export function registerBrowserAgentActHookRoutes(
               };
               return true;
             }`,
-                }),
-              guard: existingSessionGuard,
             });
             return res.json({ ok: true });
           }
@@ -277,8 +216,6 @@ export function registerBrowserAgentActHookRoutes(
             accept,
             promptText,
             timeoutMs: timeoutMs ?? undefined,
-            ...navigationPolicy,
-            signal: req.signal,
           });
           res.json({ ok: true });
         },
