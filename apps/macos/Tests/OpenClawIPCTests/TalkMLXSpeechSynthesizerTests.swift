@@ -94,6 +94,32 @@ struct TalkMLXSpeechSynthesizerTests {
     }
 
     @Test
+    func `late audio after cancel is discarded`() async throws {
+        let transport = TestMLXTransport(mode: .audioAfterCancel)
+        let factory = TestMLXTransportFactory([transport])
+        let synthesizer = TalkMLXSpeechSynthesizer(
+            transportFactory: { try await factory.make() },
+            idleDuration: .seconds(60))
+
+        let synthesis = Task {
+            try await synthesizer.synthesize(
+                text: "discard me",
+                modelRepo: nil,
+                language: nil,
+                voicePreset: nil)
+        }
+        await transport.waitForSynthesisRequest()
+        await synthesizer.cancelCurrent()
+
+        do {
+            _ = try await synthesis.value
+            Issue.record("expected cancellation")
+        } catch TalkMLXSpeechSynthesizer.SynthesizeError.canceled {
+            #expect(await transport.closeCount == 0)
+        }
+    }
+
+    @Test
     func `unresponsive cancel terminates helper without retry`() async throws {
         let transport = TestMLXTransport(mode: .ignoreCancel)
         let factory = TestMLXTransportFactory([transport])
@@ -242,6 +268,7 @@ private enum TestMLXTransportError: Error {
 private actor TestMLXTransport: MLXTTSTransport {
     enum Mode: Equatable, Sendable {
         case audio
+        case audioAfterCancel
         case crash
         case ignoreCancel
         case startupHang
@@ -273,11 +300,16 @@ private actor TestMLXTransport: MLXTTSTransport {
                     pcm: Data([0x00, 0x00, 0xFF, 0x7F]))))
             case .crash:
                 self.closed = true
-            case .ignoreCancel, .startupHang, .waitForCancel:
+            case .audioAfterCancel, .ignoreCancel, .startupHang, .waitForCancel:
                 break
             }
         case let .cancel(id):
-            if self.mode != .ignoreCancel, self.mode != .startupHang {
+            if self.mode == .audioAfterCancel {
+                self.events.append(.audio(MLXTTSAudio(
+                    id: id,
+                    sampleRate: 32000,
+                    pcm: Data([0x00, 0x00, 0xFF, 0x7F]))))
+            } else if self.mode != .ignoreCancel, self.mode != .startupHang {
                 self.events.append(.canceled(id: id))
             }
         case .shutdown:

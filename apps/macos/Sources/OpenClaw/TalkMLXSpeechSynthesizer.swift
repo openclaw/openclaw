@@ -187,6 +187,9 @@ actor TalkMLXSpeechSynthesizer {
         while true {
             switch try await transport.nextEvent() {
             case let .audio(audio) where audio.id == id:
+                guard self.cancelRequestedID != id else {
+                    throw SynthesizeError.canceled
+                }
                 return audio
             case let .canceled(canceledID) where canceledID == id:
                 throw SynthesizeError.canceled
