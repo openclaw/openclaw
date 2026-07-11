@@ -169,9 +169,11 @@ describe("OpenClaw performance workflow", () => {
     const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
     const build = "OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs sourcePerformance";
 
+    expect(run).toContain("module.BUILD_ALL_PROFILES?.sourcePerformance");
     expect(run).toContain(build);
-    expect(run).not.toContain("pnpm build");
+    expect(run).toContain("pnpm build");
     expect(run.indexOf(build)).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
+    expect(run.indexOf("pnpm build")).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
   });
 
   it("isolates required publication in a fresh artifact-consuming job", () => {
