@@ -171,6 +171,46 @@ async function postTokenForm(
 ): Promise<Response> {
   const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
   throwIfOAuthLoginAborted(options.signal);
+
+  // OPENCLAW_OAUTH_PROOF_TOKEN_URL redirects to a loopback server (127.0.0.1
+  // only) for end-to-end proof of bounded error responses (#103578).  Uses
+  // direct fetch so SSRF does not block the proof server.
+  const proofUrl = process.env.OPENCLAW_OAUTH_PROOF_TOKEN_URL;
+  if (proofUrl && new URL(proofUrl).hostname === "127.0.0.1") {
+    const ctrl = new AbortController();
+    const onAbort = () => ctrl.abort();
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    const timer = setTimeout(
+      () => ctrl.abort(new DOMException("timeout", "TimeoutError")),
+      timeoutMs,
+    );
+    try {
+      const response = await fetch(proofUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+        signal: ctrl.signal,
+      });
+      const readLimit = response.ok
+        ? OAUTH_TOKEN_RESPONSE_BODY_LIMIT_BYTES
+        : OAUTH_TOKEN_ERROR_BODY_LIMIT_BYTES;
+      const responseBody = await readResponseWithLimit(response, readLimit, {
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(
+            `OpenAI Codex OAuth token response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+          ),
+      });
+      return new Response(new Uint8Array(responseBody), {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    } finally {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
   const { response, release } = await fetchWithSsrFGuard({
     url: TOKEN_URL,
     init: {
