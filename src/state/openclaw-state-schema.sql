@@ -349,6 +349,98 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS authorization_principals (
+  principal_id TEXT NOT NULL PRIMARY KEY CHECK (length(trim(principal_id)) > 0),
+  issuer TEXT NOT NULL CHECK (length(trim(issuer)) > 0),
+  subject TEXT NOT NULL CHECK (length(trim(subject)) > 0),
+  kind TEXT NOT NULL CHECK (kind IN ('human', 'device', 'service', 'shared')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (issuer, subject, kind)
+);
+
+CREATE TABLE IF NOT EXISTS authorization_domains (
+  domain_id TEXT NOT NULL PRIMARY KEY CHECK (length(trim(domain_id)) > 0),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS authorization_domain_memberships (
+  domain_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('owner', 'member')),
+  added_by_principal_id TEXT NOT NULL,
+  added_by_role TEXT NOT NULL CHECK (added_by_role = 'owner'),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (domain_id, principal_id),
+  UNIQUE (domain_id, principal_id, role),
+  FOREIGN KEY (domain_id) REFERENCES authorization_domains(domain_id),
+  FOREIGN KEY (principal_id) REFERENCES authorization_principals(principal_id),
+  FOREIGN KEY (added_by_principal_id) REFERENCES authorization_principals(principal_id),
+  FOREIGN KEY (domain_id, added_by_principal_id, added_by_role)
+    REFERENCES authorization_domain_memberships(domain_id, principal_id, role)
+    DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_authorization_domain_owner
+  ON authorization_domain_memberships(domain_id)
+  WHERE role = 'owner';
+
+CREATE INDEX IF NOT EXISTS idx_authorization_memberships_principal
+  ON authorization_domain_memberships(principal_id, domain_id);
+
+CREATE TABLE IF NOT EXISTS authorization_resources (
+  namespace TEXT NOT NULL CHECK (length(trim(namespace)) > 0),
+  resource_type TEXT NOT NULL CHECK (length(trim(resource_type)) > 0),
+  resource_id TEXT NOT NULL CHECK (length(trim(resource_id)) > 0),
+  domain_id TEXT NOT NULL,
+  owner_principal_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (namespace, resource_type, resource_id),
+  UNIQUE (domain_id, namespace, resource_type, resource_id),
+  FOREIGN KEY (domain_id, owner_principal_id)
+    REFERENCES authorization_domain_memberships(domain_id, principal_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_authorization_resources_domain
+  ON authorization_resources(domain_id, namespace, resource_type, resource_id);
+
+CREATE TABLE IF NOT EXISTS authorization_grants (
+  domain_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  namespace TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT NOT NULL,
+  permission TEXT NOT NULL CHECK (length(trim(permission)) > 0),
+  granted_by_principal_id TEXT NOT NULL,
+  granted_by_role TEXT NOT NULL CHECK (granted_by_role = 'owner'),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (
+    domain_id,
+    principal_id,
+    namespace,
+    resource_type,
+    resource_id,
+    permission
+  ),
+  FOREIGN KEY (domain_id, principal_id)
+    REFERENCES authorization_domain_memberships(domain_id, principal_id),
+  FOREIGN KEY (domain_id, granted_by_principal_id, granted_by_role)
+    REFERENCES authorization_domain_memberships(domain_id, principal_id, role),
+  FOREIGN KEY (domain_id, namespace, resource_type, resource_id)
+    REFERENCES authorization_resources(domain_id, namespace, resource_type, resource_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_authorization_grants_lookup
+  ON authorization_grants(
+    principal_id,
+    permission,
+    namespace,
+    resource_type,
+    resource_id,
+    domain_id
+  );
+
 CREATE TABLE IF NOT EXISTS device_pairing_pending (
   request_id TEXT NOT NULL PRIMARY KEY,
   device_id TEXT NOT NULL,
