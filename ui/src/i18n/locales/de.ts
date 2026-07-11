@@ -947,154 +947,6 @@ export const de: TranslationMap = {
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  codexSessions: {
-    eyebrow: "Codex-Flotte",
-    title: "Sitzungen auf allen deinen Computern",
-    interactiveSubtitle:
-      "Starten Sie einen Chat-Branch, dessen Modellauswahl unter der Kontrolle des Codex App Server bleibt, archivieren Sie berechtigte lokale Sitzungen nach Bestätigung und zeigen Sie Sitzungen gekoppelter Computer an.",
-    summaryLabel: "Zusammenfassung der Codex-Sitzungen",
-    summary: {
-      sessions: "Sitzungen",
-      onlineHosts: "online",
-      hosts: "Hosts",
-    },
-    searchLabel: "Codex-Sitzungen durchsuchen",
-    searchPlaceholder: "Sitzungstitel durchsuchen",
-    refresh: "Aktualisieren",
-    disconnected: "Verbinde dich erneut mit dem Gateway, um die Codex-Sitzungen zu aktualisieren.",
-    partial: "Nicht verfügbare Hosts: {count}. Andere Hosts bleiben verfügbar.",
-    loading: "Codex-Sitzungen werden geladen…",
-    loadMore: "Mehr laden",
-    loadingMore: "Wird geladen…",
-    untitled: "Unbenannte Codex-Sitzung",
-    threadId: "Thread",
-    actions: {
-      continue: "Fortfahren",
-      continueAsBranch: "Als Branch fortfahren",
-      openChat: "Chat öffnen",
-      continuing: "Wird fortgesetzt…",
-      archive: "Archivieren",
-      readTranscript: "Gelesen",
-      readTranscriptLabel: "Transkript für {title} lesen",
-      continueLabel: "{title} fortsetzen",
-      continueAsBranchLabel: "{title} als Branch fortsetzen",
-      openChatLabel: "Chat für {title} öffnen",
-      continueAsBranchHint:
-        "Erstellen Sie einen Chat aus dem gespeicherten sichtbaren Verlauf. Bei Ihrer ersten Nachricht wählt der Codex App Server das Modell und den Anbieter für den neuen Harness-Thread aus. Die spätere Auswahl bleibt Codex-gesteuert; OpenClaw ersetzt niemals eine andere Laufzeitumgebung, ein anderes Modell oder einen Fallback. Die Quelle bleibt unverändert, und laufende Arbeit ist möglicherweise nicht enthalten.",
-      archiveLabel: "{title} archivieren",
-      archiveConfirmation:
-        "{title} und alle erzeugten Nachfolger archivieren? Bestätigen Sie, dass kein anderer Codex-Client oder OpenClaw-Runner sie verwendet. Das Archivieren, während ein anderer Runner aktiv ist, kann dessen Arbeit unterbrechen.",
-      active: "Aktive Sitzungen können keinen Branch starten und nicht archiviert werden.",
-      archiveActivityUnknownHint:
-        "Die Aktivität ist unbekannt, da der Status prozesslokal ist. Archivieren Sie erst, nachdem Sie bestätigt haben, dass kein anderer Codex-Client oder Runner diese Sitzung verwendet.",
-      statusUnavailable:
-        "Diese Codex-Sitzung kann in ihrem aktuellen Zustand nicht verwaltet werden.",
-      hostOffline:
-        "Verbinden Sie diesen Computer erneut, bevor Sie seine Codex-Sitzungen verwalten.",
-      gatewayOffline:
-        "Stellen Sie erneut eine Verbindung zum Gateway her, bevor Sie Codex-Sitzungen verwalten.",
-      remoteReadOnly: "Sitzungen gekoppelter Computer können vorerst nur angezeigt werden.",
-    },
-    status: {
-      active: "Aktiv",
-      idle: "Inaktiv",
-      archived: "Archiviert",
-      storedActivityUnknown: "Gespeichert / Aktivität unbekannt",
-      systemError: "Systemfehler",
-      unknown: "Unbekannt",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "Knoten",
-      connected: "Verbunden",
-      offline: "Offline",
-      unavailable: "Sitzungskatalog nicht verfügbar",
-      sessionCount: "{count} angezeigt",
-    },
-    empty: {
-      title: "Keine Codex-Hosts gefunden",
-      supervisionSubtitle:
-        "Aktiviere die Codex-Überwachung auf dem Gateway oder einem gekoppelten Computer und aktualisiere dann diese Ansicht.",
-      search: "Keine Sitzungen auf diesem Host entsprechen deiner Suche.",
-      nonArchived: "Keine nicht archivierten Sitzungen auf diesem Host.",
-    },
-    sidebar: {
-      title: "Codex-Sitzungen",
-      unavailable: "Codex-Sitzungen nicht verfügbar",
-      viewAll: "Alle Codex-Sitzungen anzeigen",
-      truncated: "Weitere Sitzungen sind im vollständigen Katalog verfügbar.",
-    },
-    transcript: {
-      eyebrow: "Codex-Transkript",
-      back: "Alle Codex-Sitzungen",
-      you: "Sie",
-      reasoning: "Argumentation",
-      command: "Befehl",
-      fileChange: "Dateiänderung",
-      item: "Codex-Element",
-      details: "Vollständige Details",
-      loading: "Transkript wird geladen…",
-      loadMore: "Ältere Transkriptelemente laden",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "Claude-Flotte",
-    title: "Claude-Sitzungen auf Ihren Computern",
-    subtitle:
-      "Durchsuchen Sie nicht archivierte Claude CLI- und Claude Desktop-Sitzungen und lesen Sie deren paginierte lokale Transkripte.",
-    summaryLabel: "Claude-Sitzungszusammenfassung",
-    summary: {
-      sessions: "Sitzungen",
-      onlineHosts: "online",
-      hosts: "Hosts",
-    },
-    searchLabel: "Claude-Sitzungen suchen",
-    searchPlaceholder: "Sitzungstitel durchsuchen",
-    refresh: "Aktualisieren",
-    disconnected:
-      "Stellen Sie die Verbindung zur Gateway wieder her, um Claude-Sitzungen zu aktualisieren.",
-    partial: "Nicht verfügbare Hosts: {count}. Andere Hosts bleiben verfügbar.",
-    loading: "Claude-Sitzungen werden geladen…",
-    loadMore: "Mehr laden",
-    loadingMore: "Wird geladen…",
-    untitled: "Unbenannte Claude-Sitzung",
-    sessionId: "Sitzung",
-    stored: "Gespeichert",
-    read: "Gelesen",
-    readLabel: "Transkript für {title} lesen",
-    host: {
-      gateway: "Gateway",
-      node: "Knoten",
-      connected: "Verbunden",
-      offline: "Offline",
-      unavailable: "Sitzungskatalog nicht verfügbar",
-      sessionCount: "{count} angezeigt",
-    },
-    empty: {
-      title: "Keine Claude-Sitzungen gefunden",
-      subtitle:
-        "Installieren und verwenden Sie Claude CLI oder Claude Desktop, und aktualisieren Sie dann diese Ansicht.",
-      search: "Keine Sitzungen auf diesem Host entsprechen deiner Suche.",
-      nonArchived: "Keine nicht archivierten Sitzungen auf diesem Host.",
-    },
-    sidebar: {
-      title: "Claude-Sitzungen",
-      viewAll: "Alle Claude-Sitzungen anzeigen",
-      truncated: "Weitere Sitzungen sind im vollständigen Katalog verfügbar.",
-    },
-    transcript: {
-      eyebrow: "Claude-Transkript",
-      back: "Alle Claude-Sitzungen",
-      you: "Sie",
-      reasoning: "Argumentation",
-      toolCall: "Tool-Aufruf",
-      toolResult: "Tool-Ergebnis",
-      item: "Claude-Element",
-      details: "Vollständige Details",
-      loading: "Transkript wird geladen…",
-      loadMore: "Ältere Transkriptelemente laden",
-    },
-  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -2124,6 +1976,12 @@ export const de: TranslationMap = {
   chat: {
     disconnected: "Verbindung zum Gateway getrennt.",
     archivedSessionDisabled: "Stellen Sie diese Sitzung wieder her, um Nachrichten zu senden.",
+    loadOlder: "Ältere laden",
+    catalog: {
+      remoteViewOnly:
+        "Diese Sitzung befindet sich auf einem gekoppelten Knoten und ist schreibgeschützt.",
+      unsupportedViewOnly: "Diese externe Sitzungsquelle ist schreibgeschützt.",
+    },
     taskSuggestions: {
       eyebrow: "Vorgeschlagene Folgeaufgabe",
       start: "In Worktree starten",
