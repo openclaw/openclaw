@@ -1120,11 +1120,13 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 }
 
 .sidebar-session-group-count {
+  width: 26px;
   flex: 0 0 auto;
   color: var(--muted);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
+  text-align: center;
 }
 
 .sidebar-session-group-drag-handle {
@@ -1429,6 +1431,10 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 26px;
+  height: 26px;
+  min-width: 0;
+  flex: 0 0 26px;
   opacity: 0.5;
   transition: transform var(--duration-fast) ease;
 }

@@ -2143,7 +2143,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           aria-expanded=${String(expanded)}
         >
           <span class="nav-section__label-text">${t("nav.more")}</span>
-          <span class="nav-section__chevron"> ${icons.chevronDown} </span>
+          <span class="nav-section__chevron">${icons.chevronDown}</span>
         </button>
         <div class="nav-section__items">
           ${moreRoutes.map((routeId) => this.renderRoute(routeId))}
