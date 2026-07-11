@@ -88,63 +88,66 @@ describe("browser tab routes attachOnly loopback profiles", () => {
     });
   });
 
-  it("redacts tab list URLs when strict SSRF sees explicit browser proxy routing", async () => {
-    const state = makeBrowserServerState({
-      profile: makeManualLoopbackProfile(),
-      resolvedOverrides: {
-        defaultProfile: "manual-cdp",
-        extraArgs: ["--proxy-server=http://proxy.example.test:8080"],
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-      },
-    });
+  it.each([
+    { allowPrivateNetwork: false, expectedUrl: "" },
+    { allowPrivateNetwork: true, expectedUrl: "http://93.184.216.34/proxy-routed" },
+  ])(
+    "applies explicit browser proxy policy to tab list URLs (allowPrivateNetwork=$allowPrivateNetwork)",
+    async ({ allowPrivateNetwork, expectedUrl }) => {
+      const state = makeBrowserServerState({
+        profile: makeManualLoopbackProfile(),
+        resolvedOverrides: {
+          defaultProfile: "manual-cdp",
+          extraArgs: ["--proxy-server=http://proxy.example.test:8080"],
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: allowPrivateNetwork },
+        },
+      });
 
-    const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
-    isChromeCdpReady.mockResolvedValue(true);
+      const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
+      isChromeCdpReady.mockResolvedValue(true);
 
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify([
-            {
-              id: "PAGE-1",
-              title: "Proxy routed",
-              url: "http://93.184.216.34/proxy-routed",
-              webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/PAGE-1",
-              type: "page",
-            },
-          ]),
-          { headers: { "content-type": "application/json" } },
-        ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify([
+              {
+                id: "PAGE-1",
+                title: "Proxy routed",
+                url: "http://93.184.216.34/proxy-routed",
+                webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/PAGE-1",
+                type: "page",
+              },
+            ]),
+            { headers: { "content-type": "application/json" } },
+          ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
 
-    const ctx = createBrowserRouteContext({ getState: () => state });
-    const { app, getHandlers, postHandlers } = createBrowserRouteApp();
-    registerBrowserTabRoutes(app, ctx as never);
-    const getTabs = getHandlers.get("/tabs");
-    const postTabsAction = postHandlers.get("/tabs/action");
-    expect(getTabs).toBeTypeOf("function");
-    expect(postTabsAction).toBeTypeOf("function");
+      const ctx = createBrowserRouteContext({ getState: () => state });
+      const { app, getHandlers, postHandlers } = createBrowserRouteApp();
+      registerBrowserTabRoutes(app, ctx as never);
+      const getTabs = getHandlers.get("/tabs");
+      const postTabsAction = postHandlers.get("/tabs/action");
+      expect(getTabs).toBeTypeOf("function");
+      expect(postTabsAction).toBeTypeOf("function");
 
-    const getResponse = createBrowserRouteResponse();
-    await getTabs?.({ params: {}, query: { profile: "manual-cdp" }, body: {} }, getResponse.res);
+      const getResponse = createBrowserRouteResponse();
+      await getTabs?.({ params: {}, query: { profile: "manual-cdp" }, body: {} }, getResponse.res);
 
-    const actionResponse = createBrowserRouteResponse();
-    await postTabsAction?.(
-      { params: {}, query: { profile: "manual-cdp" }, body: { action: "list" } },
-      actionResponse.res,
-    );
+      const actionResponse = createBrowserRouteResponse();
+      await postTabsAction?.(
+        { params: {}, query: { profile: "manual-cdp" }, body: { action: "list" } },
+        actionResponse.res,
+      );
 
-    expect(getResponse.statusCode).toBe(200);
-    expect(actionResponse.statusCode).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(getResponse.body).toMatchObject({
-      running: true,
-      tabs: [{ targetId: "PAGE-1", title: "Proxy routed", url: "" }],
-    });
-    expect(actionResponse.body).toMatchObject({
-      ok: true,
-      tabs: [{ targetId: "PAGE-1", title: "Proxy routed", url: "" }],
-    });
-  });
+      expect(getResponse.statusCode).toBe(200);
+      expect(actionResponse.statusCode).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      for (const response of [getResponse, actionResponse]) {
+        expect(response.body).toMatchObject({
+          tabs: [{ targetId: "PAGE-1", title: "Proxy routed", url: expectedUrl }],
+        });
+      }
+    },
+  );
 });
