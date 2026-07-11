@@ -1,5 +1,11 @@
 import { timingSafeEqual } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+  validateHeaderValue,
+} from "node:http";
 
 const CONTROL_PORT_ENV = "OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT";
 const CONTROL_TOKEN_ENV = "OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN";
@@ -62,8 +68,13 @@ function parseActivationId(value: unknown): string {
 }
 
 function parseControlToken(value: string): string {
-  if (value.trim().length === 0) {
-    throw new Error("deferred activation control token must be non-empty");
+  if (value.length === 0 || value.trim() !== value) {
+    throw new Error("invalid deferred activation control token");
+  }
+  try {
+    validateHeaderValue(TOKEN_HEADER, value);
+  } catch {
+    throw new Error("invalid deferred activation control token");
   }
   return value;
 }
@@ -81,6 +92,13 @@ function parseControlPort(value: string): number {
 
 function drainRequest(request: IncomingMessage) {
   request.resume();
+}
+
+function normalizeServerCloseError(error: Error | null | undefined): Error | null {
+  if (!error) {
+    return null;
+  }
+  return (error as { code?: unknown }).code === "ERR_SERVER_NOT_RUNNING" ? null : error;
 }
 
 function writeJson(
@@ -119,7 +137,9 @@ async function waitForDeferredGatewayActivationOnce(
 
   const controlToken = parseControlToken(controlTokenValue);
   const controlPort = parseControlPort(controlPortValue);
-  await params.preload?.();
+  if (params.preload) {
+    await params.preload();
+  }
 
   return await new Promise<DeferredActivationResult>((resolve, reject) => {
     let state: "open" | "closing" | "accepted" | "settled" = "open";
@@ -163,18 +183,14 @@ async function waitForDeferredGatewayActivationOnce(
     activeServer = server;
 
     const closeServer = (onClosed: (error: Error | null) => void) => {
-      if (!server.listening) {
-        if (activeServer === server) {
-          activeServer = null;
-        }
-        onClosed(null);
-        return;
-      }
+      // server.listen(...) is already issued before any parked signal/request path can
+      // reach this helper, but Node may not flip server.listening yet. Always close so
+      // shutdown cancels a pending bind instead of leaving the control port reserved.
       server.close((closeError) => {
         if (activeServer === server) {
           activeServer = null;
         }
-        onClosed(closeError ?? null);
+        onClosed(normalizeServerCloseError(closeError ?? null));
       });
       server.closeAllConnections();
     };
@@ -360,11 +376,18 @@ export async function resetDeferredGatewayActivationForTest(): Promise<void> {
   const server = activeServer;
   activeServer = null;
   singleton = null;
-  if (!server || !server.listening) {
+  if (!server) {
     return;
   }
   await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
+    server.close((error) => {
+      const normalizedError = normalizeServerCloseError(error ?? null);
+      if (normalizedError) {
+        reject(normalizedError);
+      } else {
+        resolve();
+      }
+    });
     server.closeAllConnections();
   });
 }

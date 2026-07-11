@@ -306,26 +306,44 @@ describe("waitForDeferredGatewayActivation", () => {
     ).rejects.toThrow("invalid deferred activation control port");
   });
 
-  it.each(["", " \t "])(
-    "rejects %j control token before preload or listener bind",
-    async (controlToken) => {
-      const port = await reserveLoopbackPort();
-      const preload = vi.fn(async () => undefined);
+  it.each([
+    ["empty", ""],
+    ["all-whitespace", " \t "],
+    ["leading space", ` ${TOKEN}`],
+    ["trailing space", `${TOKEN} `],
+    ["carriage return", "activation\rsecret"],
+    ["line feed", "activation\nsecret"],
+    ["NUL", "activation\u0000secret"],
+    ["DEL", "activation\u007fsecret"],
+  ])("rejects %s control token before preload or listener bind", async (_name, controlToken) => {
+    const port = await reserveLoopbackPort();
+    const preload = vi.fn(async () => undefined);
 
-      await expect(
-        waitForDeferredGatewayActivation({
-          env: {
-            OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: String(port),
-            OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: controlToken,
-          },
-          preload,
-        }),
-      ).rejects.toThrow("deferred activation control token must be non-empty");
+    await expect(
+      waitForDeferredGatewayActivation({
+        env: {
+          OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: String(port),
+          OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: controlToken,
+        },
+        preload,
+      }),
+    ).rejects.toThrow("invalid deferred activation control token");
 
-      expect(preload).not.toHaveBeenCalled();
-      await expectPortReusable(port);
-    },
-  );
+    expect(preload).not.toHaveBeenCalled();
+    await expectPortReusable(port);
+  });
+
+  it("accepts the existing control token bytes without normalization", async () => {
+    const port = await reserveLoopbackPort();
+    const { waiting } = await waitForParkedGateway(port);
+
+    const accepted = await postActivate(port, TOKEN, { activationId: "exact-token-bytes" });
+    expect(accepted.status).toBe(202);
+    await expect(waiting).resolves.toEqual({
+      mode: "activated",
+      activationId: "exact-token-bytes",
+    });
+  });
 
   it("parks until one authenticated bounded activation", async () => {
     const port = await reserveLoopbackPort();
@@ -552,6 +570,44 @@ describe("waitForDeferredGatewayActivation", () => {
       writeHeadSpy.mockRestore();
     }
   });
+
+  it.each(["SIGTERM", "SIGINT"] as const)(
+    "rejects %s immediately after waitForDeferredGatewayActivation returns, before any listening await",
+    async (signal) => {
+      const signalListeners = captureSignalListeners();
+      const killPortReuse: { current: Promise<void> | null } = { current: null };
+      const port = await reserveLoopbackPort();
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid, resentSignal) => {
+        expect(pid).toBe(process.pid);
+        expect(resentSignal).toBe(signal);
+        expect(countAddedSignalListeners(signalListeners)).toEqual({
+          SIGTERM: 0,
+          SIGINT: 0,
+        });
+        killPortReuse.current = expectPortReusable(port);
+        return true;
+      }) as typeof process.kill);
+
+      const waiting = waitForDeferredGatewayActivation({ env: deferredActivationEnv(port) });
+      expect(countAddedSignalListeners(signalListeners)).toEqual({
+        SIGTERM: 1,
+        SIGINT: 1,
+      });
+
+      const addedSignalListener = findAddedSignalListener(signal, signalListeners[signal]);
+      expect(addedSignalListener).not.toBeNull();
+      addedSignalListener?.();
+
+      await expect(waiting).rejects.toThrow(`deferred activation interrupted by ${signal}`);
+      expect(killSpy).toHaveBeenCalledWith(process.pid, signal);
+      await expect(killPortReuse.current).resolves.toBeUndefined();
+      expect(countAddedSignalListeners(signalListeners)).toEqual({
+        SIGTERM: 0,
+        SIGINT: 0,
+      });
+      await expectFreshProcessEquivalentCanReuseControlPort(port, `restart-immediate-${signal}`);
+    },
+  );
 
   it.each(["SIGTERM", "SIGINT"] as const)(
     "re-signals %s only after cleanup and listener close, even with a slow parked socket",
