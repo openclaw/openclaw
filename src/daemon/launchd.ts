@@ -1063,6 +1063,38 @@ export async function stopLaunchAgent({
   stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
 }
 
+// Bounded retention for the supervisor stderr sink: launchd appends to
+// gateway.err.log across relaunches and nothing else rotates it, so cap it to
+// a tail whenever OpenClaw (re)writes the plist — fresh installs, gateway
+// restarts, and update handoffs. Growth between operator actions is bounded
+// only by launchd's relaunch throttle until broader log retention lands.
+const LAUNCH_AGENT_STDERR_CAP_BYTES = 2_000_000;
+const LAUNCH_AGENT_STDERR_KEEP_BYTES = 1_000_000;
+
+export async function capLaunchAgentStderrLogTail(stderrPath: string): Promise<void> {
+  try {
+    const stat = await fs.stat(stderrPath);
+    if (stat.size <= LAUNCH_AGENT_STDERR_CAP_BYTES) {
+      return;
+    }
+    const handle = await fs.open(stderrPath, "r");
+    const tail = Buffer.alloc(LAUNCH_AGENT_STDERR_KEEP_BYTES);
+    try {
+      await handle.read(
+        tail,
+        0,
+        LAUNCH_AGENT_STDERR_KEEP_BYTES,
+        stat.size - LAUNCH_AGENT_STDERR_KEEP_BYTES,
+      );
+    } finally {
+      await handle.close();
+    }
+    await fs.writeFile(stderrPath, tail);
+  } catch {
+    // Best-effort: retention must never block install or restart.
+  }
+}
+
 async function writeLaunchAgentPlist({
   env,
   programArguments,
@@ -1076,6 +1108,7 @@ async function writeLaunchAgentPlist({
     platform: "darwin",
   });
   await ensureSecureDirectory(logDir);
+  await capLaunchAgentStderrLogTail(stderrPath);
 
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
@@ -1196,6 +1229,7 @@ async function rewriteLaunchAgentPlistForRestart({
     platform: "darwin",
   });
   await ensureSecureDirectory(logDir);
+  await capLaunchAgentStderrLogTail(stderrPath);
 
   const serviceDescription = resolveGatewayServiceDescription({
     env,
