@@ -407,7 +407,8 @@ function selectTopContributors(
   for (const contributor of contributors) {
     let insertAt = selected.length;
     for (let index = 0; index < selected.length; index += 1) {
-      if (contributor.chars > selected[index].chars) {
+      const selectedContributor = selected.at(index);
+      if (selectedContributor && contributor.chars > selectedContributor.chars) {
         insertAt = index;
         break;
       }
@@ -734,7 +735,6 @@ async function compactEmbeddedAgentSessionDirectOnce(
       }
     } else {
       const preparedAuth = protectPreparedProviderRuntimeAuth({
-        sourceApiKey: apiKeyInfo.apiKey,
         provider: runtimeModel.provider,
         preparedAuth: await prepareProviderRuntimeAuth({
           provider: runtimeModel.provider,

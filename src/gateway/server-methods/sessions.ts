@@ -87,6 +87,10 @@ import {
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
+import {
+  handleSessionStateSessionDeleted,
+  recordSessionCompacted,
+} from "../../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
@@ -2746,6 +2750,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     // operator UIs can point at the preserved checkout instead of orphaning it.
     let worktreePreserved: { id: string; branch: string; path: string } | undefined;
     if (deleted) {
+      // requestedAgentId wins: "global" canonical keys resolve to the default store
+      // agent, which would purge the wrong agent's rows for explicit-agent deletes.
+      handleSessionStateSessionDeleted(
+        target.canonicalKey ?? key,
+        requestedAgentId ?? resolveSessionStoreAgentId(cfg, target.canonicalKey ?? key),
+      );
       try {
         const worktree = managedWorktrees.findLiveByOwner("session", target.canonicalKey);
         if (worktree && !(await managedWorktrees.removeIfLossless(worktree.id))) {
@@ -3112,6 +3122,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             return;
           }
 
+          const operationId = randomUUID();
           if (maxLines !== undefined) {
             const trimResult = await trimSessionTranscriptForManualCompact(
               {
@@ -3137,6 +3148,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               undefined,
             );
             if (trimResult.compacted) {
+              recordSessionCompacted({
+                sessionKey: target.canonicalKey,
+                operationId,
+                sessionId,
+                agentId: target.agentId ?? requestedAgentId,
+              });
               emitSessionsChanged(context, {
                 sessionKey: target.canonicalKey,
                 ...(target.canonicalKey === "global" && target.agentId
@@ -3182,7 +3199,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               workspaceDir: latestEntry.spawnedWorkspaceDir,
               cwd: latestEntry.spawnedCwd,
             }) ?? resolveAgentWorkspaceDir(cfg, target.agentId);
-          const operationId = randomUUID();
           emitSessionOperation(context, {
             operationId,
             operation: "compact",
@@ -3303,6 +3319,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               );
               return;
             }
+            recordSessionCompacted({
+              sessionKey: target.canonicalKey,
+              operationId,
+              sessionId: result.result?.sessionId ?? sessionId,
+              agentId: target.agentId ?? requestedAgentId,
+            });
           }
 
           emitCompactionEnd(result.ok && result.compacted, result.reason);

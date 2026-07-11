@@ -490,8 +490,10 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
     runSqliteImmediateTransactionSync(db, () => {
       // Ownership and version checks must share the write transaction with the
       // schema update; concurrent openers must not overwrite another agent.
-      assertSupportedAgentSchemaVersion(db, pathname);
+      // Role/ownership gates before version: user_version is only meaningful
+      // within one schema role, and the global state DB now carries version 2.
       assertExistingSchemaOwner(readExistingSchemaMeta(db), agentId, pathname);
+      assertSupportedAgentSchemaVersion(db, pathname);
       const previousVersion = readSqliteUserVersion(db);
       // Two legacy memory shapes exist: the flip lineage's source_kind schema
       // (derived cache — dropped for rebuild) and main's path/source-keyed
