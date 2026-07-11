@@ -123,4 +123,34 @@ describe("Codex sidebar", () => {
     expect(sidebar.querySelectorAll("[data-codex-thread-id]")).toHaveLength(100);
     expect(sidebar.textContent).toContain("More sessions are available in the full catalog.");
   });
+
+  it("clears the previous Gateway catalog before a replacement client loads", async () => {
+    const firstRequest = vi.fn(async () => ({
+      hosts: [
+        {
+          hostId: "gateway:first",
+          label: "Private Gateway",
+          kind: "gateway",
+          connected: true,
+          sessions: [
+            { threadId: "private-1", name: "Private task", status: "idle", archived: false },
+          ],
+        },
+      ],
+    }));
+    const secondRequest = vi.fn(async () => {
+      throw new Error("replacement unavailable");
+    });
+    const sidebar = new CodexSidebar();
+    sidebar.client = { request: firstRequest } as unknown as GatewayBrowserClient;
+    sidebar.connected = true;
+    document.body.append(sidebar);
+
+    await vi.waitFor(() => expect(sidebar.textContent).toContain("Private task"));
+
+    sidebar.client = { request: secondRequest } as unknown as GatewayBrowserClient;
+    await vi.waitFor(() => expect(secondRequest).toHaveBeenCalledOnce());
+    expect(sidebar.textContent).not.toContain("Private Gateway");
+    expect(sidebar.textContent).not.toContain("Private task");
+  });
 });

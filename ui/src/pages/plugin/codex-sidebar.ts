@@ -68,6 +68,14 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     if (this.connected && this.client && this.loadedClient !== this.client) {
+      if (this.loadedClient) {
+        this.hydrationToken = null;
+        this.clearRefreshTimer();
+        stopCodexSessionsPolling(this.controllerHost);
+        sessionsState.requestUpdate = () => {
+          this.revision += 1;
+        };
+      }
       this.loadedClient = this.client;
       this.beginRefresh();
     }
