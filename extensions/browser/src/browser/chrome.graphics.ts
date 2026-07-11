@@ -140,6 +140,7 @@ function firstAttribute(
 function classifyGraphicsAcceleration(params: {
   renderer: string | null;
   devices: BrowserGraphicsDevice[];
+  featureStatus: Record<string, string>;
 }): BrowserGraphicsAcceleration {
   const deviceText = params.devices
     .flatMap((device) => [device.vendor, device.device, device.driverVendor])
@@ -148,7 +149,16 @@ function classifyGraphicsAcceleration(params: {
   if (/(swiftshader|llvmpipe|softpipe|software rasterizer|swrast)/.test(description)) {
     return "software";
   }
-  return description.trim() ? "hardware" : "unknown";
+  if (description.trim()) {
+    return "hardware";
+  }
+
+  // Chrome omits renderer/device text when GPU use is disabled, but its core
+  // feature states still distinguish the effective software rendering path.
+  const coreFeatureStatuses = ["2d_canvas", "gpu_compositing", "rasterization", "webgl"].map(
+    (feature) => params.featureStatus[feature]?.toLowerCase() ?? "",
+  );
+  return coreFeatureStatuses.some((status) => status.includes("software")) ? "software" : "unknown";
 }
 
 export function normalizeChromeGraphicsInfo(
@@ -176,7 +186,7 @@ export function normalizeChromeGraphicsInfo(
   return {
     status: "available",
     observedAt,
-    acceleration: classifyGraphicsAcceleration({ renderer, devices }),
+    acceleration: classifyGraphicsAcceleration({ renderer, devices, featureStatus }),
     renderer,
     vendor: firstAttribute(attributes, ["glVendor", "angleVendor", "webglVendor"]),
     version: firstAttribute(attributes, ["glVersion", "angleVersion"]),

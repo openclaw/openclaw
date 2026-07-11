@@ -105,6 +105,75 @@ describe("managed Chrome graphics diagnostics", () => {
     expect(JSON.stringify(diagnostics)).not.toContain("secret");
   });
 
+  it("uses core feature states when disabled GPU mode omits renderer and device text", () => {
+    const diagnostics = normalizeChromeGraphicsInfo(
+      {
+        gpu: {
+          devices: [
+            {
+              vendorId: 0,
+              deviceId: 0,
+              vendorString: "",
+              deviceString: "",
+              driverVendor: "",
+              driverVersion: "",
+            },
+          ],
+          auxAttributes: {
+            glRenderer: "",
+            glVendor: "",
+            glVersion: "",
+            glImplementationParts: "(gl=disabled,angle=none)",
+          },
+          featureStatus: {
+            "2d_canvas": "disabled_software",
+            gpu_compositing: "disabled_software",
+            rasterization: "disabled_software",
+            webgl: "unavailable_software",
+          },
+          driverBugWorkarounds: [],
+          videoDecoding: [],
+          videoEncoding: [],
+        },
+      },
+      124,
+    );
+
+    expect(diagnostics).toMatchObject({
+      status: "available",
+      observedAt: 124,
+      acceleration: "software",
+      renderer: null,
+      vendor: null,
+      version: null,
+      backend: "(gl=disabled,angle=none)",
+    });
+  });
+
+  it("prefers an observed hardware renderer over unrelated software feature states", () => {
+    const diagnostics = normalizeChromeGraphicsInfo({
+      gpu: {
+        devices: [],
+        auxAttributes: {
+          glRenderer: "ANGLE (NVIDIA, GeForce RTX 4090 Direct3D11)",
+        },
+        featureStatus: {
+          gpu_compositing: "enabled",
+          video_encode: "disabled_software",
+        },
+        driverBugWorkarounds: [],
+        videoDecoding: [],
+        videoEncoding: [],
+      },
+    });
+
+    expect(diagnostics).toMatchObject({
+      status: "available",
+      acceleration: "hardware",
+      renderer: "ANGLE (NVIDIA, GeForce RTX 4090 Direct3D11)",
+    });
+  });
+
   it("uses the browser-level SystemInfo command with bounded passive timeouts", async () => {
     sendMock.mockResolvedValueOnce({
       gpu: {
