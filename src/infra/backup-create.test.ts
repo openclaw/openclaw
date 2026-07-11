@@ -699,6 +699,76 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it("snapshots and verifies a canonical agent database when the agent id is node_modules", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-agent-node-modules-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const dbPath = state.statePath("agents", "node_modules", "agent", "openclaw-agent.sqlite");
+        await fs.mkdir(path.dirname(dbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        const sqlite = requireNodeSqlite();
+        const db = new sqlite.DatabaseSync(dbPath);
+        try {
+          db.exec(`
+            PRAGMA journal_mode = WAL;
+            PRAGMA wal_autocheckpoint = 0;
+            CREATE TABLE schema_meta (
+              meta_key TEXT NOT NULL PRIMARY KEY,
+              role TEXT NOT NULL
+            );
+            INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'agent');
+            CREATE TABLE markers (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+            PRAGMA wal_checkpoint(TRUNCATE);
+            INSERT INTO markers (value) VALUES ('committed-in-wal');
+          `);
+          await expect(fs.access(`${dbPath}-wal`)).resolves.toBeUndefined();
+
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 31, 30),
+          });
+          const entries = await listArchiveEntries(result.archivePath);
+          const archivedDbEntry = entries.find((entry) =>
+            entry.endsWith("/state/agents/node_modules/agent/openclaw-agent.sqlite"),
+          );
+          expect(archivedDbEntry).toBeDefined();
+          expect(
+            entries.some((entry) =>
+              entry.endsWith("/state/agents/node_modules/agent/openclaw-agent.sqlite-wal"),
+            ),
+          ).toBe(false);
+
+          const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          await expect(
+            backupVerifyCommand(runtime, { archive: result.archivePath }),
+          ).resolves.toMatchObject({ ok: true });
+
+          await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+          const archivedDb = new sqlite.DatabaseSync(path.join(extractDir, archivedDbEntry!), {
+            readOnly: true,
+          });
+          try {
+            expect(archivedDb.prepare("SELECT value FROM markers").get()).toEqual({
+              value: "committed-in-wal",
+            });
+          } finally {
+            archivedDb.close();
+          }
+        } finally {
+          db.close();
+        }
+      },
+    );
+  });
+
   it("snapshots nested live SQLite databases with transaction continuity", async () => {
     await withOpenClawTestState(
       {
@@ -979,6 +1049,10 @@ describe("createBackupArchive", () => {
         expect(
           entries.find((entry) => entry.path.endsWith("/state/plugins/dedicated/linked.sqlite")),
         ).toMatchObject({ type: "SymbolicLink" });
+        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        await expect(
+          backupVerifyCommand(runtime, { archive: result.archivePath }),
+        ).resolves.toMatchObject({ ok: true });
       },
     );
   });
@@ -1019,6 +1093,11 @@ describe("createBackupArchive", () => {
           CREATE TABLE delivery_queue_entries (
             id TEXT PRIMARY KEY
           );
+          CREATE TABLE schema_meta (
+            meta_key TEXT NOT NULL PRIMARY KEY,
+            role TEXT NOT NULL
+          );
+          INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'global');
           PRAGMA wal_checkpoint(TRUNCATE);
           INSERT INTO durable_state (id, value) VALUES (1, 'must-stay');
           INSERT INTO delivery_queue_entries (id) VALUES ('must-drop');
