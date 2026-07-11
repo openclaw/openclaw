@@ -2,14 +2,25 @@
  * Subagent orphan recovery gate.
  *
  * Bounds automatic recovery attempts and tombstones repeatedly wedged session entries.
+ * Includes a cumulative cross-boot ceiling (#95750) so slow reboot loops cannot keep
+ * re-accepting orphan resume forever. Main-session restart recovery keeps its own fuse;
+ * this is the canonical subagent surface.
  */
 import type { SessionEntry } from "../config/sessions.js";
 
+/** Rapid-burst ceiling inside the rewedge window (same-boot stop-the-bleed). */
 const SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS = 2;
+/**
+ * Cumulative accepted automatic orphan-recovery resumes allowed for the same entry
+ * across boots before permanent tombstone. Mirrors main-session restart-recovery
+ * MAX_RECOVERY_RETRIES semantics (resume while attempts == MAX still allowed; block when
+ * attempts > MAX). See #95750 review P1b.
+ */
+export const SUBAGENT_RECOVERY_MAX_CUMULATIVE_ATTEMPTS = 3;
 const SUBAGENT_RECOVERY_REWEDGE_WINDOW_MS = 2 * 60_000;
 
 /** Decision returned before attempting automatic subagent orphan recovery. */
-type SubagentRecoveryGate =
+export type SubagentRecoveryGate =
   | {
       allowed: true;
       nextAttempt: number;
@@ -20,8 +31,12 @@ type SubagentRecoveryGate =
       shouldMarkWedged: boolean;
     };
 
-// Attempts outside the rewedge window start a new small burst instead of
-// permanently consuming the session's automatic recovery budget.
+function normalizeAutomaticAttempts(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+// Attempts outside the rewedge window stop counting toward the *rapid* burst budget,
+// but cumulative automaticAttempts still gate across reboots.
 function isRecentRecoveryAttempt(entry: SessionEntry, now: number): boolean {
   const lastAttemptAt = entry.subagentRecovery?.lastAttemptAt;
   return (
@@ -52,6 +67,14 @@ export function formatSubagentRecoveryWedgedReason(entry: SessionEntry): string 
   );
 }
 
+function buildCumulativeBudgetReason(previousAttempts: number): string {
+  return (
+    `subagent orphan recovery blocked after ${previousAttempts} accepted resume attempts ` +
+    `across boots (budget ${SUBAGENT_RECOVERY_MAX_CUMULATIVE_ATTEMPTS}); ` +
+    `run "openclaw tasks maintenance --apply" or "openclaw doctor --fix" to reconcile it`
+  );
+}
+
 /** Checks whether automatic orphan recovery may run for this session entry. */
 export function evaluateSubagentRecoveryGate(
   entry: SessionEntry,
@@ -65,9 +88,19 @@ export function evaluateSubagentRecoveryGate(
     };
   }
 
-  const previousAttempts = isRecentRecoveryAttempt(entry, now)
-    ? Math.max(0, entry.subagentRecovery?.automaticAttempts ?? 0)
-    : 0;
+  const cumulativeAttempts = normalizeAutomaticAttempts(entry.subagentRecovery?.automaticAttempts);
+  // Cross-boot ceiling: cumulative accepted resumes persist past the rewedge window.
+  // Strict greater-than so attempts === MAX still offered one final resume (same
+  // boundary as main-session restartRecoveryAttempts). See #95750.
+  if (cumulativeAttempts > SUBAGENT_RECOVERY_MAX_CUMULATIVE_ATTEMPTS) {
+    return {
+      allowed: false,
+      reason: buildCumulativeBudgetReason(cumulativeAttempts),
+      shouldMarkWedged: true,
+    };
+  }
+
+  const previousAttempts = isRecentRecoveryAttempt(entry, now) ? cumulativeAttempts : 0;
   if (previousAttempts >= SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS) {
     return {
       allowed: false,
@@ -80,7 +113,9 @@ export function evaluateSubagentRecoveryGate(
 
   return {
     allowed: true,
-    nextAttempt: previousAttempts + 1,
+    // Always advance the durable counter from the true cumulative total, not a
+    // window-reset 0, so the cross-boot budget survives slow reboot loops.
+    nextAttempt: cumulativeAttempts + 1,
   };
 }
 
@@ -91,8 +126,14 @@ export function markSubagentRecoveryAttempt(params: {
   runId: string;
   attempt: number;
 }): void {
+  const prior = normalizeAutomaticAttempts(params.entry.subagentRecovery?.automaticAttempts);
+  // Monotonic advance: never shrink cumulative budget on re-mark/stale snapshot.
+  const nextAttempts = Math.max(prior, Math.max(1, params.attempt));
+  // Avoid double-charge when a concurrent writer already advanced to nextAttempts
+  // for the same conceptual resume (prior === requested attempt already applied).
   params.entry.subagentRecovery = {
-    automaticAttempts: Math.max(1, params.attempt),
+    ...params.entry.subagentRecovery,
+    automaticAttempts: nextAttempts,
     lastAttemptAt: params.now,
     lastRunId: params.runId,
   };
@@ -106,12 +147,12 @@ export function markSubagentRecoveryWedged(params: {
   reason: string;
 }): void {
   params.entry.abortedLastRun = false;
+  const prior = normalizeAutomaticAttempts(params.entry.subagentRecovery?.automaticAttempts);
   params.entry.subagentRecovery = {
     ...params.entry.subagentRecovery,
-    automaticAttempts: Math.max(
-      params.entry.subagentRecovery?.automaticAttempts ?? 0,
-      SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS,
-    ),
+    // Keep the higher of prior cumulative count vs rapid-burst floor so doctor
+    // still sees that recovery was exhausted; never shrink over-budget counts.
+    automaticAttempts: Math.max(prior, SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS),
     lastAttemptAt: params.entry.subagentRecovery?.lastAttemptAt ?? params.now,
     ...(params.runId ? { lastRunId: params.runId } : {}),
     wedgedAt: params.now,

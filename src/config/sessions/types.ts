@@ -154,7 +154,11 @@ export type SessionPluginNextTurnInjection = {
 };
 
 export type SubagentRecoveryState = {
-  /** Consecutive accepted automatic orphan-recovery resumes in the rapid re-wedge window. */
+  /**
+   * Cumulative accepted automatic orphan-recovery resumes across boots.
+   * Survives slow reboot loops (unlike a pure in-window counter) so a wedged
+   * child cannot death-loop the gateway. See #95750.
+   */
   automaticAttempts?: number;
   /** Timestamp (ms) of the latest accepted automatic orphan-recovery resume. */
   lastAttemptAt?: number;
@@ -301,6 +305,21 @@ export type SessionEntry = {
   pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /**
+   * Persistent count of cross-boot restart-recovery resume attempts for this entry.
+   * Bounds the restart-recovery loop so a genuinely wedged session cannot death-loop
+   * the gateway across reboots. Reset to 0 when a fresh interruption is marked on a
+   * session that had previously settled (made progress). See #95750.
+   */
+  restartRecoveryAttempts?: number;
+  /**
+   * ISO timestamp set when an entry exceeded the cross-boot restart-recovery budget and
+   * was quarantined (no longer eligible for automatic resume). Cleared when the session
+   * makes fresh progress. See #95750.
+   */
+  restartRecoveryQuarantinedAt?: string;
+  /** Reason recorded alongside restartRecoveryQuarantinedAt. See #95750. */
+  restartRecoveryQuarantineReason?: string;
   /** Interrupted run generations whose late lifecycle events must be ignored. */
   restartRecoveryRuns?: RestartRecoveryRun[];
   /** Durable guard state for automatic subagent orphan recovery. */

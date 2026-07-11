@@ -538,4 +538,53 @@ describe("session lifecycle state", () => {
       requireWriteSuccess: true,
     });
   });
+
+  it("clears the restart-recovery budget + quarantine on a successful run (#95750)", () => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        restartRecoveryAttempts: 2,
+        restartRecoveryQuarantinedAt: "2026-06-23T00:00:00.000Z",
+        restartRecoveryQuarantineReason: "exceeded_restart_retry_budget",
+      },
+      data: { phase: "end", endedAt: 1_550 },
+      expected: {
+        ...terminalPatch(1_050, 1_550, "done", false),
+        restartRecoveryAttempts: undefined,
+        restartRecoveryQuarantinedAt: undefined,
+        restartRecoveryQuarantineReason: undefined,
+      },
+    });
+  });
+
+  it("clears the restart-recovery budget + quarantine on a fresh non-recovery start (#95750)", () => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        restartRecoveryAttempts: 4,
+        restartRecoveryQuarantinedAt: "2026-06-23T00:00:00.000Z",
+        restartRecoveryQuarantineReason: "exceeded_restart_retry_budget",
+      },
+      data: { phase: "start", startedAt: 1_500 },
+      expected: {
+        updatedAt: 1_500,
+        status: "running",
+        startedAt: 1_500,
+        endedAt: undefined,
+        runtimeMs: undefined,
+        abortedLastRun: false,
+        restartRecoveryAttempts: undefined,
+        restartRecoveryQuarantinedAt: undefined,
+        restartRecoveryQuarantineReason: undefined,
+      },
+    });
+  });
+
+  it("leaves the restart-recovery budget untouched on a non-successful run (#95750)", () => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        restartRecoveryAttempts: 2,
+      },
+      data: { phase: "error", endedAt: 1_550 },
+      expected: terminalPatch(1_050, 1_550, "failed", false),
+    });
+  });
 });

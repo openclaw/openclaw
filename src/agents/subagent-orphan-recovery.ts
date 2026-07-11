@@ -43,6 +43,10 @@ const log = createSubsystemLogger("subagent-interrupted-resume");
 
 /** Delay before attempting recovery to let the gateway finish bootstrapping. */
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
+/** Maximum number of retry attempts for orphan recovery (in-process schedule). */
+const MAX_RECOVERY_RETRIES = 3;
+/** Backoff multiplier between retries (exponential). */
+const RETRY_BACKOFF_MULTIPLIER = 2;
 
 function isLegacyRestartInterruptedTimeout(
   runRecord: SubagentRunRecord,
@@ -364,6 +368,9 @@ export async function recoverOrphanedSubagentSessions(params: {
           continue;
         }
 
+        // Durable cumulative/cross-boot fuse lives on entry.subagentRecovery
+        // (evaluateSubagentRecoveryGate). Do NOT add a parallel restartRecovery*
+        // counter on this surface — main-session keeps its own fuse. See #95750 P1b.
         const recoveryGate = evaluateSubagentRecoveryGate(entry, now);
         if (!recoveryGate.allowed) {
           if (recoveryGate.shouldMarkWedged) {
@@ -371,13 +378,21 @@ export async function recoverOrphanedSubagentSessions(params: {
               await updateSessionStore(storePath, (currentStore) => {
                 const current = currentStore[childSessionKey];
                 if (current) {
-                  markSubagentRecoveryWedged({
-                    entry: current,
-                    now,
-                    runId,
-                    reason: recoveryGate.reason,
-                  });
-                  currentStore[childSessionKey] = current;
+                  // Revalidate under the store lock: still aborted and still blocked.
+                  const liveGate = evaluateSubagentRecoveryGate(current, now);
+                  if (
+                    current.abortedLastRun === true &&
+                    !liveGate.allowed &&
+                    liveGate.shouldMarkWedged
+                  ) {
+                    markSubagentRecoveryWedged({
+                      entry: current,
+                      now,
+                      runId,
+                      reason: liveGate.reason,
+                    });
+                    currentStore[childSessionKey] = current;
+                  }
                 }
               });
               markSubagentRecoveryWedged({
@@ -447,17 +462,35 @@ export async function recoverOrphanedSubagentSessions(params: {
         if (resumeResult.resumed) {
           resumedSessionKeys.add(childSessionKey);
           // Only clear the aborted flag after confirmed successful resume.
+          // Charge the canonical subagentRecovery cumulative budget once per
+          // accepted resume (no parallel restartRecoveryAttempts field). See #95750.
+          const preResumeAttempts =
+            typeof entry.subagentRecovery?.automaticAttempts === "number" &&
+            Number.isFinite(entry.subagentRecovery.automaticAttempts) &&
+            entry.subagentRecovery.automaticAttempts > 0
+              ? Math.floor(entry.subagentRecovery.automaticAttempts)
+              : 0;
           try {
             await updateSessionStore(storePath, (currentStore) => {
               const current = currentStore[childSessionKey];
               if (current) {
                 current.abortedLastRun = false;
-                markSubagentRecoveryAttempt({
-                  entry: current,
-                  now: Date.now(),
-                  runId,
-                  attempt: recoveryGate.nextAttempt,
-                });
+                const livePrior =
+                  typeof current.subagentRecovery?.automaticAttempts === "number" &&
+                  Number.isFinite(current.subagentRecovery.automaticAttempts) &&
+                  current.subagentRecovery.automaticAttempts > 0
+                    ? Math.floor(current.subagentRecovery.automaticAttempts)
+                    : 0;
+                // Only charge when the counter still matches the pre-resume snapshot
+                // (no double-charge on re-mark / concurrent updater).
+                if (livePrior === preResumeAttempts) {
+                  markSubagentRecoveryAttempt({
+                    entry: current,
+                    now: Date.now(),
+                    runId,
+                    attempt: recoveryGate.nextAttempt,
+                  });
+                }
                 current.updatedAt = Date.now();
                 currentStore[childSessionKey] = current;
               }
@@ -508,10 +541,6 @@ export async function recoverOrphanedSubagentSessions(params: {
   return result;
 }
 
-/** Maximum number of retry attempts for orphan recovery. */
-const MAX_RECOVERY_RETRIES = 3;
-/** Backoff multiplier between retries (exponential). */
-const RETRY_BACKOFF_MULTIPLIER = 2;
 /** Separate durable-terminal attempts after session recovery is exhausted. */
 const MAX_TERMINAL_FINALIZE_ATTEMPTS = 3;
 

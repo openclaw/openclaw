@@ -144,8 +144,17 @@ function requireFirstUpdateSessionStoreCall() {
 describe("subagent-orphan-recovery", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.clearAllMocks();
+    // resetAllMocks (not just clear) so mockImplementation from budget cases does not leak
+    vi.resetAllMocks();
     resetGatewayWorkAdmission();
+    // Re-apply default mocks cleared by resetAllMocks.
+    vi.mocked(sessions.resolveAgentIdFromSessionKey).mockReturnValue("main");
+    vi.mocked(sessions.resolveStorePath).mockReturnValue("/tmp/test-sessions.json");
+    vi.mocked(sessions.loadSessionStore).mockReturnValue({});
+    vi.mocked(sessions.updateSessionStore).mockResolvedValue(undefined as never);
+    vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "test-run-id" } as never);
+    vi.mocked(sessionUtils.readSessionMessagesAsync).mockResolvedValue([]);
+    vi.mocked(subagentRegistrySteerRuntime.replaceSubagentRunAfterSteer).mockReturnValue(true);
     vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun)
       .mockReset()
       .mockResolvedValue(1);
@@ -946,5 +955,172 @@ describe("subagent-orphan-recovery", () => {
       "orphan recovery exhausted with 1 interrupted terminal projection(s) incomplete",
       { runIds: ["run-1"] },
     );
+  });
+
+  describe("cross-boot subagentRecovery budget (#95750)", () => {
+    it("still resumes a wedged session while it is within the recovery budget", async () => {
+      // Last-AttemptAt older than rewedge window so rapid-burst gate does not fire;
+      // cumulative automaticAttempts === 3 (MAX) still allows one final resume.
+      mockSingleAbortedSession({
+        sessionId: "session-budget-ok",
+        subagentRecovery: {
+          automaticAttempts: 3,
+          lastAttemptAt: Date.now() - 10 * 60_000,
+        },
+      });
+
+      const result = await recoverOrphanedSubagentSessions({
+        getActiveRuns: () => createActiveRuns(createTestRunRecord()),
+      });
+
+      expect(result).toMatchObject({ recovered: 1, failed: 0, skipped: 0 });
+      expect(gateway.callGateway).toHaveBeenCalledOnce();
+      expect(sessions.updateSessionStore).toHaveBeenCalled();
+    });
+
+    it("tombstones a wedged session once it exceeds the cross-boot recovery budget", async () => {
+      const sessionEntry = {
+        sessionId: "session-budget-exceeded",
+        updatedAt: Date.now() - 10_000,
+        abortedLastRun: true as boolean | undefined,
+        // Cumulative attempts > MAX (3) → gate blocks and marks wedged.
+        subagentRecovery: {
+          automaticAttempts: 4,
+          lastAttemptAt: Date.now() - 10 * 60_000,
+        } as {
+          automaticAttempts?: number;
+          lastAttemptAt?: number;
+          wedgedAt?: number;
+          wedgedReason?: string;
+        },
+      };
+      vi.mocked(sessions.loadSessionStore).mockReturnValue({
+        "agent:main:subagent:test-session-1": sessionEntry as never,
+      });
+      vi.mocked(sessions.updateSessionStore).mockImplementation(async (_path, updater) => {
+        const store: Record<string, typeof sessionEntry> = {
+          "agent:main:subagent:test-session-1": sessionEntry,
+        };
+        await updater(store as never);
+        return store as never;
+      });
+
+      const result = await recoverOrphanedSubagentSessions({
+        getActiveRuns: () => createActiveRuns(createTestRunRecord()),
+      });
+
+      // Tombstoned via subagentRecovery, not resumed; transcript pointer preserved.
+      expect(result.recovered).toBe(0);
+      expect(result.skipped).toBe(1);
+      expect(gateway.callGateway).not.toHaveBeenCalled();
+      expect(sessionEntry.abortedLastRun).toBe(false);
+      expect(typeof sessionEntry.subagentRecovery?.wedgedAt).toBe("number");
+      expect(sessionEntry.subagentRecovery?.wedgedReason).toMatch(/across boots/);
+      expect(sessionEntry.sessionId).toBe("session-budget-exceeded");
+      expect(result.failedRuns.some((r) => (r.error ?? "").includes("across boots"))).toBe(true);
+    });
+
+    it("does not double-charge the budget when re-running count on settled snapshot", async () => {
+      const sessionEntry = {
+        sessionId: "session-budget-double",
+        updatedAt: Date.now(),
+        abortedLastRun: true as boolean | undefined,
+        subagentRecovery: {
+          automaticAttempts: 1,
+          lastAttemptAt: Date.now() - 10 * 60_000,
+        } as {
+          automaticAttempts?: number;
+          lastAttemptAt?: number;
+          lastRunId?: string;
+        },
+      };
+      vi.mocked(sessions.loadSessionStore).mockReturnValue({
+        "agent:main:subagent:test-session-1": sessionEntry as never,
+      });
+      vi.mocked(sessions.updateSessionStore).mockImplementation(async (_path, updater) => {
+        const store: Record<string, typeof sessionEntry> = {
+          "agent:main:subagent:test-session-1": {
+            ...sessionEntry,
+            subagentRecovery: { ...sessionEntry.subagentRecovery },
+          },
+        };
+        await updater(store as never);
+        Object.assign(sessionEntry, store["agent:main:subagent:test-session-1"]);
+        return store as never;
+      });
+
+      const result = await recoverOrphanedSubagentSessions({
+        getActiveRuns: () => createActiveRuns(createTestRunRecord()),
+      });
+      expect(result.recovered).toBe(1);
+      expect(sessionEntry.subagentRecovery?.automaticAttempts).toBe(2);
+
+      // Second accepted resume from already-charged cumulative=2.
+      sessionEntry.abortedLastRun = true;
+      sessionEntry.subagentRecovery = {
+        automaticAttempts: 2,
+        lastAttemptAt: Date.now() - 10 * 60_000,
+      };
+      vi.mocked(sessions.loadSessionStore).mockReturnValue({
+        "agent:main:subagent:test-session-1": sessionEntry as never,
+      });
+      vi.mocked(gateway.callGateway).mockClear();
+      vi.mocked(sessions.updateSessionStore).mockImplementation(async (_path, updater) => {
+        const store: Record<string, typeof sessionEntry> = {
+          "agent:main:subagent:test-session-1": {
+            ...sessionEntry,
+            subagentRecovery: { ...sessionEntry.subagentRecovery },
+          },
+        };
+        await updater(store as never);
+        Object.assign(sessionEntry, store["agent:main:subagent:test-session-1"]);
+        return store as never;
+      });
+
+      const second = await recoverOrphanedSubagentSessions({
+        getActiveRuns: () => createActiveRuns(createTestRunRecord({ runId: "run-2" })),
+        resumedSessionKeys: new Set(), // new process, previously recovered key not memoized
+      });
+      expect(second.recovered).toBe(1);
+      // Second accepted resume advances 2 → 3; single charge per write.
+      expect(sessionEntry.subagentRecovery?.automaticAttempts).toBe(3);
+    });
+
+    it("clears abortedLastRun only after success and records subagentRecovery.automaticAttempts", async () => {
+      const sessionEntry = {
+        sessionId: "session-budget-success",
+        updatedAt: Date.now(),
+        abortedLastRun: true as boolean | undefined,
+        subagentRecovery: {
+          automaticAttempts: 1,
+          lastAttemptAt: Date.now() - 10 * 60_000,
+        } as {
+          automaticAttempts?: number;
+          lastAttemptAt?: number;
+          lastRunId?: string;
+          wedgedAt?: number;
+          wedgedReason?: string;
+        },
+      };
+      vi.mocked(sessions.loadSessionStore).mockReturnValue({
+        "agent:main:subagent:test-session-1": sessionEntry as never,
+      });
+      vi.mocked(sessions.updateSessionStore).mockImplementation(async (_path, updater) => {
+        const store: Record<string, typeof sessionEntry> = {
+          "agent:main:subagent:test-session-1": sessionEntry,
+        };
+        await updater(store as never);
+        return store as never;
+      });
+
+      const result = await recoverOrphanedSubagentSessions({
+        getActiveRuns: () => createActiveRuns(createTestRunRecord()),
+      });
+
+      expect(result.recovered).toBe(1);
+      expect(sessionEntry.abortedLastRun).toBe(false);
+      expect(sessionEntry.subagentRecovery?.automaticAttempts).toBe(2);
+      expect(sessionEntry.subagentRecovery?.wedgedAt).toBeUndefined();
+    });
   });
 });
