@@ -201,7 +201,7 @@ describe("formatClaudeCliFallbackPrelude", () => {
   });
 
   it.each([
-    ["a surrogate boundary", `${"x".repeat(21)}😀tail`, "x".repeat(21)],
+    ["a surrogate boundary", `${"x".repeat(21)}😀${"y".repeat(100)}`, "x".repeat(21)],
     ["the ASCII budget", "x".repeat(100), "x".repeat(22)],
   ])("preserves %s when truncating an oversized summary", (_label, summaryText, expected) => {
     const out = formatClaudeCliFallbackPrelude(
