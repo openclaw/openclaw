@@ -94,6 +94,7 @@ export function createGatewayRequestContext(
   };
 
   return {
+    authorization: { mode: "legacy" },
     deps: params.deps,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
     // every handler closure that already holds this request context.
