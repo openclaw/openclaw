@@ -3390,6 +3390,39 @@ describe("processDiscordMessage draft streaming", () => {
     expect(finals[1]).toBe("second answer");
   });
 
+  it("preserves the progress receipt when the first final delivery fails", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    deliverDiscordReply.mockRejectedValueOnce(new Error("Discord unavailable"));
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
+      await params?.dispatcher.sendFinalReply({ text: "first answer" });
+      await params?.dispatcher.waitForIdle();
+      await params?.dispatcher.sendFinalReply({ text: "retry answer" });
+      await params?.dispatcher.waitForIdle();
+      return {
+        queuedFinal: true,
+        counts: { final: 1, tool: 0, block: 0 },
+        failedCounts: { final: 1 },
+      };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { label: "Shelling" } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    const attemptedFinals = getDeliveredFinalTexts();
+    expect(attemptedFinals).toHaveLength(2);
+    expect(attemptedFinals[0]).toMatch(/^first answer\n-# .*🛠️ 1 tool call/);
+    expect(attemptedFinals[1]).toMatch(/^retry answer\n-# .*🛠️ 1 tool call/);
+  });
+
   it("re-arms progress collapse for a queued assistant turn", async () => {
     const draftStream = createMockDraftStreamForTest();
 

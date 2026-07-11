@@ -79,7 +79,7 @@ export function createDiscordDraftPreviewController(params: {
   // Final delivery can cancel the gate before Discord consumes collapse
   // eligibility, so keep the pre-final state until that transition occurs.
   let progressDraftStartedBeforeFinal = false;
-  let progressDraftCollapseConsumed = false;
+  let progressDraftCollapsed = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
   const narrationProgressEnabled =
@@ -155,18 +155,14 @@ export function createDiscordDraftPreviewController(params: {
     get isProgressMode() {
       return discordStreamMode === "progress";
     },
-    consumeProgressDraftCollapse() {
-      if (
-        progressDraftCollapseConsumed ||
-        (!progressDraft.hasStarted && !progressDraftStartedBeforeFinal)
-      ) {
-        return false;
-      }
-      // One final owns the receipt-and-clear transition. Later final payloads
-      // must not reuse the sticky pre-final latch after the draft is gone.
-      progressDraftCollapseConsumed = true;
+    get hasProgressDraftToCollapse() {
+      return (
+        !progressDraftCollapsed && (progressDraft.hasStarted || progressDraftStartedBeforeFinal)
+      );
+    },
+    markProgressDraftCollapsed() {
+      progressDraftCollapsed = true;
       progressDraftStartedBeforeFinal = false;
-      return true;
     },
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
@@ -290,7 +286,7 @@ export function createDiscordDraftPreviewController(params: {
     handleAssistantMessageBoundary() {
       // Queued/followup turns need a fresh progress draft after the primary final.
       if (progressDraft.beginNewTurn()) {
-        progressDraftCollapseConsumed = false;
+        progressDraftCollapsed = false;
         progressDraftStartedBeforeFinal = false;
       }
       if (discordStreamMode === "progress") {

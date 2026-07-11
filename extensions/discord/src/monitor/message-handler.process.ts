@@ -793,7 +793,7 @@ async function processDiscordMessageInner(
       isFinal &&
       draftPreview.isProgressMode &&
       !deliverablePayload.isError &&
-      draftPreview.consumeProgressDraftCollapse();
+      draftPreview.hasProgressDraftToCollapse;
     if (shouldCollapseProgressDraft && draftStream) {
       await draftPreview.flush();
       // The activity receipt rides on the final answer and the working draft
@@ -915,9 +915,6 @@ async function processDiscordMessageInner(
     }
     const receiptLine =
       isFinal && deliverablePayload.isError !== true ? progressReceiptLine : undefined;
-    if (receiptLine) {
-      progressReceiptLine = undefined;
-    }
     const payloadForDelivery = receiptLine
       ? {
           ...deliverablePayload,
@@ -947,6 +944,12 @@ async function processDiscordMessageInner(
     });
     replyReference.markSent();
     if (isFinal && deliverablePayload.isError !== true) {
+      if (receiptLine) {
+        progressReceiptLine = undefined;
+        // Commit only after Discord accepted the receipt-bearing final. A
+        // failed send leaves the same receipt available to the queued retry.
+        draftPreview.markProgressDraftCollapsed();
+      }
       markUserFacingFinalDelivered();
       if (clearProgressDraftAfterFinalDelivery) {
         clearProgressDraftAfterFinalDelivery = false;
