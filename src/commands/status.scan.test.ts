@@ -101,6 +101,7 @@ describe("scanStatus", () => {
       plugins: { enabled: false },
     });
     configureScanStatus({
+      hasConfiguredChannels: true,
       sourceConfig,
       resolvedConfig,
       summary: createStatusSummary({ linkChannel: { linked: false } }),
