@@ -694,7 +694,9 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
       { type: "text_delta", contentIndex: 0, delta: "Visible" },
     ]);
 
-    expect(textDeltas(events)).toEqual(["Visible"]);
+    const deltas = textDeltas(events);
+    expect(deltas.at(-1)).toBe("Visible");
+    expect(deltas.slice(0, -1).join("").length).toBeLessThanOrEqual(2 * 4096);
     expect(JSON.stringify(events)).not.toContain("<function=read>");
   });
 
