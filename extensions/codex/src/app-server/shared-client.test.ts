@@ -127,9 +127,9 @@ function clientStartCall(startSpy: unknown) {
 }
 
 function deferNextAuthProfileApplication(): () => void {
-  let release = () => {};
-  const gate = new Promise<void>((resolve) => {
-    release = () => resolve();
+  let release: () => void = () => {};
+  const gate = new Promise<undefined>((resolve) => {
+    release = () => resolve(undefined);
   });
   mocks.applyCodexAppServerAuthProfile.mockReturnValueOnce(gate);
   return release;
