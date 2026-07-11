@@ -2192,9 +2192,9 @@ export const ru: TranslationMap = {
       workSessions: "Работа",
     },
     welcome: {
-      ready: "Готово к чату",
       hintBeforeShortcut: "Введите сообщение ниже ·",
       hintAfterShortcut: "для команд",
+      recentSessions: "Recent chats",
       suggestions: {
         whatCanYouDo: "Что вы умеете?",
         summarizeRecentSessions: "Суммируйте мои недавние сеансы",
