@@ -222,12 +222,16 @@ function formatError(error) {
 async function runTaskGraph({ commandKey, jobs, tasks }) {
   const runnableTasks = tasks
     .filter((task) => task[commandKey])
-    .map((task) => ({
-      id: task.id,
-      name: task.name,
-      ...task[commandKey],
-      after: commandKey === "fix" ? (task.fixAfter ?? []) : [],
-    }));
+    .map((task) => {
+      const command = task[commandKey];
+      return {
+        id: task.id,
+        name: task.name,
+        args: command.args,
+        bin: command.bin,
+        after: commandKey === "fix" ? (task.fixAfter ?? []) : [],
+      };
+    });
   const selectedIds = new Set(runnableTasks.map((task) => task.id));
   const pending = new Map(runnableTasks.map((task) => [task.id, task]));
   const completed = new Set();
