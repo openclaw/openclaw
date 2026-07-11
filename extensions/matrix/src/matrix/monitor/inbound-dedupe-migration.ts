@@ -186,23 +186,28 @@ async function resolveJsonRootAccountId(storageRootDir: string): Promise<string>
   return "default";
 }
 
-/** Reads one storage root's legacy inbound-dedupe.json markers; throws on read errors. */
+/**
+ * Reads one storage root's legacy inbound-dedupe.json markers. Throws on file
+ * read errors so a transiently unreadable file is never retired unread, and
+ * returns null for malformed content so the caller can archive it explicitly.
+ */
 export async function readLegacyInboundDedupeJsonSource(
   storageRootDir: string,
-): Promise<LegacyInboundDedupeMarker[]> {
+): Promise<LegacyInboundDedupeMarker[] | null> {
   const jsonPath = path.join(storageRootDir, MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME);
+  const raw = await fs.readFile(jsonPath, "utf8");
   let parsed: unknown;
   try {
-    parsed = JSON.parse(await fs.readFile(jsonPath, "utf8")) as unknown;
+    parsed = JSON.parse(raw) as unknown;
   } catch {
-    return [];
+    return null;
   }
   if (
     !isRecord(parsed) ||
     parsed.version !== LEGACY_JSON_VERSION ||
     !Array.isArray(parsed.entries)
   ) {
-    return [];
+    return null;
   }
   const accountId = await resolveJsonRootAccountId(storageRootDir);
   const markers: LegacyInboundDedupeMarker[] = [];

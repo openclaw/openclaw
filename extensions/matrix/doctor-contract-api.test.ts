@@ -440,6 +440,35 @@ describe("matrix doctor contract state migrations", () => {
     await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toBeNull();
   });
 
+  it("archives malformed inbound dedupe JSON without importing it", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
+    tempDirs.push(stateDir);
+    const jsonRoot = path.join(
+      stateDir,
+      "matrix",
+      "accounts",
+      "home",
+      "matrix.example.org__bot",
+      "token-a",
+    );
+    fs.mkdirSync(jsonRoot, { recursive: true });
+    const jsonPath = path.join(jsonRoot, "inbound-dedupe.json");
+    fs.writeFileSync(jsonPath, "not-json");
+
+    const migration = migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
+    await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
+      changes: [
+        "Migrated Matrix inbound dedupe markers to the claimable dedupe store (0 of 0 entries)",
+        `Archived Matrix inbound dedupe legacy source -> ${jsonPath}.migrated`,
+      ],
+      warnings: [
+        `Matrix inbound dedupe JSON for ${jsonRoot} is malformed; archived without import`,
+      ],
+    });
+    expect(fs.existsSync(jsonPath)).toBe(false);
+    expect(fs.existsSync(`${jsonPath}.migrated`)).toBe(true);
+  });
+
   it("keeps newer runtime dedupe rows when legacy imports hit capacity", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
     tempDirs.push(stateDir);

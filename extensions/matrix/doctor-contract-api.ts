@@ -202,7 +202,16 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const jsonRootsToRetire: string[] = [];
       for (const storageRootDir of sources.jsonRoots) {
         try {
-          gathered.push(...(await readLegacyInboundDedupeJsonSource(storageRootDir)));
+          const markers = await readLegacyInboundDedupeJsonSource(storageRootDir);
+          if (markers === null) {
+            // Nothing recoverable, but archiving (rename, not delete) resolves
+            // the pending detection while preserving the bytes for inspection.
+            warnings.push(
+              `Matrix inbound dedupe JSON for ${storageRootDir} is malformed; archived without import`,
+            );
+          } else {
+            gathered.push(...markers);
+          }
           jsonRootsToRetire.push(storageRootDir);
         } catch (err) {
           warnings.push(
