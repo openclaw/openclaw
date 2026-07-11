@@ -50,7 +50,11 @@ function isNonFiniteNumberValue(value: unknown): boolean {
   ) {
     return false;
   }
-  return !Number.isFinite(Number.prototype.valueOf.call(value));
+  try {
+    return !Number.isFinite(Number.prototype.valueOf.call(value));
+  } catch {
+    return false;
+  }
 }
 
 function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInputSchemaProjection {

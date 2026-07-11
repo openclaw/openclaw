@@ -130,6 +130,26 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
+  it("does not treat a spoofed Number tag as a boxed number", () => {
+    const taggedValue = { [Symbol.toStringTag]: "Number", value: "finite" };
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: { default: taggedValue },
+        },
+      }),
+    ).toEqual({
+      schema: {
+        type: "object",
+        properties: {
+          score: { default: { value: "finite" } },
+        },
+      },
+      violations: [],
+    });
+  });
+
   it("does not report schema map field names as dynamic JSON Schema keywords", () => {
     // Dynamic keywords are only invalid as JSON Schema control fields; property
     // names and definitions can legally contain the same strings.
