@@ -1408,7 +1408,8 @@ function mergeTtsSupplementMessages(
     if (marker && isAssistantTtsSupplementMessage(message)) {
       let targetIndex = -1;
       for (let i = merged.length - 1; i >= 0; i--) {
-        if (ttsSupplementMatchesAssistant(marker, expectDefined(merged[i], "merged entry at i"))) {
+        const candidate = merged[i];
+        if (candidate && ttsSupplementMatchesAssistant(marker, candidate)) {
           targetIndex = i;
           break;
         }

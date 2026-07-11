@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 /** Denylist checks for unsafe packages in plugin manifests and installed dependency trees. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
@@ -173,7 +172,9 @@ function collectBlockedOverrideFindings(
   }
 
   const findings: BlockedManifestDependencyFinding[] = [];
-  for (const overrideKey of Object.keys(value).toSorted()) {
+  for (const [overrideKey, overrideValue] of Object.entries(value).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
     const overrideSelectorPackageName = parsePackageNameFromOverrideSelector(overrideKey);
     if (
       overrideSelectorPackageName &&
@@ -185,12 +186,7 @@ function collectBlockedOverrideFindings(
         field: "overrides",
       });
     }
-    findings.push(
-      ...collectBlockedOverrideFindings(
-        expectDefined(value[overrideKey], "value entry at override key"),
-        [...path, overrideKey],
-      ),
-    );
+    findings.push(...collectBlockedOverrideFindings(overrideValue, [...path, overrideKey]));
   }
   return findings;
 }
@@ -211,19 +207,19 @@ export function findBlockedManifestDependencies(
     findings.push(...collectBlockedOverrideFindings(manifest.overrides));
   }
   for (const field of ["dependencies", "optionalDependencies", "peerDependencies"] as const) {
-    const dependencyMap = expectDefined(manifest[field], "manifest entry at field");
+    const dependencyMap = manifest[field];
     if (!dependencyMap) {
       continue;
     }
-    for (const dependencyName of Object.keys(dependencyMap).toSorted()) {
+    for (const [dependencyName, dependencySpec] of Object.entries(dependencyMap).toSorted(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
       if (isBlockedInstallDependencyPackageName(dependencyName)) {
         findings.push({ dependencyName, field });
         continue;
       }
 
-      const aliasTargetPackageName = parseNpmAliasTargetPackageName(
-        expectDefined(dependencyMap[dependencyName], "dependency map entry at dependency name"),
-      );
+      const aliasTargetPackageName = parseNpmAliasTargetPackageName(dependencySpec);
       if (!aliasTargetPackageName) {
         continue;
       }

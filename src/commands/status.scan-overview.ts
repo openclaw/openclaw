@@ -243,13 +243,9 @@ export async function collectStatusScanOverview(params: {
     ),
     gatewayProbeTimeoutMs: expectDefined(gatewayProbeTimeoutMs, "gateway probe timeout"),
     getTailnetHostname: async (runner) => {
-      const hostname = await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
+      return await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
         getTailnetHostname(runner),
       );
-      if (hostname === undefined) {
-        throw new Error("Tailnet hostname resolver returned undefined");
-      }
-      return hostname;
     },
     getUpdateCheckResult: async (updateParams) =>
       await loadStatusUpdateModule().then(({ getUpdateCheckResult }) =>

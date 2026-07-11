@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Normalizes installed plugin config and install records.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -53,22 +52,20 @@ export function recordPluginInstall(
 ): OpenClawConfig {
   const { pluginId, ...record } = update;
   const previous = clearStaleInstallRecordFields(cfg.plugins?.installs?.[pluginId]);
-  const installs = {
-    ...cfg.plugins?.installs,
-    [pluginId]: {
-      ...previous,
-      ...record,
-      installedAt: record.installedAt ?? new Date().toISOString(),
-    },
+  const nextRecord = {
+    ...previous,
+    ...record,
+    installedAt: record.installedAt ?? new Date().toISOString(),
   };
 
   return {
     ...cfg,
     plugins: {
-      ...expectDefined(cfg.plugins, "plugin configuration"),
+      // cfg.plugins may be absent on first install; spreading undefined is {}.
+      ...cfg.plugins,
       installs: {
-        ...installs,
-        [pluginId]: expectDefined(installs[pluginId], "installs entry at plugin id"),
+        ...cfg.plugins?.installs,
+        [pluginId]: nextRecord,
       },
     },
   };

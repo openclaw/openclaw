@@ -245,10 +245,14 @@ export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
   const { positionals, rootOptions, helpFlagIndex } = scan;
 
   const [help, target] = positionals;
+  // The --help flag must trail the LAST positional so nested targets like
+  // `help plugins list --help` still normalize (target is only the first one).
+  const lastPositional = positionals.at(-1);
   if (
     help?.value !== "help" ||
     !target ||
-    (helpFlagIndex !== null && helpFlagIndex !== target.index + 1)
+    !lastPositional ||
+    (helpFlagIndex !== null && helpFlagIndex !== lastPositional.index + 1)
   ) {
     return argv;
   }

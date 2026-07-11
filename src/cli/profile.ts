@@ -1,7 +1,6 @@
 // Root --profile/--dev parsing and environment projection for profile-specific state.
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -36,12 +35,12 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     }
 
     if (arg === "--profile" || arg.startsWith("--profile=")) {
-      const next = expectDefined(args[index + 1], "args entry at index + 1");
+      const next = args[index + 1];
       const { value, consumedNext } = takeCliRootOptionValue(arg, next);
       const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
       if (primary === "qa" && secondary === "matrix") {
         out.push(arg);
-        if (consumedNext) {
+        if (consumedNext && next !== undefined) {
           out.push(next);
         }
         return { kind: "handled", consumedNext };
