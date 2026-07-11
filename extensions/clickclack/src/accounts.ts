@@ -16,6 +16,7 @@ import {
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { selectClickClackRuntimeConfig } from "./runtime-config.js";
 import type { ClickClackAccountConfig, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const DEFAULT_RECONNECT_MS = 1_500;
@@ -110,13 +111,14 @@ export function resolveClickClackAccount(params: {
   accountId?: string | null;
   env?: NodeJS.ProcessEnv;
 }): ResolvedClickClackAccount {
+  const cfg = selectClickClackRuntimeConfig(params.cfg);
   const accountId = normalizeAccountId(params.accountId);
-  const merged = resolveMergedClickClackAccountConfig(params.cfg, accountId);
-  const baseEnabled = params.cfg.channels?.clickclack?.enabled !== false;
+  const merged = resolveMergedClickClackAccountConfig(cfg, accountId);
+  const baseEnabled = cfg.channels?.clickclack?.enabled !== false;
   const enabled = baseEnabled && merged.enabled !== false;
   const baseUrl = merged.baseUrl?.trim().replace(/\/$/, "") ?? "";
   const token = resolveClickClackToken({
-    cfg: params.cfg,
+    cfg,
     value: merged.token,
     accountId,
     env: params.env,

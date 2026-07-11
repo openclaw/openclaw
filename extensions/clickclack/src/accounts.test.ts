@@ -1,5 +1,9 @@
 // Clickclack tests cover accounts plugin behavior.
-import { describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   listClickClackAccountIds,
   resolveClickClackAccount,
@@ -7,7 +11,68 @@ import {
 } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
 describe("ClickClack account resolution", () => {
+  it("resolves a top-level SecretRef from the active runtime snapshot", () => {
+    const sourceCfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://app.clickclack.chat",
+          token: { source: "exec", provider: "vault", id: "clickclack/token" },
+          workspace: "wsp_1",
+        },
+      },
+    } as unknown as CoreConfig;
+    const runtimeCfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://app.clickclack.chat",
+          token: "ccb_runtime",
+          workspace: "wsp_1",
+        },
+      },
+    } as CoreConfig;
+    setRuntimeConfigSnapshot(runtimeCfg, sourceCfg);
+
+    const account = resolveClickClackAccount({ cfg: sourceCfg });
+
+    expect(account.configured).toBe(true);
+    expect(account.token).toBe("ccb_runtime");
+  });
+
+  it("does not substitute an unrelated runtime snapshot", () => {
+    const sourceCfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://source.example",
+          token: "ccb_source",
+          workspace: "wsp_source",
+        },
+      },
+    } as CoreConfig;
+    setRuntimeConfigSnapshot(
+      {
+        channels: {
+          clickclack: {
+            baseUrl: "https://runtime.example",
+            token: "ccb_runtime",
+            workspace: "wsp_runtime",
+          },
+        },
+      } as CoreConfig,
+      { channels: { clickclack: { enabled: false } } } as CoreConfig,
+    );
+
+    const account = resolveClickClackAccount({ cfg: sourceCfg });
+
+    expect(account.baseUrl).toBe("https://source.example");
+    expect(account.token).toBe("ccb_source");
+    expect(account.workspace).toBe("wsp_source");
+  });
+
   it("preserves top-level default account when named accounts are configured", () => {
     const cfg = {
       channels: {
