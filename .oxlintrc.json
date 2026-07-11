@@ -228,7 +228,6 @@
     "**/node_modules/**"
   ],
   "overrides": [
-    // Keep these package globs aligned with the noUncheckedIndexedAccess ratchet lane.
     {
       "files": [
         "packages/markdown-core/**/*.ts",
