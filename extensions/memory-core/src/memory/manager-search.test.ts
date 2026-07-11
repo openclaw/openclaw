@@ -530,13 +530,15 @@ describe("searchPathKeyword", () => {
         startLine: 1,
         snippet: "early unrelated body",
         exactPathSpecificity: 1,
+        textScore: 0,
       });
-      expect(exact[0]?.score).toBe(exact[0]?.textScore);
+      expect(exact[0]?.score).toBe(exact[0]?.pathScore);
 
       const token = await search("lantern");
       expect(token).toHaveLength(1);
       expect(token[0]?.exactPathSpecificity).toBe(0);
-      expect(token[0]?.score).toBe(token[0]?.textScore);
+      expect(token[0]?.textScore).toBe(0);
+      expect(token[0]?.score).toBe(token[0]?.pathScore);
       expect(token[0]?.score).toBeLessThan(1);
     } finally {
       db.close();
@@ -619,6 +621,47 @@ describe("searchPathKeyword", () => {
           bm25RankToScore,
         }),
       ).resolves.toMatchObject([{ id: "live-exact-source", exactPathSpecificity: 1 }]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps exact basename truncation independent of path BM25", async () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const schema = ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
+      if (!schema.ftsAvailable) {
+        throw new Error(schema.ftsError ?? "FTS unavailable");
+      }
+      for (const fixture of [
+        { id: "exact-a", path: "a/very/deep/foo.md" },
+        { id: "exact-b", path: "b/foo.md" },
+        { id: "exact-c", path: "c/foo.md" },
+      ]) {
+        insertKeywordFixture(db, {
+          ...fixture,
+          source: "memory",
+          model: "mock-embed",
+          startLine: 1,
+          endLine: 2,
+          text: "unrelated body",
+        });
+      }
+
+      const results = await searchPathKeyword({
+        db,
+        pathFtsTable: "memory_index_paths_fts",
+        query: "foo.md",
+        ftsTokenizer: "unicode61",
+        limit: 2,
+        snippetMaxChars: 200,
+        sourceFilter: { sql: "", params: [] },
+        buildFtsQuery,
+        bm25RankToScore,
+      });
+
+      expect(results.map((entry) => entry.id)).toEqual(["exact-a", "exact-b"]);
+      expect(results.every((entry) => entry.textScore === 0)).toBe(true);
     } finally {
       db.close();
     }

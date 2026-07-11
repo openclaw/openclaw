@@ -115,8 +115,39 @@ type EmbeddingProbeCacheEntry = {
 type KeywordSearchHit = MemorySearchResult & {
   id: string;
   textScore: number;
+  pathScore: number;
   exactPathSpecificity: ExactPathSpecificity;
 };
+
+function compareKeywordSearchHits(a: KeywordSearchHit, b: KeywordSearchHit): number {
+  const specificityDelta = b.exactPathSpecificity - a.exactPathSpecificity;
+  if (specificityDelta !== 0) {
+    return specificityDelta;
+  }
+  if (a.exactPathSpecificity > 0) {
+    const bodyPresenceDelta = Number(b.textScore > 0) - Number(a.textScore > 0);
+    if (bodyPresenceDelta !== 0) {
+      return bodyPresenceDelta;
+    }
+  }
+  // Score carries body relevance plus any configured decay. Exact tiers ignore
+  // path BM25 because specificity already owns path precedence.
+  const relevanceDelta = b.score - a.score;
+  if (relevanceDelta !== 0) {
+    return relevanceDelta;
+  }
+  const textDelta = b.textScore - a.textScore;
+  if (textDelta !== 0) {
+    return textDelta;
+  }
+  if (a.exactPathSpecificity === 0) {
+    const pathDelta = b.pathScore - a.pathScore;
+    if (pathDelta !== 0) {
+      return pathDelta;
+    }
+  }
+  return a.path.localeCompare(b.path) || a.startLine - b.startLine || a.id.localeCompare(b.id);
+}
 
 const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
 
@@ -647,6 +678,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     },
   ): Promise<MemorySearchResult[]> {
     opts?.onDebug?.({ backend: "builtin" });
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) {
+      return [];
+    }
     if (this.providerRequirement.mode === "required") {
       await this.ensureProviderInitialized();
       this.assertRequiredProviderAvailable("search");
@@ -664,7 +699,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       hasIndexedContent = this.hasIndexedContent();
     }
     const preflight = resolveMemorySearchPreflight({
-      query,
+      query: normalizedQuery,
       hasIndexedContent,
     });
     if (!preflight.shouldSearch) {
@@ -868,15 +903,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   private rankKeywordOnlyResults(results: KeywordSearchHit[]): KeywordSearchHit[] {
     return results
-      .toSorted(
-        (a, b) =>
-          b.exactPathSpecificity - a.exactPathSpecificity ||
-          b.score - a.score ||
-          b.textScore - a.textScore ||
-          a.path.localeCompare(b.path) ||
-          a.startLine - b.startLine ||
-          a.id.localeCompare(b.id),
-      )
+      .toSorted(compareKeywordSearchHits)
       .map((entry) =>
         entry.exactPathSpecificity > 0 ? Object.assign(entry, { score: 1 }) : entry,
       );
@@ -975,6 +1002,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       bodyResults.map((entry) =>
         Object.assign(entry, {
           exactPathSpecificity: resolveExactPathSpecificity(query, entry.path),
+          pathScore: 0,
         }),
       ),
       pathResults,
@@ -1032,13 +1060,24 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           seenIds.set(result.id, result);
           continue;
         }
+        const existingHasBody = existing.textScore > 0;
+        const resultHasBody = result.textScore > 0;
+        const existingBodyScore = existingHasBody ? existing.score : 0;
+        const resultBodyScore = resultHasBody ? result.score : 0;
         existing.textScore = Math.max(existing.textScore, result.textScore);
+        existing.pathScore = Math.max(existing.pathScore, result.pathScore);
         existing.exactPathSpecificity = Math.max(
           existing.exactPathSpecificity,
           result.exactPathSpecificity,
         ) as ExactPathSpecificity;
-        existing.score = Math.max(existing.score, result.score);
-        if (result.snippet.length > existing.snippet.length) {
+        const bodyScore = Math.max(existingBodyScore, resultBodyScore);
+        existing.score = bodyScore > 0 ? bodyScore : existing.pathScore;
+        // Path hits project the first chunk; keep a real body-match snippet
+        // authoritative when both retrieval surfaces find the same document.
+        if (
+          (resultHasBody && !existingHasBody) ||
+          (resultHasBody === existingHasBody && result.snippet.length > existing.snippet.length)
+        ) {
           existing.snippet = result.snippet;
         }
       }
@@ -1051,20 +1090,24 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         result.exactPathSpecificity = resolveExactPathSpecificity(exactPathQuery, result.path);
       }
     }
-    return merged.toSorted(
-      (a, b) =>
-        b.exactPathSpecificity - a.exactPathSpecificity ||
-        b.score - a.score ||
-        b.textScore - a.textScore ||
-        a.path.localeCompare(b.path) ||
-        a.startLine - b.startLine ||
-        a.id.localeCompare(b.id),
-    );
+    for (const result of merged) {
+      if (result.textScore === 0) {
+        // A uniform exact-only baseline lets temporal decay order otherwise
+        // equivalent filename hits without reusing incomparable path BM25.
+        result.score = result.exactPathSpecificity > 0 ? 1 : result.pathScore;
+      }
+    }
+    return merged.toSorted(compareKeywordSearchHits);
   }
 
   private toMemorySearchResults(results: KeywordSearchHit[]): MemorySearchResult[] {
     return results.map(
-      ({ id: _id, exactPathSpecificity: _exactPathSpecificity, ...result }) => result,
+      ({
+        id: _id,
+        pathScore: _pathScore,
+        exactPathSpecificity: _exactPathSpecificity,
+        ...result
+      }) => result,
     );
   }
 
@@ -1075,6 +1118,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       MemorySearchResult & {
         id: string;
         textScore: number;
+        pathScore: number;
         exactPathSpecificity: ExactPathSpecificity;
       }
     >;
@@ -1102,6 +1146,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         source: r.source,
         snippet: r.snippet,
         textScore: r.textScore,
+        pathScore: r.pathScore,
         exactPathSpecificity: r.exactPathSpecificity,
       })),
       vectorWeight: params.vectorWeight,

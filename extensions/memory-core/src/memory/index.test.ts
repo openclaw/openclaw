@@ -2363,6 +2363,49 @@ describe("memory index", () => {
     expect(results[0]?.score).toBe(1);
   });
 
+  it("preserves temporal decay for body and path-only exact basenames", async () => {
+    forceNoProvider = true;
+    const staleDir = path.join(fixtureRoot, "decay-a-stale");
+    const freshDir = path.join(fixtureRoot, "decay-z-fresh");
+    await fs.mkdir(staleDir, { recursive: true });
+    await fs.mkdir(freshDir, { recursive: true });
+    const staleFooPath = path.join(staleDir, "foo.md");
+    const freshFooPath = path.join(freshDir, "foo.md");
+    const staleBarPath = path.join(staleDir, "bar.md");
+    await fs.writeFile(staleFooPath, "Unrelated stale candidate.");
+    await fs.writeFile(freshFooPath, "Unrelated fresh candidate.");
+    await fs.writeFile(staleBarPath, "bar md bar md bar md strongest stale body");
+    await fs.writeFile(path.join(freshDir, "bar.md"), "bar md fresh body");
+    const staleMtime = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+    await Promise.all([
+      fs.utimes(staleFooPath, staleMtime, staleMtime),
+      fs.utimes(staleBarPath, staleMtime, staleMtime),
+    ]);
+    const cfg = createCfg({
+      extraPaths: [staleDir, freshDir],
+      minScore: 0,
+      hybrid: {
+        enabled: true,
+        temporalDecay: { enabled: true, halfLifeDays: 1 },
+      },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+    await manager.sync({ reason: "test" });
+
+    for (const basename of ["foo.md", "bar.md"]) {
+      const results = await manager.search(basename, { maxResults: 1, minScore: 0 });
+      expect(results).toHaveLength(1);
+      expect(results[0]?.path.endsWith(`decay-z-fresh/${basename}`)).toBe(true);
+      expect(results[0]?.score).toBe(1);
+    }
+  });
+
   it("keeps body relevance for an exact basename beyond the exact candidate cap", async () => {
     forceNoProvider = true;
     const cfg = createCfg({

@@ -29,6 +29,7 @@ type HybridKeywordResult = {
   source: HybridSource;
   snippet: string;
   textScore: number;
+  pathScore?: number;
   exactPathSpecificity?: ExactPathSpecificity;
 };
 
@@ -87,6 +88,8 @@ export async function mergeHybridResults(params: {
       snippet: string;
       vectorScore: number;
       textScore: number;
+      pathScore: number;
+      hasWeightedContentRelevance: boolean;
       exactPathSpecificity: ExactPathSpecificity;
     }
   >();
@@ -101,6 +104,8 @@ export async function mergeHybridResults(params: {
       snippet: r.snippet,
       vectorScore: r.vectorScore,
       textScore: 0,
+      pathScore: 0,
+      hasWeightedContentRelevance: params.vectorWeight * r.vectorScore > 0,
       exactPathSpecificity: r.exactPathSpecificity ?? 0,
     });
   }
@@ -110,6 +115,8 @@ export async function mergeHybridResults(params: {
     const existing = byId.get(r.id);
     if (existing) {
       existing.textScore = r.textScore;
+      existing.pathScore = r.pathScore ?? 0;
+      existing.hasWeightedContentRelevance ||= params.textWeight * r.textScore > 0;
       existing.exactPathSpecificity = Math.max(
         existing.exactPathSpecificity,
         exactPathSpecificity,
@@ -127,14 +134,24 @@ export async function mergeHybridResults(params: {
         snippet: r.snippet,
         vectorScore: 0,
         textScore: r.textScore,
+        pathScore: r.pathScore ?? 0,
+        hasWeightedContentRelevance: params.textWeight * r.textScore > 0,
         exactPathSpecificity,
       });
     }
   }
 
   const merged = Array.from(byId.values()).map((entry) => {
-    const weightedScore =
-      params.vectorWeight * entry.vectorScore + params.textWeight * entry.textScore;
+    // Exact specificity already carries path precedence. Keep body scores as
+    // the within-tier signal, and use path BM25 only for partial path-only hits.
+    const keywordScore =
+      entry.exactPathSpecificity > 0 || entry.textScore > 0 ? entry.textScore : entry.pathScore;
+    // Exact path-only hits share one recency baseline. Content-backed hits stay
+    // in the stronger tie class and retain their weighted relevance.
+    const exactPathOnly = entry.exactPathSpecificity > 0 && !entry.hasWeightedContentRelevance;
+    const weightedScore = exactPathOnly
+      ? 1
+      : params.vectorWeight * entry.vectorScore + params.textWeight * keywordScore;
     return {
       path: entry.path,
       startLine: entry.startLine,
@@ -143,6 +160,7 @@ export async function mergeHybridResults(params: {
       vectorScore: entry.vectorScore,
       textScore: entry.textScore,
       exactPathSpecificity: entry.exactPathSpecificity,
+      hasWeightedContentRelevance: entry.hasWeightedContentRelevance,
       snippet: entry.snippet,
       source: entry.source,
     };
@@ -172,17 +190,29 @@ export async function mergeHybridResults(params: {
 
   // Apply MMR re-ranking if enabled
   const mmrConfig = { ...DEFAULT_MMR_CONFIG, ...params.mmr };
-  const exact = ([3, 2, 1] as const).flatMap((specificity) => {
-    const tier = rankable
-      .filter((entry) => entry.exactPathSpecificity === specificity)
-      .toSorted((a, b) => b.exactPathTieScore - a.exactPathTieScore);
+  const rerankExactGroup = (entries: typeof rankable) => {
     if (!mmrConfig.enabled) {
-      return tier;
+      return entries;
     }
     return applyMMRToHybridResults(
-      tier.map((entry) => Object.assign(entry, { score: entry.exactPathTieScore })),
+      entries.map((entry) => Object.assign(entry, { score: entry.exactPathTieScore })),
       mmrConfig,
     ).map((entry) => Object.assign(entry, { score: 1 }));
+  };
+  const compareExactTieScores = (a: (typeof rankable)[number], b: (typeof rankable)[number]) =>
+    b.exactPathTieScore - a.exactPathTieScore ||
+    a.path.localeCompare(b.path) ||
+    a.startLine - b.startLine ||
+    a.endLine - b.endLine;
+  const exact = ([3, 2, 1] as const).flatMap((specificity) => {
+    const tier = rankable.filter((entry) => entry.exactPathSpecificity === specificity);
+    const contentBacked = tier
+      .filter((entry) => entry.hasWeightedContentRelevance)
+      .toSorted(compareExactTieScores);
+    const pathOnly = tier
+      .filter((entry) => !entry.hasWeightedContentRelevance)
+      .toSorted(compareExactTieScores);
+    return rerankExactGroup(contentBacked).concat(rerankExactGroup(pathOnly));
   });
   const ranked = [
     ...exact,
@@ -193,6 +223,7 @@ export async function mergeHybridResults(params: {
     ({
       exactPathSpecificity: _exactPathSpecificity,
       exactPathTieScore: _exactPathTieScore,
+      hasWeightedContentRelevance: _hasWeightedContentRelevance,
       ...entry
     }) => entry,
   );

@@ -46,7 +46,8 @@ type SearchRowResult = {
 };
 
 type PathKeywordSearchResult = SearchRowResult & {
-  textScore: number;
+  textScore: 0;
+  pathScore: number;
   exactPathSpecificity: ExactPathSpecificity;
 };
 
@@ -762,6 +763,7 @@ export async function searchPathKeyword(params: {
       endLine: row.end_line,
       score: 0,
       textScore: 0,
+      pathScore: 0,
       exactPathSpecificity: row.exact_path_specificity,
       snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
       source: row.source,
@@ -866,15 +868,16 @@ export async function searchPathKeyword(params: {
     }
     const { rows, usedMatch } = loadLexicalRows(lexicalPlan);
     for (const row of rows) {
-      const textScore = usedMatch ? params.bm25RankToScore(row.rank) : 1;
+      const pathScore = usedMatch ? params.bm25RankToScore(row.rank) : 1;
       const exactPathSpecificity = resolveExactPathSpecificity(params.query, row.path);
       const result: PathKeywordSearchResult = {
         id: row.id,
         path: row.path,
         startLine: row.start_line,
         endLine: row.end_line,
-        score: textScore,
-        textScore,
+        score: pathScore,
+        textScore: 0,
+        pathScore,
         exactPathSpecificity,
         snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
         source: row.source,
@@ -884,7 +887,7 @@ export async function searchPathKeyword(params: {
         lexicalById.set(result.id, result);
         continue;
       }
-      existing.textScore = Math.max(existing.textScore, result.textScore);
+      existing.pathScore = Math.max(existing.pathScore, result.pathScore);
       existing.score = Math.max(existing.score, result.score);
       existing.exactPathSpecificity = Math.max(
         existing.exactPathSpecificity,
@@ -898,7 +901,7 @@ export async function searchPathKeyword(params: {
   for (const entry of lexicalResults) {
     const exact = byId.get(entry.id);
     if (exact) {
-      exact.textScore = Math.max(exact.textScore, entry.textScore);
+      exact.pathScore = Math.max(exact.pathScore, entry.pathScore);
       exact.score = Math.max(exact.score, entry.score);
       exact.exactPathSpecificity = Math.max(
         exact.exactPathSpecificity,
@@ -909,14 +912,22 @@ export async function searchPathKeyword(params: {
     byId.set(entry.id, entry);
   }
   return [...byId.values()]
-    .toSorted(
-      (left, right) =>
-        right.exactPathSpecificity - left.exactPathSpecificity ||
-        right.score - left.score ||
-        right.textScore - left.textScore ||
+    .toSorted((left, right) => {
+      const specificityDelta = right.exactPathSpecificity - left.exactPathSpecificity;
+      if (specificityDelta !== 0) {
+        return specificityDelta;
+      }
+      if (left.exactPathSpecificity === 0) {
+        const pathDelta = right.pathScore - left.pathScore;
+        if (pathDelta !== 0) {
+          return pathDelta;
+        }
+      }
+      return (
         left.path.localeCompare(right.path) ||
         left.startLine - right.startLine ||
-        left.id.localeCompare(right.id),
-    )
+        left.id.localeCompare(right.id)
+      );
+    })
     .slice(0, params.limit);
 }
