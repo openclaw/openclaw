@@ -21,6 +21,25 @@ handoff, inspection, and safe owner controls. It does not require product UI,
 Workboard or Task Flow authoring, distributed scheduling, automatic semantic
 replay, or external channel delivery.
 
+## Root-Cause Coverage
+
+The beta 3 durable-core stack must prove the general runtime root causes are
+handled as durable facts, not as product-specific conventions. PR1 documents the
+required coverage only; later PRs own executable proof.
+
+| Root cause                      | Required durable-core response                                                                                                                                    | First proof owner |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| Coordinator silence             | Accepted deferred work creates an inspectable wake, report-route, progress, timeout, or owner-decision obligation instead of relying only on transcript intent    | PR3               |
+| Restart and interruption loss   | Runtime facts distinguish complete, failed, cancelled, interrupted, stale, and decision-needed work after process exit, gateway restart, tool failure, or handoff | PR2/PR3           |
+| Stale running work              | Claims and leases have owners, expiry, stale diagnostics, and fail-closed mutation rules so lost owners cannot keep rewriting or hiding abandoned work            | PR2/PR5           |
+| Parent/child handoff gaps       | Child spawn, terminal outcome, fan-in, result-mailbox, and parent wake facts are durably linked and deduped before any parent/human completion claim              | PR3/PR5           |
+| Delivery and attention unknowns | Internal handoff and any claimed external delivery record target, attempt, acknowledgement, failure, no-handler, and unresolved states with bounded inspection    | PR3/PR5           |
+| Side-effect uncertainty         | Automatic replay is denied unless operation authority, input material, side-effect class, idempotency, dedupe/CAS or reconciliation, and retention gates all pass | PR3               |
+
+Reviewers should treat these as cross-stack acceptance criteria. A later PR may
+implement a narrow slice, but it should still name which root-cause rows it
+covers and which rows remain deferred.
+
 ## Exact Head Rules
 
 - Run proof on the PR head being reviewed, not only on a downstream cumulative
