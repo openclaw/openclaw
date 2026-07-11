@@ -633,7 +633,7 @@ describe("task-registry", () => {
         toolUseCount: 2,
         lastToolName: "exec",
       });
-    });
+      });
   });
 
   it("keeps subagent abort lifecycle projections provisional", async () => {
