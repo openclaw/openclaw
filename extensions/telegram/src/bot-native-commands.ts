@@ -494,16 +494,19 @@ function isSuppressedTelegramNativeReplyPayload(result: TelegramNativeReplyPaylo
   return result.suppressReply === true;
 }
 
+function hasTelegramNativeReplyReaction(result: TelegramNativeReplyPayload): boolean {
+  const reactionEmoji = resolveTelegramNativeReplyChannelData(result)?.reaction?.emoji;
+  return typeof reactionEmoji === "string" && reactionEmoji.trim().length > 0;
+}
+
 function hasRenderableTelegramNativeReplyPayload(result: TelegramNativeReplyPayload): boolean {
   const { channelData: _channelData, ...portableContent } = result;
   if (hasOutboundReplyContent(portableContent, { trimText: true })) {
     return true;
   }
   const telegramData = resolveTelegramNativeReplyChannelData(result);
-  const reactionEmoji = telegramData?.reaction?.emoji;
   return Boolean(
-    buildInlineKeyboard(telegramData?.buttons) ||
-    (typeof reactionEmoji === "string" && reactionEmoji.trim()),
+    buildInlineKeyboard(telegramData?.buttons) || hasTelegramNativeReplyReaction(result),
   );
 }
 
@@ -517,6 +520,7 @@ function isEditableTelegramProgressResult(result: TelegramNativeReplyPayload): b
     !result.presentation &&
     !result.interactive &&
     !result.btw &&
+    !hasTelegramNativeReplyReaction(result) &&
     telegramData?.pin !== true,
   );
 }
@@ -1809,9 +1813,7 @@ export const registerTelegramNativeCommands = ({
           return;
         }
 
-        const resultTelegramData = resolveTelegramNativeReplyChannelData(result);
-        const reactionEmoji = resultTelegramData?.reaction?.emoji;
-        const hasReaction = typeof reactionEmoji === "string" && reactionEmoji.trim().length > 0;
+        const hasReaction = hasTelegramNativeReplyReaction(result);
         const deliverableResult: TelegramNativeReplyPayload =
           hasRenderableTelegramNativeReplyPayload(result)
             ? hasReaction && !normalizeOptionalString(result.replyToId)

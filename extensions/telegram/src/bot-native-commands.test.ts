@@ -647,6 +647,32 @@ describe("registerTelegramNativeCommands", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("delivers reactions after cleaning up a metadata-driven progress placeholder", async () => {
+    const { handler, sendMessage, deleteMessage } = registerPlugCommand({
+      args: "now",
+      command: {
+        nativeProgressMessages: { telegram: "Working on it..." },
+      },
+      result: {
+        text: "Command completed successfully",
+        channelData: { telegram: { reaction: { emoji: "🔥" } } },
+      },
+    });
+
+    await handler(createPrivateCommandContext({ match: "now", messageId: 321 }));
+
+    expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deleteMessage).toHaveBeenCalledWith(100, 999);
+    const deliveryParams = firstDeliverRepliesParams();
+    expect(deliveryParams.replyToMode).toBe("all");
+    expect(replyAt(deliveryParams)).toEqual({
+      text: "Command completed successfully",
+      replyToId: "321",
+      channelData: { telegram: { reaction: { emoji: "🔥" } } },
+    });
+  });
+
   it("falls back to a normal reply when a metadata-driven progress result is not editable", async () => {
     const { handler, sendMessage, deleteMessage } = registerPlugCommand({
       args: "now",
