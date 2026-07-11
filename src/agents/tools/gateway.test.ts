@@ -413,7 +413,7 @@ describe("gateway tool defaults", () => {
     await callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" });
 
     const call = capturedGatewayCall();
-    expect(call).not.toHaveProperty("deviceIdentity");
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
   });
 
