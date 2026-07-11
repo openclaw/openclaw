@@ -128,6 +128,41 @@ describe("plugin runtime session creation", () => {
     });
   });
 
+  it("creates a plugin-owned locked CLI session with a seeded fork binding", async () => {
+    await withOpenClawTestState({ label: "plugin-runtime-cli-session-create" }, async () => {
+      const runtime = createRuntimeAgent();
+      const key = "agent:main:catalog-adopt:claude:source";
+      const created = await runtime.session.createSessionEntry({
+        cfg: {},
+        key,
+        initialEntry: {
+          cliBackendId: "claude-cli",
+          model: "claude-opus-4-8",
+          modelSelectionLocked: true,
+          pluginOwnerId: "anthropic",
+          cliSessionBinding: {
+            sessionId: "claude-source",
+            forceReuse: true,
+            forkNextResume: true,
+          },
+        },
+      });
+      expect(created.entry).toMatchObject({
+        pluginOwnerId: "anthropic",
+        providerOverride: "claude-cli",
+        modelOverride: "claude-opus-4-8",
+        modelSelectionLocked: true,
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "claude-source",
+            forceReuse: true,
+            forkNextResume: true,
+          },
+        },
+      });
+    });
+  });
+
   it("rolls back the exact created entry and transcript when initialization fails", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create-rollback" }, async () => {
       const runtime = createRuntimeAgent();

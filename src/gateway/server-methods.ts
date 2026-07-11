@@ -219,6 +219,10 @@ const loadSessionsHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions.js"),
   (module) => module.sessionsHandlers,
 );
+const loadSessionCatalogHandlers = lazyHandlerModule(
+  () => import("./server-methods/session-catalog.js"),
+  (module) => module.sessionCatalogHandlers,
+);
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
   (module) => module.skillsHandlers,
@@ -624,6 +628,15 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "skills.proposals.quarantine",
     ],
     loadHandlers: loadSkillsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "sessions.catalog.list",
+      "sessions.catalog.read",
+      "sessions.catalog.continue",
+      "sessions.catalog.archive",
+    ],
+    loadHandlers: loadSessionCatalogHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

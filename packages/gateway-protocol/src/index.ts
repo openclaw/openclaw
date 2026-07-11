@@ -11,6 +11,22 @@ export {
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
+export type {
+  SessionCatalog,
+  SessionCatalogCapabilities,
+  SessionCatalogDescriptor,
+  SessionCatalogHost,
+  SessionCatalogSession,
+  SessionCatalogTranscriptItem,
+  SessionsCatalogArchiveParams,
+  SessionsCatalogArchiveResult,
+  SessionsCatalogContinueParams,
+  SessionsCatalogContinueResult,
+  SessionsCatalogListParams,
+  SessionsCatalogListResult,
+  SessionsCatalogReadParams,
+  SessionsCatalogReadResult,
+} from "./schema/sessions-catalog.js";
 import {
   type AgentEvent,
   AgentEventSchema,
@@ -566,6 +582,24 @@ import {
   SessionsFilesListResultSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
+  SessionCatalogSchema,
+  SessionCatalogCapabilitiesSchema,
+  SessionCatalogDescriptorSchema,
+  SessionCatalogHostSchema,
+  SessionCatalogSessionSchema,
+  SessionCatalogTranscriptItemSchema,
+  type SessionsCatalogArchiveParams,
+  SessionsCatalogArchiveParamsSchema,
+  SessionsCatalogArchiveResultSchema,
+  type SessionsCatalogContinueParams,
+  SessionsCatalogContinueParamsSchema,
+  SessionsCatalogContinueResultSchema,
+  type SessionsCatalogListParams,
+  SessionsCatalogListParamsSchema,
+  SessionsCatalogListResultSchema,
+  type SessionsCatalogReadParams,
+  SessionsCatalogReadParamsSchema,
+  SessionsCatalogReadResultSchema,
   type SessionsMessagesSubscribeParams,
   SessionsMessagesSubscribeParamsSchema,
   type SessionsMessagesUnsubscribeParams,
@@ -981,6 +1015,18 @@ export const validateSecretsResolveResult = lazyCompile<SecretsResolveResult>(
   SecretsResolveResultSchema,
 );
 export const validateSessionsListParams = lazyCompile<SessionsListParams>(SessionsListParamsSchema);
+export const validateSessionsCatalogListParams = lazyCompile<SessionsCatalogListParams>(
+  SessionsCatalogListParamsSchema,
+);
+export const validateSessionsCatalogReadParams = lazyCompile<SessionsCatalogReadParams>(
+  SessionsCatalogReadParamsSchema,
+);
+export const validateSessionsCatalogContinueParams = lazyCompile<SessionsCatalogContinueParams>(
+  SessionsCatalogContinueParamsSchema,
+);
+export const validateSessionsCatalogArchiveParams = lazyCompile<SessionsCatalogArchiveParams>(
+  SessionsCatalogArchiveParamsSchema,
+);
 export const validateSessionsCleanupParams = lazyCompile<SessionsCleanupParams>(
   SessionsCleanupParamsSchema,
 );
@@ -1445,6 +1491,20 @@ export {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   SessionsListParamsSchema,
+  SessionCatalogCapabilitiesSchema,
+  SessionCatalogDescriptorSchema,
+  SessionCatalogSessionSchema,
+  SessionCatalogHostSchema,
+  SessionCatalogSchema,
+  SessionCatalogTranscriptItemSchema,
+  SessionsCatalogListParamsSchema,
+  SessionsCatalogListResultSchema,
+  SessionsCatalogReadParamsSchema,
+  SessionsCatalogReadResultSchema,
+  SessionsCatalogContinueParamsSchema,
+  SessionsCatalogContinueResultSchema,
+  SessionsCatalogArchiveParamsSchema,
+  SessionsCatalogArchiveResultSchema,
   SessionsCleanupParamsSchema,
   SessionsPreviewParamsSchema,
   SessionsDescribeParamsSchema,

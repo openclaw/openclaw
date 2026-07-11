@@ -328,6 +328,10 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
     startup: true,
     controlPlaneWrite: true,
   },
+  { name: "sessions.catalog.list", scope: "operator.write" },
+  { name: "sessions.catalog.read", scope: "operator.write" },
+  { name: "sessions.catalog.continue", scope: "operator.write" },
+  { name: "sessions.catalog.archive", scope: "operator.write" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
