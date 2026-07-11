@@ -17,9 +17,9 @@ import {
 import type { ResolvedSmsAccount } from "./types.js";
 
 const INVALID_REQUEST_MAX_REQUESTS = 300;
-const SIGNED_CALLBACK_MAX_REQUESTS = 30;
+const CALLBACK_DISPATCH_MAX_REQUESTS = 30;
 
-// Count failed-auth traffic separately from the stricter signed callback quota.
+// Count failed-auth traffic separately from the stricter dispatchable callback quota.
 // The over-budget decision is applied only after validation fails, so a same-key
 // invalid burst cannot block a later valid Twilio callback before authentication.
 const invalidRequestRateLimiter = createFixedWindowRateLimiter({
@@ -27,8 +27,8 @@ const invalidRequestRateLimiter = createFixedWindowRateLimiter({
   windowMs: 60_000,
   maxTrackedKeys: 5_000,
 });
-const signedRateLimiter = createFixedWindowRateLimiter({
-  maxRequests: SIGNED_CALLBACK_MAX_REQUESTS,
+const callbackDispatchRateLimiter = createFixedWindowRateLimiter({
+  maxRequests: CALLBACK_DISPATCH_MAX_REQUESTS,
   windowMs: 60_000,
   maxTrackedKeys: 5_000,
 });
@@ -154,7 +154,7 @@ function rejectInvalidRequestRateLimit(params: {
 
 export function resetSmsWebhookRateLimiterForTest(): void {
   invalidRequestRateLimiter.clear();
-  signedRateLimiter.clear();
+  callbackDispatchRateLimiter.clear();
 }
 
 // Each account route owns its guard so one saturated account cannot block sibling accounts.
@@ -222,10 +222,7 @@ export function createSmsWebhookHandler(
     if (invalidRequestRateLimited && params.account.dangerouslyDisableSignatureValidation) {
       return rejectInvalidRequestRateLimit({ key, log: params.log, res });
     }
-    if (
-      !params.account.dangerouslyDisableSignatureValidation &&
-      signedRateLimiter.isRateLimited(key)
-    ) {
+    if (callbackDispatchRateLimiter.isRateLimited(key)) {
       params.log?.warn?.(`SMS webhook rate limit exceeded for ${key}`);
       respondTwiml(res, 429, "Rate limit exceeded");
       return true;

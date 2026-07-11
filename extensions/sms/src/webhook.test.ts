@@ -350,7 +350,7 @@ describe("createSmsWebhookHandler", () => {
     expect(defaultRes.statusCode).toBe(200);
   });
 
-  it("rate limits validation-disabled webhook traffic with the invalid-request budget", async () => {
+  it("keeps validation-disabled webhook dispatches on the stricter callback budget", async () => {
     const account = createAccount({ dangerouslyDisableSignatureValidation: true });
     const handler = createSmsWebhookHandler({
       cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
@@ -358,7 +358,7 @@ describe("createSmsWebhookHandler", () => {
       channelRuntime: {} as SmsChannelRuntime,
     });
 
-    for (let i = 0; i < 300; i += 1) {
+    for (let i = 0; i < 30; i += 1) {
       const valid = createSignedBody({
         account,
         messageSid: `SM-disabled-${i}`,
@@ -386,6 +386,6 @@ describe("createSmsWebhookHandler", () => {
     );
 
     expect(overBudgetRes.statusCode).toBe(429);
-    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(300);
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(30);
   });
 });
