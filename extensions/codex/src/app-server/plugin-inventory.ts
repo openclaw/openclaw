@@ -10,7 +10,9 @@ import type {
 } from "./app-inventory-cache.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
+  CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
   resolveCodexPluginsPolicy,
+  type CodexPluginMarketplaceName,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
 } from "./config.js";
@@ -21,9 +23,9 @@ const CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME = `${CODEX_PLUGINS_MARKETPLACE_NAME}
 /** Request callback used to call Codex app-server plugin/app methods. */
 export type CodexPluginRuntimeRequest = (method: string, params?: unknown) => Promise<unknown>;
 
-/** Stable reference to the OpenAI curated Codex plugin marketplace. */
+/** Stable reference to a supported Codex plugin marketplace. */
 export type CodexPluginMarketplaceRef = {
-  name: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
+  name: CodexPluginMarketplaceName;
   path?: string;
   remoteMarketplaceName?: string;
 };
@@ -70,7 +72,6 @@ export type CodexPluginInventoryRecord = {
 /** Complete inventory result for configured Codex plugins and owned apps. */
 export type CodexPluginInventory = {
   policy: ResolvedCodexPluginsPolicy;
-  marketplace?: CodexPluginMarketplaceRef;
   records: CodexPluginInventoryRecord[];
   diagnostics: CodexPluginInventoryDiagnostic[];
   appInventory?: CodexAppInventoryCacheRead;
@@ -107,26 +108,20 @@ export async function readCodexPluginInventory(
   }
 
   const appInventory = readCachedAppInventory(params);
-  const listed = (await params.request("plugin/list", {
+  const curatedListed = (await params.request("plugin/list", {
     cwds: [],
   } satisfies v2.PluginListParams)) as v2.PluginListResponse;
-  const marketplaceEntry = listed.marketplaces.find(isOpenAiCuratedMarketplace);
-  if (!marketplaceEntry) {
-    return {
-      policy,
-      records: [],
-      diagnostics: policy.pluginPolicies
-        .filter((pluginPolicy) => pluginPolicy.enabled)
-        .map((pluginPolicy) => ({
-          code: "marketplace_missing",
-          plugin: pluginPolicy,
-          message: `Codex marketplace ${CODEX_PLUGINS_MARKETPLACE_NAME} was not found.`,
-        })),
-      ...(appInventory ? { appInventory } : {}),
-    };
-  }
+  const workspaceListed = policy.pluginPolicies.some(
+    (pluginPolicy) =>
+      pluginPolicy.enabled &&
+      pluginPolicy.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+  )
+    ? ((await params.request("plugin/list", {
+        cwds: [],
+        marketplaceKinds: [CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME],
+      } satisfies v2.PluginListParams)) as v2.PluginListResponse)
+    : undefined;
 
-  let marketplace = marketplaceRef(marketplaceEntry);
   const diagnostics: CodexPluginInventoryDiagnostic[] = [];
   const records: CodexPluginInventoryRecord[] = [];
   if (appInventory?.state === "missing") {
@@ -145,21 +140,41 @@ export async function readCodexPluginInventory(
     if (!pluginPolicy.enabled) {
       continue;
     }
-    const resolvedPlugin = findOpenAiCuratedMarketplacePlugin(listed, pluginPolicy.pluginName);
+    const listed =
+      pluginPolicy.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
+        ? workspaceListed
+        : curatedListed;
+    const hasMarketplace =
+      pluginPolicy.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
+        ? listed?.marketplaces.some(
+            (entry) => entry.name === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+          ) === true
+        : listed?.marketplaces.some(isOpenAiCuratedMarketplace) === true;
+    if (!listed || !hasMarketplace) {
+      diagnostics.push({
+        code: "marketplace_missing",
+        plugin: pluginPolicy,
+        message: `Codex marketplace ${pluginPolicy.marketplaceName} was not found.`,
+      });
+      continue;
+    }
+    const resolvedPlugin =
+      pluginPolicy.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
+        ? findWorkspaceMarketplacePlugin(listed, pluginPolicy.pluginName)
+        : findOpenAiCuratedMarketplacePlugin(listed, pluginPolicy.pluginName);
     if (!resolvedPlugin) {
       diagnostics.push({
         code: "plugin_missing",
         plugin: pluginPolicy,
-        message: `${pluginPolicy.pluginName} was not found in ${CODEX_PLUGINS_MARKETPLACE_NAME}.`,
+        message: `${pluginPolicy.pluginName} was not found in ${pluginPolicy.marketplaceName}.`,
       });
       continue;
     }
     const { summary } = resolvedPlugin;
-    const pluginMarketplace = marketplaceRef(resolvedPlugin.marketplace);
-    if (records.length === 0) {
-      marketplace = pluginMarketplace;
-    }
-
+    const pluginMarketplace = marketplaceRef(
+      resolvedPlugin.marketplace,
+      pluginPolicy.marketplaceName,
+    );
     const detail = await readPluginDetail(
       params,
       pluginMarketplace,
@@ -211,7 +226,6 @@ export async function readCodexPluginInventory(
 
   const inventory = {
     policy,
-    marketplace,
     records,
     diagnostics,
     ...(appInventory ? { appInventory } : {}),
@@ -226,7 +240,10 @@ export function findOpenAiCuratedPluginSummary(
 ): { marketplace: CodexPluginMarketplaceRef; summary: v2.PluginSummary } | undefined {
   const resolved = findOpenAiCuratedMarketplacePlugin(listed, pluginName);
   return resolved
-    ? { marketplace: marketplaceRef(resolved.marketplace), summary: resolved.summary }
+    ? {
+        marketplace: marketplaceRef(resolved.marketplace, CODEX_PLUGINS_MARKETPLACE_NAME),
+        summary: resolved.summary,
+      }
     : undefined;
 }
 
@@ -268,6 +285,18 @@ async function readPluginDetail(
   diagnostics: CodexPluginInventoryDiagnostic[],
 ): Promise<v2.PluginDetail | undefined> {
   if (params.readPluginDetails === false) {
+    return undefined;
+  }
+  if (
+    marketplace.name === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME &&
+    marketplace.remoteMarketplaceName &&
+    !summary.remotePluginId
+  ) {
+    diagnostics.push({
+      code: "plugin_detail_unavailable",
+      plugin: pluginPolicy,
+      message: `${pluginPolicy.pluginName} detail unavailable: Codex did not return a remote plugin id.`,
+    });
     return undefined;
   }
   try {
@@ -380,6 +409,19 @@ function findOpenAiCuratedMarketplacePlugin(
   return undefined;
 }
 
+function findWorkspaceMarketplacePlugin(
+  listed: v2.PluginListResponse,
+  pluginName: string,
+): { marketplace: v2.PluginMarketplaceEntry; summary: v2.PluginSummary } | undefined {
+  // Workspace display names are not unique; the configured pluginName is the
+  // exact catalog id returned by plugin/list.
+  const marketplace = listed.marketplaces.find(
+    (entry) => entry.name === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+  );
+  const summary = marketplace?.plugins.find((plugin) => plugin.id === pluginName);
+  return marketplace && summary ? { marketplace, summary } : undefined;
+}
+
 function pluginNameFromPluginId(pluginId: string, marketplaceName: string): string | undefined {
   const trimmed = pluginId.trim();
   if (!trimmed) {
@@ -392,9 +434,12 @@ function pluginNameFromPluginId(pluginId: string, marketplaceName: string): stri
   return withoutMarketplaceSuffix.split("/").at(-1)?.trim() || undefined;
 }
 
-function marketplaceRef(marketplace: v2.PluginMarketplaceEntry): CodexPluginMarketplaceRef {
+function marketplaceRef(
+  marketplace: v2.PluginMarketplaceEntry,
+  name: CodexPluginMarketplaceName,
+): CodexPluginMarketplaceRef {
   return {
-    name: CODEX_PLUGINS_MARKETPLACE_NAME,
+    name,
     ...(marketplace.path ? { path: marketplace.path } : {}),
     ...(!marketplace.path ? { remoteMarketplaceName: marketplace.name } : {}),
   };
