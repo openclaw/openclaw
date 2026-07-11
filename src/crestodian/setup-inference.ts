@@ -262,6 +262,7 @@ type SetupInferenceTestPlan = {
   provider: string;
   model: string;
   modelRef: string;
+  agentHarnessRuntimeOverride?: string;
   config: OpenClawConfig;
   agentId?: string;
   agentDir?: string;
@@ -275,6 +276,31 @@ type SetupInferenceTestPlan = {
     pluginId?: string;
   };
 };
+
+function configureCodexCliNativeAuth(cfg: OpenClawConfig): OpenClawConfig {
+  const entry = cfg.plugins?.entries?.codex;
+  const pluginConfig = entry?.config ?? {};
+  const appServer =
+    pluginConfig.appServer && typeof pluginConfig.appServer === "object"
+      ? pluginConfig.appServer
+      : {};
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      entries: {
+        ...cfg.plugins?.entries,
+        codex: {
+          ...entry,
+          config: {
+            ...pluginConfig,
+            appServer: { ...appServer, transport: "stdio", homeScope: "user" },
+          },
+        },
+      },
+    },
+  };
+}
 
 type RunResult = {
   payloads?: Array<{ text?: string }>;
@@ -435,7 +461,10 @@ async function buildTestPlan(params: {
         runner: "embedded",
         ...ref,
         modelRef,
-        config: cfg,
+        agentHarnessRuntimeOverride: "codex",
+        // This choice is the installed Codex CLI, so let Codex own its native
+        // cross-platform credential backend instead of copying secrets into OpenClaw.
+        config: configureCodexCliNativeAuth(cfg),
         agentId: resolveDefaultAgentId(cfg),
         agentDir: params.agentDir,
         cleanupBundleMcpOnRunEnd: true,
@@ -745,6 +774,7 @@ async function activateSetupInferenceUnredacted(
     if ("error" in plan) {
       return { ok: false, status: "unavailable", error: plan.error };
     }
+    let setupConfigPatch = plan.manualAuth?.configPatch;
 
     const agentRuntimeId = agentRuntimeIdForSetupKind(params.kind);
     let testPlan = plan;
@@ -866,7 +896,9 @@ async function activateSetupInferenceUnredacted(
             ...(agentRuntimeId ? { agentRuntimeId } : {}),
           })
         : currentCodexConfig;
-      const enabledCodex = enablePluginInConfig(currentCodexSelection, "codex");
+      const currentCodexPrepared = configureCodexCliNativeAuth(currentCodexSelection);
+      setupConfigPatch = createMergePatch(currentCodexSelection, currentCodexPrepared);
+      const enabledCodex = enablePluginInConfig(currentCodexPrepared, "codex");
       if (!enabledCodex.enabled) {
         return {
           ok: false,
@@ -938,7 +970,6 @@ async function activateSetupInferenceUnredacted(
     if (!test.ok) {
       return test;
     }
-
     // The probe is agent-scoped. A concurrent default-agent switch would make
     // the final setup write target an untested agent (and potentially a
     // different credential store), so fail cleanly and let the user retry.
@@ -995,7 +1026,7 @@ async function activateSetupInferenceUnredacted(
         ...(expectedAgentDir ? { expectedAgentDir } : {}),
         ...(params.kind === "existing-model" ? { expectedModelRef: plan.modelRef } : {}),
         expectedConfigHash: probedConfigHash,
-        ...(plan.manualAuth ? { configPatch: plan.manualAuth.configPatch } : {}),
+        ...(setupConfigPatch ? { configPatch: setupConfigPatch } : {}),
         ...(plan.manualAuth?.pluginId
           ? { enablePluginId: plan.manualAuth.pluginId }
           : params.kind === "codex-cli"
@@ -1237,6 +1268,9 @@ async function runSetupInferenceTest(params: {
         prompt: SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
         model: plan.model,
+        ...(plan.agentHarnessRuntimeOverride
+          ? { agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride }
+          : {}),
         ...(plan.authProfileId
           ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
           : {}),

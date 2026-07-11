@@ -133,6 +133,62 @@ describe("detectInferenceBackends", () => {
     expect(candidates[1]?.detail).toBe("installed, not logged in");
   });
 
+  it("recognizes Codex login status across native credential stores", async () => {
+    const probe = async (command: string, args: string[] = ["--version"]) => ({
+      command,
+      found: command === "codex",
+      ...(args[0] === "login" ? {} : { version: "codex 1.0" }),
+    });
+    const candidates = await detectInferenceBackends({
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probe,
+      },
+    });
+
+    expect(candidates).toMatchObject([
+      { kind: "codex-cli", credentials: true, detail: "logged in" },
+    ]);
+  });
+
+  it("reports a Codex install whose canonical login status is logged out", async () => {
+    const candidates = await detectInferenceBackends({
+      env: {},
+      platform: "darwin",
+      deps: {
+        probeLocalCommand: async (command: string, args: string[] = ["--version"]) => ({
+          command,
+          found: command === "codex",
+          ...(args[0] === "login" ? { version: "Not logged in", error: "exited 1" } : {}),
+        }),
+      },
+    });
+
+    expect(candidates).toMatchObject([
+      { kind: "codex-cli", credentials: false, detail: "installed, not logged in" },
+    ]);
+  });
+
+  it("keeps an indeterminate Codex status error distinct from logout", async () => {
+    const candidates = await detectInferenceBackends({
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: async (command: string, args: string[] = ["--version"]) => ({
+          command,
+          found: command === "codex",
+          ...(args[0] === "login"
+            ? { version: "Error checking login status: keyring unavailable", error: "exited 1" }
+            : {}),
+        }),
+      },
+    });
+
+    expect(candidates).toMatchObject([{ kind: "codex-cli", detail: "installed" }]);
+    expect(candidates[0]?.credentials).toBeUndefined();
+  });
+
   it("treats working Claude and Codex logins as randomized peers", async () => {
     const detectWithPick = async (pick: number) =>
       await detectInferenceBackends({

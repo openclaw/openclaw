@@ -2,7 +2,6 @@ import { randomInt } from "node:crypto";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   readClaudeCliCredentialsCached,
-  readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
 } from "../agents/cli-credentials.js";
 // Inference backend detection shared by onboarding bootstrap and Crestodian setup.
@@ -87,6 +86,18 @@ function describeCliDetail(credentials: boolean | undefined): string {
   return "installed";
 }
 
+async function detectCodexLoginState(
+  probe: typeof probeLocalCommand,
+): Promise<boolean | undefined> {
+  const status = await probe("codex", ["login", "status"], { timeoutMs: 3_000 });
+  if (!status.error) {
+    return true;
+  }
+  return status.error.startsWith("exited ") && status.version === "Not logged in"
+    ? false
+    : undefined;
+}
+
 function randomizeClaudeCodexTie(
   candidates: InferenceBackendCandidate[],
   pickRandomInt: (maxExclusive: number) => number,
@@ -121,9 +132,6 @@ export async function detectInferenceBackends(
   const readClaude =
     options.deps?.readClaudeCliCredentials ??
     (() => readClaudeCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 60_000 }));
-  const readCodex =
-    options.deps?.readCodexCliCredentials ??
-    (() => readCodexCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 60_000 }));
   const readGemini =
     options.deps?.readGeminiCliCredentials ??
     (() => readGeminiCliCredentialsCached({ ttlMs: 60_000 }));
@@ -191,11 +199,13 @@ export async function detectInferenceBackends(
     });
   }
   if (codexProbe.found) {
-    const credentials = detectCliCredentialState({
-      probe: codexProbe,
-      hasStoredCredentials: readCodex() !== null,
-      platform,
-    });
+    const credentials = options.deps?.readCodexCliCredentials
+      ? detectCliCredentialState({
+          probe: codexProbe,
+          hasStoredCredentials: options.deps.readCodexCliCredentials() !== null,
+          platform,
+        })
+      : await detectCodexLoginState(probe);
     cliCandidates.push({
       kind: "codex-cli",
       modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,

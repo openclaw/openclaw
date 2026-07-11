@@ -1465,7 +1465,7 @@ describe("activateSetupInference", () => {
         status: "installed" as const,
       };
     });
-    const runEmbeddedAgent = vi.fn(async (_params: unknown) => {
+    const runEmbeddedAgent = vi.fn(async () => {
       events.push("live-test");
       return { meta: { finalAssistantVisibleText: "OK" } };
     });
@@ -1584,13 +1584,26 @@ describe("activateSetupInference", () => {
           }),
           plugins: expect.objectContaining({
             entries: expect.objectContaining({
-              codex: expect.objectContaining({ enabled: true }),
+              codex: expect.objectContaining({
+                enabled: true,
+                config: {
+                  appServer: {
+                    command: "codex",
+                    mode: "yolo",
+                    transport: "stdio",
+                    homeScope: "user",
+                  },
+                },
+              }),
             }),
           }),
         }),
       }),
     );
-    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("agentHarnessRuntimeOverride");
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).toHaveProperty(
+      "agentHarnessRuntimeOverride",
+      "codex",
+    );
     expect(persistedConfig).toMatchObject({
       gateway: { port: 19000 },
       models: {
@@ -1628,6 +1641,17 @@ describe("activateSetupInference", () => {
         expectedConfigHash: null,
         enablePluginId: "codex",
         refreshPluginRegistry: true,
+        configPatch: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              codex: expect.objectContaining({
+                config: expect.objectContaining({
+                  appServer: expect.objectContaining({ transport: "stdio", homeScope: "user" }),
+                }),
+              }),
+            }),
+          }),
+        }),
       }),
     );
     expect(pendingCodexInstalls[0]).toMatchObject({
@@ -1644,7 +1668,13 @@ describe("activateSetupInference", () => {
     const ensureCodex = vi.fn(async (params: { cfg: OpenClawConfig }) => ({
       cfg: {
         ...params.cfg,
-        plugins: { entries: { codex: { enabled: true } } },
+        plugins: {
+          ...params.cfg.plugins,
+          entries: {
+            ...params.cfg.plugins?.entries,
+            codex: { ...params.cfg.plugins?.entries?.codex, enabled: true },
+          },
+        },
       },
       required: true,
       installed: true,
@@ -1668,7 +1698,6 @@ describe("activateSetupInference", () => {
       },
     );
     const applySetup = vi.fn(async () => ({ configPath: "/tmp/openclaw.json", lines: ["ok"] }));
-
     const result = await activateSetupInference({
       kind: "codex-cli",
       modelRef: "openai/gpt-5.4",
@@ -1713,6 +1742,7 @@ describe("activateSetupInference", () => {
     );
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentHarnessRuntimeOverride: "codex",
         provider: "openai",
         model: "gpt-5.4",
         config: expect.objectContaining({
@@ -1729,7 +1759,14 @@ describe("activateSetupInference", () => {
               }),
             ]),
           }),
-          plugins: { entries: { codex: { enabled: true } } },
+          plugins: {
+            entries: {
+              codex: {
+                enabled: true,
+                config: { appServer: { transport: "stdio", homeScope: "user" } },
+              },
+            },
+          },
         }),
       }),
     );
@@ -1739,6 +1776,17 @@ describe("activateSetupInference", () => {
         agentRuntimeId: "codex",
         enablePluginId: "codex",
         refreshPluginRegistry: true,
+        configPatch: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              codex: expect.objectContaining({
+                config: expect.objectContaining({
+                  appServer: expect.objectContaining({ transport: "stdio", homeScope: "user" }),
+                }),
+              }),
+            }),
+          }),
+        }),
       }),
     );
   });
