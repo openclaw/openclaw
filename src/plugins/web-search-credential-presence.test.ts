@@ -297,6 +297,70 @@ describe("hasConfiguredWebSearchCredential", () => {
     ).toBe(true);
   });
 
+  it("keeps selected non-bundled provider plugin credentials under bundled audit scope", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "brave",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["brave"] },
+        },
+        {
+          id: "custom-search",
+          origin: "global",
+          contracts: { webSearchProviders: ["custom-search"] },
+        },
+        {
+          id: "other-search",
+          origin: "global",
+          contracts: { webSearchProviders: ["other-search"] },
+        },
+      ],
+    });
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          tools: { web: { search: { provider: "custom-search" } } },
+          plugins: {
+            entries: {
+              "other-search": {
+                config: {
+                  webSearch: {
+                    apiKey: "other-search-key",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          tools: { web: { search: { provider: "custom-search" } } },
+          plugins: {
+            entries: {
+              "custom-search": {
+                config: {
+                  webSearch: {
+                    apiKey: "custom-search-key",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
+  });
+
   it("limits explicit provider checks to the selected provider", () => {
     manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
       plugins: [

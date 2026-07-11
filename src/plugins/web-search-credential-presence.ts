@@ -153,6 +153,7 @@ function getConfiguredProviderId(searchConfig: unknown): string | undefined {
 }
 
 type WebSearchCredentialPolicyScope = {
+  providerOwnerRecords: readonly PluginManifestRecord[];
   manifestRecords: readonly PluginManifestRecord[];
   policy: WebSearchCredentialPolicy;
 };
@@ -277,16 +278,19 @@ function resolvePolicyFilteredWebSearchScope(params: {
   const policy = createWebSearchCredentialPolicy(params.config, allManifestRecords);
   if (policy.pluginsDisabled) {
     return {
+      providerOwnerRecords: [],
       manifestRecords: [],
       policy,
     };
   }
-  const manifestRecords = allManifestRecords.filter(
-    (plugin) =>
-      (!params.origin || plugin.origin === params.origin) &&
-      !isPluginBlockedByPolicy(policy, plugin.id),
+  const providerOwnerRecords = allManifestRecords.filter(
+    (plugin) => !isPluginBlockedByPolicy(policy, plugin.id),
+  );
+  const manifestRecords = providerOwnerRecords.filter(
+    (plugin) => !params.origin || plugin.origin === params.origin,
   );
   return {
+    providerOwnerRecords,
     manifestRecords,
     policy,
   };
@@ -342,6 +346,8 @@ function providerCanUseAuthProfileForCredential(params: {
   if (!params.provider.authProviderId) {
     return false;
   }
+  // Mirror runtime auto-detect: keyless providers are selectable only, so an
+  // auth profile should not make them look configured without an explicit pick.
   if (!params.explicitProviderId && params.provider.requiresCredential === false) {
     return false;
   }
@@ -514,7 +520,7 @@ export function hasConfiguredWebSearchCredential(params: {
     origin: params.origin,
   });
   const explicitProviderPluginIds = resolveExplicitProviderPluginIds({
-    manifestRecords: policyScope.manifestRecords,
+    manifestRecords: policyScope.providerOwnerRecords,
     providerId,
   });
   return (
