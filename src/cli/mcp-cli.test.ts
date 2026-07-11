@@ -330,7 +330,7 @@ describe("mcp cli", () => {
       expect(buildMcpHttpFetch).toHaveBeenCalledWith(
         expect.objectContaining({
           resourceUrl: "https://mcp.example.com",
-          requestTimeoutMs: 9_000,
+          timeoutMs: 9_000,
         }),
       );
       expect(runMcpOAuthLogin).toHaveBeenCalledWith({

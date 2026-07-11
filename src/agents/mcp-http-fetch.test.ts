@@ -1,3 +1,5 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 /**
@@ -82,6 +84,26 @@ function getDispatcherConnectOptions(init: unknown): Record<string, unknown> | u
   }
   const options = dispatcher.options as { connect?: Record<string, unknown> };
   return options.connect;
+}
+
+async function listenOnLoopback(server: Server): Promise<string> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function closeLoopbackServer(server: Server): Promise<void> {
+  const closed = new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  server.closeAllConnections();
+  await closed;
 }
 
 describe("MCP HTTP fetch helpers", () => {
@@ -273,48 +295,30 @@ describe("MCP HTTP fetch helpers", () => {
     expect(text).not.toHaveBeenCalled();
   });
 
-  it("aborts hung OAuth requests when requestTimeoutMs is configured", async () => {
-    vi.useFakeTimers();
-    try {
-      testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-        Agent: TestAgent,
-        EnvHttpProxyAgent: TestEnvHttpProxyAgent,
-        ProxyAgent: TestProxyAgent,
-        fetch: async (_url: string | URL | Request, init?: unknown) =>
-          await new Promise<Response>((_resolve, reject) => {
-            const signal =
-              typeof init === "object" && init !== null && "signal" in init
-                ? (init as { signal?: AbortSignal }).signal
-                : undefined;
-            if (!signal) {
-              reject(new Error("expected signal"));
-              return;
-            }
-            const rejectForAbort = () => {
-              reject(
-                signal.reason instanceof Error
-                  ? signal.reason
-                  : new Error("MCP OAuth request aborted"),
-              );
-            };
-            if (signal.aborted) {
-              rejectForAbort();
-              return;
-            }
-            signal.addEventListener("abort", rejectForAbort, { once: true });
-          }),
-      };
-      const fetch = buildMcpHttpFetch({
-        resourceUrl: "https://mcp.example.com/mcp",
-        requestTimeoutMs: 25,
+  it.each(["headers", "body"] as const)(
+    "aborts a hung OAuth request while awaiting %s",
+    async (stage) => {
+      delete testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY];
+      const server = createServer((_request, response) => {
+        if (stage === "body") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.write('{"access_token":');
+        }
       });
+      const baseUrl = await listenOnLoopback(server);
+      const fetch = buildMcpHttpFetch({ resourceUrl: `${baseUrl}/mcp`, timeoutMs: 100 });
 
-      const pending = fetch("https://mcp.example.com/token", { method: "POST" });
-      const expectation = expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
-      await vi.advanceTimersByTimeAsync(30);
-      await expectation;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+      try {
+        const pending = fetch(`${baseUrl}/token`, { method: "POST" });
+        if (stage === "headers") {
+          await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+          return;
+        }
+        const response = await pending;
+        await expect(response.json()).rejects.toMatchObject({ name: "TimeoutError" });
+      } finally {
+        await closeLoopbackServer(server);
+      }
+    },
+  );
 });
