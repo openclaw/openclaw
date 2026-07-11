@@ -4694,6 +4694,8 @@ public struct TaskSummary: Codable, Sendable {
     public let updatedat: AnyCodable?
     public let startedat: AnyCodable?
     public let endedat: AnyCodable?
+    public let toolusecount: Int?
+    public let lasttoolname: String?
     public let progresssummary: String?
     public let terminalsummary: String?
     public let error: String?
@@ -4717,6 +4719,8 @@ public struct TaskSummary: Codable, Sendable {
         updatedat: AnyCodable? = nil,
         startedat: AnyCodable? = nil,
         endedat: AnyCodable? = nil,
+        toolusecount: Int? = nil,
+        lasttoolname: String? = nil,
         progresssummary: String? = nil,
         terminalsummary: String? = nil,
         error: String? = nil)
@@ -4739,6 +4743,8 @@ public struct TaskSummary: Codable, Sendable {
         self.updatedat = updatedat
         self.startedat = startedat
         self.endedat = endedat
+        self.toolusecount = toolusecount
+        self.lasttoolname = lasttoolname
         self.progresssummary = progresssummary
         self.terminalsummary = terminalsummary
         self.error = error
@@ -4763,6 +4769,8 @@ public struct TaskSummary: Codable, Sendable {
         case updatedat = "updatedAt"
         case startedat = "startedAt"
         case endedat = "endedAt"
+        case toolusecount = "toolUseCount"
+        case lasttoolname = "lastToolName"
         case progresssummary = "progressSummary"
         case terminalsummary = "terminalSummary"
         case error

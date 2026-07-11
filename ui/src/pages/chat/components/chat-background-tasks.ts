@@ -417,12 +417,9 @@ function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): Template
         ${toolUseCount > 0
           ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
               <span
-                >${t(
-                  toolUseCount === 1
-                    ? "chat.backgroundTasks.toolUseOne"
-                    : "chat.backgroundTasks.toolUseMany",
-                  { count: String(toolUseCount) },
-                )}</span
+                >${toolUseCount === 1
+                  ? t("chat.backgroundTasks.toolUseOne")
+                  : t("chat.backgroundTasks.toolUseMany", { count: String(toolUseCount) })}</span
               >`
           : nothing}
         ${active && task.lastToolName
