@@ -752,13 +752,15 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           };
         };
         return {
-          bubble: styleFor(".chat-group.assistant .chat-bubble:first-child"),
+          assistantBubble: styleFor(".chat-group.assistant .chat-bubble:first-child"),
+          bubble: styleFor(".chat-group.user .chat-bubble:first-child"),
           composer: styleFor(".agent-chat__input"),
           footer: styleFor(".agent-chat__composer-footer"),
           textarea: styleFor(".agent-chat__composer-combobox > textarea"),
         };
       });
 
+      expect(geometry.assistantBubble).not.toBeNull();
       expect(geometry.bubble).not.toBeNull();
       expect(geometry.composer).not.toBeNull();
       expect(geometry.footer).not.toBeNull();
@@ -773,6 +775,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           geometry.bubble?.paddingLeft,
         ]),
       ).toEqual(new Set([16]));
+      // Assistant replies render flat (no bubble card): zero horizontal inset
+      // keeps the text on the tool-row left edge.
+      expect(geometry.assistantBubble?.paddingLeft).toBe(0);
+      expect(geometry.assistantBubble?.paddingRight).toBe(0);
       expect(geometry.composer?.borderRadius).toBe(10);
 
       const composerInset = width <= 768 ? 4 : 8;
