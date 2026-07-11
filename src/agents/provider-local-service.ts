@@ -443,14 +443,9 @@ async function startAndWaitForLocalService(params: {
       diagnostics.lastHealthyAt = diagnostics.readyAt;
       // Pipes keep startup alive while readiness is pending, then stop
       // diagnostics from retaining runtime output or pinning one-shot hosts.
-      child.stdout?.off("data", captureStdout);
-      child.stderr?.off("data", captureStderr);
       diagnostics.stdoutTail = "";
       diagnostics.stderrTail = "";
-      child.stdout?.resume();
-      child.stderr?.resume();
-      unrefLocalServiceOutput(child.stdout);
-      unrefLocalServiceOutput(child.stderr);
+      drainLocalServiceOutput(child);
       log.info(
         `${provider} local service ready: pid=${diagnostics.pid ?? "unknown"} spawnMs=${diagnostics.spawnedAt - startedAt} readyMs=${diagnostics.readyAt - startedAt}`,
       );
@@ -494,6 +489,15 @@ function appendLocalServiceOutputTail(
 
 function unrefLocalServiceOutput(stream: ChildProcess["stdout"]): void {
   (stream as { unref?: () => void } | null)?.unref?.();
+}
+
+function drainLocalServiceOutput(child: ChildProcess): void {
+  child.stdout?.removeAllListeners("data");
+  child.stderr?.removeAllListeners("data");
+  child.stdout?.resume();
+  child.stderr?.resume();
+  unrefLocalServiceOutput(child.stdout);
+  unrefLocalServiceOutput(child.stderr);
 }
 
 function formatLocalServiceDiagnosticTail(diagnostics: LocalServiceDiagnostics): string {
@@ -542,6 +546,9 @@ function stopManagedService(key: string, managed: ManagedLocalService, reason: s
   managed.process = undefined;
   managed.lastExit = undefined;
   services.delete(key);
+  if (child) {
+    drainLocalServiceOutput(child);
+  }
   if (child && !hasLocalServiceProcessExited(child)) {
     log.info(`stopping local model service: reason=${reason}`);
     signalChildProcessTree(child, "SIGTERM");
@@ -558,6 +565,7 @@ async function stopManagedProcessForRestart(
   if (!child || hasLocalServiceProcessExited(child)) {
     return;
   }
+  drainLocalServiceOutput(child);
   signalChildProcessTree(child, "SIGTERM");
   await waitForChildExit(child, signal, DEFAULT_PROBE_TIMEOUT_MS);
   if (!hasLocalServiceProcessExited(child)) {

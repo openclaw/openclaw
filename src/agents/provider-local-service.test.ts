@@ -606,6 +606,64 @@ describe("provider local service", () => {
     }
   });
 
+  it("does not keep failed one-shot hosts alive through diagnostic pipes", async () => {
+    const port = await freePort();
+    const tempDir = tempDirs.make("openclaw-local-service-failed-unref-");
+    const servicePidPath = path.join(tempDir, "service.pid");
+    const moduleUrl = new URL("./provider-local-service.ts", import.meta.url).href;
+    const serviceScript = [
+      `const fs=require("node:fs");`,
+      `fs.writeFileSync(${JSON.stringify(servicePidPath)},String(process.pid));`,
+      `process.on("SIGTERM",()=>{});`,
+      `setInterval(()=>process.stderr.write("tick\\n"),10);`,
+    ].join("");
+    const script = [
+      `import { ensureProviderLocalService } from ${JSON.stringify(moduleUrl)};`,
+      `try {`,
+      `  await ensureProviderLocalService({`,
+      `    providerId: "local-failed-unref",`,
+      `    baseUrl: "http://127.0.0.1:${port}/v1",`,
+      `    service: {`,
+      `      command: process.execPath,`,
+      `      args: ["-e", ${JSON.stringify(serviceScript)}],`,
+      `      readyTimeoutMs: 100,`,
+      `    },`,
+      `  });`,
+      `} catch {}`,
+    ].join("\n");
+    const parent = spawn(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", script],
+      {
+        cwd: process.cwd(),
+        stdio: ["ignore", "ignore", "ignore"],
+      },
+    );
+    let servicePid: number | undefined;
+    let exitTimeout: NodeJS.Timeout | undefined;
+
+    try {
+      const result = await Promise.race([
+        new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+          parent.once("exit", (code, signal) => resolve({ code, signal }));
+        }),
+        new Promise<"timeout">((resolve) => {
+          exitTimeout = setTimeout(() => resolve("timeout"), 5_000);
+        }),
+      ]);
+      clearTimeout(exitTimeout);
+      expect(result).toEqual({ code: 0, signal: null });
+      servicePid = await readPidFile(servicePidPath);
+    } finally {
+      clearTimeout(exitTimeout);
+      killPidIfAlive(parent.pid);
+      if (servicePid === undefined) {
+        servicePid = await readPidFile(servicePidPath).catch(() => undefined);
+      }
+      killPidIfAlive(servicePid);
+    }
+  });
+
   it("honors request aborts while waiting for local service readiness", async () => {
     const port = await freePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
