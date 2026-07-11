@@ -1896,19 +1896,31 @@ public struct NodeInvokeParams: Codable, Sendable {
     public let params: AnyCodable?
     public let timeoutms: Int?
     public let idempotencykey: String
+    public let turnsourcechannel: String?
+    public let turnsourceto: String?
+    public let turnsourceaccountid: String?
+    public let turnsourcethreadid: AnyCodable?
 
     public init(
         nodeid: String,
         command: String,
         params: AnyCodable? = nil,
         timeoutms: Int? = nil,
-        idempotencykey: String)
+        idempotencykey: String,
+        turnsourcechannel: String? = nil,
+        turnsourceto: String? = nil,
+        turnsourceaccountid: String? = nil,
+        turnsourcethreadid: AnyCodable? = nil)
     {
         self.nodeid = nodeid
         self.command = command
         self.params = params
         self.timeoutms = timeoutms
         self.idempotencykey = idempotencykey
+        self.turnsourcechannel = turnsourcechannel
+        self.turnsourceto = turnsourceto
+        self.turnsourceaccountid = turnsourceaccountid
+        self.turnsourcethreadid = turnsourcethreadid
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1917,6 +1929,10 @@ public struct NodeInvokeParams: Codable, Sendable {
         case params
         case timeoutms = "timeoutMs"
         case idempotencykey = "idempotencyKey"
+        case turnsourcechannel = "turnSourceChannel"
+        case turnsourceto = "turnSourceTo"
+        case turnsourceaccountid = "turnSourceAccountId"
+        case turnsourcethreadid = "turnSourceThreadId"
     }
 }
 
