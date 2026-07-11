@@ -473,6 +473,73 @@ describe("hasConfiguredWebSearchCredential", () => {
     ).not.toHaveBeenCalled();
   });
 
+  it("honors bundled-discovery compat for allowlisted-out bundled providers", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "brave",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["brave"] },
+        },
+        {
+          id: "duckduckgo",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["duckduckgo"] },
+        },
+      ],
+    });
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValue(
+      [
+        {
+          id: "duckduckgo",
+          pluginId: "duckduckgo",
+          requiresCredential: false,
+        },
+      ],
+    );
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockClear();
+
+    const restrictiveCompatPlugins = {
+      allow: ["some-other-plugin"],
+      bundledDiscovery: "compat",
+    } as const;
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          plugins: restrictiveCompatPlugins,
+          tools: { web: { search: { provider: "duckduckgo" } } },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
+    expect(
+      publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+    ).toHaveBeenCalledWith({ onlyPluginIds: ["duckduckgo"] });
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          plugins: {
+            ...restrictiveCompatPlugins,
+            entries: {
+              brave: {
+                config: {
+                  webSearch: {
+                    apiKey: "brave-key",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
+  });
+
   it("does not count ambient search apiKey when every known provider is blocked", () => {
     manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
       plugins: [

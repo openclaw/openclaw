@@ -28,6 +28,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 type WebSearchCredentialPolicy = {
   allowPluginIds: ReadonlySet<string> | undefined;
+  allowlistBypassPluginIds: ReadonlySet<string>;
   denyPluginIds: ReadonlySet<string> | undefined;
   disabledPluginIds: ReadonlySet<string>;
   disabledProviderIds: ReadonlySet<string>;
@@ -131,13 +132,7 @@ function hasConfiguredPluginWebSearchCandidate(
     if (onlyPluginIds && !onlyPluginIds.has(normalizedPluginId)) {
       return false;
     }
-    if (policy?.allowPluginIds && !policy.allowPluginIds.has(normalizedPluginId)) {
-      return false;
-    }
-    if (
-      policy?.denyPluginIds?.has(normalizedPluginId) ||
-      policy?.disabledPluginIds.has(normalizedPluginId)
-    ) {
+    if (policy && isPluginBlockedByPolicy(policy, normalizedPluginId)) {
       return false;
     }
     const pluginConfig = isRecord(entry) ? entry.config : undefined;
@@ -212,10 +207,31 @@ function isPluginBlockedByPolicy(policy: WebSearchCredentialPolicy, pluginId: st
   if (policy.pluginsDisabled) {
     return true;
   }
-  if (policy.allowPluginIds && !policy.allowPluginIds.has(pluginId)) {
+  if (
+    policy.allowPluginIds &&
+    !policy.allowlistBypassPluginIds.has(pluginId) &&
+    !policy.allowPluginIds.has(pluginId)
+  ) {
     return true;
   }
   return policy.denyPluginIds?.has(pluginId) === true || policy.disabledPluginIds.has(pluginId);
+}
+
+function createAllowlistBypassPluginIdSet(
+  config: OpenClawConfig,
+  records: readonly PluginManifestRecord[],
+): ReadonlySet<string> {
+  if (config.plugins?.bundledDiscovery !== "compat") {
+    return new Set();
+  }
+  return new Set(
+    records
+      .filter(
+        (plugin) =>
+          plugin.origin === "bundled" && (plugin.contracts?.webSearchProviders?.length ?? 0) > 0,
+      )
+      .map((plugin) => plugin.id),
+  );
 }
 
 function createWebSearchCredentialPolicy(
@@ -224,6 +240,7 @@ function createWebSearchCredentialPolicy(
 ): WebSearchCredentialPolicy {
   const policy = {
     allowPluginIds: createNormalizedPluginIdSet(config.plugins?.allow),
+    allowlistBypassPluginIds: createAllowlistBypassPluginIdSet(config, records),
     denyPluginIds: createNormalizedPluginIdSet(config.plugins?.deny),
     disabledPluginIds: createDisabledPluginIdSet(config.plugins?.entries),
     disabledProviderIds: new Set<string>(),
