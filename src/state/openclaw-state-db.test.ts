@@ -843,6 +843,41 @@ describe("openclaw state database", () => {
     expect(credentialTable?.name).toBe("worker_environment_credentials");
   });
 
+  it("adds worker transcript commit tables to existing state databases", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      DROP TABLE worker_transcript_commits;
+      DROP TABLE worker_transcript_commit_heads;
+    `);
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const tables = reopened.db
+      .prepare(
+        `SELECT name FROM sqlite_master
+          WHERE type = 'table' AND name IN (
+            'worker_transcript_commit_heads',
+            'worker_transcript_commits'
+          )
+          ORDER BY name`,
+      )
+      .all() as Array<{ name?: string }>;
+    expect(tables.map((table) => table.name)).toEqual([
+      "worker_transcript_commit_heads",
+      "worker_transcript_commits",
+    ]);
+  });
+
   it("migrates requester and executor attribution for existing cross-agent tasks", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({
