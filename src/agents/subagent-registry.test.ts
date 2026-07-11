@@ -5200,6 +5200,87 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
+  it("finalizes a subagent as timed out once its deadline passes with no live run context", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    const startedAt = now - 60_000;
+    const runId = "run-sweep-finalize-timeout";
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: startedAt,
+        status: "running",
+      },
+    });
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "explicit timeout with no live context",
+      cleanup: "keep",
+      createdAt: startedAt,
+      startedAt,
+      runTimeoutSeconds: 5,
+      execution: { status: "running" },
+    });
+
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1));
+    const announceParams = expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "swept finalize timeout"),
+      { childRunId: runId },
+      "swept finalize timeout",
+    );
+    expectRecordFields(
+      announceParams.outcome,
+      { status: "timeout" },
+      "swept finalize timeout outcome",
+    );
+  });
+
+  it("honors a persisted session completion instead of forcing a timeout when both race", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    const startedAt = now - 60_000;
+    const persistedEndedAt = startedAt + 2_000;
+    const runId = "run-sweep-timeout-race-completion";
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: persistedEndedAt,
+        status: "done",
+        startedAt,
+        endedAt: persistedEndedAt,
+      },
+    });
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "late persisted completion beats synthetic timeout",
+      cleanup: "keep",
+      createdAt: startedAt,
+      startedAt,
+      runTimeoutSeconds: 5,
+      execution: { status: "running" },
+    });
+
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1));
+    const announceParams = expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "swept timeout race completion"),
+      { childRunId: runId },
+      "swept timeout race completion",
+    );
+    expectRecordFields(
+      announceParams.outcome,
+      { status: "ok", endedAt: persistedEndedAt },
+      "swept timeout race completion outcome",
+    );
+  });
+
   it("suspends retry-budgeted successful keep-mode completion deliveries during resume", async () => {
     mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
       runs: Map<string, unknown>;

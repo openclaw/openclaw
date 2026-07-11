@@ -1197,10 +1197,13 @@ async function sweepSubagentRuns() {
       const deliveryHealth = classifyHealthForSweep({ run: entry, now });
       // Subagent health actions consumed by the sweeper are intentionally narrow:
       // - retry failed or stale terminal delivery through the existing resume path;
-      // - resume stale keep-mode cleanup that has no archive/delete owner.
-      // Higher-risk actions remain observational here: timeouts can race with
-      // persisted session completion, orphan recovery has its own scheduler, and
-      // cancellation reconciliation owns a bounded provider/task evidence window.
+      // - resume stale keep-mode cleanup that has no archive/delete owner;
+      // - finalize an explicit run-timeout deadline, but only once the live run
+      //   context is gone (a still-connected child may legitimately finish late)
+      //   and only after checking for a persisted completion that already arrived.
+      // Higher-risk actions remain observational here: orphan recovery has its own
+      // scheduler, and cancellation reconciliation owns a bounded provider/task
+      // evidence window.
       if (
         deliveryHealth.status === "delivery_failed" &&
         deliveryHealth.nextAction === "retry_delivery"
@@ -1223,6 +1226,46 @@ async function sweepSubagentRuns() {
         !entry.archiveAtMs
       ) {
         resumeSubagentRun(runId);
+        continue;
+      }
+      if (
+        typeof entry.endedAt !== "number" &&
+        deliveryHealth.status === "timed_out" &&
+        deliveryHealth.nextAction === "finalize_timeout" &&
+        !getAgentRunContext(runId)
+      ) {
+        const sessionEntry = loadSubagentSessionEntry({
+          childSessionKey: entry.childSessionKey,
+          storeCache,
+        });
+        const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
+          notBeforeMs: entry.startedAt ?? entry.createdAt,
+        });
+        await completeSubagentRunWithRecovery(
+          completion
+            ? {
+                runId,
+                startedAt: completion.startedAt,
+                endedAt: completion.endedAt,
+                outcome: completion.outcome,
+                reason: completion.reason,
+                sendFarewell: true,
+                accountId: entry.requesterOrigin?.accountId,
+                triggerCleanup: true,
+              }
+            : {
+                runId,
+                startedAt: entry.startedAt,
+                endedAt: now,
+                outcome: { status: "timeout" },
+                reason: SUBAGENT_ENDED_REASON_COMPLETE,
+                sendFarewell: true,
+                accountId: entry.requesterOrigin?.accountId,
+                triggerCleanup: true,
+              },
+          completion ? "sweeper-timeout-session-completion" : "sweeper-finalize-timeout",
+        );
+        mutated = true;
         continue;
       }
       if (typeof entry.endedAt !== "number") {
