@@ -152,12 +152,28 @@ function failAttachment(error: string): never {
   throw new Error(error);
 }
 
+// Renders a rejected, untrusted attachment name for diagnostics without
+// leaking raw control bytes: C0 (0x00-0x1f), DEL (0x7f), and C1 (0x80-0x9f)
+// are escaped to visible \xNN sequences (C1 includes the U+009B CSI
+// introducer), and the result is capped by code point so it stays single-line
+// and bounded even for adversarial names.
+function describeRejectedName(name: string): string {
+  const chars = Array.from(name, (char) => {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
+      return `\\x${code.toString(16).padStart(2, "0")}`;
+    }
+    return char;
+  });
+  return chars.length > 80 ? `${chars.slice(0, 80).join("")}...` : chars.join("");
+}
+
 function validateAttachmentName(name: string): void {
   if (!name) {
     failAttachment("attachments_invalid_name (empty)");
   }
   if (name.includes("/") || name.includes("\\") || name.includes("\u0000")) {
-    failAttachment(`attachments_invalid_name (${name})`);
+    failAttachment(`attachments_invalid_name (${describeRejectedName(name)})`);
   }
   if (
     Array.from(name).some((char) => {
@@ -165,10 +181,10 @@ function validateAttachmentName(name: string): void {
       return code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
     })
   ) {
-    failAttachment(`attachments_invalid_name (${name})`);
+    failAttachment(`attachments_invalid_name (${describeRejectedName(name)})`);
   }
   if (name === "." || name === ".." || name === ".manifest.json") {
-    failAttachment(`attachments_invalid_name (${name})`);
+    failAttachment(`attachments_invalid_name (${describeRejectedName(name)})`);
   }
 }
 
