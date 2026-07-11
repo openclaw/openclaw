@@ -585,6 +585,23 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain('if [[ "${1:-}" == "--root-terminate-uid" ]]');
   });
 
+  it("keeps the generated SUT launcher valid bash", () => {
+    const createSutStep = workflowStep(
+      workflowJob("run_telegram"),
+      "Create isolated Telegram SUT identity and launcher",
+    );
+    const launcherSource = createSutStep.run?.match(
+      /<<'LAUNCHER'\n([\s\S]*?)\nLAUNCHER(?:\n|$)/u,
+    )?.[1];
+    expect(launcherSource).toBeTruthy();
+
+    const result = spawnSync("bash", ["-n"], {
+      encoding: "utf8",
+      input: launcherSource,
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("arms the boundary preload only in the gateway main thread", () => {
     const createSutStep = workflowStep(
       workflowJob("run_telegram"),
