@@ -150,6 +150,45 @@ describe("managed Chrome graphics diagnostics", () => {
     });
   });
 
+  it("classifies Chrome's disabled renderer sentinel as software", () => {
+    const diagnostics = normalizeChromeGraphicsInfo({
+      gpu: {
+        devices: [
+          {
+            vendorId: 0,
+            deviceId: 0,
+            vendorString: "",
+            deviceString: "",
+            driverVendor: "",
+            driverVersion: "",
+          },
+        ],
+        auxAttributes: {
+          glRenderer: "Disabled",
+          glVendor: "Disabled",
+          glVersion: "Disabled",
+          glImplementationParts: "(gl=disabled,angle=none)",
+        },
+        featureStatus: {
+          "2d_canvas": "disabled_software",
+          gpu_compositing: "disabled_software",
+          rasterization: "disabled_software",
+          webgl: "disabled_off",
+        },
+        driverBugWorkarounds: [],
+        videoDecoding: [],
+        videoEncoding: [],
+      },
+    });
+
+    expect(diagnostics).toMatchObject({
+      status: "available",
+      acceleration: "software",
+      renderer: "Disabled",
+      backend: "(gl=disabled,angle=none)",
+    });
+  });
+
   it("prefers an observed hardware renderer over unrelated software feature states", () => {
     const diagnostics = normalizeChromeGraphicsInfo({
       gpu: {

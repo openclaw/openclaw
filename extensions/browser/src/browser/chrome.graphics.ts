@@ -147,7 +147,7 @@ function classifyGraphicsAcceleration(params: {
     .join(" ");
   const description = `${params.renderer ?? ""} ${deviceText}`.toLowerCase();
   if (
-    /(swiftshader|swangle|llvmpipe|softpipe|software rasterizer|swrast|microsoft basic render driver|d3d11-warp)/.test(
+    /(swiftshader|swangle|llvmpipe|softpipe|software rasterizer|swrast|microsoft basic render driver|d3d11-warp|\bdisabled\b)/.test(
       description,
     )
   ) {
