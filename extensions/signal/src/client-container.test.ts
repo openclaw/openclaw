@@ -380,6 +380,45 @@ describe("containerRestRequest", () => {
       timeoutSpy.mockRestore();
     }
   });
+
+  it("keeps REST request timeouts active while reading response bodies", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      mockFetch.mockImplementation(async (_url, init: RequestInit) => {
+        observedSignal = init.signal ?? undefined;
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            observedSignal?.addEventListener(
+              "abort",
+              () => controller.error(new DOMException("Signal REST body timed out", "AbortError")),
+              { once: true },
+            );
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+
+      const request = containerRestRequest("/v1/about", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetch).toHaveBeenCalledOnce();
+      expect(observedSignal?.aborted).toBe(false);
+      const requestRejection = expect(request).rejects.toThrow(/timed out|abort/i);
+
+      await vi.advanceTimersByTimeAsync(25);
+      await requestRejection;
+      expect(observedSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("containerSendMessage", () => {
