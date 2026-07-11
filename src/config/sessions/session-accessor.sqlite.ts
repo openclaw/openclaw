@@ -212,6 +212,13 @@ class SqliteSessionMutationConflictError extends Error {
   }
 }
 
+class SqliteTranscriptMutationConflictError extends Error {
+  constructor(sessionId: string) {
+    super(`SQLite transcript changed while preparing rewrite for ${sessionId}`);
+    this.name = "SqliteTranscriptMutationConflictError";
+  }
+}
+
 type ResolvedSqliteScope = {
   agentId: string;
   env?: NodeJS.ProcessEnv;
@@ -321,6 +328,15 @@ export type SqliteTranscriptWriteLockContext = {
   readEvents: () => Promise<TranscriptEvent[]>;
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
 };
+
+type SqliteTranscriptSnapshotRow = {
+  eventJson: string;
+  seq: number;
+};
+
+type SqliteTranscriptSnapshotState =
+  | { kind: "current"; rows: SqliteTranscriptSnapshotRow[] }
+  | { kind: "stale" };
 
 const SQLITE_SESSION_WRITER_QUEUES = new Map<string, StoreWriterQueue>();
 
@@ -1371,6 +1387,31 @@ function loadSqliteTranscriptEventsFromDatabase(
   return rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
 }
 
+function readSqliteTranscriptSnapshot(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): {
+  events: TranscriptEvent[];
+  rows: SqliteTranscriptSnapshotRow[];
+} {
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select(["event_json", "seq"])
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "asc"),
+  ).rows;
+  return {
+    events: rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent),
+    rows: rows.map((row) => ({
+      eventJson: row.event_json,
+      seq: normalizeSqliteNumber(row.seq),
+    })),
+  };
+}
+
 function sqliteTranscriptJsonlByteSize() {
   return /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */ sql<number>`COALESCE(SUM(LENGTH(CAST(event_json AS BLOB))), 0)
     + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes");
@@ -1953,18 +1994,62 @@ export async function withSqliteTranscriptWriteLock<T>(
   const resolved = resolveSqliteTranscriptScope(scope);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    let transcriptSnapshot: SqliteTranscriptSnapshotState | undefined;
     return await run({
-      readEvents: async () => loadSqliteTranscriptEventsFromDatabase(database, resolved.sessionId),
+      readEvents: async () => {
+        const snapshot = readSqliteTranscriptSnapshot(database, resolved.sessionId);
+        transcriptSnapshot = { kind: "current", rows: snapshot.rows };
+        return snapshot.events;
+      },
       replaceEvents: async (events) => {
+        if (transcriptSnapshot?.kind === "stale") {
+          throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
+        }
+        const expectedSnapshot = transcriptSnapshot?.rows;
+        let nextSnapshot: SqliteTranscriptSnapshotRow[] | undefined;
         runOpenClawAgentWriteTransaction((writeDatabase) => {
+          if (expectedSnapshot !== undefined) {
+            // The writer queue is process-local. Revalidate after BEGIN IMMEDIATE
+            // so a committed cross-process append cannot be deleted by the rewrite.
+            assertSqliteTranscriptSnapshotUnchanged(
+              writeDatabase,
+              resolved.sessionId,
+              expectedSnapshot,
+            );
+          }
           replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, events);
+          if (expectedSnapshot !== undefined) {
+            nextSnapshot = readSqliteTranscriptSnapshot(writeDatabase, resolved.sessionId).rows;
+          }
         }, toDatabaseOptions(resolved));
+        if (nextSnapshot !== undefined) {
+          transcriptSnapshot = { kind: "current", rows: nextSnapshot };
+        }
       },
       appendMessage: async (options) => {
         let result: TranscriptMessageAppendResult<unknown> | undefined;
+        const snapshotState = transcriptSnapshot;
+        let nextSnapshotState = snapshotState;
         runOpenClawAgentWriteTransaction((writeDatabase) => {
+          const snapshotStillCurrent =
+            snapshotState?.kind === "current"
+              ? isSqliteTranscriptSnapshotUnchanged(
+                  writeDatabase,
+                  resolved.sessionId,
+                  snapshotState.rows,
+                )
+              : false;
           result = appendSqliteTranscriptMessageInTransaction(writeDatabase, resolved, options);
+          if (snapshotState?.kind === "current") {
+            nextSnapshotState = snapshotStillCurrent
+              ? {
+                  kind: "current",
+                  rows: readSqliteTranscriptSnapshot(writeDatabase, resolved.sessionId).rows,
+                }
+              : { kind: "stale" };
+          }
         }, toDatabaseOptions(resolved));
+        transcriptSnapshot = nextSnapshotState;
         return result as TranscriptMessageAppendResult<typeof options.message> | undefined;
       },
     });
@@ -1984,6 +2069,31 @@ export async function withSqliteTranscriptWriteTransaction<T>(
       { operationLabel: "session.transcript.batch" },
     ),
   );
+}
+
+function isSqliteTranscriptSnapshotUnchanged(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  expected: readonly SqliteTranscriptSnapshotRow[],
+): boolean {
+  const current = readSqliteTranscriptSnapshot(database, sessionId).rows;
+  return (
+    current.length === expected.length &&
+    current.every(
+      (row, index) =>
+        row.seq === expected[index]?.seq && row.eventJson === expected[index]?.eventJson,
+    )
+  );
+}
+
+function assertSqliteTranscriptSnapshotUnchanged(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  expected: readonly SqliteTranscriptSnapshotRow[],
+): void {
+  if (!isSqliteTranscriptSnapshotUnchanged(database, sessionId, expected)) {
+    throw new SqliteTranscriptMutationConflictError(sessionId);
+  }
 }
 
 function appendSqliteTranscriptMessageInTransaction<TMessage>(
