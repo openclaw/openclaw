@@ -27,9 +27,9 @@ function buildDeps(response: Response): Parameters<typeof fetchVoyageBatchStatus
   return {
     now: () => 0,
     sleep: async () => {},
-    postJsonWithRetry: (async () => {
+    postJsonWithRetry: async () => {
       throw new Error("postJsonWithRetry should not be called in these tests");
-    }) as never,
+    },
     uploadBatchJsonlFile: (async () => {
       throw new Error("uploadBatchJsonlFile should not be called in these tests");
     }) as never,

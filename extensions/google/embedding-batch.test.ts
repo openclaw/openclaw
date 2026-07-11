@@ -298,7 +298,8 @@ describe("Google embedding-batch bounded JSON reads", () => {
     const server = createServer((request, response) => {
       void (async () => {
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
-        authHeaders.push(request.headers["x-goog-api-key"]);
+        const apiKey = request.headers["x-goog-api-key"];
+        authHeaders.push(Array.isArray(apiKey) ? apiKey.join(", ") : apiKey);
         const respondJson = (body: unknown) => {
           response.writeHead(200, { "content-type": "application/json" });
           response.end(JSON.stringify(body));

@@ -54,7 +54,7 @@ const VOYAGE_BATCH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 type VoyageBatchDeps = {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
-  postJsonWithRetry: typeof postJsonWithRetry;
+  postJsonWithRetry: typeof postJsonWithRetry<VoyageBatchStatus>;
   uploadBatchJsonlFile: typeof uploadBatchJsonlFile;
   withRemoteHttpResponse: typeof withRemoteHttpResponse;
 };
@@ -104,7 +104,7 @@ async function submitVoyageBatch(params: {
   });
 
   // 2. Create batch job using Voyage Batches API
-  return await params.deps.postJsonWithRetry<VoyageBatchStatus>({
+  return await params.deps.postJsonWithRetry({
     url: `${baseUrl}/batches`,
     headers: buildBatchHeaders(params.client, { json: true }),
     ssrfPolicy: params.client.ssrfPolicy,
