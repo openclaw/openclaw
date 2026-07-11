@@ -60,7 +60,7 @@ describe("resolveToolTitleRequest", () => {
       "serialized object args",
       "mcp__linear__create_issue",
       { value: `${"a".repeat(1_989)}😀tail` },
-      `${'{"value":"'}${"a".repeat(1_989)}`,
+      '{"value":"' + "a".repeat(1_989),
     ],
   ])("keeps bounded %s on a valid UTF-16 boundary", (_label, name, args, expected) => {
     expect(resolveToolTitleRequest(name, args)?.input).toBe(expected);
