@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { estimateStringChars } from "../../utils/cjk-chars.js";
 import { resolveAgentContextLimits } from "../agent-scope.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
@@ -192,11 +193,26 @@ export function truncateToolResultText(
     minKeepChars: options.minKeepChars ?? MIN_KEEP_CHARS,
     suffixFactory,
   });
-  if (text.length <= maxChars) {
+  // Use CJK-aware estimate so the early-return check correctly identifies
+  // CJK-heavy text that exceeds the intended token budget despite having a
+  // small raw character count.
+  // For pure ASCII/Latin text (estimated === text.length), no adjustment needed.
+  const estimatedLength = estimateStringChars(text);
+  if (estimatedLength <= maxChars) {
     return text;
   }
-  const defaultSuffix = suffixFactory(Math.max(1, text.length - maxChars));
+  const defaultSuffix = suffixFactory(Math.max(1, estimatedLength - maxChars));
   const budget = Math.max(minKeepChars, maxChars - defaultSuffix.length);
+
+  // Scale the cut point by the CJK density ratio so that CJK-heavy text
+  // receives a proportionally smaller raw char budget (CJK chars average
+  // ~1 token/char while Latin averages ~1 token/4 chars).
+  const densityAdjustedCut = (rawCut: number) => {
+    if (estimatedLength <= text.length) {
+      return rawCut;
+    }
+    return Math.max(minKeepChars, Math.floor((rawCut * maxChars) / estimatedLength));
+  };
 
   // If tail looks important, split budget between head and tail
   if (hasImportantTail(text) && budget > minKeepChars * 2) {
@@ -204,16 +220,18 @@ export function truncateToolResultText(
     const headBudget = budget - tailBudget - MIDDLE_OMISSION_MARKER.length;
 
     if (headBudget > minKeepChars) {
-      // Find clean cut points at newline boundaries
-      let headCut = headBudget;
-      const headNewline = text.lastIndexOf("\n", headBudget);
-      if (headNewline > headBudget * 0.8) {
+      // Find clean cut points at newline boundaries, adjusted for CJK density
+      const adjustedHeadBudget = densityAdjustedCut(headBudget);
+      let headCut = adjustedHeadBudget;
+      const headNewline = text.lastIndexOf("\n", adjustedHeadBudget);
+      if (headNewline > adjustedHeadBudget * 0.8) {
         headCut = headNewline;
       }
 
-      let tailStart = text.length - tailBudget;
+      const adjustedTailBudget = densityAdjustedCut(tailBudget);
+      let tailStart = text.length - adjustedTailBudget;
       const tailNewline = text.indexOf("\n", tailStart);
-      if (tailNewline !== -1 && tailNewline < tailStart + tailBudget * 0.2) {
+      if (tailNewline !== -1 && tailNewline < tailStart + adjustedTailBudget * 0.2) {
         tailStart = tailNewline + 1;
       }
 
@@ -228,10 +246,11 @@ export function truncateToolResultText(
     }
   }
 
-  // Default: keep the beginning
-  let cutPoint = budget;
-  const lastNewline = text.lastIndexOf("\n", budget);
-  if (lastNewline > budget * 0.8) {
+  // Default: keep the beginning, with CJK-density-adjusted cut point
+  const adjustedBudget = densityAdjustedCut(budget);
+  let cutPoint = adjustedBudget;
+  const lastNewline = text.lastIndexOf("\n", adjustedBudget);
+  if (lastNewline > adjustedBudget * 0.8) {
     cutPoint = lastNewline;
   }
   const keptText = sliceUtf16Safe(text, 0, cutPoint);
@@ -339,7 +358,11 @@ export function getToolResultTextLength(msg: AgentMessage): number {
     if (isToolResultTextBlock(block)) {
       const text = block.text;
       if (typeof text === "string") {
-        totalLength += text.length;
+        // Use CJK-aware estimate so that non-Latin text (CJK, Hangul, etc.)
+        // is weighted correctly against the ~4 chars/token budget derived from
+        // calculateMaxToolResultChars. Without this, CJK-heavy tool results
+        // can overshoot their intended token budget by up to 4x.
+        totalLength += estimateStringChars(text);
       }
     }
   }
@@ -381,10 +404,12 @@ export function truncateToolResultMessage(
     if (typeof textBlock.text !== "string") {
       return block;
     }
-    // Proportional budget for this block
-    const blockShare = textBlock.text.length / totalTextChars;
+    // Proportional budget for this block, using CJK-aware character counts
+    // so Latin and CJK blocks receive fair shares of the available budget.
+    const blockEstimatedChars = estimateStringChars(textBlock.text);
+    const blockShare = blockEstimatedChars / totalTextChars;
     const defaultSuffix = suffixFactory(
-      Math.max(1, textBlock.text.length - Math.floor(maxChars * blockShare)),
+      Math.max(1, blockEstimatedChars - Math.floor(maxChars * blockShare)),
     );
     const proportionalBudget = Math.floor(maxChars * blockShare);
     const blockBudget = Math.max(
