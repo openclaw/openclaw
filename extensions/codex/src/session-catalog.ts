@@ -74,7 +74,10 @@ export const CODEX_SESSION_ARCHIVE_METHOD = "codex.sessions.archive";
 const CODEX_APP_SERVER_THREADS_CAPABILITY = "codex-app-server-threads";
 const DEFAULT_PAGE_LIMIT = 50;
 export const CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT = 100;
-const NODE_INVOKE_TIMEOUT_MS = 20_000;
+// A node may need a cold Codex state scan before returning a large catalog page.
+// Keep this above the Mac node's native 60-second deadline so its specific
+// timeout wins instead of the less useful generic node.invoke timeout.
+const NODE_INVOKE_TIMEOUT_MS = 65_000;
 const MAX_SEARCH_LENGTH = 500;
 const MAX_CURSOR_LENGTH = 4096;
 const MAX_CURSOR_COUNT = 100;
