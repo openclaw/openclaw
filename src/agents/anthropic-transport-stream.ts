@@ -44,6 +44,7 @@ import {
   describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
   extractToolResultText,
+  hasInlineMediaData,
 } from "@openclaw/ai/internal/shared";
 /**
  * Native Anthropic Messages streaming transport.
@@ -369,7 +370,7 @@ function convertContentBlocks(content: readonly unknown[]) {
       blocks.push({ type: "text", text: sanitizeTransportPayloadText(blockText) });
       hasTextBlock = true;
     }
-    if (record.type !== "image") {
+    if (record.type !== "image" || !hasInlineMediaData(record)) {
       continue;
     }
     blocks.push({

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  hasInlineMediaData,
+} from "./tool-result-text.js";
 
 describe("extractToolResultText", () => {
   it("keeps media-only blocks out of provider replay text", () => {
@@ -157,5 +161,19 @@ describe("describeToolResultMediaPlaceholder", () => {
     expect(
       describeToolResultMediaPlaceholder([{ type: "text", text: "hello", mimeType: "image/png" }]),
     ).toBeUndefined();
+  });
+});
+
+describe("hasInlineMediaData", () => {
+  it("returns true for blocks with non-empty data", () => {
+    expect(hasInlineMediaData({ type: "image", data: "img", mimeType: "image/png" })).toBe(true);
+  });
+
+  it("returns false for blocks without data", () => {
+    expect(hasInlineMediaData({ type: "image", mimeType: "image/png" })).toBe(false);
+  });
+
+  it("returns false for blocks with empty data", () => {
+    expect(hasInlineMediaData({ type: "image", data: "", mimeType: "image/png" })).toBe(false);
   });
 });

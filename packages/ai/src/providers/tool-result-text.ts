@@ -65,6 +65,16 @@ function hasMediaPayload(block: unknown): boolean {
   return false;
 }
 
+/**
+ * True when a canonical media block carries inline base64 `data` that provider
+ * converters can embed directly. Converters must not emit a native media part
+ * from a block that fails this check — an empty payload produces an invalid
+ * part the provider API rejects.
+ */
+export function hasInlineMediaData(block: unknown): boolean {
+  return isRecord(block) && isNonEmptyString(block.data);
+}
+
 function readMimeType(value: unknown): string | undefined {
   if (!isRecord(value)) {
     return undefined;

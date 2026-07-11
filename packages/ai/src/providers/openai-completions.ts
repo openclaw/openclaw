@@ -61,7 +61,11 @@ import {
   type OpenAIToolProjection,
 } from "./openai-tool-projection.js";
 import { buildBaseOptions } from "./simple-options.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  hasInlineMediaData,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -98,7 +102,7 @@ function isToolCallBlock(block: { type: string }): block is ToolCall {
 }
 
 function isImageContentBlock(block: { type: string }): block is ImageContent {
-  return block.type === "image";
+  return block.type === "image" && hasInlineMediaData(block);
 }
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";

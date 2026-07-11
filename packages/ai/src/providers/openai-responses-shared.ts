@@ -58,7 +58,11 @@ import {
   resolveResponsesMessageSnapshotCollapse,
 } from "./openai-responses-stream-compat.js";
 import { convertResponsesToolPayload, convertResponsesTools } from "./openai-responses-tools.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  hasInlineMediaData,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 // =============================================================================
@@ -464,7 +468,7 @@ export function convertResponsesMessages<TApi extends Api>(
         }
 
         for (const block of msg.content) {
-          if (block.type === "image") {
+          if (block.type === "image" && hasInlineMediaData(block)) {
             contentParts.push({
               type: "input_image",
               detail: "auto",

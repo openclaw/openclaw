@@ -44,6 +44,7 @@ import {
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
+  hasInlineMediaData,
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -1324,7 +1325,7 @@ function convertResponsesMessages(
                     ? [{ type: "input_text", text: mediaPlaceholder }]
                     : []),
                 ...msg.content
-                  .filter((item) => item.type === "image")
+                  .filter((item) => item.type === "image" && hasInlineMediaData(item))
                   .map((item) => ({
                     type: "input_image",
                     detail: "auto",

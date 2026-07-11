@@ -89,6 +89,7 @@ import {
   describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
   extractToolResultText,
+  hasInlineMediaData,
 } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -201,7 +202,7 @@ function convertContentBlocks(
       blocks.push({ type: "text" as const, text: sanitizeSurrogates(blockText) });
       hasTextBlock = true;
     }
-    if (record.type !== "image") {
+    if (record.type !== "image" || !hasInlineMediaData(record)) {
       continue;
     }
     blocks.push({
