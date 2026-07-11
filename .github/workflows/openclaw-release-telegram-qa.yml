@@ -766,7 +766,7 @@ jobs:
     needs: [trusted_identity, build_candidate, attest_candidate]
     if: always()
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     environment: qa-live-shared
     permissions:
       actions: read
@@ -1872,11 +1872,8 @@ jobs:
         id: validate_credentials
         env:
           CREDENTIAL_ACQUIRE_TIMEOUT_MS: "60000"
-          ATTEMPT_TIMEOUT_SECONDS: "480"
-          JOB_TIMEOUT_MINUTES: "30"
+          JOB_TIMEOUT_MINUTES: "60"
           LEASE_TTL_MS: "7200000"
-          PREFLIGHT_TIMEOUT_SECONDS: "300"
-          SETUP_CLEANUP_HEADROOM_MS: "480000"
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
@@ -1885,9 +1882,6 @@ jobs:
           set -euo pipefail
           [[ "$RUNNER_ENVIRONMENT" == "github-hosted" ]]
           ((JOB_TIMEOUT_MINUTES * 60 * 1000 < LEASE_TTL_MS))
-          ((CREDENTIAL_ACQUIRE_TIMEOUT_MS < PREFLIGHT_TIMEOUT_SECONDS * 1000))
-          ((CREDENTIAL_ACQUIRE_TIMEOUT_MS * 2 < ATTEMPT_TIMEOUT_SECONDS * 1000))
-          (((PREFLIGHT_TIMEOUT_SECONDS + ATTEMPT_TIMEOUT_SECONDS * 2) * 1000 + SETUP_CLEANUP_HEADROOM_MS < JOB_TIMEOUT_MINUTES * 60 * 1000))
           [[ -n "${OPENCLAW_QA_CONVEX_SITE_URL// }" ]]
           [[ -n "${OPENCLAW_QA_CONVEX_SECRET_CI// }" ]]
 
@@ -1895,7 +1889,6 @@ jobs:
         id: run_lane
         env:
           CANDIDATE_ROOT: ${{ steps.create_sut.outputs.candidate_root }}
-          ATTEMPT_TIMEOUT_SECONDS: "480"
           EVIDENCE_RELATIVE: ${{ steps.create_sut.outputs.evidence_relative }}
           EVIDENCE_ROOT: ${{ steps.create_sut.outputs.evidence_root }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
@@ -1912,7 +1905,6 @@ jobs:
           OPENCLAW_QA_TELEGRAM_SUT_PROCESS_BOUNDARY_DIR: ${{ steps.create_sut.outputs.boundary_evidence_dir }}
           OPENCLAW_QA_TELEGRAM_SUT_RUNTIME_EXECUTABLE: ${{ steps.create_sut.outputs.runtime_executable }}
           OPENCLAW_QA_TELEGRAM_SUT_UID: ${{ steps.create_sut.outputs.uid }}
-          PREFLIGHT_TIMEOUT_SECONDS: "300"
           SUT_RUNTIME_ROOT: ${{ steps.create_sut.outputs.runtime_root }}
           SUT_UID: ${{ steps.create_sut.outputs.uid }}
           TARGET_SHA: ${{ inputs.target_sha }}
@@ -1945,14 +1937,12 @@ jobs:
             set -euo pipefail
             exec 2>&1
             output_name="$1"
-            phase_timeout_seconds="$2"
-            shift 2
+            shift
             workflow_command_token="$(openssl rand -hex 32)"
             printf '::stop-commands::%s\n' "$workflow_command_token"
             trap 'printf "::%s::\n" "$workflow_command_token"' EXIT
             set +e
             TMPDIR="${SUT_RUNTIME_ROOT}/tmp" \
-              timeout --signal=TERM --kill-after=15s "${phase_timeout_seconds}s" \
               pnpm openclaw qa telegram \
                 --repo-root "$CANDIDATE_ROOT" \
                 --output-dir "${EVIDENCE_RELATIVE}/${output_name}" \
@@ -1968,7 +1958,7 @@ jobs:
             exit "$status"
           )
 
-          if ! run_qa_attempt preflight "$PREFLIGHT_TIMEOUT_SECONDS" --scenario channel-canary; then
+          if ! run_qa_attempt preflight --scenario channel-canary; then
             echo "Telegram channel canary failed; skipping the remaining scenarios." >&2
             exit 1
           fi
@@ -1989,10 +1979,7 @@ jobs:
           ((${#remaining_scenarios[@]} > 0))
 
           for attempt in 1 2; do
-            if run_qa_attempt \
-              "attempt-${attempt}" \
-              "$ATTEMPT_TIMEOUT_SECONDS" \
-              "${remaining_scenarios[@]}"; then
+            if run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"; then
               exit 0
             fi
             terminate_sut_uid

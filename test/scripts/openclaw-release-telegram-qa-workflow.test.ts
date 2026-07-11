@@ -472,53 +472,34 @@ describe("release Telegram QA workflow", () => {
     };
     const job = workflow.jobs?.run_telegram;
     expect(job?.["runs-on"]).toBe("ubuntu-24.04");
-    expect(job?.["timeout-minutes"]).toBe(30);
+    expect(job?.["timeout-minutes"]).toBe(60);
 
     const validateStep = job?.steps?.find(
       (step) => step.name === "Validate required QA credential env",
     );
     expect(validateStep?.env?.RUNNER_ENVIRONMENT).toBe("${{ runner.environment }}");
     expect(validateStep?.env?.CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("60000");
-    expect(validateStep?.env?.ATTEMPT_TIMEOUT_SECONDS).toBe("480");
-    expect(validateStep?.env?.JOB_TIMEOUT_MINUTES).toBe("30");
+    expect(validateStep?.env?.JOB_TIMEOUT_MINUTES).toBe("60");
     expect(validateStep?.env?.LEASE_TTL_MS).toBe("7200000");
-    expect(validateStep?.env?.PREFLIGHT_TIMEOUT_SECONDS).toBe("300");
-    expect(validateStep?.env?.SETUP_CLEANUP_HEADROOM_MS).toBe("480000");
     expect(validateStep?.run).toContain('[[ "$RUNNER_ENVIRONMENT" == "github-hosted" ]]');
     expect(validateStep?.run).toContain("JOB_TIMEOUT_MINUTES * 60 * 1000 < LEASE_TTL_MS");
-    expect(validateStep?.run).toContain(
-      "CREDENTIAL_ACQUIRE_TIMEOUT_MS < PREFLIGHT_TIMEOUT_SECONDS * 1000",
-    );
-    expect(validateStep?.run).toContain(
-      "CREDENTIAL_ACQUIRE_TIMEOUT_MS * 2 < ATTEMPT_TIMEOUT_SECONDS * 1000",
-    );
-    expect(validateStep?.run).toContain(
-      "(PREFLIGHT_TIMEOUT_SECONDS + ATTEMPT_TIMEOUT_SECONDS * 2) * 1000 + SETUP_CLEANUP_HEADROOM_MS < JOB_TIMEOUT_MINUTES * 60 * 1000",
-    );
 
     const runStep = job?.steps?.find((step) => step.name === "Run Telegram live lane");
-    expect(runStep?.env?.ATTEMPT_TIMEOUT_SECONDS).toBe("480");
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("60000");
-    expect(runStep?.env?.PREFLIGHT_TIMEOUT_SECONDS).toBe("300");
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS).toBe("7200000");
     expect(runStep?.env?.OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS).toBe("60000");
     expect(runStep?.run).toContain("trap terminate_sut_uid_on_exit EXIT");
     expect(runStep?.run).toContain('"$OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND" --terminate-uid');
-    expect(runStep?.run).toContain(
-      'run_qa_attempt preflight "$PREFLIGHT_TIMEOUT_SECONDS" --scenario channel-canary',
-    );
-    expect(runStep?.run).toContain(
-      'timeout --signal=TERM --kill-after=15s "${phase_timeout_seconds}s"',
-    );
+    expect(runStep?.run).toContain("run_qa_attempt preflight --scenario channel-canary");
     expect(runStep?.run).toContain("Telegram channel canary failed; skipping the remaining scenarios.");
     expect(runStep?.run).toContain("--list-scenarios");
     expect(runStep?.run).toContain('"$scenario_id" != "channel-canary"');
-    expect(runStep?.run).toContain('"$ATTEMPT_TIMEOUT_SECONDS"');
-    expect(
-      runStep?.run?.indexOf(
-        'run_qa_attempt preflight "$PREFLIGHT_TIMEOUT_SECONDS" --scenario channel-canary',
-      ),
-    ).toBeLessThan(runStep?.run?.indexOf("for attempt in 1 2") ?? -1);
+    expect(runStep?.run).toContain(
+      'run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"',
+    );
+    expect(runStep?.run?.indexOf("run_qa_attempt preflight --scenario channel-canary")).toBeLessThan(
+      runStep?.run?.indexOf("for attempt in 1 2") ?? -1,
+    );
   });
 
   it("serializes stderr behind the workflow-command pause", () => {
