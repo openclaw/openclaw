@@ -472,13 +472,19 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("keeps oversized auto mode plain final text on the chunked message path", async () => {
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
-    runtime.channel.text.chunkTextWithMode.mockReturnValue(["0123456789", "abcdefghij"]);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["0123456789", "abcdefghij"]);
 
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "0123456789abcdefghij" }, { kind: "final" });
     await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(0);
+    expect(runtime.channel.text.chunkMarkdownTextWithMode).toHaveBeenCalledWith(
+      "0123456789abcdefghij",
+      10,
+      "line",
+    );
+    expect(runtime.channel.text.chunkTextWithMode).not.toHaveBeenCalled();
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
     expectMockArgFields(sendMessageFeishuMock, "first message send params", {
       text: "0123456789",
@@ -509,17 +515,27 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(20);
     runtime.channel.text.resolveChunkMode.mockReturnValue("length");
     const text = "Intro\n```ts\nconst a = 1;\nconst b = 2;\n```\nAfter";
-    const firstChunk = "Intro\n```ts\nconst a = 1;";
-    const secondChunk = "\nconst b = 2;\n```\nAfter";
-    runtime.channel.text.chunkTextWithMode.mockReturnValue([firstChunk, secondChunk]);
+    const firstChunk = "Intro";
+    const secondChunk = "```ts\nconst a = 1;\nconst b = 2;\n```";
+    const thirdChunk = "After";
+    runtime.channel.text.chunkTextWithMode.mockReturnValue([
+      "Intro\n```ts\nconst a = 1;",
+      "\nconst b = 2;\n```\nAfter",
+    ]);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue([
+      firstChunk,
+      secondChunk,
+      thirdChunk,
+    ]);
 
     const { options } = createDispatcherHarness();
     await options.deliver({ text }, { kind: "final" });
     await options.onIdle?.();
 
     expect(runtime.channel.text.convertMarkdownTables).toHaveBeenCalledWith(text, "preserve");
-    expect(runtime.channel.text.chunkTextWithMode).toHaveBeenCalledWith(text, 20, "length");
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(runtime.channel.text.chunkMarkdownTextWithMode).toHaveBeenCalledWith(text, 20, "length");
+    expect(runtime.channel.text.chunkTextWithMode).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
     expectMockArgFields(sendMessageFeishuMock, "first fenced chunk", {
       text: firstChunk,
       preparedPostMarkdown: true,
@@ -532,6 +548,15 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         preparedPostMarkdown: true,
       },
       1,
+    );
+    expectMockArgFields(
+      sendMessageFeishuMock,
+      "third fenced chunk",
+      {
+        text: thirdChunk,
+        preparedPostMarkdown: true,
+      },
+      2,
     );
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
@@ -566,7 +591,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("discards partial streaming preview before oversized final text fallback", async () => {
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
-    runtime.channel.text.chunkTextWithMode.mockReturnValue(["final text", " overflow"]);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["final text", " overflow"]);
 
     const { result, options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
     result.replyOptions.onPartialReply?.({ text: "partial" });
@@ -727,7 +752,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     useNonStreamingBlockAccount();
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
-    runtime.channel.text.chunkTextWithMode.mockImplementation((text: string) =>
+    runtime.channel.text.chunkMarkdownTextWithMode.mockImplementation((text: string) =>
       text === "First paragraph." ? ["First ", "paragraph."] : [text],
     );
     const mentions = [{ openId: "ou_target", name: "Target User", key: "@_user_1" }];

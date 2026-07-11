@@ -501,12 +501,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       : materializeFeishuPostMarkdownLineBreaks(
           core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode),
         );
-    const chunkText = paramsLocal.useCard
-      ? core.channel.text.chunkMarkdownTextWithMode
-      : core.channel.text.chunkTextWithMode;
+    // Raw Feishu posts still receive prepared Markdown; keep fences/tables
+    // balanced inside each sent post instead of splitting them as plain text.
     const chunks = resolveTextChunksWithFallback(
       chunkSource,
-      chunkText(chunkSource, textChunkLimit, chunkMode),
+      core.channel.text.chunkMarkdownTextWithMode(chunkSource, textChunkLimit, chunkMode),
     );
     for (const [index, chunk] of chunks.entries()) {
       await paramsLocal.sendChunk({
