@@ -545,12 +545,7 @@ function defaultSleep(ms) {
   execFileSync("sleep", [String(ms / 1_000)]);
 }
 
-export function verifyGatewayReadiness(
-  runCommand,
-  checkout,
-  expectedSha,
-  sleep = defaultSleep,
-) {
+export function verifyGatewayReadiness(runCommand, checkout, expectedSha, sleep = defaultSleep) {
   let lastError;
   for (let attempt = 1; attempt <= GATEWAY_READINESS_ATTEMPTS; attempt += 1) {
     try {
