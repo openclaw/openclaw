@@ -503,6 +503,15 @@ describe("release Telegram QA workflow", () => {
 
   it("derives SUT-writable paths from the verified runtime root after sudo", () => {
     const source = readFileSync(WORKFLOW_PATH, "utf8");
+    expect(source).toContain("Telegram SUT launcher failed: stage=%s line=%s status=%s");
+    expect(source).toContain("launcher_stage=root-run-setup");
+    expect(source).toContain("launcher_stage=enter-mount-namespace");
+    expect(source).toContain("launcher_stage=mask-host-paths");
+    expect(source).toContain("launcher_stage=mount-proc");
+    expect(source).toContain("launcher_stage=write-identity");
+    expect(source).toMatch(/launcher_stage=enter-mount-namespace\n\s+\/usr\/bin\/unshare/u);
+    expect(source).not.toContain("exec /usr/bin/unshare");
+    expect(source).not.toContain("set -x");
     expect(source).toContain('temp_root="$(realpath -e "${OPENCLAW_QA_TEMP_ROOT:?}")"');
     expect(source).toContain('proc_stat="$(cat "/proc/${pid}/stat")"');
     expect(source).not.toContain('proc_stat="$(cat /proc/self/stat)"');
@@ -513,5 +522,25 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain('export HOME="${temp_root}/home"');
     expect(source).toContain('export XDG_CONFIG_HOME="${temp_root}/xdg-config"');
     expect(source).toContain('if [[ "${1:-}" == "--root-terminate-uid" ]]');
+  });
+
+  it("reports the namespace-entry stage when its supervised child fails", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+    const trapLine = source.match(/^\s+(trap 'exit_status=.*' ERR)$/mu)?.[1];
+    expect(trapLine).toBeTruthy();
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -Eeuo pipefail\nlauncher_stage=enter-mount-namespace\n${trapLine}\nbash -c 'exit 23'`,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(23);
+    expect(result.stderr).toMatch(
+      /Telegram SUT launcher failed: stage=enter-mount-namespace line=[0-9]+ status=23/u,
+    );
   });
 });
