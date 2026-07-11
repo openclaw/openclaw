@@ -257,6 +257,10 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       failFrame(1008, "credential-replaced");
       return;
     }
+    if (client && !admissionOpen) {
+      failFrame(1013, "gateway-unavailable");
+      return;
+    }
     if (rawDataByteLength(data) > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
       if (client) {
         failFrame(1009, "invalid-frame");
@@ -334,10 +338,6 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     queue = queue
       .then(async () => {
         if (disposed || params.isClosed()) {
-          return;
-        }
-        if (params.getClient()) {
-          await handleMessage(data, true);
           return;
         }
         const admission = tryBeginGatewayRootWorkAdmission();

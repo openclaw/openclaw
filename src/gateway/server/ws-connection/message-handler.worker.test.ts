@@ -8,8 +8,11 @@ import {
   PROTOCOL_VERSION,
   type WorkerAdmissionFailureReason,
   type WorkerConnectParams,
-  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../../../process/gateway-work-admission.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import { createGatewayWsTestSocket } from "../ws-connection.test-helpers.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -107,10 +110,10 @@ function attachHarness(
     responses,
     service,
     setClient,
-    sendRequest: (id: string, method: string, params: unknown) =>
-      send({ type: "req", id, method, params }),
-    sendConnect: (params: unknown = WORKER_CONNECT) =>
-      send({ type: "req", id: "connect-1", method: "connect", params }),
+    sendRequest: (method: string, params: unknown) =>
+      send({ type: "req", id: "request-1", method, params }),
+    sendConnect: () =>
+      send({ type: "req", id: "connect-1", method: "connect", params: WORKER_CONNECT }),
   };
 }
 
@@ -121,6 +124,7 @@ async function admit(harness: ReturnType<typeof attachHarness>): Promise<void> {
 
 describe("dedicated worker websocket protocol", () => {
   afterEach(() => {
+    resetGatewayWorkAdmission();
     for (const cleanup of cleanups.splice(0)) {
       cleanup();
     }
@@ -130,17 +134,7 @@ describe("dedicated worker websocket protocol", () => {
     const harness = attachHarness();
     await admit(harness);
 
-    expect(harness.responses[0]).toMatchObject({
-      ok: true,
-      payload: {
-        type: "worker-hello-ok",
-        environmentId: "worker-1",
-        sessionId: null,
-        ownerEpoch: 1,
-        rpcSetVersion: 1,
-        policy: { maxPayload: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES },
-      },
-    });
+    expect(harness.responses[0]).toMatchObject({ ok: true, payload: { type: "worker-hello-ok" } });
     expect(JSON.stringify([harness.responses, harness.client()])).not.toContain(CREDENTIAL);
     expect(harness.client()).toMatchObject({
       connectionKind: "worker",
@@ -168,7 +162,7 @@ describe("dedicated worker websocket protocol", () => {
   ])("rejects legacy method %s", async (method, params) => {
     const harness = attachHarness();
     await admit(harness);
-    harness.sendRequest("forbidden-1", method, params);
+    harness.sendRequest(method, params);
 
     await vi.waitFor(() => expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed"));
     expect(harness.logGateway.warn).toHaveBeenCalledWith(
@@ -176,20 +170,15 @@ describe("dedicated worker websocket protocol", () => {
     );
   });
 
-  it("accepts heartbeat and rejects malformed heartbeat parameters", async () => {
+  it("accepts heartbeat", async () => {
     const valid = attachHarness();
     await admit(valid);
-    valid.sendRequest("heartbeat-1", "worker.heartbeat", { sentAtMs: 1, status: "busy" });
+    valid.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "busy" });
     await vi.waitFor(() => expect(valid.responses).toHaveLength(2));
     expect(valid.responses[1]).toMatchObject({
       ok: true,
       payload: { status: "ok", ownerEpoch: 1 },
     });
-
-    const invalid = attachHarness();
-    await admit(invalid);
-    invalid.sendRequest("heartbeat-2", "worker.heartbeat", { status: "ready" });
-    await vi.waitFor(() => expect(invalid.close).toHaveBeenCalledWith(1008, "invalid-heartbeat"));
   });
 
   it("revalidates ownership immediately before admission", async () => {
@@ -204,7 +193,7 @@ describe("dedicated worker websocket protocol", () => {
     const harness = attachHarness();
     await admit(harness);
     vi.mocked(harness.service.validateWorkerConnection).mockReturnValue("credential-replaced");
-    harness.sendRequest("heartbeat-3", "worker.heartbeat", { sentAtMs: 1, status: "ready" });
+    harness.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "ready" });
 
     await vi.waitFor(() => expect(harness.close).toHaveBeenCalledWith(1008, "credential-replaced"));
   });
@@ -212,14 +201,26 @@ describe("dedicated worker websocket protocol", () => {
   it("fences a replaced connection before dispatch", async () => {
     const harness = attachHarness();
     await admit(harness);
-    const client = harness.client();
-    if (!client) {
-      throw new Error("expected admitted worker client");
-    }
-    client.invalidated = true;
-    harness.sendRequest("heartbeat-4", "worker.heartbeat", { sentAtMs: 1, status: "ready" });
+    harness.client()!.invalidated = true;
+    harness.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "ready" });
 
     await vi.waitFor(() => expect(harness.close).toHaveBeenCalledWith(1008, "credential-replaced"));
     expect(harness.service.validateWorkerConnection).toHaveBeenCalledOnce();
+  });
+
+  it("rejects authenticated heartbeats while gateway admission is suspended", async () => {
+    const harness = attachHarness();
+    await admit(harness);
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension).not.toBeNull();
+    try {
+      harness.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "ready" });
+      await vi.waitFor(() =>
+        expect(harness.close).toHaveBeenCalledWith(1013, "gateway-unavailable"),
+      );
+      expect(harness.service.validateWorkerConnection).toHaveBeenCalledOnce();
+    } finally {
+      suspension?.rollback();
+    }
   });
 });

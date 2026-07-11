@@ -1054,13 +1054,15 @@ describe("worker environment service", () => {
         throw new Error("provider temporarily unavailable");
       },
     });
-    let releaseTunnelStops: (() => void) | undefined;
-    const tunnelStopsPending = new Promise<void>((resolve) => {
-      releaseTunnelStops = resolve;
-    });
+    const failedTunnelStops = new Set<string>();
     const tunnelManager = {
       start: vi.fn(),
-      stop: vi.fn(async () => tunnelStopsPending),
+      stop: vi.fn(async (environmentId: string) => {
+        if (!failedTunnelStops.has(environmentId)) {
+          failedTunnelStops.add(environmentId);
+          throw new Error("tunnel stop interrupted");
+        }
+      }),
       stopAll: vi.fn(async () => {}),
       status: () => "connected" as const,
     } as unknown as WorkerTunnelManager;
@@ -1070,23 +1072,18 @@ describe("worker environment service", () => {
       throw new Error("fixture worker admission failed");
     }
 
-    const reconciliation = workerService.reconcileOnce();
-    try {
-      await vi.waitFor(() => expect(tunnelManager.stop).toHaveBeenCalled());
-      expect(store.get("worker-unknown")?.state).toBe("orphaned");
-      expect(workerService.validateWorkerConnection(admitted.identity)).toBe("credential-replaced");
-    } finally {
-      releaseTunnelStops?.();
-    }
-    await reconciliation;
+    await workerService.reconcileOnce();
 
-    expect(store.get("worker-unknown")).toMatchObject({
-      state: "orphaned",
-    });
+    expect(store.get("worker-unknown")?.state).toBe("draining");
+    expect(store.get("worker-destroyed-unknown")?.state).toBe("destroying");
+    expect(workerService.validateWorkerConnection(admitted.identity)).toBe("credential-replaced");
     expect(store.get("worker-transient")).toMatchObject({
       state: "ready",
       lastError: "provider temporarily unavailable",
     });
+    await workerService.reconcileOnce();
+    expect(tunnelManager.stop).toHaveBeenCalledTimes(4);
+    expect(store.get("worker-unknown")?.state).toBe("orphaned");
     expect(store.get("worker-destroyed-unknown")).toMatchObject({ state: "destroyed" });
   });
 

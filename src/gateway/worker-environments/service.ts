@@ -68,6 +68,7 @@ export class WorkerEnvironmentServiceError extends Error {
 
 const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) =>
   new WorkerEnvironmentServiceError(code, message);
+const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
 
 export type WorkerEnvironmentServiceOptions = {
   store: WorkerEnvironmentStore;
@@ -583,16 +584,24 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (!status) {
       return;
     }
-    const teardownExpected =
-      record.destroyRequestedAtMs !== null || inState(record, "draining", "destroying");
+    const teardownExpected = record.destroyRequestedAtMs !== null || record.state === "destroying";
     if (status === "destroyed" || (status === "unknown" && teardownExpected)) {
-      finishProvenDestroy(record);
+      const requested =
+        record.destroyRequestedAtMs === null
+          ? store.requestDestroy({ environmentId: record.environmentId, state: record.state })
+          : record;
+      const draining = beginDrain(requested);
       await tunnels?.stop(record.environmentId);
+      finishProvenDestroy(draining);
       return;
     }
     if (status === "unknown") {
-      move(record, "orphaned", { lastError: "Worker provider no longer recognizes the lease" });
+      const draining =
+        record.state === "draining"
+          ? record
+          : move(record, "draining", { lastError: ORPHANED_LEASE_ERROR });
       await tunnels?.stop(record.environmentId);
+      move(draining, "orphaned", { lastError: ORPHANED_LEASE_ERROR });
       return;
     }
     if (record.destroyRequestedAtMs !== null) {
@@ -601,6 +610,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
     if (record.state === "attached") {
       // Milestone 2 owns session draining; never replace a build beneath a live worker.
+      return;
+    }
+    if (record.state === "draining" && record.destroyRequestedAtMs === null) {
+      // Draining without destroy intent is durable provider-loss cleanup.
+      await tunnels?.stop(record.environmentId);
+      move(record, "orphaned", { lastError: record.lastError ?? ORPHANED_LEASE_ERROR });
       return;
     }
     if (inState(record, "bootstrapping", "ready", "idle")) {

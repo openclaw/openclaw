@@ -23,7 +23,8 @@ handshake time.
   the gateway closes or drops the frame. These events carry `surface`, byte
   sizes, limits, and a safe reason code, never message bodies, attachment
   contents, raw frame bytes, tokens, cookies, or secrets.
-  Frame shapes:
+
+Frame shapes:
 
 - Request: `{type:"req", id, method, params}`
 - Response: `{type:"res", id, ok, payload|error}`
@@ -171,11 +172,12 @@ go through normal pairing and scope-upgrade checks.
 Cloud workers use a dedicated loopback ingress through the gateway-owned,
 host-key-pinned SSH tunnel. It accepts only worker identity and never dispatches
 general auth, node events, operator RPCs, or plugin methods. A strict `connect`
-binds a hash-at-rest, short-lived credential to the environment, current
-bundle/version/features, owner epoch, RPC-set version, and one nullable session.
-Success returns minimal `worker-hello-ok`; feature negotiation is independent
-of the general protocol version. Frames stay under 64 KiB. Initially only
-`worker.heartbeat` is allowed, with ownership and expiry rechecked on each RPC.
+verifies a hash-at-rest, short-lived credential bound to the environment, bundle
+hash, owner epoch, RPC-set version, expiry, and one nullable session; it
+separately checks the current version and feature set. Success returns minimal
+`worker-hello-ok`; feature negotiation is independent of the general protocol
+version. Frames stay under 64 KiB. Initially only `worker.heartbeat` is allowed,
+with ownership and expiry rechecked on each RPC.
 
 ### Client capabilities
 

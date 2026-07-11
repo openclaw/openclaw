@@ -99,16 +99,7 @@ export const WorkerAdmissionFailureReasonSchema = Type.Union([
 ]);
 
 export const WorkerProtocolCloseReasonSchema = Type.Union([
-  Type.Literal("invalid-credential"),
-  Type.Literal("credential-expired"),
-  Type.Literal("environment-mismatch"),
-  Type.Literal("environment-unavailable"),
-  Type.Literal("bundle-mismatch"),
-  Type.Literal("version-mismatch"),
-  Type.Literal("session-mismatch"),
-  Type.Literal("owner-epoch-mismatch"),
-  Type.Literal("rpc-set-mismatch"),
-  Type.Literal("protocol-features-mismatch"),
+  WorkerAdmissionFailureReasonSchema,
   Type.Literal("invalid-handshake"),
   Type.Literal("protocol-mismatch"),
   Type.Literal("gateway-unavailable"),
