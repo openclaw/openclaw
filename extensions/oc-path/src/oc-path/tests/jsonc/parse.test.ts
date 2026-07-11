@@ -158,6 +158,17 @@ describe("parseJsonc — soft errors", () => {
     expect(ast.root).toBeNull();
   });
 
+  it("measures the input cap in UTF-8 bytes", () => {
+    const oversized = `"${"界".repeat(Math.floor(MAX_JSONC_INPUT_BYTES / 3) + 1)}"`;
+    expect(oversized.length).toBeLessThan(MAX_JSONC_INPUT_BYTES);
+
+    const { ast, diagnostics } = parseJsonc(oversized);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain(`got ${Buffer.byteLength(oversized, "utf8")}`);
+    expect(diagnostics[0]?.code).toBe("OC_JSONC_INPUT_TOO_LARGE");
+    expect(ast.root).toBeNull();
+  });
+
   it("accepts input up to the cap", () => {
     // Reasonable-shape JSON well within the cap parses normally.
     const { diagnostics, ast } = parseJsonc('{"key": "value"}');
