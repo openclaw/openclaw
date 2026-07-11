@@ -1367,16 +1367,8 @@ describe("telegram live qa runtime", () => {
   });
 
   it("keeps bounded telegram QA progress details on UTF-16 boundaries", () => {
-    // Regression: progress detail truncation used .slice(0, limit - 3),
-    // which can split an emoji surrogate pair and render as �.
-    // Use 236-code-unit prefix so that .slice(0, 237) keeps only the
-    // high surrogate — current main produces a malformed string here;
-    // truncateUtf16Safe backs up to 236 and returns a clean result.
     const prefix = "a".repeat(236);
-    const details = testing.formatTelegramQaProgressDetails(`${prefix}😀after`);
-
-    expect(details).toBe(`${prefix}...`);
-    expect(details).not.toContain("�");
-    expect(details.length).toBe(239);
+    expect(testing.formatTelegramQaProgressDetails(`${prefix}😀after`)).toBe(`${prefix}...`);
+    expect(testing.formatTelegramQaProgressDetails("a".repeat(241))).toBe(`${"a".repeat(237)}...`);
   });
 });
