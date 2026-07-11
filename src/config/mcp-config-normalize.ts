@@ -69,6 +69,10 @@ export function canonicalizeConfiguredMcpServer(
     next.clientKey = next.client_key;
     delete next.client_key;
   }
+  if (typeof next.disabled === "boolean" && typeof next.enabled !== "boolean") {
+    next.enabled = !next.disabled;
+    delete next.disabled;
+  }
   return next;
 }
 
@@ -80,6 +84,13 @@ export function normalizeConfiguredMcpServers(value: unknown): ConfigMcpServers 
   return Object.fromEntries(
     Object.entries(value)
       .filter(([, server]) => isRecord(server))
-      .map(([name, server]) => [name, { ...(server as Record<string, unknown>) }]),
+      .map(([name, server]) => {
+        const next = { ...(server as Record<string, unknown>) };
+        if (typeof next.disabled === "boolean" && typeof next.enabled !== "boolean") {
+          next.enabled = !next.disabled;
+          delete next.disabled;
+        }
+        return [name, next];
+      }),
   );
 }
