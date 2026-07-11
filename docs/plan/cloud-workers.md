@@ -75,9 +75,9 @@ Provider contract (plugin-implemented; no provider names or policy in core):
 type WorkerProvider = {
   id: string;
   provision(profile: WorkerProfile, opId: string): Promise<WorkerLease>; // → ssh host/port/user/key material
-  inspect(leaseId: string): Promise<LeaseStatus>; // adopt/health/orphan sweep
+  inspect(lease: { leaseId: string; profile: WorkerProfile }): Promise<LeaseStatus>; // adopt/health/orphan sweep
   renew?(leaseId: string): Promise<void>; // long-lived sessions vs provider TTLs
-  destroy(leaseId: string): Promise<void>; // idempotent, returns only on proof of teardown
+  destroy(lease: { leaseId: string; profile: WorkerProfile }): Promise<void>; // idempotent, returns only on proof of teardown
 };
 ```
 

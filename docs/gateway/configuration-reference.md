@@ -810,6 +810,8 @@ Unknown settings are rejected. Crabbox credentials and backend-specific account 
 - `lifetime.idleTimeoutMinutes`: positive integer minutes stored for later idle-reclamation policy.
 - `lifetime.maxLifetimeMinutes`: positive integer minutes stored for later lifecycle policy.
 
+Each durable environment record retains its validated provider settings snapshot for later inspection and destruction. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with their creation-time settings, provided the owning plugin remains available.
+
 Lifetime values are data only in the first cloud-worker release; automatic enforcement lands with later lifecycle work. Profile changes require a gateway restart.
 
 <Warning>
