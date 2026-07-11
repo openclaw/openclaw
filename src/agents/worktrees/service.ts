@@ -363,6 +363,8 @@ export class ManagedWorktreeService {
     }
     if (existing?.name === name && existing.removedAt === undefined) {
       if (await pathExists(existing.path)) {
+        // May return a record whose provisioning is still in flight (rows are visible from
+        // claim-time onward); callers already face that window via restore() and re-creates.
         return existing;
       }
       updateRegistryWorktree(this.env, existing.id, { removedAt: this.now() });
@@ -390,57 +392,21 @@ export class ManagedWorktreeService {
         existing === undefined &&
         (await findAdoptableOrphan(repository.repoRoot, worktreePath, branch))
       ) {
-        const adoptedBase = await resolveBase(repository.repoRoot, params.baseRef);
-        // Claim BEFORE provisioning: only the claim holder may provision or destroy this
-        // path; losers must never touch it. Claiming first means a concurrent create()
-        // cannot register the path during the (long) setup re-run and then have its live
-        // worktree force-removed by this call's failure cleanup, and the repo setup script
-        // never runs twice concurrently in the same path.
-        const adopted = this.adoptOrphan({
-          repoFingerprint: repository.fingerprint,
-          repoRoot: repository.repoRoot,
-          path: worktreePath,
+        // The crash may have hit before provisioning finished; claimThenProvision re-runs
+        // copy + setup as the claim holder, or defers to a concurrent winner untouched.
+        const adoptedBase = await resolveWorktreeBase(repository.repoRoot, params.baseRef);
+        const adopted = await this.claimThenProvision({
+          repository,
+          params,
+          name,
+          worktreePath,
           branch,
-          baseRef: adoptedBase.base,
-          ...(params.ownerKind ? { ownerKind: params.ownerKind } : {}),
-          ...(params.ownerId ? { ownerId: params.ownerId } : {}),
+          baseRef: adoptedBase.recordRef,
         });
-        if (adopted === undefined) {
-          // Claim lost: a concurrent registration won the path; this call runs no setup,
-          // no copy, no cleanup. Mirror create()'s live-row-at-path shortcut for the winner.
-          const winner = findLiveRegistryWorktreeByPath(this.env, worktreePath);
-          if (winner) {
-            if (!recordOwnerMatches(winner, params)) {
-              throw worktreeNameInUseError(winner, name);
-            }
-            return winner;
-          }
-          // Winner vanished between claim and lookup; fall through to the collision error.
-        } else {
-          // The crash may have hit before provisioning finished, so re-run copy + setup with
-          // the normal create() failure semantics. Unlike normal create() the row exists
-          // during this re-run — acceptable: the physical worktree already exists (orphan
-          // reclaim), and gc-side adoption also registers without provisioning.
-          try {
-            await copyIncludedFiles(repository.sourceRoot, worktreePath);
-            if (params.runSetupScript !== false) {
-              await runSetupScript(repository.sourceRoot, worktreePath);
-            }
-          } catch (error) {
-            // Claim-holder-only destruction: the row is held while the worktree is removed,
-            // then dropped so no registration outlives the path.
-            try {
-              await cleanupFailedCreate(repository.repoRoot, worktreePath, branch);
-            } catch (cleanupError) {
-              throw new Error(`${String(error)}\n${String(cleanupError)}`, {
-                cause: cleanupError,
-              });
-            }
-            deleteRegistryWorktree(this.env, adopted.id);
-            throw error;
-          }
+        if (adopted) {
           return adopted;
         }
+        // Winner vanished between claim and lookup; fall through to the collision error.
       }
       throw new Error(`branch already exists: ${branch}`);
     }
@@ -480,45 +446,19 @@ export class ManagedWorktreeService {
     if (added.code !== 0) {
       throw commandError("git worktree add", added);
     }
-    try {
-      await copyIncludedFiles(repository.sourceRoot, worktreePath);
-      if (params.runSetupScript !== false) {
-        await runSetupScript(repository.sourceRoot, worktreePath);
-      }
-    } catch (error) {
-      try {
-        await cleanupFailedCreate(repository.repoRoot, worktreePath, branch);
-      } catch (cleanupError) {
-        throw new Error(`${String(error)}\n${String(cleanupError)}`, { cause: cleanupError });
-      }
-      throw error;
-    }
-    const createdAt = this.now();
-    const record: ManagedWorktreeRecord = {
-      id: randomUUID(),
+    // Claim immediately after the add so the in-flight create is registered before any user
+    // code (copy/setup) runs; the only no-row window left is add -> claim, which runs no
+    // user code and is what the adoption path above recovers.
+    const record = await this.claimThenProvision({
+      repository,
+      params,
       name,
-      repoFingerprint: repository.fingerprint,
-      repoRoot: repository.repoRoot,
-      path: worktreePath,
+      worktreePath,
       branch,
       baseRef: recordBase,
-      ownerKind: params.ownerKind ?? "manual",
-      ...(params.ownerId ? { ownerId: params.ownerId } : {}),
-      createdAt,
-      lastActiveAt: createdAt,
-    };
-    // Every new live row goes through the atomic path claim. A lost claim means a concurrent
-    // create() registered this exact path during the setup window (same-name serialization);
-    // mirror the live-row-at-path shortcut for the row that won.
-    if (!insertRegistryWorktreeIfPathFree(this.env, record)) {
-      const winner = findLiveRegistryWorktreeByPath(this.env, worktreePath);
-      if (!winner) {
-        throw new Error(`worktree registration raced and lost: ${worktreePath}`);
-      }
-      if (!recordOwnerMatches(winner, params)) {
-        throw worktreeNameInUseError(winner, name);
-      }
-      return winner;
+    });
+    if (!record) {
+      throw new Error(`worktree registration raced and lost: ${worktreePath}`);
     }
     return record;
   }
@@ -871,35 +811,67 @@ export class ManagedWorktreeService {
     return { removed, orphansDeleted, snapshotsPruned };
   }
 
-  private adoptOrphan(params: {
-    repoFingerprint: string;
-    repoRoot: string;
-    path: string;
+  /**
+   * Shared post-`git worktree add` sequence for normal create and orphan adoption: claim the
+   * path atomically FIRST, then only the claim holder provisions; on provisioning failure the
+   * holder removes worktree+branch and drops its own row, so failed creates leave no row.
+   * Invariant: an in-flight create holds a live row from claim-time onward, so a live worktree
+   * with NO row genuinely means a crashed create — an in-flight worktree can never be adopted,
+   * re-provisioned, or destroyed by a concurrent same-name call. A lost claim mirrors the
+   * live-row-at-path shortcut; undefined means the claim lost and no live winner row exists.
+   */
+  private async claimThenProvision(args: {
+    repository: { fingerprint: string; repoRoot: string; sourceRoot: string };
+    params: CreateManagedWorktreeParams;
+    name: string;
+    worktreePath: string;
     branch: string;
     baseRef: string;
-    ownerKind?: ManagedWorktreeOwnerKind;
-    ownerId?: string;
-  }): ManagedWorktreeRecord | undefined {
+  }): Promise<ManagedWorktreeRecord | undefined> {
+    const { repository, params, name, worktreePath, branch, baseRef } = args;
     const createdAt = this.now();
     const record: ManagedWorktreeRecord = {
       id: randomUUID(),
-      name: path.basename(params.path),
-      repoFingerprint: params.repoFingerprint,
-      repoRoot: params.repoRoot,
-      path: params.path,
-      branch: params.branch,
-      baseRef: params.baseRef,
-      // Mirrors create()'s owner defaulting so a retried create() keeps findLiveByOwner()
-      // lookups and idle-gc expiry working.
+      name,
+      repoFingerprint: repository.fingerprint,
+      repoRoot: repository.repoRoot,
+      path: worktreePath,
+      branch,
+      baseRef,
       ownerKind: params.ownerKind ?? "manual",
       ...(params.ownerId ? { ownerId: params.ownerId } : {}),
       createdAt,
       lastActiveAt: createdAt,
     };
-    // Atomic path claim: a concurrent create() may have registered this path after this
-    // call's registry lookup; the loser must never add a second row for the same path.
     if (!insertRegistryWorktreeIfPathFree(this.env, record)) {
-      return undefined;
+      // Claim lost: a concurrent create() owns the path; this call runs no setup, no copy,
+      // no cleanup.
+      const winner = findLiveRegistryWorktreeByPath(this.env, worktreePath);
+      if (!winner) {
+        return undefined;
+      }
+      if (!recordOwnerMatches(winner, params)) {
+        throw worktreeNameInUseError(winner, name);
+      }
+      return winner;
+    }
+    // Trade-off: the row is visible (list()) while provisioning runs; that is the cost of
+    // making in-flight creates unadoptable. Failed creates still end with no row.
+    try {
+      await copyIncludedFiles(repository.sourceRoot, worktreePath);
+      if (params.runSetupScript !== false) {
+        await runSetupScript(repository.sourceRoot, worktreePath);
+      }
+    } catch (error) {
+      // Claim-holder-only destruction: the row is held while the worktree is removed, then
+      // dropped so no registration outlives the path.
+      try {
+        await cleanupFailedCreate(repository.repoRoot, worktreePath, branch);
+      } catch (cleanupError) {
+        throw new Error(`${String(error)}\n${String(cleanupError)}`, { cause: cleanupError });
+      }
+      deleteRegistryWorktree(this.env, record.id);
+      throw error;
     }
     return record;
   }

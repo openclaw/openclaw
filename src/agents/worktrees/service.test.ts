@@ -693,6 +693,8 @@ describe("ManagedWorktreeService", () => {
       ownerKind: "workboard",
       ownerId: "card-42",
     });
+    // Deleting the row reproduces the only remaining no-row crash window (between
+    // `git worktree add` and the claim, which runs no user code) and pre-fix orphans.
     deleteRegistryWorktree(env, created.id);
 
     const retried = await service.create({
@@ -835,7 +837,7 @@ describe("ManagedWorktreeService", () => {
     const releaseFlag = path.join(syncDir, "setup-release");
     await fs.mkdir(path.join(repo, ".openclaw"));
     // The setup script parks create() mid-provisioning until released, so gc deterministically
-    // observes the live-worktree/no-registry-row window of a normal create().
+    // observes an in-flight create (live worktree + live claim-time row) and must preserve it.
     await fs.writeFile(
       path.join(repo, ".openclaw", "worktree-setup.sh"),
       `#!/bin/sh\n: > "${startedFlag}"\ni=0\nwhile [ ! -f "${releaseFlag}" ]; do\n  i=$((i + 1))\n  [ "$i" -gt 400 ] && exit 9\n  sleep 0.1\ndone\nexit 0\n`,
@@ -868,9 +870,9 @@ describe("ManagedWorktreeService", () => {
       branch: "openclaw/race-normal",
     };
     let raced = false;
-    // Normal create()'s first now() read is the record's createdAt, taken right before its
-    // final claim; the trapdoor inserts the competing row there, simulating a concurrent
-    // create() that registered the same path during this call's provisioning window.
+    // Normal create()'s first now() read is the record's createdAt, taken right after
+    // `git worktree add` and before the claim; the trapdoor inserts the competing row there,
+    // simulating a concurrent registration winning the tiny post-add window.
     const racingService = new ManagedWorktreeService({
       env,
       now: () => {
@@ -887,6 +889,46 @@ describe("ManagedWorktreeService", () => {
     expect(created.id).toBe("race-winner");
     const rows = listRegistryWorktrees(env).filter((entry) => entry.path === winner.path);
     expect(rows.map((entry) => entry.id)).toEqual(["race-winner"]);
+  });
+
+  it("a parked in-flight create() cannot be adopted, reprovisioned, or destroyed by a same-name retry", async () => {
+    const syncDir = path.join(root, "sync");
+    await fs.mkdir(syncDir, { recursive: true });
+    const startedFlag = path.join(syncDir, "setup-started");
+    const releaseFlag = path.join(syncDir, "setup-release");
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    // The marker counts setup executions; the park keeps create #1 in its provisioning
+    // window while same-name retries run against the live claim-time row.
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      `#!/bin/sh\necho ran >> setup-marker.txt\n: > "${startedFlag}"\ni=0\nwhile [ ! -f "${releaseFlag}" ]; do\n  i=$((i + 1))\n  [ "$i" -gt 400 ] && exit 9\n  sleep 0.1\ndone\nexit 0\n`,
+      { mode: 0o755 },
+    );
+
+    const firstPromise = service.create({ repoRoot: repo, name: "parked" });
+    while (!(await fs.stat(startedFlag).catch(() => undefined))) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    }
+
+    // Same-owner retry returns the in-flight record without touching the worktree...
+    const retry = await service.create({ repoRoot: repo, name: "parked" });
+    // ...and a foreign-owner retry is rejected instead of adopting it.
+    await expect(
+      service.create({ repoRoot: repo, name: "parked", ownerKind: "session", ownerId: "s1" }),
+    ).rejects.toThrow(/already in use by manual/);
+    expect(listRegistryWorktrees(env).filter((entry) => entry.path === retry.path)).toHaveLength(1);
+
+    await fs.writeFile(releaseFlag, "");
+    const first = await firstPromise;
+
+    expect(retry.id).toBe(first.id);
+    // Only #1's setup execution ever ran; no retry adopted, re-provisioned, or cleaned up.
+    expect(await fs.readFile(path.join(first.path, "setup-marker.txt"), "utf8")).toBe("ran\n");
+    expect(await fs.stat(first.path)).toBeTruthy();
+    const rows = listRegistryWorktrees(env).filter((entry) => entry.path === first.path);
+    expect(rows.map((entry) => entry.id)).toEqual([first.id]);
   });
 
   it("prunes expired snapshot refs and registry rows", async () => {
