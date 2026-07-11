@@ -6150,13 +6150,14 @@ describe("runCodexAppServerAttempt", () => {
       conversationSourceTransferComplete: true,
     });
     const storePath = path.join(tempDir, "sessions.json");
-    await upsertSessionEntry(
-      { storePath, sessionKey },
-      {
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
         sessionId: "session-current",
         updatedAt: Date.now(),
       },
-    );
+    });
     const params = createParams(sessionFile, workspaceDir);
     params.sessionId = "session-current";
     params.sessionKey = sessionKey;

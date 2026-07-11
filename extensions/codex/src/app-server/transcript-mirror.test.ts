@@ -247,7 +247,7 @@ describe("importCodexThreadHistoryToTranscript", () => {
       importCodexThreadHistoryToTranscript({
         thread,
         throughTurnId: "turn-1",
-        sessionFile,
+        storePath: target.storePath,
         sessionId: "session-history",
         sessionKey: target.sessionKey,
         agentId: target.agentId,
@@ -325,7 +325,7 @@ describe("importCodexThreadHistoryToTranscript", () => {
     const importParams = {
       thread,
       throughTurnId: "turn-204",
-      sessionFile,
+      storePath: target.storePath,
       sessionId: "session-bounded-history",
       sessionKey: target.sessionKey,
       agentId: target.agentId,
@@ -380,7 +380,7 @@ describe("importCodexThreadHistoryToTranscript", () => {
     await importCodexThreadHistoryToTranscript({
       thread,
       throughTurnId: "turn-without-time",
-      sessionFile,
+      storePath: target.storePath,
       sessionId: "session-fallback-history",
       sessionKey: target.sessionKey,
       agentId: target.agentId,

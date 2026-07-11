@@ -170,8 +170,10 @@ async function createLockedSessionContextOverrides(
   sessionKey = "agent:main:test:locked",
 ): Promise<Pick<PluginCommandContext, "config" | "sessionKey">> {
   const storePath = path.join(tempDir, "locked-sessions.json");
-  await saveSessionStore(storePath, {
-    [sessionKey]: {
+  await upsertSessionEntry({
+    storePath,
+    sessionKey,
+    entry: {
       sessionId: "session-1",
       updatedAt: Date.now(),
       agentHarnessId: "codex",

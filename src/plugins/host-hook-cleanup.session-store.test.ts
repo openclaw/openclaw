@@ -254,56 +254,55 @@ describe("plugin host cleanup session stores", () => {
         },
       },
     });
-    await saveSessionStore(
-      storePath,
-      {
-        "agent:main:harness-a:locked": {
-          sessionId: "locked-session-a",
-          updatedAt,
-          agentHarnessId: "fixture-harness-a",
-          modelSelectionLocked: true,
-          pluginExtensions: {
-            "fixture-plugin": {
-              supervision: {
-                sourceThreadId: "native-thread-a",
-                modelLocked: true,
-              },
+    const seedEntries: Record<string, SessionEntry> = {
+      "agent:main:harness-a:locked": {
+        sessionId: "locked-session-a",
+        updatedAt,
+        agentHarnessId: "fixture-harness-a",
+        modelSelectionLocked: true,
+        pluginExtensions: {
+          "fixture-plugin": {
+            supervision: {
+              sourceThreadId: "native-thread-a",
+              modelLocked: true,
             },
           },
-        } satisfies SessionEntry,
-        "agent:main:harness-b:locked": {
-          sessionId: "locked-session-b",
-          updatedAt,
-          agentHarnessId: "fixture-harness-b",
-          modelSelectionLocked: true,
-          pluginExtensions: {
-            "fixture-plugin": {
-              supervision: {
-                sourceThreadId: "native-thread-b",
-                modelLocked: true,
-              },
+        },
+      } satisfies SessionEntry,
+      "agent:main:harness-b:locked": {
+        sessionId: "locked-session-b",
+        updatedAt,
+        agentHarnessId: "fixture-harness-b",
+        modelSelectionLocked: true,
+        pluginExtensions: {
+          "fixture-plugin": {
+            supervision: {
+              sourceThreadId: "native-thread-b",
+              modelLocked: true,
             },
           },
-        } satisfies SessionEntry,
-        "agent:main:other-harness:locked": {
-          sessionId: "other-locked-session",
-          updatedAt,
-          agentHarnessId: "other-harness",
-          modelSelectionLocked: true,
-          pluginExtensions: {
-            "fixture-plugin": { transient: true },
-          },
-        } satisfies SessionEntry,
-        "agent:main:ordinary": {
-          sessionId: "ordinary-session",
-          updatedAt,
-          pluginExtensions: {
-            "fixture-plugin": { transient: true },
-          },
-        } satisfies SessionEntry,
-      },
-      { skipMaintenance: true },
-    );
+        },
+      } satisfies SessionEntry,
+      "agent:main:other-harness:locked": {
+        sessionId: "other-locked-session",
+        updatedAt,
+        agentHarnessId: "other-harness",
+        modelSelectionLocked: true,
+        pluginExtensions: {
+          "fixture-plugin": { transient: true },
+        },
+      } satisfies SessionEntry,
+      "agent:main:ordinary": {
+        sessionId: "ordinary-session",
+        updatedAt,
+        pluginExtensions: {
+          "fixture-plugin": { transient: true },
+        },
+      } satisfies SessionEntry,
+    };
+    for (const [sessionKey, entry] of Object.entries(seedEntries)) {
+      await replaceSessionEntry({ storePath, sessionKey }, entry);
+    }
 
     const result = await runPluginHostCleanup({
       cfg: { session: { store: storePath } },
@@ -314,8 +313,8 @@ describe("plugin host cleanup session stores", () => {
     });
 
     expect(result).toEqual({ cleanupCount: 2, failures: [] });
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store["agent:main:harness-a:locked"]).toMatchObject({
+    const readEntry = (sessionKey: string) => loadSessionEntry({ storePath, sessionKey });
+    expect(readEntry("agent:main:harness-a:locked")).toMatchObject({
       updatedAt,
       agentHarnessId: "fixture-harness-a",
       modelSelectionLocked: true,
@@ -325,7 +324,7 @@ describe("plugin host cleanup session stores", () => {
         },
       },
     });
-    expect(store["agent:main:harness-b:locked"]).toMatchObject({
+    expect(readEntry("agent:main:harness-b:locked")).toMatchObject({
       updatedAt,
       agentHarnessId: "fixture-harness-b",
       modelSelectionLocked: true,
@@ -335,7 +334,7 @@ describe("plugin host cleanup session stores", () => {
         },
       },
     });
-    expect(store["agent:main:other-harness:locked"]?.pluginExtensions).toBeUndefined();
-    expect(store["agent:main:ordinary"]?.pluginExtensions).toBeUndefined();
+    expect(readEntry("agent:main:other-harness:locked")?.pluginExtensions).toBeUndefined();
+    expect(readEntry("agent:main:ordinary")?.pluginExtensions).toBeUndefined();
   });
 });

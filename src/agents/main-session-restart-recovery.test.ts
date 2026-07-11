@@ -7,6 +7,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import {
   appendTranscriptMessage,
   listSessionEntries,
+  loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { callGateway } from "../gateway/call.js";
@@ -1340,8 +1341,11 @@ describe("main-session-restart-recovery", () => {
 
     await vi.waitFor(() => {
       expect(callGateway).toHaveBeenCalledTimes(2);
-      const store = readSessionStoreForTest(path.join(sessionsDir, "sessions.json"));
-      expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
+      const entry = loadSessionEntry({
+        storePath: path.join(sessionsDir, "sessions.json"),
+        sessionKey: "agent:main:main",
+      });
+      expect(entry?.abortedLastRun).toBe(false);
     });
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });

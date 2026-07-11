@@ -7,7 +7,6 @@
 export {
   getSessionEntry,
   listSessionEntries,
-  loadSessionStore,
   patchSessionEntry,
   readSessionUpdatedAt,
   updateSessionStoreEntry,

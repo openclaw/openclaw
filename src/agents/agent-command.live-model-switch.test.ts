@@ -3291,7 +3291,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await expect(agentCommand({ message: "continue", sessionId: "session-1" })).rejects.toThrow(
       "Session key namespace is reserved for agent harness-owned sessions.",
     );
-    expect(state.prepareInternalSessionEffectsTranscriptMock).not.toHaveBeenCalled();
+    expect(state.prepareInternalSessionEffectsSessionMock).not.toHaveBeenCalled();
     expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
   });
 

@@ -278,7 +278,7 @@ export function projectBoundedCodexThreadHistory(params: {
 export async function importCodexThreadHistoryToTranscript(params: {
   thread: CodexThread;
   throughTurnId: string | null;
-  sessionFile: string;
+  storePath: string;
   sessionId: string;
   sessionKey: string;
   agentId?: string;
@@ -294,7 +294,7 @@ export async function importCodexThreadHistoryToTranscript(params: {
   });
   if (projection.transcriptMessages.length > 0) {
     await mirrorCodexAppServerTranscript({
-      sessionFile: params.sessionFile,
+      storePath: params.storePath,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       ...(params.agentId ? { agentId: params.agentId } : {}),

@@ -1,5 +1,6 @@
 /** Shared predicates and mutations for plugin host-owned session-state cleanup. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
 import type { SessionEntry } from "./types.js";
 
@@ -17,6 +18,8 @@ export type PluginHostSessionCleanupStoreParams = {
   sessionKey?: string;
   /** Promoted SessionEntry slots declared by the plugin registry. */
   sessionEntrySlotKeys?: ReadonlySet<string>;
+  /** Locked-harness ids whose sessions this cleanup must leave untouched. */
+  preserveLockedHarnessIds?: ReadonlySet<string>;
   /** Per-store file-backed transaction boundary. */
   storePath: string;
   /** Cancels the cleanup before persistence when host lifecycle state changes. */

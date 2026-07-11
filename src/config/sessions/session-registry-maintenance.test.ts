@@ -188,7 +188,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
         storePath,
       });
       expect(activeResult.pruned).toBe(0);
-      expect(loadSessionStore(storePath, { skipCache: true })).toHaveProperty(sessionKey);
+      expect(loadSessionEntry({ sessionKey, storePath })).toBeDefined();
     } finally {
       admission.release();
     }
@@ -200,6 +200,6 @@ describe("runSessionRegistryMaintenanceForStore", () => {
       storePath,
     });
     expect(releasedResult.pruned).toBe(1);
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });
 });

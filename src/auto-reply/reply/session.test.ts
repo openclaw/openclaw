@@ -3307,7 +3307,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         }),
       ).rejects.toThrow(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
 
-      expect(readSessionStoreForTest(storePath)[sessionKey]).toMatchObject({
+      expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
         sessionId: existingSessionId,
         agentHarnessId: "codex",
         modelSelectionLocked: true,

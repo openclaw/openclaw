@@ -178,7 +178,8 @@ describe("sessionsCommand model resolution", () => {
         },
       },
     }));
-    const store = writeStore(
+    await withSqliteStore(
+      "sessions-locked-codex-runtime",
       {
         "agent:main:main": {
           sessionId: "locked-codex-session",
@@ -190,15 +191,15 @@ describe("sessionsCommand model resolution", () => {
           modelSelectionLocked: true,
         },
       },
-      "sessions-locked-codex-runtime",
+      async (store) => {
+        const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+        const session = payload.sessions?.find((row) => row.key === "agent:main:main");
+
+        expect(session?.agentRuntime).toEqual({
+          id: "codex",
+          source: "session",
+        });
+      },
     );
-
-    const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
-    const session = payload.sessions?.find((row) => row.key === "agent:main:main");
-
-    expect(session?.agentRuntime).toEqual({
-      id: "codex",
-      source: "session",
-    });
   });
 });

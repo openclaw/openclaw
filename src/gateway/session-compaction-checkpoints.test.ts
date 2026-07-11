@@ -1140,27 +1140,30 @@ describe("session-compaction-checkpoints", () => {
     );
     const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
     const storePath = path.join(dir, "sessions.json");
-    await writeSessionStore(storePath, MAIN_SESSION_KEY, {
-      sessionId: "locked-session",
-      sessionFile,
-      updatedAt: Date.now(),
-      modelSelectionLocked: true,
-      compactionCheckpoints: [
-        {
-          checkpointId: "checkpoint-locked",
-          sessionKey: MAIN_SESSION_KEY,
-          sessionId: "locked-session",
-          createdAt: Date.now(),
-          reason: "manual",
-          preCompaction: { sessionId: "locked-session", leafId: checkpointLeafId },
-          postCompaction: {
+    await upsertSessionEntry(
+      { storePath, sessionKey: MAIN_SESSION_KEY },
+      {
+        sessionId: "locked-session",
+        sessionFile,
+        updatedAt: Date.now(),
+        modelSelectionLocked: true,
+        compactionCheckpoints: [
+          {
+            checkpointId: "checkpoint-locked",
+            sessionKey: MAIN_SESSION_KEY,
             sessionId: "locked-session",
-            sessionFile,
-            leafId: checkpointLeafId,
+            createdAt: Date.now(),
+            reason: "manual",
+            preCompaction: { sessionId: "locked-session", leafId: checkpointLeafId },
+            postCompaction: {
+              sessionId: "locked-session",
+              sessionFile,
+              leafId: checkpointLeafId,
+            },
           },
-        },
-      ],
-    });
+        ],
+      },
+    );
     const filesBefore = (await fs.readdir(dir)).toSorted();
     const store = createFileBackedCompactionCheckpointStore();
 
@@ -1181,12 +1184,12 @@ describe("session-compaction-checkpoints", () => {
     ).resolves.toEqual({ status: "model-selection-locked" });
 
     expect((await fs.readdir(dir)).toSorted()).toEqual(filesBefore);
-    expect(await readSessionStore(storePath)).toEqual({
-      [MAIN_SESSION_KEY]: expect.objectContaining({
+    expect(loadSessionEntry({ storePath, sessionKey: MAIN_SESSION_KEY })).toEqual(
+      expect.objectContaining({
         modelSelectionLocked: true,
         sessionId: "locked-session",
       }),
-    });
+    );
   });
 
   test("async fork migrates legacy checkpoint snapshots before writing a current header", async () => {

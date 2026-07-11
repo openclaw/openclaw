@@ -252,9 +252,7 @@ test("sessions.delete preserves locked archived sessions and deletes ordinary ar
       [ordinaryKey]: sessionStoreEntry(ordinarySessionId, { archivedAt: Date.now() }),
     },
   });
-  const lockedEntryBefore = structuredClone(
-    loadSessionStore(storePath, { skipCache: true })[lockedKey],
-  );
+  const lockedEntryBefore = structuredClone(loadSessionEntry({ storePath, sessionKey: lockedKey }));
   const lockedTranscriptPath = path.join(dir, `${lockedSessionId}.jsonl`);
   const lockedTranscriptBefore = await fs.readFile(lockedTranscriptPath, "utf8");
 
@@ -267,13 +265,12 @@ test("sessions.delete preserves locked archived sessions and deletes ordinary ar
     code: "INVALID_REQUEST",
     message: "This session cannot be deleted while model selection is locked.",
   });
-  expect(loadSessionStore(storePath, { skipCache: true })[lockedKey]).toEqual(lockedEntryBefore);
+  expect(loadSessionEntry({ storePath, sessionKey: lockedKey })).toEqual(lockedEntryBefore);
   expect(await fs.readFile(lockedTranscriptPath, "utf8")).toBe(lockedTranscriptBefore);
 
   await expectSessionDeleteSucceeds({ key: ordinaryKey, archivedOnly: true });
-  const storedAfterOrdinaryDelete = loadSessionStore(storePath, { skipCache: true });
-  expect(storedAfterOrdinaryDelete[ordinaryKey]).toBeUndefined();
-  expect(storedAfterOrdinaryDelete[lockedKey]).toEqual(lockedEntryBefore);
+  expect(loadSessionEntry({ storePath, sessionKey: ordinaryKey })).toBeUndefined();
+  expect(loadSessionEntry({ storePath, sessionKey: lockedKey })).toEqual(lockedEntryBefore);
 });
 
 test("sessions.delete interrupts work admitted before runtime registration", async () => {

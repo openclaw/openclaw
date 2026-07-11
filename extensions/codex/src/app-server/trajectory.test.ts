@@ -249,9 +249,10 @@ describe("Codex trajectory recorder", () => {
         ],
       },
     ];
-    const init = createMemoryBackedRecorder({ tmpDir: makeTempDir(), tools });
+    const tmpDir = makeTempDir();
+    const init = createMemoryBackedRecorder({ tmpDir, tools });
 
-    recordCodexTrajectoryContext(init.recorder, { attempt: {} as never, tools });
+    recordCodexTrajectoryContext(init.recorder, { attempt: {} as never, cwd: tmpDir, tools });
     await init.recorder.flush();
 
     expect(init.events[0]?.data?.tools).toEqual([

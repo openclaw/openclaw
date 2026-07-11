@@ -940,14 +940,15 @@ describe("Discord model picker interactions", () => {
       r: "openclaw",
     });
 
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store["agent:worker:subagent:bound"]).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.5",
-      agentHarnessId: "codex",
-      agentRuntimeOverride: "codex",
-      modelSelectionLocked: true,
-    });
+    expect(getSessionEntry({ storePath, sessionKey: "agent:worker:subagent:bound" })).toMatchObject(
+      {
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "codex",
+        modelSelectionLocked: true,
+      },
+    );
     expect(
       JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
     ).toContain("❌ Model selection is locked for this session.");

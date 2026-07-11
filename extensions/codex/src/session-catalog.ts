@@ -1560,14 +1560,15 @@ async function createOrReuseAdoptedSession(params: {
           sessionKey: entry.key,
           config: params.config,
         });
-        const sessionFile = entry.entry.sessionFile?.trim();
-        if (!sessionFile) {
-          throw new Error("Codex supervision session creation did not produce a transcript file");
-        }
+        // Post-flip the mirror targets SQLite rows; resolve the agent's store
+        // path instead of trusting the legacy sessionFile locator marker.
+        const storePath = params.api.runtime.agent.session.resolveStorePath(undefined, {
+          agentId: entry.agentId,
+        });
         await importCodexThreadHistoryToTranscript({
           thread: params.sourceThread,
           throughTurnId: pendingLastTurnId ?? null,
-          sessionFile,
+          storePath,
           sessionId: entry.sessionId,
           sessionKey: entry.key,
           agentId: entry.agentId,

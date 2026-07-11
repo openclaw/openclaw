@@ -39,6 +39,13 @@ type AgentDbTestDatabase = Pick<
   "memory_index_sources" | "schema_meta"
 >;
 
+type RegisteredAgentDatabaseRow = {
+  agent_id: string;
+  path: string;
+  schema_version: number;
+  size_bytes: number;
+};
+
 const agentDbTempDirs: string[] = [];
 
 function createTempStateDir(): string {
