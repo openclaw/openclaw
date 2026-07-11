@@ -96,9 +96,16 @@ export const SessionSchema = z
       .superRefine((val, ctx) => {
         if (val.pruneAfter !== undefined) {
           try {
-            parseDurationMs(normalizeStringifiedOptionalString(val.pruneAfter) ?? "", {
+            const ms = parseDurationMs(normalizeStringifiedOptionalString(val.pruneAfter) ?? "", {
               defaultUnit: "d",
             });
+            if (ms <= 0) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["pruneAfter"],
+                message: "duration must be positive (use ms, s, m, h, d), e.g. 30d",
+              });
+            }
           } catch {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,

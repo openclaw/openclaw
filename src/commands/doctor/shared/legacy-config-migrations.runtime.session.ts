@@ -1,4 +1,5 @@
 // Legacy session runtime config migrations for retired maintenance/fork sizing keys.
+import { parseDurationMs } from "../../../cli/parse-duration.js";
 import {
   defineLegacyConfigMigration,
   getRecord,
@@ -16,6 +17,24 @@ function hasLegacyParentForkMaxTokens(value: unknown): boolean {
   return Boolean(session && Object.hasOwn(session, "parentForkMaxTokens"));
 }
 
+/** Returns `true` when `pruneAfter` is a string that `parseDurationMs` evaluates to ≤ 0. */
+function isZeroDurationPruneAfter(raw: unknown): boolean {
+  const maintenance = getRecord(raw);
+  if (!maintenance || !Object.hasOwn(maintenance, "pruneAfter")) {
+    return false;
+  }
+  const val = maintenance.pruneAfter;
+  if (typeof val !== "string") {
+    return false;
+  }
+  try {
+    const ms = parseDurationMs(val, { defaultUnit: "d" });
+    return ms <= 0;
+  } catch {
+    return false;
+  }
+}
+
 const LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE: LegacyConfigRule = {
   path: ["session", "maintenance"],
   message:
@@ -28,6 +47,13 @@ const LEGACY_SESSION_PARENT_FORK_MAX_TOKENS_RULE: LegacyConfigRule = {
   message:
     'session.parentForkMaxTokens was removed; parent fork sizing is automatic. Run "openclaw doctor --fix" to remove it.',
   match: hasLegacyParentForkMaxTokens,
+};
+
+const SESSION_MAINTENANCE_PRUNE_AFTER_ZERO_RULE: LegacyConfigRule = {
+  path: ["session", "maintenance"],
+  message:
+    'session.maintenance.pruneAfter is a zero duration — this causes immediate deletion of all sessions. Run "openclaw doctor --fix" to remove it so the documented 30d default applies.',
+  match: isZeroDurationPruneAfter,
 };
 
 /** Legacy config migration specs for session runtime config compatibility. */
@@ -56,6 +82,29 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
       }
       delete session.parentForkMaxTokens;
       changes.push("Removed session.parentForkMaxTokens; parent fork sizing is automatic.");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "session.maintenance.pruneAfter-zero",
+    describe:
+      "Remove zero-duration session.maintenance.pruneAfter so the documented 30d default applies",
+    legacyRules: [SESSION_MAINTENANCE_PRUNE_AFTER_ZERO_RULE],
+    apply: (raw, changes) => {
+      const maintenance = getRecord(getRecord(raw.session)?.maintenance);
+      if (!maintenance || !Object.hasOwn(maintenance, "pruneAfter")) return;
+      const val = maintenance.pruneAfter;
+      if (typeof val !== "string") return;
+      let ms: number;
+      try {
+        ms = parseDurationMs(val, { defaultUnit: "d" });
+      } catch {
+        return;
+      }
+      if (ms > 0) return;
+      delete maintenance.pruneAfter;
+      changes.push(
+        `Removed session.maintenance.pruneAfter "${val}" (zero duration); documented 30d default applies.`,
+      );
     },
   }),
 ];
