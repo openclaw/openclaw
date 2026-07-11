@@ -13,6 +13,8 @@ const CHANNEL_LABELS: Record<string, string> = {
   sms: "SMS",
 };
 
+const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
+
 /** Human channel label for group headers and name fallbacks. */
 export function channelDisplayLabel(channel: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(channel);
@@ -137,6 +139,14 @@ function parseSessionKey(key: string): SessionKeyInfo {
     const channel = groupMatch[1];
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
     return { prefix: "", fallbackName: `${channelLabel} Group` };
+  }
+
+  // Channel-prefixed keys like "telegram:123": durable session rows written by
+  // pre-agent-scoped builds still surface in session lists; label, don't leak keys.
+  for (const ch of KNOWN_CHANNEL_KEYS) {
+    if (key === ch || key.startsWith(`${ch}:`)) {
+      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
+    }
   }
 
   // Dashboard sessions get generated titles asynchronously; the opaque uuid key
