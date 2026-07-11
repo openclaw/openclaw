@@ -1,6 +1,6 @@
 ---
 name: agent-transcript
-description: "Add a redacted agent transcript section to GitHub PR or issue bodies during OpenClaw agent-created PR/issue workflows."
+description: "GitHub PR/issue agent transcripts: redact, preview, and insert safely."
 ---
 
 # Agent Transcript
@@ -72,10 +72,16 @@ Append/update a body file before `gh pr create --body-file` or connector PR crea
 3. If a high-confidence session is found, ask:
    `Include a redacted agent transcript? It helps reviewers and can make the PR easier to prioritize. I can open a local preview first.`
 4. If the user wants preview, run `preview`, open the HTML with `open`, and wait for confirmation.
-5. Before insertion, trim unrelated session turns from the generated section. Keep only turns that explain this PR/issue's goal, implementation choices, files, tests, proof, blockers, and final outcome.
-6. If the user approves, run `append-body`.
-7. Use the enriched body file for creation/update.
+5. Render to a temporary body, then trim the `## Agent Transcript` section before showing it to the user or inserting it publicly. Keep only turns that explain this PR/issue's goal, implementation choices, files, tests, proof, blockers, and final outcome.
+6. Inspect the trimmed transcript text. If it still includes unrelated earlier/later work, trim again before proceeding.
+7. If the user approves, append the reviewed transcript to the body used for creation/update.
 8. If no safe session is found, say nothing and continue without transcript. If the user declines, continue without transcript and do not add any transcript placeholder section.
+
+## Validate
+
+```bash
+node --test .agents/skills/agent-transcript/scripts/agent-transcript.test.mjs
+```
 
 ## Review Artifacts
 
