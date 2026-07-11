@@ -1510,6 +1510,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Create options
   - H2: fleet list
   - H2: fleet status
+  - H2: fleet logs
   - H2: fleet start, fleet stop, and fleet restart
   - H2: fleet upgrade
   - H2: fleet rm
