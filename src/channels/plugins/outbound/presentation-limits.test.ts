@@ -23,10 +23,10 @@ function hasLoneSurrogate(text: string): boolean {
   return false;
 }
 
-const utf16Unit = (n: number): ChannelPresentationCapabilities["limits"]["text"] => ({
-  maxLength: n,
-  encoding: "utf16-units",
-});
+const utf16Unit = (n: number) =>
+  ({ maxLength: n, encoding: "utf16-units" }) as NonNullable<
+    NonNullable<ChannelPresentationCapabilities["limits"]>["text"]
+  >;
 
 const noTables = {
   context: true,
