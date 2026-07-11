@@ -1145,49 +1145,60 @@ describe("loadWebMedia", () => {
   });
 
   it("forwards responseHeaderTimeoutMs from loadWebMediaRaw through readRemoteMediaBuffer", async () => {
-    // Proves the public loadWebMedia / loadWebMediaRaw seam forwards the canonical
-    // responseHeaderTimeoutMs field from main (FetchMediaOptions.responseHeaderTimeoutMs,
-    // src/media/fetch.ts:82) end-to-end, mirroring main's "clears the response-header
-    // deadline while a healthy body keeps progressing" pattern at fetch.test.ts:438-485.
-    // Header deadline is much smaller than the body enqueue intervals so any failure to
-    // forward the field (or any leak between the header and body phases) surfaces as
-    // a MediaFetchError instead of a successful read.
+    // The response-header deadline is the only guard against a server that
+    // never begins the response. If loadWebMediaRaw does not forward the field,
+    // a stalled header will outlive any body-idle timer and the load will hang.
+    // We delay headers past the configured deadline and assert the load rejects
+    // with a header-timeout style error while a non-forwarding implementation
+    // would still be pending.
     vi.useFakeTimers();
     try {
+      const responseHeaderTimeoutMs = 10;
+      const headerDelayMs = 50;
       const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         const signal = init?.signal;
+        // Wait longer than the header deadline. If the deadline is forwarded,
+        // the abort signal fires before this resolves.
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, headerDelayMs);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(new Error(String(signal.reason)));
+            },
+            { once: true },
+          );
+        });
         return new Response(
           new ReadableStream<Uint8Array>({
             start(controller) {
-              const failForAbort = () => controller.error(signal?.reason);
-              if (signal?.aborted) {
-                failForAbort();
-                return;
-              }
-              signal?.addEventListener("abort", failForAbort, { once: true });
-              setTimeout(() => controller.enqueue(new Uint8Array([1])), 25);
-              setTimeout(() => controller.enqueue(new Uint8Array([2])), 50);
-              setTimeout(() => {
-                signal?.removeEventListener("abort", failForAbort);
-                controller.close();
-              }, 75);
+              controller.enqueue(new Uint8Array([1, 2]));
+              controller.close();
             },
           }),
           { status: 200 },
         );
       });
 
-      const result = loadWebMediaRaw("https://example.test/file.bin", {
+      const loadPromise = loadWebMediaRaw("https://example.test/file.bin", {
         fetchImpl,
         maxBytes: 1024,
-        responseHeaderTimeoutMs: 10,
-        readIdleTimeoutMs: 30,
+        responseHeaderTimeoutMs,
+        readIdleTimeoutMs: 1000,
         ssrfPolicy: { allowedHostnames: ["example.test"] },
       });
 
-      await vi.advanceTimersByTimeAsync(80);
+      const outcome = loadPromise.then(
+        () => ({ status: "resolved" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
 
-      await expect(result).resolves.toMatchObject({ buffer: Buffer.from([1, 2]) });
+      await vi.advanceTimersByTimeAsync(responseHeaderTimeoutMs + 5);
+
+      await expect(
+        Promise.race([outcome, Promise.resolve({ status: "pending" as const })]),
+      ).resolves.toMatchObject({ status: "rejected" });
     } finally {
       vi.useRealTimers();
     }
