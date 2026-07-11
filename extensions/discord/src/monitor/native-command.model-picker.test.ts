@@ -424,6 +424,58 @@ describe("Discord model picker interactions", () => {
     ).toContain("✅ Model set to openai/gpt-5.6-terra.");
   });
 
+  it("keeps a pending model stable when hot reload reorders the catalog", async () => {
+    const context = createModelPickerContext();
+    const runtimeCfg = { ...context.cfg } as OpenClawConfig;
+    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSnapshot").mockReturnValue(runtimeCfg);
+    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSourceSnapshot").mockReturnValue(
+      runtimeCfg,
+    );
+
+    const runtimeData = createModelsProviderData({ openai: ["a", "aa", "b"] });
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(runtimeData);
+    mockModelCommandPipeline(createModelCommandDefinition());
+    const dispatchSpy = createDispatchSpy();
+
+    const submitInteraction = await runSubmitButton({
+      context,
+      data: {
+        cmd: "model",
+        act: "submit",
+        view: "models",
+        u: "owner",
+        p: "openai",
+        pg: "1",
+        m: modelPickerModule.createDiscordModelPickerModelToken("openai", "b"),
+      },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+
+    expectDispatchedModelSelection({ dispatchSpy, model: "openai/b" });
+    expect(
+      JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
+    ).toContain("✅ Model set to openai/b.");
+
+    dispatchSpy.mockClear();
+    const legacyInteraction = await runSubmitButton({
+      context,
+      data: {
+        cmd: "model",
+        act: "submit",
+        view: "models",
+        u: "owner",
+        p: "openai",
+        pg: "1",
+        mi: "2",
+      },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(
+      JSON.stringify(firstMockArg(legacyInteraction.editReply, "interaction.editReply")),
+    ).toContain("selection expired");
+  });
+
   it("requires submit click before routing selected model through /model pipeline", async () => {
     const context = createModelPickerContext();
     const pickerData = createDefaultModelPickerData();

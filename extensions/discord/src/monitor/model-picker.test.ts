@@ -11,6 +11,7 @@ import {
   DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX,
   buildDiscordModelPickerCustomId,
   computeAlphaBuckets,
+  createDiscordModelPickerModelToken,
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
   findProviderBucketId,
@@ -276,6 +277,7 @@ describe("Discord model picker custom_id", () => {
   });
 
   it("keeps typical submit ids under Discord max length", () => {
+    const modelToken = createDiscordModelPickerModelToken("azure-openai-responses", "gpt-5.5");
     const customId = buildDiscordModelPickerCustomId({
       command: "models",
       action: "submit",
@@ -284,10 +286,14 @@ describe("Discord model picker custom_id", () => {
       page: 1,
       providerPage: 1,
       modelIndex: 10,
+      modelToken,
       userId: "12345678901234567890",
     });
 
     expect(customId.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
+    const parsed = parseDiscordModelPickerCustomId(customId);
+    expect(parsed?.modelToken).toBe(modelToken);
+    expect(parsed?.modelIndex).toBeUndefined();
   });
 });
 
@@ -1033,7 +1039,8 @@ describe("Discord model picker rendering", () => {
     const submitState = parseDiscordModelPickerCustomId(navButtons[3]?.custom_id ?? "");
     expect(submitState?.action).toBe("submit");
     expect(submitState?.provider).toBe("openai");
-    expect(submitState?.modelIndex).toBe(3);
+    expect(submitState?.modelIndex).toBeUndefined();
+    expect(submitState?.modelToken).toBe(createDiscordModelPickerModelToken("openai", "o3"));
   });
 
   it("defaults the runtime picker to the first effective runtime choice", () => {
@@ -1093,7 +1100,8 @@ describe("Discord model picker rendering", () => {
     const submitState = parseDiscordModelPickerCustomId(navButtons.at(-1)?.custom_id ?? "");
     expect(submitState?.action).toBe("submit");
     expect(submitState?.runtime).toBeUndefined();
-    expect(submitState?.modelIndex).toBe(3);
+    expect(submitState?.modelIndex).toBeUndefined();
+    expect(submitState?.modelToken).toBe(createDiscordModelPickerModelToken("openai", "o3"));
   });
 
   it("carries only explicit runtime picker state into model submit ids", () => {
