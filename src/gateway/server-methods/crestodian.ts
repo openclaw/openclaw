@@ -151,6 +151,9 @@ export const crestodianHandlers: GatewayRequestHandlers = {
     const sessionId = params.sessionId;
     const session = new WizardSession(
       async (prompter, signal) => {
+        // Match setup.activate's lock order: setup admission before the Gateway
+        // queue. Both stay held for the session, so a relaunched client cannot
+        // start competing setup work while this server-owned flow can commit.
         const result = await runExclusiveCrestodianSetupActivation(async () =>
           runCrestodianGatewayTask(async () => {
             const { activateSetupInference } = await import("../../crestodian/setup-inference.js");

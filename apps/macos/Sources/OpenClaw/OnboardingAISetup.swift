@@ -1453,7 +1453,7 @@ extension OnboardingAISetupModel {
         if done || status == "done" {
             providerAuthReconciliationPending = true
             clearProviderAuth()
-            Task { await self.detectAndAutoConnect() }
+            scheduleDetection()
             return
         }
         authStep = step
