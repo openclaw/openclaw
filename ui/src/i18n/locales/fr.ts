@@ -314,6 +314,8 @@ export const fr: TranslationMap = {
     archived: "Archivée",
     pinned: "Épinglée",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "Renommer la session",
     renameSessionPrompt: "Renommer la session",
     renameSessionMenu: "Rename…",

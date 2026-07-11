@@ -307,6 +307,8 @@ export const ar: TranslationMap = {
     archived: "مؤرشف",
     pinned: "مثبّتة",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "إعادة تسمية الجلسة",
     renameSessionPrompt: "إعادة تسمية الجلسة",
     renameSessionMenu: "Rename…",

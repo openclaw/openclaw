@@ -306,6 +306,8 @@ export const zh_CN: TranslationMap = {
     archived: "已归档",
     pinned: "已置顶",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "重命名会话",
     renameSessionPrompt: "重命名会话",
     renameSessionMenu: "Rename…",

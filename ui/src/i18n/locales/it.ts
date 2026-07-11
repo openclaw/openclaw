@@ -311,6 +311,8 @@ export const it: TranslationMap = {
     archived: "Archiviata",
     pinned: "Fissate",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "Rinomina sessione",
     renameSessionPrompt: "Rinomina sessione",
     renameSessionMenu: "Rename…",

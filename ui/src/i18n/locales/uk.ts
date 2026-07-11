@@ -309,6 +309,8 @@ export const uk: TranslationMap = {
     archived: "Архівовано",
     pinned: "Закріплено",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "Перейменувати сеанс",
     renameSessionPrompt: "Перейменувати сеанс",
     renameSessionMenu: "Rename…",

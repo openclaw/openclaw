@@ -307,6 +307,8 @@ export const ko: TranslationMap = {
     archived: "보관됨",
     pinned: "고정됨",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "세션 이름 변경",
     renameSessionPrompt: "세션 이름 변경",
     renameSessionMenu: "Rename…",

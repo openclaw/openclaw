@@ -308,6 +308,8 @@ export const pt_BR: TranslationMap = {
     archived: "Arquivada",
     pinned: "Fixadas",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "Renomear sessão",
     renameSessionPrompt: "Renomear sessão",
     renameSessionMenu: "Rename…",

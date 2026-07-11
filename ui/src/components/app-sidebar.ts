@@ -115,6 +115,7 @@ type SidebarRecentSession = {
   channelSession?: boolean;
   workSession?: boolean;
   worktreeId?: string;
+  hasAutomation: boolean;
   unread: boolean;
 };
 
@@ -897,6 +898,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         channelSession: channelInfo.channelSession,
         workSession: Boolean(row.worktree || row.execNode),
         worktreeId: row.worktree?.id,
+        hasAutomation: row.hasAutomation === true,
         unread: row.unread === true,
       };
     };
@@ -2098,31 +2100,51 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           title=${`${session.label} · ${session.key}`}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
-          ${session.unread
+          ${session.hasActiveRun
             ? html`<span
-                class="session-unread-dot sidebar-recent-session__unread"
+                class="session-run-spinner sidebar-recent-session__state"
                 role="img"
-                aria-label=${t("sessionsView.unread")}
+                aria-label=${t("sessionsView.activeRun")}
+                title=${t("sessionsView.activeRun")}
               ></span>`
-            : nothing}
+            : session.unread
+              ? html`<span
+                  class="session-unread-dot sidebar-recent-session__unread"
+                  role="img"
+                  aria-label=${t("sessionsView.unread")}
+                ></span>`
+              : nothing}
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__name hover-marquee">${session.label}</span>
             ${session.subtitle && session.workSession && session.subtitle !== session.label
               ? html`<span class="sidebar-recent-session__subtitle">${session.subtitle}</span>`
               : nothing}
           </span>
+          ${session.worktreeId || session.hasAutomation
+            ? html`<span class="session-row-badges">
+                ${session.worktreeId
+                  ? html`<span
+                      class="session-row-badge"
+                      role="img"
+                      aria-label=${t("sessionsView.worktreeSession")}
+                      title=${t("sessionsView.worktreeSession")}
+                      >${icons.gitBranch}</span
+                    >`
+                  : nothing}
+                ${session.hasAutomation
+                  ? html`<span
+                      class="session-row-badge"
+                      role="img"
+                      aria-label=${t("sessionsView.automationAttached")}
+                      title=${t("sessionsView.automationAttached")}
+                      >${icons.clock}</span
+                    >`
+                  : nothing}
+              </span>`
+            : nothing}
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
-          <span class="session-row-trail">
-            ${session.hasActiveRun
-              ? html`<span
-                  class="session-run-spinner"
-                  role="img"
-                  aria-label=${t("sessionsView.activeRun")}
-                  title=${t("sessionsView.activeRun")}
-                ></span>`
-              : session.meta}
-          </span>
+          <span class="session-row-trail">${session.meta}</span>
           <span class="session-row-actions">
             <button
               class="session-action session-action--pin"

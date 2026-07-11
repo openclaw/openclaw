@@ -313,6 +313,8 @@ export const ja_JP: TranslationMap = {
     archived: "アーカイブ済み",
     pinned: "ピン留め済み",
     unread: "Unread",
+    worktreeSession: "Worktree session",
+    automationAttached: "Automation attached",
     renameSession: "セッション名を変更",
     renameSessionPrompt: "セッション名を変更",
     renameSessionMenu: "Rename…",
