@@ -6,9 +6,14 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  readJsonBodyWithLimit,
+  requestBodyErrorToText,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { isAdminHttpRpcAllowedMethod, listAdminHttpRpcAllowedMethods } from "./methods.js";
 
 const DEFAULT_RPC_BODY_BYTES = 1024 * 1024;
+const DEFAULT_RPC_BODY_TIMEOUT_MS = 30_000;
 
 const ErrorCodes = {
   AGENT_TIMEOUT: "AGENT_TIMEOUT",
@@ -42,6 +47,12 @@ type ParsedRequest = {
   method: string;
   params?: unknown;
 };
+
+type RequestBodyLimitFailureCode =
+  | "PAYLOAD_TOO_LARGE"
+  | "REQUEST_BODY_TIMEOUT"
+  | "CONNECTION_CLOSED";
+type ReadJsonBodyFailureCode = RequestBodyLimitFailureCode | "INVALID_JSON";
 
 function createError(code: string, message: string): RpcError {
   return { code, message };
@@ -82,31 +93,42 @@ function sendError(res: ServerResponse, status: number, error: { type: string; m
 async function readJsonBody(
   req: IncomingMessage,
   maxBytes: number,
+  timeoutMs: number,
 ): Promise<{ ok: true; value: unknown } | { ok: false; status: number; message: string }> {
-  const chunks: Buffer[] = [];
-  let totalBytes = 0;
-  try {
-    for await (const chunk of req) {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      totalBytes += buffer.byteLength;
-      if (totalBytes > maxBytes) {
-        return { ok: false, status: 413, message: "Payload too large" };
-      }
-      chunks.push(buffer);
-    }
-  } catch {
-    return { ok: false, status: 400, message: "failed to read request body" };
+  const body = await readJsonBodyWithLimit(req, {
+    maxBytes,
+    timeoutMs,
+    emptyObjectOnEmpty: false,
+  });
+  if (body.ok) {
+    return body;
   }
+  return {
+    ok: false,
+    status: statusForBodyErrorCode(body.code),
+    message: messageForBodyError(body),
+  };
+}
 
-  const raw = Buffer.concat(chunks).toString("utf8");
-  if (!raw.trim()) {
-    return { ok: false, status: 400, message: "request body must be JSON" };
+function statusForBodyErrorCode(code: ReadJsonBodyFailureCode): number {
+  switch (code) {
+    case "PAYLOAD_TOO_LARGE":
+      return 413;
+    case "REQUEST_BODY_TIMEOUT":
+      return 408;
+    case "CONNECTION_CLOSED":
+    case "INVALID_JSON":
+      return 400;
   }
-  try {
-    return { ok: true, value: JSON.parse(raw) };
-  } catch {
-    return { ok: false, status: 400, message: "request body must be valid JSON" };
+}
+
+function messageForBodyError(body: { code: ReadJsonBodyFailureCode; error: string }): string {
+  if (body.code === "INVALID_JSON") {
+    return body.error === "empty payload"
+      ? "request body must be JSON"
+      : "request body must be valid JSON";
   }
+  return requestBodyErrorToText(body.code);
 }
 
 function readRpcRequestBody(body: unknown):
@@ -192,6 +214,7 @@ async function dispatchAdminRpc(request: ParsedRequest): Promise<RpcResponse> {
 export async function handleAdminHttpRpcRequest(
   req: IncomingMessage,
   res: ServerResponse,
+  options?: { bodyTimeoutMs?: number },
 ): Promise<boolean> {
   if ((req.method ?? "GET").toUpperCase() !== "POST") {
     res.setHeader("Allow", "POST");
@@ -202,7 +225,11 @@ export async function handleAdminHttpRpcRequest(
     return true;
   }
 
-  const body = await readJsonBody(req, DEFAULT_RPC_BODY_BYTES);
+  const body = await readJsonBody(
+    req,
+    DEFAULT_RPC_BODY_BYTES,
+    options?.bodyTimeoutMs ?? DEFAULT_RPC_BODY_TIMEOUT_MS,
+  );
   if (!body.ok) {
     sendError(res, body.status, {
       type: "invalid_request",

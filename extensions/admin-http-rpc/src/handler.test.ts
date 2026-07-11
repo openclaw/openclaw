@@ -30,6 +30,22 @@ function createRequest(body: unknown, method = "POST") {
   return req as import("node:http").IncomingMessage;
 }
 
+function createHangingRequest() {
+  const req = new Readable({
+    read() {
+      // Keep the body open so the handler's request-body timeout owns settlement.
+    },
+  });
+  Object.assign(req, {
+    method: "POST",
+    url: "/api/v1/admin/rpc",
+    headers: {
+      "content-type": "application/json",
+    },
+  });
+  return req as import("node:http").IncomingMessage;
+}
+
 function createResponse() {
   const captured: CapturedResponse = {
     statusCode: 200,
@@ -54,8 +70,12 @@ function createResponse() {
 }
 
 async function invoke(body: unknown, method = "POST") {
+  return invokeRequest(createRequest(body, method));
+}
+
+async function invokeRequest(req: import("node:http").IncomingMessage, bodyTimeoutMs?: number) {
   const { res, captured } = createResponse();
-  const handled = await handleAdminHttpRpcRequest(createRequest(body, method), res);
+  const handled = await handleAdminHttpRpcRequest(req, res, { bodyTimeoutMs });
   return {
     handled,
     captured,
@@ -204,6 +224,21 @@ describe("admin-http-rpc plugin handler", () => {
 
     expect(result.captured.statusCode).toBe(405);
     expect(result.captured.headers.allow).toBe("POST");
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+
+  it("times out incomplete request bodies before dispatch", async () => {
+    const result = await invokeRequest(createHangingRequest(), 1);
+
+    expect(result.handled).toBe(true);
+    expect(result.captured.statusCode).toBe(408);
+    expect(result.json).toEqual({
+      ok: false,
+      error: {
+        type: "invalid_request",
+        message: "Request body timeout",
+      },
+    });
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
   });
 });
