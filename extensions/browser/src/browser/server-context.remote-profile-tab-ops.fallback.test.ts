@@ -183,6 +183,33 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     );
   });
 
+  it("rejects non-selectable targets returned by raw tab creation", async () => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    vi.spyOn(deps.cdpModule, "createTargetViaCdp").mockRejectedValue(
+      new Error("Target.createTarget unavailable"),
+    );
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (!u.includes("/json/new")) {
+        throw new Error(`unexpected fetch: ${u}`);
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          id: "WORKER",
+          title: "Worker",
+          url: "https://example.com/worker.js",
+          webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/WORKER",
+          type: "worker",
+        }),
+      } as unknown as Response;
+    });
+    const { state, remote } = deps.createRemoteRouteHarness(fetchMock);
+
+    await expect(remote.openTab("https://example.com")).rejects.toThrow(/non-selectable target/);
+    expect(state.profiles.get("remote")?.lastTargetId).not.toBe("WORKER");
+  });
+
   it("fails closed for remote tab opens in strict mode without Playwright", async () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     const { state, remote, fetchMock } = deps.createRemoteRouteHarness();
