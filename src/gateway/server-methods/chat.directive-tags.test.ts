@@ -113,6 +113,7 @@ const mockState = vi.hoisted(() => ({
   maxActiveSaveMediaCalls: 0,
   sandboxWorkspace: null as { workspaceDir: string; containerWorkdir?: string } | null,
   stageSandboxMediaError: null as Error | null,
+  stageSandboxMediaCleanup: vi.fn(async () => undefined),
   stagedRelativePaths: null as string[] | null,
   hasBeforeAgentRunHooks: false,
   beforeMessageWriteBlock: false,
@@ -427,7 +428,7 @@ vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => ({
           staged.delete(source);
         }
       }
-      return { staged };
+      return { staged, cleanup: mockState.stageSandboxMediaCleanup };
     },
   ),
 }));
@@ -956,6 +957,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     bindingMocks.resolveByConversation.mockReturnValue(null);
     mockState.sandboxWorkspace = null;
     mockState.stageSandboxMediaError = null;
+    mockState.stageSandboxMediaCleanup.mockReset();
+    mockState.stageSandboxMediaCleanup.mockResolvedValue(undefined);
     mockState.stagedRelativePaths = null;
     mockState.unstagedSources = null;
     mockState.deleteMediaBufferCalls = [];
@@ -5756,6 +5759,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.MediaPath).toBe("media/inbound/report.pdf");
     expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBe("/sandbox/workspace");
     expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.stageSandboxMediaCleanup).toHaveBeenCalledTimes(1);
   });
 
   it("preserves staged non-image paths when plugin-bound sessions also carry inline images", async () => {

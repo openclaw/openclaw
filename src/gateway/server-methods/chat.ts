@@ -664,7 +664,12 @@ async function prestageMediaPathOffloads(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
-}): Promise<{ paths: string[]; types: string[]; workspaceDir?: string }> {
+}): Promise<{
+  paths: string[];
+  types: string[];
+  workspaceDir?: string;
+  cleanup?: StageSandboxMediaResult["cleanup"];
+}> {
   const mediaPathRefs = params.offloadedRefs.filter(
     (ref) => params.includeImageRefs || !ref.mimeType.startsWith("image/"),
   );
@@ -687,6 +692,7 @@ async function prestageMediaPathOffloads(params: {
     return refsByManagedPath(mediaPathRefs);
   }
 
+  let cleanup: StageSandboxMediaResult["cleanup"] | undefined;
   try {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
     const sandbox = await ensureSandboxWorkspaceForSession({
@@ -731,6 +737,7 @@ async function prestageMediaPathOffloads(params: {
         sessionKey: params.sessionKey,
         workspaceDir,
       });
+      cleanup = stageResult.cleanup;
     } catch (stageErr) {
       // stageSandboxMedia threw before copying anything (e.g. workspace mkdir
       // ENOSPC/EPERM), so nothing reached the sandbox. Already-managed inbound
@@ -785,8 +792,10 @@ async function prestageMediaPathOffloads(params: {
       paths: ordered.map((entry) => entry.path),
       types: ordered.map((entry) => entry.mimeType),
       workspaceDir: sandbox.workspaceDir,
+      cleanup,
     };
   } catch (err) {
+    await cleanup?.();
     await Promise.allSettled(
       params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
     );
@@ -1638,6 +1647,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     let mediaPathOffloadPaths: string[] = [];
     let mediaPathOffloadTypes: string[] = [];
     let mediaPathOffloadWorkspaceDir: string | undefined;
+    let cleanupMediaPathOffloads: (() => Promise<void>) | undefined;
+    const cleanupPreparedAttachments = async () => {
+      const cleanup = cleanupMediaPathOffloads;
+      cleanupMediaPathOffloads = undefined;
+      await cleanup?.();
+    };
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -2173,6 +2188,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               paths: mediaPathOffloadPaths,
               types: mediaPathOffloadTypes,
               workspaceDir: mediaPathOffloadWorkspaceDir,
+              cleanup: cleanupMediaPathOffloads,
             } = await prestageMediaPathOffloads({
               offloadedRefs,
               // Text-only image offloads need ctx.MediaPaths so media-understanding
@@ -2197,6 +2213,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           performance.now() - prepareAttachmentsStartedAtMs,
         );
       } catch (err) {
+        await cleanupPreparedAttachments();
         cleanupAdmittedRun({ force: true });
         clearAgentRunContext(clientRunId, lifecycleGeneration);
         logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
@@ -2212,6 +2229,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
     if (activeRunAbort.controller.signal.aborted) {
+      await cleanupPreparedAttachments();
       finishAbortedChatSend();
       return;
     }
@@ -2219,6 +2237,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     // Attachment preparation and admission can suspend. Recheck immediately
     // before ACK/dispatch so hot config reload cannot cross the send boundary.
     if (sessionRoutingChanged(context.getRuntimeConfig())) {
+      await cleanupPreparedAttachments();
       cleanupAdmittedRun({ force: true });
       clearAgentRunContext(clientRunId, lifecycleGeneration);
       respondSessionRoutingChanged();
@@ -2289,6 +2308,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           ) {
             throw new Error("chat admission ownership changed before terminalization");
           }
+          await cleanupPreparedAttachments();
           finishAbortedChatSend();
           return;
         }
@@ -2296,6 +2316,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           if (!(await terminalizeRestartSafeAdmission({ retryable: true, status: "failed" }))) {
             throw new Error("chat admission ownership changed before terminalization");
           }
+          await cleanupPreparedAttachments();
           cleanupAdmittedRun({ force: true });
           clearAgentRunContext(clientRunId, lifecycleGeneration);
           respondSessionRoutingChanged();
@@ -3763,6 +3784,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             errorMessage,
           });
         })
+        .then(cleanupPreparedAttachments)
         .finally(() => {
           const dispatchError = pendingDispatchLifecycleError;
           // Reserve error projection before cleanup retires the dispatch root. Restart
@@ -3831,6 +3853,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             .finally(() => releaseDispatchErrorRoot?.());
         });
     } catch (err) {
+      await cleanupPreparedAttachments();
       if (restartSafeAdmission) {
         const terminalized = await terminalizeRestartSafeAdmission({
           retryable: true,

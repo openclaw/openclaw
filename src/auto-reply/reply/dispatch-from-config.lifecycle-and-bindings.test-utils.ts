@@ -1312,7 +1312,10 @@ describe("dispatchReplyFromConfig", () => {
       params.sessionCtx.MediaPaths = [stagedPath];
       params.sessionCtx.MediaUrl = stagedPath;
       params.sessionCtx.MediaUrls = [stagedPath];
-      return { staged: new Map([[rawPath, stagedPath]]) };
+      return {
+        staged: new Map([[rawPath, stagedPath]]),
+        cleanup: async () => undefined,
+      };
     });
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>

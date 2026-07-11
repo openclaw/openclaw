@@ -4,7 +4,7 @@ import { logVerbose } from "../../globals.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import type { MsgContext } from "../templating.js";
-import { withFastReplyConfig } from "./get-reply-fast-path.js";
+import { withFastReplyConfig, withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import {
   buildGetReplyGroupCtx,
   createGetReplyContinueDirectivesResult,
@@ -148,7 +148,10 @@ async function resetMessageHookTestState() {
     aliasIndex: emptyAliasIndex(),
   });
   vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
-  vi.mocked(stageSandboxMediaMock).mockResolvedValue({ staged: new Map() });
+  vi.mocked(stageSandboxMediaMock).mockResolvedValue({
+    staged: new Map(),
+    cleanup: async () => undefined,
+  });
   mocks.resolveReplySessionPreprocessingState.mockReturnValue({
     sessionEntry: undefined,
     sessionKey: "agent:main:telegram:-100123",
@@ -518,7 +521,10 @@ describe("getReplyFromConfig message hooks", () => {
       params.sessionCtx.MediaPaths = [stagedPath];
       params.sessionCtx.MediaUrl = stagedPath;
       params.sessionCtx.MediaUrls = [stagedPath];
-      return { staged: new Map([[remotePath, stagedPath]]) };
+      return {
+        staged: new Map([[remotePath, stagedPath]]),
+        cleanup: async () => undefined,
+      };
     });
     mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
       order.push("understand");
@@ -565,6 +571,37 @@ describe("getReplyFromConfig message hooks", () => {
         workspaceDir: "/tmp/workspace",
       }),
     );
+  });
+
+  it("keeps host-staged media available until the prepared reply finishes", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "<media:audio>",
+        abortKey: "agent:main:telegram:-100123",
+        from: "telegram:user",
+        to: "telegram:ops",
+        senderId: "telegram:user",
+        commandSource: "message",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+      }),
+    );
+    vi.mocked(stageSandboxMediaMock).mockResolvedValueOnce({
+      staged: new Map(),
+      cleanup,
+    });
+    vi.mocked(runPreparedReplyMock).mockImplementationOnce(async () => {
+      expect(cleanup).not.toHaveBeenCalled();
+      return { text: "ok" };
+    });
+
+    await expect(
+      getReplyFromConfig(buildCtx(), undefined, withFullRuntimeReplyConfig({})),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(stageSandboxMediaMock).toHaveBeenCalledTimes(1);
+    expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("emits only preprocessed when no transcript is produced", async () => {

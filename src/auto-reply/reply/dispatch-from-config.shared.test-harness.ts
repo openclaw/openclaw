@@ -248,9 +248,15 @@ const replyMediaPathMocks = vi.hoisted(() => ({
   ),
 }));
 const stageSandboxMediaMocks = vi.hoisted(() => ({
-  stageSandboxMedia: vi.fn<(params: unknown) => Promise<{ staged: Map<string, string> }>>(
-    async () => ({ staged: new Map() }),
-  ),
+  stageSandboxMedia: vi.fn<
+    (params: unknown) => Promise<{
+      staged: Map<string, string>;
+      cleanup: () => Promise<void>;
+    }>
+  >(async () => ({
+    staged: new Map(),
+    cleanup: async () => undefined,
+  })),
 }));
 const runtimePluginMocks = vi.hoisted(() => ({
   ensureRuntimePluginsLoaded: vi.fn(),
@@ -733,6 +739,10 @@ export function resetPluginTtsAndThreadMocks() {
   replyMediaPathMocks.createReplyMediaPathNormalizer
     .mockReset()
     .mockReturnValue(async (payload: ReplyPayload) => payload);
+  stageSandboxMediaMocks.stageSandboxMedia.mockReset().mockResolvedValue({
+    staged: new Map(),
+    cleanup: async () => undefined,
+  });
   threadInfoMocks.parseSessionThreadInfo
     .mockReset()
     .mockImplementation(parseGenericThreadSessionInfo);

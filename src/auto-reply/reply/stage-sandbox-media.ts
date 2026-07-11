@@ -34,9 +34,18 @@ export const SCP_STDERR_TAIL_CHARS = 16_384;
 // chat.send RPC already admitted under its 20MB cap).
 export type StageSandboxMediaResult = {
   staged: ReadonlyMap<string, string>;
+  /**
+   * Best-effort lifecycle cleanup for host-workspace staging. Callers must wait
+   * until every consumer is finished; cleanup never removes a non-empty dir.
+   */
+  cleanup: () => Promise<void>;
 };
 
-const EMPTY_STAGE_RESULT: StageSandboxMediaResult = { staged: new Map() };
+const NOOP_STAGE_CLEANUP = async () => {};
+const EMPTY_STAGE_RESULT: StageSandboxMediaResult = {
+  staged: new Map(),
+  cleanup: NOOP_STAGE_CLEANUP,
+};
 
 type StageableMediaSource = {
   lookupKey: string;
@@ -90,6 +99,12 @@ export async function stageSandboxMedia(params: {
     !sandbox && !ctx.MediaRemoteHost
       ? path.join("media", "inbound", `openclaw-staged-${crypto.randomUUID()}`)
       : undefined;
+  const cleanup = hostWorkspaceStagingDir
+    ? () =>
+        removeEmptyHostWorkspaceStagingDir(
+          path.join(effectiveWorkspaceDir, hostWorkspaceStagingDir),
+        )
+    : NOOP_STAGE_CLEANUP;
 
   for (const raw of rawPaths) {
     const source = await resolveStageableMediaSource(raw);
@@ -160,7 +175,25 @@ export async function stageSandboxMedia(params: {
     hasPathsArray,
   });
 
-  return { staged };
+  if (staged.size === 0) {
+    await cleanup();
+  }
+  return { staged, cleanup };
+}
+
+async function removeEmptyHostWorkspaceStagingDir(stagingDir: string): Promise<void> {
+  try {
+    // Non-recursive removal preserves files that a runner or tool still needs.
+    await fs.rmdir(stagingDir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTEMPTY" || code === "EEXIST") {
+      return;
+    }
+    logVerbose(
+      `Failed to remove empty inbound media staging directory ${stagingDir}: ${String(error)}`,
+    );
+  }
 }
 
 function toPosixRelativePath(filePath: string): string {

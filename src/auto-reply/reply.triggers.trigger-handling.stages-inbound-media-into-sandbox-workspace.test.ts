@@ -229,6 +229,14 @@ describe("stageSandboxMedia", () => {
       expect(sessionCtx.MediaPath).toBe(stagedPath);
       await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("host-pdf-bytes");
       await expect(fs.readFile(existingProjectFile, "utf8")).resolves.toBe("project-file");
+
+      const stagingDir = dirname(stagedPath);
+      await result.cleanup();
+      await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("host-pdf-bytes");
+
+      await fs.rm(stagedPath);
+      await result.cleanup();
+      await expect(fs.stat(stagingDir)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
