@@ -2,8 +2,8 @@
 
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { createOpenClawCodingToolsRaw } from "../agents/agent-tools.js";
+import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
