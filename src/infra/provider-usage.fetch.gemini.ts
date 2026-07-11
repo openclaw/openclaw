@@ -7,7 +7,7 @@ import {
   fetchJson,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
-import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
+import { clampPercent, providerUsageLabel } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
   UsageProviderId,
@@ -98,7 +98,7 @@ export async function fetchGeminiUsage(
 
   return {
     provider,
-    displayName: expectDefined(PROVIDER_LABELS[provider], "provider labels entry at provider"),
+    displayName: expectDefined(providerUsageLabel(provider), "gemini provider usage label"),
     windows,
   };
 }

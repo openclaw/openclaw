@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Fetches Claude provider usage windows.
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import {
@@ -170,7 +169,7 @@ async function fetchClaudeWebUsage(
   }
   return {
     provider: "anthropic",
-    displayName: expectDefined(PROVIDER_LABELS.anthropic, "provider label"),
+    displayName: PROVIDER_LABELS.anthropic,
     windows,
   };
 }
@@ -259,7 +258,7 @@ export async function fetchClaudeUsage(
 
   return {
     provider: "anthropic",
-    displayName: expectDefined(PROVIDER_LABELS.anthropic, "provider label"),
+    displayName: PROVIDER_LABELS.anthropic,
     windows,
     ...(billing ? { billing } : {}),
   };

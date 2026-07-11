@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Fetches and normalizes DeepSeek provider usage records.
 import {
   buildUsageHttpErrorSnapshot,
@@ -109,7 +108,7 @@ export async function fetchDeepSeekUsage(
   if (!summary) {
     return {
       provider: "deepseek",
-      displayName: expectDefined(PROVIDER_LABELS.deepseek, "provider label"),
+      displayName: PROVIDER_LABELS.deepseek,
       windows: [],
       error: "No balance data",
     };
@@ -117,7 +116,7 @@ export async function fetchDeepSeekUsage(
 
   return {
     provider: "deepseek",
-    displayName: expectDefined(PROVIDER_LABELS.deepseek, "provider label"),
+    displayName: PROVIDER_LABELS.deepseek,
     windows: [],
     billing,
     summary,

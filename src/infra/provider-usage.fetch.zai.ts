@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Fetches and normalizes Z.ai provider usage records.
 import {
   buildUsageHttpErrorSnapshot,
@@ -61,7 +60,7 @@ export async function fetchZaiUsage(
     const errorMessage = typeof data.msg === "string" ? data.msg.trim() : "";
     return {
       provider: "zai",
-      displayName: expectDefined(PROVIDER_LABELS.zai, "provider label"),
+      displayName: PROVIDER_LABELS.zai,
       windows: [],
       error: errorMessage || "API error",
     };
@@ -100,7 +99,7 @@ export async function fetchZaiUsage(
   const planName = data.data?.planName || data.data?.plan || undefined;
   return {
     provider: "zai",
-    displayName: expectDefined(PROVIDER_LABELS.zai, "provider label"),
+    displayName: PROVIDER_LABELS.zai,
     windows,
     plan: planName,
   };
