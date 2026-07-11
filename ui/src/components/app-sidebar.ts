@@ -2039,25 +2039,25 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           ? html`<button
               type="button"
               class="sidebar-session-pagination__button"
-              aria-label=${t("chat.sidebar.seeMore")}
+              aria-label=${t("codexSessions.loadMore")}
               @click=${() => {
                 this.visibleSessionLimit += SIDEBAR_SESSION_PAGE_SIZE;
               }}
             >
-              ${t("chat.sidebar.seeMore")}
+              ${t("codexSessions.loadMore")}
             </button>`
           : nothing}
         ${canShowLess
           ? html`<button
               type="button"
               class="sidebar-session-pagination__button"
-              aria-label=${t("chat.sidebar.seeLess")}
+              aria-label=${t("usage.details.collapse")}
               @click=${() => {
                 this.clearSessionSelection();
                 this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
               }}
             >
-              ${t("chat.sidebar.seeLess")}
+              ${t("usage.details.collapse")}
             </button>`
           : nothing}
       </div>

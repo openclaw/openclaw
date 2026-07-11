@@ -2182,8 +2182,6 @@ export const ja_JP: TranslationMap = {
       sortUpdated: "最終更新",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "{count} 件のセッションに対するアクション",
-      seeLess: "See less",
-      seeMore: "See more",
       workSessions: "作業",
     },
     welcome: {

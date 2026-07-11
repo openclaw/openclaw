@@ -2164,8 +2164,6 @@ export const ko: TranslationMap = {
       sortUpdated: "마지막 업데이트",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "{count}개 세션 작업",
-      seeLess: "See less",
-      seeMore: "See more",
       workSessions: "작업",
     },
     welcome: {

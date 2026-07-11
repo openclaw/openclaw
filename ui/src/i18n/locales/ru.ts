@@ -2189,8 +2189,6 @@ export const ru: TranslationMap = {
       sortUpdated: "Последнее обновление",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Действия для {count} сеансов",
-      seeLess: "See less",
-      seeMore: "See more",
       workSessions: "Работа",
     },
     welcome: {

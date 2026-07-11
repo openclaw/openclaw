@@ -2163,8 +2163,6 @@ export const vi: TranslationMap = {
       sortUpdated: "Cập nhật lần cuối",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Hành động cho {count} phiên",
-      seeLess: "See less",
-      seeMore: "See more",
       workSessions: "Công việc",
     },
     welcome: {

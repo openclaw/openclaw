@@ -2175,8 +2175,6 @@ export const id: TranslationMap = {
       sortUpdated: "Terakhir diperbarui",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Tindakan untuk {count} sesi",
-      seeLess: "See less",
-      seeMore: "See more",
       workSessions: "Pekerjaan",
     },
     welcome: {

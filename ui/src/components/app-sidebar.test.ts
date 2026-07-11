@@ -303,12 +303,18 @@ describe("AppSidebar session pagination", () => {
     if (!result) {
       return;
     }
+    const pinnedIndex = result.sessions.findIndex((row) => row.key === pinnedKey);
+    const pinned = result.sessions[pinnedIndex];
+    expect(pinned).toBeDefined();
+    if (!pinned) {
+      return;
+    }
+    const sessionRows = [...result.sessions];
+    sessionRows[pinnedIndex] = { ...pinned, pinned: true };
     sessions.publish({
       result: {
         ...result,
-        sessions: result.sessions.map((row) =>
-          row.key === pinnedKey ? { ...row, pinned: true } : row,
-        ),
+        sessions: sessionRows,
       },
     });
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -332,36 +338,36 @@ describe("AppSidebar session pagination", () => {
       sidebar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 
     expect(rows()).toHaveLength(10);
-    expect(button("See more")).not.toBeNull();
-    expect(button("See less")).toBeNull();
+    expect(button("Load more")).not.toBeNull();
+    expect(button("Collapse")).toBeNull();
 
-    button("See more")?.click();
+    button("Load more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(20);
-    expect(button("See less")).toBeNull();
+    expect(button("Collapse")).toBeNull();
 
-    button("See more")?.click();
+    button("Load more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(30);
-    expect(button("See less")).toBeNull();
+    expect(button("Collapse")).toBeNull();
 
-    button("See more")?.click();
+    button("Load more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(40);
-    expect(button("See more")).not.toBeNull();
-    expect(button("See less")).not.toBeNull();
+    expect(button("Load more")).not.toBeNull();
+    expect(button("Collapse")).not.toBeNull();
 
-    button("See more")?.click();
+    button("Load more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(41);
-    expect(button("See more")).toBeNull();
-    expect(button("See less")).not.toBeNull();
+    expect(button("Load more")).toBeNull();
+    expect(button("Collapse")).not.toBeNull();
 
-    button("See less")?.click();
+    button("Collapse")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(10);
-    expect(button("See more")).not.toBeNull();
-    expect(button("See less")).toBeNull();
+    expect(button("Load more")).not.toBeNull();
+    expect(button("Collapse")).toBeNull();
   });
 });
 

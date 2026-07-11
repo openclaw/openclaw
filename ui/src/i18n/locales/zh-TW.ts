@@ -2126,8 +2126,6 @@ export const zh_TW: TranslationMap = {
       sortUpdated: "最近更新",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "{count} 個工作階段的動作",
-      seeLess: "See less",
-      seeMore: "See more",
       workSessions: "工作",
     },
     welcome: {

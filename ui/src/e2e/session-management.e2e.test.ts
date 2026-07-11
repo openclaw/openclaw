@@ -772,7 +772,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
       const sidebarRows = page.locator(".sidebar-recent-session");
       await expect.poll(() => sidebarRows.count()).toBe(10);
-      await page.getByRole("button", { name: "See more" }).click();
+      await page.getByRole("button", { name: "Load more" }).click();
       await expect.poll(() => sidebarRows.count()).toBe(12);
       await expect.poll(() => page.getByText("All sessions", { exact: true }).count()).toBe(0);
       await captureUiProof(page, "sidebar-all-sessions.png");
@@ -870,7 +870,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         )
         .toBe("false");
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(9);
-      await page.getByRole("button", { name: "See more" }).click();
+      await page.getByRole("button", { name: "Load more" }).click();
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
@@ -1114,7 +1114,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     });
     try {
       await page.goto(`${server.baseUrl}chat`);
-      const seeMore = page.getByRole("button", { name: "See more" });
+      const seeMore = page.getByRole("button", { name: "Load more" });
       for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
         await seeMore.click();
       }

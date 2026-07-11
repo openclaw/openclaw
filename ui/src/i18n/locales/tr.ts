@@ -2188,8 +2188,6 @@ export const tr: TranslationMap = {
       sortUpdated: "Son güncelleme",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "{count} oturum için eylemler",
-      seeLess: "See less",
-      seeMore: "See more",
       workSessions: "Çalışma",
     },
     welcome: {
