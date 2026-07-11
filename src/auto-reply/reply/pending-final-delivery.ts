@@ -1,5 +1,3 @@
-/** Sanitizes pending final delivery text before channel-visible output. */
-import type { ReplyPayload } from "../types.js";
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
@@ -8,6 +6,8 @@ import {
   stripLeadingSilentToken,
   stripSilentToken,
 } from "../tokens.js";
+/** Sanitizes pending final delivery text before channel-visible output. */
+import type { ReplyPayload } from "../types.js";
 import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
 
 /** Build the restart-recovery text represented by one or more final payloads. */

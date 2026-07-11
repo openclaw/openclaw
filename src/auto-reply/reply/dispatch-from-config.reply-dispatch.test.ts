@@ -110,9 +110,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       () => sessionStoreMocks.currentEntry,
     );
     sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
-    sessionStoreMocks.readSessionEntry.mockReset().mockImplementation(
-      () => sessionStoreMocks.currentEntry,
-    );
+    sessionStoreMocks.readSessionEntry
+      .mockReset()
+      .mockImplementation(() => sessionStoreMocks.currentEntry);
     sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
     sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
     sessionStoreMocks.updateSessionStoreEntry.mockClear();
