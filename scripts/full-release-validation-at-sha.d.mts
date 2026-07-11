@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 export function parseArgs(argv: unknown): {
   sha: string;
+  targetRef: string;
   workflowSha: string;
   keepBranch: boolean;
   dryRun: boolean;

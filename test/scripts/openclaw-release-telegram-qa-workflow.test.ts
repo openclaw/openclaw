@@ -218,10 +218,10 @@ describe("release Telegram QA workflow", () => {
       2,
     );
     expect(source.match(/collaborators\/\$\{permission_actor\}\/permission/gu)).toHaveLength(2);
-    expect(source.match(/refs\/remotes\/origin\/extended-stable/gu).length).toBeGreaterThanOrEqual(
-      2,
-    );
-    expect(source.match(/extended-stable\/\[0-9\]/gu).length).toBeGreaterThanOrEqual(2);
+    expect(
+      (source.match(/refs\/remotes\/origin\/extended-stable/gu) ?? []).length,
+    ).toBeGreaterThanOrEqual(2);
+    expect((source.match(/extended-stable\/\[0-9\]/gu) ?? []).length).toBeGreaterThanOrEqual(2);
     expect(source).not.toContain("collaborators/${signer}/permission");
   });
 
