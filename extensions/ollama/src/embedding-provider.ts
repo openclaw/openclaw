@@ -344,7 +344,7 @@ function resolveOllamaEmbeddingClient(
       ? {
           localServiceTarget: {
             providerId: providerConfig.providerId,
-            baseUrl,
+            baseUrl: `${baseUrl.replace(/\/+$/, "")}/v1`,
             headers,
           },
           acquireLocalService: options.acquireLocalService,

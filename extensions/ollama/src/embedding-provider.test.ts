@@ -605,7 +605,7 @@ describe("ollama embedding provider", () => {
     expect(acquireLocalService).toHaveBeenCalledWith(
       {
         providerId: "ollama-spark",
-        baseUrl: "http://spark.local:11434",
+        baseUrl: "http://spark.local:11434/v1",
         headers: {
           "Content-Type": "application/json",
           "X-Custom-Ollama": "spark",
