@@ -9,7 +9,12 @@ const navigationGuardMocks = vi.hoisted(() => ({
   assertBrowserNavigationResultAllowed: vi.fn(
     async (_opts?: { url: string; ssrfPolicy?: unknown }) => {},
   ),
-  withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
+  withBrowserNavigationPolicy: vi.fn(
+    (ssrfPolicy?: unknown, opts?: { browserProxyMode?: string }) => ({
+      ...(ssrfPolicy ? { ssrfPolicy } : {}),
+      ...(opts?.browserProxyMode ? { browserProxyMode: opts.browserProxyMode } : {}),
+    }),
+  ),
 }));
 
 vi.mock("../navigation-guard.js", () => navigationGuardMocks);
@@ -128,12 +133,13 @@ function baseProfileContext() {
 
 function createRouteContext(
   profileCtx: ProfileContext,
-  options?: { actionTimeoutMs?: number; ssrfPolicy?: unknown },
+  options?: { actionTimeoutMs?: number; extraArgs?: string[]; ssrfPolicy?: unknown },
 ) {
   return {
     state: () => ({
       resolved: {
         actionTimeoutMs: options?.actionTimeoutMs ?? 45_000,
+        extraArgs: options?.extraArgs ?? [],
         ssrfPolicy: options?.ssrfPolicy,
       },
     }),
@@ -160,6 +166,7 @@ async function callTabsRoute(params: {
   body?: Record<string, unknown>;
   profileCtx: ProfileContext;
   actionTimeoutMs?: number;
+  extraArgs?: string[];
   signal?: AbortSignal;
   ssrfPolicy?: unknown;
 }) {
@@ -168,6 +175,7 @@ async function callTabsRoute(params: {
     app,
     createRouteContext(params.profileCtx, {
       actionTimeoutMs: params.actionTimeoutMs,
+      extraArgs: params.extraArgs,
       ssrfPolicy: params.ssrfPolicy,
     }) as never,
   );
@@ -192,6 +200,7 @@ async function callTabsAction(params: {
   body: Record<string, unknown>;
   profileCtx: ProfileContext;
   actionTimeoutMs?: number;
+  extraArgs?: string[];
   signal?: AbortSignal;
   ssrfPolicy?: unknown;
 }) {
@@ -201,6 +210,7 @@ async function callTabsAction(params: {
 async function callTabsList(params: {
   profileCtx: ProfileContext;
   actionTimeoutMs?: number;
+  extraArgs?: string[];
   signal?: AbortSignal;
   ssrfPolicy?: unknown;
 }) {
@@ -242,8 +252,11 @@ describe("browser tab routes", () => {
     navigationGuardMocks.assertBrowserNavigationAllowed.mockReset();
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockReset();
     navigationGuardMocks.withBrowserNavigationPolicy.mockReset();
-    navigationGuardMocks.withBrowserNavigationPolicy.mockImplementation((ssrfPolicy?: unknown) =>
-      ssrfPolicy ? { ssrfPolicy } : {},
+    navigationGuardMocks.withBrowserNavigationPolicy.mockImplementation(
+      (ssrfPolicy?: unknown, opts?: { browserProxyMode?: string }) => ({
+        ...(ssrfPolicy ? { ssrfPolicy } : {}),
+        ...(opts?.browserProxyMode ? { browserProxyMode: opts.browserProxyMode } : {}),
+      }),
     );
   });
 
@@ -420,6 +433,40 @@ describe("browser tab routes", () => {
       ],
     });
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes explicit browser proxy mode into tab list redaction guards", async () => {
+    const ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
+    const profileCtx = createProfileContext({
+      profile: {
+        ...baseProfileContext().profile,
+        cdpIsLoopback: true,
+        driver: "openclaw",
+      } as never,
+    });
+
+    const listResponse = await callTabsList({
+      profileCtx,
+      extraArgs: ["--proxy-server=http://proxy.example.test:8080"],
+      ssrfPolicy,
+    });
+    const actionResponse = await callTabsAction({
+      body: { action: "list" },
+      profileCtx,
+      extraArgs: ["--proxy-server=http://proxy.example.test:8080"],
+      ssrfPolicy,
+    });
+
+    expect(listResponse.statusCode).toBe(200);
+    expect(actionResponse.statusCode).toBe(200);
+    expect(navigationGuardMocks.withBrowserNavigationPolicy).toHaveBeenCalledWith(ssrfPolicy, {
+      browserProxyMode: "explicit-browser-proxy",
+    });
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+      url: "https://example.com",
+      ssrfPolicy,
+      browserProxyMode: "explicit-browser-proxy",
+    });
   });
 
   it("blocks /tabs/focus when target tab URL fails SSRF checks", async () => {
