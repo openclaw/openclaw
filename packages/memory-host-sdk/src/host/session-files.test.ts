@@ -911,6 +911,7 @@ describe("buildSessionEntry", () => {
         message: {
           role: "user",
           content: "[OpenClaw heartbeat poll]",
+          provenance: { kind: "heartbeat" },
         },
       }),
       JSON.stringify({
@@ -938,6 +939,33 @@ describe("buildSessionEntry", () => {
       "User: What is the weather today?\nAssistant: The weather is sunny.",
     );
     expect(entry.lineMap).toStrictEqual([3, 4]);
+  });
+
+  it("does not drop assistant response when user message lacks heartbeat provenance", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "What is the meaning of life?",
+          // No provenance -- this is a normal user message
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "42",
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "normal-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    // Both messages should survive -- no provenance means no heartbeat detection
+    expect(entry.content).toBe("User: What is the meaning of life?\nAssistant: 42");
+    expect(entry.lineMap).toStrictEqual([1, 2]);
   });
 
   it("drops Date-invalid numeric message timestamps", async () => {

@@ -802,9 +802,9 @@ export async function buildSessionEntry(
       false;
     const allowArchiveRecordCronClassification =
       isUsageCountedSessionArchiveTranscriptPath(absPath);
-    // When a heartbeat user prompt is filtered by sanitizeSessionText (below),
-    // this flag tracks that the next assistant response is a synthetic ack
-    // that must also be excluded from the dream corpus.
+    // When a heartbeat user message (authenticated by provenance) is filtered
+    // by sanitizeSessionText (below), this flag tracks that the next assistant
+    // response is a synthetic ack that must also be excluded from the dream corpus.
     let pendingHeartbeatUserDrop = false;
     for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
       await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
@@ -857,11 +857,12 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
-      // Check before sanitization: if this user message is a runtime-injected
-      // heartbeat poll, the following assistant response is a synthetic ack
+      // Check before sanitization: if this user message carries heartbeat
+      // provenance, the following assistant response is a synthetic ack
       // that must also be excluded (see pendingHeartbeatUserDrop below).
       const isHeartbeatUser =
-        message.role === "user" && isGeneratedHeartbeatPromptMessage(rawText, "user");
+        message.role === "user" &&
+        (message.provenance as { kind?: string } | undefined)?.kind === "heartbeat";
 
       // User text is not trusted archive-wide provenance. Per-message sanitization
       // drops cron prompts without clearing unrelated content from the archive.
@@ -870,10 +871,10 @@ export async function buildSessionEntry(
         if (isHeartbeatUser) {
           pendingHeartbeatUserDrop = true;
         }
-        // SAFE cross-message coupling for heartbeat only: the prompt pattern
-        // ([OpenClaw heartbeat poll]) is injected by the runtime and cannot be
-        // spoofed by user input, unlike [cron:...] or System (untrusted): ...
-        // patterns. See PR #70737 review for why those are unsafe to couple.
+        // SAFE cross-message coupling for heartbeat only: the initiating turn
+        // is authenticated by runtime provenance (kind: "heartbeat"), not by
+        // user-spoofable text content. See PR #70737 for why text-based
+        // cross-message coupling is unsafe for [cron:...] patterns.
         continue;
       }
 
