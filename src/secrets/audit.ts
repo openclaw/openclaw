@@ -635,7 +635,7 @@ export async function runSecretsAudit(
   };
 
   const stateDir = resolveStateDir(env, os.homedir);
-  const envPath = path.join(resolveStateDir(env, os.homedir), ".env");
+  const envPath = path.join(stateDir, ".env");
   const config = snapshot.valid ? snapshot.config : ({} as OpenClawConfig);
   let resolution = {
     refsChecked: 0,
