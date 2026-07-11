@@ -4,7 +4,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 export const OPENAI_CODEX_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/codex";
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
-export type OpenAIEndpointKind = "unresolved" | "platform" | "chatgpt" | "custom" | "invalid";
+type OpenAIEndpointKind = "unresolved" | "platform" | "chatgpt" | "custom" | "invalid";
 
 const OPENAI_PLATFORM_PATHS = new Set(["/", "/v1", "/v1/"]);
 const OPENAI_CHATGPT_PATHS = new Set([
@@ -45,6 +45,8 @@ export function classifyOpenAIBaseUrl(baseUrl: unknown): OpenAIEndpointKind {
     const rawHost = url.hostname.toLowerCase();
     const host = rawHost.endsWith(".") ? rawHost.slice(0, -1) : rawHost;
     if (host === "api.openai.com" || host === "chatgpt.com") {
+      // Official remote endpoints carry API keys or subscription bearers.
+      // Never reinterpret their plaintext form as an eligible native route.
       if (url.protocol !== "https:" || url.port || url.search || url.hash) {
         return "invalid";
       }
@@ -69,19 +71,19 @@ export function resolveOpenAIDefaultBaseUrl(
 }
 
 export function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
-  const trimmed = normalizeOptionalString(baseUrl);
-  if (!trimmed) {
-    return false;
-  }
-  return /^https?:\/\/api\.openai\.com(?:\/v1)?\/?$/i.test(trimmed);
+  return classifyOpenAIBaseUrl(baseUrl) === "platform";
 }
 
 export function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
-  const trimmed = normalizeOptionalString(baseUrl);
-  if (!trimmed) {
+  return classifyOpenAIBaseUrl(baseUrl) === "chatgpt";
+}
+
+/** True only for an HTTPS OpenAI Platform endpoint eligible for native transport hooks. */
+export function isOpenAIHttpsApiBaseUrl(baseUrl?: string): boolean {
+  if (typeof baseUrl !== "string" || classifyOpenAIBaseUrl(baseUrl) !== "platform") {
     return false;
   }
-  return /^https?:\/\/chatgpt\.com\/backend-api(?:\/codex)?(?:\/v1)?\/?$/i.test(trimmed);
+  return new URL(baseUrl.trim()).protocol === "https:";
 }
 
 export function canonicalizeCodexResponsesBaseUrl(baseUrl?: string): string | undefined {

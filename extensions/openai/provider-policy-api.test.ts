@@ -1,8 +1,36 @@
 // Openai tests cover provider policy api plugin behavior.
-import { describe, expect, it } from "vitest";
-import { resolveModelRoutes, resolveThinkingProfile } from "./provider-policy-api.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  normalizeModelCatalogId,
+  resolveModelRoutes,
+  resolveThinkingProfile,
+} from "./provider-policy-api.js";
 
 describe("OpenAI provider policy artifact", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENAI_BASE_URL", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("normalizes the legacy Codex model alias at the provider boundary", () => {
+    expect(normalizeModelCatalogId({ provider: " OpenAI ", modelId: "openai/GPT-5.4-CODEX" })).toBe(
+      "gpt-5.4",
+    );
+    expect(
+      resolveModelRoutes({
+        provider: "openai",
+        modelId: "openai/gpt-5.4-codex",
+        env: {},
+      }),
+    ).toMatchObject({
+      kind: "routes",
+      routes: [{ api: "openai-responses" }, { api: "openai-chatgpt-responses" }],
+    });
+  });
+
   it("keeps OpenAI thinking policy for openai refs", () => {
     const codexProfile = resolveThinkingProfile({
       provider: "openai",
@@ -172,44 +200,142 @@ describe("OpenAI provider policy artifact", () => {
           api: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
           authRequirement: "api-key",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
         },
         {
           api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
           authRequirement: "subscription",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
         },
       ],
     } as const;
+    expect(resolveModelRoutes({ provider: "openai", modelId: "gpt-5.5" })).toEqual(expected);
     for (const observed of [
       { api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+      { api: "openai-completions", baseUrl: "https://api.openai.com/v1" },
       {
         api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
       },
     ] as const) {
-      expect(resolveModelRoutes({ provider: "openai", modelId: "gpt-5.5", observed })).toEqual(
-        expected,
-      );
+      expect(
+        resolveModelRoutes({
+          provider: "openai",
+          modelId: "gpt-5.5",
+          observedRoutes: [observed],
+        }),
+      ).toEqual(expected);
     }
   });
 
-  it("keeps the exact dual-route roster explicit", () => {
-    for (const modelId of [
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.5",
-      "gpt-5.5-pro",
-      "gpt-5.4",
-      "gpt-5.4-codex",
-      "gpt-5.4-pro",
-      "gpt-5.4-mini",
+  it.each(["gpt-5.4-nano", "gpt-future-observed"])(
+    "groups reversed physical routes for unknown logical model %s",
+    (modelId) => {
+      const platform = {
+        api: "openai-responses" as const,
+        baseUrl: "https://api.openai.com/v1",
+      };
+      const chatGPT = {
+        api: "openai-chatgpt-responses" as const,
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      };
+      const forward = resolveModelRoutes({
+        provider: "openai",
+        modelId,
+        observedRoutes: [platform, chatGPT],
+      });
+      const reversed = resolveModelRoutes({
+        provider: "openai",
+        modelId,
+        observedRoutes: [chatGPT, platform],
+      });
+
+      expect(reversed).toEqual(forward);
+      expect(forward).toMatchObject({
+        kind: "routes",
+        routes: [
+          { api: "openai-responses", authRequirement: "api-key" },
+          { api: "openai-chatgpt-responses", authRequirement: "subscription" },
+        ],
+      });
+    },
+  );
+
+  it("deduplicates equivalent custom URLs independently of observation order", () => {
+    const withoutSlash = {
+      api: "openai-responses" as const,
+      baseUrl: "https://relay.example.test:443/v1",
+    };
+    const withSlash = {
+      api: "openai-responses" as const,
+      baseUrl: "https://relay.example.test/v1/",
+    };
+    const forward = resolveModelRoutes({
+      provider: "openai",
+      modelId: "gpt-future-observed",
+      observedRoutes: [withoutSlash, withSlash],
+    });
+    const reversed = resolveModelRoutes({
+      provider: "openai",
+      modelId: "gpt-future-observed",
+      observedRoutes: [withSlash, withoutSlash],
+    });
+
+    expect(reversed).toEqual(forward);
+    expect(forward).toMatchObject({
+      kind: "routes",
+      routes: [{ api: "openai-responses", authRequirement: "api-key" }],
+    });
+    expect(forward.kind === "routes" ? forward.routes : []).toHaveLength(1);
+  });
+
+  it("rejects plaintext observations beside HTTPS routes", () => {
+    const httpsRoute = {
+      api: "openai-chatgpt-responses" as const,
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    const httpRoute = {
+      api: "openai-chatgpt-responses" as const,
+      baseUrl: "http://chatgpt.com/backend-api/codex",
+    };
+    for (const observedRoutes of [
+      [httpsRoute, httpRoute],
+      [httpRoute, httpsRoute],
     ]) {
-      const resolution = resolveModelRoutes({ provider: "openai", modelId });
       expect(
-        resolution.kind === "routes" ? resolution.routes.map((route) => route.api) : [],
-      ).toEqual(["openai-responses", "openai-chatgpt-responses"]);
+        resolveModelRoutes({
+          provider: "openai",
+          modelId: "gpt-future-observed",
+          observedRoutes,
+        }),
+      ).toMatchObject({ kind: "incompatible", code: "invalid-openai-base-url" });
     }
+  });
+
+  it("carries prepared request transport behavior across every candidate", () => {
+    expect(
+      resolveModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        requestTransportOverrides: "present",
+      }),
+    ).toMatchObject({
+      kind: "routes",
+      defaultRuntimeId: "openclaw",
+      routes: [
+        {
+          requestTransportOverrides: "present",
+          runtimePolicy: { compatibleIds: ["openclaw"] },
+        },
+        {
+          requestTransportOverrides: "present",
+          runtimePolicy: { compatibleIds: ["openclaw"] },
+        },
+      ],
+    });
   });
 
   it("lets authored model routes lock provider, environment, and observed facts", () => {
@@ -225,11 +351,13 @@ describe("OpenAI provider policy artifact", () => {
           api: "openai-chatgpt-responses",
           baseUrl: "https://provider.example.test/v1",
         },
-        environment: { baseUrl: "https://env.example.test/v1" },
-        observed: {
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-        },
+        env: { OPENAI_BASE_URL: "https://env.example.test/v1" },
+        observedRoutes: [
+          {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+          },
+        ],
       }),
     ).toEqual({
       kind: "routes",
@@ -239,6 +367,8 @@ describe("OpenAI provider policy artifact", () => {
           api: "openai-responses",
           baseUrl: "https://model.example.test/v1",
           authRequirement: "api-key",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw"] },
         },
       ],
     });
@@ -262,6 +392,8 @@ describe("OpenAI provider policy artifact", () => {
           api: "openai-chatgpt-responses",
           baseUrl: "https://proxy.example.test/v1",
           authRequirement: "subscription",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw"] },
         },
       ],
     });
@@ -282,11 +414,94 @@ describe("OpenAI provider policy artifact", () => {
       resolveModelRoutes({
         provider: "openai",
         modelId: "gpt-5.5",
-        environment: { baseUrl: "https://env.example.test/v1" },
+        env: { OPENAI_BASE_URL: "https://env.example.test/v1" },
       }),
     ).toMatchObject({
       kind: "routes",
       routes: [{ api: "openai-responses", authRequirement: "api-key" }],
+    });
+  });
+
+  it("rejects unsupported observed adapters for authored custom endpoints", () => {
+    for (const observedRoutes of [
+      [{ api: "anthropic-messages" as const }],
+      [{ api: "openai-responses" as const }, { api: "anthropic-messages" as const }],
+    ]) {
+      expect(
+        resolveModelRoutes({
+          provider: "openai",
+          modelId: "gpt-5.5",
+          configuredProvider: { baseUrl: "https://configured.example.test/v1" },
+          observedRoutes,
+        }),
+      ).toMatchObject({
+        kind: "incompatible",
+        code: "unsupported-custom-openai-api",
+      });
+    }
+  });
+
+  it("rejects conflicting observed Platform adapters regardless of order", () => {
+    for (const observedRoutes of [
+      [{ api: "openai-responses" as const }, { api: "openai-completions" as const }],
+      [{ api: "openai-completions" as const }, { api: "openai-responses" as const }],
+    ]) {
+      expect(
+        resolveModelRoutes({
+          provider: "openai",
+          modelId: "gpt-5.5",
+          configuredProvider: { baseUrl: "https://configured.example.test/v1" },
+          observedRoutes,
+        }),
+      ).toMatchObject({
+        kind: "incompatible",
+        code: "ambiguous-openai-route-group",
+      });
+    }
+  });
+
+  it("ignores unauthored ChatGPT observations beside a Platform adapter", () => {
+    for (const observedRoutes of [
+      [{ api: "openai-chatgpt-responses" as const }, { api: "openai-responses" as const }],
+      [{ api: "openai-responses" as const }, { api: "openai-chatgpt-responses" as const }],
+    ]) {
+      expect(
+        resolveModelRoutes({
+          provider: "openai",
+          modelId: "gpt-5.5",
+          configuredProvider: { baseUrl: "https://configured.example.test/v1" },
+          observedRoutes,
+        }),
+      ).toMatchObject({
+        kind: "routes",
+        routes: [{ api: "openai-responses", authRequirement: "api-key" }],
+      });
+    }
+  });
+
+  it("owns OPENAI_BASE_URL interpretation", () => {
+    vi.stubEnv("OPENAI_BASE_URL", "https://process-env.example.test/v1");
+
+    expect(resolveModelRoutes({ provider: "openai", modelId: "gpt-5.5" })).toMatchObject({
+      kind: "routes",
+      defaultRuntimeId: "openclaw",
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://process-env.example.test/v1",
+          authRequirement: "api-key",
+        },
+      ],
+    });
+    expect(
+      resolveModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        env: { OPENAI_BASE_URL: "https://injected-env.example.test/v1" },
+      }),
+    ).toMatchObject({
+      kind: "routes",
+      routes: [{ baseUrl: "https://injected-env.example.test/v1" }],
     });
   });
 
@@ -296,14 +511,14 @@ describe("OpenAI provider policy artifact", () => {
         { configuredProvider: { baseUrl: "https://configured.example.test/v1" } },
         "openai-completions",
       ],
-      [{ environment: { baseUrl: "https://env.example.test/v1" } }, "openai-responses"],
+      [{ env: { OPENAI_BASE_URL: "https://env.example.test/v1" } }, "openai-responses"],
     ] as const) {
       expect(
         resolveModelRoutes({
           provider: "openai",
           modelId: "gpt-5.5",
           ...configured,
-          observed: { api: observedApi },
+          observedRoutes: [{ api: observedApi }],
         }),
       ).toMatchObject({
         kind: "routes",
@@ -313,12 +528,42 @@ describe("OpenAI provider policy artifact", () => {
     }
   });
 
+  it("ignores unrelated observed adapter conflicts for complete authored routes", () => {
+    const observedRoutes = [
+      { api: "openai-responses" as const },
+      { api: "openai-completions" as const },
+    ];
+
+    expect(
+      resolveModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        configuredModel: { api: "openai-chatgpt-responses" },
+        observedRoutes,
+      }),
+    ).toMatchObject({
+      kind: "routes",
+      routes: [{ api: "openai-chatgpt-responses", authRequirement: "subscription" }],
+    });
+    expect(
+      resolveModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        env: { OPENAI_BASE_URL: "https://api.openai.com/v1" },
+        observedRoutes,
+      }),
+    ).toMatchObject({
+      kind: "routes",
+      routes: [{ api: "openai-responses", authRequirement: "api-key" }],
+    });
+  });
+
   it("requires authored ChatGPT intent before sending subscription auth to a custom endpoint", () => {
     expect(
       resolveModelRoutes({
         provider: "openai",
         configuredProvider: { baseUrl: "https://configured.example.test/v1" },
-        observed: { api: "openai-chatgpt-responses" },
+        observedRoutes: [{ api: "openai-chatgpt-responses" }],
       }),
     ).toMatchObject({
       kind: "routes",
@@ -327,8 +572,8 @@ describe("OpenAI provider policy artifact", () => {
     expect(
       resolveModelRoutes({
         provider: "openai",
-        environment: { baseUrl: "https://env.example.test/v1" },
-        observed: { api: "openai-chatgpt-responses" },
+        env: { OPENAI_BASE_URL: "https://env.example.test/v1" },
+        observedRoutes: [{ api: "openai-chatgpt-responses" }],
       }),
     ).toMatchObject({
       kind: "routes",
@@ -337,10 +582,12 @@ describe("OpenAI provider policy artifact", () => {
     expect(
       resolveModelRoutes({
         provider: "openai",
-        observed: {
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://observed-relay.example.test/v1",
-        },
+        observedRoutes: [
+          {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://observed-relay.example.test/v1",
+          },
+        ],
       }),
     ).toMatchObject({
       kind: "incompatible",
@@ -353,8 +600,7 @@ describe("OpenAI provider policy artifact", () => {
       resolveModelRoutes({
         provider: "openai",
         modelId: "gpt-5.5",
-        environment: { baseUrl: "https://api.openai.com/v1" },
-        observed: { api: "openai-chatgpt-responses" },
+        env: { OPENAI_BASE_URL: "https://api.openai.com/v1" },
       }),
     ).toMatchObject({
       kind: "routes",
@@ -364,7 +610,7 @@ describe("OpenAI provider policy artifact", () => {
       resolveModelRoutes({
         provider: "openai",
         modelId: "gpt-5.3-codex-spark",
-        environment: { baseUrl: "https://api.openai.com/v1" },
+        env: { OPENAI_BASE_URL: "https://api.openai.com/v1" },
       }),
     ).toMatchObject({
       kind: "incompatible",
@@ -377,10 +623,6 @@ describe("OpenAI provider policy artifact", () => {
       resolveModelRoutes({
         provider: "openai",
         modelId: "gpt-5.3-codex-spark",
-        observed: {
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-        },
       }),
     ).toEqual({
       kind: "routes",
@@ -390,6 +632,8 @@ describe("OpenAI provider policy artifact", () => {
           api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
           authRequirement: "subscription",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
         },
       ],
     });
@@ -458,62 +702,27 @@ describe("OpenAI provider policy artifact", () => {
     });
   });
 
-  it("lets partial model official facts outrank lower provider facts", () => {
-    const chatGPT = {
-      kind: "routes",
-      defaultRuntimeId: "codex",
-      routes: [
-        {
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-          authRequirement: "subscription",
-        },
-      ],
-    } as const;
-    const platform = {
-      kind: "routes",
-      defaultRuntimeId: "codex",
-      routes: [
-        {
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          authRequirement: "api-key",
-        },
-      ],
-    } as const;
-
-    expect(
-      resolveModelRoutes({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        configuredModel: { api: "openai-chatgpt-responses" },
-        configuredProvider: { baseUrl: "https://api.openai.com/v1" },
-      }),
-    ).toEqual(chatGPT);
-    expect(
-      resolveModelRoutes({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        configuredModel: { baseUrl: "https://chatgpt.com/backend-api/codex" },
-        configuredProvider: { api: "openai-responses" },
-      }),
-    ).toEqual(chatGPT);
-    expect(
-      resolveModelRoutes({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        configuredModel: { api: "openai-responses" },
-        configuredProvider: { baseUrl: "https://chatgpt.com/backend-api/codex" },
-      }),
-    ).toEqual(platform);
+  it("inherits a provider adapter when the model overrides only its official base URL", () => {
     expect(
       resolveModelRoutes({
         provider: "openai",
         modelId: "gpt-5.5",
         configuredModel: { baseUrl: "https://api.openai.com/v1" },
-        configuredProvider: { api: "openai-chatgpt-responses" },
+        configuredProvider: { api: "openai-completions" },
       }),
-    ).toEqual(platform);
+    ).toEqual({
+      kind: "routes",
+      defaultRuntimeId: "openclaw",
+      routes: [
+        {
+          api: "openai-completions",
+          baseUrl: "https://api.openai.com/v1",
+          authRequirement: "api-key",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw"] },
+        },
+      ],
+    });
   });
 
   it("inherits lower custom endpoints without changing the model adapter", () => {
@@ -556,7 +765,7 @@ describe("OpenAI provider policy artifact", () => {
           provider: "openai",
           modelId: "gpt-5.5",
           configuredModel,
-          observed,
+          observedRoutes: [observed],
         }),
       ).toMatchObject({
         kind: "routes",
@@ -572,51 +781,90 @@ describe("OpenAI provider policy artifact", () => {
     }
   });
 
+  it("rejects invalid configured routes", () => {
+    expect(
+      resolveModelRoutes({
+        provider: "openai",
+        configuredProvider: { baseUrl: { url: "https://api.openai.com/v1" } },
+      }),
+    ).toMatchObject({ kind: "incompatible", code: "invalid-openai-base-url" });
+    for (const baseUrl of [
+      "not a URL",
+      "https://api.openai.com:8443/v1",
+      "http://api.openai.com:443/v1",
+      "https://api.openai.com/v1/models",
+      "https://api.openai.com/v1?proxy=1",
+      "https://chatgpt.com/backend-api/codex#fragment",
+    ]) {
+      expect(
+        resolveModelRoutes({ provider: "openai", configuredProvider: { baseUrl } }),
+      ).toMatchObject({
+        kind: "incompatible",
+        code: "invalid-openai-base-url",
+      });
+    }
+  });
+
   it("rejects internally contradictory observed routes", () => {
     expect(
       resolveModelRoutes({
         provider: "openai",
         modelId: "gpt-5.5",
-        observed: {
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://api.openai.com/v1",
-        },
+        observedRoutes: [
+          {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://api.openai.com/v1",
+          },
+        ],
       }),
     ).toMatchObject({ kind: "incompatible", code: "conflicting-official-openai-route" });
     expect(
       resolveModelRoutes({
         provider: "openai",
-        observed: { baseUrl: { url: "https://api.openai.com/v1" } },
+        observedRoutes: [{ baseUrl: { url: "https://api.openai.com/v1" } }],
       }),
     ).toMatchObject({ kind: "incompatible", code: "invalid-openai-base-url" });
     for (const baseUrl of [
       "not a URL",
-      "http://api.openai.com/v1",
       "https://api.openai.com:8443/v1",
+      "http://api.openai.com:443/v1",
       "https://api.openai.com/v1/models",
       "https://api.openai.com/v1?proxy=1",
       "https://chatgpt.com/backend-api/codex#fragment",
-      "http://chatgpt.com./backend-api/codex",
     ]) {
-      expect(resolveModelRoutes({ provider: "openai", observed: { baseUrl } })).toMatchObject({
+      expect(
+        resolveModelRoutes({ provider: "openai", observedRoutes: [{ baseUrl }] }),
+      ).toMatchObject({
         kind: "incompatible",
         code: "invalid-openai-base-url",
       });
     }
-    expect(
-      resolveModelRoutes({
-        provider: "openai",
-        configuredModel: { api: "openai-responses" },
-        configuredProvider: { baseUrl: "http://api.openai.com/v1" },
-      }),
-    ).toMatchObject({ kind: "incompatible", code: "invalid-openai-base-url" });
   });
 
-  it("canonicalizes official completions and keeps Platform-only models on OpenClaw", () => {
+  it("rejects plaintext official routes", () => {
+    for (const baseUrl of ["http://api.openai.com/v1", "http://chatgpt.com/backend-api/codex"]) {
+      expect(
+        resolveModelRoutes({
+          provider: "openai",
+          modelId: "gpt-5.5",
+          configuredProvider: { baseUrl },
+        }),
+      ).toMatchObject({ kind: "incompatible", code: "invalid-openai-base-url" });
+      expect(
+        resolveModelRoutes({
+          provider: "openai",
+          modelId: "gpt-future-observed",
+          observedRoutes: [{ baseUrl }],
+        }),
+      ).toMatchObject({ kind: "incompatible", code: "invalid-openai-base-url" });
+    }
+  });
+
+  it("preserves explicit official completions and keeps them on OpenClaw", () => {
     expect(
       resolveModelRoutes({
         provider: "openai",
-        modelId: "chat-latest",
+        modelId: "gpt-5.5",
         configuredProvider: {
           api: "openai-completions",
           baseUrl: "https://api.openai.com/v1",
@@ -627,25 +875,18 @@ describe("OpenAI provider policy artifact", () => {
       defaultRuntimeId: "openclaw",
       routes: [
         {
-          api: "openai-responses",
+          api: "openai-completions",
           baseUrl: "https://api.openai.com/v1",
           authRequirement: "api-key",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw"] },
         },
       ],
     });
     for (const modelId of ["chat-latest", "gpt-5.6"]) {
-      expect(
-        resolveModelRoutes({
-          provider: "openai",
-          modelId,
-          observed: {
-            api: "openai-chatgpt-responses",
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-          },
-        }),
-      ).toMatchObject({
+      expect(resolveModelRoutes({ provider: "openai", modelId })).toMatchObject({
         kind: "routes",
-        defaultRuntimeId: "openclaw",
+        defaultRuntimeId: "codex",
         routes: [{ api: "openai-responses", authRequirement: "api-key" }],
       });
       expect(
@@ -661,7 +902,7 @@ describe("OpenAI provider policy artifact", () => {
     }
   });
 
-  it("preserves explicit ChatGPT routes for its static catalog rows", () => {
+  it("preserves explicit ChatGPT routes for known model contracts", () => {
     for (const modelId of ["gpt-5.3-chat-latest", "gpt-5.4-nano"]) {
       expect(
         resolveModelRoutes({
@@ -699,28 +940,41 @@ describe("OpenAI provider policy artifact", () => {
       resolveModelRoutes({
         provider: "openai",
         modelId: "gpt-5.5-unknown",
-        observed: { api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+        observedRoutes: [{ api: "openai-responses", baseUrl: "https://api.openai.com/v1" }],
       }),
     ).toMatchObject({ kind: "routes", routes: [{ api: "openai-responses" }] });
     const unknown = resolveModelRoutes({
       provider: "openai",
       modelId: "gpt-5.5-unknown",
-      observed: { api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+      observedRoutes: [{ api: "openai-responses", baseUrl: "https://api.openai.com/v1" }],
     });
     expect(unknown.kind === "routes" ? unknown.routes : []).toHaveLength(1);
     expect(
       resolveModelRoutes({
         provider: "openai",
         modelId: "gpt-5.5-unknown",
-        observed: {
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-        },
+        observedRoutes: [
+          {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+          },
+        ],
       }),
     ).toMatchObject({
       kind: "routes",
       routes: [{ api: "openai-chatgpt-responses", authRequirement: "subscription" }],
     });
+    expect(resolveModelRoutes({ provider: "openai", modelId: "gpt-5.5-unknown" })).toEqual({
+      kind: "indeterminate",
+      defaultRuntimeId: "codex",
+    });
+    expect(
+      resolveModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.5-unknown",
+        requestTransportOverrides: "present",
+      }),
+    ).toEqual({ kind: "indeterminate", defaultRuntimeId: "openclaw" });
   });
 
   it("allows custom endpoints to expose Spark-like ids", () => {

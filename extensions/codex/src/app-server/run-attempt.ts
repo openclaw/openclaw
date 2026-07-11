@@ -125,6 +125,8 @@ import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerPreparedAuthHandoff,
+  resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./auth-bridge.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import {
@@ -231,7 +233,6 @@ import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
-  isCodexAppServerNativeAuthProfile,
   reclaimCurrentCodexSessionGeneration,
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
@@ -595,36 +596,55 @@ export async function runCodexAppServerAttempt(
       agentDir,
       openClawSandboxActive: sandbox?.enabled === true,
     }).appServer;
-  const startupBindingAuthProfileId = startupBinding?.authProfileId;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
+  const preparedAuthRoute = usesSupervisionConnection
+    ? undefined
+    : params.runtimePlan?.auth.modelRoute;
   const startupAuthProfileCandidate = usesSupervisionConnection
     ? undefined
-    : (params.runtimePlan?.auth.forwardedAuthProfileId ??
-      params.authProfileId ??
-      startupBinding?.authProfileId ??
-      startupBindingAuthProfileId);
-  const startupAuthProfileId = usesSupervisionConnection
+    : preparedAuthRoute
+      ? params.runtimePlan?.auth.forwardedAuthProfileId
+      : (params.runtimePlan?.auth.forwardedAuthProfileId ??
+        params.authProfileId ??
+        startupBinding?.authProfileId);
+  const resolvedStartupAuthProfileId = usesSupervisionConnection
     ? undefined
-    : params.authProfileStore
-      ? resolveCodexAppServerAuthProfileId({
-          authProfileId: startupAuthProfileCandidate,
-          store: params.authProfileStore,
-          config: params.config,
-        })
-      : resolveCodexAppServerAuthProfileIdForAgent({
-          authProfileId: startupAuthProfileCandidate,
-          agentDir,
-          config: params.config,
-        });
-  const startupClientAuthProfileId = usesSupervisionConnection ? null : startupAuthProfileId;
-  const nativeAuthProfile =
-    isCodexAppServerNativeAuthProfile({
-      authProfileId: startupClientAuthProfileId ?? undefined,
-      authProfileStore: params.authProfileStore,
-      agentDir,
-      config: params.config,
-    }) || usesSupervisionConnection;
+    : preparedAuthRoute
+      ? startupAuthProfileCandidate
+      : params.authProfileStore
+        ? resolveCodexAppServerAuthProfileId({
+            authProfileId: startupAuthProfileCandidate,
+            store: params.authProfileStore,
+            config: params.config,
+          })
+        : resolveCodexAppServerAuthProfileIdForAgent({
+            authProfileId: startupAuthProfileCandidate,
+            agentDir,
+            config: params.config,
+          });
+  const authHandoff = usesSupervisionConnection
+    ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }
+    : await resolveCodexAppServerPreparedAuthHandoff({
+        authRequirement: preparedAuthRoute?.authRequirement,
+        resolvedApiKey: params.resolvedApiKey,
+        authProfileId: resolvedStartupAuthProfileId,
+        authProfileStore: params.authProfileStore,
+        agentDir,
+        config: params.config,
+        subscriptionProfileRequiredError:
+          "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",
+        subscriptionProfileUnusableError: "Prepared Codex subscription auth profile is unusable.",
+      });
+  const {
+    authProfileId: startupAuthProfileId,
+    nativeAuthProfile,
+    preparedAuth: startupPreparedAuth,
+  } = authHandoff;
+  const startupClientAuthProfileId =
+    usesSupervisionConnection || startupPreparedAuth?.kind === "api-key"
+      ? null
+      : startupAuthProfileId;
   const resolveReviewerPolicyContext = (binding: CodexAppServerThreadBinding | undefined) => {
     const nativeModelOwned = binding?.preserveNativeModel === true;
     // A supervised Codex branch owns its model. The outer OpenClaw default may
@@ -846,15 +866,19 @@ export async function runCodexAppServerAttempt(
   });
   const startupAuthAccountCacheKey = usesSupervisionConnection
     ? undefined
-    : await resolveCodexAppServerAuthAccountCacheKey({
-        authProfileId: startupAuthProfileId,
-        authProfileStore: attemptAuthProfileStore,
-        agentDir,
-        config: params.config,
-      });
+    : startupPreparedAuth?.kind === "api-key"
+      ? resolveCodexAppServerPreparedApiKeyCacheKey(startupPreparedAuth.apiKey)
+      : startupPreparedAuth?.kind === "profile"
+        ? startupPreparedAuth.snapshot?.secretFreeCacheKey
+        : await resolveCodexAppServerAuthAccountCacheKey({
+            authProfileId: startupAuthProfileId,
+            authProfileStore: attemptAuthProfileStore,
+            agentDir,
+            config: params.config,
+          });
   const startupEnvApiKeyCacheKey = usesSupervisionConnection
     ? undefined
-    : startupAuthProfileId
+    : startupPreparedAuth || startupAuthProfileId
       ? undefined
       : resolveCodexAppServerFallbackApiKeyCacheKey({
           startOptions: appServer.start,
@@ -889,6 +913,7 @@ export async function runCodexAppServerAttempt(
           clientFactory: attemptClientFactory,
           appServer,
           authProfileId: startupClientAuthProfileId,
+          preparedAuth: startupPreparedAuth,
           agentDir,
           config: params.config,
           modelProviderOverride: usesSupervisionConnection
@@ -1772,6 +1797,7 @@ export async function runCodexAppServerAttempt(
       startupAuthProfileId: startupClientAuthProfileId,
       startupAuthBindingFingerprint: preparedAuthBinding?.fingerprint,
       ...(runtimeArtifactRequest ? { runtimeArtifactRequest } : {}),
+      startupPreparedAuth,
       startupAuthAccountCacheKey,
       startupEnvApiKeyCacheKey,
       agentDir,

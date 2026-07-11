@@ -7,16 +7,6 @@ import {
   type BundledProviderPolicySurface,
 } from "./provider-policy-surface.js";
 
-export { resolveDirectBundledProviderPolicySurface } from "./provider-policy-surface.js";
-export type {
-  BundledProviderPolicySurface,
-  ProviderModelRouteAuthRequirement,
-  ProviderModelRouteCandidate,
-  ProviderModelRouteResolution,
-  ProviderModelRouteSource,
-  ProviderResolveModelRoutesContext,
-} from "./provider-policy-surface.js";
-
 function resolveBundledProviderPolicyPluginId(
   providerId: string,
   options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},

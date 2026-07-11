@@ -1,6 +1,11 @@
 /** Lightweight direct loader for bundled provider policy public artifacts. */
-import type { ModelApi, ModelProviderConfig } from "../config/types.js";
+import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  ProviderModelRouteResolution,
+  ProviderNormalizeModelCatalogIdContext,
+  ProviderResolveModelRoutesContext,
+} from "../plugin-sdk/provider-model-types.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import type {
   ProviderApplyConfigDefaultsContext,
@@ -16,42 +21,6 @@ import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-load
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
 const providerPolicySurfaceByPluginId = new Map<string, BundledProviderPolicySurface | null>();
 
-export type ProviderModelRouteSource = {
-  api?: ModelApi | null;
-  baseUrl?: unknown;
-};
-
-/** A concrete provider route. Order expresses provider default, never credential precedence. */
-export type ProviderModelRouteAuthRequirement = "api-key" | "subscription";
-
-export type ProviderModelRouteCandidate = {
-  api: ModelApi;
-  baseUrl: string;
-  authRequirement: ProviderModelRouteAuthRequirement;
-};
-
-export type ProviderModelRouteResolution =
-  | {
-      kind: "routes";
-      routes: readonly [ProviderModelRouteCandidate, ...ProviderModelRouteCandidate[]];
-      /** Advisory only; authored agentRuntime policy remains authoritative. */
-      defaultRuntimeId?: string;
-    }
-  | {
-      kind: "incompatible";
-      code: string;
-      message: string;
-    };
-
-export type ProviderResolveModelRoutesContext = {
-  provider: string;
-  modelId?: string;
-  configuredModel?: ProviderModelRouteSource;
-  configuredProvider?: ProviderModelRouteSource;
-  environment?: { baseUrl?: unknown };
-  observed?: ProviderModelRouteSource;
-};
-
 /** Provider policy hooks loaded from bundled plugin public artifacts. */
 export type BundledProviderPolicySurface = {
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
@@ -65,6 +34,9 @@ export type BundledProviderPolicySurface = {
   resolveModelRoutes?: (
     ctx: ProviderResolveModelRoutesContext,
   ) => ProviderModelRouteResolution | null | undefined;
+  normalizeModelCatalogId?: (
+    ctx: ProviderNormalizeModelCatalogIdContext,
+  ) => string | null | undefined;
 };
 
 function hasProviderPolicyHook(
@@ -75,7 +47,8 @@ function hasProviderPolicyHook(
     typeof mod.applyConfigDefaults === "function" ||
     typeof mod.resolveConfigApiKey === "function" ||
     typeof mod.resolveThinkingProfile === "function" ||
-    typeof mod.resolveModelRoutes === "function"
+    typeof mod.resolveModelRoutes === "function" ||
+    typeof mod.normalizeModelCatalogId === "function"
   );
 }
 

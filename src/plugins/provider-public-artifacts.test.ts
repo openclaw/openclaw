@@ -56,11 +56,15 @@ describe("provider public artifacts", () => {
           api: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
           authRequirement: "api-key",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
         },
         {
           api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
           authRequirement: "subscription",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
         },
       ],
     });
@@ -441,6 +445,7 @@ describe("provider public artifacts", () => {
           api: "openai-responses",
           baseUrl: "https://fixture.example.test/v1",
           authRequirement: "api-key" as const,
+          requestTransportOverrides: "none" as const,
         },
       ] as const,
     }));
@@ -461,6 +466,7 @@ describe("provider public artifacts", () => {
           api: "openai-responses",
           baseUrl: "https://fixture.example.test/v1",
           authRequirement: "api-key",
+          requestTransportOverrides: "none",
         },
       ],
     });
