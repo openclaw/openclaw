@@ -4,7 +4,7 @@ import { performance } from "node:perf_hooks";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/types.js";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
+import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
@@ -247,14 +247,12 @@ export function resolveChatErrorKindFromError(error: unknown): ChatErrorKind | u
     case "rate_limit":
     case "overloaded":
       return "rate_limit";
-    case "timeout":
-    case "server_error":
-      return "timeout";
     case "context_overflow":
       return "context_length";
-    default:
-      return undefined;
   }
+  // FailoverReason "timeout" is the retryable-transient bucket and deliberately
+  // swallows generic 5xx; only genuinely timeout-shaped errors get the badge.
+  return isTimeoutError(error) ? "timeout" : undefined;
 }
 
 function excludeConnIds(

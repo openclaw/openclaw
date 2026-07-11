@@ -3884,6 +3884,16 @@ describe("agent event handler", () => {
       expected: undefined,
     },
     {
+      name: "http 500 is not a timeout",
+      error: Object.assign(new Error("Internal server error"), { status: 500 }),
+      expected: undefined,
+    },
+    {
+      name: "rate limit beats timeout text",
+      error: new Error("Rate limit exceeded, timeout: 30s"),
+      expected: "rate_limit",
+    },
+    {
       name: "undefined error",
       error: undefined,
       expected: undefined,
