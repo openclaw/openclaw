@@ -26,7 +26,13 @@ async function reserveLoopbackPort(): Promise<number> {
         reject(new Error("expected TCP address"));
         return;
       }
-      server.close((error) => (error ? reject(error) : resolve(address.port)));
+      server.close((error) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(address.port);
+        }
+      });
     });
   });
 }
@@ -35,11 +41,15 @@ async function waitForHttp(url: string): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
       const response = await fetch(url);
-      if (response.status < 500) return;
+      if (response.status < 500) {
+        return;
+      }
     } catch {
       // Listener is still starting.
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error(`timed out waiting for ${url}`);
 }
@@ -72,7 +82,9 @@ async function expectLoopbackListenerClosed(port: number): Promise<void> {
     } catch {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error(`expected loopback listener on ${port} to close`);
 }

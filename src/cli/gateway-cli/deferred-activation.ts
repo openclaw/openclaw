@@ -25,7 +25,9 @@ let activeServer: Server | null = null;
 let singleton: Promise<DeferredActivationResult> | null = null;
 
 function tokensEqual(actual: string | undefined, expected: string): boolean {
-  if (actual === undefined) return false;
+  if (actual === undefined) {
+    return false;
+  }
   const actualBytes = Buffer.from(actual);
   const expectedBytes = Buffer.from(expected);
   return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
@@ -37,7 +39,9 @@ async function readBoundedJson(request: IncomingMessage): Promise<unknown> {
   for await (const chunk of request) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += bytes.length;
-    if (size > MAX_BODY_BYTES) throw new Error("activation body too large");
+    if (size > MAX_BODY_BYTES) {
+      throw new Error("activation body too large");
+    }
     chunks.push(bytes);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -126,7 +130,8 @@ async function waitForDeferredGatewayActivationOnce(
         return;
       }
       state = "settled";
-      reject(error);
+      const reason = error instanceof Error ? error : new Error(String(error));
+      reject(reason);
     };
 
     const cleanupSignalHandlers = () => {
@@ -137,7 +142,7 @@ async function waitForDeferredGatewayActivationOnce(
     };
 
     const server = createServer((request, response) => {
-      void handleRequest(request, response).catch((error) => {
+      void handleRequest(request, response).catch((error: unknown) => {
         const reason = error instanceof Error ? error : new Error(String(error));
         if (!response.headersSent) {
           writeJson(response, 500, { error: "internal server error" });
@@ -284,7 +289,9 @@ export async function resetDeferredGatewayActivationForTest(): Promise<void> {
   const server = activeServer;
   activeServer = null;
   singleton = null;
-  if (!server || !server.listening) return;
+  if (!server || !server.listening) {
+    return;
+  }
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
