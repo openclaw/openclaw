@@ -153,13 +153,14 @@ describe("provider local service", () => {
     await waitForProbeFailure(healthUrl);
   });
 
-  it("allows a default loopback endpoint when provider baseUrl is omitted", async () => {
+  it("allows a default loopback endpoint when provider baseUrl is empty", async () => {
     const port = await freePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const acquire = createConfiguredProviderLocalServiceAcquirer(() => ({
       models: {
         providers: {
           "gpu-default": {
+            baseUrl: "",
             models: [],
             localService: {
               command: process.execPath,
@@ -210,11 +211,12 @@ describe("provider local service", () => {
     ).rejects.toThrow("must match models.providers.gpu-spark.baseUrl");
   });
 
-  it("rejects a remote endpoint when provider baseUrl is omitted", async () => {
+  it("rejects a remote endpoint when provider baseUrl is empty", async () => {
     const acquire = createConfiguredProviderLocalServiceAcquirer(() => ({
       models: {
         providers: {
           "gpu-default": {
+            baseUrl: "",
             models: [],
             localService: {
               command: process.execPath,
