@@ -266,6 +266,46 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("reports last-known llama.cpp runtime facts from the gateway", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: true,
+        runtimeFacts: {
+          engine: "llama.cpp",
+          state: "ready",
+          backend: "cuda",
+          buildType: "prebuilt",
+          deviceNames: ["NVIDIA Test GPU"],
+          offload: {
+            supported: true,
+            offloadedLayers: 24,
+            totalLayers: 24,
+          },
+          context: {
+            requestedSize: 4096,
+          },
+        },
+      },
+    });
+
+    expect(note).toHaveBeenCalledWith(
+      [
+        "llama.cpp runtime: cuda, prebuilt",
+        "Devices: NVIDIA Test GPU",
+        "GPU offload: 24/24 layers",
+        "Requested context: 4096 tokens",
+      ].join("\n"),
+      "Memory search",
+    );
+  });
+
   it("does not warn when local provider readiness probe was intentionally skipped", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",

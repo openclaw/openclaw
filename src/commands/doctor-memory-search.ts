@@ -23,6 +23,7 @@ import {
 } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DoctorMemoryEmbeddingRuntimePayload } from "../gateway/server-methods/doctor.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   checkQmdBinaryAvailability,
@@ -62,6 +63,19 @@ type MemoryEmbeddingProviderDoctorMetadata = {
   transport: "local" | "remote";
   autoSelectPriority?: number;
 };
+
+function formatLocalRuntimeDoctorNote(facts: DoctorMemoryEmbeddingRuntimePayload): string {
+  const backend = facts.backend ?? "unknown";
+  const build = facts.buildType ? `, ${facts.buildType}` : "";
+  const devices = facts.deviceNames?.length ? `\nDevices: ${facts.deviceNames.join(", ")}` : "";
+  const offload =
+    typeof facts.offload?.offloadedLayers === "number" &&
+    typeof facts.offload.totalLayers === "number"
+      ? `\nGPU offload: ${facts.offload.offloadedLayers}/${facts.offload.totalLayers} layers`
+      : "";
+  const context = facts.context ? `\nRequested context: ${facts.context.requestedSize} tokens` : "";
+  return `llama.cpp runtime: ${backend}${build}${devices}${offload}${context}`;
+}
 
 const BUNDLED_MEMORY_EMBEDDING_PROVIDER_DOCTOR_METADATA: MemoryEmbeddingProviderDoctorMetadata[] = [
   {
@@ -419,6 +433,7 @@ export async function noteMemorySearchHealth(
       ready: boolean;
       error?: string;
       skipped?: boolean;
+      runtimeFacts?: DoctorMemoryEmbeddingRuntimePayload;
     };
     noteFn?: typeof note;
     includeWorkspaceMemoryHealth?: boolean;
@@ -514,6 +529,9 @@ export async function noteMemorySearchHealth(
 
   if (provider === "local") {
     const suggestedRemoteProvider = resolveSuggestedRemoteMemoryProvider();
+    if (opts?.gatewayMemoryProbe?.runtimeFacts?.state === "ready") {
+      noteFn(formatLocalRuntimeDoctorNote(opts.gatewayMemoryProbe.runtimeFacts), "Memory search");
+    }
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;
     }
