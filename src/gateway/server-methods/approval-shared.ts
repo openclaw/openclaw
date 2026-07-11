@@ -692,6 +692,23 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
     return;
   }
   if (!ok) {
+    // A concurrent surface can win between the pending lookup and this
+    // resolve; report the recorded conflict, not a missing approval.
+    const raced = params.manager.getSnapshot(resolved.approvalId);
+    if (raced && raced.resolvedAtMs !== undefined) {
+      if (resolveRecordedApprovalDecision(raced) === params.decision) {
+        params.respond(true, { ok: true }, undefined);
+        return;
+      }
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "approval already resolved", {
+          details: APPROVAL_ALREADY_RESOLVED_DETAILS,
+        }),
+      );
+      return;
+    }
     respondUnknownOrExpiredApproval(params.respond);
     return;
   }

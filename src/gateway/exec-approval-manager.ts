@@ -184,6 +184,10 @@ function attachLiveRecord<TPayload, TResult extends { outcome: string }>(
   } as WithLiveRecord<TResult, TPayload>;
 }
 
+// Without `persistence` the manager runs process-local-only. Gateway
+// production always injects persistence (server-aux-handlers); local mode
+// exists for unit tests and is slated for removal once the embedded broker
+// migrates onto the durable store — do not grow it new behavior.
 export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
   private pending = new Map<string, PendingEntry<TPayload>>();
 
@@ -998,7 +1002,8 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
         consumerId,
         expectedKind: this.approvalKind,
         runtimeEpoch: persistence.runtimeEpoch,
-        redemptionWindowMs: EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS + Math.max(0, graceAnchorMs - resolvedAtMs),
+        redemptionWindowMs:
+          EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS + Math.max(0, graceAnchorMs - resolvedAtMs),
         databaseOptions: persistence.databaseOptions,
       });
       if (result.outcome !== "consumed") {

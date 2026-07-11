@@ -3,13 +3,17 @@ import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS } from "./operator-approval-store.js";
 import {
   canonicalizeSpawnedByForAgent,
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
 } from "./session-store-key.js";
 
-const MAX_APPROVAL_AUDIENCE_SESSIONS = 64;
+// The walker cap must never exceed the store cap: insertOperatorApproval
+// throws past OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS, which would fail
+// every deep-lineage approval request. Deriving keeps them in lockstep.
+const MAX_APPROVAL_AUDIENCE_SESSIONS = OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS;
 
 type SubagentApprovalLineage = {
   controllerSessionKey?: string | null;
