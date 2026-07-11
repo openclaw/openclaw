@@ -553,19 +553,12 @@ function parseReceiptJson(
   return parsed;
 }
 
-const COMMAND_FAILURE_DETAIL_MAX_CHARS = 512;
-
 function commandFailure(phase: string, result: SpawnResult): Error {
-  // Remote stderr/stdout can include emoji or other non-BMP diagnostics. Cap with
-  // truncateUtf16Safe so a surrogate pair at the 512-unit boundary is not split
-  // into a lone high surrogate in the operator-facing Error message.
   const output = truncateUtf16Safe(
     redactSensitiveText(result.stderr.trim() || result.stdout.trim(), {
       mode: "tools",
-    })
-      .replace(/\s+/gu, " ")
-      .trim(),
-    COMMAND_FAILURE_DETAIL_MAX_CHARS,
+    }).replace(/\s+/gu, " "),
+    512,
   );
   const status =
     result.termination === "exit" ? `exit ${result.code ?? "unknown"}` : result.termination;
