@@ -10,7 +10,11 @@ import {
 } from "../infra/device-pairing.js";
 import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  type GatewayClientName,
+} from "../utils/message-channel.js";
 import { callGateway } from "./call.js";
 import {
   loadDeviceIdentity,
@@ -60,7 +64,7 @@ async function connectNodeClient(params: {
   port: number;
   deviceIdentity: ReturnType<typeof loadDeviceIdentity>["identity"];
   commands: string[];
-  clientName?: string;
+  clientName?: GatewayClientName;
   platform?: string;
   deviceFamily?: string;
 }) {
