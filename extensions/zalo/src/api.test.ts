@@ -15,13 +15,16 @@ import {
   callZaloApi,
   deleteWebhook,
   getMe,
+  getUpdates,
   getWebhookInfo,
   sendChatAction,
+  sendMessage,
   sendPhoto,
   type ZaloFetch,
 } from "./api.js";
 
 const ZALO_JSON_CAP_BYTES = 16 * 1024 * 1024;
+const ZALO_DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 function oversizedZaloJsonResponse(onCancel: () => void): Response {
   const response = new Response(
@@ -41,6 +44,28 @@ function oversizedZaloJsonResponse(onCancel: () => void): Response {
     },
   });
   return response;
+}
+
+function signalAbortedZaloJsonResponse(signal: AbortSignal, onAbort: () => void): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        const abortBody = () => {
+          onAbort();
+          controller.error(new Error("zalo body aborted"));
+        };
+        if (signal.aborted) {
+          abortBody();
+          return;
+        }
+        signal.addEventListener("abort", abortBody, { once: true });
+      },
+      async pull() {
+        await new Promise<void>(() => {});
+      },
+    }),
+    { headers: { "content-type": "application/json" }, status: 200 },
+  );
 }
 
 function createOkFetcher() {
@@ -216,6 +241,44 @@ describe("Zalo API request methods", () => {
     }
   });
 
+  it("keeps the default request deadline active while reading a hanging send response body", async () => {
+    vi.useFakeTimers();
+    try {
+      let bodyAborted = false;
+      const fetcher = vi.fn<ZaloFetch>(async (_input, init) => {
+        const signal = init?.signal;
+        if (!(signal instanceof AbortSignal)) {
+          throw new Error("expected Zalo request abort signal");
+        }
+        return signalAbortedZaloJsonResponse(signal, () => {
+          bodyAborted = true;
+        });
+      });
+
+      const promise = sendMessage(
+        "test-token",
+        {
+          chat_id: "chat-123",
+          text: "hello",
+        },
+        fetcher,
+      );
+      const rejected = expect(promise).rejects.toThrow("zalo body aborted");
+
+      await vi.advanceTimersByTimeAsync(ZALO_DEFAULT_REQUEST_TIMEOUT_MS);
+
+      await rejected;
+      const [, init] = requireFirstFetchCall(fetcher, "Zalo send request");
+      if (!init?.signal) {
+        throw new Error("expected Zalo send request abort signal");
+      }
+      expect(init.signal.aborted).toBe(true);
+      expect(bodyAborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("caps oversized sendChatAction timeouts before scheduling the timer", async () => {
     const setTimeoutMock = vi
       .spyOn(globalThis, "setTimeout")
@@ -239,6 +302,27 @@ describe("Zalo API request methods", () => {
       );
 
       expect(setTimeoutMock).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutMock.mockRestore();
+      clearTimeoutMock.mockRestore();
+    }
+  });
+
+  it("keeps getUpdates on the long-poll request timeout", async () => {
+    const setTimeoutMock = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    const clearTimeoutMock = vi
+      .spyOn(globalThis, "clearTimeout")
+      .mockImplementation(() => undefined);
+    try {
+      const fetcher = createOkFetcher();
+
+      await getUpdates("test-token", { timeout: 45 }, fetcher);
+
+      expect(setTimeoutMock).toHaveBeenCalledWith(expect.any(Function), 50_000);
+      const [, init] = requireFirstFetchCall(fetcher, "Zalo getUpdates request");
+      expect(init?.body).toBe(JSON.stringify({ timeout: "45" }));
     } finally {
       setTimeoutMock.mockRestore();
       clearTimeoutMock.mockRestore();
