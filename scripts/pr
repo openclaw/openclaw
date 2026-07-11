@@ -49,11 +49,13 @@ if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute
     # edits (release trains move it); maintainer-controlled origin/main is the
     # trust anchor then. Run THIS worktree's committed wrapper, without
     # substitution, when it exactly matches origin/main.
+    # refs/remotes/... explicitly: bare "origin/main" is a DWIM name that a
+    # local branch or tag named origin/main could shadow, spoofing the anchor.
     anchor_wrapper_revision=$(
       git -C "$script_parent_dir" rev-parse \
-        origin/main:scripts/pr \
-        origin/main:scripts/pr-lib \
-        origin/main:scripts/lib/plain-gh.sh 2>/dev/null || true
+        refs/remotes/origin/main:scripts/pr \
+        refs/remotes/origin/main:scripts/pr-lib \
+        refs/remotes/origin/main:scripts/lib/plain-gh.sh 2>/dev/null || true
     )
     if [ -z "$linked_wrapper_revision" ] ||
       [ -z "$anchor_wrapper_revision" ] ||

@@ -158,11 +158,25 @@ describe("scripts/pr wrappers", () => {
       cwd: linked,
       encoding: "utf8",
     });
-    rmSync(dir, { recursive: true, force: true });
 
     expect(result.stderr).not.toContain("Refusing to silently substitute");
     expect(result.stderr).not.toContain("scripts/pr implementation differs");
     expect(result.stderr).not.toContain("uncommitted changes");
+
+    // A local branch literally named "origin/main" must not spoof the trust
+    // anchor: only the remote-tracking ref counts.
+    expect(git(repo, ["update-ref", "-d", "refs/remotes/origin/main"]).status).toBe(0);
+    expect(git(repo, ["update-ref", "refs/heads/origin/main", "main"]).status).toBe(0);
+    const spoofed = spawnSync(join(linked, "scripts", "pr"), ["ls"], {
+      cwd: linked,
+      encoding: "utf8",
+    });
+    rmSync(dir, { recursive: true, force: true });
+
+    expect(spoofed.status).toBe(1);
+    expect(spoofed.stderr).toContain(
+      "scripts/pr implementation differs between this worktree and the canonical checkout",
+    );
   });
 
   it("verifies local GitHub auth through GraphQL when REST quota is unavailable", () => {
