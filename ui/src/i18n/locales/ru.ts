@@ -976,6 +976,8 @@ export const ru: TranslationMap = {
       openChat: "Открыть Chat",
       continuing: "Продолжение…",
       archive: "Архивировать",
+      readTranscript: "Прочитано",
+      readTranscriptLabel: "Прочитать расшифровку для {title}",
       continueLabel: "Продолжить {title}",
       continueAsBranchLabel: "Продолжить {title} как ветку",
       openChatLabel: "Открыть Chat для {title}",
@@ -1015,6 +1017,24 @@ export const ru: TranslationMap = {
       search: "Ни один сеанс на этом хосте не соответствует поиску.",
       nonArchived: "На этом хосте нет неархивированных сеансов.",
     },
+    sidebar: {
+      title: "Сеансы Codex",
+      unavailable: "Сеансы Codex недоступны",
+      viewAll: "Просмотреть все сеансы Codex",
+      truncated: "Больше сеансов доступно в полном каталоге.",
+    },
+    transcript: {
+      eyebrow: "Расшифровка Codex",
+      back: "Все сеансы Codex",
+      you: "Вы",
+      reasoning: "Рассуждение",
+      command: "Команда",
+      fileChange: "Изменение файла",
+      item: "Элемент Codex",
+      details: "Полные сведения",
+      loading: "Загрузка расшифровки…",
+      loadMore: "Загрузить более старые элементы расшифровки",
+    },
   },
   logbook: {
     duration: {
@@ -1038,7 +1058,7 @@ export const ru: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",

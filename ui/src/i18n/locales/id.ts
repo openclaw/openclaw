@@ -972,6 +972,8 @@ export const id: TranslationMap = {
       openChat: "Buka Chat",
       continuing: "Melanjutkan…",
       archive: "Arsipkan",
+      readTranscript: "Dibaca",
+      readTranscriptLabel: "Baca transkrip untuk {title}",
       continueLabel: "Lanjutkan {title}",
       continueAsBranchLabel: "Lanjutkan {title} sebagai cabang",
       openChatLabel: "Buka Chat untuk {title}",
@@ -1011,6 +1013,24 @@ export const id: TranslationMap = {
       search: "Tidak ada sesi di host ini yang cocok dengan pencarian Anda.",
       nonArchived: "Tidak ada sesi non-arsip di host ini.",
     },
+    sidebar: {
+      title: "Sesi Codex",
+      unavailable: "Sesi Codex tidak tersedia",
+      viewAll: "Lihat semua sesi Codex",
+      truncated: "Sesi lainnya tersedia di katalog lengkap.",
+    },
+    transcript: {
+      eyebrow: "Transkrip Codex",
+      back: "Semua sesi Codex",
+      you: "Anda",
+      reasoning: "Penalaran",
+      command: "Perintah",
+      fileChange: "Perubahan file",
+      item: "Item Codex",
+      details: "Detail lengkap",
+      loading: "Memuat transkrip…",
+      loadMore: "Muat item transkrip yang lebih lama",
+    },
   },
   logbook: {
     duration: {
@@ -1034,7 +1054,7 @@ export const id: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",

@@ -970,6 +970,8 @@ export const vi: TranslationMap = {
       openChat: "Mở Chat",
       continuing: "Đang tiếp tục…",
       archive: "Lưu trữ",
+      readTranscript: "Đã đọc",
+      readTranscriptLabel: "Đọc bản ghi cho {title}",
       continueLabel: "Tiếp tục {title}",
       continueAsBranchLabel: "Tiếp tục {title} dưới dạng nhánh",
       openChatLabel: "Mở Chat cho {title}",
@@ -1009,6 +1011,24 @@ export const vi: TranslationMap = {
       search: "Không có phiên nào trên máy này khớp với từ khóa tìm kiếm.",
       nonArchived: "Không có phiên chưa lưu trữ nào trên máy chủ này.",
     },
+    sidebar: {
+      title: "Phiên Codex",
+      unavailable: "Phiên Codex không khả dụng",
+      viewAll: "Xem tất cả phiên Codex",
+      truncated: "Có thêm phiên trong danh mục đầy đủ.",
+    },
+    transcript: {
+      eyebrow: "Bản ghi Codex",
+      back: "Tất cả phiên Codex",
+      you: "Bạn",
+      reasoning: "Lập luận",
+      command: "Lệnh",
+      fileChange: "Thay đổi tệp",
+      item: "Mục Codex",
+      details: "Chi tiết đầy đủ",
+      loading: "Đang tải bản ghi…",
+      loadMore: "Tải các mục bản ghi cũ hơn",
+    },
   },
   logbook: {
     duration: {
@@ -1032,7 +1052,7 @@ export const vi: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",

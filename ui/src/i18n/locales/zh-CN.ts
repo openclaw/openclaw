@@ -958,6 +958,8 @@ export const zh_CN: TranslationMap = {
       openChat: "打开 Chat",
       continuing: "正在继续…",
       archive: "归档",
+      readTranscript: "已读取",
+      readTranscriptLabel: "阅读 {title} 的转录",
       continueLabel: "继续 {title}",
       continueAsBranchLabel: "将 {title} 作为分支继续",
       openChatLabel: "为 {title} 打开 Chat",
@@ -996,6 +998,24 @@ export const zh_CN: TranslationMap = {
       search: "此主机上没有符合搜索条件的会话。",
       nonArchived: "此主机上没有未归档的会话。",
     },
+    sidebar: {
+      title: "Codex 会话",
+      unavailable: "Codex 会话不可用",
+      viewAll: "查看所有 Codex 会话",
+      truncated: "完整目录中还有更多会话可用。",
+    },
+    transcript: {
+      eyebrow: "Codex 转录",
+      back: "所有 Codex 会话",
+      you: "你",
+      reasoning: "推理",
+      command: "命令",
+      fileChange: "文件更改",
+      item: "Codex 项目",
+      details: "完整详情",
+      loading: "正在加载转录…",
+      loadMore: "加载更早的转录项目",
+    },
   },
   logbook: {
     duration: {
@@ -1019,7 +1039,7 @@ export const zh_CN: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",

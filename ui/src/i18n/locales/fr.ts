@@ -988,6 +988,8 @@ export const fr: TranslationMap = {
       openChat: "Ouvrir Chat",
       continuing: "Continuation…",
       archive: "Archiver",
+      readTranscript: "Lu",
+      readTranscriptLabel: "Lire la transcription de {title}",
       continueLabel: "Continuer {title}",
       continueAsBranchLabel: "Continuer {title} en tant que branche",
       openChatLabel: "Ouvrir Chat pour {title}",
@@ -1027,6 +1029,24 @@ export const fr: TranslationMap = {
       search: "Aucune session de cet hôte ne correspond à votre recherche.",
       nonArchived: "Aucune session non archivée sur cet hôte.",
     },
+    sidebar: {
+      title: "Sessions Codex",
+      unavailable: "Sessions Codex indisponibles",
+      viewAll: "Voir toutes les sessions Codex",
+      truncated: "D’autres sessions sont disponibles dans le catalogue complet.",
+    },
+    transcript: {
+      eyebrow: "Transcription Codex",
+      back: "Toutes les sessions Codex",
+      you: "Vous",
+      reasoning: "Raisonnement",
+      command: "Commande",
+      fileChange: "Modification de fichier",
+      item: "Élément Codex",
+      details: "Détails complets",
+      loading: "Chargement de la transcription…",
+      loadMore: "Charger les éléments de transcription plus anciens",
+    },
   },
   logbook: {
     duration: {
@@ -1050,7 +1070,7 @@ export const fr: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",

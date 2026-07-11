@@ -981,6 +981,8 @@ export const tr: TranslationMap = {
       openChat: "Chat'i aç",
       continuing: "Devam ediliyor…",
       archive: "Arşivle",
+      readTranscript: "Okundu",
+      readTranscriptLabel: "{title} için dökümü oku",
       continueLabel: "{title} ile devam et",
       continueAsBranchLabel: "{title} ile dal olarak devam et",
       openChatLabel: "{title} için Chat'i aç",
@@ -1020,6 +1022,24 @@ export const tr: TranslationMap = {
       search: "Bu ana makinedeki hiçbir oturum aramanızla eşleşmiyor.",
       nonArchived: "Bu ana makinede arşivlenmemiş oturum yok.",
     },
+    sidebar: {
+      title: "Codex oturumları",
+      unavailable: "Codex oturumları kullanılamıyor",
+      viewAll: "Tüm Codex oturumlarını görüntüle",
+      truncated: "Tam katalogda daha fazla oturum mevcut.",
+    },
+    transcript: {
+      eyebrow: "Codex dökümü",
+      back: "Tüm Codex oturumları",
+      you: "Siz",
+      reasoning: "Gerekçelendirme",
+      command: "Komut",
+      fileChange: "Dosya değişikliği",
+      item: "Codex öğesi",
+      details: "Tüm ayrıntılar",
+      loading: "Döküm yükleniyor…",
+      loadMore: "Daha eski döküm öğelerini yükle",
+    },
   },
   logbook: {
     duration: {
@@ -1043,7 +1063,7 @@ export const tr: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",

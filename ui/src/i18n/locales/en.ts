@@ -943,7 +943,7 @@ export const en: TranslationMap = {
     eyebrow: "Codex fleet",
     title: "Sessions across your computers",
     interactiveSubtitle:
-      "Start a Chat branch whose model selection stays under Codex App Server control, archive eligible local sessions with confirmation, and view paired-computer sessions.",
+      "Read paginated Codex transcripts from every connected computer, start a Codex-controlled Chat branch, or archive eligible local sessions.",
     summaryLabel: "Codex session summary",
     summary: {
       sessions: "sessions",
@@ -966,6 +966,8 @@ export const en: TranslationMap = {
       openChat: "Open Chat",
       continuing: "Continuing…",
       archive: "Archive",
+      readTranscript: "Read",
+      readTranscriptLabel: "Read transcript for {title}",
       continueLabel: "Continue {title}",
       continueAsBranchLabel: "Continue {title} as a branch",
       openChatLabel: "Open Chat for {title}",
@@ -980,7 +982,7 @@ export const en: TranslationMap = {
       statusUnavailable: "This Codex session cannot be managed in its current state.",
       hostOffline: "Reconnect this computer before managing its Codex sessions.",
       gatewayOffline: "Reconnect to the gateway before managing Codex sessions.",
-      remoteReadOnly: "Paired-computer sessions are view-only for now.",
+      remoteReadOnly: "Transcript available; continue and archive stay on the owning computer.",
     },
     status: {
       active: "Active",
@@ -1005,6 +1007,24 @@ export const en: TranslationMap = {
       search: "No sessions on this host match your search.",
       nonArchived: "No non-archived sessions on this host.",
     },
+    sidebar: {
+      title: "Codex sessions",
+      unavailable: "Codex sessions unavailable",
+      viewAll: "View all Codex sessions",
+      truncated: "More sessions are available in the full catalog.",
+    },
+    transcript: {
+      eyebrow: "Codex transcript",
+      back: "All Codex sessions",
+      you: "You",
+      reasoning: "Reasoning",
+      command: "Command",
+      fileChange: "File change",
+      item: "Codex item",
+      details: "Full details",
+      loading: "Loading transcript…",
+      loadMore: "Load older transcript items",
+    },
   },
   logbook: {
     duration: {
@@ -1028,7 +1048,7 @@ export const en: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",

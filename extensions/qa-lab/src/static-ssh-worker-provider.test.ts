@@ -11,6 +11,11 @@ const KEY_REF = {
   provider: "default",
   id: "/cloud-workers/development/private-key",
 };
+const PROFILE = {
+  host: "worker.example.test",
+  user: "openclaw",
+  keyRef: KEY_REF,
+};
 
 describe("QA Lab static-SSH worker provider", () => {
   it("provisions a deterministic logical lease with the default SSH port", async () => {
@@ -112,19 +117,24 @@ describe("QA Lab static-SSH worker provider", () => {
   it("reports only its deterministic lease ids as active", async () => {
     const provider = createStaticSshWorkerProvider();
 
-    await expect(provider.inspect("static-ssh:operation-123")).resolves.toStrictEqual({
+    await expect(
+      provider.inspect({ leaseId: "static-ssh:operation-123", profile: PROFILE }),
+    ).resolves.toStrictEqual({
       status: "active",
     });
-    await expect(provider.inspect("static-ssh:")).resolves.toStrictEqual({ status: "unknown" });
-    await expect(provider.inspect("other:operation-123")).resolves.toStrictEqual({
-      status: "unknown",
-    });
+    await expect(
+      provider.inspect({ leaseId: "static-ssh:", profile: PROFILE }),
+    ).resolves.toStrictEqual({ status: "unknown" });
+    await expect(
+      provider.inspect({ leaseId: "other:operation-123", profile: PROFILE }),
+    ).resolves.toStrictEqual({ status: "unknown" });
   });
 
   it("destroys logical leases idempotently", async () => {
     const provider = createStaticSshWorkerProvider();
 
-    await expect(provider.destroy("static-ssh:operation-123")).resolves.toBeUndefined();
-    await expect(provider.destroy("static-ssh:operation-123")).resolves.toBeUndefined();
+    const lease = { leaseId: "static-ssh:operation-123", profile: PROFILE };
+    await expect(provider.destroy(lease)).resolves.toBeUndefined();
+    await expect(provider.destroy(lease)).resolves.toBeUndefined();
   });
 });
