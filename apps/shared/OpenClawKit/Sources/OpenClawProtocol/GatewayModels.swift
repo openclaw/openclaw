@@ -1608,6 +1608,7 @@ public struct WorktreeRecord: Codable, Sendable {
     public let ownerkind: String
     public let ownerid: String?
     public let snapshotref: String?
+    public let readiness: String?
     public let createdat: Int
     public let lastactiveat: Int
     public let removedat: Int?
@@ -1623,6 +1624,7 @@ public struct WorktreeRecord: Codable, Sendable {
         ownerkind: String,
         ownerid: String? = nil,
         snapshotref: String? = nil,
+        readiness: String? = nil,
         createdat: Int,
         lastactiveat: Int,
         removedat: Int? = nil)
@@ -1637,6 +1639,7 @@ public struct WorktreeRecord: Codable, Sendable {
         self.ownerkind = ownerkind
         self.ownerid = ownerid
         self.snapshotref = snapshotref
+        self.readiness = readiness
         self.createdat = createdat
         self.lastactiveat = lastactiveat
         self.removedat = removedat
@@ -1653,6 +1656,7 @@ public struct WorktreeRecord: Codable, Sendable {
         case ownerkind = "ownerKind"
         case ownerid = "ownerId"
         case snapshotref = "snapshotRef"
+        case readiness
         case createdat = "createdAt"
         case lastactiveat = "lastActiveAt"
         case removedat = "removedAt"
