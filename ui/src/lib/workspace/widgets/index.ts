@@ -2,7 +2,7 @@
 // dispatch (ui/src/components/workspace-widget-cell.ts). Keys are the bare kind
 // (`builtin:<name>` with the prefix stripped). Adding a builtin = add a module +
 // one entry here; the plugin schema's BUILTIN_KIND_PATTERN must list the same
-// names (extensions/workspace/src/schema.ts).
+// names (extensions/workspaces/src/schema.ts).
 
 import { renderActivity } from "./activity.ts";
 import { renderCron } from "./cron.ts";

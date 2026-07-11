@@ -332,7 +332,7 @@ describe("rate-limit state persists across bridge re-instantiation (remount)", (
 
 describe("resolve-time rpc allowlist re-check (defense-in-depth)", () => {
   // The mirror-vs-server keep-in-sync guard lives in the node-rooted extension
-  // suite (extensions/workspace/src/rpc-allowlist-sync.test.ts), which can import
+  // suite (extensions/workspaces/src/rpc-allowlist-sync.test.ts), which can import
   // both the browser mirror and the node-side binding-contract; the browser-rooted
   // UI vitest cannot resolve imports outside ui/.
   it("isRpcMethodAllowed accepts allowlisted and rejects non-allowlisted methods", () => {

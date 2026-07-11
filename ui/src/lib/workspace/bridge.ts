@@ -22,7 +22,7 @@ export const BRIDGE_ENVELOPE_VERSION = 1;
 
 /**
  * Browser-safe mirror of the plugin's write-time rpc allowlist
- * (`extensions/workspace/src/binding-contract.ts` `DATA_READ_RPC_ALLOWLIST`).
+ * (`extensions/workspaces/src/binding-contract.ts` `DATA_READ_RPC_ALLOWLIST`).
  * KEEP IN SYNC — a `bridge.test.ts` guard asserts this equals the server const so
  * drift is caught in CI. Mirrored (not imported) because the server module pulls in
  * `node:path`, which must never enter the browser bundle. This enables the

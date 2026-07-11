@@ -56,7 +56,7 @@ export function snapCells(deltaPx: number, unitPx: number): number {
 
 /**
  * Clamp a rect into the grid the store will accept. The bounds mirror
- * `extensions/workspace/src/schema.ts` exactly: a rect the UI lets you build but
+ * `extensions/workspaces/src/schema.ts` exactly: a rect the UI lets you build but
  * the server rejects shows up as an optimistic move that snaps back.
  */
 export function clampRect(rect: WorkspaceGridRect): WorkspaceGridRect {
