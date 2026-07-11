@@ -11,8 +11,14 @@ import {
   getRegistryWorktree,
   insertRegistryWorktree,
   listRegistryWorktrees,
+  updateRegistryWorktree,
 } from "./registry.js";
-import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
+import {
+  IDLE_GC_MS,
+  ManagedWorktreeService,
+  PROVISIONING_STALE_MS,
+  SNAPSHOT_RETENTION_MS,
+} from "./service.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -891,7 +897,7 @@ describe("ManagedWorktreeService", () => {
     expect(rows.map((entry) => entry.id)).toEqual(["race-winner"]);
   });
 
-  it("a parked in-flight create() cannot be adopted, reprovisioned, or destroyed by a same-name retry", async () => {
+  it("a parked in-flight create() is invisible as a usable record and untouchable by retries", async () => {
     const syncDir = path.join(root, "sync");
     await fs.mkdir(syncDir, { recursive: true });
     const startedFlag = path.join(syncDir, "setup-started");
@@ -905,30 +911,82 @@ describe("ManagedWorktreeService", () => {
       { mode: 0o755 },
     );
 
-    const firstPromise = service.create({ repoRoot: repo, name: "parked" });
+    const firstPromise = service.create({
+      repoRoot: repo,
+      name: "parked",
+      ownerKind: "session",
+      ownerId: "agent:parked",
+    });
     while (!(await fs.stat(startedFlag).catch(() => undefined))) {
       await new Promise((resolve) => {
         setTimeout(resolve, 20);
       });
     }
 
-    // Same-owner retry returns the in-flight record without touching the worktree...
-    const retry = await service.create({ repoRoot: repo, name: "parked" });
-    // ...and a foreign-owner retry is rejected instead of adopting it.
+    // The claim-time row is observable but not usable: list() shows it provisioning, while
+    // usable-record acquisition (findLiveByOwner, same-name create) refuses to hand it out.
+    const parkedRows = listRegistryWorktrees(env).filter((entry) => entry.name === "parked");
+    expect(parkedRows.map((entry) => entry.readiness)).toEqual(["provisioning"]);
+    expect(service.findLiveByOwner("session", "agent:parked")).toBeUndefined();
     await expect(
-      service.create({ repoRoot: repo, name: "parked", ownerKind: "session", ownerId: "s1" }),
-    ).rejects.toThrow(/already in use by manual/);
-    expect(listRegistryWorktrees(env).filter((entry) => entry.path === retry.path)).toHaveLength(1);
+      service.create({
+        repoRoot: repo,
+        name: "parked",
+        ownerKind: "session",
+        ownerId: "agent:parked",
+      }),
+    ).rejects.toThrow("worktree provisioning in progress: parked");
+    await expect(service.create({ repoRoot: repo, name: "parked" })).rejects.toThrow(
+      "worktree provisioning in progress: parked",
+    );
+    expect(listRegistryWorktrees(env).filter((entry) => entry.name === "parked")).toHaveLength(1);
 
     await fs.writeFile(releaseFlag, "");
     const first = await firstPromise;
 
-    expect(retry.id).toBe(first.id);
+    expect(first.readiness).toBe("ready");
+    expect(service.findLiveByOwner("session", "agent:parked")?.id).toBe(first.id);
     // Only #1's setup execution ever ran; no retry adopted, re-provisioned, or cleaned up.
     expect(await fs.readFile(path.join(first.path, "setup-marker.txt"), "utf8")).toBe("ran\n");
     expect(await fs.stat(first.path)).toBeTruthy();
     const rows = listRegistryWorktrees(env).filter((entry) => entry.path === first.path);
-    expect(rows.map((entry) => entry.id)).toEqual([first.id]);
+    expect(rows.map((entry) => [entry.id, entry.readiness])).toEqual([[first.id, "ready"]]);
+  });
+
+  it("gc reaps stale provisioning rows and preserves fresh ones", async () => {
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      "#!/bin/sh\necho ran > setup-marker.txt\n",
+      { mode: 0o755 },
+    );
+    const named = await service.create({ repoRoot: repo, name: "stale-prov" });
+    const autoNamed = await service.create({ repoRoot: repo });
+    // Constructed post-claim crash state: live worktree + branch with a row still marked
+    // 'provisioning' — exactly what a create() killed mid-setup leaves behind.
+    updateRegistryWorktree(env, named.id, { readiness: "provisioning" });
+    updateRegistryWorktree(env, autoNamed.id, { readiness: "provisioning" });
+
+    // At the threshold the rows are still considered in-flight and stay untouched.
+    now += PROVISIONING_STALE_MS;
+    await service.gc();
+    expect(getRegistryWorktree(env, named.id)?.readiness).toBe("provisioning");
+    expect(await fs.stat(named.path)).toBeTruthy();
+
+    // Past the threshold the holder is dead by contract: row, worktree, and branch go away.
+    now += 1;
+    await service.gc();
+    expect(getRegistryWorktree(env, named.id)).toBeUndefined();
+    expect(getRegistryWorktree(env, autoNamed.id)).toBeUndefined();
+    await expect(fs.stat(named.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(autoNamed.path)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await git(repo, "branch", "--list", named.branch)).toBe("");
+    expect(await git(repo, "branch", "--list", autoNamed.branch)).toBe("");
+
+    // Background recovery is complete: the same name (and any auto name) provisions fresh.
+    const recreated = await service.create({ repoRoot: repo, name: "stale-prov" });
+    expect(recreated.readiness).toBe("ready");
+    expect(await fs.readFile(path.join(recreated.path, "setup-marker.txt"), "utf8")).toBe("ran\n");
   });
 
   it("prunes expired snapshot refs and registry rows", async () => {

@@ -47,6 +47,11 @@ import type {
 export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain restorable after automatic cleanup.
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
+const SETUP_SCRIPT_TIMEOUT_MS = 120_000;
+// Provisioning rows are transient by contract: copy + setup are bounded by
+// SETUP_SCRIPT_TIMEOUT_MS, so a row still 'provisioning' this long after its claim has a
+// dead holder and gc may reclaim the path and branch for the next create().
+export const PROVISIONING_STALE_MS = 10 * SETUP_SCRIPT_TIMEOUT_MS;
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -56,6 +61,13 @@ export class WorktreeSnapshotError extends Error {
   constructor(snapshotError: string, options?: ErrorOptions) {
     super(`worktree snapshot failed; removal aborted: ${snapshotError}`, options);
     this.snapshotError = snapshotError;
+  }
+}
+
+/** Name reuse hit a same-path row still provisioning; retry after it settles or gc reaps it. */
+export class WorktreeProvisioningError extends Error {
+  constructor(name: string) {
+    super(`worktree provisioning in progress: ${name}`);
   }
 }
 const SNAPSHOT_REF_PREFIX = "refs/openclaw/snapshots";
@@ -292,7 +304,7 @@ async function runSetupScript(repoRoot: string, worktreePath: string): Promise<v
     return;
   }
   const result = await runCommandWithTimeout([setupScript], {
-    timeoutMs: 120_000,
+    timeoutMs: SETUP_SCRIPT_TIMEOUT_MS,
     cwd: worktreePath,
     env: {
       OPENCLAW_SOURCE_TREE_PATH: repoRoot,
@@ -355,6 +367,12 @@ export class ManagedWorktreeService {
     const root = path.join(resolveStateDir(this.env), "worktrees", repository.fingerprint);
     const worktreePath = path.join(root, name);
     const existing = findRegistryWorktreeByPath(this.env, worktreePath);
+    // Usable records are 'ready' only: a live 'provisioning' row means another create()
+    // holds the claim (or crashed mid-setup, which gc reaps after PROVISIONING_STALE_MS).
+    // Returning it would hand out a checkout whose copy/setup never finished.
+    if (existing?.name === name && !existing.removedAt && existing.readiness === "provisioning") {
+      throw new WorktreeProvisioningError(name);
+    }
     // Name reuse only ever adopts the caller's own record. Without this guard a
     // caller-chosen name could bind a new owner to another session's or a
     // manual checkout and run inside it.
@@ -363,8 +381,6 @@ export class ManagedWorktreeService {
     }
     if (existing?.name === name && existing.removedAt === undefined) {
       if (await pathExists(existing.path)) {
-        // May return a record whose provisioning is still in flight (rows are visible from
-        // claim-time onward); callers already face that window via restore() and re-creates.
         return existing;
       }
       updateRegistryWorktree(this.env, existing.id, { removedAt: this.now() });
@@ -762,6 +778,20 @@ export class ManagedWorktreeService {
           updateRegistryWorktree(this.env, record.id, { removedAt: now });
           record.removedAt = now;
         }
+        // Stale 'provisioning' rows have a dead holder by contract (PROVISIONING_STALE_MS);
+        // reap worktree+branch+row so the next create() — including auto-named orphans no
+        // retry will ever reach — starts fresh. Fresh provisioning rows stay untouched.
+        if (
+          record.removedAt === undefined &&
+          record.readiness === "provisioning" &&
+          now - record.createdAt > PROVISIONING_STALE_MS
+        ) {
+          // resetFailedWorktreeAdd tolerates the partial states a dead holder leaves
+          // (unlisted dir, missing branch), unlike the happy-path cleanupFailedCreate.
+          await resetFailedWorktreeAdd(record.repoRoot, record.path, record.branch);
+          deleteRegistryWorktree(this.env, record.id);
+          continue;
+        }
         // Manual worktrees remain until explicit removal; only run-owned worktrees expire.
         const expiresWhenIdle = record.ownerKind === "workboard" || record.ownerKind === "session";
         if (
@@ -840,6 +870,7 @@ export class ManagedWorktreeService {
       baseRef,
       ownerKind: params.ownerKind ?? "manual",
       ...(params.ownerId ? { ownerId: params.ownerId } : {}),
+      readiness: "provisioning",
       createdAt,
       lastActiveAt: createdAt,
     };
@@ -850,13 +881,17 @@ export class ManagedWorktreeService {
       if (!winner) {
         return undefined;
       }
+      // Only 'ready' rows are usable records; the winner is still provisioning its checkout.
+      if (winner.readiness === "provisioning") {
+        throw new WorktreeProvisioningError(name);
+      }
       if (!recordOwnerMatches(winner, params)) {
         throw worktreeNameInUseError(winner, name);
       }
       return winner;
     }
-    // Trade-off: the row is visible (list()) while provisioning runs; that is the cost of
-    // making in-flight creates unadoptable. Failed creates still end with no row.
+    // The row is visible as 'provisioning' (list()) while copy/setup run; that is what makes
+    // in-flight creates unadoptable and observable. Failed creates still end with no row.
     try {
       await copyIncludedFiles(repository.sourceRoot, worktreePath);
       if (params.runSetupScript !== false) {
@@ -873,7 +908,10 @@ export class ManagedWorktreeService {
       deleteRegistryWorktree(this.env, record.id);
       throw error;
     }
-    return record;
+    // Readiness flips only after provisioning fully succeeded; every usable-record path
+    // (entry shortcut, findLiveByOwner) filters on it.
+    updateRegistryWorktree(this.env, record.id, { readiness: "ready" });
+    return { ...record, readiness: "ready" };
   }
 
   private requireLiveRecord(id: string): ManagedWorktreeRecord {

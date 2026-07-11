@@ -1,5 +1,8 @@
 export type ManagedWorktreeOwnerKind = "manual" | "workboard" | "session";
 
+// 'provisioning' = claimed but copy/setup not finished; only 'ready' rows are usable records.
+export type ManagedWorktreeReadiness = "provisioning" | "ready";
+
 export type ManagedWorktreeRecord = {
   id: string;
   name: string;
@@ -11,6 +14,7 @@ export type ManagedWorktreeRecord = {
   ownerKind: ManagedWorktreeOwnerKind;
   ownerId?: string;
   snapshotRef?: string;
+  readiness: ManagedWorktreeReadiness;
   createdAt: number;
   lastActiveAt: number;
   removedAt?: number;

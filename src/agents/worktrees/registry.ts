@@ -7,7 +7,11 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js";
+import type {
+  ManagedWorktreeOwnerKind,
+  ManagedWorktreeReadiness,
+  ManagedWorktreeRecord,
+} from "./types.js";
 
 type WorktreesTable = OpenClawStateKyselyDatabase["worktrees"];
 type WorktreeRow = Selectable<WorktreesTable>;
@@ -38,6 +42,7 @@ function rowToRecord(row: WorktreeRow): ManagedWorktreeRecord {
     ownerKind: row.owner_kind as ManagedWorktreeOwnerKind,
     ...(row.owner_id ? { ownerId: row.owner_id } : {}),
     ...(row.snapshot_ref ? { snapshotRef: row.snapshot_ref } : {}),
+    readiness: row.readiness as ManagedWorktreeReadiness,
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at,
     ...(row.removed_at == null ? {} : { removedAt: row.removed_at }),
@@ -55,6 +60,7 @@ function recordToRow(record: ManagedWorktreeRecord): Insertable<WorktreesTable> 
     owner_kind: record.ownerKind,
     owner_id: record.ownerId ?? null,
     snapshot_ref: record.snapshotRef ?? null,
+    readiness: record.readiness,
     created_at: record.createdAt,
     last_active_at: record.lastActiveAt,
     removed_at: record.removedAt ?? null,
@@ -103,12 +109,15 @@ export function findLiveRegistryWorktreeByOwner(
   ownerId: string,
 ): ManagedWorktreeRecord | undefined {
   const db = dbFor(env);
+  // Usable-record acquisition: callers run work inside the returned checkout, so a row
+  // still 'provisioning' (claimed, copy/setup unfinished) must stay invisible here.
   const query = kyselyFor(db)
     .selectFrom("worktrees")
     .selectAll()
     .where("owner_kind", "=", ownerKind)
     .where("owner_id", "=", ownerId)
     .where("removed_at", "is", null)
+    .where("readiness", "=", "ready")
     .orderBy("created_at", "desc")
     .limit(1);
   const row = executeSqliteQuerySync(db, query).rows[0];
@@ -168,6 +177,7 @@ export function insertRegistryWorktreeIfPathFree(
         "owner_kind",
         "owner_id",
         "snapshot_ref",
+        "readiness",
         "created_at",
         "last_active_at",
         "removed_at",
@@ -184,6 +194,7 @@ export function insertRegistryWorktreeIfPathFree(
             eb.val(row.owner_kind).as("owner_kind"),
             eb.val(row.owner_id).as("owner_id"),
             eb.val(row.snapshot_ref).as("snapshot_ref"),
+            eb.val(row.readiness).as("readiness"),
             eb.val(row.created_at).as("created_at"),
             eb.val(row.last_active_at).as("last_active_at"),
             eb.val(row.removed_at).as("removed_at"),
@@ -208,7 +219,9 @@ export function insertRegistryWorktreeIfPathFree(
 export function updateRegistryWorktree(
   env: NodeJS.ProcessEnv,
   id: string,
-  patch: Partial<Pick<ManagedWorktreeRecord, "lastActiveAt" | "removedAt" | "snapshotRef">>,
+  patch: Partial<
+    Pick<ManagedWorktreeRecord, "lastActiveAt" | "removedAt" | "snapshotRef" | "readiness">
+  >,
 ): void {
   const db = dbFor(env);
   const values: Partial<WorktreeRow> = {};
@@ -220,6 +233,9 @@ export function updateRegistryWorktree(
   }
   if ("snapshotRef" in patch) {
     values.snapshot_ref = patch.snapshotRef ?? null;
+  }
+  if (patch.readiness !== undefined) {
+    values.readiness = patch.readiness;
   }
   runOpenClawStateWriteTransaction(() => {
     executeSqliteQuerySync(
