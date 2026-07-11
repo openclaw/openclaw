@@ -42,7 +42,7 @@ type MemoryCoreAcquireLocalService = (
     service?: LmstudioProviderConfig["localService"];
   },
   signal?: AbortSignal | null,
-) => Promise<{ release: () => Promise<void> } | undefined>;
+) => Promise<{ release: () => void } | undefined>;
 type LocalServiceAwareEmbeddingOptions = MemoryEmbeddingProviderCreateOptions & {
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };

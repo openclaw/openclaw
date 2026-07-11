@@ -457,7 +457,7 @@ export type PluginRuntimeCore = {
         service?: import("../../config/types.models.js").ModelProviderLocalServiceConfig;
       },
       signal?: AbortSignal | null,
-    ) => Promise<{ release: () => Promise<void> } | undefined>;
+    ) => Promise<{ release: () => void } | undefined>;
   };
   modelAuth: {
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */

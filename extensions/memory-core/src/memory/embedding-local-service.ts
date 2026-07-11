@@ -11,7 +11,7 @@ export type MemoryCoreAcquireLocalService = (
     service?: ModelProviderConfig["localService"];
   },
   signal?: AbortSignal | null,
-) => Promise<{ release: () => Promise<void> } | undefined>;
+) => Promise<{ release: () => void } | undefined>;
 
 let acquireLocalService: MemoryCoreAcquireLocalService | undefined;
 
