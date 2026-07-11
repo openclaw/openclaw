@@ -2187,7 +2187,7 @@ export const ja_JP: TranslationMap = {
     welcome: {
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
-      recentSessions: "Recent chats",
+      recentSessions: "最近のチャット",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

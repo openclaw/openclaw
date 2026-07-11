@@ -2188,7 +2188,7 @@ export const nl: TranslationMap = {
     welcome: {
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
-      recentSessions: "Recent chats",
+      recentSessions: "Recente chats",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

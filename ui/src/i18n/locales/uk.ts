@@ -2180,7 +2180,7 @@ export const uk: TranslationMap = {
     welcome: {
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
-      recentSessions: "Recent chats",
+      recentSessions: "Нещодавні чати",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

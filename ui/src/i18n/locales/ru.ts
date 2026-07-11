@@ -2194,7 +2194,7 @@ export const ru: TranslationMap = {
     welcome: {
       hintBeforeShortcut: "Введите сообщение ниже ·",
       hintAfterShortcut: "для команд",
-      recentSessions: "Recent chats",
+      recentSessions: "Недавние чаты",
       suggestions: {
         whatCanYouDo: "Что вы умеете?",
         summarizeRecentSessions: "Суммируйте мои недавние сеансы",

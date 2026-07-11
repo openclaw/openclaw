@@ -2169,7 +2169,7 @@ export const ko: TranslationMap = {
     welcome: {
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
-      recentSessions: "Recent chats",
+      recentSessions: "최근 채팅",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

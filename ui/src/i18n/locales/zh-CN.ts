@@ -2128,7 +2128,7 @@ export const zh_CN: TranslationMap = {
     welcome: {
       hintBeforeShortcut: "在下方输入消息 · 输入",
       hintAfterShortcut: "查看命令",
-      recentSessions: "Recent chats",
+      recentSessions: "最近聊天",
       suggestions: {
         whatCanYouDo: "你能做什么？",
         summarizeRecentSessions: "总结我最近的会话",
