@@ -35,6 +35,7 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "../conversation.runtime.js";
+import { isSlackBulkActionId } from "../../bulk-action-ids.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 
 type InteractionMessageBlock = {
@@ -290,7 +291,9 @@ function isBulkActionsBlock(block: InteractionMessageBlock): boolean {
     block.type === "actions" &&
     Array.isArray(block.elements) &&
     block.elements.length > 0 &&
-    block.elements.every((el) => typeof el.action_id === "string" && el.action_id.endsWith("_all"))
+    block.elements.every(
+      (el) => typeof el.action_id === "string" && isSlackBulkActionId(el.action_id),
+    )
   );
 }
 

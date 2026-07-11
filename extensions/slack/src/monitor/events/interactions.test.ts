@@ -2167,6 +2167,187 @@ describe("registerSlackInteractionEvents", () => {
     });
   });
 
+  it("removes bulk action rows when the last individual Slack control is selected", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, app, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      body: {
+        user: { id: "U444" },
+        channel: { id: "C4" },
+        message: {
+          ts: "444.555",
+          text: "fallback",
+          blocks: [
+            { type: "divider" },
+            {
+              type: "actions",
+              block_id: "bulk_row",
+              elements: [
+                { type: "button", action_id: "select_all", text: { type: "plain_text", text: "All" } },
+                {
+                  type: "button",
+                  action_id: "deselect_all",
+                  text: { type: "plain_text", text: "None" },
+                },
+              ],
+            },
+            { type: "divider" },
+            {
+              type: "actions",
+              block_id: "approve_row",
+              elements: [
+                {
+                  type: "button",
+                  action_id: "approve_selected",
+                  text: { type: "plain_text", text: "Approve" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "approve_selected",
+        block_id: "approve_row",
+        value: "go",
+        text: { type: "plain_text", text: "Approve" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+    expectRecordFields(chatUpdateCall(app), {
+      channel: "C4",
+      ts: "444.555",
+      blocks: [
+        { type: "divider" },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: ":white_check_mark: *Approve* selected by <@U444>",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("keeps non-bulk deploy_all_services rows while another individual control remains", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, app, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      body: {
+        user: { id: "U555" },
+        channel: { id: "C5" },
+        message: {
+          ts: "555.666",
+          text: "fallback",
+          blocks: [
+            { type: "divider" },
+            {
+              type: "actions",
+              block_id: "bulk_row",
+              elements: [
+                { type: "button", action_id: "select_all", text: { type: "plain_text", text: "All" } },
+                {
+                  type: "button",
+                  action_id: "deselect_all",
+                  text: { type: "plain_text", text: "None" },
+                },
+              ],
+            },
+            { type: "divider" },
+            {
+              type: "actions",
+              block_id: "deploy_row",
+              elements: [
+                {
+                  type: "button",
+                  action_id: "deploy_all_services",
+                  text: { type: "plain_text", text: "Deploy all services" },
+                },
+              ],
+            },
+            {
+              type: "actions",
+              block_id: "approve_row",
+              elements: [
+                {
+                  type: "button",
+                  action_id: "approve_selected",
+                  text: { type: "plain_text", text: "Approve" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "approve_selected",
+        block_id: "approve_row",
+        value: "go",
+        text: { type: "plain_text", text: "Approve" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+    expectRecordFields(chatUpdateCall(app), {
+      channel: "C5",
+      ts: "555.666",
+      blocks: [
+        { type: "divider" },
+        {
+          type: "actions",
+          block_id: "bulk_row",
+          elements: [
+            { type: "button", action_id: "select_all", text: { type: "plain_text", text: "All" } },
+            {
+              type: "button",
+              action_id: "deselect_all",
+              text: { type: "plain_text", text: "None" },
+            },
+          ],
+        },
+        { type: "divider" },
+        {
+          type: "actions",
+          block_id: "deploy_row",
+          elements: [
+            {
+              type: "button",
+              action_id: "deploy_all_services",
+              text: { type: "plain_text", text: "Deploy all services" },
+            },
+          ],
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: ":white_check_mark: *Approve* selected by <@U555>",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("renders date/time/datetime picker selections in confirmation rows", async () => {
     enqueueSystemEventMock.mockClear();
     const { ctx, app, getHandler } = createContext();
