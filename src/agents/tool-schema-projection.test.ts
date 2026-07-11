@@ -102,6 +102,20 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
+  it("keeps empty property names in non-finite diagnostic paths", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          "": { type: "number", maximum: Number.POSITIVE_INFINITY },
+        },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties..maximum is not JSON-serializable"],
+    });
+  });
+
   it("does not report schema map field names as dynamic JSON Schema keywords", () => {
     // Dynamic keywords are only invalid as JSON Schema control fields; property
     // names and definitions can legally contain the same strings.

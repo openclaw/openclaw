@@ -44,18 +44,19 @@ function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInpu
     path: null as string | null,
   };
   const paths = new WeakMap<object, string>();
+  let isRoot = true;
   let text: string | undefined;
   try {
     text = JSON.stringify(value, function (this: object, key, entry) {
       const holderPath = paths.get(this);
-      const entryPath =
-        key === ""
-          ? path
-          : holderPath === undefined
-            ? `${path}.${key}`
-            : Array.isArray(this)
-              ? `${holderPath}[${key}]`
-              : `${holderPath}.${key}`;
+      const entryPath = isRoot
+        ? path
+        : holderPath === undefined
+          ? `${path}.${key}`
+          : Array.isArray(this)
+            ? `${holderPath}[${key}]`
+            : `${holderPath}.${key}`;
+      isRoot = false;
       if (nonFiniteNumber.path === null && typeof entry === "number" && !Number.isFinite(entry)) {
         nonFiniteNumber.path = entryPath;
       } else if (entry && typeof entry === "object") {
