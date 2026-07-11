@@ -57,7 +57,10 @@ describe("openai realtime voice provider with gpt-live models", () => {
       providerConfig: { apiKey: "test-key" },
       model: "gpt-realtime-2.1",
     });
-    expect(session?.offerUrl).toBe("https://api.openai.com/v1/realtime/calls");
+    expect(session).toMatchObject({
+      transport: "webrtc",
+      offerUrl: "https://api.openai.com/v1/realtime/calls",
+    });
     expect(mintSecretMock.mock.calls[0]?.[0]?.session).toMatchObject({
       type: "realtime",
       model: "gpt-realtime-2.1",
