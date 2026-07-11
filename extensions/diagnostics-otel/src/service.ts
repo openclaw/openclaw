@@ -3992,7 +3992,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "session.state":
               recordSessionState(evt);
-              return;
+              break;
             case "session.long_running":
             case "session.stalled":
               break;
@@ -4010,7 +4010,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "run.attempt":
               recordRunAttempt(evt);
-              return;
+              break;
             case "run.progress":
               break;
             case "diagnostic.heartbeat":
@@ -4066,7 +4066,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "exec.process.completed":
               recordExecProcessCompleted(evt);
-              return;
+              break;
             case "exec.approval.followup_suppressed":
               break;
             case "log.record":

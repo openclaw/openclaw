@@ -967,7 +967,7 @@ function recordDiagnosticEvent(
         {},
         numericValue(evt.queueLength),
       );
-      return;
+      break;
     case "diagnostic.heartbeat":
       break;
     case "telemetry.exporter":
