@@ -57,6 +57,7 @@ import {
   pinActivePluginHttpRouteRegistry,
   pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
+import { resolveWorkerProvider } from "../plugins/worker-provider-registry.js";
 import { getTotalQueueSize, isGatewayDraining } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -85,6 +86,7 @@ import {
 } from "./methods/registry.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
+import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import {
   listChannelPluginConfigTargetIds,
   pluginConfigTargetsChanged,
@@ -131,6 +133,8 @@ import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
+import { createWorkerEnvironmentService } from "./worker-environments/service.js";
+import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
 
@@ -681,6 +685,13 @@ export async function startGatewayServer(
     startupLastGoodSnapshot = startupSnapshot;
   }
   setRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
+  const workerEnvironmentStore = minimalTestGateway ? undefined : createWorkerEnvironmentStore();
+  const hasWorkerEnvironmentRecords = (workerEnvironmentStore?.list().length ?? 0) > 0;
+  // Durable rows can outlive profiles. Startup planning still enforces plugin trust/disable gates.
+  const listDurableWorkerProviderIds = () =>
+    uniqueStrings(
+      workerEnvironmentStore?.listForReconcile().map((record) => record.providerId) ?? [],
+    );
   const { prepareGatewayPluginBootstrap } = await loadStartupPluginsModule();
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
     prepareGatewayPluginBootstrap({
@@ -688,6 +699,7 @@ export async function startGatewayServer(
       activationSourceConfig: startupActivationSourceConfig,
       startupRuntimeConfig,
       pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
+      workerProviderIds: listDurableWorkerProviderIds(),
       minimalTestGateway,
       log,
       loadRuntimePlugins: false,
@@ -729,6 +741,19 @@ export async function startGatewayServer(
     ]);
   }
   let { pluginRegistry, baseGatewayMethods } = pluginBootstrap;
+  // Unconfigured clean installs get no service; durable rows still need list/status projection.
+  const shouldStartWorkerEnvironmentService =
+    Object.keys(gatewayPluginConfigAtStart.cloudWorkers?.profiles ?? {}).length > 0 ||
+    hasWorkerEnvironmentRecords;
+  const workerEnvironmentService =
+    workerEnvironmentStore && shouldStartWorkerEnvironmentService
+      ? createWorkerEnvironmentService({
+          store: workerEnvironmentStore,
+          getConfig: getRuntimeConfig,
+          resolveProvider: (providerId) => resolveWorkerProvider(pluginRegistry, providerId),
+          logger: log.child("worker-environments"),
+        })
+      : undefined;
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -1317,8 +1342,13 @@ export async function startGatewayServer(
           auxHandlers[method] = handler;
         }
       }
+      const coreDescriptors = createCoreGatewayMethodDescriptors(coreDescriptorHandlers).filter(
+        (descriptor) =>
+          workerEnvironmentService ||
+          (descriptor.name !== "environments.create" && descriptor.name !== "environments.destroy"),
+      );
       return createGatewayMethodRegistry([
-        ...createCoreGatewayMethodDescriptors(coreDescriptorHandlers),
+        ...coreDescriptors,
         ...createPluginGatewayMethodDescriptors(nextPluginRegistry),
         ...createGatewayMethodDescriptorsFromHandlers({
           handlers: auxHandlers,
@@ -1415,11 +1445,17 @@ export async function startGatewayServer(
           loadGatewayPluginBootstrapModule(),
           import("../plugins/services.js"),
         ]);
+      const nextPluginActivationConfig = resolveGatewayStartupPluginActivationConfig({
+        runtimeConfig: params.nextConfig,
+        activationSourceConfig: params.nextConfig,
+        env: process.env,
+      });
       const nextPluginLookUpTable = loadPluginLookUpTable({
-        config: params.nextConfig,
+        config: nextPluginActivationConfig,
         workspaceDir: defaultWorkspaceDir,
         env: process.env,
         activationSourceConfig: params.nextConfig,
+        workerProviderIds: listDurableWorkerProviderIds(),
       });
       const nextStartupPluginIds = new Set(nextPluginLookUpTable.startup.pluginIds);
       const nextStartupChannelIds = new Set<ChannelId>();
@@ -1552,6 +1588,7 @@ export async function startGatewayServer(
             });
           },
           nodeRegistry,
+          ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
           terminalSessions,
           agentRunSeq,
           chatAbortControllers,
@@ -1789,6 +1826,20 @@ export async function startGatewayServer(
                 runtimeState.gatewayLifetimeSidecars = [];
               }
             },
+            ...(workerEnvironmentService
+              ? {
+                  startWorkerEnvironmentRuntime: () => {
+                    if (closePreludeStarted) {
+                      return null;
+                    }
+                    const sidecar = { stop: () => workerEnvironmentService.stop() };
+                    // Close must see the drain handle before reconciliation can yield.
+                    runtimeState.gatewayLifetimeSidecars.push(sidecar);
+                    workerEnvironmentService.start();
+                    return sidecar;
+                  },
+                }
+              : {}),
             onSidecarsReady: () => {
               startupSidecarsReady = true;
               activateScheduledServicesWhenReady();
