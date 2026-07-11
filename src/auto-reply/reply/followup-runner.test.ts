@@ -8,6 +8,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { setCliSessionBinding } from "../../agents/cli-session.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE } from "../../config/sessions/undelivered-final-notice.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
@@ -58,6 +59,7 @@ const FOLLOWUP_TEST_QUEUES = new Map<
 >();
 const FOLLOWUP_TEST_SESSION_STORES = new Map<string, Record<string, SessionEntry>>();
 const FOLLOWUP_TEST_SESSION_STORE_PATHS = new Set<string>();
+let inspectEnqueueFollowupRunForTest: (() => void) | undefined;
 
 function debugFollowupTest(message: string): void {
   if (!FOLLOWUP_DEBUG) {
@@ -242,6 +244,7 @@ function enqueueFollowupRunForFollowupTest(
   _restartIfIdle?: unknown,
   options?: { position?: "tail" | "front" },
 ): boolean {
+  inspectEnqueueFollowupRunForTest?.();
   if (options?.position === "front") {
     run.protectFromQueueOverflow = true;
   }
@@ -387,6 +390,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
       release: async () => {},
     })),
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 1),
+    resolveSessionWriteLockOptions: vi.fn(() => ({})),
   }));
   vi.doMock("../../agents/embedded-agent.js", () => ({
     abortEmbeddedAgentRun: vi.fn(async () => false),
@@ -604,6 +608,7 @@ beforeEach(() => {
   clearFollowupQueue("main");
   FOLLOWUP_TEST_QUEUES.clear();
   FOLLOWUP_TEST_SESSION_STORES.clear();
+  inspectEnqueueFollowupRunForTest = undefined;
 });
 
 afterEach(() => {
@@ -5750,46 +5755,82 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
-  it("enqueues a one-shot recovery retry for substantive message-tool-only queued followup finals", async () => {
+  it("persists queued message-tool-only undelivered finals before enqueueing recovery", async () => {
     const finalText =
       "Here is the answer the queued user asked for. It includes enough detail to be a visible response, and it has another sentence so the substantive-final detector treats it as a real reply.";
     const parentOnComplete = vi.fn();
     const parentLifecycle = { onComplete: parentOnComplete };
     const queued = baseQueuedRun("discord");
-    const { onBlockReply } = await runMessagingCase({
-      agentResult: {
-        payloads: [{ text: finalText }],
-        meta: { finalAssistantVisibleText: finalText },
-      },
-      queued: {
-        ...queued,
-        originatingChannel: "discord",
-        originatingTo: "channel:C1",
-        queuedLifecycle: parentLifecycle,
-        run: {
-          ...queued.run,
-          sourceReplyDeliveryMode: "message_tool_only",
-        },
-      } as FollowupRun,
-    });
+    const sessionFile = path.join(tmpdir(), "openclaw-followup-stranded-session.jsonl");
+    const storePath = path.join(tmpdir(), "openclaw-followup-stranded-store.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: queued.run.sessionId,
+      sessionFile,
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session",
+        id: sessionEntry.sessionId,
+        timestamp: new Date().toISOString(),
+        cwd: queued.run.workspaceDir,
+      })}\n`,
+      "utf8",
+    );
+    let transcriptAtEnqueue = "";
+    inspectEnqueueFollowupRunForTest = () => {
+      transcriptAtEnqueue = fsSync.existsSync(sessionFile)
+        ? fsSync.readFileSync(sessionFile, "utf8")
+        : "";
+    };
 
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(routeReplyMock).not.toHaveBeenCalled();
-    const retry = FOLLOWUP_TEST_QUEUES.get("main")?.items[0];
-    expect(retry?.summaryLine).toBe("stranded-reply-retry");
-    expect(retry?.strandedReplyRetry).toBe(true);
-    expect(retry?.disableCollectBatching).toBe(true);
-    expect(retry?.protectFromQueueOverflow).toBe(true);
-    expect(retry?.transcriptPrompt).toBeUndefined();
-    expect(retry?.userTurnTranscriptRecorder).toBeUndefined();
-    expect(retry?.currentInboundContext).toBeUndefined();
-    expect(retry?.run.suppressNextUserMessagePersistence).toBe(true);
-    expect(retry?.run.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(retry?.prompt).toContain("message(action=send)");
-    expect(retry?.prompt).toContain(finalText);
-    // System retry detaches from the client turn lifecycle; parent completion owns onComplete once.
-    expect(retry?.queuedLifecycle).toBeUndefined();
-    expect(parentOnComplete).toHaveBeenCalledTimes(1);
+    try {
+      const { onBlockReply } = await runMessagingCase({
+        agentResult: {
+          payloads: [{ text: finalText }],
+          meta: { finalAssistantVisibleText: finalText },
+        },
+        runnerOverrides: {
+          sessionEntry,
+          sessionStore,
+          sessionKey: "main",
+          storePath,
+        },
+        queued: {
+          ...queued,
+          originatingChannel: "discord",
+          originatingTo: "channel:C1",
+          queuedLifecycle: parentLifecycle,
+          run: {
+            ...queued.run,
+            sessionFile,
+            sourceReplyDeliveryMode: "message_tool_only",
+          },
+        } as FollowupRun,
+      });
+
+      expect(transcriptAtEnqueue).toContain(MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE);
+      expect(onBlockReply).not.toHaveBeenCalled();
+      expect(routeReplyMock).not.toHaveBeenCalled();
+      const retry = FOLLOWUP_TEST_QUEUES.get("main")?.items[0];
+      expect(retry?.summaryLine).toBe("stranded-reply-retry");
+      expect(retry?.strandedReplyRetry).toBe(true);
+      expect(retry?.disableCollectBatching).toBe(true);
+      expect(retry?.protectFromQueueOverflow).toBe(true);
+      expect(retry?.transcriptPrompt).toBeUndefined();
+      expect(retry?.userTurnTranscriptRecorder).toBeUndefined();
+      expect(retry?.currentInboundContext).toBeUndefined();
+      expect(retry?.run.suppressNextUserMessagePersistence).toBe(true);
+      expect(retry?.run.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(retry?.prompt).toContain("message(action=send)");
+      expect(retry?.prompt).toContain(finalText);
+      expect(retry?.queuedLifecycle).toBeUndefined();
+      expect(parentOnComplete).toHaveBeenCalledTimes(1);
+    } finally {
+      await fs.rm(sessionFile, { force: true });
+    }
   });
 
   it("excludes raw trace and status payloads from queued stranded recovery prompts", async () => {

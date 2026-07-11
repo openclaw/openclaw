@@ -132,7 +132,7 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
           threadId,
           replyToId: readStringParam(params, "replyTo") ?? readStringParam(params, "replyToId"),
         });
-        return jsonResult({ message });
+        return jsonResult({ message, messageId: message.id });
       }
       case "thread-create": {
         const channelId =

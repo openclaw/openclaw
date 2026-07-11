@@ -129,6 +129,7 @@ import {
 } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
+import { persistMessageToolOnlyUndeliveredFinalNotice } from "./undelivered-final-notice.js";
 
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
 
@@ -1687,15 +1688,36 @@ export function createFollowupRunner(params: {
           typeof runResult.meta?.finalAssistantVisibleText === "string"
             ? normalizeAssistantFinalDeliveryText(runResult.meta.finalAssistantVisibleText)
             : "";
+        const successfulSourceReplyDelivery = hasSuccessfulFollowupSourceReplyDelivery({
+          didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
+          messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
+        });
+        try {
+          await persistMessageToolOnlyUndeliveredFinalNotice({
+            cfg: runtimeConfig,
+            sessionEntry: activeSessionEntry,
+            sessionStore,
+            sessionId: activeSessionEntry?.sessionId ?? run.sessionId,
+            expectedLifecycleRevision: activeSessionEntry?.lifecycleRevision,
+            sessionKey: replySessionKey,
+            storePath,
+            sessionAgentId: run.agentId,
+            threadId: queued.originatingThreadId,
+            workspaceDir: run.workspaceDir,
+            sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+            sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+            finalTextDeliveredToCurrentSourceRoute: successfulSourceReplyDelivery,
+            finalText: assistantFinalText,
+          });
+        } catch (error) {
+          logVerbose(`failed to persist undelivered final notice: ${String(error)}`);
+        }
         const isStrandedReply =
           queued.currentInboundEventKind !== "room_event" &&
           shouldWarnAboutPrivateMessageToolFinal({
             sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
             sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-            successfulSourceReplyDelivery: hasSuccessfulFollowupSourceReplyDelivery({
-              didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
-              messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
-            }),
+            successfulSourceReplyDelivery,
             finalText: assistantFinalText,
           });
         if (!isStrandedReply) {

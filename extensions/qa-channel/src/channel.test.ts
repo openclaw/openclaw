@@ -652,8 +652,12 @@ describe("qa-channel plugin", () => {
           message: "hello from action",
         },
       });
-      const payload = extractToolPayload(result) as { message: { text: string } };
+      const payload = extractToolPayload(result) as {
+        message: { id: string; text: string };
+        messageId?: string;
+      };
       expect(payload.message.text).toBe("hello from action");
+      expect(payload.messageId).toBe(payload.message.id);
 
       const outbound = await state.waitFor({
         kind: "message-text",

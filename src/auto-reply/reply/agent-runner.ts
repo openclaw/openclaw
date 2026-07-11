@@ -36,17 +36,8 @@ import {
   resolveSessionPluginTraceLines,
   type SessionEntry,
 } from "../../config/sessions.js";
-import {
-  loadSessionEntry,
-  persistSessionTranscriptTurn,
-  updateSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
-import {
-  MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE,
-  MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_NOTICE,
-  type MessageToolOnlyUndeliveredFinalNoticeDetails,
-} from "../../config/sessions/undelivered-final-notice.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -83,7 +74,7 @@ import {
 } from "../reply-payload.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmptyInteractiveReplyPayload,
@@ -153,6 +144,7 @@ import {
 } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
+import { persistMessageToolOnlyUndeliveredFinalNotice } from "./undelivered-final-notice.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 const RESTART_LIFECYCLE_REPLY_TEXT =
@@ -289,83 +281,6 @@ async function hasMessagingToolDeliveredFinalTextToCurrentSourceRoute(params: {
       ? decision.routeSentTexts
       : sentTexts;
   return hasDeliveredFinalText({ finalText: params.finalText, sentTexts: routeSentTexts });
-}
-
-async function persistMessageToolOnlyUndeliveredFinalNotice(params: {
-  cfg: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionId: string;
-  expectedLifecycleRevision?: string;
-  sessionKey?: string;
-  storePath?: string;
-  sessionAgentId?: string;
-  threadId?: string | number;
-  workspaceDir: string;
-  sourceReplyDeliveryMode?: string;
-  sendPolicyDenied: boolean;
-  finalTextDeliveredToCurrentSourceRoute: boolean;
-  finalText: string;
-}): Promise<void> {
-  if (
-    params.sourceReplyDeliveryMode !== "message_tool_only" ||
-    params.sendPolicyDenied ||
-    params.finalTextDeliveredToCurrentSourceRoute
-  ) {
-    return;
-  }
-  const trimmed = params.finalText.trim();
-  if (!trimmed || isSilentReplyText(trimmed)) {
-    return;
-  }
-  const sessionKey = params.sessionKey?.trim();
-  const sessionId = params.sessionId.trim();
-  if (!sessionKey || !sessionId) {
-    return;
-  }
-
-  await persistSessionTranscriptTurn(
-    {
-      sessionId,
-      sessionKey,
-      sessionEntry: params.sessionEntry,
-      sessionStore: params.sessionStore,
-      storePath: params.storePath,
-      agentId: params.sessionAgentId,
-      threadId: params.threadId,
-    },
-    {
-      config: params.cfg,
-      cwd: params.workspaceDir,
-      messages: [
-        {
-          message: {
-            role: "custom",
-            customType: MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE,
-            content: MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_NOTICE,
-            display: false,
-            details: {
-              sourceReplyDeliveryMode: "message_tool_only",
-              delivered: false,
-              finalTextLength: trimmed.length,
-            } satisfies MessageToolOnlyUndeliveredFinalNoticeDetails,
-            timestamp: Date.now(),
-          },
-        },
-      ],
-      publishWhen: "when-appended",
-      touchSessionEntry: true,
-      updateMode: "file-only",
-      ...(params.storePath
-        ? {
-            expectedSessionId: sessionId,
-            ...(params.expectedLifecycleRevision
-              ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
-              : {}),
-          }
-        : {}),
-    },
-  );
 }
 
 function resolveReplyRunDeliveryContext(params: {
