@@ -196,7 +196,7 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete 66e676d29b92d040716376a75aca32bad655cfac..6fb7daa08744f6f862afd45dae7811b2b475b102 history: 1480 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete 66e676d29b92d040716376a75aca32bad655cfac..6606e9bff5da38ec8220431dee379c8de5d37b7e history: 1487 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 Shipped baseline exclusions: v2026.6.11 (10 PRs: #87298, #89949, #90811, #92020, #92657, #93466, #93650, #93767, #93810, #97118).
 
@@ -1657,6 +1657,7 @@ Shipped baseline exclusions: v2026.6.11 (10 PRs: #87298, #89949, #90811, #92020,
 - **PR #102256** ci: temporarily disable QA smoke again. Thanks @RomneyDa.
 - **PR #99776** policy: preview review-required gateway repairs. Thanks @giodl73-repo.
 - **PR #101881** Fix container image upgrade migrations before gateway readiness. Related #98565. Thanks @sallyom and @jacobtomlinson.
+- **PR #102444** fix(codex): support app-server 0.143.0. Thanks @vincentkoc.
 - **PR #102600** fix(release): accept tool-only completion signal.
 - **PR #102732** test(qa): assert Telegram command denial.
 - **PR #103244** ci: pin docs i18n Go toolchain. Related #103240.
@@ -1671,15 +1672,21 @@ Shipped baseline exclusions: v2026.6.11 (10 PRs: #87298, #89949, #90811, #92020,
 - **PR #103635** fix(qa): keep retry passes terminally successful. Related #103631.
 - **PR #103650** fix(qa): keep non-assistant fixtures out of token usage gate. Related #103641.
 - **PR #103654** fix(ci): run live suites from manual dispatches. Related #103652.
+- **PR #103608** fix(release): contain installer artifact restores.
 - **PR #103681** fix(qa): accept structured gateway restart outcomes. Related #103676.
 - **PR #103685** fix(qa): require web fetch after tool discovery. Related #103678.
 - **PR #103718** test(qa): wait for durable webchat transcript. Related #103701.
 - **PR #103906** fix(release): keep validation evidence immutable across reruns.
 - **PR #103923** fix(i18n): recognize Meta docs glossary terms.
 - **PR #103095** fix(ci): isolate OpenWebUI release smoke.
-- **PR #104032** fix(release): harden and accelerate 2026.7.1 handoff. Thanks @vincentkoc.
+- **PR #103549** fix(telegram): complete spooled updates at turn adoption instead of turn settle. Related #102468. Thanks @obviyus.
+- **PR #103695** fix(telegram): harden spooled turn adoption. Thanks @vincentkoc.
+- **PR #103664** fix(telegram): scope reply-fence abort authority to pre-adoption dispatch. Thanks @obviyus.
 - **PR #103680** fix(providers): align Meta Model API contract. Related #103667. Thanks @vincentkoc.
+- **PR #104032** fix(release): harden and accelerate 2026.7.1 handoff. Thanks @vincentkoc.
 - **PR #103861** fix(logging): redact Telegram tokens across chunk boundaries. Thanks @vincentkoc.
+- **PR #104000** improve(release): make preparation atomic and bounded. Thanks @vincentkoc.
+- **PR #103952** fix(telegram): detach adopted turns from reply fence. Thanks @vincentkoc.
 - **PR #103965** fix(telegram): suppress replies superseded during adoption.
 - **PR #103946** fix(tasks): repair legacy delivery statuses. Related #103168. Thanks @bek91 and @theo674.
 ## 2026.6.11
