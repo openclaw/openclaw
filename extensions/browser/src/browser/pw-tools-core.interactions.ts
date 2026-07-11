@@ -41,6 +41,7 @@ import {
 import {
   assertPageNavigationCompletedSafely,
   beginActionDownloadCaptureOnPage,
+  closeBrowserTargetForUnsafePageExecution,
   createObservedDialogAbortSignalForPage,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
@@ -83,6 +84,48 @@ const ACT_DOWNLOAD_MAX_DRAIN_MS = 1_000;
 // Playwright's highlight owns a live DOM overlay and RAF loop. Keep its whole
 // visible lifetime, including disposal, inside the navigation guard.
 const HIGHLIGHT_DURATION_MS = 2_000;
+
+// Playwright serializes this function into the page. Keeping caller source as
+// data prevents the Gateway from evaluating page JavaScript while routing.
+// eslint-disable-next-line @typescript-eslint/no-implied-eval -- runs only in page context
+const runNormalizedWaitPredicate = new Function(
+  `
+    return function runNormalizedWaitPredicate(fnSource) {
+      "use strict";
+      try {
+        var state = runNormalizedWaitPredicate.__openclawState;
+        if (!state || state.fnSource !== fnSource) {
+          var candidate = globalThis.eval("(" + fnSource + ")");
+          if (typeof candidate !== "function") {
+            throw new Error("wait source did not produce a function");
+          }
+          state = { fnSource: fnSource, candidate: candidate, pending: false, failed: false };
+          runNormalizedWaitPredicate.__openclawState = state;
+        }
+        if (state.failed) throw state.error;
+        if (state.value) return state.value;
+        if (state.pending) return false;
+        var result = state.candidate();
+        if (!result || typeof result.then !== "function") return result;
+        state.pending = true;
+        Promise.resolve(result).then(
+          function(value) {
+            state.pending = false;
+            if (value) state.value = value;
+          },
+          function(error) {
+            state.pending = false;
+            state.failed = true;
+            state.error = error;
+          }
+        );
+        return false;
+      } catch (err) {
+        throw new Error("Invalid wait function: " + (err && err.message ? err.message : String(err)));
+      }
+    };
+  `,
+)() as (fnSource: string) => unknown;
 
 function resolveBoundedDelayMs(value: number | undefined, label: string, maxMs: number): number {
   const normalized = Math.floor(value ?? 0);
@@ -1023,7 +1066,60 @@ export async function waitForViaPlaywright(
         if (opts.fn) {
           const fn = normalizeOptionalString(opts.fn) ?? "";
           if (fn) {
-            await waitForStep(page.waitForFunction(fn, { timeout }));
+            const fnSource = normalizeBrowserEvaluateFunctionSource(fn);
+            const targetId = normalizeOptionalString(opts.targetId) ?? "";
+            if (!targetId) {
+              throw new Error("targetId is required for wait --fn");
+            }
+            // Playwright treats string page functions as expressions and its
+            // second argument as page data, not options. Pass a real wrapper so
+            // function sources execute and the timeout reaches the third slot.
+            let predicateSettled = false;
+            let targetClosure: Promise<void> | undefined;
+            const closeUnsafePredicateTarget = () => {
+              targetClosure ??= closeBrowserTargetForUnsafePageExecution({
+                cdpUrl: opts.cdpUrl,
+                page,
+                targetId,
+                ssrfPolicy: opts.ssrfPolicy,
+              }).catch(
+                // Releasing the route while timed-out page code can still run
+                // would reopen the SSRF window. Keep this action pending when
+                // exact target closure cannot be proven.
+                async () => await new Promise<never>(() => {}),
+              );
+              return targetClosure;
+            };
+            const onPredicateAbort = () => {
+              if (predicateSettled || isBrowserObservedDialogBlockedError(opts.signal?.reason)) {
+                return;
+              }
+              void closeUnsafePredicateTarget();
+            };
+            opts.signal?.addEventListener("abort", onPredicateAbort, { once: true });
+            if (opts.signal?.aborted) {
+              onPredicateAbort();
+            }
+            try {
+              const predicate = page
+                .waitForFunction(runNormalizedWaitPredicate, fnSource, { timeout })
+                .catch(async (err: unknown) => {
+                  if (err instanceof Error && err.name === "TimeoutError") {
+                    await closeUnsafePredicateTarget();
+                  }
+                  throw err;
+                })
+                .finally(async () => {
+                  predicateSettled = true;
+                  if (targetClosure) {
+                    await targetClosure;
+                  }
+                });
+              await waitForStep(predicate);
+            } finally {
+              predicateSettled = true;
+              opts.signal?.removeEventListener("abort", onPredicateAbort);
+            }
           }
         }
       },

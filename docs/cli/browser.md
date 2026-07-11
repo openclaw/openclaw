@@ -174,7 +174,7 @@ openclaw browser evaluate --fn 'const title = document.title; return title;'
 openclaw browser evaluate --timeout-ms 30000 --fn 'async () => { await window.ready; return true; }'
 ```
 
-`evaluate --fn` accepts a function source, an expression, or a statement body. Statement bodies are wrapped as async functions, so use `return` for the value you want back. Use `--timeout-ms` when the page-side function may need longer than the default evaluate timeout. `browser.evaluateEnabled=false` (default: `true`) disables both `evaluate` and `wait --fn`.
+`evaluate --fn` and `wait --fn` accept a function source, an expression, or a statement body. Statement bodies are wrapped as async functions, so use `return` for the value you want back. `wait --fn` re-runs false async results until its timeout. Use `--timeout-ms` when the page-side function may need longer than the default timeout. On Playwright-backed profiles, a timed-out or request-aborted `wait --fn` closes its exact tab so unfinished page code cannot resume outside the browser navigation guard. `browser.evaluateEnabled=false` (default: `true`) disables both `evaluate` and `wait --fn`.
 
 Action responses return the current raw `targetId` after action-triggered page replacement when OpenClaw can prove the replacement tab. Scripts should still store and pass `suggestedTargetId`/labels for long-lived workflows.
 

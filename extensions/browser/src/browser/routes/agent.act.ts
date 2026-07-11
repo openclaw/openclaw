@@ -74,7 +74,8 @@ function buildExistingSessionWaitPredicate(params: {
     checks.push(`document.readyState === "complete"`);
   }
   if (params.fn) {
-    checks.push(`Boolean(await (${params.fn})())`);
+    const fnSource = normalizeBrowserEvaluateFunctionSource(params.fn);
+    checks.push(`Boolean(await (${fnSource})())`);
   }
   if (checks.length === 0) {
     return null;

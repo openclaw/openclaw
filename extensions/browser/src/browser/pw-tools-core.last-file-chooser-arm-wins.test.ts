@@ -129,6 +129,7 @@ describe("pw-tools-core", () => {
 
     await mod.waitForViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
       selector: "#main",
       url: "**/dash",
       loadState: "networkidle",
@@ -147,9 +148,11 @@ describe("pw-tools-core", () => {
     expect(waitForLoadState).toHaveBeenCalledWith("networkidle", {
       timeout: 1234,
     });
-    expect(waitForFunction).toHaveBeenCalledWith("window.ready===true", {
-      timeout: 1234,
-    });
+    expect(waitForFunction).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.stringContaining("window.ready===true"),
+      { timeout: 1234 },
+    );
   });
 
   it("clamps wait timeoutMs to 120000 for wait steps", async () => {

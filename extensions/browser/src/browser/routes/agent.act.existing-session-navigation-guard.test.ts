@@ -321,6 +321,44 @@ describe("existing-session interaction navigation guard", () => {
     expectNavigationProbeUrls(Array.from({ length: 5 }, () => "https://example.com"));
   });
 
+  it.each([
+    ["expression", "window.ready === true", "const __openclawEvaluateExpressionResult"],
+    ["statement body", "return window.ready === true;", "async () =>"],
+  ])("normalizes %s existing-session wait predicates", async (_label, fn, expectedSource) => {
+    chromeMcpMocks.evaluateChromeMcpScript
+      .mockResolvedValueOnce("https://example.com" as never)
+      .mockResolvedValueOnce("https://example.com" as never)
+      .mockResolvedValueOnce(true as never)
+      .mockResolvedValue("https://example.com" as never);
+
+    const response = await runAction({ kind: "wait", fn });
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.evaluateChromeMcpScript.mock.calls[2]?.[0]).toEqual(
+      expect.objectContaining({
+        targetId: "7",
+        fn: expect.stringContaining(expectedSource),
+      }),
+    );
+  });
+
+  it("re-polls false existing-session wait predicates", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript
+      .mockResolvedValueOnce("https://example.com" as never)
+      .mockResolvedValueOnce("https://example.com" as never)
+      .mockResolvedValueOnce(false as never)
+      .mockResolvedValueOnce(true as never)
+      .mockResolvedValue("https://example.com" as never);
+
+    const response = await runAction({ kind: "wait", fn: "async () => window.ready === true" });
+
+    expect(response.statusCode).toBe(200);
+    const predicateCalls = chromeMcpMocks.evaluateChromeMcpScript.mock.calls.filter(([params]) =>
+      (params as { fn?: string }).fn?.includes("window.ready === true"),
+    );
+    expect(predicateCalls).toHaveLength(2);
+  });
+
   it("checks navigation after an existing-session viewport resize", async () => {
     chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValue("https://target.example");
     const response = await runAction({ kind: "resize", width: 800, height: 600 });

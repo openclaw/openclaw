@@ -1485,6 +1485,60 @@ export async function quarantineBlockedNavigationTarget(opts: {
   }
 }
 
+type CdpTargetInfosResult = {
+  targetInfos?: Array<{ targetId?: unknown }>;
+};
+
+/** Quarantine, close, and verify removal of one exact target on the active browser connection. */
+export async function closeBrowserTargetForUnsafePageExecution(opts: {
+  cdpUrl: string;
+  page: Page;
+  targetId: string;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<void> {
+  const targetId = normalizeOptionalString(opts.targetId) ?? "";
+  if (!targetId) {
+    throw new Error("targetId is required to retire unsafe page execution");
+  }
+
+  // Block all later OpenClaw access before using a browser-scoped CDP session
+  // to close the renderer. This remains target-local while keeping remote
+  // providers that spawn one browser per connection on the original browser.
+  await quarantineBlockedNavigationTarget({
+    cdpUrl: opts.cdpUrl,
+    page: opts.page,
+    targetId,
+  });
+
+  const browser = opts.page.context().browser();
+  if (!browser?.isConnected()) {
+    throw new Error("Owning Playwright browser connection disappeared before target cleanup");
+  }
+
+  const session = await browser.newBrowserCDPSession();
+  try {
+    await session.send("Target.closeTarget", { targetId });
+    const deadline = Date.now() + 2_000;
+    do {
+      const result = (await session.send("Target.getTargets")) as CdpTargetInfosResult;
+      if (!Array.isArray(result.targetInfos)) {
+        throw new Error("Target.getTargets returned no target list after close");
+      }
+      const targetExists = result.targetInfos.some(
+        (target) => normalizeOptionalString(target.targetId) === targetId,
+      );
+      if (!targetExists) {
+        return;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    } while (Date.now() < deadline);
+
+    throw new Error(`Browser target ${targetId} remained open after close`);
+  } finally {
+    await session.detach().catch(() => {});
+  }
+}
+
 const quarantineByNavigationError = new WeakMap<object, WeakMap<Page, Promise<void>>>();
 
 /** Quarantine one target once for a specific policy error. */

@@ -8,6 +8,7 @@ const pageState = vi.hoisted(() => ({
 
 const sessionMocks = vi.hoisted(() => ({
   assertPageNavigationCompletedSafely: vi.fn(async () => {}),
+  closeBrowserTargetForUnsafePageExecution: vi.fn(async () => {}),
   closeBlockedNavigationTarget: vi.fn(async () => {}),
   ensurePageState: vi.fn(() => ({})),
   forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
@@ -253,7 +254,16 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it("guards wait predicates that trigger navigation", async () => {
     let currentUrl = "https://93.184.216.34";
-    const waitForFunction = vi.fn(async () => {
+    const waitForFunction = vi.fn(async (predicate: unknown, source: unknown) => {
+      if (typeof predicate !== "function" || typeof source !== "string") {
+        throw new Error("wait predicate was not executable");
+      }
+      let result = predicate(source);
+      if (result === false) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        result = predicate(source);
+      }
+      expect(result).toBe(true);
       currentUrl = "https://target.example";
     });
     pageState.page = {
@@ -277,6 +287,9 @@ describe("pw-tools-core browser SSRF guards", () => {
     expect(sessionMocks.withPageNavigationRequestGuard.mock.invocationCallOrder[0]).toBeLessThan(
       waitForFunction.mock.invocationCallOrder[0]!,
     );
+    expect(waitForFunction).toHaveBeenCalledWith(expect.any(Function), "() => true", {
+      timeout: expect.any(Number),
+    });
     expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
       page: pageState.page,
@@ -284,6 +297,206 @@ describe("pw-tools-core browser SSRF guards", () => {
       ssrfPolicy: { allowPrivateNetwork: false },
       targetId: "tab-1",
     });
+  });
+
+  it("re-polls async wait predicates after a false result", async () => {
+    const stateKey = "__openclawAsyncWaitPredicateTest";
+    const globalState = globalThis as Record<string, unknown>;
+    delete globalState[stateKey];
+    try {
+      const waitForFunction = vi.fn(async (predicate: unknown, source: unknown) => {
+        if (typeof predicate !== "function" || typeof source !== "string") {
+          throw new Error("wait predicate was not executable");
+        }
+        expect(predicate(source)).toBe(false);
+        await Promise.resolve();
+        expect(predicate(source)).toBe(false);
+        await Promise.resolve();
+        expect(predicate(source)).toBe(true);
+      });
+      pageState.page = {
+        url: vi.fn(() => "https://93.184.216.34"),
+        waitForFunction,
+      };
+
+      await interactions.waitForViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "tab-1",
+        fn: `async () => {
+          globalThis.${stateKey} = (globalThis.${stateKey} ?? 0) + 1;
+          return globalThis.${stateKey} > 1;
+        }`,
+      });
+    } finally {
+      delete globalState[stateKey];
+    }
+  });
+
+  it.each([
+    ["expression", "Math.max(1, 2) === 2"],
+    ["statement body", "return true;"],
+  ])("executes managed wait %s sources", async (_label, fn) => {
+    const waitForFunction = vi.fn(async (predicate: unknown, source: unknown) => {
+      if (typeof predicate !== "function" || typeof source !== "string") {
+        throw new Error("wait predicate was not executable");
+      }
+      let result = predicate(source);
+      if (result === false) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        result = predicate(source);
+      }
+      expect(result).toBe(true);
+    });
+    pageState.page = {
+      url: vi.fn(() => "https://93.184.216.34"),
+      waitForFunction,
+    };
+
+    await interactions.waitForViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      fn,
+      timeoutMs: 1234,
+    });
+
+    expect(waitForFunction).toHaveBeenCalledWith(expect.any(Function), expect.any(String), {
+      timeout: 1234,
+    });
+  });
+
+  it("resolves wait predicate globals outside wrapper state", async () => {
+    const globalState = globalThis as Record<string, unknown>;
+    const previousState = globalState.state;
+    globalState.state = { ready: true };
+    try {
+      const waitForFunction = vi.fn(async (predicate: unknown, source: unknown) => {
+        if (typeof predicate !== "function" || typeof source !== "string") {
+          throw new Error("wait predicate was not executable");
+        }
+        expect(predicate(source)).toBe(true);
+      });
+      pageState.page = {
+        url: vi.fn(() => "https://93.184.216.34"),
+        waitForFunction,
+      };
+
+      await interactions.waitForViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "tab-1",
+        fn: "() => state.ready",
+      });
+    } finally {
+      if (previousState === undefined) {
+        delete globalState.state;
+      } else {
+        globalState.state = previousState;
+      }
+    }
+  });
+
+  it("surfaces falsy async wait predicate rejections", async () => {
+    const waitForFunction = vi.fn(async (predicate: unknown, source: unknown) => {
+      if (typeof predicate !== "function" || typeof source !== "string") {
+        throw new Error("wait predicate was not executable");
+      }
+      expect(predicate(source)).toBe(false);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      predicate(source);
+    });
+    pageState.page = {
+      url: vi.fn(() => "https://93.184.216.34"),
+      waitForFunction,
+    };
+
+    await expect(
+      interactions.waitForViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "tab-1",
+        fn: "async () => Promise.reject()",
+      }),
+    ).rejects.toThrow("Invalid wait function: undefined");
+  });
+
+  it("closes an async wait predicate target before surfacing its timeout", async () => {
+    const timeoutError = Object.assign(new Error("waitForFunction timed out"), {
+      name: "TimeoutError",
+    });
+    pageState.page = {
+      url: vi.fn(() => "https://93.184.216.34"),
+      waitForFunction: vi.fn(async () => {
+        throw timeoutError;
+      }),
+    };
+
+    await expect(
+      interactions.waitForViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "tab-1",
+        fn: "async () => await new Promise(() => {})",
+        timeoutMs: 10,
+        ssrfPolicy: { allowPrivateNetwork: false },
+      }),
+    ).rejects.toBe(timeoutError);
+
+    expect(sessionMocks.closeBrowserTargetForUnsafePageExecution).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page: pageState.page,
+      targetId: "tab-1",
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+  });
+
+  it("closes a pending async wait predicate target when its request aborts", async () => {
+    const controller = new AbortController();
+    let markPredicateStarted!: () => void;
+    const predicateStarted = new Promise<void>((resolve) => {
+      markPredicateStarted = resolve;
+    });
+    pageState.page = {
+      url: vi.fn(() => "https://93.184.216.34"),
+      waitForFunction: vi.fn(async () => {
+        markPredicateStarted();
+        return await new Promise<never>(() => {});
+      }),
+    };
+
+    const task = interactions.waitForViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      fn: "async () => await new Promise(() => {})",
+      signal: controller.signal,
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+    await predicateStarted;
+    controller.abort(new Error("request closed"));
+
+    await expect(task).rejects.toThrow("request closed");
+    expect(sessionMocks.closeBrowserTargetForUnsafePageExecution).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page: pageState.page,
+      targetId: "tab-1",
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+  });
+
+  it("does not close a target when a non-function wait aborts", async () => {
+    const controller = new AbortController();
+    pageState.page = {
+      url: vi.fn(() => "https://93.184.216.34"),
+      waitForTimeout: vi.fn(async () => await new Promise<never>(() => {})),
+    };
+
+    const task = interactions.waitForViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      timeMs: 1_000,
+      signal: controller.signal,
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+    controller.abort(new Error("request closed"));
+
+    await expect(task).rejects.toThrow("request closed");
+    expect(sessionMocks.closeBrowserTargetForUnsafePageExecution).not.toHaveBeenCalled();
   });
 
   it("guards resize handlers that trigger navigation", async () => {
