@@ -70,6 +70,20 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
+  it("reports non-finite numeric schema values before JSON projection", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: { type: "number", default: Number.NaN },
+        },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties.score.default is not JSON-serializable"],
+    });
+  });
+
   it("does not report schema map field names as dynamic JSON Schema keywords", () => {
     // Dynamic keywords are only invalid as JSON Schema control fields; property
     // names and definitions can legally contain the same strings.
