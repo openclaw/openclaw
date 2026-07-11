@@ -47,6 +47,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
     shouldDeferProviderSyntheticProfileAuthWithPlugin: () => false,
     resolveProviderSyntheticAuthWithPlugin: (params: {
       provider: string;
+      workspaceDir?: string;
       config?: {
         plugins?: {
           enabled?: boolean;
@@ -99,6 +100,15 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         }
         return undefined;
       }
+      if (params.provider === "workspace-plugin") {
+        return params.workspaceDir === "/workspace/expected"
+          ? {
+              apiKey: "workspace-plugin-key",
+              source: "workspace-plugin (synthetic)",
+              mode: "api-key" as const,
+            }
+          : undefined;
+      }
       if (params.provider === "native-cli") {
         return {
           apiKey: "native-cli-access-token",
@@ -123,6 +133,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
 
 let applyAuthHeaderOverride: typeof import("./model-auth.js").applyAuthHeaderOverride;
 let applyLocalNoAuthHeaderOverride: typeof import("./model-auth.js").applyLocalNoAuthHeaderOverride;
+let hasRuntimeAvailableProviderAuth: typeof import("./model-auth.js").hasRuntimeAvailableProviderAuth;
 let hasUsableCustomProviderApiKey: typeof import("./model-auth.js").hasUsableCustomProviderApiKey;
 let requireApiKey: typeof import("./model-auth.js").requireApiKey;
 let resolveApiKeyForProvider: typeof import("./model-auth.js").resolveApiKeyForProvider;
@@ -140,6 +151,7 @@ beforeAll(async () => {
   ({
     applyAuthHeaderOverride,
     applyLocalNoAuthHeaderOverride,
+    hasRuntimeAvailableProviderAuth,
     hasUsableCustomProviderApiKey,
     requireApiKey,
     resolveApiKeyForProvider,
@@ -1156,6 +1168,27 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
 
     expect(auth.mode).toBe("aws-sdk");
     expect(auth.apiKey).toBeUndefined();
+  });
+});
+
+describe("hasRuntimeAvailableProviderAuth", () => {
+  it("forwards workspaceDir through synthetic local provider auth resolution to plugin-owned auth", () => {
+    expect(
+      hasRuntimeAvailableProviderAuth({
+        provider: "workspace-plugin",
+        cfg: {},
+        workspaceDir: "/workspace/expected",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not report plugin-owned synthetic auth when workspaceDir is missing", () => {
+    expect(
+      hasRuntimeAvailableProviderAuth({
+        provider: "workspace-plugin",
+        cfg: {},
+      }),
+    ).toBe(false);
   });
 });
 
