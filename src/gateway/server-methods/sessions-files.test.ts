@@ -752,6 +752,25 @@ describe("sessions.files RPC handlers", () => {
     expect(bytes.toString("utf8")).toBe(next);
   });
 
+  it("rejects replacement content containing NUL bytes", async () => {
+    const error = expectError(
+      await invokeSessionFilesHandler("sessions.files.set", {
+        sessionKey: "agent:main:main",
+        path: "ui/vite.config.ts",
+        content: "before\0after",
+        expectedHash: hashContent("export default {};\n"),
+      }),
+    );
+
+    expect(error.details).toMatchObject({
+      path: "ui/vite.config.ts",
+      type: "session_file_unsafe",
+    });
+    expect(fs.readFileSync(path.join(workspaceRoot, "ui/vite.config.ts"), "utf8")).toBe(
+      "export default {};\n",
+    );
+  });
+
   it("previews binary files without issuing a CAS hash", async () => {
     const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]);
     fs.writeFileSync(path.join(workspaceRoot, "logo.png"), binary);

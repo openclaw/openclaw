@@ -672,6 +672,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsFilesSetParams, "sessions.files.set", respond)) {
       return;
     }
+    // NUL bytes would make the written file fail decodeUtf8Strict on the next
+    // read, stranding it without a CAS hash; reject them up front so the API
+    // never writes content its own editability checks classify as binary.
+    if (params.content.includes("\0")) {
+      respondSessionFileUnsafe(respond, params.path);
+      return;
+    }
     const contentSize = Buffer.byteLength(params.content, "utf8");
     if (contentSize > MAX_PREVIEW_BYTES) {
       respond(
