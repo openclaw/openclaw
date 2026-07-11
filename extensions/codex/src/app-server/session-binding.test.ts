@@ -915,7 +915,11 @@ describe("Codex app-server binding store", () => {
 
   it("drains an in-flight ownership mutation and rejects late attachment during archive", async () => {
     const fixture = createStateStore();
-    const originalUpdate = fixture.state.update.bind(fixture.state);
+    const stateUpdate = fixture.state.update;
+    if (!stateUpdate) {
+      throw new Error("test state store must support atomic updates");
+    }
+    const originalUpdate = stateUpdate.bind(fixture.state);
     let startArchive: (() => void) | undefined;
     fixture.state.update = (...args) => {
       startArchive?.();
