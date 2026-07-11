@@ -53,6 +53,7 @@ import {
   type BrowserDownloadCaptureOptions,
   type PlaywrightDownload,
 } from "./pw-download-capture.js";
+import { assertBrowserDownloadSaveAllowed } from "./pw-download-navigation-policy.js";
 import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
 const { chromium } = playwrightCore;
@@ -129,11 +130,17 @@ type PendingObservedDialog = BrowserObservedDialogRecord & {
   dialog: Dialog;
 };
 
+type RunObservedDialogResponse = (
+  respond: () => Promise<BrowserObservedDialogRecord>,
+  mode: "pending" | "armed",
+) => Promise<BrowserObservedDialogRecord>;
+
 type ArmedDialogResponse = {
   accept: boolean;
   promptText?: string;
   expiresAt: number;
   timer?: ReturnType<typeof setTimeout>;
+  runResponse?: RunObservedDialogResponse;
 };
 
 type TargetInfoResponse = {
@@ -170,8 +177,11 @@ type PageState = {
   armIdDownload: number;
   downloadWaiterDepth: number;
   actionDownloadCapture?: ActionDownloadCapture;
+  downloadNavigationPolicy?: BrowserNavigationPolicyOptions;
   nextObservedDialogId: number;
   pendingDialogs: PendingObservedDialog[];
+  respondingDialogIds: Set<string>;
+  dispatchedDialogResponseIds: Set<string>;
   recentDialogs: BrowserObservedDialogRecord[];
   armedDialogResponse?: ArmedDialogResponse;
   dialogAbortControllers: Set<AbortController>;
@@ -194,6 +204,7 @@ type RoleRefsCacheEntry = {
 
 type ContextState = {
   traceActive: boolean;
+  downloadNavigationPolicy?: BrowserNavigationPolicyOptions;
 };
 
 const pageStates = new WeakMap<Page, PageState>();
@@ -439,7 +450,6 @@ async function settleObservedDialog(params: {
   closedBy: NonNullable<BrowserObservedDialogRecord["closedBy"]>;
 }): Promise<BrowserObservedDialogRecord> {
   const { state, pending } = params;
-  state.pendingDialogs = state.pendingDialogs.filter((dialog) => dialog.id !== pending.id);
 
   let closedBy = params.closedBy;
   try {
@@ -450,9 +460,6 @@ async function settleObservedDialog(params: {
     }
   } catch (err) {
     if (!isNoDialogShowingError(err)) {
-      if (params.closedBy === "agent") {
-        state.pendingDialogs.push(pending);
-      }
       throw err;
     }
     closedBy = "remote";
@@ -469,6 +476,48 @@ async function settleObservedDialog(params: {
   };
   appendRecentDialog(state, record);
   return record;
+}
+
+function runReservedObservedDialogResponse(params: {
+  state: PageState;
+  pending: PendingObservedDialog;
+  accept: boolean;
+  promptText?: string;
+  closedBy: NonNullable<BrowserObservedDialogRecord["closedBy"]>;
+  mode: "pending" | "armed";
+  runResponse?: RunObservedDialogResponse;
+}): Promise<BrowserObservedDialogRecord> {
+  params.state.respondingDialogIds.add(params.pending.id);
+  let dispatched = false;
+  const respond = async () => {
+    if (!params.state.pendingDialogs.includes(params.pending)) {
+      const remotelyHandled = params.state.recentDialogs.findLast(
+        (dialog) => dialog.id === params.pending.id && dialog.closedBy === "remote",
+      );
+      if (remotelyHandled) {
+        return remotelyHandled;
+      }
+      throw new Error(`Dialog "${params.pending.id}" is no longer pending.`);
+    }
+    dispatched = true;
+    params.state.dispatchedDialogResponseIds.add(params.pending.id);
+    return await settleObservedDialog(params);
+  };
+  let response: Promise<BrowserObservedDialogRecord>;
+  try {
+    response = params.runResponse ? params.runResponse(respond, params.mode) : respond();
+  } catch (err) {
+    response = Promise.reject(err);
+  }
+  return response.finally(() => {
+    params.state.respondingDialogIds.delete(params.pending.id);
+    params.state.dispatchedDialogResponseIds.delete(params.pending.id);
+    if (dispatched) {
+      params.state.pendingDialogs = params.state.pendingDialogs.filter(
+        (dialog) => dialog.id !== params.pending.id,
+      );
+    }
+  });
 }
 
 function observeDialog(pageState: PageState, dialog: Dialog): void {
@@ -488,13 +537,15 @@ function observeDialog(pageState: PageState, dialog: Dialog): void {
   const armed = pageState.armedDialogResponse;
   if (armed && isFutureDateTimestampMs(armed.expiresAt)) {
     clearArmedDialogResponse(pageState);
-    void settleObservedDialog({
+    void runReservedObservedDialogResponse({
       state: pageState,
       pending,
       accept: armed.accept,
       ...(armed.promptText !== undefined ? { promptText: armed.promptText } : {}),
       closedBy: "armed",
-    }).catch(() => {});
+      mode: "armed",
+      runResponse: armed.runResponse,
+    }).catch(() => abortActionsBlockedByDialog(pageState));
     return;
   }
   if (armed) {
@@ -719,6 +770,8 @@ export function ensurePageState(page: Page): PageState {
     downloadWaiterDepth: 0,
     nextObservedDialogId: 0,
     pendingDialogs: [],
+    respondingDialogIds: new Set(),
+    dispatchedDialogResponseIds: new Set(),
     recentDialogs: [],
     dialogAbortControllers: new Set(),
   };
@@ -797,17 +850,32 @@ export function ensurePageState(page: Page): PageState {
         return;
       }
       const actionCapture = state.actionDownloadCapture;
-      const beforeSave = actionCapture?.beforeSave;
-      const captureOptions: BrowserDownloadCaptureOptions | undefined =
-        actionCapture && beforeSave
-          ? {
-              beforeSave: (candidate) => {
-                const validation = Promise.resolve().then(() => beforeSave(candidate));
-                actionCapture.validations.push(validation);
-                return validation;
-              },
+      const downloadNavigationPolicy = state.downloadNavigationPolicy;
+      const beforeSave =
+        actionCapture?.beforeSave ??
+        (downloadNavigationPolicy
+          ? async (candidate: BrowserDownloadCandidate) => {
+              if (!candidate.url) {
+                throw new Error("Download URL is unavailable");
+              }
+              await assertBrowserDownloadSaveAllowed({
+                downloadUrl: candidate.url,
+                page,
+                ...downloadNavigationPolicy,
+              });
             }
-          : undefined;
+          : undefined);
+      const captureOptions: BrowserDownloadCaptureOptions | undefined = beforeSave
+        ? {
+            beforeSave: actionCapture
+              ? (candidate) => {
+                  const validation = Promise.resolve().then(() => beforeSave(candidate));
+                  actionCapture.validations.push(validation);
+                  return validation;
+                }
+              : beforeSave,
+          }
+        : undefined;
       const managedSave = saveBrowserDownload(download, captureOptions);
       managedSave.catch(() => {});
       download.path = async () => (await managedSave).path;
@@ -843,13 +911,49 @@ export function getObservedBrowserStateForPage(page: Page): BrowserObservedState
 }
 
 /** Resolve a page and read its observed browser state. */
-export async function getObservedBrowserStateViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<BrowserObservedState> {
-  const page = await getPageForTargetId(opts);
-  return getObservedBrowserStateForPage(page);
+export async function getObservedBrowserStateViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+  } & BrowserNavigationPolicyOptions,
+): Promise<BrowserObservedState> {
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
+  const page = await getPageForTargetId({
+    ...opts,
+    pageNavigationPolicy: navigationPolicy,
+  });
+  if (!opts.ssrfPolicy && opts.browserProxyMode !== "explicit-browser-proxy") {
+    return getObservedBrowserStateForPage(page);
+  }
+  return await withPageNavigationRequestGuard({
+    page,
+    ...navigationPolicy,
+    onGuardCleanupError: async () =>
+      await forceDisconnectPlaywrightForTarget({
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        ssrfPolicy: opts.ssrfPolicy,
+        reason: "observed browser state navigation guard cleanup failed",
+      }),
+    onLateUnsafePolicyError: async (error) =>
+      await quarantineBlockedNavigationTargetForError({
+        cdpUrl: opts.cdpUrl,
+        error,
+        page,
+        targetId: opts.targetId,
+      }),
+    action: async () => {
+      const currentUrl = page.url();
+      await assertBrowserNavigationResultAllowed({ url: currentUrl, ...navigationPolicy });
+      const latestUrl = page.url();
+      if (latestUrl !== currentUrl) {
+        await assertBrowserNavigationResultAllowed({ url: latestUrl, ...navigationPolicy });
+      }
+      return getObservedBrowserStateForPage(page);
+    },
+  });
 }
 
 function resolvePendingDialogForResponse(params: {
@@ -886,37 +990,32 @@ export async function respondToObservedDialogOnPage(opts: {
     state,
     ...(opts.dialogId !== undefined ? { dialogId: opts.dialogId } : {}),
   });
-  return await settleObservedDialog({
+  if (state.respondingDialogIds.size > 0) {
+    throw new Error("A dialog response is already in progress.");
+  }
+  return await runReservedObservedDialogResponse({
     state,
     pending,
     accept: opts.accept,
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
     closedBy: opts.closedBy ?? "agent",
-  });
-}
-
-/** Resolve a page and respond to one of its observed dialogs. */
-export async function respondToObservedDialogViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  dialogId?: string;
-  accept: boolean;
-  promptText?: string;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<BrowserObservedDialogRecord> {
-  const page = await getPageForTargetId(opts);
-  return await respondToObservedDialogOnPage({
-    page,
-    accept: opts.accept,
-    ...(opts.dialogId !== undefined ? { dialogId: opts.dialogId } : {}),
-    ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
+    mode: opts.closedBy === "armed" ? "armed" : "pending",
   });
 }
 
 /** Mark pending observed dialogs as handled by a remote/browser-side hook. */
 export function markObservedDialogsHandledRemotelyForPage(page: Page): BrowserObservedState {
   const state = ensurePageState(page);
-  const pending = state.pendingDialogs.splice(0);
+  const pending: PendingObservedDialog[] = [];
+  state.pendingDialogs = state.pendingDialogs.filter((dialog) => {
+    // Playwright dialog objects become single-use as soon as accept/dismiss is
+    // dispatched. Let that response owner retire the record without duplication.
+    if (state.dispatchedDialogResponseIds.has(dialog.id)) {
+      return true;
+    }
+    pending.push(dialog);
+    return false;
+  });
   const closedAt = new Date().toISOString();
   for (const dialog of pending) {
     appendRecentDialog(state, {
@@ -938,8 +1037,12 @@ export function armObservedDialogResponseOnPage(opts: {
   accept: boolean;
   promptText?: string;
   timeoutMs?: number;
+  runResponse?: RunObservedDialogResponse;
 }): void {
   const state = ensurePageState(opts.page);
+  if (state.respondingDialogIds.size > 0) {
+    throw new Error("A dialog response is already in progress.");
+  }
   clearArmedDialogResponse(state);
   const timeoutMs = resolveObservedDialogTimeoutMs(opts.timeoutMs);
   const expiresAt = resolveExpiresAtMsFromDurationMs(timeoutMs);
@@ -950,6 +1053,7 @@ export function armObservedDialogResponseOnPage(opts: {
     accept: opts.accept,
     expiresAt,
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
+    ...(opts.runResponse ? { runResponse: opts.runResponse } : {}),
   };
   response.timer = setTimeout(() => {
     if (state.armedDialogResponse === response) {
@@ -957,6 +1061,53 @@ export function armObservedDialogResponseOnPage(opts: {
     }
   }, timeoutMs);
   state.armedDialogResponse = response;
+}
+
+/** Atomically respond to a current dialog or arm the next dialog response. */
+export function respondOrArmObservedDialogOnPage(opts: {
+  page: Page;
+  dialogId?: string;
+  accept: boolean;
+  promptText?: string;
+  timeoutMs?: number;
+  runResponse?: RunObservedDialogResponse;
+}): { kind: "responding"; response: Promise<BrowserObservedDialogRecord> } | { kind: "armed" } {
+  const state = ensurePageState(opts.page);
+  if (state.respondingDialogIds.size > 0) {
+    throw new Error("A dialog response is already in progress.");
+  }
+  let pending: PendingObservedDialog;
+  try {
+    pending = resolvePendingDialogForResponse({
+      state,
+      ...(opts.dialogId !== undefined ? { dialogId: opts.dialogId } : {}),
+    });
+  } catch (err) {
+    if (opts.dialogId || !(err instanceof Error) || !err.message.includes("No dialog is pending")) {
+      throw err;
+    }
+    armObservedDialogResponseOnPage({
+      page: opts.page,
+      accept: opts.accept,
+      timeoutMs: opts.timeoutMs,
+      ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
+      ...(opts.runResponse ? { runResponse: opts.runResponse } : {}),
+    });
+    return { kind: "armed" };
+  }
+
+  return {
+    kind: "responding",
+    response: runReservedObservedDialogResponse({
+      state,
+      pending,
+      accept: opts.accept,
+      ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
+      closedBy: "agent",
+      mode: "pending",
+      runResponse: opts.runResponse,
+    }),
+  };
 }
 
 /** Create an abort signal that fires while a dialog blocks the page. */
@@ -977,7 +1128,7 @@ export function createObservedDialogAbortSignalForPage(opts: {
     }
   };
 
-  if (state.pendingDialogs.length > 0) {
+  if (state.pendingDialogs.length > 0 || state.respondingDialogIds.size > 0) {
     abortForCurrentDialog();
   } else {
     state.dialogAbortControllers.add(controller);
@@ -999,17 +1150,50 @@ export function createObservedDialogAbortSignalForPage(opts: {
   };
 }
 
+function rememberContextDownloadNavigationPolicy(
+  context: BrowserContext,
+  opts: BrowserNavigationPolicyOptions,
+): void {
+  if (!opts.ssrfPolicy && opts.browserProxyMode !== "explicit-browser-proxy") {
+    return;
+  }
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
+  ensureContextState(context).downloadNavigationPolicy = navigationPolicy;
+  for (const page of context.pages()) {
+    ensurePageState(page).downloadNavigationPolicy = navigationPolicy;
+  }
+}
+
+function rememberBrowserDownloadNavigationPolicy(
+  browser: Browser,
+  opts: BrowserNavigationPolicyOptions,
+): void {
+  for (const context of browser.contexts()) {
+    rememberContextDownloadNavigationPolicy(context, opts);
+  }
+}
+
 function observeContext(context: BrowserContext) {
   if (observedContexts.has(context)) {
     return;
   }
   observedContexts.add(context);
-  ensureContextState(context);
+  const contextState = ensureContextState(context);
 
   for (const page of context.pages()) {
-    ensurePageState(page);
+    const pageState = ensurePageState(page);
+    if (contextState.downloadNavigationPolicy) {
+      pageState.downloadNavigationPolicy = contextState.downloadNavigationPolicy;
+    }
   }
-  context.on("page", (page) => ensurePageState(page));
+  context.on("page", (page) => {
+    const pageState = ensurePageState(page);
+    if (contextState.downloadNavigationPolicy) {
+      pageState.downloadNavigationPolicy = contextState.downloadNavigationPolicy;
+    }
+  });
 }
 
 /** Ensure shared Playwright browser-context state. */
@@ -1176,6 +1360,7 @@ async function pageTargetId(page: Page): Promise<string | null> {
 
 async function getPageForTargetIdOnce(opts: {
   cdpUrl: string;
+  pageNavigationPolicy?: BrowserNavigationPolicyOptions;
   targetId?: string;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<Page> {
@@ -1183,6 +1368,9 @@ async function getPageForTargetIdOnce(opts: {
     throw new BlockedBrowserTargetError();
   }
   const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+  if (opts.pageNavigationPolicy) {
+    rememberBrowserDownloadNavigationPolicy(browser, opts.pageNavigationPolicy);
+  }
   const pages = await getAllPages(browser);
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
@@ -1212,6 +1400,7 @@ async function getPageForTargetIdOnce(opts: {
 /** Resolve a Playwright page by target id, reconnecting once on stale state. */
 export async function getPageForTargetId(opts: {
   cdpUrl: string;
+  pageNavigationPolicy?: BrowserNavigationPolicyOptions;
   targetId?: string;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<Page> {
@@ -1276,24 +1465,27 @@ export async function quarantineBlockedNavigationTarget(opts: {
   targetId?: string;
 }): Promise<void> {
   markPageRefBlocked(opts.cdpUrl, opts.page);
-  const resolvedTargetId = await pageTargetId(opts.page).catch(() => null);
   const fallbackTargetId = normalizeOptionalString(opts.targetId) ?? "";
-  const targetIdToBlock = resolvedTargetId || fallbackTargetId;
-  if (targetIdToBlock) {
-    markTargetBlocked(opts.cdpUrl, targetIdToBlock);
+  if (fallbackTargetId) {
+    // Quarantine the caller's exact target before touching the same CDP pipe
+    // that may already be stuck. Resolve churned identity only as best effort.
+    markTargetBlocked(opts.cdpUrl, fallbackTargetId);
+    void pageTargetId(opts.page)
+      .then((resolvedTargetId) => {
+        if (resolvedTargetId) {
+          markTargetBlocked(opts.cdpUrl, resolvedTargetId);
+        }
+      })
+      .catch(() => {});
+    return;
+  }
+  const resolvedTargetId = await pageTargetId(opts.page).catch(() => null);
+  if (resolvedTargetId) {
+    markTargetBlocked(opts.cdpUrl, resolvedTargetId);
   }
 }
 
-const quarantinedPagesByNavigationError = new WeakMap<object, WeakSet<Page>>();
-
-/** Return true when this policy error already quarantined its page target. */
-export function wasBrowserNavigationErrorQuarantined(err: unknown, page: Page): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    quarantinedPagesByNavigationError.get(err)?.has(page) === true
-  );
-}
+const quarantineByNavigationError = new WeakMap<object, WeakMap<Page, Promise<void>>>();
 
 /** Quarantine one target once for a specific policy error. */
 export async function quarantineBlockedNavigationTargetForError(opts: {
@@ -1302,14 +1494,28 @@ export async function quarantineBlockedNavigationTargetForError(opts: {
   page: Page;
   targetId?: string;
 }): Promise<void> {
-  if (wasBrowserNavigationErrorQuarantined(opts.error, opts.page)) {
+  if (typeof opts.error !== "object" || opts.error === null) {
+    await quarantineBlockedNavigationTarget(opts);
     return;
   }
-  await quarantineBlockedNavigationTarget(opts);
-  if (typeof opts.error === "object" && opts.error !== null) {
-    const quarantinedPages = quarantinedPagesByNavigationError.get(opts.error) ?? new WeakSet();
-    quarantinedPages.add(opts.page);
-    quarantinedPagesByNavigationError.set(opts.error, quarantinedPages);
+
+  const quarantines = quarantineByNavigationError.get(opts.error) ?? new WeakMap();
+  const existing = quarantines.get(opts.page);
+  if (existing) {
+    await existing;
+    return;
+  }
+
+  const pending = quarantineBlockedNavigationTarget(opts);
+  quarantines.set(opts.page, pending);
+  quarantineByNavigationError.set(opts.error, quarantines);
+  try {
+    await pending;
+  } catch (err) {
+    if (quarantines.get(opts.page) === pending) {
+      quarantines.delete(opts.page);
+    }
+    throw err;
   }
 }
 
@@ -1389,6 +1595,91 @@ async function fallbackRouteSafely(route: Route): Promise<void> {
 }
 
 const blockedBeforeDispatchErrors = new WeakSet<object>();
+type PendingBrowserInteractionAction = {
+  promise: Promise<void>;
+  settled: boolean;
+};
+
+class PendingBrowserInteractionError extends Error {
+  constructor(
+    readonly publicError: Error,
+    readonly pendingAction: PendingBrowserInteractionAction,
+  ) {
+    super(publicError.message, { cause: publicError });
+    this.name = "PendingBrowserInteractionError";
+  }
+}
+
+function createPendingBrowserInteractionAction(
+  actionPromise: Promise<unknown>,
+  onActionResolved?: () => void,
+): PendingBrowserInteractionAction {
+  const pending: PendingBrowserInteractionAction = {
+    promise: Promise.resolve(),
+    settled: false,
+  };
+  pending.promise = (async () => {
+    try {
+      await actionPromise;
+      try {
+        onActionResolved?.();
+      } catch {
+        // Dialog reconciliation is best-effort; it must not strand the guard.
+      }
+    } catch (err) {
+      // A guard can outlive the wrapper promise that reported an abort. Follow
+      // its tracked inner Playwright operation before releasing interception.
+      const nestedPending =
+        err instanceof PendingBrowserInteractionError ? err.pendingAction : undefined;
+      if (nestedPending && nestedPending !== pending) {
+        await nestedPending.promise;
+      }
+    }
+  })().finally(() => {
+    pending.settled = true;
+  });
+  return pending;
+}
+
+/** Attach a still-running Playwright operation to its user-facing abort error. */
+export function trackPendingBrowserInteractionAction(
+  err: unknown,
+  actionPromise: Promise<unknown>,
+  onActionResolved?: () => void,
+): Error {
+  return new PendingBrowserInteractionError(
+    toLintErrorObject(err, "Non-Error rejection"),
+    createPendingBrowserInteractionAction(actionPromise, onActionResolved),
+  );
+}
+
+/** Preserve pending-action ownership when a post-check error takes precedence. */
+export function replacePendingBrowserInteractionActionError(
+  currentError: unknown,
+  replacementError: unknown,
+): Error {
+  const replacement = toLintErrorObject(replacementError, "Non-Error rejection");
+  return currentError instanceof PendingBrowserInteractionError
+    ? new PendingBrowserInteractionError(replacement, currentError.pendingAction)
+    : replacement;
+}
+
+/** Keep pending-action ownership through an asynchronous post-settlement finalizer. */
+export function finalizePendingBrowserInteractionAction(
+  error: unknown,
+  finalizer: () => Promise<void>,
+): { error: Error; deferred: boolean } {
+  if (!(error instanceof PendingBrowserInteractionError)) {
+    return { error: toLintErrorObject(error, "Non-Error rejection"), deferred: false };
+  }
+  const pendingAction = createPendingBrowserInteractionAction(
+    error.pendingAction.promise.then(finalizer),
+  );
+  return {
+    error: new PendingBrowserInteractionError(error.publicError, pendingAction),
+    deferred: true,
+  };
+}
 
 async function removePageNavigationRequestGuard(
   page: Page,
@@ -1420,11 +1711,17 @@ export function wasBrowserNavigationRequestBlockedBeforeDispatch(err: unknown): 
 export async function withPageNavigationRequestGuard<T>(
   opts: {
     action: () => Promise<T>;
+    onGuardCleanupError?: (err: unknown) => Promise<void>;
+    onLateUnsafePolicyError?: (err: unknown) => Promise<void>;
     page: Page;
   } & BrowserNavigationPolicyOptions,
 ): Promise<T> {
   if (!opts.ssrfPolicy && opts.browserProxyMode !== "explicit-browser-proxy") {
-    return await opts.action();
+    try {
+      return await opts.action();
+    } catch (err) {
+      throw err instanceof PendingBrowserInteractionError ? err.publicError : err;
+    }
   }
 
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
@@ -1435,17 +1732,46 @@ export async function withPageNavigationRequestGuard<T>(
   let firstGuardError: unknown;
   let policyDeniedRequestCount = 0;
   let policyDeniedRequestFulfillCount = 0;
+  let unpreservedDocumentRequestCount = 0;
+  let pendingActionGuard = false;
+  let lateUnsafePolicyErrorNotified = false;
+  let resolveGuardError!: () => void;
+  const guardErrorObserved = new Promise<void>((resolve) => {
+    resolveGuardError = resolve;
+  });
 
   const recordGuardError = (err: unknown) => {
     if (hasGuardError) {
+      if (!isPolicyDenyNavigationError(firstGuardError) && isPolicyDenyNavigationError(err)) {
+        firstGuardError = err;
+      }
       return;
     }
     hasGuardError = true;
     firstGuardError = err;
+    resolveGuardError();
   };
 
-  const stopGuardedRoute = async (route: Route, preserveDocument: boolean) => {
-    if (preserveDocument && isPolicyDenyNavigationError(firstGuardError)) {
+  const notifyLateUnsafePolicyError = () => {
+    if (
+      !pendingActionGuard ||
+      lateUnsafePolicyErrorNotified ||
+      !isPolicyDenyNavigationError(firstGuardError) ||
+      (policyDeniedRequestCount === policyDeniedRequestFulfillCount &&
+        unpreservedDocumentRequestCount === 0)
+    ) {
+      return;
+    }
+    lateUnsafePolicyErrorNotified = true;
+    void opts.onLateUnsafePolicyError?.(firstGuardError).catch(() => {});
+  };
+
+  const stopGuardedRoute = async (
+    route: Route,
+    preserveDocument: boolean,
+    requestError: unknown,
+  ) => {
+    if (preserveDocument && isPolicyDenyNavigationError(requestError)) {
       policyDeniedRequestCount += 1;
       try {
         // Chromium keeps the current document for a 204 navigation response.
@@ -1458,7 +1784,11 @@ export async function withPageNavigationRequestGuard<T>(
         // because the source document may already be unusable.
       }
     }
+    if (preserveDocument) {
+      unpreservedDocumentRequestCount += 1;
+    }
     await route.abort().catch(() => {});
+    notifyLateUnsafePolicyError();
   };
 
   const handleRoute = async (route: Route, request: Request) => {
@@ -1467,12 +1797,8 @@ export async function withPageNavigationRequestGuard<T>(
         await fallbackRouteSafely(route);
       } catch (err) {
         recordGuardError(err);
-        await stopGuardedRoute(route, false);
+        await stopGuardedRoute(route, false, err);
       }
-      return;
-    }
-    if (hasGuardError) {
-      await stopGuardedRoute(route, true);
       return;
     }
     try {
@@ -1482,22 +1808,20 @@ export async function withPageNavigationRequestGuard<T>(
       });
     } catch (err) {
       recordGuardError(err);
-    }
-    if (hasGuardError) {
-      await stopGuardedRoute(route, true);
+      await stopGuardedRoute(route, true, err);
       return;
     }
     try {
       await fallbackRouteSafely(route);
     } catch (err) {
       recordGuardError(err);
-      await stopGuardedRoute(route, true);
+      await stopGuardedRoute(route, true, err);
     }
   };
   const handler = (route: Route, request: Request) => {
-    const operation = handleRoute(route, request).catch(async (err) => {
+    const operation = handleRoute(route, request).catch(async (err: unknown) => {
       recordGuardError(err);
-      await stopGuardedRoute(route, true);
+      await stopGuardedRoute(route, true, err);
     });
     inFlight.add(operation);
     void operation.then(
@@ -1507,38 +1831,113 @@ export async function withPageNavigationRequestGuard<T>(
     return operation;
   };
 
+  const updateBlockedBeforeDispatchMarker = (err: unknown): boolean => {
+    const sourcePreserved =
+      isPolicyDenyNavigationError(err) &&
+      policyDeniedRequestCount > 0 &&
+      policyDeniedRequestFulfillCount === policyDeniedRequestCount &&
+      unpreservedDocumentRequestCount === 0 &&
+      typeof err === "object" &&
+      err !== null;
+    if (typeof err === "object" && err !== null) {
+      if (sourcePreserved) {
+        blockedBeforeDispatchErrors.add(err);
+      } else {
+        blockedBeforeDispatchErrors.delete(err);
+      }
+    }
+    return sourcePreserved;
+  };
+
+  const finalizeGuard = async () => {
+    // Playwright falls through routes owned by a handler when that handler is
+    // removed. Drain to a stable empty set so cleanup cannot dispatch a request
+    // whose destination check arrived while an earlier check was still pending.
+    while (inFlight.size > 0) {
+      await Promise.allSettled([...inFlight]);
+    }
+    const cleanupError = await removePageNavigationRequestGuard(opts.page, handler);
+    if (cleanupError) {
+      await opts.onGuardCleanupError?.(cleanupError).catch(() => {});
+    }
+    const guardError = hasGuardError
+      ? toLintErrorObject(firstGuardError, "Non-Error thrown")
+      : undefined;
+    const sourcePreserved = guardError ? updateBlockedBeforeDispatchMarker(guardError) : false;
+    return { cleanupError, guardError, sourcePreserved };
+  };
+
   try {
     await opts.page.route("**", handler);
   } catch (err) {
     // Playwright registers the client-side handler before awaiting browser-side
     // interception setup, so a rejected route() still needs exact rollback.
-    await removePageNavigationRequestGuard(opts.page, handler);
+    const cleanupError = await removePageNavigationRequestGuard(opts.page, handler);
+    if (cleanupError) {
+      await opts.onGuardCleanupError?.(cleanupError).catch(() => {});
+    }
     throw err;
   }
+  const actionPromise = (async () => await opts.action())();
+  const actionOutcome = await Promise.race([
+    actionPromise.then(
+      (result) => ({ kind: "result" as const, result }),
+      (error: unknown) => ({ kind: "error" as const, error }),
+    ),
+    guardErrorObserved.then(() => ({ kind: "guard-error" as const })),
+  ]);
   let result: T | undefined;
   let actionError: unknown;
-  try {
-    result = await opts.action();
-  } catch (err) {
-    actionError = err;
+  let pendingAction: PendingBrowserInteractionAction | undefined;
+  if (actionOutcome.kind === "result") {
+    result = actionOutcome.result;
+  } else if (actionOutcome.kind === "error") {
+    if (actionOutcome.error instanceof PendingBrowserInteractionError) {
+      actionError = actionOutcome.error.publicError;
+      pendingAction = actionOutcome.error.pendingAction;
+    } else {
+      actionError = actionOutcome.error;
+    }
+  } else {
+    // Return a known policy denial promptly while retaining the route until the
+    // still-running Playwright operation settles or reaches its own timeout.
+    pendingAction = createPendingBrowserInteractionAction(actionPromise);
   }
 
-  const cleanupError = await removePageNavigationRequestGuard(opts.page, handler);
-  await Promise.allSettled(inFlight);
+  if (pendingAction && !pendingAction.settled) {
+    // A dialog, request abort, or policy denial can win while Playwright is still
+    // executing the action. Retain this exact route until that operation settles.
+    pendingActionGuard = true;
+    await Promise.allSettled(inFlight);
+    const immediateGuardError = hasGuardError
+      ? toLintErrorObject(firstGuardError, "Non-Error thrown")
+      : undefined;
+    if (immediateGuardError) {
+      const sourcePreserved = updateBlockedBeforeDispatchMarker(immediateGuardError);
+      if (!sourcePreserved) {
+        notifyLateUnsafePolicyError();
+      }
+    }
+    void pendingAction.promise
+      .then(async () => {
+        const finalized = await finalizeGuard();
+        if (finalized.guardError && !finalized.sourcePreserved) {
+          notifyLateUnsafePolicyError();
+        }
+      })
+      .catch(() => {});
+    if (immediateGuardError) {
+      throw immediateGuardError;
+    }
+    throw toLintErrorObject(actionError, "Non-Error thrown");
+  }
+
+  const { cleanupError, guardError } = await finalizeGuard();
 
   // Policy denial wins over action and cleanup errors. Only 204 responses keep
   // the source document usable; abort fallbacks require quarantine.
-  if (hasGuardError) {
-    if (
-      isPolicyDenyNavigationError(firstGuardError) &&
-      policyDeniedRequestCount > 0 &&
-      policyDeniedRequestFulfillCount === policyDeniedRequestCount &&
-      typeof firstGuardError === "object" &&
-      firstGuardError !== null
-    ) {
-      blockedBeforeDispatchErrors.add(firstGuardError);
-    }
-    throw toLintErrorObject(firstGuardError, "Non-Error thrown");
+  if (guardError) {
+    throw guardError;
   }
   if (actionError) {
     throw toLintErrorObject(actionError, "Non-Error thrown");
@@ -2003,10 +2402,14 @@ export async function createPageViaPlaywright(
 }> {
   const { browser } = await connectBrowser(opts.cdpUrl, opts.cdpPolicy ?? opts.ssrfPolicy);
   const context = browser.contexts()[0] ?? (await browser.newContext());
-  ensureContextState(context);
+  observeContext(context);
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
+  rememberContextDownloadNavigationPolicy(context, navigationPolicy);
 
   const page = await context.newPage();
-  ensurePageState(page);
+  ensurePageState(page).downloadNavigationPolicy = navigationPolicy;
   clearBlockedPageRef(opts.cdpUrl, page);
   const createdTargetId = await pageTargetId(page).catch(() => null);
   clearBlockedTarget(opts.cdpUrl, createdTargetId ?? undefined);
@@ -2014,9 +2417,6 @@ export async function createPageViaPlaywright(
   // Navigate to the URL
   const targetUrl = opts.url.trim() || "about:blank";
   if (targetUrl !== "about:blank") {
-    const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
-      browserProxyMode: opts.browserProxyMode,
-    });
     await assertBrowserNavigationAllowed({
       url: targetUrl,
       ...navigationPolicy,

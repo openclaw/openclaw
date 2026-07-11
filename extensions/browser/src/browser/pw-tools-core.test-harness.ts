@@ -47,6 +47,10 @@ const sessionMocks = vi.hoisted(() => ({
   }),
   ensurePageState: vi.fn(() => pageState),
   forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
+  finalizePendingBrowserInteractionAction: vi.fn((error: unknown) => ({
+    error: error instanceof Error ? error : new Error("pending interaction failed"),
+    deferred: false,
+  })),
   gotoPageWithNavigationGuard: vi.fn(
     async (opts: {
       url: string;
@@ -79,12 +83,12 @@ const sessionMocks = vi.hoisted(() => ({
     async <T>({ action }: { action: () => Promise<T> }): Promise<T> => await action(),
   ),
   wasBrowserNavigationRequestBlockedBeforeDispatch: vi.fn(() => false),
-  wasBrowserNavigationErrorQuarantined: vi.fn(() => false),
   quarantineBlockedNavigationTarget: vi.fn(async () => {}),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   respondToObservedDialogOnPage: vi.fn(async () => {
     throw new Error("No dialog is pending.");
   }),
+  respondOrArmObservedDialogOnPage: vi.fn(() => ({ kind: "armed" as const })),
   armObservedDialogResponseOnPage: vi.fn(() => {}),
   createObservedDialogAbortSignalForPage: vi.fn((opts?: { parentSignal?: AbortSignal }) => ({
     signal: opts?.parentSignal ?? new AbortController().signal,
@@ -92,6 +96,15 @@ const sessionMocks = vi.hoisted(() => ({
   })),
   isBrowserObservedDialogBlockedError: vi.fn(() => false),
   storeRoleRefsForTarget: vi.fn(() => {}),
+  trackPendingBrowserInteractionAction: vi.fn(
+    (err: unknown, actionPromise: Promise<unknown>, onActionResolved?: () => void) => {
+      void actionPromise.then(onActionResolved, () => {});
+      return err instanceof Error ? err : new Error("aborted");
+    },
+  ),
+  replacePendingBrowserInteractionActionError: vi.fn((_current: unknown, replacement: unknown) =>
+    replacement instanceof Error ? replacement : new Error("replacement error"),
+  ),
   refLocator: vi.fn(() => {
     if (!currentRefLocator) {
       throw new Error("missing locator");
@@ -195,7 +208,11 @@ export function installPwToolsCoreTestHooks() {
       fn.mockClear();
     }
     for (const fn of Object.values(navigationGuardMocks)) {
-      fn.mockClear();
+      fn.mockReset();
     }
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(async () => {});
+    navigationGuardMocks.withBrowserNavigationPolicy.mockImplementation((ssrfPolicy) => ({
+      ssrfPolicy,
+    }));
   });
 }

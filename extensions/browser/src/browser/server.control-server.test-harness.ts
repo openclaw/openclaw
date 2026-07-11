@@ -226,6 +226,15 @@ const pwMocks = vi.hoisted(() => ({
     refs: { e1: { role: "button", name: "Role" } },
     stats: { lines: 1, chars: 24, refs: 1, interactive: 1 },
   })),
+  snapshotRoleWithLabelsViaPlaywright: vi.fn(async () => ({
+    snapshot: '- button "Role" [ref=e1]',
+    refs: { e1: { role: "button", name: "Role" } },
+    stats: { lines: 1, chars: 24, refs: 1, interactive: 1 },
+    buffer: Buffer.from("png"),
+    labels: 1,
+    skipped: 0,
+    annotations: [],
+  })),
   storageGetViaPlaywright: vi.fn(async () => ({ values: {} })),
   storeAriaSnapshotRefsViaPlaywright: vi.fn(async () => {}),
   traceStartViaPlaywright: vi.fn(async () => {}),
@@ -292,10 +301,13 @@ const passThroughActDispatch: Record<string, PassThroughActDispatch> = {
   resize: {
     mock: pwMocks.resizeViewportViaPlaywright,
     fields: ["width", "height"],
+    includeSsrf: true,
+    includeSignal: true,
   },
   wait: {
     mock: pwMocks.waitForViaPlaywright,
     fields: ["timeMs", "text", "textGone", "selector", "url", "loadState", "fn", "timeoutMs"],
+    includeSsrf: true,
     includeSignal: true,
   },
   close: {
@@ -382,6 +394,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
   fillChromeMcpForm: vi.fn(async () => {}),
   focusChromeMcpTab: vi.fn(async () => {}),
   getChromeMcpPid: vi.fn(() => 4321),
+  handleChromeMcpDialog: vi.fn(async () => false),
   hoverChromeMcpElement: vi.fn(async () => {}),
   listChromeMcpTabs: vi.fn(async () => [
     { targetId: "7", title: "", url: "https://example.com", type: "page" },

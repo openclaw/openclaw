@@ -5,6 +5,10 @@ let page: { evaluate: ReturnType<typeof vi.fn>; url: ReturnType<typeof vi.fn> } 
 let locator: { evaluate: ReturnType<typeof vi.fn> } | null = null;
 
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
+const finalizePendingBrowserInteractionAction = vi.fn((error: unknown) => ({
+  error: error instanceof Error ? error : new Error("pending interaction failed"),
+  deferred: false,
+}));
 const getPageForTargetId = vi.fn(async () => {
   if (!page) {
     throw new Error("test: page not set");
@@ -22,7 +26,16 @@ const markObservedDialogsHandledRemotelyForPage = vi.fn(() => ({}));
 const quarantineBlockedNavigationTarget = vi.fn(async () => {});
 const quarantineBlockedNavigationTargetForError = vi.fn(async () => {});
 const wasBrowserNavigationRequestBlockedBeforeDispatch = vi.fn(() => false);
-const wasBrowserNavigationErrorQuarantined = vi.fn(() => false);
+const trackPendingBrowserInteractionAction = vi.fn(
+  (err: unknown, actionPromise: Promise<unknown>, onActionResolved?: () => void) => {
+    void actionPromise.then(onActionResolved, () => {});
+    return err instanceof Error ? err : new Error("aborted");
+  },
+);
+const replacePendingBrowserInteractionActionError = vi.fn(
+  (_current: unknown, replacement: unknown) =>
+    replacement instanceof Error ? replacement : new Error("replacement error"),
+);
 const withPageNavigationRequestGuard = vi.fn(
   async <T>({ action }: { action: () => Promise<T> }): Promise<T> => await action(),
 );
@@ -38,6 +51,7 @@ vi.mock("./pw-session.js", () => {
     assertPageNavigationCompletedSafely,
     ensurePageState,
     forceDisconnectPlaywrightForTarget,
+    finalizePendingBrowserInteractionAction,
     getPageForTargetId,
     isBrowserObservedDialogBlockedError,
     isPolicyDenyNavigationError,
@@ -45,9 +59,10 @@ vi.mock("./pw-session.js", () => {
     quarantineBlockedNavigationTarget,
     quarantineBlockedNavigationTargetForError,
     refLocator,
+    replacePendingBrowserInteractionActionError,
     restoreRoleRefsForTarget,
+    trackPendingBrowserInteractionAction,
     wasBrowserNavigationRequestBlockedBeforeDispatch,
-    wasBrowserNavigationErrorQuarantined,
     withPageNavigationRequestGuard,
   };
 });
@@ -90,7 +105,7 @@ describe("evaluateViaPlaywright (abort)", () => {
         }
         return pendingPromise;
       }),
-      url: vi.fn(() => "https://example.com/current"),
+      url: vi.fn(() => "https://93.184.216.34/current"),
     };
     locator = {
       evaluate: vi.fn(() => {
@@ -127,7 +142,7 @@ describe("evaluateViaPlaywright (abort)", () => {
   ])("installs the request guard before starting $label", async ({ fn, ref }) => {
     page = {
       evaluate: vi.fn(async () => "page result"),
-      url: vi.fn(() => "https://example.com/current"),
+      url: vi.fn(() => "https://93.184.216.34/current"),
     };
     locator = {
       evaluate: vi.fn(async () => "locator result"),
@@ -163,7 +178,7 @@ describe("evaluateViaPlaywright (abort)", () => {
         pending.resolveEvalCalled();
         return pendingPromise;
       }),
-      url: vi.fn(() => "https://example.com/current"),
+      url: vi.fn(() => "https://93.184.216.34/current"),
     };
 
     const p = evaluateViaPlaywright({

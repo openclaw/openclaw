@@ -50,6 +50,22 @@ describe("browser navigation guard", () => {
     ).resolves.toBeUndefined();
   });
 
+  it.each([
+    "blob:http://127.0.0.1:8080/private-id",
+    "filesystem:http://169.254.169.254/temporary/private.txt",
+  ])("blocks private embedded origins in result URLs: %s", async (url) => {
+    await expect(assertBrowserNavigationResultAllowed({ url })).rejects.toBeInstanceOf(
+      SsrFBlockedError,
+    );
+  });
+
+  it.each([
+    "blob:https://93.184.216.34/public-id",
+    "filesystem:https://93.184.216.34/temporary/public.txt",
+  ])("allows public embedded origins in result URLs: %s", async (url) => {
+    await expect(assertBrowserNavigationResultAllowed({ url })).resolves.toBeUndefined();
+  });
+
   it("blocks file URLs", async () => {
     await expect(
       assertBrowserNavigationAllowed({

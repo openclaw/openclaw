@@ -86,31 +86,26 @@ describe("pw-tools-core", () => {
       promptText: "x",
     });
 
-    expect(sessionMocks.respondToObservedDialogOnPage).toHaveBeenCalledWith({
-      page,
-      accept: true,
-      promptText: "x",
-      closedBy: "agent",
-    });
-    expect(sessionMocks.armObservedDialogResponseOnPage).toHaveBeenCalledWith({
+    expect(sessionMocks.respondOrArmObservedDialogOnPage).toHaveBeenCalledWith({
       page,
       accept: true,
       promptText: "x",
       timeoutMs: 120_000,
+      runResponse: expect.any(Function),
     });
 
-    sessionMocks.respondToObservedDialogOnPage.mockClear();
-    sessionMocks.armObservedDialogResponseOnPage.mockClear();
+    sessionMocks.respondOrArmObservedDialogOnPage.mockClear();
 
     await mod.armDialogViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       accept: false,
     });
 
-    expect(sessionMocks.armObservedDialogResponseOnPage).toHaveBeenCalledWith({
+    expect(sessionMocks.respondOrArmObservedDialogOnPage).toHaveBeenCalledWith({
       page,
       accept: false,
       timeoutMs: 120_000,
+      runResponse: expect.any(Function),
     });
   });
   it("waits for selector, url, load state, and function", async () => {

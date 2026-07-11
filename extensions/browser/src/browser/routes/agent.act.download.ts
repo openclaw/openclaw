@@ -8,6 +8,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
+  browserNavigationPolicyForProfile,
   readBody,
   requirePwAi,
   resolveTargetIdFromBody,
@@ -77,8 +78,10 @@ export function registerBrowserAgentActDownloadRoutes(
           const requestBase = buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs);
           const result = await pw.waitForDownloadViaPlaywright({
             ...requestBase,
+            ...browserNavigationPolicyForProfile(ctx, profileCtx),
             path: downloadPath,
             rootDir: DEFAULT_DOWNLOAD_DIR,
+            signal: req.signal,
           });
           res.json({ ok: true, targetId: tab.targetId, download: result });
         },
@@ -133,9 +136,11 @@ export function registerBrowserAgentActDownloadRoutes(
           const requestBase = buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs);
           const result = await pw.downloadViaPlaywright({
             ...requestBase,
+            ...browserNavigationPolicyForProfile(ctx, profileCtx),
             ref,
             path: downloadPath,
             rootDir: DEFAULT_DOWNLOAD_DIR,
+            signal: req.signal,
           });
           res.json({ ok: true, targetId: tab.targetId, download: result });
         },

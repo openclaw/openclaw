@@ -21,10 +21,24 @@ const refLocator = vi.fn(() => {
   return locator;
 });
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
+const finalizePendingBrowserInteractionAction = vi.fn((error: unknown) => ({
+  error: error instanceof Error ? error : new Error("pending interaction failed"),
+  deferred: false,
+}));
 const assertPageNavigationCompletedSafely = vi.fn(async () => {});
 const isPolicyDenyNavigationError = vi.fn(() => false);
 const quarantineBlockedNavigationTargetForError = vi.fn(async () => {});
 const wasBrowserNavigationRequestBlockedBeforeDispatch = vi.fn(() => false);
+const trackPendingBrowserInteractionAction = vi.fn(
+  (err: unknown, actionPromise: Promise<unknown>, onActionResolved?: () => void) => {
+    void actionPromise.then(onActionResolved, () => {});
+    return err instanceof Error ? err : new Error("aborted");
+  },
+);
+const replacePendingBrowserInteractionActionError = vi.fn(
+  (_current: unknown, replacement: unknown) =>
+    replacement instanceof Error ? replacement : new Error("replacement error"),
+);
 const withPageNavigationRequestGuard = vi.fn(
   async <T>({ action }: { action: () => Promise<T> }): Promise<T> => await action(),
 );
@@ -37,13 +51,16 @@ vi.mock("./pw-session.js", () => {
     assertPageNavigationCompletedSafely,
     ensurePageState,
     forceDisconnectPlaywrightForTarget,
+    finalizePendingBrowserInteractionAction,
     getPageForTargetId,
     isBrowserObservedDialogBlockedError,
     isPolicyDenyNavigationError,
     markObservedDialogsHandledRemotelyForPage,
     quarantineBlockedNavigationTargetForError,
     refLocator,
+    replacePendingBrowserInteractionActionError,
     restoreRoleRefsForTarget,
+    trackPendingBrowserInteractionAction,
     wasBrowserNavigationRequestBlockedBeforeDispatch,
     withPageNavigationRequestGuard,
   };
@@ -57,11 +74,7 @@ vi.mock("./paths.js", () => {
 
 const { setInputFilesViaPlaywright } = await import("./pw-tools-core.interactions.js");
 
-function seedSingleLocatorPage(): {
-  setInputFiles: ReturnType<typeof vi.fn>;
-  elementHandle: ReturnType<typeof vi.fn>;
-  setUrl: (url: string) => void;
-} {
+function seedSingleLocatorPage() {
   let currentUrl = "https://example.com/form";
   const setInputFiles = vi.fn(async () => {});
   const elementHandle = vi.fn(async () => {
@@ -134,6 +147,24 @@ describe("setInputFilesViaPlaywright", () => {
     expect(setInputFiles).not.toHaveBeenCalled();
   });
 
+  it("rechecks the current page inside the upload request guard", async () => {
+    const { setInputFiles } = seedSingleLocatorPage();
+
+    await expect(
+      setInputFilesViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        element: "input[type=file]",
+        paths: ["/tmp/openclaw/uploads/ok.txt"],
+        ssrfPolicy: { allowPrivateNetwork: false },
+        browserProxyMode: "explicit-browser-proxy",
+      }),
+    ).rejects.toThrow("strict browser SSRF policy cannot be enforced");
+
+    expect(withPageNavigationRequestGuard).toHaveBeenCalledOnce();
+    expect(setInputFiles).not.toHaveBeenCalled();
+  });
+
   it("guards the upload dispatch and checks its resulting navigation", async () => {
     const { setInputFiles, setUrl } = seedSingleLocatorPage();
     const requestSignal = new AbortController().signal;
@@ -146,17 +177,19 @@ describe("setInputFilesViaPlaywright", () => {
       targetId: "T1",
       element: "input[type=file]",
       paths: ["/tmp/openclaw/uploads/ok.txt"],
-      ssrfPolicy: { allowPrivateNetwork: false },
+      ssrfPolicy: { allowPrivateNetwork: true },
       browserProxyMode: "explicit-browser-proxy",
       signal: requestSignal,
     });
 
-    expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
-      page,
-      ssrfPolicy: { allowPrivateNetwork: false },
-      browserProxyMode: "explicit-browser-proxy",
-      action: expect.any(Function),
-    });
+    expect(withPageNavigationRequestGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        page,
+        ssrfPolicy: { allowPrivateNetwork: true },
+        browserProxyMode: "explicit-browser-proxy",
+        action: expect.any(Function),
+      }),
+    );
     expect(withPageNavigationRequestGuard.mock.invocationCallOrder[0]).toBeLessThan(
       setInputFiles.mock.invocationCallOrder[0]!,
     );
@@ -164,7 +197,7 @@ describe("setInputFilesViaPlaywright", () => {
       cdpUrl: "http://127.0.0.1:18792",
       page,
       response: null,
-      ssrfPolicy: { allowPrivateNetwork: false },
+      ssrfPolicy: { allowPrivateNetwork: true },
       browserProxyMode: "explicit-browser-proxy",
       targetId: "T1",
     });

@@ -17,6 +17,7 @@ import {
   evaluateChromeMcpScript,
   fillChromeMcpElement,
   fillChromeMcpForm,
+  handleChromeMcpDialog,
   hoverChromeMcpElement,
   listChromeMcpTabs,
   navigateChromeMcpPage,
@@ -1282,6 +1283,90 @@ describe("chrome MCP page parsing", () => {
     });
 
     expect(result).toBe(123);
+  });
+
+  it("handles a pending dialog on the exact target", async () => {
+    const session = createPageSession({
+      pid: 151,
+      pages: [
+        { id: 1, url: "https://a.example" },
+        { id: 2, url: "https://b.example" },
+      ],
+      onTool: (call) => {
+        if (call.name === "handle_dialog") {
+          return { content: [{ type: "text", text: "Successfully accepted the dialog" }] };
+        }
+        return undefined;
+      },
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+    const [, targetB] = await listChromeMcpTabs("chrome-live");
+
+    await expect(
+      handleChromeMcpDialog({
+        profileName: "chrome-live",
+        targetId: targetB?.targetId ?? "",
+        accept: true,
+        promptText: "approved",
+      }),
+    ).resolves.toBe(true);
+
+    const handleCall = (session.client.callTool as unknown as ToolCallMock).mock.calls.find(
+      ([call]) => call.name === "handle_dialog",
+    )?.[0];
+    expect(handleCall?.arguments).toEqual({
+      pageId: 2,
+      action: "accept",
+      promptText: "approved",
+    });
+  });
+
+  it("returns false only for Chrome MCP's exact no-open-dialog result", async () => {
+    const session = createPageSession({
+      pid: 152,
+      pages: [{ id: 1, url: "https://a.example" }],
+      onTool: (call) =>
+        call.name === "handle_dialog"
+          ? {
+              isError: true,
+              structuredContent: { message: "No open dialog found" },
+            }
+          : undefined,
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+    const [target] = await listChromeMcpTabs("chrome-live");
+
+    await expect(
+      handleChromeMcpDialog({
+        profileName: "chrome-live",
+        targetId: target?.targetId ?? "",
+        accept: false,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("preserves other Chrome MCP dialog failures", async () => {
+    const session = createPageSession({
+      pid: 153,
+      pages: [{ id: 1, url: "https://a.example" }],
+      onTool: (call) =>
+        call.name === "handle_dialog"
+          ? {
+              isError: true,
+              structuredContent: { message: "No open dialog found on the selected page" },
+            }
+          : undefined,
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+    const [target] = await listChromeMcpTabs("chrome-live");
+
+    await expect(
+      handleChromeMcpDialog({
+        profileName: "chrome-live",
+        targetId: target?.targetId ?? "",
+        accept: false,
+      }),
+    ).rejects.toThrow("No open dialog found on the selected page");
   });
 
   it("defaults non-finite coordinate click delays before injecting the browser script", async () => {

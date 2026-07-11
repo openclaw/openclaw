@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getPwToolsCoreNavigationGuardMocks,
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
@@ -23,6 +24,7 @@ vi.mock("./chrome.js", () => chromeMocks);
 vi.mock("./client-fetch.js", () => clientFetchMocks);
 
 const sessionMocks = getPwToolsCoreSessionMocks();
+const navigationGuardMocks = getPwToolsCoreNavigationGuardMocks();
 
 let mod: Pick<
   typeof import("./pw-tools-core.downloads.js"),
@@ -124,7 +126,7 @@ describe("pw-tools-core", () => {
     expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
   }
 
-  function createDownloadEventHarness() {
+  function createDownloadEventHarness(pageOverrides: Record<string, unknown> = {}) {
     const downloadHandlers = new Set<(download: unknown) => void>();
     const on = vi.fn((event: string, handler: (download: unknown) => void) => {
       if (event === "download") {
@@ -136,8 +138,15 @@ describe("pw-tools-core", () => {
         downloadHandlers.delete(handler);
       }
     });
-    setPwToolsCoreCurrentPage({ on, off });
+    const page = {
+      on,
+      off,
+      url: vi.fn(() => "https://example.com/downloads"),
+      ...pageOverrides,
+    };
+    setPwToolsCoreCurrentPage(page);
     return {
+      page,
       trigger: (download: unknown) => {
         for (const handler of downloadHandlers) {
           handler(download);
@@ -384,7 +393,285 @@ describe("pw-tools-core", () => {
       const res = await p;
       await expectAtomicDownloadSave({ saveAs, targetPath, content: "report-content" });
       await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
+      expect(sessionMocks.withPageNavigationRequestGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: expect.any(Function),
+          page: harness.page,
+          ssrfPolicy: undefined,
+        }),
+      );
     });
+  });
+
+  it("guards an explicit download click with the resolved policy and cancels a blocked request", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness({
+        url: vi.fn(() => "https://safe.example/downloads"),
+      });
+      const click = vi.fn(async () => {});
+      setPwToolsCoreCurrentRefLocator({ click });
+
+      const blocked = new Error("SSRF blocked: private download destination");
+      blocked.name = "SsrFBlockedError";
+      sessionMocks.withPageNavigationRequestGuard.mockRejectedValueOnce(blocked);
+
+      const task = mod.downloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "e12",
+        path: path.join(tempDir, "blocked.pdf"),
+        timeoutMs: 1000,
+        ssrfPolicy: { allowPrivateNetwork: false },
+      });
+
+      await expect(task).rejects.toBe(blocked);
+      expect(click).not.toHaveBeenCalled();
+      expect(harness.activeHandlerCount()).toBe(0);
+      expect(sessionMocks.withPageNavigationRequestGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: expect.any(Function),
+          page: harness.page,
+          ssrfPolicy: { allowPrivateNetwork: false },
+        }),
+      );
+      expect(sessionMocks.quarantineBlockedNavigationTargetForError).toHaveBeenCalledWith({
+        cdpUrl: "http://127.0.0.1:18792",
+        error: blocked,
+        page: harness.page,
+        targetId: "T1",
+      });
+    });
+  });
+
+  it("keeps a successful explicit download click guarded for the full grace window", async () => {
+    await withTempDir(async (tempDir) => {
+      vi.useFakeTimers();
+      try {
+        const harness = createDownloadEventHarness({
+          url: vi.fn(() => "https://safe.example/downloads"),
+        });
+        const click = vi.fn(async () => {});
+        setPwToolsCoreCurrentRefLocator({ click });
+        const saveAs = vi.fn(async (outPath: string) => {
+          await fs.writeFile(outPath, "guarded-content", "utf8");
+        });
+        const targetPath = path.join(tempDir, "guarded.pdf");
+        const completion = vi.fn();
+
+        const task = mod
+          .downloadViaPlaywright({
+            cdpUrl: "http://127.0.0.1:18792",
+            targetId: "T1",
+            ref: "e12",
+            path: targetPath,
+            timeoutMs: 1000,
+            ssrfPolicy: { allowPrivateNetwork: false },
+          })
+          .then((result) => {
+            completion();
+            return result;
+          });
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(click).toHaveBeenCalledWith({ timeout: 1000 });
+        harness.trigger({
+          url: () => "https://safe.example/guarded.pdf",
+          suggestedFilename: () => "guarded.pdf",
+          saveAs,
+        });
+
+        await vi.advanceTimersByTimeAsync(249);
+        expect(completion).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+
+        const result = await task;
+        expect(completion).toHaveBeenCalledOnce();
+        await expectAtomicDownloadSave({ saveAs, targetPath, content: "guarded-content" });
+        expect(result.path).toBe(targetPath);
+        expect(sessionMocks.withPageNavigationRequestGuard).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: expect.any(Function),
+            page: harness.page,
+            ssrfPolicy: { allowPrivateNetwork: false },
+          }),
+        );
+        expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+          ssrfPolicy: { allowPrivateNetwork: false },
+          url: "https://safe.example/guarded.pdf",
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("does not disconnect Playwright when aborting only the post-click download wait", async () => {
+    await withTempDir(async (tempDir) => {
+      vi.useFakeTimers();
+      try {
+        const harness = createDownloadEventHarness({
+          url: vi.fn(() => "https://safe.example/downloads"),
+        });
+        const click = vi.fn(async () => {});
+        setPwToolsCoreCurrentRefLocator({ click });
+        const controller = new AbortController();
+        const task = mod.downloadViaPlaywright({
+          cdpUrl: "http://127.0.0.1:18792",
+          targetId: "T1",
+          ref: "e12",
+          path: path.join(tempDir, "aborted.pdf"),
+          timeoutMs: 1000,
+          ssrfPolicy: { allowPrivateNetwork: false },
+          signal: controller.signal,
+        });
+        const rejection = expect(task).rejects.toThrow("request closed after click");
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(click).toHaveBeenCalledOnce();
+        controller.abort(new Error("request closed after click"));
+        await vi.advanceTimersByTimeAsync(250);
+
+        await rejection;
+        expect(harness.activeHandlerCount()).toBe(0);
+        expect(sessionMocks.forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("rejects a policy-blocked waited download before saving it", async () => {
+    const harness = createDownloadEventHarness();
+    const saveAs = vi.fn(async () => {});
+    const blocked = new Error("SSRF blocked: private download URL");
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockRejectedValueOnce(blocked);
+
+    const task = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+    await Promise.resolve();
+    harness.trigger({
+      url: () => "http://169.254.169.254/latest/meta-data/",
+      suggestedFilename: () => "metadata.txt",
+      saveAs,
+    });
+
+    await expect(task).rejects.toBe(blocked);
+    expect(saveAs).not.toHaveBeenCalled();
+    expect(harness.activeHandlerCount()).toBe(0);
+  });
+
+  it("rejects a data download when its owning page moved to a private URL", async () => {
+    let currentUrl = "https://safe.example/downloads";
+    const privateUrl = "http://169.254.169.254/latest/meta-data/";
+    const harness = createDownloadEventHarness({ url: vi.fn(() => currentUrl) });
+    const saveAs = vi.fn(async () => {});
+    const blocked = new Error("blocked private download owner");
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
+      async ({ url }: { url: string }) => {
+        if (url === privateUrl) {
+          throw blocked;
+        }
+      },
+    );
+
+    const task = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+    await Promise.resolve();
+    currentUrl = privateUrl;
+    harness.trigger({
+      url: () => "data:text/plain,private",
+      suggestedFilename: () => "private.txt",
+      saveAs,
+    });
+
+    await expect(task).rejects.toBe(blocked);
+    expect(saveAs).not.toHaveBeenCalled();
+  });
+
+  it("delegates blob downloads to the embedded-origin-aware navigation policy", async () => {
+    const privateOrigin = "http://169.254.169.254";
+    const harness = createDownloadEventHarness();
+    const saveAs = vi.fn(async () => {});
+    const blocked = new Error("blocked private blob origin");
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
+      async ({ url }: { url: string }) => {
+        if (url === `blob:${privateOrigin}/proof-id`) {
+          throw blocked;
+        }
+      },
+    );
+
+    const task = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+    await Promise.resolve();
+    harness.trigger({
+      url: () => `blob:${privateOrigin}/proof-id`,
+      suggestedFilename: () => "private.txt",
+      saveAs,
+    });
+
+    await expect(task).rejects.toBe(blocked);
+    expect(saveAs).not.toHaveBeenCalled();
+  });
+
+  it("delegates filesystem downloads to the embedded-origin-aware navigation policy", async () => {
+    const privateOrigin = "http://169.254.169.254";
+    const harness = createDownloadEventHarness();
+    const saveAs = vi.fn(async () => {});
+    const blocked = new Error("blocked private filesystem origin");
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
+      async ({ url }: { url: string }) => {
+        if (url === `filesystem:${privateOrigin}/temporary/proof-id`) {
+          throw blocked;
+        }
+      },
+    );
+
+    const task = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+    await Promise.resolve();
+    harness.trigger({
+      url: () => `filesystem:${privateOrigin}/temporary/proof-id`,
+      suggestedFilename: () => "private.txt",
+      saveAs,
+    });
+
+    await expect(task).rejects.toBe(blocked);
+    expect(saveAs).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending waited download when its request aborts", async () => {
+    const harness = createDownloadEventHarness();
+    const controller = new AbortController();
+    const task = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+      signal: controller.signal,
+    });
+    await Promise.resolve();
+    harness.expectArmed();
+
+    controller.abort(new Error("request closed"));
+
+    await expect(task).rejects.toThrow("request closed");
+    expect(harness.activeHandlerCount()).toBe(0);
   });
 
   it.runIf(process.platform !== "win32")(

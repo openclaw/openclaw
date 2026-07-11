@@ -173,9 +173,9 @@ export async function assertBrowserNavigationAllowed(
 
 /**
  * Best-effort post-navigation guard for final page URLs.
- * Only validates network URLs (http/https) and about:blank to avoid false
- * positives on browser-internal error pages (e.g. chrome-error://). In strict
- * mode this intentionally re-applies the hostname gate after redirects.
+ * Validates network URLs, about:blank, and the HTTP(S) origins embedded in
+ * blob/filesystem documents while ignoring unrelated browser-internal error
+ * pages. Strict mode re-applies the hostname gate after redirects.
  */
 export async function assertBrowserNavigationResultAllowed(
   opts: {
@@ -198,6 +198,28 @@ export async function assertBrowserNavigationResultAllowed(
     isAllowedNonNetworkNavigationUrl(parsed)
   ) {
     await assertBrowserNavigationAllowed(opts);
+    return;
+  }
+  const embeddedUrl =
+    parsed.protocol === "blob:"
+      ? rawUrl
+      : parsed.protocol === "filesystem:"
+        ? rawUrl.slice(rawUrl.indexOf(":") + 1)
+        : undefined;
+  if (!embeddedUrl) {
+    return;
+  }
+  let embeddedOrigin: string;
+  try {
+    embeddedOrigin = new URL(embeddedUrl).origin;
+  } catch {
+    return;
+  }
+  if (embeddedOrigin !== "null") {
+    await assertBrowserNavigationAllowed({
+      ...opts,
+      url: `${embeddedOrigin}/`,
+    });
   }
 }
 
