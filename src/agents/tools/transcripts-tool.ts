@@ -39,6 +39,7 @@ type TranscriptsRuntimeContext = {
 type ActiveTranscriptsSession = {
   session: TranscriptSessionDescriptor;
   providerId: string;
+  cleanupPending?: boolean;
 };
 
 const activeSessions = new Map<string, ActiveTranscriptsSession>();
@@ -209,25 +210,52 @@ async function startTranscripts(params: {
     startedAt: new Date().toISOString(),
   };
   await params.store.writeSession(session);
+  let startupPending = true;
   const result = await provider.start({
     cfg: params.ctx.config,
     session,
     abortSignal: params.abortSignal,
     startupWaitMs: params.startupWaitMs,
-    onUtterance: (utterance) => params.store.appendUtteranceForSession(session, utterance),
+    onUtterance: async (utterance) => {
+      if (startupPending && params.abortSignal?.aborted) {
+        return;
+      }
+      await params.store.appendUtteranceForSession(session, utterance);
+    },
   });
   if (!result.ok) {
     throw new Error(result.error);
   }
   if (params.abortSignal?.aborted) {
-    await provider.stop?.({
-      cfg: params.ctx.config,
-      sessionId: session.sessionId,
-      source: session.source,
-      reason: "service-stop",
-    });
+    let cleanupError: string | undefined;
+    if (!provider.stop) {
+      cleanupError = `transcripts provider ${provider.id} cannot stop live capture`;
+    } else {
+      try {
+        const cleanupResult = await provider.stop({
+          cfg: params.ctx.config,
+          sessionId: session.sessionId,
+          source: session.source,
+          reason: "service-stop",
+        });
+        if (!cleanupResult.ok) {
+          cleanupError = cleanupResult.error;
+        }
+      } catch (error) {
+        cleanupError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    if (cleanupError) {
+      activeSessions.set(session.sessionId, {
+        session,
+        providerId: provider.id,
+        cleanupPending: true,
+      });
+      throw new Error(`transcripts start aborted; provider cleanup failed: ${cleanupError}`);
+    }
     throw new Error("transcripts start aborted");
   }
+  startupPending = false;
   activeSessions.set(session.sessionId, { session, providerId: provider.id });
   return toolText(`Transcripts started: ${session.sessionId}`, {
     sessionId: session.sessionId,
@@ -274,6 +302,11 @@ async function stopTranscripts(params: {
     if (!result.ok) {
       providerStopError = result.error;
     }
+  } else if (selectedActive?.cleanupPending) {
+    providerStopError = `transcripts provider ${providerId} cannot stop live capture`;
+  }
+  if (selectedActive?.cleanupPending && providerStopError) {
+    throw new Error(`transcripts provider cleanup failed: ${providerStopError}`);
   }
   const stoppedAt = new Date().toISOString();
   if (selectedActive) {
@@ -392,6 +425,7 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
     providerId: entry.providerId,
     title: entry.session.title,
     source: entry.session.source,
+    cleanupPending: entry.cleanupPending === true,
   }));
   return toolText(
     [
@@ -419,7 +453,7 @@ export function createTranscriptsTool(options?: {
     description:
       "Start/stop/import/summarize/status meeting transcripts: Discord, Google Meet, Slack huddles, others.",
     parameters: TranscriptsSchema,
-    async execute(_toolCallId, rawParams) {
+    async execute(_toolCallId, rawParams, signal) {
       const config = resolveTranscriptsConfig(ctx.config?.transcripts);
       if (!config.enabled) {
         throw new Error("transcripts are disabled");
@@ -429,7 +463,7 @@ export function createTranscriptsTool(options?: {
       const store = createStore(ctx);
       switch (action) {
         case "start":
-          return await startTranscripts({ ctx, store, rawParams: params });
+          return await startTranscripts({ ctx, store, rawParams: params, abortSignal: signal });
         case "stop":
           return await stopTranscripts({ ctx, store, rawParams: params });
         case "import":
