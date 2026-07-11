@@ -489,6 +489,25 @@ describe("sendStickerDiscord", () => {
     });
     expect(requestBody(postMock as unknown as MockCallSource).nonce).toMatch(/^[0-9a-f]{24}$/);
   });
+
+  it("reuses a single nonce across a retried 502 for stickers", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
+    await sendStickerDiscord("channel:789", ["123"], {
+      cfg: DISCORD_TEST_CFG,
+      rest,
+      token: "t",
+      content: "hiya",
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+    expect(postMock).toHaveBeenCalledTimes(2);
+    const firstNonce = requestBody(postMock as unknown as MockCallSource, 0).nonce;
+    const secondNonce = requestBody(postMock as unknown as MockCallSource, 1).nonce;
+    expect(firstNonce).toMatch(/^[0-9a-f]{24}$/);
+    expect(secondNonce).toBe(firstNonce);
+  });
 });
 
 describe("sendPollDiscord", () => {
@@ -530,6 +549,31 @@ describe("sendPollDiscord", () => {
       enforce_nonce: true,
     });
     expect(requestBody(postMock as unknown as MockCallSource).nonce).toMatch(/^[0-9a-f]{24}$/);
+  });
+
+  it("reuses a single nonce across a retried 502 for polls", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
+    await sendPollDiscord(
+      "channel:789",
+      {
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      },
+    );
+    expect(postMock).toHaveBeenCalledTimes(2);
+    const firstNonce = requestBody(postMock as unknown as MockCallSource, 0).nonce;
+    const secondNonce = requestBody(postMock as unknown as MockCallSource, 1).nonce;
+    expect(firstNonce).toMatch(/^[0-9a-f]{24}$/);
+    expect(secondNonce).toBe(firstNonce);
   });
 
   it("combines silent and suppress-embeds flags for polls", async () => {

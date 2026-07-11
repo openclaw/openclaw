@@ -436,17 +436,15 @@ export async function sendStickerDiscord(
     await resolveDiscordStructuredSendContext(to, opts);
   const stickers = normalizeStickerIds(stickerIds);
   const flags = resolveDiscordMessageFlags({ suppressEmbeds });
+  const body = {
+    content: rewrittenContent || undefined,
+    sticker_ids: stickers,
+    nonce: createDiscordMessageNonce(),
+    enforce_nonce: true,
+    ...(flags ? { flags } : {}),
+  };
   const res = (await request(
-    () =>
-      createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
-        body: {
-          content: rewrittenContent || undefined,
-          sticker_ids: stickers,
-          nonce: createDiscordMessageNonce(),
-          enforce_nonce: true,
-          ...(flags ? { flags } : {}),
-        },
-      }),
+    () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
     "sticker",
     { nonIdempotent: true },
   )) as { id: string; channel_id: string };
@@ -465,17 +463,15 @@ export async function sendPollDiscord(
   }
   const payload = normalizeDiscordPollInput(poll);
   const flags = resolveDiscordMessageFlags({ silent: opts.silent, suppressEmbeds });
+  const body = {
+    content: rewrittenContent || undefined,
+    poll: payload,
+    nonce: createDiscordMessageNonce(),
+    enforce_nonce: true,
+    ...(flags ? { flags } : {}),
+  };
   const res = (await request(
-    () =>
-      createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
-        body: {
-          content: rewrittenContent || undefined,
-          poll: payload,
-          nonce: createDiscordMessageNonce(),
-          enforce_nonce: true,
-          ...(flags ? { flags } : {}),
-        },
-      }),
+    () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
     "poll",
     { nonIdempotent: true },
   )) as { id: string; channel_id: string };
