@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Flows command tests cover task creation, task execution, and runtime command output.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { createRunningTaskRun as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
 import {
@@ -11,15 +12,15 @@ import {
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.js";
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
   loadConfig: vi.fn(() => ({})),
+  resetConfigRuntimeState: () => undefined,
 }));
-
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 function jsonRoundTrip<T>(value: T): T {
   const serialized = JSON.stringify(value);
@@ -83,12 +84,14 @@ async function withTaskFlowCommandStateDir(run: (root: string) => Promise<void>)
 }
 
 describe("flows commands", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  });
+
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    envSnapshot.restore();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
@@ -156,6 +159,29 @@ describe("flows commands", () => {
           },
         ],
       });
+    });
+  });
+
+  it("keeps truncated text rows UTF-16 well-formed", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: `${"x".repeat(18)}🚀tail`,
+        goal: "Inspect a PR cluster",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      const runtime = createRuntime();
+
+      await flowsListCommand({}, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain(`${"x".repeat(18)}…`);
+      expect(output).not.toContain("\uD83D");
     });
   });
 

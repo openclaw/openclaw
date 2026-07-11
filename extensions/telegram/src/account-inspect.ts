@@ -1,3 +1,4 @@
+// Telegram plugin module implements account inspect behavior.
 import { resolveAccountWithDefaultFallback } from "openclaw/plugin-sdk/account-core";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -251,8 +252,9 @@ export function inspectTelegramAccount(params: {
   accountId?: string | null;
   envToken?: string | null;
 }): InspectedTelegramAccount {
+  const resolvedAccountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
   return resolveAccountWithDefaultFallback({
-    accountId: params.accountId,
+    accountId: resolvedAccountId,
     normalizeAccountId,
     resolvePrimary: (accountId) =>
       inspectTelegramAccountPrimary({

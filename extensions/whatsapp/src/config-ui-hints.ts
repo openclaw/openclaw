@@ -1,3 +1,4 @@
+// Whatsapp helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/core";
 
 export const whatsAppChannelConfigUiHints = {
@@ -20,6 +21,10 @@ export const whatsAppChannelConfigUiHints = {
   configWrites: {
     label: "WhatsApp Config Writes",
     help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
+  },
+  "actions.calls": {
+    label: "WhatsApp Voice Calls",
+    help: "Expose the experimental requester-bound WhatsApp voice-call tool. Default: false. Requires a separately paired MeowCaller CLI.",
   },
   mentionPatterns: {
     label: "WhatsApp Mention Pattern Policy",

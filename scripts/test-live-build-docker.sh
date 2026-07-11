@@ -6,7 +6,7 @@ ROOT_DIR="${OPENCLAW_LIVE_DOCKER_REPO_ROOT:-$SCRIPT_ROOT_DIR}"
 ROOT_DIR="$(cd "$ROOT_DIR" && pwd)"
 source "$SCRIPT_ROOT_DIR/scripts/lib/docker-build.sh"
 source "$SCRIPT_ROOT_DIR/scripts/lib/docker-e2e-container.sh"
-DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_LIVE_DOCKER_PULL_TIMEOUT:-180s}}"
+DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_LIVE_DOCKER_PULL_TIMEOUT:-600s}}"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${IMAGE_NAME}-live}"
 DOCKER_BUILD_EXTENSIONS="${OPENCLAW_DOCKER_BUILD_EXTENSIONS:-${OPENCLAW_EXTENSIONS:-}}"
@@ -53,6 +53,10 @@ if [[ "${OPENCLAW_SKIP_DOCKER_BUILD:-}" == "1" ]]; then
   echo "==> Reuse live-test image: $LIVE_IMAGE_NAME"
   if docker_e2e_docker_cmd image inspect "$LIVE_IMAGE_NAME" >/dev/null 2>&1; then
     exit 0
+  fi
+  if [[ "${OPENCLAW_LIVE_REQUIRE_LOCAL_IMAGE:-0}" == "1" ]]; then
+    echo "Required local live-test image not found: $LIVE_IMAGE_NAME" >&2
+    exit 1
   fi
   echo "==> Live-test image not found locally; pulling: $LIVE_IMAGE_NAME"
   if pull_live_image; then

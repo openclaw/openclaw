@@ -1,3 +1,4 @@
+// Gateway RPC handlers for channel lifecycle, status, and account operations.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -245,7 +246,8 @@ function resolveChannelGatewayAccountId(params: {
   );
 }
 
-export async function logoutChannelAccount(params: {
+/** Log out one channel account through its owning channel plugin. */
+async function logoutChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
   cfg: OpenClawConfig;
@@ -279,7 +281,8 @@ export async function logoutChannelAccount(params: {
   };
 }
 
-export async function startChannelAccount(params: {
+/** Start one channel account through its owning channel plugin. */
+async function startChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
   cfg: OpenClawConfig;
@@ -290,7 +293,7 @@ export async function startChannelAccount(params: {
     throw new Error(`Channel ${params.channelId} does not support runtime start`);
   }
   const resolvedAccountId = resolveChannelGatewayAccountId(params);
-  await params.context.startChannel(params.channelId, resolvedAccountId);
+  await params.context.startChannel(params.channelId, resolvedAccountId, { manual: true });
   const runtime = params.context.getRuntimeSnapshot();
   const started =
     resolveRuntimeAccountSnapshot({
@@ -305,7 +308,8 @@ export async function startChannelAccount(params: {
   };
 }
 
-export async function stopChannelAccount(params: {
+/** Stop one channel account through its owning channel plugin. */
+async function stopChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
   cfg: OpenClawConfig;
@@ -328,6 +332,7 @@ export async function stopChannelAccount(params: {
   };
 }
 
+/** Gateway request handlers for channel list, status, start, stop, and logout. */
 export const channelsHandlers: GatewayRequestHandlers = {
   "channels.status": async ({ params, respond, context }) => {
     if (!validateChannelsStatusParams(params)) {

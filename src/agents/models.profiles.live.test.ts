@@ -1,3 +1,4 @@
+// Live-sweeps discovered model profiles with optional provider/model filters and probes.
 import { writeSync } from "node:fs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
@@ -19,6 +20,7 @@ import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { isRateLimitErrorMessage } from "./embedded-agent-helpers/errors.js";
+import { extractAssistantText } from "./embedded-agent-utils.js";
 import { collectAnthropicApiKeys } from "./live-auth-keys.js";
 import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
@@ -26,7 +28,6 @@ import {
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isPrioritizedHighSignalLiveModelRef,
-  isPrioritizedSmallLiveModelRef,
   isSmallLiveModelRef,
   listPrioritizedSmallLiveModelRefs,
   resolveHighSignalLiveModelLimit,
@@ -38,14 +39,13 @@ import {
   buildLiveModelFileProbeContext,
   buildLiveModelFileProbeRetryContext,
   buildLiveModelImageProbeContext,
-  extractAssistantText,
   fileProbeTextMatches,
-  imageProbeTextMatches,
   isLiveModelProbeEnabled,
   LIVE_MODEL_FILE_PROBE_ENV,
   LIVE_MODEL_FILE_PROBE_TOKEN,
   LIVE_MODEL_IMAGE_PROBE_ENV,
   modelSupportsImageInput,
+  runLiveModelImageProbeWithRetry,
   shouldSkipLiveModelExtraProbes,
   shouldSkipLiveModelFileProbe,
   shouldSkipLiveModelImageProbe,
@@ -132,6 +132,7 @@ function parseModelFilter(raw?: string): Set<string> | null {
 function parseExplicitLiveModelRefs(
   filter: Set<string> | null,
 ): Array<{ provider: string; id: string }> {
+  // Explicit refs use provider/model syntax; bare provider filters are handled elsewhere.
   if (!filter) {
     return [];
   }
@@ -202,6 +203,7 @@ function resolveLiveProviderDiscoveryProviderIds(params: {
   explicitRefs: readonly { provider: string; id: string }[];
   priorityRefs?: readonly { provider: string; id: string }[];
 }): string[] | undefined {
+  // Narrow startup discovery to providers that can affect the requested live target set.
   const providers = new Set<string>();
   for (const provider of params.providerFilter ?? []) {
     const normalized = normalizeProviderId(provider);
@@ -1686,25 +1688,31 @@ async function runExtraTurnProbes(params: {
     return;
   }
 
-  logProgress(`${params.progressLabel}: image probe`);
-  const image = await completeSimpleWithTimeout(
-    params.model,
-    buildLiveModelImageProbeContext({ systemPrompt: resolveLiveSystemPrompt(params.model) }),
-    options,
-    params.timeoutMs,
-    `${params.progressLabel}: image probe`,
-  );
-  if (image.stopReason === "error") {
-    throw new Error(image.errorMessage || "image probe returned error with no message");
-  }
-  const imageText = extractAssistantText(image);
-  if (!imageProbeTextMatches(imageText)) {
-    if (imageText.length === 0) {
-      logProgress(`${params.progressLabel}: image probe skipped (empty response)`);
-      return;
-    }
-    throw new Error(`image probe did not return ok: ${imageText}`);
-  }
+  await runLiveModelImageProbeWithRetry({
+    run: async (attempt) => {
+      const attemptLabel = `${params.progressLabel}: image probe attempt ${attempt}/2`;
+      logProgress(attemptLabel);
+      const image = await completeSimpleWithTimeout(
+        params.model,
+        buildLiveModelImageProbeContext({ systemPrompt: resolveLiveSystemPrompt(params.model) }),
+        options,
+        params.timeoutMs,
+        attemptLabel,
+      );
+      if (image.stopReason === "error" || image.stopReason === "aborted") {
+        const fallback =
+          image.stopReason === "aborted"
+            ? `${attemptLabel} was aborted`
+            : `${attemptLabel} returned error with no message`;
+        throw new Error(image.errorMessage || fallback);
+      }
+      return extractAssistantText(image);
+    },
+    onRetry: (firstText) => {
+      const reason = firstText.length === 0 ? "was empty" : "did not return ok";
+      logProgress(`${params.progressLabel}: image probe attempt 1/2 ${reason}; retrying once`);
+    },
+  });
 }
 
 describeLive("live models (profile keys)", () => {
@@ -1851,12 +1859,6 @@ describeLive("live models (profile keys)", () => {
           continue;
         }
         if (!filter && useSmall) {
-          if (
-            useSmallPriorityOnly &&
-            !isPrioritizedSmallLiveModelRef({ provider: model.provider, id: model.id })
-          ) {
-            continue;
-          }
           if (!isSmallLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }

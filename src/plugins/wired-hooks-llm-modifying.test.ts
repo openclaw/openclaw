@@ -196,6 +196,28 @@ describe("llm_input modifying hook", () => {
     const result = await runner.runLlmInput(makeLlmInputEvent(), stubCtx);
     expect(result?.prompt).toBe("still works");
   });
+
+  it("evolves from accumulated result, not raw handler result (A>B>C priority scenario)", async () => {
+    // A(prio=20) sets prompt="A", B(prio=10) sets prompt="B", C(prio=0) observes.
+    // First-setter-wins: merged result has prompt="A".
+    // C should see prompt="A" (from accumulated result), NOT prompt="B" (from B's raw result).
+    const cSpy = vi.fn<[PluginHookLlmInputEvent], void>();
+    addLlmInputHook(registry, "plugin-A", () => ({ prompt: "A" }), 20);
+    addLlmInputHook(registry, "plugin-B", () => ({ prompt: "B" }), 10);
+    addLlmInputHook(
+      registry,
+      "plugin-C",
+      (event) => {
+        cSpy(event);
+      },
+      0,
+    );
+    const runner = createHookRunner(registry);
+    const result = await runner.runLlmInput(makeLlmInputEvent(), stubCtx);
+    expect(result?.prompt).toBe("A");
+    // C must see the winning prompt "A", not the losing "B"
+    expect(cSpy.mock.calls[0][0].prompt).toBe("A");
+  });
 });
 
 describe("llm_output modifying hook", () => {

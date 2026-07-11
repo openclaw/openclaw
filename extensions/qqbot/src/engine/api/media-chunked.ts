@@ -36,7 +36,10 @@
 
 import * as crypto from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MediaSource, OpenedLocalFile } from "../messaging/media-source.js";
 import { openLocalFile } from "../messaging/media-source.js";
 import {
@@ -139,6 +142,7 @@ const MAX_PART_FINISH_RETRY_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** Per-part PUT timeout (5 minutes). Matches the low-bandwidth tolerance. */
 const PART_UPLOAD_TIMEOUT_MS = 300_000;
+const PART_UPLOAD_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 /**
  * Boundary used by `md5_10m` — first 10,002,432 bytes.
@@ -411,19 +415,6 @@ export class ChunkedMediaApi {
   }
 }
 
-// ============ Legacy functional facade ============
-
-/**
- * @deprecated The chunked uploader is always implemented.
- *
- * Legacy feature flag. The chunked uploader is fully implemented, so this
- * returns `true`. Retained so that older call sites can be converted
- * progressively.
- */
-export function isChunkedUploadImplemented(): boolean {
-  return true;
-}
-
 // ============ Source resolution ============
 
 /**
@@ -582,12 +573,15 @@ async function putToPresignedUrl(
         const etag = response.headers.get("ETag") ?? "-";
 
         if (!response.ok) {
-          const body = await response.text().catch(() => "");
+          const body = await readResponseTextLimited(
+            response,
+            PART_UPLOAD_ERROR_BODY_LIMIT_BYTES,
+          ).catch(() => "");
           logger?.error?.(
-            `${prefix} PUT part ${partIndex}/${totalParts}: HTTP ${response.status} ${response.statusText} (${elapsed}ms, requestId=${requestId}) body=${body.slice(0, 160)}`,
+            `${prefix} PUT part ${partIndex}/${totalParts}: HTTP ${response.status} ${response.statusText} (${elapsed}ms, requestId=${requestId}) body=${truncateUtf16Safe(body, 160)}`,
           );
           throw new Error(
-            `COS PUT failed: ${response.status} ${response.statusText} - ${body.slice(0, 120)}`,
+            `COS PUT failed: ${response.status} ${response.statusText} - ${truncateUtf16Safe(body, 120)}`,
           );
         }
 
@@ -608,7 +602,7 @@ async function putToPresignedUrl(
       if (attempt < PART_UPLOAD_MAX_RETRIES) {
         const delay = 1000 * 2 ** attempt;
         (logger?.warn ?? logger?.error)?.(
-          `${prefix} PUT part ${partIndex}/${totalParts} attempt ${attempt + 1} failed (${lastError.message.slice(0, 120)}), retrying in ${delay}ms`,
+          `${prefix} PUT part ${partIndex}/${totalParts} attempt ${attempt + 1} failed (${truncateUtf16Safe(lastError.message, 120)}), retrying in ${delay}ms`,
         );
         await sleep(delay);
       }
@@ -638,10 +632,4 @@ async function runWithConcurrency(
     const batch = tasks.slice(i, i + maxConcurrent);
     await Promise.all(batch.map((task) => task()));
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }

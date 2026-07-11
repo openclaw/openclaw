@@ -1,3 +1,4 @@
+// Interactive outbound tests cover channel outbound interactive payload construction.
 import { describe, expect, it } from "vitest";
 import {
   adaptMessagePresentationForChannel,
@@ -789,5 +790,39 @@ describe("presentation capability limits", () => {
         20,
       ),
     ).toBe(9);
+  });
+
+  it("keeps charts only for channels that explicitly advertise native support", () => {
+    const chart = {
+      type: "chart" as const,
+      chartType: "bar" as const,
+      title: "Quarterly revenue",
+      categories: ["Q1", "Q2"],
+      series: [{ name: "Revenue", values: [120, 145] }],
+    };
+
+    expect(
+      adaptMessagePresentationForChannel({
+        presentation: { blocks: [chart] },
+        capabilities: { charts: true },
+      }).blocks,
+    ).toEqual([chart]);
+    expect(
+      adaptMessagePresentationForChannel({
+        presentation: { blocks: [chart] },
+        capabilities: { context: true },
+      }).blocks,
+    ).toEqual([
+      {
+        type: "context",
+        text: "Quarterly revenue (bar chart)\n- Revenue: Q1: 120; Q2: 145",
+      },
+    ]);
+    expect(
+      adaptMessagePresentationForChannel({
+        presentation: { blocks: [chart] },
+        capabilities: { context: false },
+      }).blocks[0]?.type,
+    ).toBe("text");
   });
 });

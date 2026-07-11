@@ -1,3 +1,4 @@
+// Imessage tests cover sanitize outbound plugin behavior.
 import { describe, expect, it } from "vitest";
 import { sanitizeOutboundText } from "./sanitize-outbound.js";
 
@@ -46,6 +47,15 @@ describe("sanitizeOutboundText", () => {
     const text = "Hello\nassistant:\nuser:";
     const result = sanitizeOutboundText(text);
     expect(result).not.toMatch(/^assistant:$/m);
+  });
+
+  it("preserves prose lines that merely end with 'user:'/'system:'", () => {
+    expect(sanitizeOutboundText("Please send this reply to the user:")).toBe(
+      "Please send this reply to the user:",
+    );
+    expect(sanitizeOutboundText("Here is a note for the system:")).toBe(
+      "Here is a note for the system:",
+    );
   });
 
   it("collapses excessive blank lines after stripping", () => {

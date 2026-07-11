@@ -1,5 +1,10 @@
+// Legacy runtime agent config migrations for memory, heartbeat, sandbox, and runtime policy keys.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  isCanonicalToolProviderPolicyKey,
+  normalizeToolProviderPolicyKey,
+} from "../../../agents/provider-tool-policy.js";
 import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
 import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../../../agents/tool-policy-shared.js";
@@ -12,7 +17,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
-import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
+import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import { listLegacyRuntimeModelProviderAliases } from "./legacy-runtime-model-providers.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([
@@ -63,6 +68,25 @@ const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
     message:
       'agents.list[].memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
     match: hasAgentListLegacyMemorySearchAutoProvider,
+  },
+];
+
+const LEGACY_MEMORY_SEARCH_STORE_PATH_RULES: LegacyConfigRule[] = [
+  {
+    path: ["memorySearch", "store", "path"],
+    message:
+      'memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["agents", "defaults", "memorySearch", "store", "path"],
+    message:
+      'agents.defaults.memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
+    match: hasAgentListMemorySearchStorePath,
   },
 ];
 
@@ -388,6 +412,30 @@ function hasAgentListLegacyMemorySearchAutoProvider(value: unknown): boolean {
   return value.some((agent) =>
     isLegacyMemorySearchAutoProvider(getRecord(getRecord(agent)?.memorySearch)?.provider),
   );
+}
+
+function hasMemorySearchStorePath(value: unknown): boolean {
+  return typeof getRecord(getRecord(value)?.store)?.path === "string";
+}
+
+function hasAgentListMemorySearchStorePath(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some((agent) => hasMemorySearchStorePath(getRecord(agent)?.memorySearch))
+  );
+}
+
+function removeLegacyMemorySearchStorePath(
+  memorySearch: Record<string, unknown> | null,
+  pathLabel: string,
+  changes: string[],
+): void {
+  const store = getRecord(memorySearch?.store);
+  if (!store || typeof store.path !== "string") {
+    return;
+  }
+  delete store.path;
+  changes.push(`Removed ${pathLabel}.store.path; memory indexes now use each agent database.`);
 }
 
 function rewriteLegacyMemorySearchAutoProvider(
@@ -984,21 +1032,6 @@ function addHandledProviderPolicyKey(handledProviders: Set<string>, providerKey:
   handledProviders.add(normalizeToolProviderPolicyKey(providerKey));
 }
 
-function normalizeToolProviderPolicyKey(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  const slashIndex = normalized.indexOf("/");
-  if (slashIndex <= 0) {
-    return normalizeProviderId(normalized);
-  }
-  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
-  const modelId = normalized.slice(slashIndex + 1);
-  return modelId ? `${provider}/${modelId}` : provider;
-}
-
-function isCanonicalToolProviderPolicyKey(value: string): boolean {
-  return value.trim().toLowerCase() === normalizeToolProviderPolicyKey(value);
-}
-
 function buildInheritedProviderPolicyLookup(
   inheritedByProvider: Record<string, unknown> | null | undefined,
 ): Map<
@@ -1136,6 +1169,7 @@ function addProfileConfiguredSectionGrantsWithConfiguredGrants(
   }
 }
 
+/** Legacy config migration specs for agent/runtime-owned config keys. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "tools.profile-configured-sections-alsoAllow",
@@ -1355,6 +1389,32 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
         rewriteLegacyMemorySearchAutoProvider(
           getRecord(getRecord(agent)?.memorySearch),
           `agents.list.${index}.memorySearch`,
+          changes,
+        );
+      }
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "memorySearch.store.path->agent-database",
+    describe: "Remove legacy memory search sidecar index paths",
+    legacyRules: LEGACY_MEMORY_SEARCH_STORE_PATH_RULES,
+    apply: (raw, changes) => {
+      removeLegacyMemorySearchStorePath(getRecord(raw.memorySearch), "memorySearch", changes);
+
+      const agents = getRecord(raw.agents);
+      removeLegacyMemorySearchStorePath(
+        getRecord(getRecord(agents?.defaults)?.memorySearch),
+        "agents.defaults.memorySearch",
+        changes,
+      );
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        removeLegacyMemorySearchStorePath(
+          getRecord(getRecord(agent)?.memorySearch),
+          `agents.list[${index}].memorySearch`,
           changes,
         );
       }

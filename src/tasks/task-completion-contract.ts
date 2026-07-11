@@ -1,5 +1,8 @@
+// Defines task terminal outcome contracts used by completion handling.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { TaskTerminalOutcome } from "./task-registry.types.js";
 
+/** Terminal fields required when a mandatory detached task completion is invalid. */
 export type RequiredCompletionTerminalResult = {
   terminalOutcome?: Extract<TaskTerminalOutcome, "blocked">;
   terminalSummary?: string;
@@ -23,7 +26,7 @@ function normalizeCompletionFailureReason(value: string | null | undefined): str
   if (!normalized) {
     return "";
   }
-  return normalized.length <= 160 ? normalized : `${normalized.slice(0, 159)}...`;
+  return normalized.length <= 160 ? normalized : `${truncateUtf16Safe(normalized, 159)}...`;
 }
 
 function matchesProgressOnlyPrefix(value: string): boolean {
@@ -48,7 +51,7 @@ function hasNonProgressFollowupSentence(value: string): boolean {
   return matchesProgressOnlyPrefix(firstSentence) && !isProgressOnlyCompletionText(rest);
 }
 
-export function isProgressOnlyCompletionText(value: string | null | undefined): boolean {
+function isProgressOnlyCompletionText(value: string | null | undefined): boolean {
   const normalized = normalizeCompletionText(value);
   if (!normalized) {
     return false;

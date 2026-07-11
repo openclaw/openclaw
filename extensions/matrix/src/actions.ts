@@ -1,3 +1,4 @@
+// Matrix plugin module implements actions behavior.
 import {
   createActionGate,
   readPositiveIntegerParam,
@@ -138,7 +139,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     const listedActions = Array.from(actions);
     return {
       actions: listedActions,
-      capabilities: [],
+      capabilities: ["presentation"],
       schema: listedActions.includes("set-profile") ? buildMatrixProfileToolSchema() : null,
       mediaSourceParams: listedActions.includes("set-profile")
         ? { "set-profile": MATRIX_PROFILE_MEDIA_SOURCE_PARAMS }
@@ -239,6 +240,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
         limit,
         before: readStringParam(params, "before"),
         after: readStringParam(params, "after"),
+        threadId: readStringParam(params, "threadId"),
       });
     }
 

@@ -1,3 +1,4 @@
+// Browser tests cover pw session.create page.navigation guard plugin behavior.
 import { chromium } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
@@ -615,7 +616,6 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
     const page = await getPageForTargetId({
       cdpUrl: "http://127.0.0.1:18792",
-      targetId: "MISSING_TARGET",
     });
 
     pageGoto.mockImplementationOnce(async () => {

@@ -1,9 +1,14 @@
+// Slack helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const slackChannelConfigUiHints = {
   "": {
     label: "Slack",
     help: "Slack channel provider configuration for bot/app tokens, streaming behavior, and DM policy controls. Keep token handling and thread behavior explicit to avoid noisy workspace interactions.",
+  },
+  enterpriseOrgInstall: {
+    label: "Slack Enterprise Grid Org Install",
+    help: 'Enable only for an Enterprise Grid org-wide bot installation. OpenClaw verifies the token with Slack auth.test at startup; DMs must be disabled or use dmPolicy="open" with allowFrom=["*"].',
   },
   "dm.policy": {
     label: "Slack DM Policy",
@@ -80,6 +85,22 @@ export const slackChannelConfigUiHints = {
   "socketMode.pingPongLoggingEnabled": {
     label: "Slack Socket Mode Ping/Pong Logging",
     help: "Enable Slack SDK ping/pong transport logs while debugging Socket Mode websocket health.",
+  },
+  relay: {
+    label: "Slack Relay Mode",
+    help: 'Relay-delivered Slack events. Use with mode="relay" when openclaw-slack-router owns the Slack Socket Mode connection.',
+  },
+  "relay.url": {
+    label: "Slack Relay URL",
+    help: "Full websocket URL for openclaw-slack-router. Include the route path, for example ws://127.0.0.1:8081/gateway/ws.",
+  },
+  "relay.authToken": {
+    label: "Slack Relay Auth Token",
+    help: "Bearer token used by this gateway to authenticate its reverse websocket connection to openclaw-slack-router.",
+  },
+  "relay.gatewayId": {
+    label: "Slack Relay Gateway ID",
+    help: "Destination id that openclaw-slack-router uses when routing user-group mentions to this gateway.",
   },
   botToken: {
     label: "Slack Bot Token",

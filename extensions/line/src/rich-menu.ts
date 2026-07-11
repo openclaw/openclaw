@@ -1,3 +1,4 @@
+// Line plugin module implements rich menu behavior.
 import { messagingApi } from "@line/bot-sdk";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/agent-media-payload";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -13,6 +14,8 @@ type RichMenuResponse = messagingApi.RichMenuResponse;
 type RichMenuArea = messagingApi.RichMenuArea;
 type Action = messagingApi.Action;
 const USER_BATCH_SIZE = 500;
+// LINE counts rich-menu names and chat-bar text in grapheme clusters, unlike most message fields.
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export interface RichMenuSize {
   width: 2500;
@@ -77,6 +80,19 @@ function chunkUserIds(userIds: string[]): string[][] {
   return batches;
 }
 
+function truncateGraphemes(input: string, maxLength: number): string {
+  let result = "";
+  let count = 0;
+  for (const { segment } of graphemeSegmenter.segment(input)) {
+    if (count >= maxLength) {
+      break;
+    }
+    result += segment;
+    count += 1;
+  }
+  return result;
+}
+
 export async function createRichMenu(
   menu: CreateRichMenuParams,
   opts: RichMenuOpts,
@@ -86,8 +102,8 @@ export async function createRichMenu(
   const richMenuRequest: RichMenuRequest = {
     size: menu.size,
     selected: menu.selected ?? false,
-    name: menu.name.slice(0, 300),
-    chatBarText: menu.chatBarText.slice(0, 14),
+    name: truncateGraphemes(menu.name, 300),
+    chatBarText: truncateGraphemes(menu.chatBarText, 14),
     areas: menu.areas as RichMenuArea[],
   };
 

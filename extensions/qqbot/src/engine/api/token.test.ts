@@ -1,3 +1,4 @@
+// Qqbot tests cover token plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TokenManager } from "./token.js";
 
@@ -18,6 +19,33 @@ function mockGuardedTokenResponse(body: BodyInit, init?: ResponseInit): ReturnTy
     release,
   });
   return release;
+}
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  release: ReturnType<typeof vi.fn>;
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  const release = vi.fn(async () => {});
+  const response = new Response(stream, init);
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
+  return {
+    release,
+    response,
+    wasCanceled: () => canceled,
+  };
 }
 
 describe("QQBot token manager", () => {
@@ -56,6 +84,25 @@ describe("QQBot token manager", () => {
       },
     });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds access token responses without using response.text()", async () => {
+    const logger = { debug: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const tracked = cancelTrackedResponse(`${"qqbot token unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+
+    await expect(new TokenManager({ logger }).getAccessToken("app-id", "secret")).rejects.toThrow(
+      "QQBot access_token response was malformed JSON",
+    );
+
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(tracked.release).toHaveBeenCalledTimes(1);
+    expect(logger.debug.mock.calls.join("\n")).toContain("qqbot token unavailable");
+    expect(logger.debug.mock.calls.join("\n")).not.toContain("tail");
   });
 
   it("passes the RFC2544 SSRF allowance to the token fetch (regression for #88984)", async () => {

@@ -1,3 +1,4 @@
+// Discord plugin module implements native command auth behavior.
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
@@ -20,7 +21,7 @@ import type { DiscordConfig } from "./native-command.types.js";
 import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 
-export function resolveDiscordNativeCommandAllowlistAccess(params: {
+function resolveDiscordNativeCommandAllowlistAccess(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   sender: { id: string; name?: string; tag?: string };

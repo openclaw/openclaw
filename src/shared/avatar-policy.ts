@@ -1,11 +1,20 @@
+// Avatar policy helpers resolve avatar paths and provider fallback rules.
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isPathInside } from "../infra/path-guards.js";
+export { AVATAR_MAX_BYTES, AVATAR_MAX_DATA_URL_CHARS } from "./avatar-limits.js";
 
-export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+/**
+ * Shared avatar source policy for config validation, agent identity loading,
+ * gateway uploads, and Control UI rendering hints.
+ */
 
+// Local avatar serving intentionally excludes formats handled only as MIME fallbacks:
+// callers may recognize BMP/TIFF MIME types, but local inline serving stays on
+// the smaller browser-safe extension set below.
 const LOCAL_AVATAR_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]);
 
+/** MIME hints for known image extensions, including formats not accepted for local serving. */
 const AVATAR_MIME_BY_EXT: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -18,11 +27,16 @@ const AVATAR_MIME_BY_EXT: Record<string, string> = {
   ".tiff": "image/tiff",
 };
 
-export const AVATAR_DATA_RE = /^data:/i;
-export const AVATAR_IMAGE_DATA_RE = /^data:image\//i;
-export const AVATAR_HTTP_RE = /^https?:\/\//i;
-export const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
-export const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
+/** Detects data URLs before image-specific avatar validation. */
+const AVATAR_DATA_RE = /^data:/i;
+/** Detects inline image data URLs accepted by the persisted avatar contract. */
+const AVATAR_IMAGE_DATA_RE = /^data:image\//i;
+/** Detects remote avatar URLs served over HTTP(S). */
+const AVATAR_HTTP_RE = /^https?:\/\//i;
+/** Detects URI schemes so non-path avatar values can be rejected or routed. */
+const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+/** Detects Windows absolute paths before URI-scheme classification. */
+const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
 
 const AVATAR_PATH_EXT_RE = /\.(png|jpe?g|gif|webp|svg|ico)$/i;
 
@@ -37,7 +51,7 @@ export function isAvatarDataUrl(value: string): boolean {
   return AVATAR_DATA_RE.test(value);
 }
 
-/** Detects image data URLs accepted by avatar sources. */
+/** Detects image data URLs without applying a projection-specific size limit. */
 export function isAvatarImageDataUrl(value: string): boolean {
   return AVATAR_IMAGE_DATA_RE.test(value);
 }

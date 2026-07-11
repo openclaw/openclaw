@@ -1,28 +1,9 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+// Builds balanced Vitest shard plans for channel plugin contract tests.
+import { relative } from "node:path";
+import { listTrackedTestFiles } from "./list-test-files.mjs";
 
 function listContractTestFiles(rootDir = "src/channels/plugins/contracts") {
-  const result = spawnSync("git", ["ls-files", "--", rootDir], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status === 0) {
-    return result.stdout
-      .split("\n")
-      .map((line) => line.trim().replaceAll("\\", "/"))
-      .filter((line) => line.endsWith(".test.ts"))
-      .toSorted((a, b) => a.localeCompare(b));
-  }
-
-  if (!existsSync(rootDir)) {
-    return [];
-  }
-
-  return readdirSync(rootDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"))
-    .map((entry) => join(rootDir, entry.name).replaceAll("\\", "/"))
-    .toSorted((a, b) => a.localeCompare(b));
+  return listTrackedTestFiles(rootDir);
 }
 
 const CONTRACT_FILE_WEIGHTS = new Map([
@@ -50,6 +31,7 @@ function resolveContractFileWeight(file) {
   return CONTRACT_FILE_WEIGHTS.get(name) ?? 8;
 }
 
+/** Create balanced channel contract test shards for CI check planning. */
 export function createChannelContractTestShards() {
   const rootDir = "src/channels/plugins/contracts";
   const suffixes = ["a", "b"];

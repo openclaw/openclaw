@@ -1,9 +1,15 @@
+/**
+ * Tests for skill upload gateway methods and archive validation.
+ */
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const agentScopeState = vi.hoisted(() => ({
@@ -11,7 +17,7 @@ const agentScopeState = vi.hoisted(() => ({
 }));
 
 const installSecurityScanState = vi.hoisted(() => ({
-  scanSkillInstallSource: vi.fn(),
+  evaluateSkillInstallPolicy: vi.fn(),
 }));
 
 const replaceFileState = vi.hoisted(() => ({
@@ -30,7 +36,7 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
 });
 
 vi.mock("../../plugins/install-security-scan.js", () => ({
-  scanSkillInstallSource: installSecurityScanState.scanSkillInstallSource,
+  evaluateSkillInstallPolicy: installSecurityScanState.evaluateSkillInstallPolicy,
 }));
 
 vi.mock("../../infra/replace-file.js", async (importOriginal) => {
@@ -55,6 +61,7 @@ vi.mock("../../infra/replace-file.js", async (importOriginal) => {
 });
 
 let tempDirs: string[] = [];
+let testStates: OpenClawTestState[] = [];
 
 type CallResult = {
   ok: boolean;
@@ -67,12 +74,13 @@ async function makeHarness(): Promise<{
   stateDir: string;
   workspaceDir: string;
 }> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-handler-"));
-  tempDirs.push(root);
-  const stateDir = path.join(root, "state");
-  const workspaceDir = path.join(root, "workspace");
-  await fs.mkdir(workspaceDir, { recursive: true });
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const testState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-skill-upload-handler-",
+  });
+  testStates.push(testState);
+  const stateDir = testState.stateDir;
+  const workspaceDir = testState.workspaceDir;
   agentScopeState.workspaceDir = workspaceDir;
   vi.resetModules();
   const { skillsHandlers } = await import("./skills.js");
@@ -216,19 +224,19 @@ async function uploadArchive(
 describe("skill upload gateway handlers", () => {
   beforeEach(() => {
     tempDirs = [];
-    vi.unstubAllEnvs();
+    testStates = [];
     replaceFileState.publishFailureTarget = "";
     replaceFileState.publishFailures = 0;
-    installSecurityScanState.scanSkillInstallSource.mockReset();
-    installSecurityScanState.scanSkillInstallSource.mockResolvedValue(undefined);
+    installSecurityScanState.evaluateSkillInstallPolicy.mockReset();
+    installSecurityScanState.evaluateSkillInstallPolicy.mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
-    vi.unstubAllEnvs();
     vi.restoreAllMocks();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    await Promise.all([
+      ...tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+      ...testStates.splice(0).map((state) => state.cleanup()),
+    ]);
   });
 
   it("rejects upload archive RPCs and upload installs when disabled by config", async () => {
@@ -461,13 +469,12 @@ describe("skill upload gateway handlers", () => {
     await expectPathMissing(path.join(workspaceDir, "skills", "traversal-skill"));
   });
 
-  it("treats security scan blocks as terminal invalid uploads", async () => {
+  it("treats install policy blocks as terminal invalid uploads", async () => {
     const { handlers, stateDir } = await makeHarness();
-    installSecurityScanState.scanSkillInstallSource.mockResolvedValueOnce({
+    installSecurityScanState.evaluateSkillInstallPolicy.mockResolvedValueOnce({
       blocked: {
         code: "security_scan_blocked",
-        reason:
-          'Skill "scan-blocked" installation blocked: blocked dependencies "plain-crypto-js" declared in package.json.',
+        reason: 'blocked by install policy: Skill "scan-blocked" is not approved.',
       },
     });
     const upload = await uploadArchive(handlers, {
@@ -483,11 +490,13 @@ describe("skill upload gateway handlers", () => {
 
     expect(install.ok).toBe(false);
     expect(install.error?.code).toBe("INVALID_REQUEST");
-    expect(install.error?.message).toContain("blocked dependencies");
-    const scanInput = firstCallArg<{ origin?: string; skillName?: string }>(
-      installSecurityScanState.scanSkillInstallSource,
-    );
-    expect(scanInput.origin).toBe("skill-upload");
+    expect(install.error?.message).toContain("blocked by install policy");
+    const scanInput = firstCallArg<{
+      origin?: { type?: string; uploadId?: string };
+      skillName?: string;
+    }>(installSecurityScanState.evaluateSkillInstallPolicy);
+    expect(scanInput.origin?.type).toBe("upload");
+    expect(scanInput.origin?.uploadId).toBe(upload.uploadId);
     expect(scanInput.skillName).toBe("scan-blocked");
     await expectPathMissing(path.join(stateDir, "tmp", "skill-uploads", upload.uploadId));
   });

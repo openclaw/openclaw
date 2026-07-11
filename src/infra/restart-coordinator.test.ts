@@ -1,3 +1,4 @@
+// Covers safe gateway restart preflight and requests.
 import { describe, expect, it, vi } from "vitest";
 import {
   createSafeGatewayRestartPreflight,
@@ -16,6 +17,7 @@ describe("safe gateway restart coordinator", () => {
       getQueueSize: () => 0,
       getPendingReplies: () => 0,
       getEmbeddedRuns: () => 0,
+      getCronRuns: () => 0,
       getActiveTasks: () => 0,
       getTaskBlockers: () => [],
     });
@@ -26,6 +28,7 @@ describe("safe gateway restart coordinator", () => {
         queueSize: 0,
         pendingReplies: 0,
         embeddedRuns: 0,
+        cronRuns: 0,
         activeTasks: 0,
         totalActive: 0,
       },
@@ -39,6 +42,7 @@ describe("safe gateway restart coordinator", () => {
       getQueueSize: () => 2,
       getPendingReplies: () => 1,
       getEmbeddedRuns: () => 1,
+      getCronRuns: () => 1,
       getActiveTasks: () => 1,
       getTaskBlockers: () => [
         {
@@ -53,15 +57,38 @@ describe("safe gateway restart coordinator", () => {
     });
 
     expect(preflight.safe).toBe(false);
-    expect(preflight.counts.totalActive).toBe(5);
+    expect(preflight.counts.totalActive).toBe(6);
     expect(preflight.blockers.map((blocker) => blocker.kind)).toEqual([
       "queue",
       "reply",
       "embedded-run",
+      "cron-run",
       "task",
     ]);
     expect(preflight.summary).toContain("restart deferred");
     expect(preflight.summary).toContain("taskId=task-1");
+  });
+
+  it("keeps truncated task titles on complete UTF-16 code points", () => {
+    const preflight = createSafeGatewayRestartPreflight({
+      getQueueSize: () => 0,
+      getPendingReplies: () => 0,
+      getEmbeddedRuns: () => 0,
+      getCronRuns: () => 0,
+      getActiveTasks: () => 1,
+      getTaskBlockers: () => [
+        {
+          taskId: "task-emoji",
+          status: "running",
+          runtime: "acp",
+          title: `${"t".repeat(79)}🚀`,
+        },
+      ],
+    });
+
+    expect(preflight.blockers[0]?.message).toBe(
+      `taskId=task-emoji status=running runtime=acp title=${"t".repeat(79)}`,
+    );
   });
 
   it("schedules one restart request and marks active work as deferred", () => {
@@ -81,6 +108,7 @@ describe("safe gateway restart coordinator", () => {
         getQueueSize: () => 1,
         getPendingReplies: () => 0,
         getEmbeddedRuns: () => 0,
+        getCronRuns: () => 0,
         getActiveTasks: () => 0,
         getTaskBlockers: () => [],
       },
@@ -109,6 +137,7 @@ describe("safe gateway restart coordinator", () => {
         getQueueSize: () => 0,
         getPendingReplies: () => 0,
         getEmbeddedRuns: () => 0,
+        getCronRuns: () => 0,
         getActiveTasks: () => 0,
         getTaskBlockers: () => [],
       },
@@ -135,6 +164,7 @@ describe("safe gateway restart coordinator", () => {
         getQueueSize: () => 1,
         getPendingReplies: () => 0,
         getEmbeddedRuns: () => 0,
+        getCronRuns: () => 0,
         getActiveTasks: () => 0,
         getTaskBlockers: () => [],
       },
@@ -144,6 +174,7 @@ describe("safe gateway restart coordinator", () => {
     expect(result.preflight.safe).toBe(false);
     expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
       delayMs: 0,
+      preservePendingEmitHooksOnDeferralBypass: true,
       reason: "test.skip-deferral",
       skipDeferral: true,
     });
@@ -166,6 +197,7 @@ describe("safe gateway restart coordinator", () => {
         getQueueSize: () => 0,
         getPendingReplies: () => 0,
         getEmbeddedRuns: () => 0,
+        getCronRuns: () => 0,
         getActiveTasks: () => 0,
         getTaskBlockers: () => [],
       },

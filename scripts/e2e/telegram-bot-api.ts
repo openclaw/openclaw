@@ -1,3 +1,4 @@
+// Telegram Bot Api script supports OpenClaw repository automation.
 import { readBoundedResponseText } from "../lib/bounded-response.ts";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 
@@ -12,7 +13,7 @@ type TelegramBotApiOptions = {
 
 const DEFAULT_BASE_URL =
   process.env.OPENCLAW_TELEGRAM_USER_BOT_API_BASE_URL ?? "https://api.telegram.org";
-export type TelegramBotApiLimits = {
+type TelegramBotApiLimits = {
   bodyMaxBytes: number;
   timeoutMs: number;
 };

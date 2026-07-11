@@ -1,3 +1,4 @@
+// Models list e2e tests cover model listing command output with local auth/config fixtures.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +7,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 
 let modelsListCommand: typeof import("./models/list.list-command.js").modelsListCommand;
 let loadModelRegistry: typeof import("./models/list.registry.js").loadModelRegistry;
-let toModelRow: typeof import("./models/list.registry.js").toModelRow;
+let toModelRow: typeof import("./models/list.model-row.js").toModelRow;
 
 const getRuntimeConfig = vi.fn();
 const readConfigFileSnapshotForWrite = vi.fn().mockResolvedValue({
@@ -34,6 +35,14 @@ const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
 const shouldSuppressBuiltInModelFromManifest = vi.fn().mockReturnValue(false);
 const normalizeProviderResolvedModelWithPlugin = vi.hoisted(() =>
   vi.fn(({ context }) => {
+    if (context?.provider === "anthropic" && context?.modelId === "claude-sonnet-5") {
+      return {
+        ...context.model,
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+        contextTokens: 1_000_000,
+      };
+    }
     if (
       context?.provider === "anthropic" &&
       context?.modelId === "claude-sonnet-4-5" &&
@@ -412,7 +421,8 @@ describe("models list/status", () => {
 
   beforeAll(async () => {
     ({ modelsListCommand } = await import("./models/list.list-command.js"));
-    ({ loadModelRegistry, toModelRow } = await import("./models/list.registry.js"));
+    ({ loadModelRegistry } = await import("./models/list.registry.js"));
+    ({ toModelRow } = await import("./models/list.model-row.js"));
   });
 
   it("models list runs model discovery without auth.json sync", async () => {
@@ -491,6 +501,23 @@ describe("models list/status", () => {
         }),
       }),
     );
+  });
+
+  it("models list renders a configured Sonnet 5 table row through provider normalization", async () => {
+    getRuntimeConfig.mockReturnValue({
+      agents: { defaults: { model: "anthropic/claude-sonnet-5" } },
+    });
+    const runtime = makeRuntime();
+
+    await modelsListCommand({}, runtime);
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(output).toContain("anthropic/claude-sonnet-5");
+    expect(output).toContain("text+image");
+    const normalizationContext =
+      normalizeProviderResolvedModelWithPlugin.mock.calls.at(-1)?.[0]?.context;
+    expect(normalizationContext?.model).not.toHaveProperty("cost");
   });
 
   it.each(["z.ai", "Z.AI", "z-ai"] as const)(

@@ -1,3 +1,4 @@
+/** Reusable turn-level fixtures for isolated cron agent regression tests. */
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import { expect, vi } from "vitest";

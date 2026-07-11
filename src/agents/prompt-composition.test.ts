@@ -1,3 +1,4 @@
+// Verifies prompt composition invariants across generated agent scenarios.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createPromptCompositionScenarios,
@@ -7,6 +8,7 @@ import {
 type ScenarioFixture = Awaited<ReturnType<typeof createPromptCompositionScenarios>>;
 
 function getTurn(scenario: PromptScenario, id: string) {
+  // Scenario assertions use named turns so failures identify the prompt boundary.
   const turn = scenario.turns.find((entry) => entry.id === id);
   if (!turn) {
     throw new Error(`expected turn ${scenario.scenario}:${id}`);
@@ -23,6 +25,7 @@ function getScenario(fixture: ScenarioFixture, id: string): PromptScenario {
 }
 
 function countOccurrences(text: string, needle: string): number {
+  // Avoid regex escaping when checking exact prompt-body duplication.
   if (!needle) {
     return 0;
   }
@@ -73,7 +76,7 @@ describe("prompt composition invariants", () => {
     expect(always.bodyPrompt).toContain("[Bootstrap truncation warning]");
   });
 
-  it("keeps the group auto-reply prompt dynamic only across the first-turn intro boundary", () => {
+  it("keeps the group auto-reply prompt stable across the first-turn intro boundary", () => {
     const groupScenario = getScenario(fixture, "auto-reply-group");
     const first = getTurn(groupScenario, "t1");
     const steady = getTurn(groupScenario, "t2");
@@ -86,10 +89,10 @@ describe("prompt composition invariants", () => {
     expect(first.systemPrompt).not.toContain("## Silent Replies");
     expect(steady.systemPrompt).toContain("You are in a Slack group chat.");
     expect(steady.systemPrompt).toContain("prefer delegating bounded side investigations early");
+    expect(steady.systemPrompt).toContain("Activation: trigger-only");
     expect(steady.systemPrompt).toContain('reply with exactly "NO_REPLY"');
     expect(steady.systemPrompt).not.toContain("## Silent Replies");
-    expect(steady.systemPrompt).not.toContain("Activation: trigger-only");
-    expect(first.systemPrompt).not.toBe(steady.systemPrompt);
+    expect(first.systemPrompt).toBe(steady.systemPrompt);
     expect(steady.systemPrompt).toBe(eventTurn.systemPrompt);
   });
 

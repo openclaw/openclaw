@@ -1,3 +1,4 @@
+// Agent Core type module defines shared TypeScript contracts.
 import type {
   ImageContent,
   Model,
@@ -23,21 +24,6 @@ export function err<TValue, TError>(error: TError): Result<TValue, TError> {
   return { ok: false, error };
 }
 
-/** Return the success value or throw the failure error. Intended for tests and explicit adapter boundaries. */
-export function getOrThrow<TValue, TError>(result: Result<TValue, TError>): TValue {
-  if (!result.ok) {
-    throw toLintErrorObject(result.error, "Non-Error thrown");
-  }
-  return result.value;
-}
-
-/** Return the success value or `undefined`. Only object values are allowed to avoid truthiness bugs with primitives. */
-export function getOrUndefined<TValue extends object, TError>(
-  result: Result<TValue, TError>,
-): TValue | undefined {
-  return result.ok ? result.value : undefined;
-}
-
 /** Normalize unknown thrown values into Error instances before using them as typed error causes. */
 export function toError(error: unknown): Error {
   if (error instanceof Error) {
@@ -56,8 +42,8 @@ export function toError(error: unknown): Error {
 /**
  * Skill loaded from a `SKILL.md` file or provided by an application.
  *
- * `name`, `description`, and `filePath` are inserted into the system prompt in an XML-formatted block as suggested by agentskills.io.
- * Use {@link formatSkillsForSystemPrompt} to generate the spec-compatible system prompt block.
+ * `name`, `description`, `filePath`, and optional `promptVersion` are available to host-owned prompt builders and
+ * direct skill invocation.
  */
 export interface Skill {
   /** Stable skill name used for lookup and model-visible listings. */
@@ -68,6 +54,8 @@ export interface Skill {
   content: string;
   /** Absolute path to the skill file. Used for model-visible location and resolving relative references. */
   filePath: string;
+  /** Deterministic marker for the skill content, rendered as <version> when available. */
+  promptVersion?: string;
   /** Exclude this skill from model-visible skill lists while still allowing explicit application invocation. */
   disableModelInvocation?: boolean;
 }
@@ -371,6 +359,8 @@ export interface SessionTreeEntryBase {
   parentId: string | null;
   /** ISO timestamp string used for persistence and sorting. */
   timestamp: string;
+  /** This row consumes the raw side cursor instead of the visible leaf. */
+  appendMode?: "side";
 }
 
 /** Persisted transcript message entry. */
@@ -445,6 +435,8 @@ export interface SessionInfoEntry extends SessionTreeEntryBase {
 export interface LeafEntry extends SessionTreeEntryBase {
   type: "leaf";
   targetId: string | null;
+  /** Raw parent for the next append when it differs from the visible leaf. */
+  appendParentId?: string | null;
 }
 
 /** All persisted session tree entry variants. */
@@ -480,6 +472,7 @@ export interface JsonlSessionMetadata extends SessionMetadata {
 export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
   getMetadata(): Promise<TMetadata>;
   getLeafId(): Promise<string | null>;
+  getAppendParentId?(): Promise<string | null>;
   /** Persist a leaf entry that records the active session-tree leaf. */
   setLeafId(leafId: string | null): Promise<void>;
   createEntryId(): Promise<string>;
@@ -494,46 +487,6 @@ export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetad
 }
 
 export type { Session } from "./session/session.js";
-
-export interface SessionCreateOptions {
-  id?: string;
-}
-
-export interface SessionForkOptions {
-  entryId?: string;
-  position?: "before" | "at";
-  id?: string;
-}
-
-export interface SessionRepo<
-  TMetadata extends SessionMetadata = SessionMetadata,
-  TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
-  TListOptions = void,
-> {
-  create(options: TCreateOptions): Promise<Session<TMetadata>>;
-  open(metadata: TMetadata): Promise<Session<TMetadata>>;
-  list(options?: TListOptions): Promise<TMetadata[]>;
-  delete(metadata: TMetadata): Promise<void>;
-  fork(
-    source: TMetadata,
-    options: SessionForkOptions & TCreateOptions,
-  ): Promise<Session<TMetadata>>;
-}
-
-export interface JsonlSessionCreateOptions extends SessionCreateOptions {
-  cwd: string;
-  parentSessionPath?: string;
-}
-
-export interface JsonlSessionListOptions {
-  cwd?: string;
-}
-
-export interface JsonlSessionRepoApi extends SessionRepo<
-  JsonlSessionMetadata,
-  JsonlSessionCreateOptions,
-  JsonlSessionListOptions
-> {}
 
 export type AgentHarnessPhase = "idle" | "turn" | "compaction" | "branch_summary" | "retry";
 
@@ -770,11 +723,6 @@ export type AgentHarnessEventResultMap = {
   settled: undefined;
 };
 
-/** Options for a prompt submitted through AgentHarness. */
-export interface AgentHarnessPromptOptions {
-  images?: ImageContent[];
-}
-
 /** Queued messages removed by an abort operation. */
 export interface AbortResult {
   clearedSteer: AgentMessage[];
@@ -892,17 +840,3 @@ export interface AgentHarnessOptions<
 }
 
 export type { CoreAgentHarness as AgentHarness } from "./agent-harness.js";
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

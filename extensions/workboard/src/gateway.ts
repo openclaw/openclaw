@@ -1,3 +1,4 @@
+// Workboard plugin module implements gateway behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
@@ -382,11 +383,22 @@ export function registerWorkboardGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "workboard.cards.dispatch",
-    async ({ respond }) => {
+    async ({ params: requestParams, respond, client }) => {
       try {
+        const boardId =
+          requestParams && typeof requestParams === "object" && "boardId" in requestParams
+            ? requestParams.boardId
+            : undefined;
         const result = await dispatchAndStartWorkboardCards({
           store,
           subagent: api.runtime.subagent,
+          worktrees: api.runtime.worktrees,
+          options: {
+            boardId: typeof boardId === "string" ? boardId : undefined,
+            allowManagedWorktrees:
+              Array.isArray(client?.connect?.scopes) &&
+              client.connect.scopes.includes("operator.admin"),
+          },
         });
         respond(true, {
           ...result,

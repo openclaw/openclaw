@@ -125,7 +125,6 @@
   gap: 10px;
   align-items: center;
   padding: 12px 14px;
-  cursor: pointer;
   list-style: none;
 }
 
@@ -199,7 +198,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   padding: 0 8px;
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 650;
   text-transform: uppercase;
 }

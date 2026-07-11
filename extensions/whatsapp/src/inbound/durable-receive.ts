@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements durable receive behavior.
 import { createHash } from "node:crypto";
 import type { WAMessage } from "baileys";
 import { createDurableInboundReceiveJournalFromQueue } from "openclaw/plugin-sdk/channel-outbound";
@@ -16,7 +17,7 @@ export type WhatsAppReadReceiptTarget = {
   participant?: string;
 };
 
-export type SerializedWhatsAppDurableInboundMessage = PluginJsonValue;
+type SerializedWhatsAppDurableInboundMessage = PluginJsonValue;
 
 export type WhatsAppDurableInboundPayload = {
   message: SerializedWhatsAppDurableInboundMessage;
@@ -28,7 +29,7 @@ export type WhatsAppDurableInboundMetadata = {
   readReceipt?: WhatsAppReadReceiptTarget;
 };
 
-export type WhatsAppDurableInboundCompletedMetadata = {
+type WhatsAppDurableInboundCompletedMetadata = {
   readReceipt?: WhatsAppReadReceiptTarget;
 };
 

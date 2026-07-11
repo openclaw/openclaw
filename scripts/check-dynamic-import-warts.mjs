@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Advises on ineffective or suspicious dynamic import patterns.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
@@ -90,6 +91,9 @@ function isIgnoredTestHelperPath(filePath) {
   );
 }
 
+/**
+ * Finds dynamic import advisories in a single source file.
+ */
 export function findDynamicImportAdvisories(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const staticRuntimeImports = new Map();
@@ -171,7 +175,10 @@ export function findDynamicImportAdvisories(content, fileName = "source.ts") {
   return advisories;
 }
 
-export async function collectDynamicImportAdvisories(options = {}) {
+/**
+ * Collects dynamic import advisories across configured source roots.
+ */
+async function collectDynamicImportAdvisories(options = {}) {
   const roots = options.roots ?? defaultRoots;
   const files = await collectTypeScriptFilesFromRoots(roots, {
     extraTestSuffixes: [".suite.ts"],
@@ -195,6 +202,9 @@ export async function collectDynamicImportAdvisories(options = {}) {
   return advisories;
 }
 
+/**
+ * Runs the dynamic import advisory check.
+ */
 export async function main(argv = process.argv.slice(2)) {
   const fail = argv.includes("--fail");
   const json = argv.includes("--json");

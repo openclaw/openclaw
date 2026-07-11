@@ -1,3 +1,4 @@
+// Agent Core module implements kill tree behavior.
 import { spawn } from "node:child_process";
 
 const DEFAULT_GRACE_MS = 3000;
@@ -109,11 +110,12 @@ function signalProcessTreeUnix(
 
 function runTaskkill(args: string[]): void {
   try {
-    spawn("taskkill", args, {
+    const child = spawn("taskkill", args, {
       stdio: "ignore",
       detached: true,
       windowsHide: true,
     });
+    child.once("error", () => {});
   } catch {
     // Ignore taskkill spawn failures.
   }

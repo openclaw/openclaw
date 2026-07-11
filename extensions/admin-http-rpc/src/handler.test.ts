@@ -1,3 +1,4 @@
+// Admin Http Rpc tests cover handler plugin behavior.
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleAdminHttpRpcRequest } from "./handler.js";
@@ -131,6 +132,27 @@ describe("admin-http-rpc plugin handler", () => {
       });
     },
   );
+
+  it.each([
+    ["gateway.suspend.prepare", { requestId: "host-request-1" }],
+    ["gateway.suspend.status", { suspensionId: "suspension-1" }],
+    ["gateway.suspend.resume", { suspensionId: "suspension-1" }],
+  ] as const)("dispatches suspension method %s through Admin HTTP", async (method, params) => {
+    dispatchGatewayMethod.mockResolvedValueOnce({
+      ok: true,
+      payload: { status: "ok" },
+    });
+
+    const result = await invoke({ id: "suspension", method, params });
+
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith(method, params);
+    expect(result.captured.statusCode).toBe(200);
+    expect(result.json).toEqual({
+      id: "suspension",
+      ok: true,
+      payload: { status: "ok" },
+    });
+  });
 
   it("rejects methods outside the admin HTTP RPC allowlist", async () => {
     const result = await invoke({ id: "bad", method: "sessions.send" });

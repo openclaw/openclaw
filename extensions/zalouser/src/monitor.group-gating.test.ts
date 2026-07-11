@@ -1,7 +1,8 @@
+// Zalouser tests cover monitor.group gating plugin behavior.
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
-import "./monitor.send-mocks.js";
+import "./monitor.send.test-mocks.js";
 import "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
 import { testing, monitorZalouserProvider } from "./monitor.js";
@@ -10,7 +11,7 @@ import {
   sendMessageZalouserMock,
   sendSeenZalouserMock,
   sendTypingZalouserMock,
-} from "./monitor.send-mocks.js";
+} from "./monitor.send.test-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";

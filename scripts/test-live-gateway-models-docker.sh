@@ -17,6 +17,9 @@ CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="$(openclaw_live_default_profile_file)"
 DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
+LIVE_GATEWAY_MAX_MODELS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_GATEWAY_MAX_MODELS 8)"
+LIVE_GATEWAY_STEP_TIMEOUT_MS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS 45000)"
+LIVE_GATEWAY_MODEL_TIMEOUT_MS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS 90000)"
 TEMP_DIRS=()
 DOCKER_HOME_MOUNT=()
 DOCKER_AUTH_PRESTAGED=0
@@ -36,18 +39,23 @@ elif openclaw_live_is_ci; then
 else
   CACHE_HOME_DIR="$HOME/.cache/openclaw/docker-cache"
 fi
-mkdir -p "$CACHE_HOME_DIR"
-if openclaw_live_is_ci; then
+openclaw_live_prepare_bind_dir_for_container_user "$CACHE_HOME_DIR"
+if openclaw_live_uses_managed_bind_dirs; then
   DOCKER_USER="$(id -u):$(id -g)"
   DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
   TEMP_DIRS+=("$DOCKER_HOME_DIR")
+  openclaw_live_prepare_bind_dir_for_container_user "$DOCKER_HOME_DIR"
   DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
 fi
 
 PROFILE_MOUNT=()
 PROFILE_STATUS="none"
 if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
-  PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
+  if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
+    openclaw_live_stage_profile_into_home "$DOCKER_HOME_DIR" "$PROFILE_FILE"
+  else
+    PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
+  fi
   PROFILE_STATUS="$PROFILE_FILE"
 fi
 
@@ -162,6 +170,13 @@ node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"
+if openclaw_live_uses_managed_bind_dirs; then
+  openclaw_live_chown_bind_dirs_for_container_user \
+    "$LIVE_IMAGE_NAME" \
+    "$DOCKER_USER" \
+    "$CACHE_HOME_DIR" \
+    "${DOCKER_HOME_DIR:-}"
+fi
 
 echo "==> Run gateway live model tests (profile keys)"
 echo "==> Target: src/gateway/gateway-models.profiles.live.test.ts"
@@ -203,10 +218,10 @@ DOCKER_RUN_ARGS+=(--rm -t \
   -e OPENCLAW_LIVE_GATEWAY_PROVIDERS="${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" \
   -e OPENCLAW_LIVE_GATEWAY_THINKING="${OPENCLAW_LIVE_GATEWAY_THINKING:-}" \
   -e OPENCLAW_LIVE_GATEWAY_SMOKE="${OPENCLAW_LIVE_GATEWAY_SMOKE:-1}" \
-  -e OPENCLAW_LIVE_GATEWAY_MAX_MODELS="${OPENCLAW_LIVE_GATEWAY_MAX_MODELS:-8}" \
+  -e OPENCLAW_LIVE_GATEWAY_MAX_MODELS="$LIVE_GATEWAY_MAX_MODELS" \
   -e OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS="${OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS:-}" \
-  -e OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS="${OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS:-45000}" \
-  -e OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS="${OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS:-90000}" \
+  -e OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS="$LIVE_GATEWAY_STEP_TIMEOUT_MS" \
+  -e OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS="$LIVE_GATEWAY_MODEL_TIMEOUT_MS" \
   -e OPENCLAW_VITEST_FS_MODULE_CACHE=0)
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_TRUSTED_HARNESS_MOUNT

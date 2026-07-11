@@ -1,3 +1,4 @@
+// Defines Discord channel configuration types.
 import type {
   ChannelPreviewStreamingConfig,
   ChannelStreamingProgressConfig,
@@ -22,12 +23,8 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
-export type DiscordStreamingProgressConfig = ChannelStreamingProgressConfig & {
-  /** Include assistant commentary/preamble text in the progress draft. Default: false. */
-  commentary?: boolean;
-};
 export type DiscordChannelStreamingConfig = Omit<ChannelPreviewStreamingConfig, "progress"> & {
-  progress?: DiscordStreamingProgressConfig;
+  progress?: ChannelStreamingProgressConfig;
 };
 
 export type DiscordPluralKitConfig = {
@@ -159,7 +156,7 @@ export type DiscordVoiceRealtimeBootstrapContextFile = "IDENTITY.md" | "USER.md"
 export type DiscordVoiceRealtimeConfig = {
   /** Realtime voice provider id, for example "openai". */
   provider?: string;
-  /** Provider realtime session model, for example "gpt-realtime-2". */
+  /** Provider realtime session model, for example "gpt-realtime-2.1". */
   model?: string;
   /** Provider realtime output voice name, for example "cedar". */
   speakerVoice?: string;

@@ -1,9 +1,15 @@
-import { chunkTextForOutbound, stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
+// Sms plugin module implements send behavior.
+import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+  stripMarkdown,
+} from "openclaw/plugin-sdk/text-chunking";
 import { sendSmsViaTwilio } from "./twilio.js";
 import type { ResolvedSmsAccount, SmsSendResult } from "./types.js";
 
 export function toSmsPlainText(text: string): string {
-  const withoutFencedCodeMarkers = text.replace(
+  const visibleText = sanitizeAssistantVisibleText(text);
+  const withoutFencedCodeMarkers = visibleText.replace(
     /```[^\n]*\n?([\s\S]*?)```/g,
     (_match, body: string) => body.trim(),
   );

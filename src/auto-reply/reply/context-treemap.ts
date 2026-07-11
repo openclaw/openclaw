@@ -1,3 +1,4 @@
+// Builds deterministic compact treemaps for context file summaries.
 import crypto from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -6,6 +7,7 @@ import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 
+/** PNG treemap renderer for visualizing prompt context size by section. */
 type Rect = {
   x: number;
   y: number;
@@ -188,6 +190,7 @@ function layoutBinary<T extends { value: number }>(rawItems: T[], rect: Rect): P
   ];
 }
 
+/** Tiny in-process RGBA canvas used to avoid runtime image dependencies. */
 class PngCanvas {
   readonly data = Buffer.alloc(WIDTH * HEIGHT * 4);
 
@@ -331,7 +334,11 @@ function treemapGroup(params: { name: string; color: Rgba; leaves: TreemapLeaf[]
   return { ...params, value: totalValue(params.leaves) };
 }
 
-function buildGroups(report: SessionSystemPromptReport): TreemapGroup[] {
+function buildGroups(params: {
+  report: SessionSystemPromptReport;
+  conversation: TreemapLeaf[];
+}): TreemapGroup[] {
+  const { report } = params;
   const injectedTotal = report.injectedWorkspaceFiles.reduce(
     (sum, file) => sum + file.injectedChars,
     0,
@@ -342,17 +349,11 @@ function buildGroups(report: SessionSystemPromptReport): TreemapGroup[] {
   const tools = report.tools.entries
     .map((tool) => ({ name: tool.name, value: tool.schemaChars ?? 0 }))
     .filter((tool) => tool.value > 0);
-  const currentTurnLeaves = report.currentTurn
-    ? [
-        { name: "Model prompt", value: report.currentTurn.promptChars },
-        { name: "Runtime context", value: report.currentTurn.runtimeContextChars },
-      ].filter((leaf) => leaf.value > 0)
-    : [];
   const groups = [
     treemapGroup({
-      name: report.currentTurn?.kind === "room_event" ? "Room event" : "Current turn",
-      color: rgba(72, 135, 197),
-      leaves: currentTurnLeaves,
+      name: "Conversation",
+      color: rgba(201, 82, 96),
+      leaves: params.conversation,
     }),
     treemapGroup({
       name: "Workspace files",
@@ -448,11 +449,14 @@ function drawLegend(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect, total
   });
 }
 
+/** Renders a prompt context treemap PNG and returns the written file path. */
 export async function renderContextTreemapPng(params: {
   report: SessionSystemPromptReport;
   session: ContextTreemapSessionStats;
+  conversation: TreemapLeaf[];
 }): Promise<{ path: string; trackedChars: number; caption: string }> {
-  const groups = buildGroups(params.report);
+  const groups = buildGroups({ report: params.report, conversation: params.conversation });
+  const conversationChars = totalValue(params.conversation);
   const trackedChars = totalValue(groups);
   const canvas = new PngCanvas();
   canvas.fill(rgba(238, 241, 245));
@@ -503,6 +507,7 @@ export async function renderContextTreemapPng(params: {
     "Context treemap",
     `Source: ${params.report.source}`,
     `Tracked: ${formatInt(trackedChars)} chars (~${formatInt(estimateTokensFromChars(trackedChars))} tok)`,
+    `Conversation: ${formatInt(conversationChars)} chars (~${formatInt(estimateTokensFromChars(conversationChars))} tok)`,
     params.session.cachedContextTokens == null
       ? "Actual cached context: unavailable"
       : `Actual cached context: ${formatInt(params.session.cachedContextTokens)} tok`,

@@ -1,3 +1,4 @@
+// Crestodian overview gathers config, agent, tool, docs, source, and gateway status.
 import {
   listAgentEntries,
   resolveAgentEffectiveModelPrimary,
@@ -41,6 +42,7 @@ export type CrestodianOverview = {
   tools: {
     codex: LocalCommandProbe;
     claude: LocalCommandProbe;
+    gemini: LocalCommandProbe;
     apiKeys: {
       openai: boolean;
       anthropic: boolean;
@@ -102,6 +104,7 @@ function buildAgentSummaries(cfg: OpenClawConfig): CrestodianAgentSummary[] {
   }
   const seen = new Set<string>();
   const summaries: CrestodianAgentSummary[] = [];
+  // Agent ids are normalized and deduped so config aliases do not produce duplicate setup choices.
   for (const entry of entries) {
     const id = normalizeAgentId(entry.id);
     if (seen.has(id)) {
@@ -167,9 +170,11 @@ export async function loadCrestodianOverview(
   }
   const resolveReferences = deps.resolveOpenClawReferencePaths ?? resolveOpenClawReferencePaths;
   const commandProbe = deps.probeLocalCommand ?? probeLocalCommand;
-  const [codex, claude, gateway, references] = await Promise.all([
+  const [codex, claude, gemini, gateway, references] = await Promise.all([
+    // Probes run in parallel; each individual probe is timeout-bounded in probes.ts.
     commandProbe("codex"),
     commandProbe("claude"),
+    commandProbe("gemini"),
     (deps.probeGatewayUrl ?? probeGatewayUrl)(gatewayUrl),
     resolveFastTestReferences(env) ??
       resolveReferences({
@@ -192,6 +197,7 @@ export async function loadCrestodianOverview(
     tools: {
       codex,
       claude,
+      gemini,
       apiKeys: {
         openai: Boolean(env.OPENAI_API_KEY?.trim()),
         anthropic: Boolean(env.ANTHROPIC_API_KEY?.trim()),
@@ -253,13 +259,14 @@ export function formatCrestodianOverview(overview: CrestodianOverview): string {
     ...agentLines,
     `Codex: ${formatCommandProbe(overview.tools.codex)}`,
     `Claude Code: ${formatCommandProbe(overview.tools.claude)}`,
+    `Gemini CLI: ${formatCommandProbe(overview.tools.gemini)}`,
     `API keys: OpenAI ${overview.tools.apiKeys.openai ? "found" : "not found"}, Anthropic ${
       overview.tools.apiKeys.anthropic ? "found" : "not found"
     }`,
-    `Planner: ${
+    `AI: ${
       overview.defaultModel
-        ? `model-assisted via ${overview.defaultModel} for fuzzy local commands`
-        : "deterministic only until a model is configured"
+        ? `conversation runs on ${overview.defaultModel}`
+        : "no model configured; local Claude Code/Codex/Gemini logins are reused when present"
     }`,
     `Docs: ${overview.references.docsPath ?? overview.references.docsUrl}`,
     overview.references.sourcePath
@@ -299,9 +306,9 @@ function formatStartupConfigStatus(overview: CrestodianOverview): string {
 
 function formatStartupUse(overview: CrestodianOverview): string {
   if (overview.defaultModel) {
-    return `Using: ${overview.defaultModel} for fuzzy local planning.`;
+    return `Using: ${overview.defaultModel} — just tell me what you want.`;
   }
-  return "Using: deterministic typed commands until we configure a model.";
+  return "Using: any local Claude Code/Codex/Gemini login I can find; typed commands as last resort.";
 }
 
 function formatStartupGatewayStatus(overview: CrestodianOverview): string {
@@ -325,6 +332,22 @@ function formatStartupAction(overview: CrestodianOverview): string {
     return "I can start debugging with `gateway status`, or queue `restart gateway` for approval.";
   }
   return "Everything basic is reachable. Use `talk to agent` when you want the normal agent.";
+}
+
+/**
+ * Welcome shown right after bootstrap onboarding: setup is done, so the
+ * conversation focuses on channels and the agent handoff instead of repair.
+ */
+export function formatCrestodianOnboardingWelcome(overview: CrestodianOverview): string {
+  return [
+    "## Your agent is ready.",
+    "",
+    `- Model: ${overview.defaultModel ?? "not configured (say `setup` to pick one)"}.`,
+    `- ${overview.gateway.reachable ? `Gateway: running at ${overview.gateway.url}.` : "Gateway: not reachable yet — say `gateway status` if it stays down."}`,
+    "- Connect how you want to talk: say `connect whatsapp`, `connect telegram`, `connect slack`, `connect discord` — or `channels` for the full list.",
+    "",
+    "Say `talk to agent` to meet your agent right here, or `help` for everything I can do.",
+  ].join("\n");
 }
 
 export function formatCrestodianStartupMessage(overview: CrestodianOverview): string {

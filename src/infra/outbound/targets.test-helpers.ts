@@ -1,3 +1,5 @@
+// Shared outbound target test fixtures provide deterministic channel plugins,
+// target parsing, and session-route behavior.
 import type {
   ChannelMessagingAdapter,
   ChannelOutboundAdapter,
@@ -7,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelOutboundSessionRoute } from "../../plugin-sdk/core.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
+// Target fixtures keep normalization deterministic while exercising plugin-owned seams.
 function readTestDefaultTo(cfg: OpenClawConfig, channelId: string): string | undefined {
   const channels = cfg.channels as Record<string, { defaultTo?: unknown }> | undefined;
   const value = channels?.[channelId]?.defaultTo;
@@ -17,6 +20,7 @@ function stripTestPrefix(raw: string, channelId: string): string {
   return raw.replace(new RegExp(`^${channelId}:`, "i"), "").trim();
 }
 
+/** Parses forum test targets with optional topic/thread suffixes. */
 export function parseForumTargetForTest(raw: string): {
   roomId: string;
   threadId?: number;

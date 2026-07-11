@@ -1,4 +1,6 @@
+// Commander registration for device pairing and auth-token commands.
 import type { Command } from "commander";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type DevicesRpcOpts = {
@@ -17,13 +19,8 @@ type DevicesRpcOpts = {
 
 const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
 
-type DevicesRuntimeModule = typeof import("./devices-cli.runtime.js");
-
-let devicesRuntimePromise: Promise<DevicesRuntimeModule> | undefined;
-
-function loadDevicesRuntime(): Promise<DevicesRuntimeModule> {
-  return (devicesRuntimePromise ??= import("./devices-cli.runtime.js"));
-}
+// Keep device-pairing crypto/table dependencies out of root help startup.
+const loadDevicesRuntime = createLazyRuntimeModule(() => import("./devices-cli.runtime.js"));
 
 const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
@@ -93,6 +90,18 @@ export function registerDevicesCli(program: Command) {
       .action(async (requestId: string, opts: DevicesRpcOpts) => {
         const { runDevicesRejectCommand } = await loadDevicesRuntime();
         await runDevicesRejectCommand(requestId, opts);
+      }),
+  );
+
+  devicesCallOpts(
+    devices
+      .command("rename")
+      .description("Assign an operator label to a paired device")
+      .requiredOption("--device <id>", "Device id")
+      .requiredOption("--name <label>", "Operator-assigned label (max 64 characters)")
+      .action(async (opts: DevicesRpcOpts) => {
+        const { runDevicesRenameCommand } = await loadDevicesRuntime();
+        await runDevicesRenameCommand(opts);
       }),
   );
 

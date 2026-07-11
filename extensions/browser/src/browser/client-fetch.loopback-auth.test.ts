@@ -1,3 +1,4 @@
+// Browser tests cover client fetch.loopback auth plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
@@ -445,6 +446,38 @@ describe("fetchBrowserJson loopback auth", () => {
     await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
       contains: ["Chrome CDP connection refused", "Do NOT retry the browser tool"],
       omits: ["Can't reach the OpenClaw browser control service"],
+    });
+  });
+
+  it("preserves validated structured errors from dispatcher routes", async () => {
+    mocks.dispatch.mockResolvedValueOnce({
+      status: 409,
+      body: {
+        error: "display required",
+        reason: "no_display_for_headed_profile",
+        details: {
+          profile: "openclaw",
+          requestedHeadless: false,
+          headlessSource: "request",
+          displayPresent: false,
+        },
+      },
+    });
+
+    const error = await fetchBrowserJson("/start?headless=false", { method: "POST" }).catch(
+      (err: unknown) => err,
+    );
+
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      message: "display required",
+      reason: "no_display_for_headed_profile",
+      details: {
+        profile: "openclaw",
+        requestedHeadless: false,
+        headlessSource: "request",
+        displayPresent: false,
+      },
     });
   });
 

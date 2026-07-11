@@ -1,6 +1,9 @@
+// Probe auth integration tests verify cached operator device tokens and pairing
+// state work with call/probe flows against a real local gateway harness.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { listDevicePairing } from "../infra/device-pairing.js";
 import { createGatewaySuiteHarness, installGatewayTestHooks, testState } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -107,8 +110,9 @@ describe("probeGateway auth integration", () => {
     expect(result.status).toBeNull();
     expect(result.configSnapshot).toBeNull();
     expect(result.auth.capability).toBe("connected_no_operator_scope");
-    expect(fs.existsSync(statePath("devices", "paired.json"))).toBe(false);
-    expect(fs.existsSync(statePath("devices", "pending.json"))).toBe(false);
+    const pairing = await listDevicePairing();
+    expect(pairing.paired).toEqual([]);
+    expect(pairing.pending).toEqual([]);
     expect(fs.existsSync(statePath("identity", "device-auth.json"))).toBe(false);
   });
 

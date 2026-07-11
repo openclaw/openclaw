@@ -1,3 +1,8 @@
+/**
+ * image built-in tool.
+ *
+ * Describes local, staged, web, and generated media through configured media-understanding providers.
+ */
 import { resolve, isAbsolute } from "node:path";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -35,7 +40,6 @@ import {
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import {
   bundledStaticCatalogProviderUsesRuntimeAugment,
   resolveBundledStaticCatalogModel,
@@ -69,6 +73,7 @@ import {
   buildToolModelConfigFromCandidates,
   hasToolModelConfig,
   resolveDefaultModelRef,
+  resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
@@ -106,6 +111,13 @@ async function loadImageWebMediaRuntime(): Promise<ImageWebMediaRuntime> {
   return await import("../../media/web-media.js");
 }
 
+type ResolveModelAsync = (typeof import("../embedded-agent-runner/model.js"))["resolveModelAsync"];
+
+const resolveModelAsyncDefault: ResolveModelAsync = async (...args) => {
+  const { resolveModelAsync } = await import("../embedded-agent-runner/model.js");
+  return await resolveModelAsync(...args);
+};
+
 const imageToolProviderDeps = {
   buildProviderRegistry,
   getMediaUnderstandingProvider,
@@ -114,7 +126,7 @@ const imageToolProviderDeps = {
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
   resolveBundledStaticCatalogModel,
-  resolveModelAsync,
+  resolveModelAsync: resolveModelAsyncDefault,
   resolveImageCompressionPolicy,
   loadImageWebMediaRuntime,
 };
@@ -177,7 +189,7 @@ export const testing = {
     resolveAutoMediaKeyProviders?: typeof resolveAutoMediaKeyProviders;
     resolveDefaultMediaModel?: typeof resolveDefaultMediaModel;
     resolveBundledStaticCatalogModel?: typeof resolveBundledStaticCatalogModel;
-    resolveModelAsync?: typeof resolveModelAsync;
+    resolveModelAsync?: ResolveModelAsync;
     resolveImageCompressionPolicy?: typeof resolveImageCompressionPolicy;
     loadImageWebMediaRuntime?: typeof loadImageWebMediaRuntime;
   }) {
@@ -195,7 +207,8 @@ export const testing = {
       overrides?.resolveDefaultMediaModel ?? resolveDefaultMediaModel;
     imageToolProviderDeps.resolveBundledStaticCatalogModel =
       overrides?.resolveBundledStaticCatalogModel ?? resolveBundledStaticCatalogModel;
-    imageToolProviderDeps.resolveModelAsync = overrides?.resolveModelAsync ?? resolveModelAsync;
+    imageToolProviderDeps.resolveModelAsync =
+      overrides?.resolveModelAsync ?? resolveModelAsyncDefault;
     imageToolProviderDeps.resolveImageCompressionPolicy =
       overrides?.resolveImageCompressionPolicy ?? resolveImageCompressionPolicy;
     imageToolProviderDeps.loadImageWebMediaRuntime =
@@ -241,6 +254,30 @@ export function resolveImageModelConfigForTool(params: {
   }
 
   const primary = resolveDefaultModelRef(params.cfg);
+  let verifiedSubstituteProvider: string | undefined;
+  const resolveCodexImageModel = () =>
+    imageToolProviderDeps.resolveDefaultMediaModel({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      providerId: "codex",
+      capability: "image",
+      includeConfiguredImageModels: false,
+    });
+  const resolveImplicitOpenAiImageCandidate = (openAiModel: string): string | null => {
+    const decision = resolveOpenAiImageMediaCandidate({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      authStore: params.authStore,
+      openAiModel,
+      codexModel: resolveCodexImageModel(),
+    });
+    if (decision.kind === "substitute") {
+      verifiedSubstituteProvider = decision.provider;
+      return decision.ref;
+    }
+    return decision.kind === "keep" ? decision.ref : null;
+  };
 
   const providerVisionFromConfig = resolveProviderVisionModelFromConfig({
     cfg: params.cfg,
@@ -248,6 +285,13 @@ export function resolveImageModelConfigForTool(params: {
   });
   const primaryCandidates = (() => {
     if (providerVisionFromConfig) {
+      if (primary.provider === "openai") {
+        return [
+          resolveImplicitOpenAiImageCandidate(
+            providerVisionFromConfig.slice(providerVisionFromConfig.indexOf("/") + 1),
+          ),
+        ];
+      }
       return [providerVisionFromConfig];
     }
     const providerDefault = imageToolProviderDeps.resolveDefaultMediaModel({
@@ -258,6 +302,9 @@ export function resolveImageModelConfigForTool(params: {
       includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
     });
     if (providerDefault) {
+      if (primary.provider === "openai") {
+        return [resolveImplicitOpenAiImageCandidate(providerDefault)];
+      }
       return [`${primary.provider}/${providerDefault}`];
     }
     if (isMinimaxVlmProvider(primary.provider)) {
@@ -280,7 +327,12 @@ export function resolveImageModelConfigForTool(params: {
         capability: "image",
         includeConfiguredImageModels: !isMinimaxVlmProvider(providerId),
       });
-      return modelId ? `${providerId}/${modelId}` : null;
+      if (!modelId) {
+        return null;
+      }
+      return providerId === "openai"
+        ? resolveImplicitOpenAiImageCandidate(modelId)
+        : `${providerId}/${modelId}`;
     });
   const autoCandidates = rawAutoCandidates.filter(
     (candidate) =>
@@ -307,6 +359,8 @@ export function resolveImageModelConfigForTool(params: {
     agentDir: params.agentDir,
     authStore: params.authStore,
     candidates: [...primaryAliasCandidates, ...primaryCandidates, ...remainingAutoCandidates],
+    isProviderConfigured: (provider) =>
+      verifiedSubstituteProvider && provider === verifiedSubstituteProvider ? true : undefined,
   });
 }
 
@@ -385,6 +439,7 @@ function resolveBundledStaticCompressionModelPolicy(params: {
     modelId: params.model,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
+    includeRuntimeDiscovery: true,
   });
   return model?.mediaInput?.image ?? {};
 }
@@ -588,6 +643,7 @@ type ImageSandboxConfig = {
 async function runImagePrompt(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
+  authStore?: AuthProfileStore;
   imageModelConfig: ImageModelConfig;
   modelOverride?: string;
   prompt: string;
@@ -636,6 +692,7 @@ async function runImagePrompt(params: {
           timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
+          authStore: params.authStore,
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         });
         return { text: described.text, provider, model: described.model ?? modelId };
@@ -655,6 +712,7 @@ async function runImagePrompt(params: {
           timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
+          authStore: params.authStore,
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         });
         return { text: described.text, provider, model: described.model ?? modelId };
@@ -673,6 +731,7 @@ async function runImagePrompt(params: {
           timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
+          authStore: params.authStore,
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         });
         parts.push(`Image ${index + 1}:\n${described.text.trim()}`);
@@ -1004,6 +1063,7 @@ export function createImageTool(options?: {
       const result = await runImagePrompt({
         cfg: options?.config,
         agentDir,
+        authStore: options?.authProfileStore,
         imageModelConfig,
         modelOverride,
         prompt: promptRaw,

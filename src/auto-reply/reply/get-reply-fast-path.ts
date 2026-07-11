@@ -1,3 +1,4 @@
+// Runs lightweight get-reply fast-path commands before full agent setup.
 import crypto from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
@@ -8,7 +9,7 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { loadSessionStore } from "../../config/sessions/store.js";
+import { loadSessionStore, resolveSessionStoreEntry } from "../../config/sessions/store.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -18,15 +19,12 @@ import { isFormattedGoalContinuationPrompt } from "./commands-goal.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandContext } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import type { SessionInitResult } from "./session.js";
 
-const COMPLETE_REPLY_CONFIG_SYMBOL = Symbol.for("openclaw.reply.complete-config");
-const FULL_REPLY_RUNTIME_SYMBOL = Symbol.for("openclaw.reply.full-runtime");
-
-type ReplyConfigWithMarker = OpenClawConfig & {
-  [COMPLETE_REPLY_CONFIG_SYMBOL]?: true;
-  [FULL_REPLY_RUNTIME_SYMBOL]?: true;
-};
+// Reply completeness is process-local metadata. Keep it off config objects so
+// frozen runtime snapshots and identity-keyed caches remain valid.
+const replyConfigRuntimeModes = new WeakMap<OpenClawConfig, "fast" | "full">();
 
 function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
   return (
@@ -47,27 +45,11 @@ function resolveFastSessionKey(params: {
   return resolveSessionKey(params.sessionScope, ctx, params.mainKey);
 }
 
-function markReplyConfigRuntimeMode(
-  config: ReplyConfigWithMarker,
-  runtimeMode: "fast" | "full" = "fast",
-): void {
-  Object.defineProperty(config, FULL_REPLY_RUNTIME_SYMBOL, {
-    value: runtimeMode === "full" ? true : undefined,
-    configurable: true,
-    enumerable: false,
-  });
-}
-
 export function markCompleteReplyConfig<T extends OpenClawConfig>(
   config: T,
   options?: { runtimeMode?: "fast" | "full" },
 ): T {
-  Object.defineProperty(config as ReplyConfigWithMarker, COMPLETE_REPLY_CONFIG_SYMBOL, {
-    value: true,
-    configurable: true,
-    enumerable: false,
-  });
-  markReplyConfigRuntimeMode(config as ReplyConfigWithMarker, options?.runtimeMode ?? "fast");
+  replyConfigRuntimeModes.set(config, options?.runtimeMode ?? "fast");
   return config;
 }
 
@@ -81,9 +63,7 @@ export function withFullRuntimeReplyConfig<T extends OpenClawConfig>(config: T):
 
 function isCompleteReplyConfig(config: unknown): config is OpenClawConfig {
   return Boolean(
-    config &&
-    typeof config === "object" &&
-    (config as ReplyConfigWithMarker)[COMPLETE_REPLY_CONFIG_SYMBOL] === true,
+    config && typeof config === "object" && replyConfigRuntimeModes.has(config as OpenClawConfig),
   );
 }
 
@@ -91,7 +71,7 @@ function usesFullReplyRuntime(config: unknown): boolean {
   return Boolean(
     config &&
     typeof config === "object" &&
-    (config as ReplyConfigWithMarker)[FULL_REPLY_RUNTIME_SYMBOL] === true,
+    replyConfigRuntimeModes.get(config as OpenClawConfig) === "full",
   );
 }
 
@@ -177,6 +157,7 @@ export function buildFastReplyCommandContext(params: {
     surface,
     channel,
     channelId: normalizeAnyChannelId(channel) ?? normalizeAnyChannelId(surface) ?? undefined,
+    accountId: normalizeOptionalString(ctx.AccountId),
     ownerList: [],
     senderIsOwner: false,
     isAuthorizedSender: commandAuthorized,
@@ -218,7 +199,10 @@ export function initFastReplySessionState(params: {
     skipCache: true,
     clone: false,
   });
-  const existingEntry = sessionStore[sessionKey];
+  const existingEntry = resolveSessionStoreEntry({
+    store: sessionStore,
+    sessionKey,
+  }).existing;
   const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
   const triggerBodyNormalized = isFormattedGoalContinuationPrompt(commandSource)
     ? commandSource.trim()
@@ -256,7 +240,7 @@ export function initFastReplySessionState(params: {
     verboseLevel: resetTriggered ? existingEntry?.verboseLevel : existingEntry?.verboseLevel,
     reasoningLevel: resetTriggered ? existingEntry?.reasoningLevel : existingEntry?.reasoningLevel,
     ttsAuto: resetTriggered ? existingEntry?.ttsAuto : existingEntry?.ttsAuto,
-    responseUsage: !resetTriggered ? existingEntry?.responseUsage : undefined,
+    responseUsage: existingEntry?.responseUsage,
     modelOverride: resetTriggered ? existingEntry?.modelOverride : existingEntry?.modelOverride,
     providerOverride: resetTriggered
       ? existingEntry?.providerOverride
@@ -282,6 +266,11 @@ export function initFastReplySessionState(params: {
       : {}),
   };
   sessionStore[sessionKey] = sessionEntry;
+  const sessionEntryHandle = createReplySessionEntryHandle({
+    sessionEntry,
+    sessionKey,
+    sessionStore,
+  });
   const sessionCtx: TemplateContext = {
     ...ctx,
     SessionKey: sessionKey,
@@ -292,6 +281,8 @@ export function initFastReplySessionState(params: {
   return {
     sessionCtx,
     sessionEntry,
+    initialSessionEntry: existingEntry ? { ...existingEntry } : undefined,
+    sessionEntryHandle,
     sessionStore,
     sessionKey,
     sessionId,

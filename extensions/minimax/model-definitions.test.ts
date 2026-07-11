@@ -1,3 +1,4 @@
+// Minimax tests cover model definitions plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildMinimaxApiModelDefinition,
@@ -10,8 +11,10 @@ import {
   MINIMAX_M27_API_COST,
   MINIMAX_M25_API_COST,
   MINIMAX_M25_API_HIGHSPEED_COST,
-  MINIMAX_M3_CONTEXT_WINDOW,
 } from "./model-definitions.js";
+import { MINIMAX_TEXT_MODEL_CATALOG } from "./provider-models.js";
+
+const MINIMAX_M3_CATALOG_CONTEXT_WINDOW = MINIMAX_TEXT_MODEL_CATALOG["MiniMax-M3"].contextWindow;
 
 describe("minimax model definitions", () => {
   it("uses M3 as default hosted model", () => {
@@ -19,7 +22,7 @@ describe("minimax model definitions", () => {
   });
 
   it("uses the current upstream MiniMax context, token, and pricing defaults", () => {
-    expect(MINIMAX_M3_CONTEXT_WINDOW).toBe(1_000_000);
+    expect(MINIMAX_M3_CATALOG_CONTEXT_WINDOW).toBe(1_000_000);
     expect(DEFAULT_MINIMAX_CONTEXT_WINDOW).toBe(204800);
     expect(DEFAULT_MINIMAX_MAX_TOKENS).toBe(131072);
     expect(MINIMAX_API_COST).toEqual({
@@ -34,11 +37,11 @@ describe("minimax model definitions", () => {
     const model = buildMinimaxModelDefinition({
       id: "MiniMax-M3",
       cost: MINIMAX_API_COST,
-      contextWindow: MINIMAX_M3_CONTEXT_WINDOW,
+      contextWindow: MINIMAX_M3_CATALOG_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
     });
     expect(model).toEqual({
-      contextWindow: MINIMAX_M3_CONTEXT_WINDOW,
+      contextWindow: MINIMAX_M3_CATALOG_CONTEXT_WINDOW,
       cost: MINIMAX_API_COST,
       id: "MiniMax-M3",
       input: ["text", "image"],
@@ -69,7 +72,7 @@ describe("minimax model definitions", () => {
   it("builds API model definition with standard cost for M3", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M3");
     expect(model.cost).toEqual(MINIMAX_API_COST);
-    expect(model.contextWindow).toBe(MINIMAX_M3_CONTEXT_WINDOW);
+    expect(model.contextWindow).toBe(MINIMAX_M3_CATALOG_CONTEXT_WINDOW);
     expect(model.maxTokens).toBe(DEFAULT_MINIMAX_MAX_TOKENS);
     expect(model.input).toEqual(["text", "image"]);
   });

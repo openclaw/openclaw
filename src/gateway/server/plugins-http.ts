@@ -1,3 +1,4 @@
+// Plugin HTTP routing dispatches registered plugin routes, upgrades, auth policy, and runtime request scope.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import {
@@ -45,8 +46,11 @@ function resolvePluginRoutePathContextForRequest(
 
 function createPluginRouteRuntimeClient(
   scopes: readonly string[],
+  clientIp: string | undefined,
 ): GatewayRequestOptions["client"] {
   return {
+    connId: `plugin-http:${clientIp ?? "unknown"}`,
+    ...(clientIp ? { clientIp } : {}),
     connect: {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -70,6 +74,7 @@ function writeUpgradeUnauthorized(socket: Duplex) {
 type PluginRouteRuntimeDispatchContext = {
   gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
   gatewayRequestOperatorScopes?: readonly string[];
+  gatewayRequestClientIp?: string;
 };
 
 function getMissingPluginRouteRuntimeContext(
@@ -91,6 +96,7 @@ function createPluginRouteRuntimeScope(params: {
   gatewayRequestContext?: GatewayRequestContext;
   gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
   gatewayRequestOperatorScopes?: readonly string[];
+  gatewayRequestClientIp?: string;
 }): PluginRouteRuntimeScope {
   const runtimeScopes =
     params.route.auth !== "gateway"
@@ -102,7 +108,10 @@ function createPluginRouteRuntimeScope(params: {
             "trusted-operator",
           )
         : params.gatewayRequestOperatorScopes!;
-  const runtimeClient = createPluginRouteRuntimeClient(runtimeScopes);
+  const runtimeClient = createPluginRouteRuntimeClient(
+    runtimeScopes,
+    params.gatewayRequestClientIp,
+  );
   return {
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
     client: runtimeClient,
@@ -119,6 +128,7 @@ export type PluginRouteDispatchContext = {
   gatewayAuthSatisfied?: boolean;
   gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
   gatewayRequestOperatorScopes?: readonly string[];
+  gatewayRequestClientIp?: string;
 };
 
 export type PluginHttpRequestHandler = (
@@ -188,6 +198,7 @@ export function createGatewayPluginRequestHandler(params: {
             gatewayRequestContext,
             gatewayRequestAuth,
             gatewayRequestOperatorScopes,
+            gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
           }),
           async () => route.handler(req, res),
         );
@@ -200,6 +211,8 @@ export function createGatewayPluginRequestHandler(params: {
           res.statusCode = 500;
           res.setHeader("Content-Type", "text/plain; charset=utf-8");
           res.end("Internal Server Error");
+        } else if (!res.writableEnded && !res.destroyed) {
+          res.end();
         }
         return true;
       }
@@ -262,6 +275,7 @@ export function createGatewayPluginUpgradeHandler(params: {
             gatewayRequestContext,
             gatewayRequestAuth,
             gatewayRequestOperatorScopes,
+            gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
           }),
           async () => route.handleUpgrade?.(req, socket, head),
         );

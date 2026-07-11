@@ -1,3 +1,4 @@
+// Copilot plugin module implements usage bridge behavior.
 import type { AgentMessage, NormalizedUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
@@ -70,14 +71,4 @@ export function buildCopilotAssistantUsage(params: {
     output: usage?.output ?? 0,
     totalTokens: usage?.total ?? 0,
   };
-}
-
-export function deriveCopilotUsageTotal(usage?: NormalizedUsage): number | undefined {
-  if (!usage) {
-    return undefined;
-  }
-
-  return (
-    (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0)
-  );
 }

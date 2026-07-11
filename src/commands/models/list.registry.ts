@@ -1,3 +1,4 @@
+/** Model registry access helpers for `openclaw models list`. */
 import { loadAgentModelRegistry } from "../../agents/model-registry-loader.js";
 import {
   shouldSuppressBuiltInModel,
@@ -11,8 +12,6 @@ import {
   MODEL_AVAILABILITY_UNAVAILABLE_CODE,
   shouldFallbackToAuthHeuristics,
 } from "./list.errors.js";
-import { toModelRow as toModelRowBase } from "./list.model-row.js";
-import type { ModelRow } from "./list.types.js";
 import { modelKey } from "./shared.js";
 
 function createAvailabilityUnavailableError(message: string): Error {
@@ -70,6 +69,7 @@ function loadAvailableModels(
         ? !shouldSuppressBuiltInModelFromManifest({
             provider: model.provider,
             id: model.id,
+            baseUrl: model.baseUrl,
             config: cfg,
           })
         : !shouldSuppressBuiltInModel({
@@ -84,6 +84,7 @@ function loadAvailableModels(
   }
 }
 
+/** Loads registry models and optional availability keys with suppression applied. */
 export async function loadModelRegistry(
   cfg: OpenClawConfig,
   opts?: {
@@ -111,6 +112,7 @@ export async function loadModelRegistry(
       : !shouldSuppressBuiltInModelFromManifest({
           provider: model.provider,
           id: model.id,
+          baseUrl: model.baseUrl,
           config: cfg,
         }),
   );
@@ -135,8 +137,4 @@ export async function loadModelRegistry(
     }
   }
   return { registry, models, availableKeys, availabilityErrorMessage };
-}
-
-export function toModelRow(params: Parameters<typeof toModelRowBase>[0]): ModelRow {
-  return toModelRowBase(params);
 }

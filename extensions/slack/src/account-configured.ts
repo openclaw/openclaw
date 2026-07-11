@@ -1,3 +1,4 @@
+// Slack helper module supports account configured behavior.
 import { hasConfiguredAccountValue } from "openclaw/plugin-sdk/account-resolution";
 import type { ResolvedSlackAccount } from "./accounts.js";
 
@@ -9,6 +10,14 @@ export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): b
   }
   if (mode === "http") {
     return hasConfiguredAccountValue(account.config.signingSecret);
+  }
+  if (mode === "relay") {
+    const relay = account.config.relay;
+    return (
+      hasConfiguredAccountValue(relay?.url) &&
+      hasConfiguredAccountValue(relay?.authToken) &&
+      hasConfiguredAccountValue(relay?.gatewayId)
+    );
   }
   return Boolean(account.appToken?.trim());
 }

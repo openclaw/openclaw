@@ -1,3 +1,4 @@
+// Channels add tests cover guided setup, plugin install paths, and channel account config writes.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
@@ -68,9 +69,15 @@ vi.mock("../channels/plugins/catalog.js", () => ({
   listRawChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
 }));
 
-vi.mock("./channel-setup/discovery.js", () => ({
-  isCatalogChannelInstalled: discoveryMocks.isCatalogChannelInstalled,
-}));
+vi.mock("./channel-setup/discovery.js", async () => {
+  const actual = await vi.importActual<typeof import("./channel-setup/discovery.js")>(
+    "./channel-setup/discovery.js",
+  );
+  return {
+    ...actual,
+    isCatalogChannelInstalled: discoveryMocks.isCatalogChannelInstalled,
+  };
+});
 
 vi.mock("../channels/plugins/bundled.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
@@ -85,9 +92,9 @@ vi.mock("../channels/plugins/bundled.js", async () => {
 
 vi.mock("./channel-setup/plugin-install.js", () => pluginInstallMocks);
 
-vi.mock("../cli/plugins-registry-refresh.js", () => registryRefreshMocks);
+vi.mock("../plugins/registry-refresh.js", () => registryRefreshMocks);
 
-vi.mock("../cli/plugins-install-record-commit.js", () => pluginInstallRecordCommitMocks);
+vi.mock("../plugins/install-record-commit.js", () => pluginInstallRecordCommitMocks);
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: () => channelWizardMocks.prompter,
@@ -467,6 +474,22 @@ describe("channelsAddCommand", () => {
     expect(setupOptions().promptAccountIds).toBe(true);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("No channel changes made.");
+  });
+
+  it("preselects an installable catalog channel in guided setup", async () => {
+    const config: OpenClawConfig = { channels: {} };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      { ...createExternalChatCatalogEntry(), origin: "workspace" },
+    ]);
+
+    await channelsAddCommand({ channel: "external-chat" }, runtime, { hasFlags: false });
+
+    expect(setupOptions().initialSelection).toEqual(["external-chat"]);
   });
 
   it("exits quietly when guided channel setup is cancelled", async () => {
@@ -937,9 +960,12 @@ describe("channelsAddCommand", () => {
         aliases: ["ext"],
       },
     };
-    catalogMocks.listChannelPluginCatalogEntries.mockImplementation(
-      ({ excludeWorkspace }: { excludeWorkspace?: boolean } = {}) =>
-        excludeWorkspace ? [trustedEntry] : [workspaceEntry],
+    catalogMocks.listChannelPluginCatalogEntries.mockImplementation(() => [workspaceEntry]);
+    catalogMocks.getChannelPluginCatalogEntry.mockImplementation(
+      (_channel: string, opts?: { excludePluginRefs?: Array<{ pluginId: string }> }) =>
+        opts?.excludePluginRefs?.some((entry) => entry.pluginId === "evil-external-chat-shadow")
+          ? trustedEntry
+          : undefined,
     );
     registerExternalChatSetupPlugin("@vendor/external-chat-plugin");
 

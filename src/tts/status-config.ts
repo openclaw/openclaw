@@ -1,9 +1,11 @@
+// TTS status config helpers resolve status output paths for speech generation.
 import path from "node:path";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
@@ -113,7 +115,9 @@ function normalizeStatusDetail(
   if (!normalized) {
     return undefined;
   }
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
+  return normalized.length > maxLength
+    ? `${truncateUtf16Safe(normalized, maxLength - 3)}...`
+    : normalized;
 }
 
 function sanitizeBaseUrlForStatus(value: unknown): string | undefined {

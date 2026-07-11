@@ -1,3 +1,4 @@
+// Discord plugin module implements reply typing feedback behavior.
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -5,7 +6,7 @@ import { createDiscordRestClient } from "../client.js";
 import type { RequestClient } from "../internal/discord.js";
 import { sendTyping } from "./typing.js";
 
-export const DISCORD_REPLY_TYPING_MAX_DURATION_MS = 20 * 60_000;
+const DISCORD_REPLY_TYPING_MAX_DURATION_MS = 20 * 60_000;
 
 // Discord can keep long tool-heavy replies alive, but not forever.
 // The dispatch restart path refreshes this TTL after queue wait time.
@@ -23,6 +24,7 @@ export function createDiscordReplyTypingFeedback(params: {
   rest?: RequestClient;
   log: (message: string) => void;
   maxDurationMs?: number;
+  keepaliveIntervalMs?: number;
 }): DiscordReplyTypingFeedback {
   let channelId = params.channelId;
   const rest =
@@ -43,6 +45,7 @@ export function createDiscordReplyTypingFeedback(params: {
           error: err,
         });
       },
+      keepaliveIntervalMs: params.keepaliveIntervalMs,
       maxDurationMs: params.maxDurationMs ?? DISCORD_REPLY_TYPING_MAX_DURATION_MS,
     });
   const updateChannelId = (nextChannelId: string) => {

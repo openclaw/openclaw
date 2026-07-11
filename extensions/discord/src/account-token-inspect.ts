@@ -1,10 +1,11 @@
+// Discord plugin module implements account token inspect behavior.
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import type { DiscordCredentialStatus } from "./token.js";
 
-export type InspectedDiscordConfiguredToken = {
+type InspectedDiscordConfiguredToken = {
   token: string;
   tokenSource: "config";
   tokenStatus: Exclude<DiscordCredentialStatus, "missing">;

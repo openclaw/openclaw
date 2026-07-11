@@ -1,3 +1,4 @@
+// Agent Core module implements branch summarization behavior.
 import type { Model, StreamFn } from "../../../../llm-core/src/index.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
@@ -30,8 +31,6 @@ export interface BranchSummaryDetails {
   /** Files modified while exploring the summarized branch. */
   modifiedFiles: string[];
 }
-
-export type { FileOperations } from "./utils.js";
 
 /** Prepared branch content for summarization. */
 export interface BranchPreparation {
@@ -68,7 +67,7 @@ export interface CollectBranchPathEntriesResult<TEntry extends BranchPathEntry> 
 }
 
 /** Options for generating a branch summary. */
-export interface GenerateBranchSummaryOptions {
+interface GenerateBranchSummaryOptions {
   /** Model used for summarization. */
   model: Model;
   /** API key forwarded to the provider. */

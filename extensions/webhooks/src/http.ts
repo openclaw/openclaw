@@ -1,3 +1,4 @@
+// Webhooks plugin module implements http behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -318,11 +319,6 @@ function extractSharedSecret(req: IncomingMessage): string {
   }
   const sharedHeader = req.headers["x-openclaw-webhook-secret"];
   return Array.isArray(sharedHeader) ? (sharedHeader[0] ?? "").trim() : (sharedHeader ?? "").trim();
-}
-
-function timingSafeEquals(left: string, right: string): boolean {
-  // Reuse the shared helper so webhook auth semantics stay aligned across plugins.
-  return safeEqualSecret(left, right);
 }
 
 function formatZodError(error: z.ZodError): string {
@@ -774,7 +770,7 @@ export function createTaskFlowWebhookRequestHandler(params: {
               return false;
             }
             const resolvedSecret = await resolveTargetSecret(candidate);
-            return Boolean(resolvedSecret && timingSafeEquals(resolvedSecret, presentedSecret));
+            return Boolean(resolvedSecret && safeEqualSecret(resolvedSecret, presentedSecret));
           },
         });
         if (!target) {

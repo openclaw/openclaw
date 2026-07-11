@@ -1,3 +1,4 @@
+// Vydra tests cover speech provider plugin behavior.
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildVydraSpeechProvider } from "./speech-provider.js";
@@ -6,6 +7,12 @@ describe("vydra speech provider", () => {
   installPinnedHostnameTestHooks();
 
   const provider = buildVydraSpeechProvider();
+
+  const oversizedJsonResponse = () =>
+    new Response(Buffer.alloc(16 * 1024 * 1024 + 1, 0x20), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
 
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -101,5 +108,19 @@ describe("vydra speech provider", () => {
         timeoutMs: 30_000,
       }),
     ).rejects.toThrow("Vydra audio download exceeds 1 bytes");
+  });
+
+  it("rejects speech synthesis JSON responses that exceed the provider cap", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(oversizedJsonResponse()));
+
+    await expect(
+      provider.synthesize({
+        text: "OpenClaw test",
+        cfg: {} as never,
+        providerConfig: { apiKey: "vydra-test-key" },
+        target: "audio-file",
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow("Vydra speech synthesis: JSON response exceeds 16777216 bytes");
   });
 });

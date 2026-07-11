@@ -1,6 +1,15 @@
+/**
+ * Codex app-server supervisor that lists sessions, reads transcripts, and
+ * starts/steers/interrupts turns across configured endpoints.
+ */
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { connectCodexAppServerEndpoint } from "./json-rpc-client.js";
 import type {
   CodexJsonRpcConnection,
+  CodexSessionCatalogPage,
+  CodexSessionCatalogPageParams,
+  CodexSessionCatalogSession,
   CodexSupervisorEndpoint,
   CodexSupervisorEndpointHealth,
   CodexSupervisorSendResult,
@@ -12,12 +21,29 @@ import type {
 
 type EndpointConnector = (endpoint: CodexSupervisorEndpoint) => Promise<CodexJsonRpcConnection>;
 
-const ALL_CODEX_THREAD_SOURCE_KINDS = ["cli", "vscode", "exec", "appServer", "unknown"];
+const ALL_CODEX_THREAD_SOURCE_KINDS = [
+  "cli",
+  "vscode",
+  "exec",
+  "appServer",
+  "subAgent",
+  "subAgentReview",
+  "subAgentCompact",
+  "subAgentThreadSpawn",
+  "subAgentOther",
+  "unknown",
+];
 const DEFAULT_MAX_STORED_SESSIONS = 200;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
+const DEFAULT_CATALOG_PAGE_LIMIT = 50;
+const MAX_CATALOG_PAGE_LIMIT = 100;
+const MAX_CATALOG_SESSION_ID_LENGTH = 256;
+const MAX_CATALOG_SESSION_NAME_LENGTH = 500;
+const MAX_CATALOG_CWD_LENGTH = 4096;
+const MAX_CATALOG_STATUS_LENGTH = 64;
+const MAX_CATALOG_METADATA_LENGTH = 500;
+const MAX_CATALOG_ACTIVE_FLAGS = 16;
+const MAX_CATALOG_ACTIVE_FLAG_LENGTH = 128;
+const MAX_CATALOG_CURSOR_LENGTH = 4096;
 
 function asRecordArray(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) {
@@ -70,6 +96,120 @@ function getStatusType(thread: Record<string, unknown>): CodexSupervisorThreadSt
   return "unknown";
 }
 
+function boundedCatalogString(
+  value: unknown,
+  maxLength: number,
+  overflow: "omit" | "truncate" = "omit",
+): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return overflow === "truncate" ? truncateUtf16Safe(normalized, maxLength) : undefined;
+}
+
+function getCatalogStatus(thread: Record<string, unknown>): string {
+  const status = thread.status;
+  const value = isRecord(status) ? status.type : status;
+  return boundedCatalogString(value, MAX_CATALOG_STATUS_LENGTH) ?? "notLoaded";
+}
+
+function getCatalogActiveFlags(thread: Record<string, unknown>): string[] | undefined {
+  const status = thread.status;
+  if (!isRecord(status) || !Array.isArray(status.activeFlags)) {
+    return undefined;
+  }
+  const flags = status.activeFlags
+    .flatMap((entry) => {
+      const flag = boundedCatalogString(entry, MAX_CATALOG_ACTIVE_FLAG_LENGTH);
+      return flag ? [flag] : [];
+    })
+    .slice(0, MAX_CATALOG_ACTIVE_FLAGS);
+  return flags.length > 0 ? flags : undefined;
+}
+
+function getCatalogSourceLabel(value: unknown): string | undefined {
+  let source: string | undefined;
+  if (typeof value === "string") {
+    source = value;
+  } else if (isRecord(value)) {
+    const custom = typeof value.custom === "string" ? value.custom.trim() : undefined;
+    source = custom ? `custom:${custom}` : Object.keys(value).toSorted()[0];
+  }
+  return boundedCatalogString(source, MAX_CATALOG_METADATA_LENGTH, "truncate");
+}
+
+function boundedCatalogCursor(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim() || value.length > MAX_CATALOG_CURSOR_LENGTH) {
+    return undefined;
+  }
+  // App Server cursors are opaque, so preserve their bytes after validation.
+  return value;
+}
+
+function getFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function toCatalogSession(
+  thread: Record<string, unknown>,
+  archived: boolean,
+): CodexSessionCatalogSession | undefined {
+  const threadId = boundedCatalogString(thread.id, MAX_CATALOG_SESSION_ID_LENGTH);
+  if (!threadId) {
+    return undefined;
+  }
+  const activeFlags = getCatalogActiveFlags(thread);
+  const source = getCatalogSourceLabel(thread.source);
+  const gitInfo = isRecord(thread.gitInfo) ? thread.gitInfo : undefined;
+  const createdAt = getFiniteNumber(thread.createdAt);
+  const updatedAt = getFiniteNumber(thread.updatedAt);
+  const recencyAt = thread.recencyAt === null ? null : getFiniteNumber(thread.recencyAt);
+  const sessionId = boundedCatalogString(thread.sessionId, MAX_CATALOG_SESSION_ID_LENGTH);
+  const name = boundedCatalogString(thread.name, MAX_CATALOG_SESSION_NAME_LENGTH, "truncate");
+  const cwd = boundedCatalogString(thread.cwd, MAX_CATALOG_CWD_LENGTH);
+  const modelProvider = boundedCatalogString(
+    thread.modelProvider,
+    MAX_CATALOG_METADATA_LENGTH,
+    "truncate",
+  );
+  const cliVersion = boundedCatalogString(
+    thread.cliVersion,
+    MAX_CATALOG_METADATA_LENGTH,
+    "truncate",
+  );
+  const gitBranch = boundedCatalogString(gitInfo?.branch, MAX_CATALOG_METADATA_LENGTH, "truncate");
+  return {
+    threadId,
+    status: getCatalogStatus(thread),
+    archived,
+    ...(sessionId ? { sessionId } : {}),
+    ...(name ? { name } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(activeFlags ? { activeFlags } : {}),
+    ...(createdAt !== undefined ? { createdAt } : {}),
+    ...(updatedAt !== undefined ? { updatedAt } : {}),
+    ...(recencyAt !== undefined ? { recencyAt } : {}),
+    ...(source ? { source } : {}),
+    ...(modelProvider ? { modelProvider } : {}),
+    ...(cliVersion ? { cliVersion } : {}),
+    ...(gitBranch ? { gitBranch } : {}),
+  };
+}
+
+function normalizeCatalogLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return DEFAULT_CATALOG_PAGE_LIMIT;
+  }
+  return Math.min(MAX_CATALOG_PAGE_LIMIT, Math.max(1, Math.floor(value)));
+}
+
 function toSession(
   endpointId: string,
   thread: Record<string, unknown>,
@@ -109,6 +249,7 @@ function isLoadedThreadReadMiss(error: unknown): boolean {
   return message.includes("thread not found") || message.includes("thread not loaded");
 }
 
+/** High-level supervisor facade used by OpenClaw tools and MCP tools. */
 export class CodexSupervisor {
   private readonly connections = new Map<string, Promise<CodexJsonRpcConnection>>();
 
@@ -117,10 +258,12 @@ export class CodexSupervisor {
     private readonly connector: EndpointConnector = connectCodexAppServerEndpoint,
   ) {}
 
+  /** Returns configured endpoint definitions without opening connections. */
   listEndpoints(): CodexSupervisorEndpoint[] {
     return this.endpoints;
   }
 
+  /** Closes all open app-server connections owned by this supervisor. */
   async close(): Promise<void> {
     const settled = await Promise.allSettled(this.connections.values());
     this.connections.clear();
@@ -133,6 +276,7 @@ export class CodexSupervisor {
     );
   }
 
+  /** Checks whether each endpoint can service a lightweight thread list call. */
   async probeEndpoints(): Promise<CodexSupervisorEndpointHealth[]> {
     return await Promise.all(
       this.endpoints.map(async (endpoint) => {
@@ -152,12 +296,14 @@ export class CodexSupervisor {
     );
   }
 
+  /** Lists sessions, returning only the session array for agent-tool callers. */
   async listSessions(
     params: { includeStored?: boolean; maxStoredSessions?: number } = {},
   ): Promise<CodexSupervisorSession[]> {
     return (await this.listSessionSnapshot(params)).sessions;
   }
 
+  /** Lists sessions plus endpoint errors for structured tool output. */
   async listSessionSnapshot(
     params: { includeStored?: boolean; maxStoredSessions?: number } = {},
   ): Promise<CodexSupervisorSessionListResult> {
@@ -178,6 +324,52 @@ export class CodexSupervisor {
     return { sessions, errors };
   }
 
+  /** Lists one metadata-only page from one configured Codex app-server endpoint. */
+  async listSessionCatalogPage(
+    endpointId: string,
+    params: CodexSessionCatalogPageParams = {},
+  ): Promise<CodexSessionCatalogPage> {
+    const connection = await this.connectionFor(endpointId);
+    const archived = params.archived === true;
+    const limit = normalizeCatalogLimit(params.limit);
+    try {
+      const listed = await connection.request("thread/list", {
+        limit,
+        sortKey: "recency_at",
+        sortDirection: "desc",
+        modelProviders: [],
+        archived,
+        useStateDbOnly: false,
+        ...(params.cursor?.trim() ? { cursor: params.cursor.trim() } : {}),
+        ...(params.cwd?.trim() ? { cwd: params.cwd.trim() } : {}),
+      });
+      if (!isRecord(listed) || !Array.isArray(listed.data)) {
+        throw new Error("Codex thread/list returned an invalid response");
+      }
+      const searchTerm = params.searchTerm?.trim();
+      const sessions = asRecordArray(listed.data)
+        .slice(0, limit)
+        .flatMap((thread) => {
+          const session = toCatalogSession(thread, archived);
+          return session ? [session] : [];
+        })
+        // Codex's state query also searches transcript-derived preview text.
+        // Filter normalized titles here so catalog search cannot probe previews.
+        .filter((session) => !searchTerm || session.name?.includes(searchTerm));
+      const nextCursor = boundedCatalogCursor(listed.nextCursor);
+      const backwardsCursor = boundedCatalogCursor(listed.backwardsCursor);
+      return {
+        sessions,
+        ...(nextCursor ? { nextCursor } : {}),
+        ...(backwardsCursor ? { backwardsCursor } : {}),
+      };
+    } catch (error) {
+      this.forgetEndpoint(endpointId);
+      throw error;
+    }
+  }
+
+  /** Reads a single Codex session transcript from the resolved endpoint. */
   async readSession(params: {
     endpointId?: string;
     threadId: string;
@@ -201,6 +393,7 @@ export class CodexSupervisor {
     }
   }
 
+  /** Starts a new turn or steers an active turn depending on requested mode. */
   async sendToSession(params: {
     endpointId?: string;
     threadId: string;
@@ -224,6 +417,8 @@ export class CodexSupervisor {
       if (mode === "steer" || status === "active") {
         const detailed = await this.readThread(connection, params.threadId, true);
         const detailedThread = extractThread(detailed);
+        // Active-turn ids may appear in full thread turns or the summary API;
+        // try both before failing so steering handles materialized and lazy turns.
         const turnId =
           (detailedThread ? findInProgressTurnId(detailedThread) : undefined) ??
           findInProgressTurnId(thread) ??
@@ -247,6 +442,7 @@ export class CodexSupervisor {
     }
   }
 
+  /** Interrupts an active Codex turn, resolving the turn id when omitted. */
   async interruptSession(params: {
     endpointId?: string;
     threadId: string;
@@ -285,6 +481,8 @@ export class CodexSupervisor {
         endpoint,
         params.maxStoredSessions,
       )) {
+        // Loaded sessions are authoritative for attachment/status; append stored
+        // history only for threads that are not already live.
         if (!sessions.some((session) => session.threadId === stored.threadId)) {
           sessions.push(stored);
         }
@@ -340,6 +538,9 @@ export class CodexSupervisor {
       const listed = await connection.request("thread/list", {
         limit: Math.min(100, remaining),
         sourceKinds: ALL_CODEX_THREAD_SOURCE_KINDS,
+        modelProviders: [],
+        sortKey: "recency_at",
+        sortDirection: "desc",
         useStateDbOnly: true,
         ...(cursor ? { cursor } : {}),
       });

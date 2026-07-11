@@ -1,29 +1,44 @@
+// Shared server-method types define the client, context, response, and handler
+// contracts used by every gateway RPC method module.
 import type {
   ConnectParams,
   ErrorShape,
   RequestFrame,
-} from "../../../packages/gateway-protocol/src/index.js";
+} from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { HealthSummary } from "../../commands/health.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CronServiceContract } from "../../cron/service-contract.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WizardSession } from "../../wizard/session.js";
+import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
-import type { BufferedAgentEvent } from "../server-chat-state.js";
+import type {
+  BufferedAgentEvent,
+  ChatAbortMarker,
+  ChatRunEntry,
+  ChatRunRegistration,
+} from "../server-chat-state.js";
+import type { GatewayCronServiceContract } from "../server-cron-contract.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
+import type { TerminalLaunchResolution } from "../terminal/launch.js";
+import type { TerminalSessionManager } from "../terminal/session-manager.js";
 
+/**
+ * Shared gateway request types used by every server-method module.
+ */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
+/** Per-connection client metadata captured after the gateway handshake. */
 export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
@@ -35,11 +50,14 @@ export type GatewayClient = {
   internal?: {
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
+    cronRunContinuation?: boolean;
+    agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
     agentRunTracking?: "plugin_subagent";
   };
 };
 
+/** Callback used by method handlers to emit one protocol response frame. */
 export type RespondFn = (
   ok: boolean,
   payload?: unknown,
@@ -47,11 +65,14 @@ export type RespondFn = (
   meta?: Record<string, unknown>,
 ) => void;
 
+/** Runtime services and mutable gateway state available to request handlers. */
 export type GatewayRequestContext = {
   deps: CliDeps;
-  cron: CronServiceContract;
+  cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
+  isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
@@ -83,12 +104,18 @@ export type GatewayRequestContext = {
     deviceId: string,
     opts?: { role?: string; reason?: string },
   ) => void;
+  hasConnectedClientsForDevice?: (deviceId: string) => boolean;
   disconnectClientsUsingSharedGatewayAuth?: () => void;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: NodeRegistry;
+  // Operator terminal session store. Absent in local/in-process contexts where
+  // no PTY surface is served.
+  terminalSessions?: TerminalSessionManager;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatAbortedRuns: Map<string, number>;
+  /** Cancel identities for turns waiting in the followup/collect queue. */
+  chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
+  chatAbortedRuns: Map<string, ChatAbortMarker>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
@@ -96,15 +123,12 @@ export type GatewayRequestContext = {
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, BufferedAgentEvent>;
   clearChatRunState: (runId: string) => void;
-  addChatRun: (
-    sessionId: string,
-    entry: { sessionKey: string; agentId?: string; clientRunId: string },
-  ) => void;
+  addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
     sessionKey?: string,
-  ) => { sessionKey: string; agentId?: string; clientRunId: string } | undefined;
+  ) => ChatRunEntry | undefined;
   subscribeSessionEvents: (connId: string) => void;
   unsubscribeSessionEvents: (connId: string) => void;
   subscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
@@ -114,13 +138,16 @@ export type GatewayRequestContext = {
   registerToolEventRecipient: (runId: string, connId: string) => void;
   dedupe: Map<string, DedupeEntry>;
   wizardSessions: Map<string, WizardSession>;
+  crestodianSessions: Map<string, import("./crestodian.js").CrestodianChatSession>;
   findRunningWizard: () => string | null;
   purgeWizardSession: (id: string) => void;
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
+  getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
   startChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,
+    opts?: import("../server-channels.js").StartChannelOptions,
   ) => Promise<void>;
   stopChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
@@ -143,6 +170,7 @@ export type GatewayRequestContext = {
   unavailableGatewayMethods?: ReadonlySet<string>;
 };
 
+/** Full dispatch context for raw request frames before params are normalized. */
 export type GatewayRequestOptions = {
   req: RequestFrame;
   client: GatewayClient | null;
@@ -152,6 +180,7 @@ export type GatewayRequestOptions = {
   methodRegistry?: GatewayMethodRegistryView;
 };
 
+/** Normalized method invocation options passed to registered handlers. */
 export type GatewayRequestHandlerOptions = {
   req: RequestFrame;
   params: Record<string, unknown>;
@@ -161,6 +190,8 @@ export type GatewayRequestHandlerOptions = {
   context: GatewayRequestContext;
 };
 
+/** Single gateway method implementation. */
 export type GatewayRequestHandler = (opts: GatewayRequestHandlerOptions) => Promise<void> | void;
 
+/** Registry fragment keyed by gateway protocol method name. */
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;

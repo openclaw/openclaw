@@ -1,8 +1,18 @@
+// Venice tests cover index plugin behavior.
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 describe("venice provider plugin", () => {
+  it("registers provider-owned usage hooks", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider).toMatchObject({
+      resolveUsageAuth: expect.any(Function),
+      fetchUsageSnapshot: expect.any(Function),
+    });
+  });
+
   it("applies the shared xAI compat patch to Grok-backed Venice models only", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 

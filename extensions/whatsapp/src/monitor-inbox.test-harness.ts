@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor inbox harness behavior.
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -20,7 +21,7 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
   channels: {
     whatsapp: {
       // Allow all in tests by default.
-      allowFrom: ["*"],
+      allowFrom: ["*"] as string[],
     },
   },
   messages: {
@@ -38,6 +39,7 @@ export type MockSock = {
   ws: { close: AnyMockFn };
   sendPresenceUpdate: AnyMockFn;
   sendMessage: AnyMockFn;
+  fetchAccountReachoutTimelock: AnyMockFn;
   readMessages: AnyMockFn;
   groupMetadata: AnyMockFn;
   groupFetchAllParticipating: AnyMockFn;
@@ -185,8 +187,12 @@ const inboundRuntimeMocks = vi.hoisted(() => {
     return current;
   }
 
+  async function* fakeMediaStream() {
+    yield Buffer.from("fake-media-data");
+  }
+
   return {
-    downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("fake-media-data")),
+    downloadMediaMessage: vi.fn(() => fakeMediaStream()),
     isJidGroup: vi.fn((jid: string | undefined | null) =>
       typeof jid === "string" ? jid.endsWith("@g.us") : false,
     ),
@@ -212,6 +218,7 @@ function createMockSock(): MockSock {
     ws: { close: vi.fn() },
     sendPresenceUpdate: createResolvedMock(),
     sendMessage: createResolvedMock(),
+    fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
     readMessages: createResolvedMock(),
     groupMetadata: vi.fn().mockImplementation(async (jid: string) => ({
       id: jid,

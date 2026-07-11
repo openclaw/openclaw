@@ -1,3 +1,4 @@
+// Crestodian tests cover main rescue and audit command behavior.
 import { describe, expect, it } from "vitest";
 import { runCrestodian } from "./crestodian.js";
 import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";
@@ -11,6 +12,7 @@ const overview: CrestodianOverview = {
   tools: {
     codex: { command: "codex", found: false, error: "not found" },
     claude: { command: "claude", found: false, error: "not found" },
+    gemini: { command: "gemini", found: false, error: "not found" },
     apiKeys: { openai: true, anthropic: false },
   },
   gateway: {

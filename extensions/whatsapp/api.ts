@@ -1,3 +1,4 @@
+// Whatsapp API module exposes the plugin public contract.
 export { whatsappPlugin } from "./src/channel.js";
 export { whatsappSetupPlugin } from "./src/channel.setup.js";
 export {
@@ -41,10 +42,14 @@ export {
 export {
   type ActiveWebListener,
   type ActiveWebSendOptions,
+  type LegacyFlatWebInboundMessage,
+  type WebInboundCallbackMessage,
   type WebInboundMessage,
+  type WebInboundMessageInput,
   type WebListenerCloseReason,
   type WhatsAppStructuredContactContext,
 } from "./src/inbound/types.js";
+export type { WhatsAppInboundAdmission } from "./src/inbound/admission.js";
 export {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,

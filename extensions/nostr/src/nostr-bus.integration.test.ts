@@ -1,3 +1,4 @@
+// Nostr tests cover nostr bus.integration plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMetrics, createNoopMetrics, type MetricEvent } from "./metrics.js";
 import { createSeenTracker } from "./seen-tracker.js";
@@ -231,6 +232,55 @@ describe("SeenTracker", () => {
       tracker.stop();
       vi.useRealTimers();
     });
+
+    it.each([-1, 0])("falls back to default TTL for non-positive ttlMs %s", (ttlMs) => {
+      vi.useFakeTimers();
+      const tracker = createTracker({ ttlMs, pruneIntervalMs: 10 * 60 * 1000 });
+
+      try {
+        tracker.add("id1");
+        vi.advanceTimersByTime(1);
+        expect(tracker.peek("id1")).toBe(true);
+      } finally {
+        tracker.stop();
+        vi.useRealTimers();
+      }
+    });
+
+    it("falls back to default TTL for infinite ttlMs", () => {
+      vi.useFakeTimers();
+      const tracker = createTracker({
+        ttlMs: Number.POSITIVE_INFINITY,
+        pruneIntervalMs: 10 * 60 * 1000,
+      });
+
+      try {
+        tracker.add("id1");
+        vi.advanceTimersByTime(60 * 60 * 1000 + 1);
+        expect(tracker.peek("id1")).toBe(false);
+      } finally {
+        tracker.stop();
+        vi.useRealTimers();
+      }
+    });
+
+    it.each([-1, 0, Number.POSITIVE_INFINITY])(
+      "uses the default prune interval for unsafe pruneIntervalMs %s",
+      (pruneIntervalMs) => {
+        vi.useFakeTimers();
+        const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+        const tracker = createTracker({ pruneIntervalMs });
+
+        try {
+          expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+          expect(setIntervalSpy.mock.calls[0]?.[1]).toBe(10 * 60 * 1000);
+        } finally {
+          tracker.stop();
+          setIntervalSpy.mockRestore();
+          vi.useRealTimers();
+        }
+      },
+    );
   });
 });
 

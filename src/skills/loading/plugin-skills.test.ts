@@ -1,3 +1,4 @@
+// Plugin skill loading tests cover skill discovery from plugin-provided skill bundles.
 import fsSync, { type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -471,6 +472,23 @@ describe("publishPluginSkills", () => {
     publishPluginSkills([dir2], { pluginSkillsDir: managedDir });
 
     expect(fsSync.readlinkSync(path.join(managedDir, "my-skill"))).toBe(dir2);
+  });
+
+  it("replaces owned generated symlinks when the previous target disappeared", async () => {
+    const staleParent = await tempDirs.make("plugin-skills-stale-");
+    const currentParent = await tempDirs.make("plugin-skills-current-");
+    const managedDir = await tempDirs.make("managed-skills-");
+
+    const staleDir = await writeSkillDir(staleParent, "my-skill", "old");
+    const currentDir = await writeSkillDir(currentParent, "my-skill", "new");
+    const linkPath = path.join(managedDir, "my-skill");
+
+    fsSync.symlinkSync(staleDir, linkPath, "dir");
+    await fs.rm(staleParent, { recursive: true, force: true });
+
+    publishPluginSkills([currentDir], { pluginSkillsDir: managedDir });
+
+    expect(fsSync.readlinkSync(linkPath)).toBe(currentDir);
   });
 
   it("replaces generated Windows directory entries before publishing a current skill", async () => {

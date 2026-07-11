@@ -1,4 +1,6 @@
+// Exa provider module implements model/runtime integration.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
@@ -18,6 +20,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -27,6 +30,11 @@ const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
 const EXA_SEARCH_TYPES = ["auto", "neural", "fast", "deep", "deep-reasoning", "instant"] as const;
 const EXA_FRESHNESS_VALUES = ["day", "week", "month", "year"] as const;
 const EXA_MAX_SEARCH_COUNT = 100;
+const EXA_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+// Exa search responses are untrusted external bodies. Cap the success JSON the
+// same way other bundled providers do (16 MiB) so a misbehaving or hostile
+// endpoint cannot stream an unbounded body into memory before we parse it.
+const EXA_SEARCH_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
 type ExaConfig = {
   apiKey?: string;
@@ -67,12 +75,24 @@ type ExaSearchResponse = {
   results?: unknown;
 };
 
-async function readExaSearchResults(response: Response): Promise<ExaSearchResult[]> {
+async function readExaSearchResults(
+  response: Response,
+  opts?: { maxBytes?: number },
+): Promise<ExaSearchResult[]> {
+  const maxBytes = opts?.maxBytes ?? EXA_SEARCH_JSON_MAX_BYTES;
+  const bytes = await readResponseWithLimit(response, maxBytes, {
+    onOverflow: ({ maxBytes: maxBytesLocal }) =>
+      new Error(`Exa API response exceeds ${maxBytesLocal} bytes`),
+  });
   try {
-    return normalizeExaResults(await response.json());
+    return normalizeExaResults(JSON.parse(new TextDecoder().decode(bytes)));
   } catch (cause) {
     throw new Error("Exa API returned malformed JSON", { cause });
   }
+}
+
+async function readExaErrorDetail(response: Response): Promise<string> {
+  return await readResponseTextLimited(response, EXA_ERROR_BODY_LIMIT_BYTES);
 }
 
 function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined {
@@ -406,7 +426,7 @@ async function runExaSearch(params: {
     },
     async (res) => {
       if (!res.ok) {
-        const detail = await res.text();
+        const detail = await readExaErrorDetail(res);
         throw new Error(`Exa API error (${res.status}): ${detail || res.statusText}`);
       }
       return readExaSearchResults(res);
@@ -606,6 +626,7 @@ export const testing = {
   resolveExaSearchCount,
   resolveExaSearchEndpoint,
   resolveFreshnessStartDate,
+  readExaErrorDetail,
   readExaSearchResults,
 } as const;
 export { testing as __testing };

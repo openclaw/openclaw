@@ -1,3 +1,4 @@
+// Covers CLI turn compaction lifecycle and external CLI resume-state cleanup.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -42,6 +43,8 @@ function buildContextEngine(params: {
 }
 
 async function writeSessionFile(params: { sessionFile: string; sessionId: string }) {
+  // The lifecycle compacts canonical OpenClaw session JSONL, so tests write the
+  // same session/message envelope the real store appends.
   await fs.mkdir(path.dirname(params.sessionFile), { recursive: true });
   await fs.writeFile(
     params.sessionFile,
@@ -116,6 +119,8 @@ describe("runCliTurnCompactionLifecycle", () => {
     const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
     const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
     const settingsCwds: string[] = [];
+    // Compaction settings should be resolved against the task cwd, not the
+    // bootstrap workspace, because CLI prompts may run from nested repos.
     setCliCompactionTestDeps({
       resolveContextEngine: async () => buildContextEngine({ compactCalls }),
       createPreparedEmbeddedAgentSettingsManager: async (params) => {
@@ -183,6 +188,8 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(maintenanceCall?.sessionKey).toBe(sessionKey);
     expect(maintenanceCall?.sessionFile).toBe(sessionFile);
     expect(updatedEntry?.compactionCount).toBe(1);
+    // Once OpenClaw rewrites the transcript, external CLI resume ids are stale
+    // and must be cleared so the next turn starts from the compacted prompt.
     expect(updatedEntry?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(updatedEntry?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(updatedEntry?.claudeCliSessionId).toBeUndefined();
@@ -264,6 +271,74 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
       "claude-session",
     );
+  });
+
+  it("treats already-compacted CLI transcript compaction as a no-op", async () => {
+    const sessionKey = "agent:main:qwen-already-compacted";
+    const sessionId = "session-qwen-already-compacted";
+    const sessionFile = path.join(tmpDir, "session-qwen-already-compacted.jsonl");
+    const storePath = path.join(tmpDir, "sessions-qwen-already-compacted.json");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const recordCliCompactionInStore = vi.fn();
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => ({
+        ...buildContextEngine({ compactCalls }),
+        async compact(compactParams) {
+          compactCalls.push(compactParams);
+          throw new Error("Already compacted");
+        },
+      }),
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      runContextEngineMaintenance: maintenance,
+      recordCliCompactionInStore,
+    });
+
+    const updatedEntry = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "ollama",
+      model: "qwen3:14b",
+    });
+
+    expect(compactCalls).toHaveLength(1);
+    expect(maintenance).not.toHaveBeenCalled();
+    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
+    expect(updatedEntry).toBe(sessionEntry);
   });
 
   it("routes OpenAI Codex harness CLI compaction through native harness compaction", async () => {

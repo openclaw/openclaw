@@ -1,3 +1,4 @@
+// Trajectory metadata tests cover metadata capture and normalization.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import {
@@ -267,6 +268,7 @@ describe("trajectory metadata", () => {
       idleTimedOut: false,
       timedOutDuringCompaction: false,
       timedOutDuringToolExecution: false,
+      timedOutByRunBudget: false,
       compactionCount: 1,
       assistantTexts: ["done"],
       finalPromptText: "run tests",

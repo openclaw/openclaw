@@ -1,3 +1,4 @@
+// Core legacy config normalizers for shipped keys retired outside the rule table.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeOptionalLowercaseString,
@@ -18,6 +19,9 @@ import {
 } from "./legacy-runtime-model-providers.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
+const INHERITED_ACCOUNT_POLICY_KEYS = ["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"];
+
+/** Remove deprecated command config keys that no runtime reads anymore. */
 export function normalizeLegacyCommandsConfig(
   cfg: OpenClawConfig,
   changes: string[],
@@ -37,6 +41,7 @@ export function normalizeLegacyCommandsConfig(
   };
 }
 
+/** Migrate legacy browser/Chrome relay config to current browser profile settings. */
 export function normalizeLegacyBrowserConfig(
   cfg: OpenClawConfig,
   changes: string[],
@@ -53,10 +58,14 @@ export function normalizeLegacyBrowserConfig(
     delete browser.relayBindHost;
     browserChanged = true;
     changes.push(
-      "Removed browser.relayBindHost (legacy Chrome extension relay setting; host-local Chrome now uses Chrome MCP existing-session attach).",
+      "Removed browser.relayBindHost (legacy Chrome extension relay setting; the extension relay binds loopback on the profile cdpPort).",
     );
   }
 
+  // driver "extension" is a live driver again (Chrome extension relay v2). Old
+  // relay-era profiles could carry a cdpUrl pointing at the retired gateway
+  // relay endpoint; the new driver owns its endpoint, so drop the stale URL
+  // instead of failing schema validation.
   const rawProfiles = browser.profiles;
   if (isRecord(rawProfiles)) {
     const profiles = { ...rawProfiles };
@@ -66,16 +75,15 @@ export function normalizeLegacyBrowserConfig(
         continue;
       }
       const rawDriver = normalizeOptionalString(rawProfile.driver) ?? "";
-      if (rawDriver !== "extension") {
+      if (rawDriver !== "extension" || !normalizeOptionalString(rawProfile.cdpUrl)) {
         continue;
       }
-      profiles[profileName] = {
-        ...rawProfile,
-        driver: "existing-session",
-      };
+      const nextProfile = { ...rawProfile };
+      delete nextProfile.cdpUrl;
+      profiles[profileName] = nextProfile;
       profilesChanged = true;
       changes.push(
-        `Moved browser.profiles.${profileName}.driver "extension" → "existing-session" (Chrome MCP attach).`,
+        `Removed browser.profiles.${profileName}.cdpUrl (extension driver profiles own their relay endpoint).`,
       );
     }
     if (profilesChanged) {
@@ -122,6 +130,7 @@ export function normalizeLegacyBrowserConfig(
   };
 }
 
+/** Move single-account channel fields into accounts.default when account maps exist. */
 export function seedMissingDefaultAccountsFromSingleAccountBase(
   cfg: OpenClawConfig,
   changes: string[],
@@ -170,10 +179,34 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     for (const key of keysToMove) {
       delete nextChannel[key];
     }
-    nextChannel.accounts = {
+    const inheritedPolicyKeys = INHERITED_ACCOUNT_POLICY_KEYS.filter((key) =>
+      keysToMove.includes(key),
+    );
+    const nextAccounts: Record<string, unknown> = {
       ...rawAccounts,
       [DEFAULT_ACCOUNT_ID]: defaultAccount,
     };
+    if (inheritedPolicyKeys.length > 0) {
+      for (const [accountId, rawAccount] of Object.entries(rawAccounts)) {
+        if (!isRecord(rawAccount)) {
+          continue;
+        }
+        const nextAccount = { ...rawAccount };
+        let accountChanged = false;
+        for (const key of inheritedPolicyKeys) {
+          if (hasOwnKey(nextAccount, key)) {
+            continue;
+          }
+          const value = rawChannel[key];
+          nextAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
+          accountChanged = true;
+        }
+        if (accountChanged) {
+          nextAccounts[accountId] = nextAccount;
+        }
+      }
+    }
+    nextChannel.accounts = nextAccounts;
 
     nextChannels[channelId] = nextChannel;
     channelsChanged = true;
@@ -647,6 +680,7 @@ function normalizeLegacyCodexCliProviderRuntimePins(
     : { config: cfg, changed: false };
 }
 
+/** Move legacy runtime-tagged model/provider refs onto current agentRuntime policy fields. */
 export function normalizeLegacyRuntimeModelRefs(
   cfg: OpenClawConfig,
   changes: string[],
@@ -700,6 +734,7 @@ export function normalizeLegacyRuntimeModelRefs(
   return nextCfg;
 }
 
+/** Add missing metadata source markers to legacy OpenAI Codex model catalog entries. */
 export function normalizeLegacyOpenAICodexModelsAddMetadata(
   cfg: OpenClawConfig,
   changes: string[],
@@ -766,6 +801,7 @@ export function normalizeLegacyOpenAICodexModelsAddMetadata(
   };
 }
 
+/** Rename legacy OpenAI API identifiers to the current completion/chat API ids. */
 export function normalizeLegacyOpenAIModelProviderApi(
   cfg: OpenClawConfig,
   changes: string[],
@@ -837,6 +873,7 @@ export function normalizeLegacyOpenAIModelProviderApi(
   };
 }
 
+/** Remove retired bundled nano-banana skill config after migrating image generation models. */
 export function normalizeLegacyNanoBananaSkill(
   cfg: OpenClawConfig,
   changes: string[],
@@ -973,6 +1010,7 @@ export function normalizeLegacyNanoBananaSkill(
   };
 }
 
+/** Move legacy cross-context send boolean into explicit message crossContext policy. */
 export function normalizeLegacyCrossContextMessageConfig(
   cfg: OpenClawConfig,
   changes: string[],
@@ -1067,6 +1105,7 @@ function migrateLegacyDeepgramCompat(params: {
   return true;
 }
 
+/** Move legacy media provider option aliases into providerOptions maps. */
 export function normalizeLegacyMediaProviderOptions(
   cfg: OpenClawConfig,
   changes: string[],
@@ -1254,6 +1293,7 @@ function applyLegacyOllamaProviderNumCtxParams(params: {
   };
 }
 
+/** Seed native Ollama num_ctx params from legacy context-token budgets. */
 export function normalizeLegacyOllamaNativeNumCtxParams(
   cfg: OpenClawConfig,
   changes: string[],
@@ -1396,6 +1436,7 @@ function normalizeLegacyMistralModelCost<T extends Record<string, unknown>>(para
   };
 }
 
+/** Normalize stale Mistral model defaults such as prompt-cache read cost. */
 export function normalizeLegacyMistralModelDefaults(
   cfg: OpenClawConfig,
   changes: string[],

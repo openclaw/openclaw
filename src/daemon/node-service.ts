@@ -1,3 +1,4 @@
+/** Adapts the generic gateway service manager for OpenClaw node-host services. */
 import {
   NODE_SERVICE_KIND,
   NODE_SERVICE_MARKER,
@@ -9,9 +10,12 @@ import {
 import type { GatewayService, GatewayServiceInstallArgs } from "./service.js";
 import { resolveGatewayService } from "./service.js";
 
+// Wraps the generic gateway service with node-specific service identifiers and env.
 function withNodeServiceEnv(
   env: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
+  // Node services reuse gateway platform installers; env overrides select the
+  // node-specific labels, logs, task script, and service marker.
   return {
     ...env,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
@@ -43,6 +47,7 @@ function withNodeInstallEnv(args: GatewayServiceInstallArgs): GatewayServiceInst
   };
 }
 
+/** Returns a service controller bound to node-host labels across all platforms. */
 export function resolveNodeService(): GatewayService {
   const base = resolveGatewayService();
   return {
@@ -63,9 +68,11 @@ export function resolveNodeService(): GatewayService {
       return base.restart({ ...args, env: withNodeServiceEnv(args.env ?? {}) });
     },
     isLoaded: async (args) => {
-      return base.isLoaded({ env: withNodeServiceEnv(args.env ?? {}) });
+      // Preserve the status read deadline so node probes fail soft under a
+      // wedged service manager instead of hanging the whole status command.
+      return base.isLoaded({ env: withNodeServiceEnv(args.env ?? {}), timeoutMs: args.timeoutMs });
     },
     readCommand: (env) => base.readCommand(withNodeServiceEnv(env)),
-    readRuntime: (env) => base.readRuntime(withNodeServiceEnv(env)),
+    readRuntime: (env, opts) => base.readRuntime(withNodeServiceEnv(env), opts),
   };
 }

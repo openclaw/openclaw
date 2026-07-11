@@ -1,3 +1,4 @@
+// Imessage plugin module implements approval auth behavior.
 import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
@@ -7,7 +8,7 @@ import { normalizeIMessageHandle } from "./targets.js";
 
 type ApprovalKind = "exec" | "plugin";
 
-export function normalizeIMessageApproverId(value: string | number): string | undefined {
+function normalizeIMessageApproverId(value: string | number): string | undefined {
   const raw = String(value).trim();
   if (!raw) {
     return undefined;

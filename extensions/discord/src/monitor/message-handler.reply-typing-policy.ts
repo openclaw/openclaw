@@ -1,9 +1,10 @@
+// Discord plugin module implements message handler.reply typing policy behavior.
 import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-outbound";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 
 type SourceReplyDeliveryMode = ReturnType<typeof resolveChannelMessageSourceReplyDeliveryMode>;
 
-export type DiscordAcceptedTypingPrestartDecision = {
+type DiscordAcceptedTypingPrestartDecision = {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode;
   shouldPrestart: boolean;
   reason:
@@ -18,7 +19,7 @@ export type DiscordAcceptedTypingPrestartDecision = {
     | "defer-to-message";
 };
 
-export function resolveDiscordSourceReplyDeliveryMode(
+function resolveDiscordSourceReplyDeliveryMode(
   ctx: DiscordMessagePreflightContext,
 ): SourceReplyDeliveryMode {
   // Keep prestart policy keyed to the same source-reply mode as dispatch.

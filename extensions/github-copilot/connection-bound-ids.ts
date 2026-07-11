@@ -1,3 +1,4 @@
+// Github Copilot plugin module implements connection bound ids behavior.
 import { createHash } from "node:crypto";
 
 // Copilot's OpenAI-compatible `/responses` endpoint can emit replay item IDs
@@ -69,7 +70,7 @@ export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolea
   return sanitizeCopilotReplayResponseIds(input);
 }
 
-export function sanitizeCopilotReplayResponsePayloadIds(payload: unknown): boolean {
+function sanitizeCopilotReplayResponsePayloadIds(payload: unknown): boolean {
   if (!payload || typeof payload !== "object") {
     return false;
   }

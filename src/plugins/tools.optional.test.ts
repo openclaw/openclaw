@@ -1,8 +1,10 @@
+// Verifies optional plugin tool registration and absence handling.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 
 type MockRegistryToolEntry = {
   pluginId: string;
@@ -371,6 +373,7 @@ function createXaiToolManifest() {
     },
     toolMetadata: {
       x_search: {
+        replaySafe: true,
         authSignals: [{ provider: "xai" }],
         configSignals: [
           {
@@ -951,15 +954,16 @@ describe("resolvePluginTools optional tools", () => {
       },
     });
 
-    ensureStandalonePluginToolRegistryLoaded({
+    const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
       context: createContext() as never,
       toolAllowlist: ["optional_tool"],
     });
-    const tools = resolvePluginTools(
-      createResolveToolsParams({
+    const tools = resolvePluginTools({
+      ...createResolveToolsParams({
         toolAllowlist: ["optional_tool"],
       }),
-    );
+      runtimeRegistry,
+    });
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
@@ -1268,6 +1272,7 @@ describe("resolvePluginTools optional tools", () => {
     });
 
     expectResolvedToolNames(tools, ["x_search"]);
+    expect(getPluginToolMeta(tools[0])?.replaySafe).toBe(true);
     expect(factory).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
@@ -1805,6 +1810,33 @@ describe("resolvePluginTools optional tools", () => {
     expectSingleDiagnosticMessage(registry.diagnostics, "plugin id conflicts with core tool name");
   });
 
+  it("allows a plugin to register a second tool when one tool shares the plugin id", () => {
+    // Regression: the canvas plugin registers a `canvas` tool (same name as its
+    // plugin id) plus `show_widget`; the id-conflict guard must not treat the
+    // plugin's own earlier tool as a shadowing core name.
+    const registry = setRegistry([
+      {
+        pluginId: "canvas",
+        optional: false,
+        source: "/tmp/canvas.js",
+        names: ["canvas"],
+        factory: () => makeTool("canvas"),
+      },
+      {
+        pluginId: "canvas",
+        optional: false,
+        source: "/tmp/canvas.js",
+        names: ["show_widget"],
+        factory: () => makeTool("show_widget"),
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams({}));
+
+    expectResolvedToolNames(tools, ["canvas", "show_widget"]);
+    expect(registry.diagnostics).toHaveLength(0);
+  });
+
   it.each([
     {
       name: "skips conflicting tool names but keeps other tools",
@@ -2141,6 +2173,62 @@ describe("resolvePluginTools optional tools", () => {
       content: [{ type: "text", text: "second-session" }],
     });
     expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains cold-loaded plugin tools for cached descriptor execution after active registry replacement", async () => {
+    const factory = vi.fn(() => makeTool("cached_lifecycle_tool"));
+    const gatewayRegistry = setRegistry([
+      {
+        pluginId: "cache-lifecycle-test",
+        optional: false,
+        source: "/tmp/cache-lifecycle-test.js",
+        names: ["cached_lifecycle_tool"],
+        factory,
+      },
+    ]);
+    const first = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["cached_lifecycle_tool"],
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+    const [tool] = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["cached_lifecycle_tool"],
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+    expectResolvedToolNames(first, ["cached_lifecycle_tool"]);
+    expect(tool?.name).toBe("cached_lifecycle_tool");
+    expect(factory).toHaveBeenCalledTimes(1);
+
+    const unrelatedEntry: MockRegistryToolEntry = {
+      pluginId: "unrelated-live",
+      optional: false,
+      source: "/tmp/unrelated-live.js",
+      names: ["unrelated_live_tool"],
+      factory: () => makeTool("unrelated_live_tool"),
+    };
+    const replacementRegistry = createToolRegistry([unrelatedEntry]);
+    replacementRegistry.plugins.push({ id: "cache-lifecycle-test", status: "loaded" });
+    setActivePluginRegistry?.(replacementRegistry as never, "provider-runtime", "default", "/tmp");
+    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+    loadOpenClawPluginsMock.mockReset();
+    loadOpenClawPluginsMock
+      .mockReturnValueOnce(gatewayRegistry)
+      .mockReturnValue(createToolRegistry([]));
+
+    await expect(tool?.execute("call-1", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
+    await expect(tool?.execute("call-2", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+    expect(getActivePluginRegistry?.()).toBe(replacementRegistry);
+    expect(getActivePluginRegistry?.()?.tools.map((entry) => entry.pluginId)).toContain(
+      "unrelated-live",
+    );
   });
 
   it("does not reuse cached plugin tool descriptors across sandbox context changes", () => {
@@ -2546,20 +2634,29 @@ describe("resolvePluginTools optional tools", () => {
       diagnostics: [],
     };
     setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
-    pinActivePluginChannelRegistry({
+    const channelRegistry = {
       plugins: [{ id: "memory-core", status: "loaded" }],
       tools: [],
       diagnostics: [],
-    } as never);
+    } as never;
+    pinActivePluginChannelRegistry(channelRegistry);
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
 
-    const tools = resolvePluginTools(
-      createResolveToolsParams({
+    const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
+      context: { ...createContext(), config },
+      toolAllowlist: ["memory_search", "memory_get"],
+      allowGatewaySubagentBinding: true,
+    });
+    expect(runtimeRegistry).toBe(activeRegistry);
+
+    const tools = resolvePluginTools({
+      ...createResolveToolsParams({
         context: { ...createContext(), config },
         toolAllowlist: ["memory_search", "memory_get"],
         allowGatewaySubagentBinding: true,
       }),
-    );
+      runtimeRegistry,
+    });
 
     expectResolvedToolNames(tools, ["memory_search", "memory_get"]);
     expect(memorySearchFactory).toHaveBeenCalledTimes(1);
@@ -2792,15 +2889,9 @@ describe("resolvePluginTools optional tools", () => {
   });
 
   it("reloads when gateway binding would otherwise reuse a default-mode active registry", () => {
-    setActivePluginRegistry(
-      {
-        plugins: [],
-        tools: [],
-        diagnostics: [],
-      } as never,
-      "default-registry",
-      "default",
-    );
+    // Retiring an active registry walks all cleanup collections, so the
+    // default-mode stand-in must be a fully initialized registry shape.
+    setActivePluginRegistry(createEmptyPluginRegistry(), "default-registry", "default");
     setOptionalDemoRegistry();
 
     resolvePluginTools({

@@ -1,3 +1,5 @@
+// Gateway miscellaneous tests cover shared utility edges around control UI,
+// diagnostics, proxy state, node command policy, and server helper behavior.
 import * as fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
@@ -376,6 +378,7 @@ function broadcastChatClassEvents(
 ) {
   broadcast("chat", chatPayload());
   broadcast("agent", { type: "status", sessionKey: "agent:main:main" });
+  broadcast("chat.send_timing", { phase: "dispatch-started", runId: "run-1" });
   broadcast("chat.side_result", chatSideResultPayload());
 }
 
@@ -427,13 +430,26 @@ describe("gateway broadcaster", () => {
 
     expect(pairingSocket.send).not.toHaveBeenCalled();
     expect(nodeSocket.send).not.toHaveBeenCalled();
-    expect(readSocket.send).toHaveBeenCalledTimes(3);
-    expect(writeSocket.send).toHaveBeenCalledTimes(3);
-    expect(adminSocket.send).toHaveBeenCalledTimes(3);
-    const expectedEvents = ["chat", "agent", "chat.side_result"];
+    expect(readSocket.send).toHaveBeenCalledTimes(4);
+    expect(writeSocket.send).toHaveBeenCalledTimes(4);
+    expect(adminSocket.send).toHaveBeenCalledTimes(4);
+    const expectedEvents = ["chat", "agent", "chat.send_timing", "chat.side_result"];
     expectSentEvents(readSocket, expectedEvents);
     expectSentEvents(writeSocket, expectedEvents);
     expectSentEvents(adminSocket, expectedEvents);
+  });
+
+  it("requires operator.read for task ledger broadcast events", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
+      makeScopedBroadcastContext();
+
+    broadcast("task", { action: "deleted", taskId: "task-1" });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["task"]);
+    expectSentEvents(writeSocket, ["task"]);
+    expectSentEvents(adminSocket, ["task"]);
   });
 
   it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
@@ -927,6 +943,11 @@ describe("normalizeVoiceWakeTriggers", () => {
   test("trims and limits entries", () => {
     const result = normalizeVoiceWakeTriggers(["  hello  ", "", "world"]);
     expect(result).toEqual(["hello", "world"]);
+  });
+
+  test("does not split surrogate pairs at the length limit", () => {
+    const prefix = "x".repeat(63);
+    expect(normalizeVoiceWakeTriggers([`${prefix}\u{1f600}`])).toEqual([prefix]);
   });
 });
 

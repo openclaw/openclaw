@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-// Secret scanning alert handler for OpenClaw maintainers.
-// Usage: node secret-scanning.mjs <command> [options]
+/**
+ * Secret scanning alert handler for OpenClaw maintainers.
+ * Usage: node secret-scanning.mjs <command> [options]
+ */
 
-import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { spawnPlainGh } from "../../../../scripts/lib/plain-gh.mjs";
 
 const REPO = "openclaw/openclaw";
 const REPO_URL = `https://github.com/${REPO}`;
@@ -27,7 +29,7 @@ function tmpFile(purpose) {
 }
 
 function gh(args, { json = true, allowFailure = false } = {}) {
-  const proc = spawnSync("gh", args, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+  const proc = spawnPlainGh(args, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
   if (proc.status !== 0 && !allowFailure) {
     fail(`gh ${args.slice(0, 3).join(" ")} failed:\n${(proc.stderr || proc.stdout || "").trim()}`);
   }
@@ -57,6 +59,7 @@ function isBodyLocationType(locationType) {
   return locationType === "issue_body" || locationType === "pull_request_body";
 }
 
+/** Decides whether redacting an issue/PR body requires notifying the reporter. */
 export function decideBodyRedaction(currentBody, redactedBody) {
   const bodyChanged = String(currentBody) !== String(redactedBody);
   return {
@@ -65,6 +68,7 @@ export function decideBodyRedaction(currentBody, redactedBody) {
   };
 }
 
+/** Loads redaction-result metadata for issue/PR body secret locations. */
 export function loadBodyRedactionResult(locationType, resultFile) {
   if (!isBodyLocationType(locationType)) {
     return { notify_required: true };

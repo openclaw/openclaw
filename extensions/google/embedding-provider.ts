@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import {
   buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
@@ -24,6 +25,7 @@ import {
   asOptionalRecord as asRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 
 export type GeminiEmbeddingClient = {
   baseUrl: string;
@@ -414,6 +416,12 @@ async function resolveGeminiEmbeddingClient(
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
     ...headerOverrides,
+    ...resolveGoogleApiClientHeaders({
+      baseUrl,
+      api: "google-generative-ai",
+      capability: "other",
+      transport: "http",
+    }),
   };
   const apiKeys = collectProviderApiKeysForExecution({
     provider: "google",

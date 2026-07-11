@@ -1,5 +1,7 @@
+// Qqbot helper module supports config schema behavior.
 import {
   AllowFromListSchema,
+  ToolPolicySchema,
   buildChannelConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
@@ -52,6 +54,22 @@ const QQBotExecApprovalsSchema = z
 
 const QQBotDmPolicySchema = z.enum(["open", "allowlist", "disabled"]).optional();
 const QQBotGroupPolicySchema = z.enum(["open", "allowlist", "disabled"]).optional();
+const QQBotGroupCommandLevelSchema = z.enum(["all", "safety", "strict"]).optional();
+
+const QQBotGroupSchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+    commandLevel: QQBotGroupCommandLevelSchema,
+    ignoreOtherMentions: z.boolean().optional(),
+    historyLimit: z.number().optional(),
+    name: z.string().optional(),
+    prompt: z.string().optional(),
+    tools: ToolPolicySchema,
+    toolsBySender: z.record(z.string(), ToolPolicySchema).optional(),
+  })
+  .strict();
+
+const QQBotGroupsSchema = z.record(z.string(), QQBotGroupSchema).optional();
 
 const QQBotAccountSchema = z
   .object({
@@ -73,6 +91,7 @@ const QQBotAccountSchema = z
     upgradeMode: z.enum(["doc", "hot-reload"]).optional(),
     streaming: QQBotStreamingSchema,
     execApprovals: QQBotExecApprovalsSchema,
+    groups: QQBotGroupsSchema,
   })
   .passthrough();
 

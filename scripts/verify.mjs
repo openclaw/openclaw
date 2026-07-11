@@ -1,3 +1,4 @@
+// Runs the broad verification graph used by Crabbox/Testbox: check then test.
 import { performance } from "node:perf_hooks";
 import { formatMs, printTimingSummary } from "./lib/check-timing-summary.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
@@ -7,6 +8,9 @@ const stages = [
   { name: "test", args: ["test"] },
 ];
 
+/**
+ * Renders CLI usage for the verification wrapper.
+ */
 export function usage() {
   return [
     "Usage: node scripts/verify.mjs",
@@ -18,7 +22,10 @@ export function usage() {
   ].join("\n");
 }
 
-export function parseVerifyArgs(argv) {
+/**
+ * Parses verify wrapper CLI args.
+ */
+function parseVerifyArgs(argv) {
   const args = { help: false };
   for (const arg of argv) {
     if (arg === "--help" || arg === "-h") {
@@ -45,6 +52,9 @@ async function runStage(stage) {
   };
 }
 
+/**
+ * Runs verification stages in order and stops at the first failure.
+ */
 export async function main(argv = process.argv.slice(2)) {
   let args;
   try {

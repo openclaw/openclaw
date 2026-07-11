@@ -1,3 +1,4 @@
+// Openshell plugin module implements cli behavior.
 import {
   createSshSandboxSessionFromConfigText,
   runPluginCommandWithTimeout,
@@ -8,6 +9,7 @@ import type { ResolvedOpenShellPluginConfig } from "./config.js";
 
 export {
   buildExecRemoteCommand,
+  buildRemoteWorkdirValidationCommand,
   buildValidatedExecRemoteCommand,
   shellEscape,
 } from "openclaw/plugin-sdk/sandbox";

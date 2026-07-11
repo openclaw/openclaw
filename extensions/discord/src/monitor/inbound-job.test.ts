@@ -1,3 +1,4 @@
+// Discord tests cover inbound job plugin behavior.
 import { describe, expect, it } from "vitest";
 import { Message } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
@@ -71,6 +72,13 @@ describe("buildDiscordInboundJob", () => {
         },
         ownerId: "user-1",
       },
+      preparedMedia: [
+        {
+          path: "/tmp/openclaw-discord-test/photo.png",
+          contentType: "image/png",
+          placeholder: "<media:image>",
+        },
+      ],
     });
 
     const job = buildDiscordInboundJob(ctx);
@@ -94,6 +102,7 @@ describe("buildDiscordInboundJob", () => {
       ownerId: "user-1",
     });
     const serializedPayload = jsonRoundTrip(job.payload);
+    expect(serializedPayload.preparedMedia).toEqual(ctx.preparedMedia);
     expect(serializedPayload.threadChannel).toEqual({
       id: "thread-1",
       name: "codex",

@@ -1,3 +1,4 @@
+// Discord plugin module implements agent components dm auth behavior.
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -66,6 +67,7 @@ async function ensureDmComponentAuthorized(params: {
   }
   const pairingResult = await createChannelPairingChallengeIssuer({
     channel: "discord",
+    accountId: ctx.accountId,
     upsertPairingRequest: async ({ id, meta }) => {
       return await upsertChannelPairingRequest({
         channel: "discord",

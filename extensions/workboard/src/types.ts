@@ -1,3 +1,4 @@
+// Workboard type declarations define plugin contracts.
 export const WORKBOARD_STATUSES = [
   "triage",
   "backlog",
@@ -227,6 +228,8 @@ export type WorkboardWorkspace = {
   kind: "scratch" | "dir" | "worktree";
   path?: string;
   branch?: string;
+  sourcePath?: string;
+  sourceBranch?: string;
 };
 
 export type WorkboardAutomation = {
@@ -297,6 +300,7 @@ export type WorkboardMetadata = {
   templateId?: WorkboardTemplateId;
   archivedAt?: number;
   stale?: WorkboardStaleState;
+  lifecycleStatusSourceUpdatedAt?: number;
   failureCount?: number;
 };
 

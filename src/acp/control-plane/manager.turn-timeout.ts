@@ -1,3 +1,4 @@
+/** Timeout and cleanup helpers for long-running ACP turns. */
 import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -9,7 +10,9 @@ import { resolveRuntimeOptionsFromMeta } from "./runtime-options.js";
 
 const ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS = 2_000;
 const ACP_TURN_TIMEOUT_REASON = "turn-timeout";
+export const ACP_TURN_TIMEOUT_DETAIL_CODE = "TURN_TIMEOUT";
 
+/** Resolves the effective ACP turn timeout from session runtime options or agent defaults. */
 export function resolveTurnTimeoutMs(params: {
   cfg: OpenClawConfig;
   meta: SessionAcpMeta;
@@ -28,6 +31,7 @@ export function resolveTurnTimeoutMs(params: {
   });
 }
 
+/** Awaits a turn promise with bounded timeout handling and late-error logging. */
 export async function awaitTurnWithTimeout<T>(params: {
   sessionKey: string;
   turnPromise: Promise<T>;
@@ -93,6 +97,7 @@ export async function awaitTurnWithTimeout<T>(params: {
       throw new AcpRuntimeError(
         "ACP_TURN_FAILED",
         `ACP turn timed out after ${Math.max(1, Math.round(params.timeoutLabelMs / 1_000))}s.`,
+        { detailCode: ACP_TURN_TIMEOUT_DETAIL_CODE },
       );
     }
     if (outcome.kind === "error") {
@@ -106,6 +111,7 @@ export async function awaitTurnWithTimeout<T>(params: {
   }
 }
 
+/** Cancels a timed-out turn and clears non-persistent cached runtime state. */
 export async function cleanupTimedOutTurn(params: {
   sessionKey: string;
   activeTurn: ActiveTurnState;

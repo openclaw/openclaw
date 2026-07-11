@@ -1,3 +1,4 @@
+// Msteams tests cover sdk plugin behavior.
 import * as fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsApp, createMSTeamsTokenProvider } from "./sdk.js";
@@ -142,6 +143,21 @@ describe("createMSTeamsApp", () => {
     ).client?.options?.headers;
 
     expect(headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/\S+ OpenClaw\/\S+$/);
+  });
+
+  it("bounds Teams SDK API requests", async () => {
+    const creds: MSTeamsCredentials = {
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    };
+
+    const app = await createMSTeamsApp(creds);
+    const timeout = (app as unknown as { client?: { options?: { timeout?: number } } }).client
+      ?.options?.timeout;
+
+    expect(timeout).toBe(30_000);
   });
 
   it("accepts custom messagingEndpoint", async () => {

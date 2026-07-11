@@ -1,3 +1,4 @@
+// Lazy lifecycle runtime export hub used by gateway run-loop restart paths.
 export {
   abortEmbeddedAgentRun,
   getActiveEmbeddedRunCount,
@@ -21,12 +22,24 @@ export {
   markGatewaySigusr1RestartHandled,
   peekGatewaySigusr1RestartReason,
   resetGatewayRestartStateForInProcessRestart,
+  rollbackGatewayRestartSignalAdmission,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
 export { writeGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";
+export { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 export { markUpdateRestartSentinelFailure } from "../../infra/restart-sentinel.js";
 export { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
+export {
+  advanceCronActiveJobGeneration,
+  resetCronActiveJobs,
+  waitForActiveCronJobs,
+} from "../../cron/active-jobs.js";
+export {
+  abortActiveCronTaskRuns,
+  retireActiveCronTaskRunTracking,
+  waitForActiveCronTaskRuns,
+} from "../../tasks/cron-task-cancel.js";
 export {
   getActiveTaskCount,
   markGatewayDraining,
@@ -35,3 +48,4 @@ export {
 } from "../../process/command-queue.js";
 export { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
 export { reloadTaskRegistryFromStore } from "../../tasks/runtime-internal.js";
+export { abortPendingChannelReloads } from "../../gateway/server-reload-handlers.js";

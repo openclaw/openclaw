@@ -12,7 +12,7 @@ Adds the IRC channel surface for sending and receiving OpenClaw messages.
 ## Distribution
 
 - Package: `@openclaw/irc`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/irc`
 
 ## Surface
 

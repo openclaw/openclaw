@@ -1,3 +1,4 @@
+// Tlon tests cover tlon api plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./urbit/auth.js";
 import { scryUrbitPath } from "./urbit/channel-ops.js";
@@ -285,6 +286,39 @@ describe("uploadFile memex upload hardening", () => {
     expect(uploadCall?.auditContext).toBe("tlon-memex-upload");
     expect(uploadCall?.capture).toBe(false);
     expect(uploadCall?.maxRedirects).toBe(0);
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an oversized Memex upload JSON response", async () => {
+    const cancelBody = vi.fn();
+    let bodyReads = 0;
+    mockGuardedFetch.mockResolvedValueOnce(
+      createGuardedResult(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              bodyReads += 1;
+              controller.enqueue(new Uint8Array(32 * 1024).fill(120));
+            },
+            cancel: cancelBody,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+        "https://memex.tlon.network/v1/zod/upload",
+      ),
+    );
+
+    await expect(
+      uploadFile({
+        blob: new Blob(["image-bytes"], { type: "image/png" }),
+        fileName: "avatar.png",
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow("Memex upload: JSON response exceeds 65536 bytes");
+
+    expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
+    expect(bodyReads).toBeLessThan(10);
+    expect(cancelBody).toHaveBeenCalledTimes(1);
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 

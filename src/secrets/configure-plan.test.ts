@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+/** Tests secrets configure plan generation and target validation. */
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   TALK_TEST_PROVIDER_API_KEY_PATH,
@@ -11,8 +12,14 @@ import {
   collectConfigureProviderChanges,
   hasConfigurePlanChanges,
 } from "./configure-plan.js";
+import { resolveConfigSecretTargetByPath } from "./target-registry.js";
 
 describe("secrets configure plan helpers", () => {
+  beforeAll(() => {
+    resolveConfigSecretTargetByPath(["channels", "telegram", "botToken"]);
+    buildConfigureCandidates({} as OpenClawConfig);
+  });
+
   it("builds configure candidates from supported configure targets", () => {
     const config = {
       talk: {

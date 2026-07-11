@@ -1,3 +1,4 @@
+// Applies local resource policy and process locks for expensive check commands.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -15,6 +16,7 @@ const DEFAULT_FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * GIB;
 const DEFAULT_FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 
+/** Return whether local-heavy-check safeguards are enabled for an environment. */
 export function isLocalCheckEnabled(env) {
   const raw = env.OPENCLAW_LOCAL_CHECK?.trim().toLowerCase();
   return raw !== "0" && raw !== "false";
@@ -24,6 +26,7 @@ function isCiLikeEnv(env = process.env) {
   return env.CI === "true" || env.GITHUB_ACTIONS === "true";
 }
 
+/** Ensure local check runs opt into safeguard environment outside CI. */
 export function resolveLocalHeavyCheckEnv(env = process.env) {
   if (isCiLikeEnv(env) || isLocalCheckEnabled(env)) {
     return env;
@@ -39,6 +42,18 @@ function hasFlag(args, name) {
   return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
 }
 
+function hasOxlintFormatArg(args) {
+  return args.some(
+    (arg) =>
+      arg === "--format" ||
+      arg.startsWith("--format=") ||
+      arg === "-f" ||
+      arg.startsWith("-f=") ||
+      (arg.startsWith("-f") && arg.length > 2),
+  );
+}
+
+/** Apply local tsgo defaults for declaration skipping, caching, throttling, and profiling. */
 export function applyLocalTsgoPolicy(args, env, hostResources) {
   const nextEnv = { ...env };
   const nextArgs = [...args];
@@ -79,6 +94,7 @@ export function applyLocalTsgoPolicy(args, env, hostResources) {
   return { env: nextEnv, args: nextArgs };
 }
 
+/** Apply local oxlint defaults for type-aware checking and throttled worker settings. */
 export function applyLocalOxlintPolicy(args, env, hostResources) {
   const nextEnv = { ...env };
   const nextArgs = [...args];
@@ -90,6 +106,9 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
     !hasFlag(nextArgs, "--report-unused-disable-directives-severity")
   ) {
     insertBeforeSeparator(nextArgs, "--report-unused-disable-directives-severity", "error");
+  }
+  if (nextEnv.GITHUB_ACTIONS === "true" && !hasOxlintFormatArg(nextArgs)) {
+    insertBeforeSeparator(nextArgs, "--format", "stylish");
   }
 
   if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources)) {
@@ -107,6 +126,7 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
   return { env: nextEnv, args: nextArgs };
 }
 
+/** Decide whether an oxlint invocation needs the local heavy-check lock. */
 export function shouldAcquireLocalHeavyCheckLockForOxlint(
   args,
   { cwd = process.cwd(), env = process.env } = {},
@@ -152,6 +172,7 @@ export function shouldAcquireLocalHeavyCheckLockForOxlint(
   });
 }
 
+/** Decide whether a tsgo invocation needs the local heavy-check lock. */
 export function shouldAcquireLocalHeavyCheckLockForTsgo(args, env = process.env) {
   if (env.OPENCLAW_TSGO_FORCE_LOCK === "1") {
     return true;
@@ -188,6 +209,7 @@ function shouldThrottleLocalHeavyChecks(env, hostResources, defaultMode = "throt
   );
 }
 
+/** Acquire a filesystem lock for one local heavy check and return its release callback. */
 export function acquireLocalHeavyCheckLockSync(params) {
   const env = params.env ?? process.env;
 

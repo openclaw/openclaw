@@ -1,3 +1,4 @@
+// Tests npm registry spec parsing for packages, tags, and versions.
 import { describe, expect, it } from "vitest";
 import {
   compareOpenClawReleaseVersions,
@@ -128,7 +129,7 @@ describe("npm registry spec parsing helpers", () => {
     { value: "1.2.3-1", expected: true },
     { value: "2026.5.3-beta.1", expected: true },
     { value: "2026.5.3-1", expected: false },
-    { value: "2026.2.30-1", expected: true },
+    { value: "2026.2.30-1", expected: false },
     { value: "1.2.3", expected: false },
   ])("detects prerelease semver versions for %s", ({ value, expected }) => {
     expect(isPrereleaseSemverVersion(value)).toBe(expected);
@@ -139,7 +140,7 @@ describe("npm registry spec parsing helpers", () => {
     { value: "2026.5.3-2", expected: true },
     { value: "2026.5.3-beta.1", expected: false },
     { value: "1.2.3-1", expected: false },
-    { value: "2026.2.30-1", expected: false },
+    { value: "2026.2.30-1", expected: true },
   ])("detects OpenClaw stable correction versions for %s", ({ value, expected }) => {
     expect(isOpenClawStableCorrectionVersion(value)).toBe(expected);
   });

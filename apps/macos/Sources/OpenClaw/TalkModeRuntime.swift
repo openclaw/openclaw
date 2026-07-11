@@ -227,9 +227,7 @@ actor TalkModeRuntime {
         let meter = self.rmsMeter
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request, meter] buffer, _ in
             request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
-            if let rms = Self.rmsLevel(buffer: buffer) {
-                meter.set(rms)
-            }
+            meter.set(TalkAudioLevel.rms(buffer: buffer))
         }
 
         audioEngine.prepare()
@@ -362,9 +360,11 @@ actor TalkModeRuntime {
         await self.stopRecognition()
         await self.sendAndSpeak(text)
     }
+}
 
-    // MARK: - Gateway + TTS
+// MARK: - Gateway + TTS
 
+extension TalkModeRuntime {
     private func sendAndSpeak(_ transcript: String) async {
         let gen = self.lifecycleGeneration
         await self.reloadConfig()
@@ -391,20 +391,40 @@ actor TalkModeRuntime {
                 idempotencyKey: runId,
                 attachments: [])
             guard self.isCurrent(gen) else { return }
+            let normalizedStatus = Self.normalizedChatSendStatus(response.status)
             self.logger.info(
                 "talk chat.send ok runId=\(response.runId, privacy: .public) " +
+                    "status=\(normalizedStatus, privacy: .public) " +
                     "session=\(sessionKey, privacy: .public)")
+            if Self.isTerminalChatSendFailure(response.status) {
+                self.logger.warning(
+                    "talk chat.send terminal ack runId=\(response.runId, privacy: .public) " +
+                        "status=\(normalizedStatus, privacy: .public)")
+                await self.resumeListeningIfNeeded()
+                return
+            }
 
-            var assistantText = await self.waitForAssistantEventText(
-                sessionKey: sessionKey,
-                runId: response.runId,
-                timeoutSeconds: 45)
-            if assistantText == nil {
-                self.logger.warning("talk assistant event text missing; using history fallback")
+            var assistantText: String?
+            if Self.isTerminalChatSendSuccess(response.status) {
+                self.logger.info(
+                    "talk chat.send terminal ok runId=\(response.runId, privacy: .public); " +
+                        "using history fallback")
                 assistantText = await self.waitForAssistantTextFromHistory(
                     sessionKey: sessionKey,
-                    since: startedAt,
+                    since: nil,
                     timeoutSeconds: 12)
+            } else {
+                assistantText = await self.waitForAssistantEventText(
+                    sessionKey: sessionKey,
+                    runId: response.runId,
+                    timeoutSeconds: 45)
+                if assistantText == nil {
+                    self.logger.warning("talk assistant event text missing; using history fallback")
+                    assistantText = await self.waitForAssistantTextFromHistory(
+                        sessionKey: sessionKey,
+                        since: startedAt,
+                        timeoutSeconds: 12)
+                }
             }
             guard let assistantText
             else {
@@ -499,6 +519,19 @@ actor TalkModeRuntime {
         }
     }
 
+    private static func normalizedChatSendStatus(_ status: String) -> String {
+        status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func isTerminalChatSendSuccess(_ status: String) -> Bool {
+        self.normalizedChatSendStatus(status) == "ok"
+    }
+
+    private static func isTerminalChatSendFailure(_ status: String) -> Bool {
+        let normalized = self.normalizedChatSendStatus(status)
+        return normalized == "timeout" || normalized == "error"
+    }
+
     private static func matchesSessionKey(_ incoming: String, _ current: String) -> Bool {
         let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -509,7 +542,7 @@ actor TalkModeRuntime {
 
     private func waitForAssistantTextFromHistory(
         sessionKey: String,
-        since: Double,
+        since: Double?,
         timeoutSeconds: Int) async -> String?
     {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
@@ -1046,9 +1079,13 @@ extension TalkModeRuntime {
         stream: AsyncThrowingStream<Data, Error>,
         sampleRate: Double) async -> StreamingPlaybackResult
     {
-        await PCMStreamingAudioPlayer.shared.play(stream: stream, sampleRate: sampleRate)
+        let metered = TalkModeController.shared.meteredSpeechStream(stream, sampleRate: sampleRate)
+        let result = await PCMStreamingAudioPlayer.shared.play(stream: metered, sampleRate: sampleRate)
+        TalkModeController.shared.endSpeechMetering()
+        return result
     }
 
+    /// MP3 streaming has no metering hook; the wave falls back to its floor.
     @MainActor
     private func playMP3(stream: AsyncThrowingStream<Data, Error>) async -> StreamingPlaybackResult {
         await StreamingAudioPlayer.shared.play(stream: stream)
@@ -1065,13 +1102,16 @@ extension TalkModeRuntime {
     }
 
     @MainActor
-    private func playTalkAudio(data: Data) async -> TalkPlaybackResult {
-        await TalkAudioPlayer.shared.play(data: data)
+    private func playTalkAudio(data: Data) async -> StreamingPlaybackResult {
+        TalkBufferedAudioPlayer.shared.setLevelHandler { level in
+            TalkModeController.shared.updateSpeakingLevel(level)
+        }
+        return await TalkBufferedAudioPlayer.shared.play(data: data)
     }
 
     @MainActor
     private func stopTalkAudio() -> Double? {
-        TalkAudioPlayer.shared.stop()
+        TalkBufferedAudioPlayer.shared.stop()
     }
 
     private func synthesizeMLXVoice(
@@ -1213,18 +1253,6 @@ extension TalkModeRuntime {
             let clamped = min(1.0, max(0.0, rms / max(self.minSpeechRMS, threshold)))
             await MainActor.run { TalkModeController.shared.updateLevel(clamped) }
         }
-    }
-
-    private static func rmsLevel(buffer: AVAudioPCMBuffer) -> Double? {
-        guard let channelData = buffer.floatChannelData?.pointee else { return nil }
-        let frameCount = Int(buffer.frameLength)
-        guard frameCount > 0 else { return nil }
-        var sum: Double = 0
-        for i in 0..<frameCount {
-            let sample = Double(channelData[i])
-            sum += sample * sample
-        }
-        return sqrt(sum / Double(frameCount))
     }
 
     private func shouldInterrupt(transcript: String, hasConfidence: Bool) async -> Bool {

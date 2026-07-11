@@ -1,3 +1,5 @@
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+// Builds diagnostics for Codex plugin config and provider wiring.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -38,16 +40,6 @@ function isOpenAiCodexDefaultRuntimeSelection(params: {
     provider: OPENAI_PROVIDER_ID,
     config: params.cfg,
   });
-}
-
-function parseProviderModelRef(raw: string): { provider: string; model: string } | null {
-  const slashIndex = raw.indexOf("/");
-  if (slashIndex <= 0 || slashIndex >= raw.length - 1) {
-    return null;
-  }
-  const provider = normalizeProviderId(raw.slice(0, slashIndex));
-  const model = raw.slice(slashIndex + 1).trim();
-  return provider && model ? { provider, model } : null;
 }
 
 function codexPluginEntryEnabled(cfg: OpenClawConfig): boolean | undefined {
@@ -132,7 +124,7 @@ function agentModelsHaveCodexDefaultRuntimePolicy(
   models: Record<string, AgentModelEntryConfig> | undefined,
 ): boolean {
   for (const [modelRef, modelConfig] of Object.entries(models ?? {})) {
-    const parsed = parseProviderModelRef(modelRef);
+    const parsed = parseModelCatalogRef(modelRef);
     if (
       parsed?.provider === OPENAI_PROVIDER_ID &&
       isOpenAiCodexDefaultRuntimeSelection({
@@ -150,10 +142,10 @@ function openAiWildcardRuntimePolicy(
   models: Record<string, AgentModelEntryConfig> | undefined,
 ): AgentRuntimePolicyConfig | undefined {
   for (const [modelRef, modelConfig] of Object.entries(models ?? {})) {
-    const parsed = parseProviderModelRef(modelRef);
+    const parsed = parseModelCatalogRef(modelRef);
     if (
       parsed?.provider === OPENAI_PROVIDER_ID &&
-      parsed.model === "*" &&
+      parsed.modelId === "*" &&
       modelConfig?.agentRuntime?.id?.trim()
     ) {
       return modelConfig.agentRuntime;
@@ -187,13 +179,25 @@ function openAiDefaultRouteKeepsCodexUnavailable(cfg: OpenClawConfig): boolean {
   return !isOpenAiCodexDefaultRuntimeSelection({ cfg, raw: policy.id });
 }
 
-export function configExplicitlyKeepsCodexUnavailableForOpenAi(cfg: OpenClawConfig): boolean {
+/**
+ * Reports whether the default OpenAI route intentionally avoids the Codex plugin.
+ *
+ * Route-specific Codex selections still win; this only answers the missing-plugin
+ * diagnostic question for OpenAI defaults and OpenAI-compatible proxy configs.
+ */
+function configExplicitlyKeepsCodexUnavailableForOpenAi(cfg: OpenClawConfig): boolean {
   if (openAiHasCodexDefaultRuntimePolicy(cfg)) {
     return false;
   }
   return openAiDefaultRouteKeepsCodexUnavailable(cfg);
 }
 
+/**
+ * Suppresses missing Codex plugin diagnostics when config makes Codex optional.
+ *
+ * Explicitly enabled entries still warn so operator intent is honored even when
+ * all default routes would otherwise stay on the OpenClaw runtime.
+ */
 export function shouldSuppressMissingCodexPluginDiagnostics(cfg: OpenClawConfig): boolean {
   const entryEnabled = codexPluginEntryEnabled(cfg);
   if (entryEnabled === true) {

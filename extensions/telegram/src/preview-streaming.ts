@@ -1,15 +1,14 @@
+// Telegram plugin module implements preview streaming behavior.
 import {
   resolveChannelPreviewStreamMode,
   type StreamingMode,
 } from "openclaw/plugin-sdk/channel-outbound";
-
-type TelegramPreviewStreamMode = StreamingMode;
 
 export function resolveTelegramPreviewStreamMode(
   params: {
     streamMode?: unknown;
     streaming?: unknown;
   } = {},
-): TelegramPreviewStreamMode {
+): StreamingMode {
   return resolveChannelPreviewStreamMode(params, "partial");
 }

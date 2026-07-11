@@ -1,3 +1,4 @@
+// Draft stream loop tests cover incremental draft updates while channel replies stream.
 import { setImmediate as nextMacrotask } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
@@ -144,6 +145,39 @@ describe("createDraftStreamLoop", () => {
       vi.clearAllTimers();
       vi.useRealTimers();
     }
+  });
+
+  it("takes the latest queued text without interrupting the in-flight send", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let releaseSend: (() => void) | undefined;
+    const sendPending = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const sendOrEditStreamMessage = vi.fn(async () => {
+      await sendPending;
+      return true;
+    });
+    const loop = createDraftStreamLoop({
+      throttleMs: 0,
+      isStopped: () => false,
+      sendOrEditStreamMessage,
+    });
+
+    loop.update("in flight");
+    await flushMicrotasks();
+    loop.update("queued first");
+    loop.update("queued latest");
+
+    expect(vi.getTimerCount()).toBe(1);
+    expect(loop.takePending()).toBe("queued latest");
+    expect(vi.getTimerCount()).toBe(0);
+
+    releaseSend?.();
+    await loop.waitForInFlight();
+    await flushMicrotasks();
+
+    expect(sendOrEditStreamMessage).toHaveBeenCalledExactlyOnceWith("in flight");
   });
 
   it("contains synchronous sender failures from background flushes", async () => {

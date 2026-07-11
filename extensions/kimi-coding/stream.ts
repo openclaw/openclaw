@@ -1,3 +1,4 @@
+// Kimi Coding plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   streamSimple,
@@ -167,7 +168,7 @@ function resolveKimiAnthropicThinkingBudgetTokens(
   return KIMI_ANTHROPIC_THINKING_BUDGETS[thinkingLevel];
 }
 
-export function resolveKimiThinkingConfig(params: {
+function resolveKimiThinkingConfig(params: {
   configuredThinking: unknown;
   thinkingLevel?: KimiThinkingLevel;
 }): KimiThinkingConfig {

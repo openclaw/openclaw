@@ -1,8 +1,10 @@
+// Tests diagnostics command output and runtime diagnostic toggles.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
-import { createPluginRegistry, type PluginRecord } from "../../plugins/registry.js";
+import { createPluginRegistry } from "../../plugins/registry.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import { createBundledPluginRecord } from "../../plugins/status.test-helpers.js";
 import type { PluginCommandContext, PluginCommandHandler } from "../../plugins/types.js";
 import type { MsgContext } from "../templating.js";
 import { createDiagnosticsCommandHandler } from "./commands-diagnostics.js";
@@ -101,44 +103,6 @@ function buildDiagnosticsParams(
     elevated: { enabled: true, allowed: true, failures: [] },
     ...overrides,
   } as HandleCommandsParams;
-}
-
-function createBundledPluginRecord(id: string): PluginRecord {
-  return {
-    id,
-    name: id,
-    source: `bundled:${id}`,
-    rootDir: `/bundled/${id}`,
-    origin: "bundled",
-    enabled: true,
-    status: "loaded",
-    toolNames: [],
-    hookNames: [],
-    channelIds: [],
-    cliBackendIds: [],
-    providerIds: [],
-    embeddingProviderIds: [],
-    speechProviderIds: [],
-    realtimeTranscriptionProviderIds: [],
-    realtimeVoiceProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    transcriptSourceProviderIds: [],
-    imageGenerationProviderIds: [],
-    videoGenerationProviderIds: [],
-    musicGenerationProviderIds: [],
-    webFetchProviderIds: [],
-    webSearchProviderIds: [],
-    migrationProviderIds: [],
-    memoryEmbeddingProviderIds: [],
-    agentHarnessIds: [],
-    cliCommands: [],
-    services: [],
-    gatewayDiscoveryServiceIds: [],
-    commands: [],
-    httpRoutes: 0,
-    hookCount: 0,
-    configSchema: false,
-  } as PluginRecord;
 }
 
 function registerHostTrustedReservedCommandForTest(
@@ -610,7 +574,7 @@ describe("diagnostics command", () => {
   });
 
   it("requires an owner for diagnostics", async () => {
-    const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
+    const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics", {
         command: {
@@ -622,6 +586,7 @@ describe("diagnostics command", () => {
     );
 
     expect(result).toEqual({ shouldContinue: false });
+    expect(execCalls).toHaveLength(0);
   });
 
   it("routes confirmations back to the Codex diagnostics handler without repeating the preamble", async () => {

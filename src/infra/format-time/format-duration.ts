@@ -1,3 +1,5 @@
+// Duration formatting helpers produce compact, precise, and human display
+// strings from millisecond values.
 export type FormatDurationSecondsOptions = {
   decimals?: number;
   unit?: "s" | "seconds";
@@ -31,8 +33,9 @@ export function formatDurationPrecise(
   if (!Number.isFinite(ms)) {
     return "unknown";
   }
-  if (ms < 1000) {
-    return `${Math.max(0, Math.round(ms))}ms`;
+  const roundedMs = Math.max(0, Math.round(ms));
+  if (roundedMs < 1000) {
+    return `${roundedMs}ms`;
   }
   return formatDurationSeconds(ms, {
     decimals: options.decimals ?? 2,
@@ -53,8 +56,9 @@ export function formatDurationCompact(
   if (ms == null || !Number.isFinite(ms) || ms <= 0) {
     return undefined;
   }
-  if (ms < 1000) {
-    return `${Math.round(ms)}ms`;
+  const roundedMs = Math.round(ms);
+  if (roundedMs < 1000) {
+    return `${roundedMs}ms`;
   }
   const sep = options?.spaced ? " " : "";
   const totalSeconds = Math.round(ms / 1000);
@@ -83,8 +87,9 @@ export function formatDurationHuman(ms?: number | null, fallback = "n/a"): strin
   if (ms == null || !Number.isFinite(ms) || ms < 0) {
     return fallback;
   }
-  if (ms < 1000) {
-    return `${Math.round(ms)}ms`;
+  const roundedMs = Math.round(ms);
+  if (roundedMs < 1000) {
+    return `${roundedMs}ms`;
   }
   const sec = Math.round(ms / 1000);
   if (sec < 60) {

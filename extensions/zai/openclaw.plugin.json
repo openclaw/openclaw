@@ -34,6 +34,20 @@
         "api": "openai-completions",
         "models": [
           {
+            "id": "glm-5.2",
+            "name": "GLM-5.2",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
             "id": "glm-5.1",
             "name": "GLM-5.1",
             "reasoning": true,
@@ -247,6 +261,7 @@
       "provider": "zai",
       "method": "api-key",
       "choiceId": "zai-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Z.AI API key",
       "groupId": "zai",
       "groupLabel": "Z.AI",
@@ -260,6 +275,7 @@
       "provider": "zai",
       "method": "coding-global",
       "choiceId": "zai-coding-global",
+      "appGuidedSecret": true,
       "choiceLabel": "Coding-Plan-Global",
       "choiceHint": "GLM Coding Plan Global (api.z.ai)",
       "groupId": "zai",
@@ -274,6 +290,7 @@
       "provider": "zai",
       "method": "coding-cn",
       "choiceId": "zai-coding-cn",
+      "appGuidedSecret": true,
       "choiceLabel": "Coding-Plan-CN",
       "choiceHint": "GLM Coding Plan CN (open.bigmodel.cn)",
       "groupId": "zai",
@@ -288,6 +305,7 @@
       "provider": "zai",
       "method": "global",
       "choiceId": "zai-global",
+      "appGuidedSecret": true,
       "choiceLabel": "Global",
       "choiceHint": "Z.AI Global (api.z.ai)",
       "groupId": "zai",
@@ -302,6 +320,7 @@
       "provider": "zai",
       "method": "cn",
       "choiceId": "zai-cn",
+      "appGuidedSecret": true,
       "choiceLabel": "CN",
       "choiceHint": "Z.AI CN (open.bigmodel.cn)",
       "groupId": "zai",
@@ -314,7 +333,8 @@
     }
   ],
   "contracts": {
-    "mediaUnderstandingProviders": ["zai"]
+    "mediaUnderstandingProviders": ["zai"],
+    "usageProviders": ["zai"]
   },
   "mediaUnderstandingProviderMetadata": {
     "zai": {

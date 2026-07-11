@@ -1,3 +1,8 @@
+/**
+ * Auth profile repair helpers.
+ * Migrates legacy provider:default OAuth config references to safer modern
+ * profile ids chosen from store metadata and auth order.
+ */
 import {
   findNormalizedProviderKey,
   normalizeProviderId,
@@ -8,6 +13,8 @@ import { resolveAuthProfileMetadata } from "./identity.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import type { AuthProfileIdRepairResult, AuthProfileStore } from "./types.js";
 
+// Legacy OAuth setup used provider:default profile ids. Repair prefers a
+// matching email/lastGood/current OAuth profile instead of guessing broadly.
 function getProfileSuffix(profileId: string): string {
   const idx = profileId.indexOf(":");
   if (idx < 0) {
@@ -24,6 +31,7 @@ function isEmailLike(value: string): boolean {
   return trimmed.includes("@") && trimmed.includes(".");
 }
 
+/** Suggests a modern OAuth profile id for a legacy provider:default profile. */
 export function suggestOAuthProfileIdForLegacyDefault(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
@@ -85,6 +93,7 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
   return null;
 }
 
+/** Migrates config auth profile references away from a legacy OAuth default id. */
 export function repairOAuthProfileIdMismatch(params: {
   cfg: OpenClawConfig;
   store: AuthProfileStore;
@@ -114,7 +123,16 @@ export function repairOAuthProfileIdMismatch(params: {
     return { config: params.cfg, changes: [], migrated: false };
   }
 
+  // Skip repair if destination profile already exists as a separate
+  // user-configured account. Overwriting it would destroy the existing
+  // account's config (displayName, email, etc.) and collapse two distinct
+  // accounts into one. See #97522.
+  if (params.cfg.auth?.profiles?.[toProfileId]) {
+    return { config: params.cfg, changes: [], migrated: false };
+  }
+
   const { email: toEmail, displayName: toDisplayName } = resolveAuthProfileMetadata({
+    cfg: params.cfg,
     store: params.store,
     profileId: toProfileId,
   });

@@ -1,3 +1,4 @@
+// Env Limits script supports OpenClaw repository automation.
 import { die } from "./host-command.ts";
 
 const positiveIntPattern = /^[1-9]\d*$/u;
@@ -9,6 +10,14 @@ export function parsePositiveInt(value: string, label: string): number {
   }
   const parsed = Number(trimmed);
   if (!Number.isSafeInteger(parsed)) {
+    die(`invalid ${label}: ${value}`);
+  }
+  return parsed;
+}
+
+export function parseTcpPort(value: string, label: string): number {
+  const parsed = parsePositiveInt(value, label);
+  if (parsed > 65_535) {
     die(`invalid ${label}: ${value}`);
   }
   return parsed;

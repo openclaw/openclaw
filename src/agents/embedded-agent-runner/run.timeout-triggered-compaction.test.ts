@@ -1,3 +1,4 @@
+// Coverage for timeout-triggered compaction and retry routing.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
@@ -12,11 +13,14 @@ import {
   mockedRunPostCompactionSideEffects,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
 const useTwoAuthProfiles = () => {
+  // Auth rotation assertions need deterministic profile order and API key
+  // resolution across timeout compaction retries.
   mockedResolveAuthProfileOrder.mockReturnValue(["profile-a", "profile-b"]);
   mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => ({
     apiKey: `test-key-${profileId ?? "profile-a"}`,
@@ -72,13 +76,17 @@ type HookEvent = {
   compactedCount?: number;
   tokenCount?: number;
   sessionFile?: string;
+  previousSessionId?: string;
 };
 
 type HookContext = {
+  sessionId?: string;
   sessionKey?: string;
 };
 
 function compactCallAt(index: number): CompactParams {
+  // Timeout compaction tests inspect exact compactDirect params for routing,
+  // prompt-cache, and token-budget context.
   const call = mockedCompactDirect.mock.calls[index];
   if (!call) {
     throw new Error(`expected compact call ${index + 1}`);
@@ -109,6 +117,7 @@ function hookCallAt(index: number, kind: "before" | "after"): [HookEvent, HookCo
 describe("timeout-triggered compaction", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {
@@ -116,7 +125,8 @@ describe("timeout-triggered compaction", () => {
   });
 
   it("attempts compaction when LLM times out with high prompt token usage (>65%)", async () => {
-    // First attempt: timeout with high prompt usage (150k / 200k = 75%)
+    // Timeout recovery only compacts when prompt usage indicates the next retry
+    // has a realistic chance of fitting after compaction.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
@@ -503,6 +513,8 @@ describe("timeout-triggered compaction", () => {
       result: {
         summary: "engine-owned timeout compaction",
         tokensAfter: 70,
+        sessionId: "rotated-timeout-session",
+        sessionFile: "/tmp/rotated-timeout-session.json",
       },
     });
 
@@ -516,8 +528,10 @@ describe("timeout-triggered compaction", () => {
       messageCount: -1,
       compactedCount: -1,
       tokenCount: 70,
-      sessionFile: "/tmp/session.json",
+      sessionFile: "/tmp/rotated-timeout-session.json",
+      previousSessionId: "test-session",
     });
+    expect(afterContext.sessionId).toBe("rotated-timeout-session");
     expect(afterContext.sessionKey).toBe("test-key");
     expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledTimes(1);
   });
@@ -610,22 +624,29 @@ describe("timeout-triggered compaction", () => {
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
-  it("uses prompt/input tokens for ratio, not total tokens", async () => {
-    // Timeout where total tokens are high (150k) but input/prompt tokens
-    // are low (20k / 200k = 10%).  Should NOT trigger compaction because
-    // the ratio is based on prompt tokens, not total.
+  it("uses the explicit context snapshot instead of aggregate billing buckets", async () => {
+    // Server-side loops can report aggregate cache billing far above the final
+    // iteration's prompt. Timeout recovery must use the explicit 20k snapshot.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
         lastAssistant: {
-          usage: { input: 20000, total: 150000 },
+          usage: {
+            input: 20_000,
+            cacheRead: 150_000,
+            contextUsage: {
+              state: "available",
+              promptTokens: 20_000,
+              totalTokens: 20_500,
+            },
+            total: 170_500,
+          },
         } as never,
       }),
     );
 
     const result = await runEmbeddedAgent(overflowBaseRunParams);
 
-    // Despite high total tokens, low prompt tokens mean no compaction
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");

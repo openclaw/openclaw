@@ -1,3 +1,4 @@
+// Memory Core plugin module implements dreaming shadow trial behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -36,30 +37,6 @@ export type DreamingShadowTrialReport = {
   markdown: string;
 };
 
-export type DreamingShadowTrialScoreOptions = {
-  helpfulBoost?: number;
-  neutralDelta?: number;
-  harmfulPenalty?: number;
-};
-
-export type DreamingShadowTrialCandidateInput = {
-  key: string;
-  score: number;
-};
-
-export type DreamingShadowTrialCandidateScore<T extends DreamingShadowTrialCandidateInput> = {
-  candidate: T;
-  scoreBeforeShadowTrial: number;
-  scoreAfterShadowTrial: number;
-  shadowTrialScoreDelta: number;
-  shadowTrialVerdict: DreamingShadowTrialVerdict;
-  shadowTrialRecommendation: DreamingShadowTrialRecommendation;
-  shadowTrialRiskFlags: string[];
-  shadowTrialEvidenceRefs: string[];
-  rejectedByShadowTrial: boolean;
-  scoringAction: "report-only";
-};
-
 function normalizeRequiredText(value: string, label: string): string {
   const normalized = value.trim().replace(/\s+/g, " ");
   if (!normalized) {
@@ -75,20 +52,6 @@ function normalizeList(values: string[] | undefined, fallback: string): string[]
 
 function normalizeDataList(values: string[] | undefined): string[] {
   return (values ?? []).map((value) => value.trim()).filter(Boolean);
-}
-
-function clampScore(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  return Math.max(0, Math.min(1, value));
-}
-
-function normalizeScoreDelta(value: number, fallback: number): number {
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(-1, Math.min(1, value));
 }
 
 export function resolveDreamingShadowTrialRecommendation(
@@ -128,19 +91,6 @@ function resolveReportContentHash(params: {
     params.evidenceRefs,
   ]);
   return crypto.createHash("sha256").update(seed).digest("hex").slice(0, 12);
-}
-
-function resolveDreamingShadowTrialScoreDelta(
-  verdict: DreamingShadowTrialVerdict,
-  options?: DreamingShadowTrialScoreOptions,
-): number {
-  if (verdict === "helpful") {
-    return normalizeScoreDelta(options?.helpfulBoost ?? 0.04, 0.04);
-  }
-  if (verdict === "harmful") {
-    return normalizeScoreDelta(options?.harmfulPenalty ?? -1, -1);
-  }
-  return normalizeScoreDelta(options?.neutralDelta ?? 0, 0);
 }
 
 export function defaultDreamingShadowTrialReportPath(params: {
@@ -277,68 +227,6 @@ export function buildDreamingShadowTrialReport(
     ...(reportPath ? { reportPath } : {}),
     markdown,
   };
-}
-
-export function scoreDreamingShadowTrialCandidate<T extends DreamingShadowTrialCandidateInput>(
-  candidate: T,
-  report: Pick<
-    DreamingShadowTrialReport,
-    "verdict" | "recommendation" | "riskFlags" | "evidenceRefs"
-  >,
-  options?: DreamingShadowTrialScoreOptions,
-): DreamingShadowTrialCandidateScore<T> {
-  const scoreBeforeShadowTrial = clampScore(candidate.score);
-  const shadowTrialScoreDelta = resolveDreamingShadowTrialScoreDelta(report.verdict, options);
-  const rejectedByShadowTrial = report.verdict === "harmful" || report.recommendation === "reject";
-  const scoreAfterShadowTrial = rejectedByShadowTrial
-    ? 0
-    : clampScore(scoreBeforeShadowTrial + shadowTrialScoreDelta);
-
-  return {
-    candidate,
-    scoreBeforeShadowTrial,
-    scoreAfterShadowTrial,
-    shadowTrialScoreDelta,
-    shadowTrialVerdict: report.verdict,
-    shadowTrialRecommendation: report.recommendation,
-    shadowTrialRiskFlags: normalizeDataList(report.riskFlags),
-    shadowTrialEvidenceRefs: normalizeDataList(report.evidenceRefs),
-    rejectedByShadowTrial,
-    scoringAction: "report-only",
-  };
-}
-
-export function rankDreamingShadowTrialCandidates<T extends DreamingShadowTrialCandidateInput>(
-  candidates: readonly T[],
-  reportsByCandidateKey: ReadonlyMap<string, DreamingShadowTrialReport>,
-  options?: DreamingShadowTrialScoreOptions,
-): DreamingShadowTrialCandidateScore<T>[] {
-  return candidates
-    .map((candidate) => {
-      const report = reportsByCandidateKey.get(candidate.key);
-      if (!report) {
-        const score = clampScore(candidate.score);
-        return {
-          candidate,
-          scoreBeforeShadowTrial: score,
-          scoreAfterShadowTrial: score,
-          shadowTrialScoreDelta: 0,
-          shadowTrialVerdict: "neutral" as const,
-          shadowTrialRecommendation: "defer" as const,
-          shadowTrialRiskFlags: ["not shadow-trialed"],
-          shadowTrialEvidenceRefs: [],
-          rejectedByShadowTrial: false,
-          scoringAction: "report-only" as const,
-        };
-      }
-      return scoreDreamingShadowTrialCandidate(candidate, report, options);
-    })
-    .toSorted((left, right) => {
-      if (left.rejectedByShadowTrial !== right.rejectedByShadowTrial) {
-        return left.rejectedByShadowTrial ? 1 : -1;
-      }
-      return right.scoreAfterShadowTrial - left.scoreAfterShadowTrial;
-    });
 }
 
 export async function writeDreamingShadowTrialReport(

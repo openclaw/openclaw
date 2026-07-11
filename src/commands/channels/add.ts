@@ -1,3 +1,4 @@
+// Implements guided and non-interactive `openclaw channels add` account setup.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
@@ -12,10 +13,10 @@ import {
   formatUnknownChannelMessage,
   formatUnsupportedChannelActionMessage,
 } from "../../cli/error-format.js";
-import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
+import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -80,6 +81,32 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
   });
 }
 
+async function resolveInitialWizardChannel(
+  raw: string,
+  cfg: OpenClawConfig,
+): Promise<ChannelChoice | undefined> {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  const [{ listActiveChannelSetupPlugins }, { resolveChannelSetupEntries }] = await Promise.all([
+    import("../../channels/plugins/setup-registry.js"),
+    import("../channel-setup/discovery.js"),
+  ]);
+  const resolved = resolveChannelSetupEntries({
+    cfg,
+    installedPlugins: listActiveChannelSetupPlugins(),
+    workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
+  });
+  return resolved.entries.find(
+    (entry) =>
+      normalizeOptionalLowercaseString(entry.id) === normalized ||
+      (entry.meta.aliases ?? []).some(
+        (alias) => normalizeOptionalLowercaseString(alias) === normalized,
+      ),
+  )?.id;
+}
+
 function parseOptionalInt(value: unknown, flag: string): number | undefined {
   if (value === undefined || value === null || value === "") {
     return undefined;
@@ -124,6 +151,7 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
   return input as ChannelSetupInput;
 }
 
+/** Add or configure a channel account, using the wizard when no concrete flags are supplied. */
 export async function channelsAddCommand(
   opts: ChannelsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -165,9 +193,12 @@ async function channelsAddCommandImpl(
     let selection: ChannelChoice[] = [];
     const accountIds: Partial<Record<ChannelChoice, string>> = {};
     const resolvedPlugins = new Map<ChannelChoice, ChannelSetupPlugin>();
+    const initialChannel = await resolveInitialWizardChannel(opts.channel ?? "", cfg);
     await prompter.intro("Channel setup");
     let nextConfigLocal = await onboardChannels.setupChannels(cfg, runtime, prompter, {
+      ...(initialChannel ? { initialSelection: [initialChannel] } : {}),
       allowDisable: false,
+      allowIMessageInstall: true,
       allowSignalInstall: true,
       onPostWriteHook: (hook) => {
         postWriteHooks.collect(hook);

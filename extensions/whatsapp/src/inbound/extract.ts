@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements extract behavior.
 import type { proto } from "baileys";
 import { extractMessageContent, getContentType, normalizeMessageContent } from "baileys";
 import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
@@ -267,6 +268,26 @@ export function extractText(rawMessage: proto.IMessage | undefined): string | un
   return undefined;
 }
 
+export function extractExternalAdReplyContext(rawMessage: proto.IMessage | undefined):
+  | {
+      title?: string;
+      sourceUrl?: string;
+      body?: string;
+    }
+  | undefined {
+  const message = unwrapMessage(rawMessage);
+  const adReply =
+    message?.imageMessage?.contextInfo?.externalAdReply ??
+    message?.videoMessage?.contextInfo?.externalAdReply;
+  if (!adReply) {
+    return undefined;
+  }
+  const title = adReply.title?.trim() || undefined;
+  const sourceUrl = adReply.sourceUrl?.trim() || undefined;
+  const body = adReply.body?.trim() || undefined;
+  return title || sourceUrl || body ? { title, sourceUrl, body } : undefined;
+}
+
 export function extractMediaPlaceholder(
   rawMessage: proto.IMessage | undefined,
 ): string | undefined {
@@ -278,7 +299,7 @@ export function extractMediaPlaceholder(
     return "<media:image>";
   }
   if (message.videoMessage) {
-    return "<media:video>";
+    return message.videoMessage.gifPlayback === true ? "<media:gif>" : "<media:video>";
   }
   if (message.audioMessage) {
     return "<media:audio>";

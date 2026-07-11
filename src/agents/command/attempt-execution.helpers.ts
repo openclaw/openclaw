@@ -1,3 +1,7 @@
+/**
+ * Helper functions for agent attempt execution, Claude CLI transcript probing,
+ * fallback prompts, and ACP visible-text accumulation.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
@@ -8,7 +12,11 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../../auto-reply/tokens.js";
-import { resolveToolUseId, type ToolContentBlock } from "../../chat/tool-content.js";
+import {
+  isToolCallBlock,
+  resolveToolUseId,
+  type ToolContentBlock,
+} from "../../chat/tool-content.js";
 import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
@@ -83,6 +91,7 @@ export async function sessionFileHasContent(sessionFile: string | undefined): Pr
   return await jsonlFileHasAssistantMessage(sessionFile);
 }
 
+/** Resolves the expected Claude CLI transcript JSONL path for a session. */
 export function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
@@ -108,6 +117,7 @@ export function claudeCliSessionTranscriptPath(params: {
 const CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS = 250;
 const CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES = 1024 * 1024;
 
+/** Checks whether Claude CLI has flushed assistant content for a session. */
 export async function claudeCliSessionTranscriptHasContent(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
@@ -243,6 +253,7 @@ async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<bo
   }
 }
 
+/** Checks whether the latest Claude CLI transcript tail has unanswered tool use. */
 export async function claudeCliSessionTranscriptHasOrphanedToolUse(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
@@ -259,6 +270,7 @@ export async function claudeCliSessionTranscriptHasOrphanedToolUse(params: {
   return await jsonlFileHasOrphanedTrailingToolUse(expectedPath);
 }
 
+/** Builds the retry prompt sent to fallback models after a failed attempt. */
 export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;
@@ -312,7 +324,7 @@ function extractFallbackTurnText(message: FallbackTurnLikeMessage): string {
     // Tool calls: render as a compact "(tool: name)" hint so the fallback
     // model sees the conversation flow without the full tool argument blob,
     // which is rarely useful out of context and chews through char budget.
-    if (rec.type === "tool_use" && typeof rec.name === "string") {
+    if (isToolCallBlock(rec) && typeof rec.name === "string") {
       parts.push(`(tool call: ${rec.name})`);
       continue;
     }
@@ -435,6 +447,7 @@ export function buildClaudeCliFallbackContextPrelude(params: {
   return formatClaudeCliFallbackPrelude(seed, { charBudget: params.charBudget });
 }
 
+/** Creates an accumulator that strips ACP silent-reply prefixes while streaming. */
 export function createAcpVisibleTextAccumulator() {
   let pendingSilentPrefix = "";
   let visibleText = "";

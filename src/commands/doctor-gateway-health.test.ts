@@ -1,14 +1,42 @@
+// Doctor gateway health tests cover gateway probe failures, auth requirements, and repair messages.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+  GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+} from "./gateway-health-auth-diagnostic.js";
 
 const callGateway = vi.hoisted(() => vi.fn());
+const isGatewayCredentialsRequiredError = vi.hoisted(() => vi.fn(() => false));
+const isGatewayTransportError = vi.hoisted(() => vi.fn((_value: unknown) => false));
+const isGatewaySecretRefUnavailableError = vi.hoisted(() => vi.fn(() => false));
+const probeGatewayStatus = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
+const TEST_GATEWAY_URL = "ws://127.0.0.1:18789";
+const TEST_AUTH_CLOSE_ERROR = "gateway closed (1008):";
+const TEST_TLS_FINGERPRINT = "sha256:test-doctor-gateway-fingerprint";
 
 vi.mock("../gateway/call.js", () => ({
   buildGatewayConnectionDetails: vi.fn(() => ({
-    message: "Gateway target: ws://127.0.0.1:18789",
+    message: `Gateway target: ${TEST_GATEWAY_URL}`,
+    url: TEST_GATEWAY_URL,
+  })),
+  buildGatewayProbeConnectionDetails: vi.fn(() => ({
+    preauthHandshakeTimeoutMs: 4321,
+    tlsFingerprint: TEST_TLS_FINGERPRINT,
+    url: TEST_GATEWAY_URL,
   })),
   callGateway,
+  isGatewayCredentialsRequiredError,
+  isGatewayTransportError,
+}));
+
+vi.mock("../gateway/credentials.js", () => ({
+  isGatewaySecretRefUnavailableError,
+}));
+
+vi.mock("../cli/daemon-cli/probe.js", () => ({
+  probeGatewayStatus,
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
@@ -26,6 +54,13 @@ describe("checkGatewayHealth", () => {
 
   beforeEach(() => {
     callGateway.mockReset();
+    isGatewayCredentialsRequiredError.mockReset();
+    isGatewayCredentialsRequiredError.mockReturnValue(false);
+    isGatewayTransportError.mockReset();
+    isGatewayTransportError.mockReturnValue(false);
+    isGatewaySecretRefUnavailableError.mockReset();
+    isGatewaySecretRefUnavailableError.mockReturnValue(false);
+    probeGatewayStatus.mockReset();
     note.mockReset();
   });
 
@@ -35,7 +70,7 @@ describe("checkGatewayHealth", () => {
 
     await expect(
       checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({ healthOk: true, status: { ok: true } });
+    ).resolves.toEqual({ authenticated: true, healthOk: true, status: { ok: true } });
 
     expect(callGateway).toHaveBeenNthCalledWith(1, {
       method: "status",
@@ -58,7 +93,11 @@ describe("checkGatewayHealth", () => {
 
     await expect(
       checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({ healthOk: true, status: { runtimeVersion: "2026.4.23" } });
+    ).resolves.toEqual({
+      authenticated: true,
+      healthOk: true,
+      status: { runtimeVersion: "2026.4.23" },
+    });
 
     const mismatchNotes = note.mock.calls
       .filter(([, title]) => title === "OpenClaw version mismatch")
@@ -78,12 +117,94 @@ describe("checkGatewayHealth", () => {
 
     await expect(
       checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({ healthOk: false });
+    ).resolves.toEqual({ authenticated: false, healthOk: false, status: undefined });
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("gateway timeout after 3000ms"),
     );
+  });
+
+  it("reports the typed close reason instead of claiming the gateway is not running", async () => {
+    const error = Object.assign(
+      new Error("gateway closed (1008): \u001B]52;c;YXR0YWNr\u0007protocol version mismatch"),
+      {
+        kind: "closed",
+      },
+    );
+    callGateway.mockRejectedValueOnce(error);
+    isGatewayTransportError.mockImplementation((value) => value === error);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(
+      "Gateway connect failed: gateway closed (1008): protocol version mismatch",
+      "Gateway",
+    );
+    expect(note).not.toHaveBeenCalledWith("Gateway not running.", "Gateway");
+  });
+
+  it("reports credentials-required when status RPC auth blocks a reachable gateway", async () => {
+    callGateway.mockRejectedValueOnce(new Error());
+    isGatewayCredentialsRequiredError.mockReturnValueOnce(true);
+    probeGatewayStatus.mockResolvedValueOnce({
+      ok: false,
+      kind: "connect",
+      error: TEST_AUTH_CLOSE_ERROR,
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: false, healthOk: true });
+
+    expect(probeGatewayStatus).toHaveBeenCalledWith({
+      url: TEST_GATEWAY_URL,
+      timeoutMs: 3000,
+      tlsFingerprint: TEST_TLS_FINGERPRINT,
+      preauthHandshakeTimeoutMs: 4321,
+      config: cfg,
+      json: true,
+    });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+    );
+    expect(callGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports credentials-required when status RPC auth SecretRefs are unavailable", async () => {
+    const error = new Error("gateway.auth.password unavailable");
+    callGateway.mockRejectedValueOnce(error);
+    isGatewaySecretRefUnavailableError.mockReturnValueOnce(true);
+    probeGatewayStatus.mockResolvedValueOnce({
+      ok: false,
+      kind: "connect",
+      error: TEST_AUTH_CLOSE_ERROR,
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: false, healthOk: true });
+
+    expect(isGatewaySecretRefUnavailableError).toHaveBeenCalledWith(error);
+    expect(probeGatewayStatus).toHaveBeenCalledWith({
+      url: TEST_GATEWAY_URL,
+      timeoutMs: 3000,
+      tlsFingerprint: TEST_TLS_FINGERPRINT,
+      preauthHandshakeTimeoutMs: 4321,
+      config: cfg,
+      json: true,
+    });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+    );
+    expect(callGateway).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -116,7 +237,7 @@ describe("probeGatewayMemoryStatus", () => {
     // A transport timeout must NOT be treated as a skipped probe. It is a real
     // diagnostic signal and the renderer should warn for key-optional providers.
     callGateway.mockRejectedValue(
-      new Error("gateway timeout after 8000ms\nGateway target: ws://127.0.0.1:18789"),
+      new Error(`gateway timeout after 8000ms\nGateway target: ${TEST_GATEWAY_URL}`),
     );
 
     const result = await probeGatewayMemoryStatus({ cfg });

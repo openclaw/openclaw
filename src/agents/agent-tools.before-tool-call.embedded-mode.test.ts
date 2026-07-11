@@ -1,9 +1,27 @@
+/**
+ * Tests before_tool_call approval behavior in embedded mode.
+ * Ensures gateway approval requests use non-blocking semantics and preserve
+ * plugin hook decisions.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import {
+  EmbeddedPluginApprovalBroker,
+  setEmbeddedPluginApprovalBroker,
+} from "../infra/embedded-plugin-approval-broker.js";
+import {
+  getGlobalHookRunner,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -64,6 +82,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   let runBeforeToolCallMock: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>;
 
   beforeEach(() => {
+    resetGlobalHookRunner();
     runBeforeToolCallMock = vi.fn<HookRunner["runBeforeToolCall"]>();
     hookRunner = {
       hasHooks: vi.fn<HookRunner["hasHooks"]>().mockReturnValue(true),
@@ -75,8 +94,11 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
+    setEmbeddedPluginApprovalBroker(null);
     setEmbeddedMode(false);
     setActivePluginRegistry(createEmptyPluginRegistry());
+    resetGlobalHookRunner();
   });
 
   it("blocks approval-required tools in embedded mode when no gateway approval route exists", async () => {
@@ -104,6 +126,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(result).toEqual({
       blocked: true,
       kind: "failure",
+      disposition: "failed",
       deniedReason: "plugin-approval",
       reason: "Plugin approval required (gateway unavailable)",
       params: { command: "ls" },
@@ -132,6 +155,71 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.CANCELLED);
   });
 
+  it("resolves embedded approvals through the in-process TUI broker", async () => {
+    setEmbeddedMode(true);
+    const broker = new EmbeddedPluginApprovalBroker();
+    setEmbeddedPluginApprovalBroker(broker);
+    runBeforeToolCallMock.mockResolvedValue({
+      params: { action: "apply", proposal_id: "weather" },
+    });
+
+    const resultPromise = runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: { action: "apply", proposal_id: "weather" },
+      toolCallId: "call-skill-local",
+      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+    await vi.waitFor(() => {
+      expect(broker.listPending()).toHaveLength(1);
+    });
+    const approval = broker.listPending()[0];
+    expect(approval?.request.toolName).toBe("skill_workshop");
+    expect(broker.resolve(approval?.id, "allow-once")).toBe(true);
+
+    await expect(resultPromise).resolves.toEqual({
+      blocked: false,
+      params: { action: "apply", proposal_id: "weather" },
+      approvalResolution: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("does not allow embedded approvals when the broker stops", async () => {
+    setEmbeddedMode(true);
+    const broker = new EmbeddedPluginApprovalBroker();
+    setEmbeddedPluginApprovalBroker(broker);
+    const onResolution = vi.fn();
+    runBeforeToolCallMock.mockResolvedValue({
+      requireApproval: {
+        pluginId: "test-plugin",
+        title: "Needs approval",
+        description: "Test approval request",
+        severity: "info",
+        timeoutBehavior: "allow",
+        onResolution,
+      },
+      params: { adjusted: true },
+    });
+
+    const resultPromise = runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: { action: "apply", proposal_id: "weather" },
+      toolCallId: "call-skill-stop",
+      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+    await vi.waitFor(() => {
+      expect(broker.listPending()).toHaveLength(1);
+    });
+
+    broker.stop(new Error("local TUI stopped"));
+
+    await expect(resultPromise).resolves.toMatchObject({
+      blocked: true,
+      deniedReason: "plugin-approval",
+    });
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.CANCELLED);
+  });
+
   it("reports approval-required tools without opening an approval request", async () => {
     runBeforeToolCallMock.mockResolvedValue({
       requireApproval: {
@@ -153,6 +241,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(result).toEqual({
       blocked: true,
       kind: "failure",
+      disposition: "blocked",
       deniedReason: "plugin-approval",
       reason: "Review before running",
       params: { command: "ls" },
@@ -210,6 +299,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       toolName: "exec",
       params: { command: "ls" },
       toolCallId: "call-2",
+      ctx: { approvalReviewerDeviceId: "device-tui-reviewer" },
     });
 
     expect(result.blocked).toBe(true);
@@ -221,6 +311,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(approvalCall.request.severity).toBe("info");
     expect(approvalCall.request.toolName).toBe("exec");
     expect(approvalCall.request.toolCallId).toBe("call-2");
+    expect(approvalCall.request.approvalReviewerDeviceIds).toEqual(["device-tui-reviewer"]);
     expect(approvalCall.request.timeoutMs).toBe(5_000);
     expect(approvalCall.request.twoPhase).toBe(true);
     expect(approvalCall.options.expectFinal).toBe(false);
@@ -349,6 +440,8 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     );
     expect(approvalCall.request.severity).toBe("warning");
     expect(approvalCall.request.allowedDecisions).toEqual(["allow-once", "deny"]);
+    expect(approvalCall.request.timeoutMs).toBe(70_000);
+    expect(approvalCall.timeoutParams.timeoutMs).toBe(80_000);
     expect(approvalCall.request.toolName).toBe("skill_workshop");
     expect(approvalCall.request.toolCallId).toBe("call-skill-apply");
     expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
@@ -392,6 +485,32 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       expect(adjustedApprovalCall.request.toolCallId).toBe("call-skill-hook-apply");
       expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it("returns an actionable pending outcome when skill_workshop approval expires", async () => {
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "skill-workshop-timeout",
+      status: "accepted",
+    });
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "skill-workshop-timeout",
+      decision: null,
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
+      toolCallId: "call-skill-timeout",
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toMatchObject({
+      blocked: true,
+      kind: "veto",
+      deniedReason: "plugin-approval",
+      reason:
+        "The Skill Workshop approval request expired without a decision. This lifecycle call left the proposal unchanged and pending; check its current status in case another operator acted on it. Decide in the Skill Workshop UI or run `openclaw skills workshop apply|reject|quarantine <id>`. Do not retry this tool call in a loop.",
+    });
   });
 
   it("runs trusted policies before skill_workshop lifecycle approval", async () => {
@@ -440,6 +559,94 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();
   });
 
+  it("runs trusted policies from the global hook registry after the active registry changes", async () => {
+    const evaluatePolicy = vi.fn(() => ({
+      block: true,
+      blockReason: "gateway registry policy blocked",
+    }));
+    const gatewayRegistry = createEmptyPluginRegistry();
+    gatewayRegistry.trustedToolPolicies = [
+      {
+        pluginId: "gateway-policy",
+        pluginName: "Gateway Policy",
+        source: "test",
+        policy: {
+          id: "gateway-block",
+          description: "Gateway policy",
+          evaluate: evaluatePolicy,
+        },
+      },
+    ];
+    initializeGlobalHookRunner(gatewayRegistry);
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    runBeforeToolCallMock.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "deploy" },
+      toolCallId: "call-gateway-policy",
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toEqual({
+      blocked: true,
+      kind: "veto",
+      deniedReason: "plugin-before-tool-call",
+      reason: "gateway registry policy blocked",
+      params: { command: "deploy" },
+    });
+    expect(evaluatePolicy).toHaveBeenCalledTimes(1);
+    expect(runBeforeToolCallMock).not.toHaveBeenCalled();
+  });
+
+  it("runs pinned gateway trusted policies after a later global runner initialization", async () => {
+    const evaluatePolicy = vi.fn(() => ({
+      block: true,
+      blockReason: "pinned gateway policy blocked",
+    }));
+    const gatewayRegistry = createEmptyPluginRegistry();
+    gatewayRegistry.trustedToolPolicies = [
+      {
+        pluginId: "gateway-policy",
+        pluginName: "Gateway Policy",
+        source: "test",
+        policy: {
+          id: "gateway-block",
+          description: "Gateway policy",
+          evaluate: evaluatePolicy,
+        },
+      },
+    ];
+    setActivePluginRegistry(gatewayRegistry);
+    initializeGlobalHookRunner(gatewayRegistry);
+    pinActivePluginChannelRegistry(gatewayRegistry);
+    try {
+      const laterRegistry = createEmptyPluginRegistry();
+      setActivePluginRegistry(laterRegistry);
+      initializeGlobalHookRunner(laterRegistry);
+      runBeforeToolCallMock.mockResolvedValue(undefined);
+
+      const result = await runBeforeToolCallHook({
+        toolName: "bash",
+        params: { command: "deploy" },
+        toolCallId: "call-pinned-gateway-policy",
+        ctx: { agentId: "main", sessionKey: "main" },
+      });
+
+      expect(result).toEqual({
+        blocked: true,
+        kind: "veto",
+        deniedReason: "plugin-before-tool-call",
+        reason: "pinned gateway policy blocked",
+        params: { command: "deploy" },
+      });
+      expect(evaluatePolicy).toHaveBeenCalledTimes(1);
+      expect(runBeforeToolCallMock).not.toHaveBeenCalled();
+    } finally {
+      releasePinnedPluginChannelRegistry(gatewayRegistry);
+    }
+  });
+
   it("does not require skill_workshop lifecycle approval in auto mode", async () => {
     (hookRunner.hasHooks as ReturnType<typeof vi.fn>).mockReturnValue(false);
 
@@ -460,6 +667,30 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(result).toEqual({
       blocked: false,
       params: { action: "reject", proposal_id: "weather-20260530-a1b2c3d4e5" },
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(runBeforeToolCallMock).not.toHaveBeenCalled();
+  });
+
+  it("uses runtime config for skill_workshop auto mode when hook context config is absent", async () => {
+    (hookRunner.hasHooks as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    setRuntimeConfigSnapshot({
+      skills: {
+        workshop: {
+          approvalPolicy: "auto",
+        },
+      },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toEqual({
+      blocked: false,
+      params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
     });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();

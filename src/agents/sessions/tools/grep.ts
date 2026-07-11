@@ -1,16 +1,26 @@
+/**
+ * Built-in grep session tool.
+ *
+ * Searches files with ripgrep/local operations, optional context, and bounded output rendering.
+ */
 import { spawn } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { appendBoundedTextTail, normalizePositiveLimit } from "./limits.js";
 import { resolveToCwd } from "./path-utils.js";
-import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
+import {
+  appendSessionToolTruncationWarning,
+  formatSessionToolOutput,
+  invalidArgText,
+  shortenPath,
+  str,
+} from "./render-utils.js";
 import type { GrepToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import {
@@ -103,36 +113,17 @@ function formatGrepResult(
   theme: typeof import("../../modes/interactive/theme/theme.js").theme,
   showImages: boolean,
 ): string {
-  const output = getTextOutput(result, showImages).trim();
-  let text = "";
-  if (output) {
-    const lines = output.split("\n");
-    const maxLines = options.expanded ? lines.length : 15;
-    const displayLines = lines.slice(0, maxLines);
-    const remaining = lines.length - maxLines;
-    text += `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
-    if (remaining > 0) {
-      text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")})`;
-    }
-  }
-
   const matchLimit = result.details?.matchLimitReached;
-  const truncation = result.details?.truncation;
   const linesTruncated = result.details?.linesTruncated;
-  if (matchLimit || truncation?.truncated || linesTruncated) {
-    const warnings: string[] = [];
-    if (matchLimit) {
-      warnings.push(`${matchLimit} matches limit`);
-    }
-    if (truncation?.truncated) {
-      warnings.push(`${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit`);
-    }
-    if (linesTruncated) {
-      warnings.push("some lines truncated");
-    }
-    text += `\n${theme.fg("warning", `[Truncated: ${warnings.join(", ")}]`)}`;
-  }
-  return text;
+  return appendSessionToolTruncationWarning(
+    formatSessionToolOutput(result, options, theme, showImages, 15),
+    theme,
+    {
+      limit: matchLimit ? { count: matchLimit, noun: "matches" } : undefined,
+      truncation: result.details?.truncation,
+      additionalWarnings: linesTruncated ? ["some lines truncated"] : undefined,
+    },
+  );
 }
 
 export function createGrepToolDefinition(
@@ -173,21 +164,49 @@ export function createGrepToolDefinition(
       void onUpdate;
       void ctx;
       return new Promise((resolve, reject) => {
-        if (signal?.aborted) {
-          reject(new Error("Operation aborted"));
-          return;
-        }
+        // Keep cancellation live from the first await through async result formatting.
+        // Settlement owns listener cleanup; spawned children stop without waiting for close.
         let settled = false;
-        const settle = (fn: () => void) => {
-          if (!settled) {
-            settled = true;
-            fn();
+        let child: ReturnType<typeof spawn> | undefined;
+        let childClosed = false;
+        let rl: ReturnType<typeof createInterface> | undefined;
+        let killedDueToLimit = false;
+        const cleanup = () => {
+          rl?.close();
+          signal?.removeEventListener("abort", onAbort);
+        };
+        const settle = (fn: () => void): boolean => {
+          if (settled) {
+            return false;
+          }
+          settled = true;
+          cleanup();
+          fn();
+          return true;
+        };
+        const stopChild = (dueToLimit = false) => {
+          if (child && !childClosed && !child.killed) {
+            killedDueToLimit = dueToLimit;
+            child.kill();
           }
         };
+        const onAbort = () => {
+          if (settle(() => reject(new Error("Operation aborted")))) {
+            stopChild();
+          }
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
 
         void (async () => {
           try {
             const rgPath = await ensureTool("rg", true);
+            if (settled) {
+              return;
+            }
             if (!rgPath) {
               settle(() =>
                 reject(new Error("ripgrep (rg) is not available and could not be downloaded")),
@@ -202,6 +221,9 @@ export function createGrepToolDefinition(
               isDirectory = await ops.isDirectory(searchPath);
             } catch {
               settle(() => reject(new Error(`Path not found: ${searchPath}`)));
+              return;
+            }
+            if (settled) {
               return;
             }
 
@@ -244,34 +266,34 @@ export function createGrepToolDefinition(
             }
             args.push("--", pattern, searchPath);
 
-            const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
-            const rl = createInterface({ input: child.stdout });
+            if (settled) {
+              return;
+            }
+            const spawnedChild = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+            child = spawnedChild;
+            rl = createInterface({ input: spawnedChild.stdout });
             let stderr = "";
             let matchCount = 0;
             let matchLimitReached = false;
             let linesTruncated = false;
-            let aborted = false;
-            let killedDueToLimit = false;
             const outputLines: string[] = [];
 
-            const cleanup = () => {
-              rl.close();
-              signal?.removeEventListener("abort", onAbort);
-            };
-            const stopChild = (dueToLimit = false) => {
-              if (!child.killed) {
-                killedDueToLimit = dueToLimit;
-                child.kill();
-              }
-            };
-            const onAbort = () => {
-              aborted = true;
-              stopChild();
-            };
-            signal?.addEventListener("abort", onAbort, { once: true });
-            child.stderr?.on("data", (chunk) => {
+            spawnedChild.stderr?.on("data", (chunk) => {
               stderr = appendBoundedTextTail(stderr, chunk);
             });
+            const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
+              if (settled) {
+                return;
+              }
+              if (settle(() => reject(new Error(`ripgrep ${stream} error: ${error.message}`)))) {
+                stopChild();
+              }
+            };
+            // readline re-emits input failures, then drops its input listener on close.
+            // Keep the direct guard until child exit so later stdout errors stay handled.
+            rl.on("error", (error) => onStreamError("stdout", error));
+            spawnedChild.stdout?.on("error", (error) => onStreamError("stdout", error));
+            spawnedChild.stderr?.on("error", (error) => onStreamError("stderr", error));
 
             const formatBlock = async (filePath: string, lineNumber: number): Promise<string[]> => {
               const relativePath = formatPath(filePath);
@@ -335,15 +357,14 @@ export function createGrepToolDefinition(
               }
             });
 
-            child.on("error", (error) => {
-              cleanup();
+            spawnedChild.on("error", (error) => {
+              childClosed = true;
               settle(() => reject(new Error(`Failed to run ripgrep: ${error.message}`)));
             });
-            child.on("close", (code) => {
+            spawnedChild.on("close", (code) => {
+              childClosed = true;
               void (async () => {
-                cleanup();
-                if (aborted) {
-                  settle(() => reject(new Error("Operation aborted")));
+                if (settled) {
                   return;
                 }
                 if (!killedDueToLimit && code !== 0 && code !== 1) {
@@ -376,6 +397,9 @@ export function createGrepToolDefinition(
                     outputLines.push(`${relativePath}:${match.lineNumber}: ${truncatedText}`);
                   } else {
                     const block = await formatBlock(match.filePath, match.lineNumber);
+                    if (settled) {
+                      return;
+                    }
                     outputLines.push(...block);
                   }
                 }
@@ -412,10 +436,14 @@ export function createGrepToolDefinition(
                     details: Object.keys(details).length > 0 ? details : undefined,
                   }),
                 );
-              })();
+              })().catch((err: unknown) => {
+                settle(() => reject(err as Error));
+              });
             });
           } catch (err) {
-            settle(() => reject(err as Error));
+            if (settle(() => reject(err as Error))) {
+              stopChild();
+            }
           }
         })();
       });

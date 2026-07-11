@@ -1,3 +1,4 @@
+// Covers miscellaneous config schema defaults and validation cases.
 import { describe, expect, it } from "vitest";
 import {
   getConfigValueAtPath,
@@ -58,6 +59,20 @@ describe("boolean config validation", () => {
   });
 });
 
+describe("agent timeoutSeconds config", () => {
+  it.each([
+    ["unlimited opt-in", 0, true],
+    ["finite", 600, true],
+    ["negative", -1, false],
+    ["fractional", 1.5, false],
+  ])("agents.defaults.timeoutSeconds %s", (_label, timeoutSeconds, ok) => {
+    const result = OpenClawSchema.safeParse({
+      agents: { defaults: { timeoutSeconds } },
+    });
+    expect(result.success).toBe(ok);
+  });
+});
+
 describe("model provider localService config", () => {
   it("accepts standalone timeout overlays for bundled model providers", () => {
     const result = OpenClawSchema.safeParse({
@@ -76,11 +91,15 @@ describe("model provider localService config", () => {
     }
   });
 
-  it("accepts standalone timeout overlays for Xiaomi Token Plan", () => {
+  it.each([
+    { provider: "x-ai", name: "xAI alias" },
+    { provider: "xiaomi-token-plan", name: "Xiaomi Token Plan" },
+    { provider: "tencent-tokenplan", name: "Tencent TokenPlan" },
+  ] as const)("accepts standalone timeout overlays for $name", ({ provider }) => {
     const result = validateConfigObjectRaw({
       models: {
         providers: {
-          "xiaomi-token-plan": {
+          [provider]: {
             timeoutSeconds: 600,
           },
         },
@@ -89,9 +108,9 @@ describe("model provider localService config", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.timeoutSeconds).toBe(600);
-      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.models).toEqual([]);
-      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.baseUrl).toBe("");
+      expect(result.config.models?.providers?.[provider]?.timeoutSeconds).toBe(600);
+      expect(result.config.models?.providers?.[provider]?.models).toEqual([]);
+      expect(result.config.models?.providers?.[provider]?.baseUrl).toBe("");
     }
   });
 
@@ -421,6 +440,30 @@ describe("crestodian.rescue", () => {
 });
 
 describe("diagnostics.otel.captureContent", () => {
+  it("accepts supported OTEL log exporters and rejects unknown values", () => {
+    for (const logsExporter of ["otlp", "stdout", "both"]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: {
+          otel: {
+            logs: true,
+            logsExporter,
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+    }
+
+    const invalid = OpenClawSchema.safeParse({
+      diagnostics: {
+        otel: {
+          logs: true,
+          logsExporter: "stderr",
+        },
+      },
+    });
+    expect(invalid.success).toBe(false);
+  });
+
   it("accepts boolean and granular OTEL content capture config", () => {
     for (const captureContent of [
       true,
@@ -475,6 +518,32 @@ describe("ui.seamColor", () => {
   it("rejects invalid hex length", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500FF" } });
     expect(res.ok).toBe(false);
+  });
+});
+
+describe("tui.footer.showRemoteHost", () => {
+  it("accepts the TUI remote-host footer toggle", () => {
+    const result = OpenClawSchema.safeParse({
+      tui: {
+        footer: {
+          showRemoteHost: true,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown TUI footer keys", () => {
+    const result = OpenClawSchema.safeParse({
+      tui: {
+        footer: {
+          showLocalHost: true,
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
   });
 });
 
@@ -773,12 +842,28 @@ describe("gateway.remote.transport", () => {
         remote: {
           remotePort: 18789,
           sshTarget: "user@example.test",
+          sshHostKeyPolicy: "openssh",
           transport: "ssh",
           url: "ws://127.0.0.1:18789",
         },
       },
     });
     expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid macOS SSH host-key policy", () => {
+    const res = validateConfigObject({
+      gateway: {
+        remote: {
+          sshHostKeyPolicy: "accept-new",
+          transport: "ssh",
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.remote.sshHostKeyPolicy");
+    }
   });
 
   it("rejects invalid macOS SSH remote port", () => {

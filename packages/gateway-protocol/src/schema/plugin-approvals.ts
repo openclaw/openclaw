@@ -1,10 +1,19 @@
+// Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
+/**
+ * Plugin approval schemas.
+ *
+ * These payloads cross from plugin/tool execution into reviewer-facing UI, so
+ * title, description, decision set, and timeout limits are part of the public
+ * gateway contract.
+ */
 const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
-const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 256;
+const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 512;
 
+/** Approval request raised by a plugin before a sensitive tool action proceeds. */
 export const PluginApprovalRequestParamsSchema = Type.Object(
   {
     pluginId: Type.Optional(NonEmptyString),
@@ -21,6 +30,12 @@ export const PluginApprovalRequestParamsSchema = Type.Object(
     ),
     agentId: Type.Optional(Type.String()),
     sessionKey: Type.Optional(Type.String()),
+    approvalReviewerDeviceIds: Type.Optional(
+      Type.Array(NonEmptyString, {
+        description:
+          "Trusted approval-runtime metadata naming operator devices that may review this approval; ordinary Gateway clients may send the field, but the Gateway only binds it for internal approval-runtime requests.",
+      }),
+    ),
     turnSourceChannel: Type.Optional(Type.String()),
     turnSourceTo: Type.Optional(Type.String()),
     turnSourceAccountId: Type.Optional(Type.String()),
@@ -31,6 +46,7 @@ export const PluginApprovalRequestParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Reviewer decision payload resolving one pending plugin approval request. */
 export const PluginApprovalResolveParamsSchema = Type.Object(
   {
     id: NonEmptyString,

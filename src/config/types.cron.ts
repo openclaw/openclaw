@@ -1,3 +1,4 @@
+// Defines cron scheduling configuration types.
 import type { SecretInput } from "./types.secrets.js";
 
 /** Error types that can trigger retries for one-shot jobs. */
@@ -32,6 +33,10 @@ export type CronConfig = {
   enabled?: boolean;
   store?: string;
   maxConcurrentRuns?: number;
+  triggers?: {
+    enabled?: boolean;
+    minIntervalMs?: number;
+  };
   /** Override default retry policy for one-shot jobs on transient errors. */
   retry?: CronRetryConfig;
   /**

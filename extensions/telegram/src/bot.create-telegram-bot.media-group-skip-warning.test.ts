@@ -1,3 +1,4 @@
+// Telegram tests cover bot.create telegram bot.media group skip warning plugin behavior.
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -139,13 +140,17 @@ function createChannelPostContext(params: {
 
 async function queueChannelPostAlbum(
   handler: (ctx: Record<string, unknown>) => Promise<void>,
-  params: { caption: string; mediaGroupId: string; photoFileIds: string[] },
+  params: {
+    baseMessageId: number;
+    caption: string;
+    mediaGroupId: string;
+    photoFileIds: string[];
+  },
 ) {
-  const baseMessageId = 600;
   const calls = params.photoFileIds.map((fileId, index) =>
     handler(
       createChannelPostContext({
-        messageId: baseMessageId + index,
+        messageId: params.baseMessageId + index,
         date: 1736380800 + index,
         ...(index === 0 ? { caption: params.caption } : {}),
         mediaGroupId: params.mediaGroupId,
@@ -154,7 +159,7 @@ async function queueChannelPostAlbum(
     ),
   );
   await Promise.all(calls);
-  return baseMessageId;
+  return params.baseMessageId;
 }
 
 function urlOf(args: unknown[]): string {
@@ -199,6 +204,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
     try {
       const handler = getChannelPostHandler();
       const baseMessageId = await queueChannelPostAlbum(handler, {
+        baseMessageId: 600,
         caption: "album caption",
         mediaGroupId: "skip-warn-album-1",
         photoFileIds: ["p1", "p2"],
@@ -234,6 +240,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
     try {
       const handler = getChannelPostHandler();
       await queueChannelPostAlbum(handler, {
+        baseMessageId: 700,
         caption: "all-fail album",
         mediaGroupId: "skip-warn-album-2",
         photoFileIds: ["p1", "p2"],
@@ -263,6 +270,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
     try {
       const handler = getChannelPostHandler();
       await queueChannelPostAlbum(handler, {
+        baseMessageId: 800,
         caption: "plural album",
         mediaGroupId: "skip-warn-album-3",
         photoFileIds: ["p1", "p2", "p3"],

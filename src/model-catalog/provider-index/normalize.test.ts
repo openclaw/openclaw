@@ -1,3 +1,4 @@
+// Provider-index normalization tests cover preview catalogs, install metadata, auth choices, and malformed input.
 import { describe, expect, it } from "vitest";
 import { loadOpenClawProviderIndex, normalizeOpenClawProviderIndex } from "./index.js";
 
@@ -148,10 +149,27 @@ describe("OpenClaw provider index", () => {
       (model) => model.id === "kimi-k2.6",
     );
     expect(kimi?.status).toBe("preview");
-    expect(index.providers.deepseek?.plugin.id).toBe("deepseek");
-    const deepseekChat = index.providers.deepseek?.previewCatalog?.models.find(
-      (model) => model.id === "deepseek-chat",
+    const kimiCode = index.providers.moonshot?.previewCatalog?.models.find(
+      (model) => model.id === "kimi-k2.7-code",
     );
-    expect(deepseekChat?.contextWindow).toBe(131072);
+    expect(kimiCode).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 262144,
+      status: "preview",
+    });
+    expect(index.providers.deepseek?.plugin.id).toBe("deepseek");
+    expect(
+      index.providers.deepseek?.previewCatalog?.models.map(({ id, reasoning, contextWindow }) => ({
+        id,
+        reasoning,
+        contextWindow,
+      })),
+    ).toEqual([
+      { id: "deepseek-v4-flash", reasoning: true, contextWindow: 1000000 },
+      { id: "deepseek-v4-pro", reasoning: true, contextWindow: 1000000 },
+      { id: "deepseek-chat", reasoning: undefined, contextWindow: 1000000 },
+      { id: "deepseek-reasoner", reasoning: true, contextWindow: 1000000 },
+    ]);
   });
 });

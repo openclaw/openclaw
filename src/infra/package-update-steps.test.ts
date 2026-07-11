@@ -1,12 +1,18 @@
+// Covers package update step orchestration.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { writePackageDistInventory } from "./package-dist-inventory.js";
 import {
+  markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
   type PackageUpdateStepResult,
 } from "./package-update-steps.js";
+import {
+  createDeferredConfiguredPluginRepairDoctorResult,
+  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+} from "./update-doctor-result.js";
 import {
   resolveNpmGlobalPrefixLayoutFromPrefix,
   type CommandRunner,
@@ -72,6 +78,79 @@ function createRootRunner(globalRoot: string): CommandRunner {
     throw new Error(`unexpected command: ${argv.join(" ")}`);
   };
 }
+
+describe("markPackagePostInstallDoctorAdvisory", () => {
+  it("marks only explicit post-install doctor advisory exits", () => {
+    const step = markPackagePostInstallDoctorAdvisory(
+      {
+        exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+        stderrTail: "doctor deferred repair",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      },
+      createDeferredConfiguredPluginRepairDoctorResult(["deferred configured plugin repair"]),
+    );
+
+    expect(step.advisory).toEqual({
+      kind: "package-post-install-doctor",
+      message: expect.stringContaining("recoverable update-time repair warning"),
+    });
+    expect(step.stderrTail).toContain("doctor deferred repair");
+    expect(step.stderrTail).toContain("deferred configured plugin repair");
+  });
+
+  it("keeps advisory diagnostics bounded after appending deferred repair details", () => {
+    const step = markPackagePostInstallDoctorAdvisory(
+      {
+        exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+        stderrTail: "doctor deferred repair",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      },
+      createDeferredConfiguredPluginRepairDoctorResult([
+        `deferred configured plugin repair ${"x".repeat(10_000)}`,
+      ]),
+    );
+
+    expect(step.stderrTail).toHaveLength(8_001);
+    expect(step.stderrTail).toMatch(/^…/u);
+    expect(step.stderrTail).toContain("recoverable update-time repair warning");
+  });
+
+  it("does not mark unknown nonzero doctor exits as advisory", () => {
+    const step = markPackagePostInstallDoctorAdvisory(
+      {
+        exitCode: 1,
+        stderrTail: "doctor refused migration",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      },
+      null,
+    );
+
+    expect(step.advisory).toBeUndefined();
+    expect(step.stderrTail).toBe("doctor refused migration");
+  });
+
+  it("does not mark timed-out doctor exits as advisory when they report a code", () => {
+    const step = markPackagePostInstallDoctorAdvisory(
+      {
+        exitCode: 124,
+        stderrTail: "doctor timed out",
+        signal: null,
+        killed: true,
+        termination: "timeout" as const,
+      },
+      createDeferredConfiguredPluginRepairDoctorResult(["deferred configured plugin repair"]),
+    );
+
+    expect(step.advisory).toBeUndefined();
+    expect(step.stderrTail).toBe("doctor timed out");
+  });
+});
 
 describe("runGlobalPackageUpdateSteps", () => {
   it("installs npm updates into a clean staged prefix before swapping the global package", async () => {

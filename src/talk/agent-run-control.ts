@@ -1,3 +1,9 @@
+/**
+ * Runtime adapter for realtime voice control of active OpenClaw agent runs.
+ *
+ * The shared module owns classification and message contracts; this adapter
+ * binds those contracts to embedded-run abort, status, and steering primitives.
+ */
 import type { EmbeddedAgentQueueMessageOutcome } from "../agents/embedded-agent-runner/runs.js";
 import {
   abortEmbeddedAgentRun,
@@ -39,7 +45,11 @@ type RealtimeVoiceAgentControlDeps = {
   queueEmbeddedAgentMessageWithOutcomeAsync: (
     sessionId: string,
     text: string,
-    options?: { steeringMode?: "all"; debounceMs?: number },
+    options?: {
+      steeringMode?: "all";
+      debounceMs?: number;
+      taskSuggestionDeliveryMode?: undefined;
+    },
   ) => Promise<EmbeddedAgentQueueMessageOutcome>;
   getDiagnosticSessionActivitySnapshot: (params: {
     sessionId?: string;
@@ -55,6 +65,7 @@ const defaultDeps: RealtimeVoiceAgentControlDeps = {
   resolveActiveEmbeddedRunSessionId,
 };
 
+/** Apply a spoken status, cancel, steer, or follow-up request to an active run. */
 export async function controlRealtimeVoiceAgentRun(
   params: {
     sessionKey: string;
@@ -72,6 +83,8 @@ export async function controlRealtimeVoiceAgentRun(
   const activity = deps.getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
   const active = Boolean(sessionId || activity.activeWorkKind || activity.hasActiveEmbeddedRun);
 
+  // Status is read-only and can answer from diagnostic activity even when the
+  // active embedded run id has already disappeared.
   if (mode === "status") {
     return {
       ok: true,
@@ -90,6 +103,8 @@ export async function controlRealtimeVoiceAgentRun(
     };
   }
 
+  // Cancellation requires a concrete embedded-run id; activity-only snapshots
+  // are not abortable and should return an explicit no-active-run response.
   if (mode === "cancel") {
     if (!sessionId) {
       return {
@@ -140,10 +155,15 @@ export async function controlRealtimeVoiceAgentRun(
     };
   }
 
+  // Steering and follow-up both enqueue to the active run; follow-up is wrapped
+  // so the runner treats it as deferred context instead of an immediate pivot.
   const steerText = mode === "followup" ? buildRealtimeVoiceAgentFollowupSteeringText(text) : text;
   const outcome = await deps.queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, steerText, {
     steeringMode: "all",
     debounceMs: 0,
+    // Talk cannot present task suggestions, so spoken user input must not inherit
+    // a capable TUI run's model-facing task tools.
+    taskSuggestionDeliveryMode: undefined,
   });
   if (!outcome.queued) {
     return {

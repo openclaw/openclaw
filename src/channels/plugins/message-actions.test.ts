@@ -1,3 +1,4 @@
+// Message action tests cover channel message action schema and invocation behavior.
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -12,7 +13,6 @@ import {
   channelSupportsMessageCapability,
   channelSupportsMessageCapabilityForChannel,
   listCrossChannelSchemaSupportedMessageActions,
-  listChannelMessageActions,
   listChannelMessageCapabilities,
   listChannelMessageCapabilitiesForChannel,
   resolveChannelMessageToolMediaSourceParamKeys,
@@ -183,7 +183,6 @@ describe("message action capability checks", () => {
       createTestRegistry([{ pluginId: "demo-unified", source: "test", plugin: unifiedPlugin }]),
     );
 
-    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast", "react"]);
     expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual(["presentation"]);
     expect(
       resolveChannelMessageToolSchemaProperties({
@@ -191,6 +190,48 @@ describe("message action capability checks", () => {
         channel: "demo-unified",
       }),
     ).toHaveProperty("components");
+  });
+
+  it("keeps contributed schema properties optional so only action stays required", () => {
+    const contributingPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-contrib",
+        label: "Demo Contrib",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["send"],
+          schema: {
+            properties: {
+              // Non-optional TypeBox schema: plugin forgot Type.Optional.
+              components: Type.Array(Type.String()),
+              // Cloning strips typebox's non-enumerable `~optional` marker;
+              // mirrors serialized/external plugin contributions.
+              chatRef: structuredClone(Type.Optional(Type.String())),
+              media: Type.Optional(Type.String()),
+            },
+          },
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "demo-contrib", source: "test", plugin: contributingPlugin },
+      ]),
+    );
+
+    const properties = resolveChannelMessageToolSchemaProperties({
+      cfg: {} as OpenClawConfig,
+      channel: "demo-contrib",
+    });
+    // Regression: required leakage made every message tool call fail validation
+    // with "must have required properties chatRef, media, ...".
+    const toolSchema = Type.Object({ action: Type.String(), ...properties });
+    expect(toolSchema.required).toEqual(["action"]);
   });
 
   it("filters only actions that depend on current-channel-only schema", () => {
@@ -400,11 +441,9 @@ describe("message action capability checks", () => {
       createTestRegistry([{ pluginId: "demo-crashing", source: "test", plugin: crashingPlugin }]),
     );
 
-    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
     expect(listChannelMessageCapabilities({} as OpenClawConfig)).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
 
-    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
     expect(listChannelMessageCapabilities({} as OpenClawConfig)).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });

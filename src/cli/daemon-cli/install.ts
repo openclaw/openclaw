@@ -1,3 +1,4 @@
+// Gateway service installer: writes config defaults, resolves credentials, and installs service definitions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
@@ -33,12 +34,24 @@ import {
 } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
+/** Merge safe existing service environment into the current install invocation environment. */
 export function mergeInstallInvocationEnv(params: {
   env: NodeJS.ProcessEnv;
   existingServiceEnv?: Record<string, string>;
+  platform?: NodeJS.Platform;
 }): NodeJS.ProcessEnv {
+  const platform = params.platform ?? process.platform;
+  const normalizeInstallEnvKey = (key: string) => (platform === "win32" ? key.toUpperCase() : key);
+  const currentEnv: NodeJS.ProcessEnv = {};
+  for (const [rawKey, rawValue] of Object.entries(params.env)) {
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    if (!key || isDangerousHostEnvVarName(key)) {
+      continue;
+    }
+    currentEnv[normalizeInstallEnvKey(key)] = rawValue;
+  }
   if (!params.existingServiceEnv || Object.keys(params.existingServiceEnv).length === 0) {
-    return params.env;
+    return currentEnv;
   }
   const preservedServiceEnv: NodeJS.ProcessEnv = {};
   for (const [rawKey, rawValue] of Object.entries(params.existingServiceEnv)) {
@@ -50,7 +63,7 @@ export function mergeInstallInvocationEnv(params: {
     if (upper === OPENCLAW_WRAPPER_ENV_KEY) {
       const value = rawValue.trim();
       if (value) {
-        preservedServiceEnv[OPENCLAW_WRAPPER_ENV_KEY] = value;
+        preservedServiceEnv[normalizeInstallEnvKey(OPENCLAW_WRAPPER_ENV_KEY)] = value;
       }
       continue;
     }
@@ -62,6 +75,8 @@ export function mergeInstallInvocationEnv(params: {
     ) {
       continue;
     }
+    // Existing service env may contain host-specific secrets or loader overrides; keep only
+    // portable, non-dangerous values and let the current shell override them.
     if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
       continue;
     }
@@ -69,14 +84,15 @@ export function mergeInstallInvocationEnv(params: {
     if (!value) {
       continue;
     }
-    preservedServiceEnv[key] = value;
+    preservedServiceEnv[normalizeInstallEnvKey(key)] = value;
   }
   return {
     ...preservedServiceEnv,
-    ...params.env,
+    ...currentEnv,
   };
 }
 
+/** Install or refresh the managed Gateway service. */
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
   if (failIfNixDaemonInstallMode(fail)) {
@@ -254,6 +270,13 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       },
       config: cfg,
     });
+  const warn = (message: string) => {
+    if (json) {
+      warnings.push(message);
+    } else {
+      defaultRuntime.log(message);
+    }
+  };
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",
@@ -265,6 +288,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       await service.install({
         env: installEnv,
         stdout,
+        warn,
         programArguments,
         workingDirectory,
         environment,

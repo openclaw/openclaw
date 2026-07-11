@@ -1,14 +1,15 @@
+// Qa Lab plugin module implements child output behavior.
 export const QA_CHILD_STDOUT_MAX_BYTES = 1024 * 1024;
 export const QA_CHILD_STDERR_TAIL_BYTES = 64 * 1024;
 
-export type QaChildOutputCapture = {
+type QaChildOutputCapture = {
   chunks: Buffer[];
   bytes: number;
   exceeded: boolean;
   maxBytes: number;
 };
 
-export type QaChildOutputTail = {
+type QaChildOutputTail = {
   buffer: Buffer;
   maxBytes: number;
   truncated: boolean;

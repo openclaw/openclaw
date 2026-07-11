@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover index behavior.
 import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provider.js";
 import * as protocol from "./index.js";
@@ -12,10 +13,11 @@ import {
   validateConnectParams,
   validateModelsListParams,
   validateNodeEventResult,
-  validateNodePairRequestParams,
   validateNodePresenceAlivePayload,
+  validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
+  validateTalkCatalogResult,
   validateTalkConfigResult,
   validateTalkEvent,
   validateTalkClientCreateParams,
@@ -36,6 +38,15 @@ import {
   type ValidationError,
 } from "./index.js";
 
+/**
+ * Broad protocol validator smoke tests.
+ *
+ * This file exercises exported lazy validators, readable validation errors, and
+ * representative cross-surface payloads so schema registry changes fail before
+ * they reach CLI, Gateway, channel, or dashboard consumers.
+ */
+
+/** Builds a validation error fixture while keeping only the field under test noisy. */
 const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
   keyword: "type",
   instancePath: "",
@@ -45,6 +56,7 @@ const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
   ...overrides,
 });
 
+/** Runtime shape shared by all exported lazy protocol validator functions. */
 type ProtocolValidator = (value: unknown) => boolean;
 
 describe("lazy protocol validators", () => {
@@ -80,21 +92,33 @@ describe("lazy protocol validators", () => {
         sessionKey: "global",
         agentId: "work",
         limit: 50,
+        offset: 100,
       }),
     ).toBe(true);
     expect(
       validateChatSendParams({
         sessionKey: "global",
         agentId: "work",
+        sessionId: "session-work",
         message: "hello",
         idempotencyKey: "run-global-work",
       }),
     ).toBe(true);
     expect(
+      validateChatSendParams({
+        sessionKey: "global",
+        sessionId: "session-work",
+        resumeSession: true,
+        message: "hello",
+        idempotencyKey: "run-global-work",
+      }),
+    ).toBe(false);
+    expect(
       validateChatAbortParams({
         sessionKey: "global",
         agentId: "work",
         runId: "run-global-work",
+        preserveSideRuns: true,
       }),
     ).toBe(true);
     expect(
@@ -110,6 +134,55 @@ describe("lazy protocol validators", () => {
     expect(validateChatMetadataParams({ agentId: "work" })).toBe(true);
     expect(validateChatMetadataParams({ agentId: "" })).toBe(false);
     expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
+  });
+
+  it("accepts an IANA time zone for session usage while retaining UTC offsets", () => {
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "Europe/Vienna" })).toBe(
+      true,
+    );
+    expect(validateSessionsUsageParams({ mode: "specific", utcOffset: "UTC+2" })).toBe(true);
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "" })).toBe(false);
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: 2 })).toBe(false);
+  });
+
+  it("validates chat sends that suppress command interpretation", () => {
+    expect(
+      validateChatSendParams({
+        sessionKey: "agent:main",
+        message: "/reset examples",
+        suppressCommandInterpretation: true,
+        idempotencyKey: "chat-run-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("validates Skill Workshop revision request params", () => {
+    expect(
+      protocol.validateSkillsProposalRequestRevisionParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        targetAgentId: "writer",
+        instructions: "Make the support files 5",
+        sessionKey: "agent:main:session:skill-workshop",
+        idempotencyKey: "revision-run-1",
+      }),
+    ).toBe(true);
+    expect(
+      protocol.validateSkillsProposalRequestRevisionParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        instructions: "",
+        sessionKey: "agent:main:session:skill-workshop",
+        idempotencyKey: "revision-run-1",
+      }),
+    ).toBe(false);
+    expect(
+      protocol.validateSkillsProposalRequestRevisionParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        instructions: "Make the support files 5",
+        sessionKey: "agent:main:session:skill-workshop",
+        idempotencyKey: "revision-run-1",
+        hiddenPrompt: "do not accept caller-provided hidden prompts",
+      }),
+    ).toBe(false);
   });
 
   it("can still compile every exported protocol validator", () => {
@@ -258,9 +331,40 @@ describe("validateTalkConfigResult", () => {
               instructions: "Speak with crisp diction.",
               mode: "realtime",
               transport: "gateway-relay",
+              vadThreshold: 0.45,
+              silenceDurationMs: 650,
+              prefixPaddingMs: 250,
+              reasoningEffort: "low",
               brain: "agent-consult",
+              consultRouting: "force-agent-consult",
             },
           },
+        },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("validateTalkCatalogResult", () => {
+  it("accepts provider registry aliases", () => {
+    expect(
+      validateTalkCatalogResult({
+        modes: ["realtime"],
+        transports: ["gateway-relay"],
+        brains: ["agent-consult"],
+        speech: { providers: [] },
+        transcription: { providers: [] },
+        realtime: {
+          ready: true,
+          activeProvider: "google",
+          providers: [
+            {
+              id: "google",
+              aliases: ["gemini-live"],
+              label: "Google Live Voice",
+              configured: true,
+            },
+          ],
         },
       }),
     ).toBe(true);
@@ -586,6 +690,35 @@ describe("validateWakeParams", () => {
       }),
     ).toBe(true);
   });
+
+  it("accepts optional sessionKey and agentId so per-session wakes can be routed", () => {
+    // Origin-capture fix for #46886 / #64556 — wakes that name an explicit
+    // session/agent must validate so the gateway handler can forward them
+    // through to the cron service.
+    expect(
+      validateWakeParams({
+        mode: "now",
+        text: "follow up on the report",
+        sessionKey: "agent:main:telegram:8661849123:topic:4052",
+        agentId: "main",
+      }),
+    ).toBe(true);
+    expect(
+      validateWakeParams({
+        mode: "next-heartbeat",
+        text: "tick",
+        sessionKey: "agent:main:discord:guild123:thread456",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects sessionKey or agentId when they are present but empty strings", () => {
+    // NonEmptyString — caller must omit the field entirely to fall back to
+    // the default routing. Explicit empties are an error rather than a
+    // silent no-op.
+    expect(validateWakeParams({ mode: "now", text: "x", sessionKey: "" })).toBe(false);
+    expect(validateWakeParams({ mode: "now", text: "x", agentId: "" })).toBe(false);
+  });
 });
 
 describe("validateChatEvent", () => {
@@ -632,6 +765,18 @@ describe("validateChatEvent", () => {
     ).toBe(true);
   });
 
+  it("accepts an argument-free diagnostic on aborted chat events", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-chat",
+        sessionKey: "agent:main:main",
+        seq: 2,
+        state: "aborted",
+        errorMessage: "edit tool validation failed: path: must be string",
+      }),
+    ).toBe(true);
+  });
+
   it("rejects v3-style chat deltas without deltaText", () => {
     expect(
       validateChatEvent({
@@ -645,6 +790,27 @@ describe("validateChatEvent", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("validateChatSendParams", () => {
+  it("accepts one-turn fast:auto cutoff seconds", () => {
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      fastMode: "auto",
+      idempotencyKey: "run-1",
+    };
+
+    expect(validateChatSendParams(base)).toBe(true);
+    expect(
+      validateChatSendParams({
+        ...base,
+        expectedSessionRoutingContract: "per-sender|main|main",
+      }),
+    ).toBe(true);
+    expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
+    expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });
 });
 
@@ -703,27 +869,6 @@ describe("validateNodePresenceAlivePayload", () => {
       validateNodePresenceAlivePayload({
         trigger: "silent_push",
         arbitrary: true,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("validateNodePairRequestParams", () => {
-  it("accepts node pairing permissions", () => {
-    expect(
-      validateNodePairRequestParams({
-        nodeId: "ios-node-1",
-        commands: ["canvas.snapshot"],
-        permissions: { camera: true, notifications: false },
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects non-boolean node pairing permissions", () => {
-    expect(
-      validateNodePairRequestParams({
-        nodeId: "ios-node-1",
-        permissions: { camera: "yes" },
       }),
     ).toBe(false);
   });

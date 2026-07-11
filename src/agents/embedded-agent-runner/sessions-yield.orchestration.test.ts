@@ -10,6 +10,7 @@ import {
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import { isEmbeddedAgentRunActive, queueEmbeddedAgentMessageWithOutcome } from "./runs.js";
 
@@ -18,6 +19,7 @@ let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 describe("sessions_yield orchestration", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {

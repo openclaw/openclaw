@@ -1,6 +1,8 @@
+// Tracks task process state transitions used to reconcile running work.
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
-export type TaskRegistryProcessState = {
+/** Process-local indexes backing task lookup, owner access, and pending delivery scans. */
+type TaskRegistryProcessState = {
   tasks: Map<string, TaskRecord>;
   taskDeliveryStates: Map<string, TaskDeliveryState>;
   taskIdsByRunId: Map<string, Set<string>>;
@@ -12,6 +14,7 @@ export type TaskRegistryProcessState = {
 
 const TASK_REGISTRY_PROCESS_STATE_KEY = Symbol.for("openclaw.taskRegistry.state");
 
+/** Returns the singleton in-process task registry state. */
 export function getTaskRegistryProcessState(): TaskRegistryProcessState {
   const globalState = globalThis as typeof globalThis & {
     [TASK_REGISTRY_PROCESS_STATE_KEY]?: TaskRegistryProcessState;

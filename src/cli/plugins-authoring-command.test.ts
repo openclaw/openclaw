@@ -1,9 +1,11 @@
+// Plugins authoring command tests cover plugin authoring command output and file generation.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, it } from "vitest";
 import { defineToolPlugin, getToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
+import { VERSION } from "../version.js";
 import {
   buildToolPluginManifest,
   buildToolPluginPackageManifest,
@@ -341,6 +343,7 @@ describe("plugin authoring commands", () => {
       scripts: {
         "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
         "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js",
+        test: "vitest run --config ./vitest.config.ts",
       },
       openclaw: {
         extensions: ["./dist/index.js"],
@@ -360,6 +363,111 @@ describe("plugin authoring commands", () => {
     });
     expect(fs.readFileSync(path.join(projectDir, "src/index.test.ts"), "utf8")).toContain(
       "getToolPluginMetadata",
+    );
+    expect(fs.readFileSync(path.join(projectDir, "vitest.config.ts"), "utf8")).toContain(
+      'include: ["src/**/*.test.ts"]',
+    );
+  });
+
+  it("scaffolds a provider plugin project with ClawHub validation and release metadata", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-init-"));
+    const projectDir = path.join(tmpDir, "plugin-init-test");
+
+    await runPluginsInitCommand("plugin-init-test", {
+      directory: projectDir,
+      name: "Plugin Init Test",
+      type: "provider",
+    });
+
+    const packageManifest = JSON.parse(
+      fs.readFileSync(path.join(projectDir, "package.json"), "utf8"),
+    );
+    expect(packageManifest).toMatchObject({
+      name: "openclaw-plugin-plugin-init-test",
+      scripts: {
+        build: "tsc -p tsconfig.json",
+        test: "vitest run --config ./vitest.config.ts",
+        validate: "npm run build && clawhub package validate . --out .clawhub-validation",
+      },
+      peerDependencies: {
+        openclaw: `>=${VERSION}`,
+      },
+      devDependencies: {
+        clawhub: "latest",
+        openclaw: "latest",
+        typescript: "^5.9.0",
+        vitest: "^3.2.0",
+      },
+      openclaw: {
+        extensions: ["./dist/index.js"],
+        install: {
+          clawhubSpec: "clawhub:openclaw-plugin-plugin-init-test",
+          defaultChoice: "clawhub",
+          minHostVersion: `>=${VERSION}`,
+        },
+        compat: {
+          pluginApi: `>=${VERSION}`,
+        },
+        build: {
+          openclawVersion: VERSION,
+        },
+        release: {
+          publishToClawHub: true,
+        },
+      },
+    });
+    expect(packageManifest.scripts).not.toHaveProperty("plugin:build");
+    expect(packageManifest.scripts).not.toHaveProperty("plugin:validate");
+
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(projectDir, "openclaw.plugin.json"), "utf8"),
+    );
+    expect(manifest).toMatchObject({
+      id: "plugin-init-test",
+      name: "Plugin Init Test",
+      version: "0.1.0",
+      providers: ["plugin-init-test"],
+      setup: {
+        providers: [
+          {
+            id: "plugin-init-test",
+            envVars: ["PLUGIN_INIT_TEST_API_KEY"],
+          },
+        ],
+      },
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+    });
+
+    const indexSource = fs.readFileSync(path.join(projectDir, "src/index.ts"), "utf8");
+    expect(indexSource).toContain("definePluginEntry");
+    expect(indexSource).toContain("api.registerProvider");
+    expect(indexSource).toContain("buildSingleProviderApiKeyCatalog");
+
+    expect(fs.readFileSync(path.join(projectDir, "src/index.test.ts"), "utf8")).toContain(
+      "OpenClawPluginApi",
+    );
+    expect(fs.readFileSync(path.join(projectDir, "vitest.config.ts"), "utf8")).toContain(
+      'include: ["src/**/*.test.ts"]',
+    );
+    const readme = fs.readFileSync(path.join(projectDir, "README.md"), "utf8");
+    expect(readme).toContain("npm run validate");
+    expect(readme).toContain("npm exec clawhub -- login");
+    expect(readme).toContain("npm exec clawhub -- package publish .");
+    expect(readme).toContain("npm exec clawhub -- package trusted-publisher set");
+
+    const workflow = fs.readFileSync(
+      path.join(projectDir, ".github/workflows/clawhub-publish.yml"),
+      "utf8",
+    );
+    expect(workflow).not.toContain("release:");
+    expect(workflow).not.toContain("secrets: inherit");
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).toContain(
+      "openclaw/clawhub/.github/workflows/package-publish.yml@9d49df109d4ad3dc8a6ecf05d26b39f46d294721",
     );
   });
 });

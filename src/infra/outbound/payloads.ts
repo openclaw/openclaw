@@ -1,5 +1,10 @@
+// Outbound payload planning normalizes reply payloads into sendable text,
+// media, presentation, interactive, and mirror projections.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import {
+  mergeReactionDirectiveChannelData,
+  parseReplyDirectives,
+} from "../../auto-reply/reply/reply-directives.js";
 import {
   formatBtwTextForExternalDelivery,
   isRenderablePayload,
@@ -14,6 +19,7 @@ import {
   hasReplyPayloadContent,
   normalizeInteractiveReply,
   normalizeMessagePresentation,
+  renderMessagePresentationChartFallbackText,
   type InteractiveReply,
   type MessagePresentation,
   type ReplyPayloadDelivery,
@@ -93,6 +99,10 @@ function collectBlockMirrorText(
       }
       continue;
     }
+    if (block.type === "chart") {
+      lines.push(renderMessagePresentationChartFallbackText(block));
+      continue;
+    }
     if (block.type === "select") {
       if (block.placeholder?.trim()) {
         lines.push(block.placeholder.trim());
@@ -128,10 +138,13 @@ function collectInteractiveMirrorText(interactive: InteractiveReply | undefined)
 
 function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
   const text = entry.parts.text.trim() ? entry.parts.text : entry.payload.text;
-  if (text?.trim()) {
-    return text;
-  }
   const presentation = normalizeMessagePresentation(entry.payload.presentation);
+  if (text?.trim()) {
+    const chartText = presentation
+      ? collectBlockMirrorText(presentation.blocks.filter((block) => block.type === "chart"))
+      : [];
+    return [text, ...chartText].join("\n");
+  }
   const interactive = normalizeInteractiveReply(entry.payload.interactive);
   return [
     ...collectPresentationMirrorText(presentation),
@@ -224,6 +237,7 @@ function createOutboundPayloadPlanEntry(
   const isSilent = strippedParsed.isSilent && mergedMedia.length === 0;
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
+  const channelData = mergeReactionDirectiveChannelData(payload.channelData, parsed.reaction);
   const normalizedPayload: ReplyPayload = {
     ...payload,
     text:
@@ -237,6 +251,7 @@ function createOutboundPayloadPlanEntry(
     replyToTag: payload.replyToTag || parsed.replyToTag,
     replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
+    ...(channelData ? { channelData } : {}),
   };
   if (!isRenderablePayload(normalizedPayload) && !isSilent) {
     return null;

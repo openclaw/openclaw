@@ -1,3 +1,8 @@
+/**
+ * Provider-specific auth doctor hints.
+ * Adds local migration guidance for known legacy profiles before falling back
+ * to provider plugin doctor copy.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildProviderAuthDoctorHintWithPlugin } from "../../plugins/provider-runtime.runtime.js";
@@ -6,6 +11,8 @@ import type { AuthProfileStore } from "./types.js";
 const QWEN_PORTAL_OAUTH_MIGRATION_HINT =
   "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current portal token: openclaw onboard --auth-choice qwen-oauth.";
 
+// Qwen Portal OAuth changed credential behavior; old profiles need an explicit
+// local hint before falling back to provider plugin doctor hints.
 function hasLegacyQwenPortalOAuthProfile(store: AuthProfileStore, profileId?: string): boolean {
   const profiles = profileId ? [store.profiles[profileId]] : Object.values(store.profiles);
   return profiles.some(
@@ -14,12 +21,19 @@ function hasLegacyQwenPortalOAuthProfile(store: AuthProfileStore, profileId?: st
   );
 }
 
-export async function formatAuthDoctorHint(params: {
+type FormatAuthDoctorHintParams = {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
   provider: string;
   profileId?: string;
-}): Promise<string> {
+};
+
+// Keep local short-circuits and the plugin fallback in one seam so focused tests
+// can prove their ordering without loading the full provider runtime.
+export async function formatAuthDoctorHintWithPluginBuilder(
+  params: FormatAuthDoctorHintParams,
+  buildPluginHint: typeof buildProviderAuthDoctorHintWithPlugin,
+): Promise<string> {
   const normalizedProvider = normalizeProviderId(params.provider);
   if (
     normalizedProvider === "qwen-portal" &&
@@ -28,7 +42,7 @@ export async function formatAuthDoctorHint(params: {
     return QWEN_PORTAL_OAUTH_MIGRATION_HINT;
   }
 
-  const pluginHint = await buildProviderAuthDoctorHintWithPlugin({
+  const pluginHint = await buildPluginHint({
     provider: normalizedProvider,
     context: {
       config: params.cfg,
@@ -41,4 +55,9 @@ export async function formatAuthDoctorHint(params: {
     return pluginHint;
   }
   return "";
+}
+
+/** Formats provider-specific auth doctor guidance for a profile/store. */
+export async function formatAuthDoctorHint(params: FormatAuthDoctorHintParams): Promise<string> {
+  return await formatAuthDoctorHintWithPluginBuilder(params, buildProviderAuthDoctorHintWithPlugin);
 }

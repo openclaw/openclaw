@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements resolve outbound target behavior.
 import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -6,9 +7,7 @@ import {
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";
 
-export type WhatsAppOutboundTargetResolution =
-  | { ok: true; to: string }
-  | { ok: false; error: Error };
+type WhatsAppOutboundTargetResolution = { ok: true; to: string } | { ok: false; error: Error };
 
 function whatsappAllowFromPolicyError(target: string): Error {
   return new Error(`Target "${target}" is not listed in the configured WhatsApp allowFrom policy.`);

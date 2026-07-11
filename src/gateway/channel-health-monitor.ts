@@ -1,3 +1,5 @@
+// Gateway channel health monitor.
+// Periodically evaluates channel account health and restarts stale runtimes.
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
@@ -74,6 +76,7 @@ function resolveTimingPolicy(
   };
 }
 
+/** Start the periodic channel health monitor and return its stop handle. */
 export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): ChannelHealthMonitor {
   const {
     channelManager,
@@ -90,6 +93,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   let stopped = false;
   let checkInFlight = false;
   let timer: ReturnType<typeof setInterval> | null = null;
+  const suppressedAccounts = new Set<string>();
 
   const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
 
@@ -110,6 +114,10 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
       }
 
       const snapshot = channelManager.getRuntimeSnapshot();
+      const autostartSuppression = channelManager.getAutostartSuppression();
+      if (!autostartSuppression) {
+        suppressedAccounts.clear();
+      }
 
       for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
         if (!accounts) {
@@ -125,6 +133,17 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
+          const key = rKey(channelId, accountId);
+          if (autostartSuppression) {
+            if (status.running !== true && !suppressedAccounts.has(key)) {
+              log.info?.(
+                `[${channelId}:${accountId}] health-monitor: channel autostart suppressed; treating as expected stopped`,
+              );
+              suppressedAccounts.add(key);
+            }
+            continue;
+          }
+          suppressedAccounts.delete(key);
           const healthPolicy: ChannelHealthPolicy = {
             channelId,
             now,
@@ -135,19 +154,32 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (health.healthy) {
             continue;
           }
+          if (health.reason === "terminal-disconnect") {
+            log.info?.(
+              `[${channelId}:${accountId}] health-monitor: skipping restart, terminal disconnect`,
+            );
+            continue;
+          }
 
-          const key = rKey(channelId, accountId);
           const record = restartRecords.get(key) ?? {
             lastRestartAt: 0,
             restartsThisHour: [],
           };
 
-          if (now - record.lastRestartAt <= cooldownMs) {
+          const continuingPendingRestart =
+            status.running !== true &&
+            status.restartPending === true &&
+            (status.reconnectAttempts ?? 0) === 0;
+
+          // A timed-out recovery stop uses the first start request to mark
+          // restartPending; the next monitor pass must finish that same recovery
+          // instead of waiting behind this monitor's fresh-restart cooldown.
+          if (!continuingPendingRestart && now - record.lastRestartAt <= cooldownMs) {
             continue;
           }
 
           pruneOldRestarts(record, now);
-          if (record.restartsThisHour.length >= maxRestartsPerHour) {
+          if (!continuingPendingRestart && record.restartsThisHour.length >= maxRestartsPerHour) {
             log.warn?.(
               `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
             );
@@ -158,9 +190,11 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
-          record.lastRestartAt = now;
-          record.restartsThisHour.push({ at: now });
-          restartRecords.set(key, record);
+          if (!continuingPendingRestart) {
+            record.lastRestartAt = now;
+            record.restartsThisHour.push({ at: now });
+            restartRecords.set(key, record);
+          }
 
           try {
             if (status.running) {

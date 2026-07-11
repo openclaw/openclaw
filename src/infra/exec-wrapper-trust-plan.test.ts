@@ -1,3 +1,4 @@
+// Covers trust-plan unwrapping for exec command wrappers.
 import { describe, expect, test } from "vitest";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 
@@ -54,6 +55,32 @@ describe("resolveExecWrapperTrustPlan", () => {
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
+      },
+    },
+    {
+      name: "keeps package-manager exec argv as the execution trust target",
+      enabled: true,
+      argv: ["pnpm", "--reporter", "silent", "exec", "--", "tsx", "./run.ts"],
+      expected: {
+        argv: ["pnpm", "--reporter", "silent", "exec", "--", "tsx", "./run.ts"],
+        policyArgv: ["pnpm", "--reporter", "silent", "exec", "--", "tsx", "./run.ts"],
+        wrapperChain: [],
+        policyBlocked: false,
+        shellWrapperExecutable: false,
+        shellInlineCommand: null,
+      },
+    },
+    {
+      name: "keeps package-manager shell-call mode outside generic wrapper policy",
+      enabled: true,
+      argv: ["npx", "--call", "sh -c 'echo hi'"],
+      expected: {
+        argv: ["npx", "--call", "sh -c 'echo hi'"],
+        policyArgv: ["npx", "--call", "sh -c 'echo hi'"],
+        wrapperChain: [],
+        policyBlocked: false,
+        shellWrapperExecutable: false,
+        shellInlineCommand: null,
       },
     },
     {

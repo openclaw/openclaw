@@ -1,3 +1,4 @@
+// Command execution startup tests cover startup behavior before CLI command execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
@@ -108,6 +109,25 @@ describe("command-execution-startup", () => {
         jsonOutputMode: false,
       }).startupPolicy.loadPlugins,
     ).toBe(true);
+  });
+
+  it("uses the resolved action command path for protocol startup policy", () => {
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: ["node", "openclaw", "acp", "--token", "-secret"],
+        protocolCommandPath: ["acp"],
+        jsonOutputMode: false,
+        env: {},
+      }).startupPolicy.suppressDoctorStdout,
+    ).toBe(true);
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: ["node", "openclaw", "acp", "--verbose", "client"],
+        protocolCommandPath: ["acp", "client"],
+        jsonOutputMode: false,
+        env: {},
+      }).startupPolicy.suppressDoctorStdout,
+    ).toBe(false);
   });
 
   it("routes logs to stderr and emits banner only when allowed", async () => {

@@ -1,7 +1,7 @@
+// Skill index tests cover normalized skill names and discovery index behavior.
 import { describe, expect, it } from "vitest";
 import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
 import {
-  buildSkillIndex,
   buildSkillIndexEntries,
   filterPromptVisibleSkillEntries,
   filterUserInvocableSkillEntries,
@@ -18,35 +18,15 @@ describe("skill index", () => {
     expect(normalizeSkillIndexName("@@")).toBe("");
   });
 
-  it("indexes entries by exact and normalized name without changing input order", () => {
+  it("indexes entries without changing input order", () => {
     const entries = [
       createFixtureSkillEntry("Excel XLSX", { skillKey: "excel_xlsx" }),
       createFixtureSkillEntry("GitHub Review"),
     ];
 
-    const index = buildSkillIndex(entries);
-
-    expect(index.entries.map((entry) => entry.name)).toEqual(["Excel XLSX", "GitHub Review"]);
-    expect(index.byName.get("Excel XLSX")?.entry).toBe(entries[0]);
-    expect(index.byNormalizedName.get("excel-xlsx")?.map((entry) => entry.name)).toEqual([
+    expect(buildSkillIndexEntries(entries).map((entry) => entry.name)).toEqual([
       "Excel XLSX",
-    ]);
-    expect(index.byNormalizedName.get("github-review")?.map((entry) => entry.name)).toEqual([
       "GitHub Review",
-    ]);
-  });
-
-  it("keeps ambiguous normalized names as multiple index entries", () => {
-    const entries = [
-      createFixtureSkillEntry("Excel/XLSX", { skillKey: "excel-slash" }),
-      createFixtureSkillEntry("Excel_XLSX", { skillKey: "excel-underscore" }),
-    ];
-
-    const index = buildSkillIndex(entries);
-
-    expect(index.byNormalizedName.get("excel-xlsx")?.map((entry) => entry.name)).toEqual([
-      "Excel/XLSX",
-      "Excel_XLSX",
     ]);
   });
 
@@ -76,27 +56,23 @@ describe("skill index", () => {
       invocation: { disableModelInvocation: true, userInvocable: true },
     });
 
-    const index = buildSkillIndex([runtimeHidden, promptHidden, commandHidden, legacyPromptHidden]);
+    const entries = [runtimeHidden, promptHidden, commandHidden, legacyPromptHidden];
+    const indexEntries = buildSkillIndexEntries(entries);
 
-    expect(index.runtimeEntries.map((entry) => entry.skill.name)).toEqual([
-      "prompt-hidden",
-      "command-hidden",
-      "legacy-prompt-hidden",
-    ]);
-    expect(index.promptVisibleEntries.map((entry) => entry.skill.name)).toEqual([
+    expect(indexEntries.filter((entry) => entry.runtimeVisible).map((entry) => entry.name)).toEqual(
+      ["prompt-hidden", "command-hidden", "legacy-prompt-hidden"],
+    );
+    expect(indexEntries.filter((entry) => entry.promptVisible).map((entry) => entry.name)).toEqual([
       "runtime-hidden",
       "command-hidden",
     ]);
-    expect(index.userInvocableEntries.map((entry) => entry.skill.name)).toEqual([
+    expect(indexEntries.filter((entry) => entry.userInvocable).map((entry) => entry.name)).toEqual([
       "runtime-hidden",
       "prompt-hidden",
       "legacy-prompt-hidden",
     ]);
-    expect(filterPromptVisibleSkillEntries(index.entries.map((entry) => entry.entry))).toEqual([
-      runtimeHidden,
-      commandHidden,
-    ]);
-    expect(filterUserInvocableSkillEntries(index.entries.map((entry) => entry.entry))).toEqual([
+    expect(filterPromptVisibleSkillEntries(entries)).toEqual([runtimeHidden, commandHidden]);
+    expect(filterUserInvocableSkillEntries(entries)).toEqual([
       runtimeHidden,
       promptHidden,
       legacyPromptHidden,
@@ -114,22 +90,22 @@ describe("skill index", () => {
       skillKey: "workspace-key",
     });
 
-    const index = buildSkillIndex([bundled, unknownBundled, workspace], {
+    const indexEntries = buildSkillIndexEntries([bundled, unknownBundled, workspace], {
       bundledNames: new Set(["unknown-bundle"]),
       agentSkillFilter: ["workspace"],
     });
 
-    expect(index.byName.get("bundle")).toMatchObject({
+    expect(indexEntries.find((entry) => entry.name === "bundle")).toMatchObject({
       source: "openclaw-bundled",
       bundled: true,
       agentAllowed: false,
     });
-    expect(index.byName.get("unknown-bundle")).toMatchObject({
+    expect(indexEntries.find((entry) => entry.name === "unknown-bundle")).toMatchObject({
       source: "unknown",
       bundled: true,
       agentAllowed: false,
     });
-    expect(index.byName.get("workspace")).toMatchObject({
+    expect(indexEntries.find((entry) => entry.name === "workspace")).toMatchObject({
       source: "openclaw-workspace",
       bundled: false,
       skillKey: "workspace-key",

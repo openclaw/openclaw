@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for plugin doctor migrations, compat checks, and uninstall helpers.
+ */
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 export {
   asObjectRecord,
@@ -20,9 +23,14 @@ export type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
+export { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 export { removePluginFromConfig } from "../plugins/uninstall.js";
 export type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-registry.js";
+export {
+  archiveLegacyStateSource,
+  legacyStateFileExists,
+} from "../plugins/doctor-state-migration-fs.js";
 export type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";

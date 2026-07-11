@@ -1,3 +1,4 @@
+// Constructs channel plugin registries and plugin fixtures for tests.
 import type {
   ChannelCapabilities,
   ChannelId,
@@ -5,8 +6,10 @@ import type {
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../channels/plugins/types.public.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 
+/** Registry entry shape used by channel tests without loading real plugins. */
 export type TestChannelRegistration = {
   pluginId: string;
   plugin: unknown;
@@ -14,10 +17,7 @@ export type TestChannelRegistration = {
 };
 
 export const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  hooks: [],
-  typedHooks: [],
+  ...createEmptyPluginRegistry(),
   channels: channels as unknown as PluginRegistry["channels"],
   channelSetups: channels.map((entry) => ({
     pluginId: entry.pluginId,
@@ -25,38 +25,6 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
     source: entry.source,
     enabled: true,
   })),
-  providers: [],
-  modelCatalogProviders: [],
-  embeddingProviders: [],
-  speechProviders: [],
-  realtimeTranscriptionProviders: [],
-  realtimeVoiceProviders: [],
-  mediaUnderstandingProviders: [],
-  transcriptSourceProviders: [],
-  imageGenerationProviders: [],
-  videoGenerationProviders: [],
-  musicGenerationProviders: [],
-  webFetchProviders: [],
-  webSearchProviders: [],
-  migrationProviders: [],
-  codexAppServerExtensionFactories: [],
-  agentToolResultMiddlewares: [],
-  memoryEmbeddingProviders: [],
-  textTransforms: [],
-  cliBackends: [],
-  agentHarnesses: [],
-  gatewayHandlers: {},
-  gatewayMethodDescriptors: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  reloads: [],
-  nodeHostCommands: [],
-  securityAuditCollectors: [],
-  services: [],
-  gatewayDiscoveryServices: [],
-  commands: [],
-  conversationBindingResolvedHandlers: [],
-  diagnostics: [],
 });
 
 export const createChannelTestPluginBase = (params: {
@@ -84,41 +52,16 @@ export const createChannelTestPluginBase = (params: {
   },
 });
 
-export const createMSTeamsTestPluginBase = (): Pick<
-  ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config"
-> => {
-  const base = createChannelTestPluginBase({
-    id: "msteams",
-    label: "Microsoft Teams",
-    docsPath: "/channels/msteams",
-    config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-  });
-  return {
-    ...base,
-    meta: {
-      ...base.meta,
-      selectionLabel: "Microsoft Teams (Bot Framework)",
-      blurb: "Teams SDK; enterprise support.",
-      aliases: ["teams"],
-    },
-  };
-};
-
-export const createMSTeamsTestPlugin = (params?: {
-  aliases?: string[];
-  outbound?: ChannelOutboundAdapter;
-}): ChannelPlugin => {
-  const base = createMSTeamsTestPluginBase();
-  return {
-    ...base,
-    meta: {
-      ...base.meta,
-      ...(params?.aliases ? { aliases: params.aliases } : {}),
-    },
-    ...(params?.outbound ? { outbound: params.outbound } : {}),
-  };
-};
+export const createDirectOutboundTestAdapter = (params: {
+  channel: ChannelId;
+  messageId?: string;
+  resolveTarget?: ChannelOutboundAdapter["resolveTarget"];
+}): ChannelOutboundAdapter => ({
+  deliveryMode: "direct",
+  ...(params.resolveTarget ? { resolveTarget: params.resolveTarget } : {}),
+  sendText: async () => ({ channel: params.channel, messageId: params.messageId ?? "msg-test" }),
+  sendMedia: async () => ({ channel: params.channel, messageId: params.messageId ?? "msg-test" }),
+});
 
 export const createOutboundTestPlugin = (params: {
   id: ChannelId;

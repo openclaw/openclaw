@@ -1,3 +1,4 @@
+// Google Meet plugin module implements plugin harness behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { vi } from "vitest";
@@ -47,6 +48,7 @@ export function setupGoogleMeetPlugin(
   config: Record<string, unknown> = {},
   options: {
     fullConfig?: Record<string, unknown>;
+    gatewayAvailable?: boolean;
     nodesListResult?: GoogleMeetTestNodeListResult;
     nodesInvokeResult?: unknown;
     browserActResult?: Record<string, unknown>;
@@ -68,6 +70,7 @@ export function setupGoogleMeetPlugin(
   const tools: unknown[] = [];
   const cliRegistrations: unknown[] = [];
   const nodeHostCommands: unknown[] = [];
+  const nodeInvokePolicies: unknown[] = [];
   const nodesList = vi.fn(
     async () =>
       options.nodesListResult ?? {
@@ -135,6 +138,9 @@ export function setupGoogleMeetPlugin(
       return { code: 0, stdout: "", stderr: "" };
     },
   );
+  const gatewayRequest = vi.fn((method: string, params?: Record<string, unknown>) =>
+    invokeGoogleMeetGatewayMethodForTest(methods, method, params, "google-meet"),
+  );
   const api = createTestPluginApi({
     id: "google-meet",
     name: "Google Meet",
@@ -144,6 +150,10 @@ export function setupGoogleMeetPlugin(
     config: options.fullConfig ?? {},
     pluginConfig: config,
     runtime: {
+      gateway: {
+        isAvailable: vi.fn(async () => options.gatewayAvailable === true),
+        request: gatewayRequest,
+      },
       system: {
         runCommandWithTimeout,
         formatNativeDependencyHint: vi.fn(() => "Install with brew install blackhole-2ch."),
@@ -164,6 +174,7 @@ export function setupGoogleMeetPlugin(
     },
     registerCli: (_registrar: unknown, opts: unknown) => cliRegistrations.push(opts),
     registerNodeHostCommand: (command: unknown) => nodeHostCommands.push(command),
+    registerNodeInvokePolicy: (policy: unknown) => nodeInvokePolicies.push(policy),
   });
   const originalPlatform = process.platform;
   Object.defineProperty(process, "platform", {
@@ -183,6 +194,8 @@ export function setupGoogleMeetPlugin(
     nodesList,
     nodesInvoke,
     nodeHostCommands,
+    nodeInvokePolicies,
+    gatewayRequest,
   };
 }
 
@@ -190,10 +203,12 @@ export async function invokeGoogleMeetGatewayMethodForTest(
   methods: Map<string, unknown>,
   method: string,
   params?: unknown,
+  pluginRuntimeOwnerId?: string,
 ): Promise<unknown> {
   const handler = methods.get(method) as
     | ((opts: {
         params: Record<string, unknown>;
+        client?: { internal?: { pluginRuntimeOwnerId?: string } };
         respond: (
           ok: boolean,
           payload?: unknown,
@@ -225,6 +240,7 @@ export async function invokeGoogleMeetGatewayMethodForTest(
         params: (params && typeof params === "object" && !Array.isArray(params)
           ? params
           : {}) as Record<string, unknown>,
+        ...(pluginRuntimeOwnerId ? { client: { internal: { pluginRuntimeOwnerId } } } : {}),
         respond,
       }),
     ).catch(reject);

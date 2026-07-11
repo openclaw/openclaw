@@ -1,5 +1,9 @@
+// Imessage tests cover approval reaction poller plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { pollPendingIMessageApprovalReactions } from "./approval-reaction-poller.js";
+import {
+  clearIMessageApprovalReactionPollerStateForTest,
+  pollPendingIMessageApprovalReactions,
+} from "./approval-reaction-poller.js";
 import {
   clearIMessageApprovalReactionTargetsForTest,
   registerIMessageApprovalReactionTarget,
@@ -23,6 +27,7 @@ function createClient(request: ReturnType<typeof vi.fn>): IMessageRpcClient {
 describe("iMessage approval reaction poller", () => {
   beforeEach(() => {
     clearIMessageApprovalReactionTargetsForTest();
+    clearIMessageApprovalReactionPollerStateForTest();
     resolverMocks.resolveIMessageApproval.mockReset();
     resolverMocks.resolveIMessageApproval.mockResolvedValue(undefined);
     resolverMocks.isApprovalNotFoundError.mockReset();
@@ -113,6 +118,221 @@ describe("iMessage approval reaction poller", () => {
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
+  });
+
+  it("bounds no-target recent-chat discovery to one pass per account", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chats.list") {
+        return { chats: [{ id: 42 }] };
+      }
+      if (method === "messages.history") {
+        return { messages: [] };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const pollParams = {
+      client: createClient(request),
+      cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+      accountId: "default",
+      allowRecentChatDiscovery: true,
+    };
+
+    await pollPendingIMessageApprovalReactions(pollParams);
+    await pollPendingIMessageApprovalReactions(pollParams);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledWith("chats.list", { limit: 50 }, { timeoutMs: 10_000 });
+    expect(request).toHaveBeenCalledWith(
+      "messages.history",
+      { chat_id: 42, limit: 30 },
+      { timeoutMs: 10_000 },
+    );
+  });
+
+  it("bounds no-target discovery after resolving an observed reaction", async () => {
+    const request = vi.fn(async (method: string, payload?: { chat_id?: number }) => {
+      if (method === "chats.list") {
+        return { chats: [{ id: 42 }, { id: 99 }] };
+      }
+      if (method === "messages.history" && payload?.chat_id === 42) {
+        return {
+          messages: [
+            {
+              guid: "msg-1",
+              chat_id: 42,
+              chat_guid: "SMS;-;+15551230000",
+              chat_identifier: "+15551230000",
+              is_from_me: true,
+              sender: "+15551230000",
+              text: [
+                "Exec approval required",
+                "ID: exec-1",
+                "",
+                "Reply with: /approve exec-1 allow-once|deny",
+              ].join("\n"),
+              reactions: [
+                {
+                  id: 7,
+                  sender: "+15551230000",
+                  is_from_me: true,
+                  type: "like",
+                  emoji: "👍",
+                  created_at: "2026-05-27T21:00:00.000Z",
+                },
+              ],
+            },
+          ],
+        };
+      }
+      if (method === "messages.history" && payload?.chat_id === 99) {
+        return { messages: [] };
+      }
+      throw new Error(`unexpected request ${method} ${JSON.stringify(payload)}`);
+    });
+
+    const pollParams = {
+      client: createClient(request),
+      cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+      accountId: "default",
+      allowRecentChatDiscovery: true,
+    };
+
+    await pollPendingIMessageApprovalReactions(pollParams);
+    await pollPendingIMessageApprovalReactions(pollParams);
+
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.filter(([method]) => method === "chats.list")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "messages.history")).toHaveLength(2);
+    expect(request).toHaveBeenCalledWith(
+      "messages.history",
+      { chat_id: 99, limit: 30 },
+      { timeoutMs: 10_000 },
+    );
+  });
+
+  it("retries no-target discovery after resolver failures expire observed targets", async () => {
+    resolverMocks.resolveIMessageApproval.mockRejectedValue(new Error("gateway down"));
+    const request = vi.fn(async (method: string) => {
+      if (method === "chats.list") {
+        return { chats: [{ id: 42 }] };
+      }
+      if (method === "messages.history") {
+        return {
+          messages: [
+            {
+              guid: "msg-1",
+              chat_id: 42,
+              chat_guid: "SMS;-;+15551230000",
+              chat_identifier: "+15551230000",
+              is_from_me: true,
+              sender: "+15551230000",
+              text: [
+                "Exec approval required",
+                "ID: exec-1",
+                "",
+                "Reply with: /approve exec-1 allow-once|deny",
+              ].join("\n"),
+              reactions: [
+                {
+                  id: 7,
+                  sender: "+15551230000",
+                  is_from_me: true,
+                  type: "like",
+                  emoji: "👍",
+                  created_at: "2026-05-27T21:00:00.000Z",
+                },
+              ],
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+
+    try {
+      const pollParams = {
+        client: createClient(request),
+        cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+        accountId: "default",
+        allowRecentChatDiscovery: true,
+      };
+
+      await pollPendingIMessageApprovalReactions(pollParams);
+      dateNow.mockReturnValue(1_800_000_301_000);
+      await pollPendingIMessageApprovalReactions(pollParams);
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.filter(([method]) => method === "chats.list")).toHaveLength(2);
+  });
+
+  it("retries no-target recent-chat discovery after the first chat list fails", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chats.list") {
+        const chatListCalls = request.mock.calls.filter(
+          ([calledMethod]) => calledMethod === "chats.list",
+        );
+        if (chatListCalls.length === 1) {
+          throw new Error("temporary imsg failure");
+        }
+        return { chats: [{ id: 42 }] };
+      }
+      if (method === "messages.history") {
+        return { messages: [] };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const pollParams = {
+      client: createClient(request),
+      cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+      accountId: "default",
+      allowRecentChatDiscovery: true,
+    };
+
+    await expect(pollPendingIMessageApprovalReactions(pollParams)).rejects.toThrow(
+      "temporary imsg failure",
+    );
+    await pollPendingIMessageApprovalReactions(pollParams);
+
+    expect(request.mock.calls.filter(([method]) => method === "chats.list")).toHaveLength(2);
+    expect(request.mock.calls.filter(([method]) => method === "messages.history")).toHaveLength(1);
+  });
+
+  it("retries no-target recent-chat discovery after the first history fetch fails", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chats.list") {
+        return { chats: [{ id: 42 }] };
+      }
+      if (method === "messages.history") {
+        const historyCalls = request.mock.calls.filter(
+          ([calledMethod]) => calledMethod === "messages.history",
+        );
+        if (historyCalls.length === 1) {
+          throw new Error("temporary history failure");
+        }
+        return { messages: [] };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const pollParams = {
+      client: createClient(request),
+      cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+      accountId: "default",
+      allowRecentChatDiscovery: true,
+    };
+
+    await pollPendingIMessageApprovalReactions(pollParams);
+    await pollPendingIMessageApprovalReactions(pollParams);
+    await pollPendingIMessageApprovalReactions(pollParams);
+
+    expect(request.mock.calls.filter(([method]) => method === "chats.list")).toHaveLength(2);
+    expect(request.mock.calls.filter(([method]) => method === "messages.history")).toHaveLength(2);
   });
 
   it("does not bind observed approval prompts when the process clock is invalid", async () => {

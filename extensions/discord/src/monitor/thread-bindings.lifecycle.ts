@@ -1,3 +1,4 @@
+// Discord plugin module implements thread bindings.lifecycle behavior.
 import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -35,9 +36,9 @@ export type AcpThreadBindingReconciliationResult = {
   staleSessionKeys: string[];
 };
 
-export type AcpThreadBindingHealthStatus = "healthy" | "stale" | "uncertain";
+type AcpThreadBindingHealthStatus = "healthy" | "stale" | "uncertain";
 
-export type AcpThreadBindingHealthProbe = (params: {
+type AcpThreadBindingHealthProbe = (params: {
   cfg: OpenClawConfig;
   accountId: string;
   sessionKey: string;

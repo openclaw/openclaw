@@ -1,3 +1,4 @@
+// Coverage for prompt-cache diagnostic tracking across turns.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   beginPromptCacheObservation,
@@ -17,7 +18,21 @@ describe("prompt cache observability", () => {
     ).toEqual(["read", "write"]);
   });
 
+  it("collects prompt-cache tool names without aborting on unreadable descriptors", () => {
+    const unreadableTool = {
+      get name(): string {
+        throw new Error("tool name getter exploded");
+      },
+    };
+
+    expect(
+      collectPromptCacheToolNames([{ name: " read " }, unreadableTool, { name: "write" }]),
+    ).toEqual(["read", "write"]);
+  });
+
   it("tracks cache-relevant changes and reports a real cache-read drop", () => {
+    // Observability only emits when a material cache-read drop follows a tracked
+    // cache-affecting change.
     const first = beginPromptCacheObservation({
       sessionId: "session-1",
       sessionKey: "agent:main",
@@ -110,6 +125,8 @@ describe("prompt cache observability", () => {
   });
 
   it("treats reordered tool lists as the same diagnostics tool set", () => {
+    // Tool list ordering is deterministic for payloads but should not create a
+    // false cache-break diagnostic when the set is unchanged.
     beginPromptCacheObservation({
       sessionId: "session-1",
       provider: "openai",
@@ -138,6 +155,8 @@ describe("prompt cache observability", () => {
   });
 
   it("tracks recurring prompt-cache affinity across rotating session ids", () => {
+    // Cron-style isolated runs use promptCacheKey to carry cache affinity across
+    // new session ids.
     beginPromptCacheObservation({
       sessionId: "isolated-run-1",
       promptCacheKey: "openclaw-cron-stable-cache-key",

@@ -1,9 +1,11 @@
+// Memory Wiki tests cover cli metadata plugin behavior.
 import { Command } from "commander";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   registerWikiCli: vi.fn(),
+  resolveMemoryWikiAgentConfig: vi.fn(),
   resolveMemoryWikiConfig: vi.fn(),
 }));
 
@@ -12,6 +14,7 @@ vi.mock("./src/cli.js", () => ({
 }));
 
 vi.mock("./src/config.js", () => ({
+  resolveMemoryWikiAgentConfig: mocks.resolveMemoryWikiAgentConfig,
   resolveMemoryWikiConfig: mocks.resolveMemoryWikiConfig,
 }));
 
@@ -72,6 +75,13 @@ describe("memory-wiki cli metadata entry", () => {
     expect(mocks.resolveMemoryWikiConfig).toHaveBeenCalledWith(
       appConfig.plugins.entries["memory-wiki"].config,
     );
-    expect(mocks.registerWikiCli).toHaveBeenCalledWith(program, resolvedConfig, appConfig);
+    expect(mocks.registerWikiCli).toHaveBeenCalledWith(
+      program,
+      expect.objectContaining({
+        config: resolvedConfig,
+        getAppConfig: expect.any(Function),
+        resolveConfig: expect.any(Function),
+      }),
+    );
   });
 });

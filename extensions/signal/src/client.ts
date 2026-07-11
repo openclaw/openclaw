@@ -1,3 +1,4 @@
+// Signal plugin module implements client behavior.
 import { Buffer } from "node:buffer";
 import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
@@ -11,13 +12,13 @@ export type SignalRpcOptions = {
   maxResponseBytes?: number;
 };
 
-export type SignalRpcError = {
+type SignalRpcError = {
   code?: number;
   message?: string;
   data?: unknown;
 };
 
-export type SignalRpcResponse<T> = {
+type SignalRpcResponse<T> = {
   jsonrpc?: string;
   result?: T;
   error?: SignalRpcError;

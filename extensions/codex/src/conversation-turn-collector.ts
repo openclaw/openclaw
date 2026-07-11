@@ -1,3 +1,4 @@
+// Codex plugin module implements conversation turn collector behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -75,7 +76,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
       return;
     }
     if (notification.method === "item/agentMessage/delta") {
-      const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "assistant";
+      const itemId = readString(params, "itemId") ?? "assistant";
       const delta = readTextString(params, "delta");
       if (!delta) {
         return;

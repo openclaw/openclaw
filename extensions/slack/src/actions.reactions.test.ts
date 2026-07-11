@@ -1,3 +1,4 @@
+// Slack tests cover actions.reactions plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
 import { reactSlackMessage, removeOwnSlackReactions, removeSlackReaction } from "./actions.js";
@@ -74,6 +75,27 @@ describe("reactSlackMessage", () => {
     expect((error as { data?: unknown }).data).toEqual({
       ok: false,
       error: "invalid_name",
+    });
+  });
+});
+
+describe("reactSlackMessage emoji normalization", () => {
+  it.each([
+    { input: "✅", expected: "white_check_mark" },
+    { input: ":fire:", expected: "fire" },
+    { input: "rocket", expected: "rocket" },
+    { input: "🦄", expected: "🦄" },
+    { input: "👍🏽", expected: "thumbsup::skin-tone-4" },
+    { input: "⚠️", expected: "warning" },
+  ])("normalizes $input to $expected", async ({ input, expected }) => {
+    const client = createClient();
+
+    await reactSlackMessage("C1", "123.456", input, { client, token: "xoxb-test" });
+
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "123.456",
+      name: expected,
     });
   });
 });

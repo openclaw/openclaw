@@ -1,5 +1,11 @@
+/**
+ * Throttled draft stream loop.
+ *
+ * Sends the latest pending draft text with single-flight edit semantics.
+ */
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
+/** Throttled draft-stream sender used by channels that edit in-progress replies. */
 export type DraftStreamLoop = {
   update: (text: string) => void;
   flush: () => Promise<void>;
@@ -7,14 +13,21 @@ export type DraftStreamLoop = {
   resetPending: () => void;
   resetThrottleWindow: () => void;
   waitForInFlight: () => Promise<void>;
+  /** Removes queued (not in-flight) text atomically and cancels its scheduled flush. */
+  takePending?: () => string;
 };
 
+type CreatedDraftStreamLoop = DraftStreamLoop & {
+  takePending: () => string;
+};
+
+/** Creates a single-flight draft stream loop that preserves the newest pending text. */
 export function createDraftStreamLoop(params: {
   throttleMs: number;
   isStopped: () => boolean;
   sendOrEditStreamMessage: (text: string) => Promise<void | boolean>;
   onBackgroundFlushError?: (err: unknown) => void;
-}): DraftStreamLoop {
+}): CreatedDraftStreamLoop {
   const throttleMs = resolveTimerTimeoutMs(params.throttleMs, 0, 0);
   let lastSentAt = 0;
   let pendingText = "";
@@ -125,6 +138,15 @@ export function createDraftStreamLoop(params: {
       if (inFlightPromise) {
         await inFlightPromise;
       }
+    },
+    takePending: () => {
+      const text = pendingText;
+      pendingText = "";
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      return text;
     },
   };
 }

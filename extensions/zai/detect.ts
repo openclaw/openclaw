@@ -1,7 +1,10 @@
+// Zai plugin module implements detect behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   ZAI_CN_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
+  ZAI_CODING_DEFAULT_MODEL_ID,
   ZAI_CODING_GLOBAL_BASE_URL,
   ZAI_DEFAULT_MODEL_ID,
   ZAI_GLOBAL_BASE_URL,
@@ -27,6 +30,35 @@ type ProbeResult =
       errorCode?: string;
       errorMessage?: string;
     };
+
+type ProbeCandidate = ZaiDetectedEndpoint & {
+  fallback?: boolean;
+};
+
+const UNSUPPORTED_MODEL_ERROR_CODES = new Set(["1211", "1311"]);
+
+/** Cap for the Z.AI probe error body; bounds untrusted error responses to avoid unbounded buffering/OOM. */
+const ZAI_DETECT_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
+
+function isUnsupportedModelResult(result: ProbeResult): boolean {
+  if (result.ok) {
+    return false;
+  }
+  if (result.status === 404) {
+    return true;
+  }
+  if (result.errorCode && UNSUPPORTED_MODEL_ERROR_CODES.has(result.errorCode)) {
+    return true;
+  }
+  if (result.status !== 400) {
+    return false;
+  }
+  const detail = `${result.errorCode ?? ""} ${result.errorMessage ?? ""}`.toLowerCase();
+  return (
+    /\bmodel\b.*\b(not found|unavailable|unsupported|does not exist)\b/.test(detail) ||
+    /模型.*(不存在|不支持|不可用)/.test(detail)
+  );
+}
 
 async function fetchWithTimeoutLocal(
   fetchFn: typeof fetch,
@@ -78,12 +110,17 @@ async function probeZaiChatCompletions(params: {
     let errorCode: string | undefined;
     let errorMessage: string | undefined;
     try {
-      const json = (await res.json()) as {
+      const bytes = await readResponseWithLimit(res, ZAI_DETECT_ERROR_BODY_MAX_BYTES, {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`Z.AI probe error body exceeded size limit (${maxBytes} bytes)`),
+      });
+      const json = JSON.parse(new TextDecoder().decode(bytes)) as {
         error?: { code?: unknown; message?: unknown };
+        code?: unknown;
         msg?: unknown;
         message?: unknown;
       };
-      const code = json?.error?.code;
+      const code = json?.error?.code ?? json?.code;
       const msg = json?.error?.message ?? json?.msg ?? json?.message;
       if (typeof code === "string") {
         errorCode = code;
@@ -116,7 +153,7 @@ export async function detectZaiEndpoint(params: {
 
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 5_000);
   const probeCandidates = (() => {
-    const general = [
+    const general: ProbeCandidate[] = [
       {
         endpoint: "global" as const,
         baseUrl: ZAI_GLOBAL_BASE_URL,
@@ -130,32 +167,48 @@ export async function detectZaiEndpoint(params: {
         note: "Verified GLM-5.1 on cn endpoint.",
       },
     ];
-    const codingGlm51 = [
+    const codingModels: ProbeCandidate[] = [
       {
         endpoint: "coding-global" as const,
         baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
-        modelId: ZAI_DEFAULT_MODEL_ID,
-        note: "Verified GLM-5.1 on coding-global endpoint.",
+        modelId: ZAI_CODING_DEFAULT_MODEL_ID,
+        note: "Verified GLM-5.2 on coding-global endpoint.",
+      },
+      {
+        endpoint: "coding-global" as const,
+        baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
+        modelId: "glm-5.1",
+        note: "Verified GLM-5.1 on coding-global endpoint; GLM-5.2 is unavailable.",
+        fallback: true,
       },
       {
         endpoint: "coding-cn" as const,
         baseUrl: ZAI_CODING_CN_BASE_URL,
-        modelId: ZAI_DEFAULT_MODEL_ID,
-        note: "Verified GLM-5.1 on coding-cn endpoint.",
+        modelId: ZAI_CODING_DEFAULT_MODEL_ID,
+        note: "Verified GLM-5.2 on coding-cn endpoint.",
+      },
+      {
+        endpoint: "coding-cn" as const,
+        baseUrl: ZAI_CODING_CN_BASE_URL,
+        modelId: "glm-5.1",
+        note: "Verified GLM-5.1 on coding-cn endpoint; GLM-5.2 is unavailable.",
+        fallback: true,
       },
     ];
-    const codingFallback = [
+    const codingFallback: ProbeCandidate[] = [
       {
         endpoint: "coding-global" as const,
         baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
         modelId: "glm-4.7",
-        note: "Coding Plan endpoint verified, but this key/plan does not expose GLM-5.1 there. Defaulting to GLM-4.7.",
+        note: "Coding Plan endpoint verified, but this key/plan does not expose GLM-5.2 or GLM-5.1 there. Defaulting to GLM-4.7.",
+        fallback: true,
       },
       {
         endpoint: "coding-cn" as const,
         baseUrl: ZAI_CODING_CN_BASE_URL,
         modelId: "glm-4.7",
-        note: "Coding Plan CN endpoint verified, but this key/plan does not expose GLM-5.1 there. Defaulting to GLM-4.7.",
+        note: "Coding Plan CN endpoint verified, but this key/plan does not expose GLM-5.2 or GLM-5.1 there. Defaulting to GLM-4.7.",
+        fallback: true,
       },
     ];
 
@@ -166,20 +219,28 @@ export async function detectZaiEndpoint(params: {
         return general.filter((candidate) => candidate.endpoint === "cn");
       case "coding-global":
         return [
-          ...codingGlm51.filter((candidate) => candidate.endpoint === "coding-global"),
+          ...codingModels.filter((candidate) => candidate.endpoint === "coding-global"),
           ...codingFallback.filter((candidate) => candidate.endpoint === "coding-global"),
         ];
       case "coding-cn":
         return [
-          ...codingGlm51.filter((candidate) => candidate.endpoint === "coding-cn"),
+          ...codingModels.filter((candidate) => candidate.endpoint === "coding-cn"),
           ...codingFallback.filter((candidate) => candidate.endpoint === "coding-cn"),
         ];
       default:
-        return [...general, ...codingGlm51, ...codingFallback];
+        return [...general, ...codingModels, ...codingFallback];
     }
   })();
 
+  const resultsByEndpoint = new Map<ZaiEndpointId, ProbeResult[]>();
   for (const candidate of probeCandidates) {
+    const priorResults = resultsByEndpoint.get(candidate.endpoint) ?? [];
+    if (
+      candidate.fallback &&
+      (priorResults.length === 0 || !priorResults.every(isUnsupportedModelResult))
+    ) {
+      continue;
+    }
     const result = await probeZaiChatCompletions({
       baseUrl: candidate.baseUrl,
       apiKey: params.apiKey,
@@ -188,8 +249,14 @@ export async function detectZaiEndpoint(params: {
       fetchFn: params.fetchFn,
     });
     if (result.ok) {
-      return candidate;
+      return {
+        endpoint: candidate.endpoint,
+        baseUrl: candidate.baseUrl,
+        modelId: candidate.modelId,
+        note: candidate.note,
+      };
     }
+    resultsByEndpoint.set(candidate.endpoint, [...priorResults, result]);
   }
 
   return null;

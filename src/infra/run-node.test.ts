@@ -1,3 +1,4 @@
+// Tests node process runner lifecycle and captured output.
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -1532,7 +1533,11 @@ describe("run-node script", () => {
         buildPaths: [DIST_ENTRY, BUILD_STAMP],
       });
 
-      const fakeProcess = createFakeProcess();
+      const fakeProcess = Object.assign(createFakeProcess(), {
+        stdin: {
+          isTTY: true,
+        },
+      });
       const child = Object.assign(new EventEmitter(), {
         kill: vi.fn((signal: string) => {
           queueMicrotask(() => child.emit("exit", 0, null));
@@ -1583,11 +1588,99 @@ describe("run-node script", () => {
       expect(spawnCall?.[0]).toBe(process.execPath);
       expect(spawnCall?.[1]).toEqual(["openclaw.mjs", "status"]);
       expect(spawnCall?.[2].stdio).toBe("inherit");
+      expect(spawnCall?.[2]).toMatchObject({ detached: false });
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
       expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
       expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "force-cleans the active openclaw child process group after forwarded SIGTERM",
+    async () => {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        await setupTrackedProject(tmp, {
+          files: {
+            [ROOT_SRC]: "export const value = 1;\n",
+          },
+          oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+          buildPaths: [DIST_ENTRY, BUILD_STAMP],
+        });
+
+        const fakeProcess = Object.assign(createFakeProcess(), {
+          stdin: {
+            isTTY: false,
+          },
+        });
+        const child = Object.assign(new EventEmitter(), {
+          pid: 42_420,
+          kill: vi.fn(),
+        });
+        const groupSignals: Array<[number, string | number]> = [];
+        const spawn = vi.fn<
+          (
+            cmd: string,
+            args: string[],
+            options: unknown,
+          ) => {
+            kill: (signal?: string) => boolean;
+            on: (event: "exit", cb: (code: number | null, signal: string | null) => void) => void;
+            pid: number;
+          }
+        >(() => ({
+          kill: (signal) => {
+            child.kill(signal ?? "SIGTERM");
+            return true;
+          },
+          on: (event, cb) => {
+            child.on(event, cb);
+          },
+          pid: child.pid,
+        }));
+
+        const exitCodePromise = runNodeMain({
+          cwd: tmp,
+          args: ["status"],
+          env: {
+            ...process.env,
+            OPENCLAW_RUNNER_LOG: "0",
+          },
+          platform: "darwin",
+          process: fakeProcess,
+          signalProcess: (pid: number, signal?: string | number) => {
+            groupSignals.push([pid, signal ?? "SIGTERM"]);
+            if (signal === "SIGTERM") {
+              queueMicrotask(() => child.emit("exit", 0, null));
+            }
+            return true;
+          },
+          spawn,
+          runRuntimePostBuild: skipRuntimePostBuild,
+          execPath: process.execPath,
+        });
+
+        await vi.waitFor(() => {
+          expect(spawn).toHaveBeenCalled();
+        });
+        fakeProcess.emit("SIGTERM");
+        const exitCode = await exitCodePromise;
+
+        expect(exitCode).toBe(143);
+        const spawnCall = firstMockCall(spawn) as
+          | [string, string[], { detached?: boolean; stdio?: unknown }]
+          | undefined;
+        expect(spawnCall?.[1]).toEqual(["openclaw.mjs", "status"]);
+        expect(spawnCall?.[2]).toMatchObject({ detached: true, stdio: "inherit" });
+        expect(groupSignals).toEqual([
+          [-42_420, "SIGTERM"],
+          [-42_420, "SIGKILL"],
+        ]);
+        expect(child.kill).not.toHaveBeenCalled();
+        expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
+        expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+      });
+    },
+  );
 
   it("rebuilds when extension sources are newer than the build stamp", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {

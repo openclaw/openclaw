@@ -1,3 +1,5 @@
+// Webchat media tests cover local audio embedding, voice-note metadata, data
+// image limits, reply directives, and safe local media root handling.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
@@ -20,9 +22,9 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     tmpDir = undefined;
   });
 
-  function writeAudioFixture(bytes = [0xff, 0xfb, 0x90, 0x00]) {
+  function writeAudioFixture(bytes = [0xff, 0xfb, 0x90, 0x00], extension = ".mp3") {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
-    const audioPath = path.join(tmpDir, "clip.mp3");
+    const audioPath = path.join(tmpDir, `clip${extension}`);
     fs.writeFileSync(audioPath, Buffer.from(bytes));
     return { audioPath, localRoot: tmpDir };
   }
@@ -46,6 +48,19 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
       kind: "audio",
       label: "clip.mp3",
       mimeType: "audio/mpeg",
+    });
+  });
+
+  it("exposes MPEG-2 audio files with their canonical MIME type", async () => {
+    const { audioPath, localRoot } = writeAudioFixture([0xff, 0xfd, 0x80, 0x00], ".m2a");
+
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+      [{ mediaUrl: audioPath, trustedLocalMedia: true }],
+      { localRoots: [localRoot] },
+    );
+
+    expect(blocks[0]).toMatchObject({
+      attachment: { label: "clip.m2a", kind: "audio", mimeType: "audio/mpeg" },
     });
   });
 

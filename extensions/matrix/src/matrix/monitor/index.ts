@@ -1,3 +1,4 @@
+// Matrix plugin entrypoint registers its OpenClaw integration.
 import { format } from "node:util";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
@@ -57,7 +58,7 @@ import { createMatrixMonitorStatusController } from "./status.js";
 import { createMatrixMonitorSyncLifecycle } from "./sync-lifecycle.js";
 import { createMatrixMonitorTaskRunner } from "./task-runner.js";
 
-export type MonitorMatrixOpts = {
+type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
   abortSignal?: AbortSignal;

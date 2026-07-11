@@ -1,9 +1,11 @@
+/** Tests plugin CLI node Gateway runtime timeout and invocation behavior. */
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginCliGatewayNodesRuntime,
   resolvePluginCliNodeInvokeGatewayTimeoutMs,
 } from "./cli-gateway-nodes-runtime.js";
+import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 
 const callGatewayMock = vi.fn();
 
@@ -33,6 +35,43 @@ describe("createPluginCliGatewayNodesRuntime", () => {
         params: expect.objectContaining({
           timeoutMs: Number.MAX_SAFE_INTEGER,
         }),
+      }),
+    );
+  });
+
+  it("forwards requested node invoke scopes for bundled plugin CLI runtime", async () => {
+    const nodes = createPluginCliGatewayNodesRuntime();
+
+    await withPluginRuntimePluginScope({ pluginId: "google-meet", pluginOrigin: "bundled" }, () =>
+      nodes.invoke({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        scopes: ["operator.admin"],
+      }),
+    );
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "node.invoke",
+        scopes: ["operator.admin"],
+      }),
+    );
+  });
+
+  it("drops requested node invoke scopes for third-party plugin CLI runtime", async () => {
+    const nodes = createPluginCliGatewayNodesRuntime();
+
+    await withPluginRuntimePluginScope({ pluginId: "third-party", pluginOrigin: "global" }, () =>
+      nodes.invoke({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        scopes: ["operator.admin"],
+      }),
+    );
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        scopes: expect.anything(),
       }),
     );
   });

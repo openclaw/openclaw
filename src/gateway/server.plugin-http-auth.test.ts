@@ -1,3 +1,5 @@
+// Plugin HTTP auth tests cover protected route canonicalization, operator scope
+// checks, hook/plugin route precedence, and unauthorized variant handling.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -606,6 +608,51 @@ describe("gateway plugin HTTP auth boundary", () => {
       },
     });
   });
+
+  test.each([
+    { label: "root-mounted", basePath: "", path: "/settings/plugins" },
+    {
+      label: "base-path-mounted",
+      basePath: "/openclaw",
+      path: "/openclaw/settings/plugins",
+    },
+  ])(
+    "reserves the $label plugin manager GET while preserving writes",
+    async ({ basePath, path }) => {
+      const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+        const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+        if (pathname !== path) {
+          return false;
+        }
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("plugin-handled");
+        return true;
+      });
+
+      await withGatewayServer({
+        prefix: "openclaw-plugin-http-plugin-manager-reserved-test-",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: basePath,
+          controlUiRoot: { kind: "missing" },
+          handlePluginRequest,
+        },
+        run: async (server) => {
+          const read = await sendRequest(server, { path });
+          expect(read.res.statusCode).toBe(503);
+          expect(read.getBody()).toContain("Control UI assets not found");
+          expect(handlePluginRequest).not.toHaveBeenCalled();
+
+          const write = await sendRequest(server, { path, method: "POST" });
+          expect(write.res.statusCode).toBe(200);
+          expect(write.getBody()).toBe("plugin-handled");
+          expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+        },
+      });
+    },
+  );
 
   test("passes POST webhook routes through root-mounted control ui to plugins", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {

@@ -1,3 +1,4 @@
+// Googlechat plugin module implements monitor behavior.
 import {
   recordChannelBotPairLoopAndCheckSuppression,
   type ChannelBotLoopProtectionFacts,
@@ -11,6 +12,7 @@ import {
 } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
+import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
 import type { GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
 import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
@@ -27,6 +29,7 @@ import type {
 } from "./monitor-types.js";
 import { warnAppPrincipalMisconfiguration } from "./monitor-webhook.js";
 import { getGoogleChatRuntime } from "./runtime.js";
+import { isGoogleChatGroupSpace } from "./targets.js";
 import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
 
 setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
@@ -120,6 +123,10 @@ function shouldSuppressGoogleChatBotLoop(params: {
 
 async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTarget) {
   const eventType = event.type ?? (event as { eventType?: string }).eventType;
+  if (eventType === "CARD_CLICKED") {
+    await maybeHandleGoogleChatApprovalCardClick({ event, target });
+    return;
+  }
   if (eventType !== "MESSAGE") {
     return;
   }
@@ -180,8 +187,7 @@ async function processMessageWithPipeline(params: {
   if (!spaceId) {
     return;
   }
-  const spaceType = (space.type ?? "").toUpperCase();
-  const isGroup = spaceType !== "DM";
+  const isGroup = isGoogleChatGroupSpace(space);
   const sender = message.sender ?? event.user;
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
@@ -292,6 +298,7 @@ async function processMessageWithPipeline(params: {
       id: senderId,
       name: senderName || undefined,
       username: senderEmail,
+      isBot: isBotSender || undefined,
     },
     conversation: {
       kind: isGroup ? "channel" : "direct",

@@ -1,4 +1,5 @@
-import crypto from "node:crypto";
+import { sha256Hex } from "./crypto-digest.js";
+// Binds system-run approval requests to stable command identities.
 import type {
   SystemRunApprovalBinding,
   SystemRunApprovalFileOperand,
@@ -89,7 +90,7 @@ function hashSystemRunEnvEntries(entries: NormalizedSystemRunEnvEntry[]): string
   if (entries.length === 0) {
     return null;
   }
-  return crypto.createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+  return sha256Hex(JSON.stringify(entries));
 }
 
 export function buildSystemRunApprovalEnvBinding(env: unknown): {

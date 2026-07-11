@@ -1,3 +1,9 @@
+/**
+ * Browser client action helpers.
+ *
+ * Wraps browser-control action endpoints for navigation, dialog/file hooks,
+ * screenshots, and element actions used by the Browser agent tool.
+ */
 import {
   addTimerTimeoutGraceMs,
   clampPositiveTimerTimeoutMs,
@@ -13,8 +19,10 @@ import type { BrowserActRequest } from "./client-actions.types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
   DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
 } from "./constants.js";
+import type { BrowserDownloadResult } from "./download-types.js";
 
 export type { BrowserFormField } from "./client-actions.types.js";
 
@@ -26,9 +34,13 @@ type BrowserActResponse = {
   results?: Array<{ ok: boolean; error?: string }>;
   blockedByDialog?: boolean;
   browserState?: unknown;
+  /** Download info when a click/batch/evaluate action triggers a browser download. */
+  downloads?: BrowserDownloadResult[];
 };
 
-const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
+const BROWSER_REQUEST_TIMEOUT_SLACK_MS = 5_000;
+
+type BrowserDownloadActionResult = BrowserActionTabResult & { download: BrowserDownloadResult };
 
 function normalizePositiveTimeoutMs(value: unknown): number | undefined {
   return clampPositiveTimerTimeoutMs(value);
@@ -39,18 +51,42 @@ function resolveBrowserActRequestTimeoutMs(req: BrowserActRequest): number {
   const candidateTimeouts =
     explicitTimeout === undefined
       ? [DEFAULT_BROWSER_ACTION_TIMEOUT_MS]
-      : [addTimerTimeoutGraceMs(explicitTimeout, BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS) ?? 1];
+      : [addTimerTimeoutGraceMs(explicitTimeout, BROWSER_REQUEST_TIMEOUT_SLACK_MS) ?? 1];
   if (req.kind === "wait") {
     const waitDuration = normalizePositiveTimeoutMs(req.timeMs);
     if (waitDuration !== undefined) {
       candidateTimeouts.push(
-        addTimerTimeoutGraceMs(waitDuration, BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS) ?? 1,
+        addTimerTimeoutGraceMs(waitDuration, BROWSER_REQUEST_TIMEOUT_SLACK_MS) ?? 1,
       );
     }
   }
   return Math.max(...candidateTimeouts);
 }
 
+function resolveBrowserOperationRequestTimeoutMs(timeoutMs: unknown): number {
+  const operationTimeoutMs =
+    normalizePositiveTimeoutMs(timeoutMs) ?? DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS;
+  // Let the browser operation report its own timeout/error before the client watchdog fires.
+  return addTimerTimeoutGraceMs(operationTimeoutMs, BROWSER_REQUEST_TIMEOUT_SLACK_MS) ?? 1;
+}
+
+async function postDownloadRequest(
+  baseUrl: string | undefined,
+  route: "/download" | "/wait/download",
+  body: Record<string, unknown>,
+  profile?: string,
+  timeoutMs?: number,
+): Promise<BrowserDownloadActionResult> {
+  const q = buildProfileQuery(profile);
+  return await fetchBrowserJson<BrowserDownloadActionResult>(withBaseUrl(baseUrl, `${route}${q}`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    timeoutMs: resolveBrowserOperationRequestTimeoutMs(timeoutMs),
+  });
+}
+
+/** Navigate a browser tab through the control server. */
 export async function browserNavigate(
   baseUrl: string | undefined,
   opts: {
@@ -68,6 +104,7 @@ export async function browserNavigate(
   });
 }
 
+/** Arm a one-shot browser dialog handler. */
 export async function browserArmDialog(
   baseUrl: string | undefined,
   opts: {
@@ -90,10 +127,11 @@ export async function browserArmDialog(
       targetId: opts.targetId,
       timeoutMs: opts.timeoutMs,
     }),
-    timeoutMs: 20000,
+    timeoutMs: resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
   });
 }
 
+/** Arm or execute a browser file chooser upload. */
 export async function browserArmFileChooser(
   baseUrl: string | undefined,
   opts: {
@@ -118,10 +156,59 @@ export async function browserArmFileChooser(
       targetId: opts.targetId,
       timeoutMs: opts.timeoutMs,
     }),
-    timeoutMs: 20000,
+    timeoutMs: resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
   });
 }
 
+/** Wait for the next managed browser download and save it under the guarded download root. */
+export async function browserWaitForDownload(
+  baseUrl: string | undefined,
+  opts: {
+    path?: string;
+    targetId?: string;
+    timeoutMs?: number;
+    profile?: string;
+  },
+): Promise<BrowserDownloadActionResult> {
+  return await postDownloadRequest(
+    baseUrl,
+    "/wait/download",
+    {
+      targetId: opts.targetId,
+      path: opts.path,
+      timeoutMs: opts.timeoutMs,
+    },
+    opts.profile,
+    opts.timeoutMs,
+  );
+}
+
+/** Click a snapshot ref and save its download under the guarded download root. */
+export async function browserDownload(
+  baseUrl: string | undefined,
+  opts: {
+    ref: string;
+    path: string;
+    targetId?: string;
+    timeoutMs?: number;
+    profile?: string;
+  },
+): Promise<BrowserDownloadActionResult> {
+  return await postDownloadRequest(
+    baseUrl,
+    "/download",
+    {
+      targetId: opts.targetId,
+      ref: opts.ref,
+      path: opts.path,
+      timeoutMs: opts.timeoutMs,
+    },
+    opts.profile,
+    opts.timeoutMs,
+  );
+}
+
+/** Execute one normalized browser action request. */
 export async function browserAct(
   baseUrl: string | undefined,
   req: BrowserActRequest,
@@ -136,6 +223,7 @@ export async function browserAct(
   });
 }
 
+/** Capture a screenshot through the browser control server. */
 export async function browserScreenshotAction(
   baseUrl: string | undefined,
   opts: {

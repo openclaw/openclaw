@@ -1,11 +1,10 @@
+// Exercises agent harness registration, ownership metadata, and selection handoff.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearAgentHarnesses,
   disposeRegisteredAgentHarnesses,
-  getAgentHarness,
   getRegisteredAgentHarness,
-  listAgentHarnessIds,
   listRegisteredAgentHarnesses,
   registerAgentHarness,
   resetRegisteredAgentHarnessSessions,
@@ -36,6 +35,8 @@ function makeHarness(
     providers?: string[];
   } = {},
 ): AgentHarness {
+  // Test harnesses keep support decisions provider-scoped so selection tests
+  // can distinguish registration from runtime-policy preference.
   const providers = options.providers?.map((provider) => provider.trim().toLowerCase());
   return {
     id,
@@ -69,11 +70,11 @@ describe("agent harness registry", () => {
     const harness = makeHarness("custom");
     registerAgentHarness(harness, { ownerPluginId: "plugin-a" });
 
-    const registeredHarness = getAgentHarness("custom");
-    expect(registeredHarness?.id).toBe("custom");
-    expect(registeredHarness?.pluginId).toBe("plugin-a");
-    expect(getRegisteredAgentHarness("custom")?.ownerPluginId).toBe("plugin-a");
-    expect(listAgentHarnessIds()).toEqual(["custom"]);
+    const registeredHarness = getRegisteredAgentHarness("custom");
+    expect(registeredHarness?.harness.id).toBe("custom");
+    expect(registeredHarness?.harness.pluginId).toBe("plugin-a");
+    expect(registeredHarness?.ownerPluginId).toBe("plugin-a");
+    expect(listRegisteredAgentHarnesses().map((entry) => entry.harness.id)).toEqual(["custom"]);
   });
 
   it("restores a registry snapshot", () => {
@@ -83,7 +84,7 @@ describe("agent harness registry", () => {
 
     restoreRegisteredAgentHarnesses(snapshot);
 
-    expect(listAgentHarnessIds()).toEqual(["a"]);
+    expect(listRegisteredAgentHarnesses().map((entry) => entry.harness.id)).toEqual(["a"]);
   });
 
   it("dispatches generic session reset to registered harnesses", async () => {
@@ -125,6 +126,8 @@ describe("agent harness registry", () => {
   });
 
   it("keeps model-specific harnesses behind plugin registration in auto mode", () => {
+    // Auto mode should not select a model-specific runtime until the owning
+    // plugin has registered its harness in this process.
     process.env.OPENCLAW_AGENT_RUNTIME = "auto";
 
     expect(selectAgentHarness({ provider: "plugin-models", modelId: "custom-1" }).id).toBe(

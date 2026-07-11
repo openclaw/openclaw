@@ -1,3 +1,4 @@
+// Qa Matrix tests cover client plugin behavior.
 import { describe, expect, it } from "vitest";
 import { testing, createMatrixQaClient, provisionMatrixQaRoom } from "./client.js";
 import { buildDefaultMatrixQaTopologySpec } from "./topology.js";
@@ -381,6 +382,84 @@ describe("matrix driver client", () => {
     expect(messageBody.info?.mimetype).toBe("image/png");
     expect(messageBody.info?.size).toBe("png-bytes".length);
     expect(messageBody["m.mentions"]?.user_ids).toEqual(["@sut:matrix-qa.test"]);
+  });
+
+  it("fails closed when the media upload response streams an over-cap body", async () => {
+    // Sibling coverage to requestMatrixJson: the /_matrix/media/v3/upload
+    // response is also parsed from an external homeserver, so an oversized
+    // upload body must trip the same 16 MiB cap and cancel the stream rather
+    // than buffering it whole and OOMing the QA runner.
+    const chunkSize = 1024 * 1024;
+    const chunkCount = 32; // 32 MiB total, past the 16 MiB cap
+    let reads = 0;
+    let canceled = false;
+    const encoder = new TextEncoder();
+    const fetchImpl: typeof fetch = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            reads += 1;
+            controller.enqueue(encoder.encode("a".repeat(chunkSize)));
+            if (reads >= chunkCount) {
+              controller.close();
+            }
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+
+    const client = createMatrixQaClient({
+      accessToken: "token",
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+    });
+
+    await expect(
+      client.sendMediaMessage({
+        body: "@sut:matrix-qa.test Image understanding check",
+        buffer: Buffer.from("png-bytes"),
+        contentType: "image/png",
+        fileName: "huge.png",
+        kind: "image",
+        mentionUserIds: ["@sut:matrix-qa.test"],
+        roomId: "!room:matrix-qa.test",
+      }),
+    ).rejects.toThrow(/Matrix homeserver response exceeds 16777216 bytes/);
+
+    expect(canceled).toBe(true);
+    expect(reads).toBeLessThan(chunkCount);
+  });
+
+  it("still tolerates malformed in-bounds media upload JSON", async () => {
+    // Malformed-but-in-bounds upload bodies fall back to `{}`, so the upload
+    // surfaces the pre-existing "did not return content_uri" error rather than
+    // a parse crash — unchanged from before the bound was added.
+    const fetchImpl: typeof fetch = async () =>
+      new Response("{ not json", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    const client = createMatrixQaClient({
+      accessToken: "token",
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+    });
+
+    await expect(
+      client.sendMediaMessage({
+        body: "@sut:matrix-qa.test Image understanding check",
+        buffer: Buffer.from("png-bytes"),
+        contentType: "image/png",
+        fileName: "bad.png",
+        kind: "image",
+        mentionUserIds: ["@sut:matrix-qa.test"],
+        roomId: "!room:matrix-qa.test",
+      }),
+    ).rejects.toThrow("Matrix media upload did not return content_uri.");
   });
 
   it("adds Matrix room encryption state when provisioning encrypted QA rooms", async () => {

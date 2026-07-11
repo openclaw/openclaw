@@ -1,3 +1,9 @@
+/**
+ * Basic browser control routes.
+ *
+ * Serves status, doctor, start/stop, profile management, and simple health
+ * endpoints for the browser control server.
+ */
 import { redactCdpUrl } from "../cdp.helpers.js";
 import { snapshotAria } from "../cdp.js";
 import { getChromeMcpPid, takeChromeMcpSnapshot } from "../chrome-mcp.js";
@@ -13,6 +19,7 @@ import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./t
 import {
   asyncBrowserRoute,
   getProfileContext,
+  jsonBrowserError,
   jsonError,
   toBoolean,
   toStringOrEmpty,
@@ -47,7 +54,7 @@ async function probeChromeMcpPageReady(profileCtx: ProfileContext, timeoutMs: nu
 function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   const mapped = toBrowserErrorResponse(err);
   if (mapped) {
-    return jsonError(res, mapped.status, mapped.message);
+    return jsonBrowserError(res, mapped);
   }
   jsonError(res, 500, String(err));
 }
@@ -189,7 +196,11 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
     enabled: current.resolved.enabled,
     profile: profileCtx.profile.name,
     driver: profileCtx.profile.driver,
-    transport: capabilities.usesChromeMcp ? ("chrome-mcp" as const) : ("cdp" as const),
+    transport: capabilities.usesChromeMcp
+      ? ("chrome-mcp" as const)
+      : capabilities.mode === "local-extension"
+        ? ("extension" as const)
+        : ("cdp" as const),
     running: cdpReady,
     cdpReady,
     cdpHttp,
@@ -198,7 +209,7 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
       ? getChromeMcpPid(profileCtx.profile.name)
       : (profileState?.running?.pid ?? null),
     cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
-    cdpUrl: capabilities.usesChromeMcp ? null : (redactCdpUrl(profileCtx.profile.cdpUrl) ?? null),
+    cdpUrl: profileCtx.profile.cdpUrl ? (redactCdpUrl(profileCtx.profile.cdpUrl) ?? null) : null,
     chosenBrowser: profileState?.running?.exe.kind ?? null,
     detectedBrowser,
     detectedExecutablePath,
@@ -304,6 +315,7 @@ function parseHeadlessStartOverride(params: {
   return { ok: true, headless };
 }
 
+/** Register basic browser lifecycle, status, doctor, and profile endpoints. */
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
   // List all profiles with their status
   app.get(

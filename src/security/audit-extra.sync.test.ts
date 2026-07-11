@@ -1,10 +1,10 @@
+// Covers synchronous extra security audit aggregation.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   collectAttackSurfaceSummaryFindings,
   collectSmallModelRiskFindings,
 } from "./audit-extra.summary.js";
-import { safeEqualSecret } from "./secret-equal.js";
 
 vi.mock("../plugins/web-search-credential-presence.js", () => ({
   hasConfiguredWebSearchCredential: () => false,
@@ -58,21 +58,6 @@ describe("collectAttackSurfaceSummaryFindings", () => {
   });
 });
 
-describe("safeEqualSecret", () => {
-  it.each([
-    ["secret-token", "secret-token", true],
-    ["secret-token", "secret-tokEn", false],
-    ["short", "much-longer", false],
-    ["", "", true],
-    ["", "secret", false],
-    [undefined, "secret", false],
-    ["secret", undefined, false],
-    [null, "secret", false],
-  ] as const)("compares %o and %o", (left, right, expected) => {
-    expect(safeEqualSecret(left, right)).toBe(expected);
-  });
-});
-
 describe("collectSmallModelRiskFindings", () => {
   const browserOffCfg = {
     agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
@@ -82,6 +67,14 @@ describe("collectSmallModelRiskFindings", () => {
   const browserDefaultCfg = {
     agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
     tools: { web: { fetch: { enabled: false } } },
+  } satisfies OpenClawConfig;
+  const browserBlockedByPluginPolicyCfg = {
+    ...browserDefaultCfg,
+    plugins: { allow: ["openai"] },
+  } satisfies OpenClawConfig;
+  const configuredBrowserBlockedByPluginPolicyCfg = {
+    ...browserBlockedByPluginPolicyCfg,
+    browser: { enabled: true },
   } satisfies OpenClawConfig;
 
   it.each([
@@ -100,6 +93,22 @@ describe("collectSmallModelRiskFindings", () => {
       expectedSeverity: "critical",
       detailIncludes: ["web=[browser]"],
       detailExcludes: ["No web/browser tools detected"],
+    },
+    {
+      name: "treats browser as disabled when restrictive plugin policy excludes it",
+      cfg: browserBlockedByPluginPolicyCfg,
+      env: {},
+      expectedSeverity: "info",
+      detailIncludes: ["web=[off]", "No web/browser tools detected"],
+      detailExcludes: ["web=[browser]"],
+    },
+    {
+      name: "does not let browser config bypass restrictive plugin policy",
+      cfg: configuredBrowserBlockedByPluginPolicyCfg,
+      env: {},
+      expectedSeverity: "info",
+      detailIncludes: ["web=[off]", "No web/browser tools detected"],
+      detailExcludes: ["web=[browser]"],
     },
   ])("$name", ({ cfg, env, expectedSeverity, detailIncludes, detailExcludes }) => {
     const finding = requireFirstFinding(

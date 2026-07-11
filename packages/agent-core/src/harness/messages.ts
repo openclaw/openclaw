@@ -1,3 +1,4 @@
+// Agent Core module implements messages behavior.
 import type { ImageContent, Message, TextContent } from "../../../llm-core/src/index.js";
 import type {
   AgentMessage,
@@ -138,10 +139,16 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             typeof message.content === "string"
               ? [{ type: "text" as const, text: message.content }]
               : message.content;
+          // Transient current-turn runtime-context carriers must not anchor a
+          // provider prompt-cache breakpoint (their bytes change every turn).
+          const runtimeContextCarrier =
+            (message.details as { runtimeContextCarrier?: unknown } | undefined)
+              ?.runtimeContextCarrier === true;
           return {
             role: "user",
             content,
             timestamp: message.timestamp,
+            ...(runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
           };
         }
         case "branchSummary":

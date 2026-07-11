@@ -1,5 +1,7 @@
+// Codex tests cover sandbox exec server plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES,
   closeCodexSandboxExecServersForTests,
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
@@ -100,19 +102,6 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
-  it("rejects Codex app-server versions before the sandbox exec-server environment contract", async () => {
-    const sandbox = createSandboxContext({});
-    const client = createClient({ serverVersion: "0.131.0" });
-
-    await expect(
-      ensureCodexSandboxExecServerEnvironment({
-        client: client as never,
-        sandbox,
-      }),
-    ).rejects.toThrow("Codex app-server 0.132.0 or newer is required");
-    expect(client.request).not.toHaveBeenCalled();
-  });
-
   it("registers a sandbox-backed Codex environment and routes process execution through it", async () => {
     const buildExecSpec = vi.fn(async () => ({
       argv: [process.execPath, "-e", "process.stdout.write('sandbox-process-ok\\n')"],
@@ -188,6 +177,22 @@ describe("OpenClaw Codex sandbox exec-server", () => {
       expect.arrayContaining(["process/output", "process/exited", "process/closed"]),
     );
     socket.close();
+  });
+
+  it("closes oversized sandbox exec-server frames before JSON-RPC parsing", async () => {
+    const sandbox = createSandboxContext({});
+    const client = createClient();
+
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    const closed = waitForSocketClose(socket);
+
+    socket.send(Buffer.alloc(CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES + 1));
+
+    await expect(closed).resolves.toEqual({ code: 1009 });
   });
 
   it("rejects unsupported arg0 overrides instead of dropping them", async () => {
@@ -438,6 +443,26 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     const socket = await openSocket(unauthorizedUrl);
 
     await expect(waitForSocketClose(socket)).resolves.toEqual({ code: 1008 });
+  });
+
+  it("handles oversized frames from unauthorized WebSocket clients", async () => {
+    const sandbox = createSandboxContext({});
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const unauthorizedUrl = execServerUrlFromClient(client).replace(
+      /\/openclaw-[^/?#]+/u,
+      "/wrong",
+    );
+    const socket = await openSocket(unauthorizedUrl);
+    const closed = waitForSocketClose(socket);
+
+    socket.send(Buffer.alloc(CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES + 1));
+
+    const closeResult = await closed;
+    expect([1008, 1009]).toContain(closeResult.code);
   });
 
   it("closes the exec-server when its sandbox environment is released", async () => {

@@ -1,3 +1,4 @@
+// Upload store tests cover staged skill archive persistence and cleanup.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -479,6 +480,45 @@ describe("skill upload store", () => {
     const next = await repeated;
     expect(next.uploadId).not.toBe(committed.uploadId);
     await expectMissingPath(path.join(rootDir, committed.uploadId));
+  });
+
+  it("clears the orphaned idempotency pointer when re-begin hits corrupt metadata before the active cap throws", async () => {
+    const rootDir = await makeTempDir();
+    const store = createSkillUploadStore({ rootDir });
+    const idempotencyKey = "orphan-pointer-key";
+
+    // begin with an idempotency key → writes the upload plus its idempotency pointer
+    const first = await store.begin({
+      kind: "skill-archive",
+      slug: "demo-skill",
+      sizeBytes: 8,
+      idempotencyKey,
+    });
+    const idempotencyDir = path.join(rootDir, "idempotency");
+    const pointerFiles = await fs.readdir(idempotencyDir);
+    expect(pointerFiles).toHaveLength(1);
+    const pointerFile = pointerFiles[0];
+
+    // corrupt the upload metadata so readRecordIfPresent() returns null on re-begin
+    // (this also drops the upload from the active-upload count)
+    await fs.rm(path.join(rootDir, first.uploadId, "metadata.json"), { force: true });
+
+    // saturate the active-upload cap with unrelated uploads
+    for (let i = 0; i < MAX_ACTIVE_SKILL_UPLOADS; i++) {
+      await store.begin({ kind: "skill-archive", slug: `filler-${i}`, sizeBytes: 8 });
+    }
+
+    // re-begin the same key: the pointer still matches, but its upload metadata is gone,
+    // so the corrupt-metadata branch runs and then the active-upload cap throws before the
+    // pointer would be rewritten. The pointer must have been cleared by that branch — not
+    // left stranded pointing at the now-deleted (ghost) uploadId.
+    await expectUploadError(
+      store.begin({ kind: "skill-archive", slug: "demo-skill", sizeBytes: 8, idempotencyKey }),
+      "too many active skill uploads",
+    );
+
+    const remaining = await fs.readdir(idempotencyDir).catch(() => [] as string[]);
+    expect(remaining).not.toContain(pointerFile);
   });
 });
 

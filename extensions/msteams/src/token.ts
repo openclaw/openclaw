@@ -1,3 +1,4 @@
+// Msteams plugin module implements token behavior.
 import { readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
@@ -14,7 +15,7 @@ import { resolveMSTeamsStorePath } from "./storage.js";
 
 // ── Credential types ───────────────────────────────────────────────────────
 
-export type MSTeamsSecretCredentials = {
+type MSTeamsSecretCredentials = {
   type: "secret";
   appId: string;
   appPassword: string;

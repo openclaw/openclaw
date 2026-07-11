@@ -1,3 +1,4 @@
+// Browser tests cover basic.existing session plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
@@ -110,8 +111,13 @@ async function callBasicRouteWithState(params: {
 async function callStartRoute(params: {
   profile?: Record<string, unknown>;
   query?: Record<string, unknown>;
+  error?: Error;
 }) {
-  const ensureBrowserAvailable = vi.fn(async () => {});
+  const ensureBrowserAvailable = vi.fn(async () => {
+    if (params.error) {
+      throw params.error;
+    }
+  });
   const profile = {
     name: "openclaw",
     driver: "openclaw",
@@ -270,6 +276,34 @@ describe("basic browser routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({ ok: true, profile: "openclaw" });
     expect(ensureBrowserAvailable).toHaveBeenCalledWith({ headless: true });
+  });
+
+  it("returns structured no-display metadata without replacing the error message", async () => {
+    const { response } = await callStartRoute({
+      error: new BrowserProfileUnavailableError("display required", {
+        metadata: {
+          reason: "no_display_for_headed_profile",
+          details: {
+            profile: "openclaw",
+            requestedHeadless: false,
+            headlessSource: "profile",
+            displayPresent: false,
+          },
+        },
+      }),
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toEqual({
+      error: "display required",
+      reason: "no_display_for_headed_profile",
+      details: {
+        profile: "openclaw",
+        requestedHeadless: false,
+        headlessSource: "profile",
+        displayPresent: false,
+      },
+    });
   });
 
   it("rejects invalid start headless values", async () => {

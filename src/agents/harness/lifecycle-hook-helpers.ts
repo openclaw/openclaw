@@ -1,3 +1,9 @@
+/**
+ * Agent harness lifecycle hook helpers.
+ *
+ * This module dispatches LLM/agent lifecycle plugin hooks and normalizes
+ * before-finalize retry/finalize decisions with bounded retry accounting.
+ */
 import { createHash } from "node:crypto";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -7,7 +13,9 @@ import type {
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
   PluginHookLlmInputEvent,
+  PluginHookLlmInputResult,
   PluginHookLlmOutputEvent,
+  PluginHookLlmOutputResult,
 } from "../../plugins/hook-types.js";
 import type { VoidHookRunOptions } from "../../plugins/hooks.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -20,6 +28,7 @@ const FINALIZE_RETRY_BUDGET_MAX_ENTRIES = 2048;
 type AgentHarnessHookRunner = ReturnType<typeof getGlobalHookRunner>;
 type FinalizeRetryBudget = Map<string, Map<string, number>>;
 
+/** Returns the current global hook runner for harness lifecycle hooks. */
 export function getAgentHarnessHookRunner(): AgentHarnessHookRunner {
   return getGlobalHookRunner();
 }
@@ -57,6 +66,7 @@ function buildFinalizeRetryInstructionKey(instruction: string): string {
   return `instruction:${createHash("sha256").update(instruction).digest("hex")}`;
 }
 
+/** Clears before-finalize retry budgets globally or for one run. */
 export function clearAgentHarnessFinalizeRetryBudget(params?: { runId?: string }): void {
   const budget = getFinalizeRetryBudget();
   if (!params?.runId) {
@@ -66,35 +76,39 @@ export function clearAgentHarnessFinalizeRetryBudget(params?: { runId?: string }
   budget.delete(params.runId);
 }
 
+/** Dispatches best-effort LLM input hooks for a harness attempt. */
 export function runAgentHarnessLlmInputHook(params: {
   event: PluginHookLlmInputEvent;
   ctx: AgentHarnessHookContext;
   hookRunner?: AgentHarnessHookRunner;
-}): void {
+}): Promise<PluginHookLlmInputResult | undefined> {
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("llm_input") || typeof hookRunner.runLlmInput !== "function") {
-    return;
+    return Promise.resolve(undefined);
   }
-  void hookRunner
+  return hookRunner
     .runLlmInput(params.event, buildAgentHookContext(params.ctx))
     .catch((error: unknown) => {
       log.warn(`llm_input hook failed: ${String(error)}`);
+      return undefined;
     });
 }
 
+/** Dispatches LLM output hooks for a harness attempt. */
 export function runAgentHarnessLlmOutputHook(params: {
   event: PluginHookLlmOutputEvent;
   ctx: AgentHarnessHookContext;
   hookRunner?: AgentHarnessHookRunner;
-}): void {
+}): Promise<PluginHookLlmOutputResult | undefined> {
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("llm_output") || typeof hookRunner.runLlmOutput !== "function") {
-    return;
+    return Promise.resolve(undefined);
   }
-  void hookRunner
+  return hookRunner
     .runLlmOutput(params.event, buildAgentHookContext(params.ctx))
     .catch((error: unknown) => {
       log.warn(`llm_output hook failed: ${String(error)}`);
+      return undefined;
     });
 }
 
@@ -116,6 +130,7 @@ async function executeAgentHarnessAgentEndHook(params: {
   }
 }
 
+/** Starts agent_end hooks with unref timeout behavior. */
 export function runAgentHarnessAgentEndHook(params: {
   event: PluginHookAgentEndEvent;
   ctx: AgentHarnessHookContext;
@@ -124,6 +139,7 @@ export function runAgentHarnessAgentEndHook(params: {
   void executeAgentHarnessAgentEndHook({ ...params, unrefTimeout: true });
 }
 
+/** Runs agent_end hooks and waits for completion. */
 export async function awaitAgentHarnessAgentEndHook(params: {
   event: PluginHookAgentEndEvent;
   ctx: AgentHarnessHookContext;
@@ -132,11 +148,13 @@ export async function awaitAgentHarnessAgentEndHook(params: {
   await executeAgentHarnessAgentEndHook({ ...params, unrefTimeout: false });
 }
 
-export type AgentHarnessBeforeAgentFinalizeOutcome =
+/** Normalized before-finalize hook decision consumed by harness loops. */
+type AgentHarnessBeforeAgentFinalizeOutcome =
   | { action: "continue" }
   | { action: "revise"; reason: string }
   | { action: "finalize"; reason?: string };
 
+/** Runs before-finalize hooks and normalizes finalize/revise/continue decisions. */
 export async function runAgentHarnessBeforeAgentFinalizeHook(params: {
   event: PluginHookBeforeAgentFinalizeEvent;
   ctx: AgentHarnessHookContext;
@@ -192,6 +210,8 @@ function normalizeBeforeAgentFinalizeResult(
         const retryKey =
           normalizeTrimmedString(retry.idempotencyKey) ||
           buildFinalizeRetryInstructionKey(retryInstruction);
+        // Track retry attempts per run+instruction to prevent finalize hooks
+        // from creating an unbounded revise loop.
         const budget = getFinalizeRetryBudget();
         const runBudget = budget.get(retryRunId) ?? new Map<string, number>();
         const nextCount = (runBudget.get(retryKey) ?? 0) + 1;

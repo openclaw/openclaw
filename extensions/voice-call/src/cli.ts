@@ -1,3 +1,4 @@
+// Voice Call plugin module implements cli behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -732,7 +733,7 @@ export function registerVoiceCallCli(params: {
       }
       const rt = await ensureRuntime();
       if (options.callId) {
-        const call = rt.manager.getCall(options.callId);
+        const call = await rt.manager.getCallFromMemoryOrStore(options.callId);
         writeStdoutJson(call ?? { found: false });
         return;
       }

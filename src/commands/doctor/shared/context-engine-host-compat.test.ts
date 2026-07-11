@@ -1,6 +1,12 @@
+// Context engine host compatibility tests cover doctor warnings for host/context mismatches.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { registerContextEngine } from "../../../context-engine/registry.js";
+import {
+  getContextEngineFactory,
+  getContextEngineRegistration,
+  registerContextEngine,
+  registerContextEngineForOwner,
+} from "../../../context-engine/registry.js";
 import type { ContextEngine, ContextEngineHostCapability } from "../../../context-engine/types.js";
 import {
   collectConfiguredContextEngineAgentRunHosts,
@@ -59,6 +65,23 @@ function configWithEngine(engineId: string, cfg: OpenClawConfig = {}): OpenClawC
 }
 
 describe("doctor context-engine host compatibility", () => {
+  it("distinguishes read-only discovery registrations from runtime entries", () => {
+    const id = uniqueEngineId();
+    const factory = () => {
+      throw new Error("discovery-only");
+    };
+    const result = registerContextEngineForOwner(id, factory, `doctor-test-owner-${id}`, {
+      lifecycle: "readOnlyDiscovery",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(getContextEngineRegistration(id)).toMatchObject({
+      factory,
+      lifecycle: "readOnlyDiscovery",
+    });
+    expect(getContextEngineFactory(id)).toBeUndefined();
+  });
+
   it("collects native Codex and OpenClaw as compatible agent-run hosts", () => {
     const hosts = collectConfiguredContextEngineAgentRunHosts({
       cfg: {

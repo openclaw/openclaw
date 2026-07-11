@@ -1,3 +1,4 @@
+// Discord tests cover provider.lifecycle plugin behavior.
 import { EventEmitter } from "node:events";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -273,6 +274,27 @@ describe("runDiscordGatewayLifecycle", () => {
       waitCalls: 1,
       gatewaySupervisor,
     });
+  });
+
+  it("owns and cleans up auto-join when READY preceded voice listener registration", async () => {
+    waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("gateway wait failed"));
+    const { lifecycleParams } = createLifecycleHarness();
+    const autoJoin = vi.fn(async () => undefined);
+    const destroy = vi.fn(async () => undefined);
+    const voiceManager = {
+      autoJoin,
+      destroy,
+    } as unknown as NonNullable<LifecycleParams["voiceManager"]>;
+    lifecycleParams.voiceManager = voiceManager;
+    lifecycleParams.voiceManagerRef.current = voiceManager;
+
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+      "gateway wait failed",
+    );
+
+    expect(autoJoin).toHaveBeenCalledTimes(1);
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(lifecycleParams.voiceManagerRef.current).toBeNull();
   });
 
   it("pushes connected status when gateway is already connected at lifecycle start", async () => {

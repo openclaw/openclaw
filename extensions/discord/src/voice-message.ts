@@ -22,18 +22,25 @@ import {
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DiscordError, RateLimitError, type RequestClient } from "./internal/discord.js";
 import { readDiscordMessage, readRetryAfter } from "./internal/rest-errors.js";
+import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
 
 const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 const WAVEFORM_SAMPLES = 256;
 const DISCORD_OPUS_SAMPLE_RATE_HZ = 48_000;
+const DISCORD_VOICE_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const DISCORD_VOICE_UPLOAD_SSRF_POLICY: SsrFPolicy = {
   allowRfc2544BenchmarkRange: true,
   allowIpv6UniqueLocalRange: true,
@@ -80,7 +87,7 @@ export type VoiceMessageMetadata = {
 /**
  * Get audio duration using ffprobe
  */
-export async function getAudioDuration(filePath: string): Promise<number> {
+async function getAudioDuration(filePath: string): Promise<number> {
   try {
     const stdout = await runFfprobe([
       "-v",
@@ -106,7 +113,7 @@ export async function getAudioDuration(filePath: string): Promise<number> {
  * Generate waveform data from audio file using ffmpeg
  * Returns base64 encoded byte array of amplitude samples (0-255)
  */
-export async function generateWaveform(filePath: string): Promise<string> {
+async function generateWaveform(filePath: string): Promise<string> {
   try {
     // Extract raw PCM and sample amplitude values
     return await generateWaveformFromPcm(filePath);
@@ -291,7 +298,7 @@ function coerceDiscordErrorBody(raw: string): unknown {
   try {
     return JSON.parse(raw);
   } catch {
-    return { message: raw.slice(0, 200) };
+    return { message: truncateUtf16Safe(raw, 200) };
   }
 }
 
@@ -299,7 +306,9 @@ async function createVoiceRequestError(
   response: Response,
   fallbackMessage: string,
 ): Promise<Error> {
-  const raw = await response.text().catch(() => "");
+  const raw = await readResponseTextLimited(response, DISCORD_VOICE_ERROR_BODY_LIMIT_BYTES).catch(
+    () => "",
+  );
   const parsed = coerceDiscordErrorBody(raw);
   if (response.status === 429) {
     throw createRateLimitError(response, {
@@ -340,6 +349,9 @@ async function requestVoiceUploadUrl(params: {
   const { response: res, release } = await fetchWithSsrFGuard({
     url,
     init: uploadUrlInit,
+    // Keep control-plane negotiation on the REST budget; the binary upload below
+    // needs the longer attachment-transfer budget.
+    timeoutMs: params.rest.options.timeout,
     policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
     auditContext: "discord.voice.upload-url",
   });
@@ -347,7 +359,7 @@ async function requestVoiceUploadUrl(params: {
     if (!res.ok) {
       throw await createVoiceRequestError(res, "Upload URL request failed");
     }
-    return (await res.json()) as UploadUrlResponse;
+    return await readProviderJsonResponse<UploadUrlResponse>(res, "discord.voice.upload-url");
   } finally {
     await release();
   }
@@ -366,6 +378,7 @@ async function uploadVoiceAttachment(params: {
       },
       body: new Uint8Array(params.audioBuffer),
     },
+    timeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
     policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
     auditContext: "discord.voice.attachment-upload",
   });

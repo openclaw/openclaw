@@ -1,3 +1,4 @@
+// Gateway RPC runtime tests cover CLI gateway RPC calls and runtime error handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.fn(async () => ({ ok: true }));
@@ -14,6 +15,17 @@ const { callGatewayFromCliRuntime } = await import("./gateway-rpc.runtime.js");
 describe("callGatewayFromCliRuntime", () => {
   beforeEach(() => {
     callGatewayMock.mockClear().mockResolvedValue({ ok: true });
+  });
+
+  it("uses the 30s Gateway RPC default timeout when --timeout is omitted", async () => {
+    await callGatewayFromCliRuntime("cron.status", {});
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "cron.status",
+        timeoutMs: 30_000,
+      }),
+    );
   });
 
   it.each([
@@ -35,6 +47,14 @@ describe("callGatewayFromCliRuntime", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it.each(["", "   "])("rejects explicit empty shared --timeout value %j", async (timeout) => {
+    await expect(callGatewayFromCliRuntime("cron.status", { timeout })).rejects.toThrow(
+      "Invalid --timeout",
+    );
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it.each(["0", "-1", "1.5"])("rejects invalid shared --timeout value %j", async (timeout) => {
     await expect(callGatewayFromCliRuntime("cron.status", { timeout })).rejects.toThrow(
       `Received: "${timeout}"`,
@@ -50,6 +70,21 @@ describe("callGatewayFromCliRuntime", () => {
       expect.objectContaining({
         method: "cron.status",
         timeoutMs: 15_000,
+      }),
+    );
+  });
+
+  it("forwards caller cancellation to the gateway call", async () => {
+    const controller = new AbortController();
+
+    await callGatewayFromCliRuntime("logs.tail", {}, undefined, {
+      signal: controller.signal,
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "logs.tail",
+        signal: controller.signal,
       }),
     );
   });

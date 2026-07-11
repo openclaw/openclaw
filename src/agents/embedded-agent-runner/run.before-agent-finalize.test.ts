@@ -1,3 +1,4 @@
+// Coverage for before_agent_finalize revision handling in embedded runs.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -6,6 +7,7 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -15,6 +17,8 @@ function finalAnswerAttempt(
   text: string,
   overrides?: Partial<EmbeddedRunAttemptResult>,
 ): EmbeddedRunAttemptResult {
+  // Finalize tests need a successful assistant turn with both surfaced text and
+  // snapshot content so the runner can decide whether to request a revision.
   return makeAttemptResult({
     assistantTexts: [text],
     lastAssistant: {
@@ -47,6 +51,7 @@ function attemptCall(index: number): {
 describe("runEmbeddedAgent before_agent_finalize", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {
@@ -75,6 +80,8 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
   });
 
   it("turns a revise decision into one more hidden continuation", async () => {
+    // Revision prompts are hidden continuations; they must not persist the
+    // original user prompt a second time.
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
         finalAnswerAttempt("First answer.", {
@@ -123,6 +130,8 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
   });
 
   it("does not retry finalize revisions after a timed-out attempt", async () => {
+    // A timed-out attempt may have partial assistant text, but asking for a
+    // finalize revision would replay an invalid or blocked provider turn.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       finalAnswerAttempt("Late answer.", {
         timedOut: true,

@@ -1,10 +1,15 @@
+// Tests shared utility helpers used by CLI and runtime modules.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "./shared/number-coercion.js";
 import { withTempDir } from "./test-helpers/temp-dir.js";
+import { withEnv } from "./test-utils/env.js";
 import {
+  CONFIG_DIR,
   ensureDir,
+  normalizeE164,
+  pinConfigDir,
   resolveConfigDir,
   resolveHomeDir,
   resolveUserPath,
@@ -52,6 +57,19 @@ describe("sleep", () => {
   });
 });
 
+describe("normalizeE164", () => {
+  it.each([
+    ["+1234567890", "+1234567890"],
+    ["++1234567890", "+1234567890"],
+    ["1+234+567", "+1234567"],
+    ["whatsapp:+1 (234) 567-8900", "+12345678900"],
+    ["signal: 1 234 567", "+1234567"],
+    ["not a phone number", ""],
+  ])("normalizes %s", (input, expected) => {
+    expect(normalizeE164(input)).toBe(expected);
+  });
+});
+
 describe("resolveConfigDir", () => {
   it("prefers ~/.openclaw when legacy dir is missing", async () => {
     await withTempDir({ prefix: "openclaw-config-dir-" }, async (root) => {
@@ -79,47 +97,54 @@ describe("resolveConfigDir", () => {
 
     expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "profiles", "dev"));
   });
+
+  it("re-pins the exported configuration root after startup environment selection", () => {
+    const originalConfigDir = CONFIG_DIR;
+    const selectedConfigDir = path.resolve("/tmp/openclaw-selected-config-root");
+    try {
+      expect(
+        pinConfigDir({
+          OPENCLAW_STATE_DIR: selectedConfigDir,
+          OPENCLAW_TEST_FAST: "1",
+        }),
+      ).toBe(selectedConfigDir);
+      expect(CONFIG_DIR).toBe(selectedConfigDir);
+    } finally {
+      pinConfigDir({
+        OPENCLAW_STATE_DIR: originalConfigDir,
+        OPENCLAW_TEST_FAST: "1",
+      });
+    }
+  });
 });
 
 describe("resolveHomeDir", () => {
   it("prefers OPENCLAW_HOME over HOME", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    vi.stubEnv("HOME", "/home/other");
-    try {
+    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
       expect(resolveHomeDir()).toBe(path.resolve("/srv/openclaw-home"));
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    });
   });
 });
 
 describe("shortenHomePath", () => {
   it("uses $OPENCLAW_HOME prefix when OPENCLAW_HOME is set", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    vi.stubEnv("HOME", "/home/other");
-    try {
+    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
       expect(shortenHomePath(`${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`)).toBe(
         "$OPENCLAW_HOME/.openclaw/openclaw.json",
       );
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    });
   });
 });
 
 describe("shortenHomeInString", () => {
   it("uses $OPENCLAW_HOME replacement when OPENCLAW_HOME is set", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    vi.stubEnv("HOME", "/home/other");
-    try {
+    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
       expect(
         shortenHomeInString(
           `config: ${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`,
         ),
       ).toBe("config: $OPENCLAW_HOME/.openclaw/openclaw.json");
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    });
   });
 });
 
@@ -139,13 +164,9 @@ describe("resolveUserPath", () => {
   });
 
   it("prefers OPENCLAW_HOME for tilde expansion", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    vi.stubEnv("HOME", "/home/other");
-    try {
+    withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
       expect(resolveUserPath("~/openclaw")).toBe(path.resolve("/srv/openclaw-home", "openclaw"));
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    });
   });
 
   it("uses the provided env for tilde expansion", () => {

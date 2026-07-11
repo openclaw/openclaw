@@ -1,3 +1,6 @@
+/**
+ * Browser CLI navigation and viewport commands.
+ */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "../../browser/act-policy.js";
@@ -9,8 +12,9 @@ import {
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
-import { requireRef, resolveBrowserActionContext } from "./shared.js";
+import { resolveBrowserActionContext } from "./shared.js";
 
+/** Registers Browser navigate and resize commands. */
 export function registerBrowserNavigationCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -90,7 +94,4 @@ export function registerBrowserNavigationCommands(
         defaultRuntime.exit(1);
       }
     });
-
-  // Keep `requireRef` reachable; shared utilities are intended for other modules too.
-  void requireRef;
 }

@@ -1,3 +1,4 @@
+// Feishu tests cover bot.checkBotMentioned plugin behavior.
 import { describe, it, expect } from "vitest";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 
@@ -138,6 +139,17 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const ctx = parseFeishuMessageEvent(event, undefined);
     expect(ctx.mentionedBot).toBe(false);
   });
+
+  it.each([undefined, "", "  "])(
+    "does not create mention-forward targets when botOpenId is %j",
+    (botOpenId) => {
+      const event = makeEvent("p2p", [
+        { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
+      ]);
+      const ctx = parseFeishuMessageEvent(event, botOpenId);
+      expect(ctx.mentionTargets).toBeUndefined();
+    },
+  );
 
   it("returns mentionedBot=false when botOpenId is empty string (probe failed)", () => {
     const event = makeEvent("group", [

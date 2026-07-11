@@ -1,3 +1,4 @@
+// Browser Origin validator for gateway HTTP and websocket requests.
 import net from "node:net";
 import { isPrivateOrLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
@@ -20,10 +21,20 @@ function parseOrigin(
   if (!trimmed || trimmed === "null") {
     return null;
   }
+  // URL parsing collapses dot segments. Reject non-origin suffixes before
+  // canonicalization so a path cannot inherit its authority's grant.
+  if (!/^[a-z][a-z0-9+.-]*:\/\/[^/?#\\]+\/?$/i.test(trimmed)) {
+    return null;
+  }
   try {
     const url = new URL(trimmed);
+    if (url.username || url.password || !url.protocol || !url.host) {
+      return null;
+    }
+    // Hosted app schemes have an opaque URL.origin but a stable authority.
+    const origin = url.origin === "null" ? `${url.protocol}//${url.host}` : url.origin;
     return {
-      origin: normalizeLowercaseStringOrEmpty(url.origin),
+      origin: normalizeLowercaseStringOrEmpty(origin),
       host: normalizeLowercaseStringOrEmpty(url.host),
       hostname: normalizeLowercaseStringOrEmpty(url.hostname),
     };
@@ -32,6 +43,7 @@ function parseOrigin(
   }
 }
 
+/** Validate a browser Origin against explicit allowlist, same-host, and local dev rules. */
 export function checkBrowserOrigin(params: {
   requestHost?: string;
   origin?: string;

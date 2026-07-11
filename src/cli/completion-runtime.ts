@@ -1,3 +1,4 @@
+// Shell completion runtime: cache paths, profile installation, and shell detection.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -81,12 +82,7 @@ function escapePowerShellSingleQuotedString(value: string): string {
   return value.replace(/'/g, "''");
 }
 
-/** Formats the profile line that sources the cached completion script for a shell. */
-export function formatCompletionSourceLine(
-  shell: CompletionShell,
-  _binName: string,
-  cachePath: string,
-): string {
+function formatCompletionSourceLine(shell: CompletionShell, cachePath: string): string {
   if (shell === "powershell") {
     return `. '${escapePowerShellSingleQuotedString(cachePath)}'`;
   }
@@ -132,6 +128,7 @@ function updateCompletionProfile(
   cachePath: string | null,
   sourceLine: string,
 ): { next: string; changed: boolean; hadExisting: boolean } {
+  // Remove both cached and old dynamic blocks so installs converge to one fast source line.
   const lines = content.split("\n");
   const filtered: string[] = [];
   let hadExisting = false;
@@ -256,7 +253,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   switch (shell) {
     case "zsh":
       profilePath = resolveCompletionProfilePath("zsh");
-      sourceLine = formatCompletionSourceLine("zsh", binName, cachePath);
+      sourceLine = formatCompletionSourceLine("zsh", cachePath);
       break;
     case "bash":
       profilePath = resolveCompletionProfilePath("bash");
@@ -266,15 +263,15 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
         const home = process.env.HOME || os.homedir();
         profilePath = path.join(home, ".bash_profile");
       }
-      sourceLine = formatCompletionSourceLine("bash", binName, cachePath);
+      sourceLine = formatCompletionSourceLine("bash", cachePath);
       break;
     case "fish":
       profilePath = resolveCompletionProfilePath("fish");
-      sourceLine = formatCompletionSourceLine("fish", binName, cachePath);
+      sourceLine = formatCompletionSourceLine("fish", cachePath);
       break;
     case "powershell":
       profilePath = resolveCompletionProfilePath("powershell");
-      sourceLine = formatCompletionSourceLine("powershell", binName, cachePath);
+      sourceLine = formatCompletionSourceLine("powershell", cachePath);
       break;
   }
 

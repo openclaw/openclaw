@@ -1,3 +1,5 @@
+// Gateway restart sentinel recovery.
+// Resumes pending restart continuations and outbound delivery after process restart.
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
@@ -10,19 +12,18 @@ import { dispatchAssembledChannelTurn } from "../channels/turn/kernel.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
+  clearRestartSentinel,
   finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
   readRestartSentinel,
-  removeRestartSentinelFile,
   type RestartSentinelContinuation,
   type RestartSentinelPayload,
-  resolveRestartSentinelPath,
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import {
@@ -40,12 +41,12 @@ import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-cont
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { injectTimestamp, timestampOptsFromConfig } from "./server-methods/agent-timestamp.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 
@@ -278,8 +279,12 @@ async function deliverQueuedSessionDelivery(params: {
   let dispatchError: unknown;
   const ctxPayload = finalizeInboundContext(
     {
+      // The per-message timestamp prefix is applied at the single LLM boundary
+      // (normalizeMessagesForLlmBoundary) from each message's own timestamp, so
+      // the current turn and historical turns carry identical bytes on the wire.
+      // See: https://github.com/openclaw/openclaw/issues/3658
       Body: userMessage,
-      BodyForAgent: injectTimestamp(userMessage, timestampOptsFromConfig(cfg)),
+      BodyForAgent: userMessage,
       BodyForCommands: "",
       RawBody: userMessage,
       CommandBody: "",
@@ -297,6 +302,7 @@ async function deliverQueuedSessionDelivery(params: {
       ChatType: route.chatType,
       CommandAuthorized: true,
       GatewayClientScopes: ["operator.admin"],
+      GatewayClientCaps: [],
       ReplyToId: route.replyToId,
       OriginatingChannel: route.channel,
       OriginatingTo: route.to,
@@ -348,7 +354,7 @@ async function deliverQueuedSessionDelivery(params: {
     },
   });
   if (dispatchError) {
-    throw toLintErrorObject(dispatchError, "Non-Error thrown");
+    throw toErrorObject(dispatchError, "Non-Error thrown");
   }
 }
 
@@ -444,8 +450,10 @@ async function loadRestartSentinelStartupTask(params: {
   if (!sentinel) {
     return null;
   }
-  const sentinelPath = resolveRestartSentinelPath();
   const payload = sentinel.payload;
+  if (payload.kind === "update") {
+    recordLatestUpdateRestartSentinel(payload);
+  }
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
   const summary = summarizeRestartSentinel(payload);
@@ -461,9 +469,11 @@ async function loadRestartSentinelStartupTask(params: {
       const attempt = params.attempt ?? 0;
       if (attempt < CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS) {
         const timer = setTimeout(() => {
-          void scheduleRestartSentinelWakeAttempt({
-            deps: params.deps,
-            attempt: attempt + 1,
+          void runWithGatewayIndependentRootWorkAdmission(async () => {
+            await scheduleRestartSentinelWakeAttempt({
+              deps: params.deps,
+              attempt: attempt + 1,
+            });
           }).catch((err: unknown) => {
             log.warn(`restart sentinel pending update retry failed: ${formatErrorMessage(err)}`);
           });
@@ -486,7 +496,7 @@ async function loadRestartSentinelStartupTask(params: {
           continuationKind: payload.continuation.kind,
         });
       }
-      await removeRestartSentinelFile(sentinelPath);
+      await clearRestartSentinel();
       return { status: "ran" as const };
     }
 
@@ -580,7 +590,7 @@ async function loadRestartSentinelStartupTask(params: {
       );
     }
 
-    await removeRestartSentinelFile(sentinelPath);
+    await clearRestartSentinel();
     const routedAgentTurnContinuation =
       payload.continuation?.kind === "agentTurn" && continuationRoute !== undefined;
     if (!routedAgentTurnContinuation) {
@@ -638,13 +648,17 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   await scheduleRestartSentinelWakeAttempt({ ...params, attempt: 0 });
 }
 
-export function shouldWakeFromRestartSentinel() {
-  return !process.env.VITEST && process.env.NODE_ENV !== "test";
-}
-
 export async function refreshLatestUpdateRestartSentinel(): Promise<RestartSentinelPayload | null> {
+  const current = await readRestartSentinel();
+  if (
+    current?.payload.kind === "update" &&
+    isPendingControlPlaneUpdateRestartSentinel(current.payload)
+  ) {
+    latestUpdateRestartSentinel = cloneRestartSentinelPayload(current.payload);
+    return cloneRestartSentinelPayload(latestUpdateRestartSentinel);
+  }
   const finalized = await finalizeUpdateRestartSentinelRunningVersion();
-  const sentinel = finalized ?? (await readRestartSentinel());
+  const sentinel = finalized ?? current;
   if (sentinel?.payload.kind === "update") {
     latestUpdateRestartSentinel = cloneRestartSentinelPayload(sentinel.payload);
   }
@@ -657,18 +671,4 @@ export function getLatestUpdateRestartSentinel(): RestartSentinelPayload | null 
 
 export function recordLatestUpdateRestartSentinel(payload: RestartSentinelPayload): void {
   latestUpdateRestartSentinel = cloneRestartSentinelPayload(payload);
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -1,11 +1,9 @@
+// Covers provider/model gates for strict agentic execution-contract activation.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  isStrictAgenticExecutionContractActive,
-  resolveEffectiveExecutionContract,
-} from "./execution-contract.js";
+import { isStrictAgenticExecutionContractActive } from "./execution-contract.js";
 
-describe("resolveEffectiveExecutionContract", () => {
+describe("isStrictAgenticExecutionContractActive", () => {
   const supportedProvider = "openai";
   const unsupportedProvider = "anthropic";
   const emptyConfig: OpenClawConfig = {};
@@ -13,57 +11,57 @@ describe("resolveEffectiveExecutionContract", () => {
   describe("supported provider + model detection", () => {
     it("auto-activates on bare gpt-5 model ids", () => {
       expect(
-        resolveEffectiveExecutionContract({
+        isStrictAgenticExecutionContractActive({
           config: emptyConfig,
           provider: supportedProvider,
           modelId: "gpt-5.4",
         }),
-      ).toBe("strict-agentic");
+      ).toBe(true);
     });
 
     it("auto-activates on the mock-openai qa lane", () => {
       expect(
-        resolveEffectiveExecutionContract({
+        isStrictAgenticExecutionContractActive({
           config: emptyConfig,
           provider: "mock-openai",
           modelId: "mock-openai/gpt-5.4",
         }),
-      ).toBe("strict-agentic");
+      ).toBe(true);
     });
 
     it("auto-activates on gpt-5o and variants without a separator", () => {
       for (const modelId of ["gpt-5", "gpt-5o", "gpt-5o-mini"]) {
         expect(
-          resolveEffectiveExecutionContract({
+          isStrictAgenticExecutionContractActive({
             config: emptyConfig,
             provider: supportedProvider,
             modelId,
           }),
-        ).toBe("strict-agentic");
+        ).toBe(true);
       }
     });
 
     it("auto-activates on dot-separated variants", () => {
       for (const modelId of ["gpt-5.0", "gpt-5.4", "gpt-5.4-alt", "gpt-5.99"]) {
         expect(
-          resolveEffectiveExecutionContract({
+          isStrictAgenticExecutionContractActive({
             config: emptyConfig,
             provider: supportedProvider,
             modelId,
           }),
-        ).toBe("strict-agentic");
+        ).toBe(true);
       }
     });
 
     it("auto-activates on dash-separated variants", () => {
       for (const modelId of ["gpt-5-preview", "gpt-5-turbo", "gpt-5-2025-03"]) {
         expect(
-          resolveEffectiveExecutionContract({
+          isStrictAgenticExecutionContractActive({
             config: emptyConfig,
             provider: supportedProvider,
             modelId,
           }),
-        ).toBe("strict-agentic");
+        ).toBe(true);
       }
     });
 
@@ -80,24 +78,24 @@ describe("resolveEffectiveExecutionContract", () => {
         " OPENAI:GPT-5.4 ",
       ]) {
         expect(
-          resolveEffectiveExecutionContract({
+          isStrictAgenticExecutionContractActive({
             config: emptyConfig,
             provider: supportedProvider,
             modelId,
           }),
-        ).toBe("strict-agentic");
+        ).toBe(true);
       }
     });
 
     it("is case-insensitive", () => {
       for (const modelId of ["GPT-5.4", "Gpt-5O", "OPENAI/GPT-5.4"]) {
         expect(
-          resolveEffectiveExecutionContract({
+          isStrictAgenticExecutionContractActive({
             config: emptyConfig,
             provider: supportedProvider,
             modelId,
           }),
-        ).toBe("strict-agentic");
+        ).toBe(true);
       }
     });
 
@@ -112,23 +110,25 @@ describe("resolveEffectiveExecutionContract", () => {
         "mistral-large",
       ]) {
         expect(
-          resolveEffectiveExecutionContract({
+          isStrictAgenticExecutionContractActive({
             config: emptyConfig,
             provider: supportedProvider,
             modelId,
           }),
-        ).toBe("default");
+        ).toBe(false);
       }
     });
 
     it("collapses to default on unsupported providers even with gpt-5 model ids", () => {
+      // Model naming alone is insufficient; unsupported providers must not
+      // inherit OpenAI-specific strict-agentic handling by accident.
       expect(
-        resolveEffectiveExecutionContract({
+        isStrictAgenticExecutionContractActive({
           config: emptyConfig,
           provider: unsupportedProvider,
           modelId: "gpt-5.4",
         }),
-      ).toBe("default");
+      ).toBe(false);
     });
   });
 
@@ -144,12 +144,12 @@ describe("resolveEffectiveExecutionContract", () => {
         },
       };
       expect(
-        resolveEffectiveExecutionContract({
+        isStrictAgenticExecutionContractActive({
           config,
           provider: supportedProvider,
           modelId: "gpt-5.4",
         }),
-      ).toBe("strict-agentic");
+      ).toBe(true);
     });
 
     it("honors explicit default opt-out even on the supported lane", () => {
@@ -163,12 +163,12 @@ describe("resolveEffectiveExecutionContract", () => {
         },
       };
       expect(
-        resolveEffectiveExecutionContract({
+        isStrictAgenticExecutionContractActive({
           config,
           provider: supportedProvider,
           modelId: "gpt-5.4",
         }),
-      ).toBe("default");
+      ).toBe(false);
     });
 
     it("collapses explicit strict-agentic to default on an unsupported lane", () => {
@@ -182,12 +182,12 @@ describe("resolveEffectiveExecutionContract", () => {
         },
       };
       expect(
-        resolveEffectiveExecutionContract({
+        isStrictAgenticExecutionContractActive({
           config,
           provider: unsupportedProvider,
           modelId: "claude-opus-4-6",
         }),
-      ).toBe("default");
+      ).toBe(false);
     });
   });
 

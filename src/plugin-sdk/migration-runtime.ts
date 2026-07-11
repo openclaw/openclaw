@@ -3,7 +3,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { pathExists } from "../infra/fs-safe.js";
+import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import type {
   MigrationApplyResult,
   MigrationItem,
@@ -19,6 +22,38 @@ import {
 
 export type { MigrationApplyResult, MigrationItem } from "../plugins/types.js";
 
+/** Directories a migration provider writes imported agent data into. */
+export type PlannedMigrationTargets = {
+  workspaceDir: string;
+  stateDir: string;
+  agentDir: string;
+};
+
+/**
+ * Resolves the default agent's workspace/state/agent directories for a
+ * migration run. Prefers the runtime resolver, then a configured agentDir
+ * (home-relative paths honor the effective-home resolution used by the rest
+ * of the product), then the canonical state-dir layout.
+ */
+export function resolvePlannedMigrationTargets(
+  ctx: MigrationProviderContext,
+): PlannedMigrationTargets {
+  const cfg = ctx.config;
+  const agentId = resolveDefaultAgentId(cfg);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const configuredAgentDir = resolveAgentConfig(cfg, agentId)?.agentDir?.trim();
+  const agentDir =
+    ctx.runtime?.agent?.resolveAgentDir(cfg, agentId) ??
+    (configuredAgentDir ? resolveHomeRelativePath(configuredAgentDir) : undefined) ??
+    path.join(ctx.stateDir, "agents", agentId, "agent");
+  return {
+    workspaceDir,
+    stateDir: ctx.stateDir,
+    agentDir,
+  };
+}
+
+/** Wrap migration runtime config access with a cached mutable snapshot during apply. */
 export function withCachedMigrationConfigRuntime(
   runtime: MigrationProviderContext["runtime"] | undefined,
   fallbackConfig: MigrationProviderContext["config"],
@@ -130,6 +165,7 @@ async function resolveUniqueArchivePath(
   return candidate;
 }
 
+/** Archive a migration item source into the report directory and mark the item migrated. */
 export async function archiveMigrationItem(
   item: MigrationItem,
   reportDir: string,
@@ -166,6 +202,7 @@ export async function archiveMigrationItem(
   }
 }
 
+/** Copy a migration item source to its target, optionally backing up an overwritten target. */
 export async function copyMigrationFileItem(
   item: MigrationItem,
   reportDir: string,
@@ -201,6 +238,7 @@ export async function copyMigrationFileItem(
   }
 }
 
+/** Write redacted JSON and Markdown migration reports into the apply report directory. */
 export async function writeMigrationReport(
   result: MigrationApplyResult,
   opts: { title?: string } = {},

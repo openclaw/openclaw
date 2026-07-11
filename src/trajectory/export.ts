@@ -1,10 +1,16 @@
+// Trajectory export helpers package recorded trajectories for diagnostics.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
+import { parseSessionFileEntriesWithWarnings } from "../agents/sessions/session-file-parser.js";
 import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/session-manager.js";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  isCanonicalSessionTranscriptEntry,
+  scanSessionTranscriptTree,
+} from "../config/sessions/transcript-tree.js";
 import {
   jsonSupportBundleFile,
   jsonlSupportBundleFile,
@@ -29,6 +35,9 @@ import type {
   TrajectoryToolDefinition,
 } from "./types.js";
 
+// Trajectory bundle exporter: joins persisted session JSONL with runtime
+// trace JSONL, redacts local/support-sensitive data, and writes a portable
+// support bundle for debugging agent behavior.
 type BuildTrajectoryBundleParams = {
   outputDir: string;
   sessionFile: string;
@@ -64,60 +73,12 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function isSessionFileEntry(value: unknown): value is FileEntry {
-  if (!isRecord(value) || typeof value.type !== "string") {
-    return false;
-  }
-  if (value.type !== "message") {
-    return true;
-  }
-  const message = value.message;
-  return isRecord(message) && typeof message.role === "string";
-}
-
-function parseSessionEntries(content: string): {
-  entries: FileEntry[];
-  warnings: JsonlParseWarning[];
-  rowByEntry: Map<FileEntry, number>;
-} {
-  const entries: FileEntry[] = [];
-  const warnings: JsonlParseWarning[] = [];
-  const rowByEntry = new Map<FileEntry, number>();
-  const rows = content.split(/\r?\n/u);
-  for (const [index, rawLine] of rows.entries()) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      if (!isSessionFileEntry(parsed)) {
-        warnings.push({
-          source: "session",
-          code: "invalid-session-row",
-          row: index + 1,
-          message: "Skipped a session JSONL row that is not a session entry object.",
-        });
-        continue;
-      }
-      entries.push(parsed);
-      rowByEntry.set(parsed, index + 1);
-    } catch {
-      warnings.push({
-        source: "session",
-        code: "invalid-session-json",
-        row: index + 1,
-        message: "Skipped a session JSONL row that is not valid JSON.",
-      });
-    }
-  }
-  return { entries, warnings, rowByEntry };
-}
-
 function migrateLegacySessionEntries(entries: FileEntry[]): void {
   const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
   const version = header?.version ?? 1;
   if (version < 2) {
+    // Older session logs predate entry ids. Synthetic ids preserve branch order
+    // long enough to export the reachable suffix without mutating source files.
     let previousId: string | null = null;
     let index = 0;
     for (const entry of entries) {
@@ -165,27 +126,44 @@ async function readSessionBranch(filePath: string): Promise<{
 }> {
   const {
     entries: fileEntries,
-    warnings,
+    warnings: parseWarnings,
     rowByEntry,
-  } = parseSessionEntries(await fsp.readFile(filePath, "utf8"));
+  } = parseSessionFileEntriesWithWarnings(await fsp.readFile(filePath, "utf8"));
+  const warnings: JsonlParseWarning[] = parseWarnings.map((warning) => ({
+    source: "session",
+    code: warning.code,
+    row: warning.row,
+    message:
+      warning.code === "invalid-session-json"
+        ? "Skipped a session JSONL row that is not valid JSON."
+        : "Skipped a session JSONL row that is not a session entry object.",
+  }));
   migrateLegacySessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const entries = fileEntries.filter(
     (entry): entry is SessionEntry =>
       entry.type !== "session" &&
-      typeof (entry as { id?: unknown }).id === "string" &&
-      (typeof (entry as { timestamp?: unknown }).timestamp === "string" ||
-        typeof (entry as { timestamp?: unknown }).timestamp === "number"),
+      isCanonicalSessionTranscriptEntry(entry) &&
+      typeof (entry as { id?: unknown }).id === "string",
   );
-  const byId = new Map(entries.map((entry) => [entry.id, entry]));
-  const leafId = entries.at(-1)?.id ?? null;
+  const tree = scanSessionTranscriptTree(fileEntries);
+  if (!tree.hasLeafUpdate) {
+    return {
+      header,
+      leafId: entries.at(-1)?.id ?? null,
+      branchEntries: entries,
+      warnings,
+    };
+  }
+  const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
   const branchEntries: SessionEntry[] = [];
   const seen = new Set<string>();
-  let currentId = leafId;
+  let descendantEntry: SessionEntry | undefined;
+  let currentId = tree.leafId;
   while (currentId) {
     if (seen.has(currentId)) {
-      const cycleEntry = byId.get(currentId);
+      const cycleEntry = tree.byId.get(currentId)?.entry;
       warnings.push({
         source: "session",
         code: "cyclic-session-branch",
@@ -195,7 +173,7 @@ async function readSessionBranch(filePath: string): Promise<{
       break;
     }
     seen.add(currentId);
-    const current = byId.get(currentId);
+    const current = tree.byId.get(currentId);
     if (!current) {
       warnings.push({
         source: "session",
@@ -205,20 +183,27 @@ async function readSessionBranch(filePath: string): Promise<{
       });
       break;
     }
-    branchEntries.unshift(current);
-    const parentId = typeof current.parentId === "string" ? current.parentId : null;
-    if (parentId && !byId.has(parentId)) {
+    const visibleEntry = entriesById.get(currentId);
+    if (visibleEntry) {
+      const normalizedEntry = { ...visibleEntry, parentId: current.parentId };
+      if (descendantEntry) {
+        descendantEntry.parentId = normalizedEntry.id;
+      }
+      branchEntries.unshift(normalizedEntry);
+      descendantEntry = normalizedEntry;
+    }
+    if (current.parentId && !tree.byId.has(current.parentId)) {
       warnings.push({
         source: "session",
         code: "incomplete-session-branch",
-        row: rowByEntry.get(current) ?? 0,
+        row: rowByEntry.get(current.entry) ?? 0,
         message: "Exported the reachable session branch suffix after a missing parent link.",
       });
       break;
     }
-    currentId = parentId;
+    currentId = current.parentId;
   }
-  return { header, leafId, branchEntries, warnings };
+  return { header, leafId: tree.leafId, branchEntries, warnings };
 }
 
 async function parseJsonlFile<T>(
@@ -569,6 +554,8 @@ function redactWorkspacePathString(value: string, redaction: TrajectoryExportRed
 
 function maybeRedactPathString(value: string, redaction: TrajectoryExportRedaction): string {
   const workspaceRedacted = redactWorkspacePathString(value, redaction);
+  // Redact only strings that look path-like after workspace substitution. This
+  // keeps ordinary model text readable while still removing local host details.
   if (
     workspaceRedacted !== value ||
     path.isAbsolute(workspaceRedacted) ||
@@ -627,6 +614,8 @@ function redactTrajectoryExportObjectKeys(
   const next: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     const redactedKey = redactToolPayloadText(maybeRedactPathString(key, redaction));
+    // Object keys can contain file paths or tool payload snippets too. Preserve
+    // all entries even when redaction collapses two original keys together.
     next[uniqueRedactedObjectKey(redactedKey, usedKeys)] = redactTrajectoryExportObjectKeys(
       entry,
       redaction,
@@ -728,6 +717,8 @@ function markInvokedSkills(params: { skills: unknown; events: TrajectoryEvent[] 
       return collectPotentialPathStrings(event.data?.arguments);
     }),
   );
+  // Skill invocation is inferred from tool-call file paths in captured prompts;
+  // this keeps the export self-contained without re-reading skill state later.
   const normalizedInvokedPaths = new Set(
     [...invokedPaths].map((value) => normalizePathForMatch(value)),
   );
@@ -831,6 +822,7 @@ function buildArtifactsCapture(params: {
       runtimeArtifacts?.timedOutDuringCompaction ?? runtimeEnd?.timedOutDuringCompaction,
     timedOutDuringToolExecution:
       runtimeArtifacts?.timedOutDuringToolExecution ?? runtimeEnd?.timedOutDuringToolExecution,
+    timedOutByRunBudget: runtimeArtifacts?.timedOutByRunBudget ?? runtimeEnd?.timedOutByRunBudget,
     promptError:
       runtimeArtifacts?.promptError ?? runtimeEnd?.promptError ?? runtimeCompletion?.promptError,
     promptErrorSource: runtimeArtifacts?.promptErrorSource ?? runtimeCompletion?.promptErrorSource,
@@ -920,6 +912,8 @@ export function resolveDefaultTrajectoryExportDir(params: {
   );
 }
 
+// Public export API used by CLI/tests. The bundle is intentionally sanitized
+// before writing so sharing it should not expose credentials or local paths.
 export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): Promise<{
   manifest: TrajectoryBundleManifest;
   outputDir: string;

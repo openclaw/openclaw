@@ -1,3 +1,4 @@
+// Imessage plugin module implements monitor reply cache behavior.
 import { createHash } from "node:crypto";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -255,7 +256,7 @@ function hasChatScope(ctx?: IMessageChatContext): boolean {
  * so comparing the raw strings would falsely flag the same chat as a
  * cross-chat target. Normalize both sides to the bare suffix.
  */
-function normalizeDirectChatIdentifier(raw: string): string {
+export function normalizeDirectChatIdentifier(raw: string): string {
   const trimmed = raw.trim();
   const lowered = trimmed.toLowerCase();
   for (const prefix of ["imessage;-;", "sms;-;", "any;-;"]) {

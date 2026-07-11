@@ -1,3 +1,4 @@
+// Browser tests cover browser cli.lazy plugin behavior.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -177,6 +178,28 @@ describe("registerBrowserCli lazy browser subcommands", () => {
       "tabs action",
     );
     expect(tabsCommand.parent?.opts().json).toBe(true);
+  });
+
+  it("accepts the shipped trailing browser profile order after lazy loading", async () => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    registerBrowserCli(program, [
+      "node",
+      "openclaw",
+      "browser",
+      "tabs",
+      "--browser-profile",
+      "remote",
+    ]);
+
+    await program.parseAsync(["browser", "tabs", "--browser-profile", "remote"], {
+      from: "user",
+    });
+
+    const tabsCommand = requireTrailingCommand(
+      requireFirstCall(manageMocks.tabsAction, "tabs action call"),
+      "tabs action",
+    );
+    expect(tabsCommand.parent?.opts().browserProfile).toBe("remote");
   });
 
   it("skips browser option values when selecting the lazy command group", async () => {

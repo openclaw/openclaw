@@ -8,6 +8,7 @@
 // Extensions cannot import core internals directly, so use node:crypto here.
 import { randomBytes } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PendingApproval } from "../settings.js";
 
 export type { PendingApproval };
@@ -49,7 +50,8 @@ export function createPendingApproval(params: CreateApprovalParams): PendingAppr
     requestingShip: params.requestingShip,
     channelNest: params.channelNest,
     groupFlag: params.groupFlag,
-    messagePreview: params.messagePreview,
+    messagePreview:
+      params.messagePreview != null ? sliceUtf16Safe(params.messagePreview, 0, 100) : undefined,
     originalMessage: params.originalMessage,
     timestamp: Date.now(),
   };
@@ -62,7 +64,7 @@ function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) {
     return text;
   }
-  return text.slice(0, maxLength - 3) + "...";
+  return sliceUtf16Safe(text, 0, maxLength - 3) + "...";
 }
 
 /**
@@ -143,31 +145,6 @@ export function findPendingApproval(
   }
   // Return most recent
   return pendingApprovals[pendingApprovals.length - 1];
-}
-
-/**
- * Check if there's already a pending approval for the same ship/channel/group combo.
- * Used to avoid sending duplicate notifications.
- */
-export function hasDuplicatePending(
-  pendingApprovals: PendingApproval[],
-  type: ApprovalType,
-  requestingShip: string,
-  channelNest?: string,
-  groupFlag?: string,
-): boolean {
-  return pendingApprovals.some((approval) => {
-    if (approval.type !== type || approval.requestingShip !== requestingShip) {
-      return false;
-    }
-    if (type === "channel" && approval.channelNest !== channelNest) {
-      return false;
-    }
-    if (type === "group" && approval.groupFlag !== groupFlag) {
-      return false;
-    }
-    return true;
-  });
 }
 
 /**

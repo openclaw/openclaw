@@ -1,6 +1,8 @@
+// Memory Core tests cover dreaming plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { readMemoryHostEvents } from "openclaw/plugin-sdk/memory-host-events";
 import {
   enqueueSystemEvent,
   resetSystemEventsForTest,
@@ -13,7 +15,7 @@ import {
   resolveShortTermPromotionDreamingConfig,
   runShortTermDreamingPromotionIfTriggered,
 } from "./dreaming.js";
-import { recordShortTermRecalls } from "./short-term-promotion.js";
+import { recordShortTermRecalls, testing as shortTermTesting } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const constants = testing.constants;
@@ -2236,6 +2238,10 @@ describe("short-term dreaming trigger", () => {
     expect(result?.handled).toBe(true);
     const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("Move backups to S3 Glacier.");
+    const dreamsText = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(dreamsText).toContain("## Deep Sleep");
+    expect(dreamsText).toContain("- Ranked 1 candidate(s) for durable promotion.");
+    expect(dreamsText).toContain("- Promoted 1 candidate(s) into MEMORY.md.");
   });
 
   it("applies promotions when the managed dreaming token is embedded in a reminder body", async () => {
@@ -2334,6 +2340,57 @@ describe("short-term dreaming trigger", () => {
     expect(result?.handled).toBe(true);
     const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("Move backups to S3 Glacier.");
+  });
+
+  it("writes fallback dream diary prose when managed cron has no subagent runtime", async () => {
+    const logger = createLogger();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-cron-no-subagent-");
+    await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
+
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "backup policy",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "cron",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result?.handled).toBe(true);
+    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    expect(memoryText).toContain("Move backups to S3 Glacier.");
+    const dreamsText = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(dreamsText).toContain("<!-- openclaw:dreaming:diary:start -->");
+    expect(dreamsText).toContain(
+      "A memory trace surfaced, but details were unavailable in this run.",
+    );
+    expect(dreamsText).not.toContain("Move backups to S3 Glacier.");
+    expect(logger.info).toHaveBeenCalledWith(
+      "memory-core: narrative generation used fallback for deep phase because subagent runtime is unavailable.",
+    );
   });
 
   it("keeps one-off recalls out of long-term memory under default thresholds", async () => {
@@ -2561,38 +2618,28 @@ describe("short-term dreaming trigger", () => {
       "Move backups to S3 Glacier and sync router failover notes.",
       "Keep router recovery docs current.",
     ]);
-    const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: "2026-04-01T00:00:00.000Z",
-          entries: {
-            "memory:memory/2026-04-03.md:1:2": {
-              key: "memory:memory/2026-04-03.md:1:2",
-              path: "memory/2026-04-03.md",
-              startLine: 1,
-              endLine: 2,
-              source: "memory",
-              snippet: "Move backups to S3 Glacier and sync router failover notes.",
-              recallCount: 3,
-              totalScore: 2.7,
-              maxScore: 0.95,
-              firstRecalledAt: "2026-04-01T00:00:00.000Z",
-              lastRecalledAt: "2026-04-03T00:00:00.000Z",
-              queryHashes: ["abc", "abc", "def"],
-              recallDays: ["2026-04-01", "2026-04-01", "2026-04-03"],
-              conceptTags: [],
-            },
-          },
+    await shortTermTesting.writeRawRecallStore(workspaceDir, {
+      version: 1,
+      updatedAt: "2026-04-01T00:00:00.000Z",
+      entries: {
+        "memory:memory/2026-04-03.md:1:2": {
+          key: "memory:memory/2026-04-03.md:1:2",
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "Move backups to S3 Glacier and sync router failover notes.",
+          recallCount: 3,
+          totalScore: 2.7,
+          maxScore: 0.95,
+          firstRecalledAt: "2026-04-01T00:00:00.000Z",
+          lastRecalledAt: "2026-04-03T00:00:00.000Z",
+          queryHashes: ["abc", "abc", "def"],
+          recallDays: ["2026-04-01", "2026-04-01", "2026-04-03"],
+          conceptTags: [],
         },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
+      },
+    });
 
     const result = await runShortTermDreamingPromotionIfTriggered({
       cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
@@ -2613,12 +2660,7 @@ describe("short-term dreaming trigger", () => {
 
     expect(result?.handled).toBe(true);
     expectLogContains(logger.info, "normalized recall artifacts before dreaming");
-    const repaired = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-      entries: Record<
-        string,
-        { queryHashes?: string[]; recallDays?: string[]; conceptTags?: string[] }
-      >;
-    };
+    const repaired = await shortTermTesting.readRecallStore(workspaceDir, new Date().toISOString());
     expect(repaired.entries["memory:memory/2026-04-03.md:1:2"]?.queryHashes).toEqual([
       "abc",
       "def",
@@ -2674,6 +2716,65 @@ describe("short-term dreaming trigger", () => {
     expectLogContains(logger.info, "memory-core: dreaming verbose enabled");
     expectLogContains(logger.info, "memory-core: dreaming candidate details");
     expectLogContains(logger.info, "memory-core: dreaming applied details");
+  });
+
+  it("records a failed deep dreaming outcome when report writing fails", async () => {
+    const logger = createLogger();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-failed-event-");
+    const targetPath = path.join(workspaceDir, "outside-dreams.md");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(targetPath, "outside\n", "utf-8");
+    await fs.symlink(targetPath, dreamsPath);
+    await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
+
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "backup policy",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "heartbeat",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result?.handled).toBe(true);
+    const failedEvent = (await readMemoryHostEvents({ workspaceDir })).find(
+      (event) => event.type === "memory.dream.completed" && event.outcome === "failed",
+    );
+    if (failedEvent?.type !== "memory.dream.completed") {
+      throw new Error("expected failed dreaming event");
+    }
+    expect(failedEvent).toMatchObject({
+      type: "memory.dream.completed",
+      phase: "deep",
+      outcome: "failed",
+      lineCount: 0,
+      storageMode: "separate",
+    });
+    expect(failedEvent.error).toContain("Refusing to write symlinked DREAMS.md");
+    expectLogContains(logger.error, "memory-core: dreaming promotion failed");
   });
 
   it("fans out one dreaming run across configured agent workspaces", async () => {

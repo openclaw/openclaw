@@ -1,3 +1,4 @@
+// Diffs helper module supports config behavior.
 import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
 import { buildPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
@@ -143,15 +144,9 @@ const DiffsPluginJsonSchemaSource = z.strictObject({
       wordWrap: z.boolean().default(DEFAULT_DIFFS_TOOL_DEFAULTS.wordWrap).optional(),
       background: z.boolean().default(DEFAULT_DIFFS_TOOL_DEFAULTS.background).optional(),
       theme: z.enum(DIFF_THEMES).default(DEFAULT_DIFFS_TOOL_DEFAULTS.theme).optional(),
-      fileFormat: z
-        .enum(DIFF_OUTPUT_FORMATS)
-        .default(DEFAULT_DIFFS_TOOL_DEFAULTS.fileFormat)
-        .optional(),
+      fileFormat: z.enum(DIFF_OUTPUT_FORMATS).optional(),
       format: z.enum(DIFF_OUTPUT_FORMATS).optional().describe("Deprecated alias for fileFormat."),
-      fileQuality: z
-        .enum(DIFF_IMAGE_QUALITY_PRESETS)
-        .default(DEFAULT_DIFFS_TOOL_DEFAULTS.fileQuality)
-        .optional(),
+      fileQuality: z.enum(DIFF_IMAGE_QUALITY_PRESETS).optional(),
       fileScale: z.number().min(1).max(4).optional(),
       fileMaxWidth: z.number().min(640).max(2400).optional(),
       imageFormat: z
@@ -224,12 +219,8 @@ export const diffsPluginConfigSchema: OpenClawPluginConfigSchema = {
 function resolveConfiguredValue<T>(options: {
   primary: T | undefined;
   aliases: Array<T | undefined>;
-  schemaDefault?: T;
 }): T | undefined {
   const alias = options.aliases.find((value): value is T => value !== undefined);
-  if (alias !== undefined && options.primary === options.schemaDefault) {
-    return alias;
-  }
   return options.primary ?? alias;
 }
 
@@ -256,14 +247,12 @@ export function resolveDiffsPluginDefaults(config: unknown): DiffToolDefaults {
     resolveConfiguredValue({
       primary: defaults.fileQuality,
       aliases: [defaults.imageQuality],
-      schemaDefault: DEFAULT_DIFFS_TOOL_DEFAULTS.fileQuality,
     }),
   );
   const profile = DEFAULT_IMAGE_QUALITY_PROFILES[fileQuality];
   const fileFormat = resolveConfiguredValue({
     primary: defaults.fileFormat,
     aliases: [defaults.imageFormat, defaults.format],
-    schemaDefault: DEFAULT_DIFFS_TOOL_DEFAULTS.fileFormat,
   });
   const fileScale = resolveConfiguredValue({
     primary: defaults.fileScale,

@@ -1,3 +1,4 @@
+// Doctor Linux storage tests cover SD-card-backed state directory detection.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -23,6 +24,7 @@ describe("detectLinuxSdBackedStateDir", () => {
     const result = detectLinuxSdBackedStateDir("/home/pi/.openclaw", {
       platform: "linux",
       mountInfo,
+      resolveRealPath: (statePath) => statePath,
     });
 
     expect(result).toEqual({
@@ -50,6 +52,7 @@ describe("detectLinuxSdBackedStateDir", () => {
     const result = detectLinuxSdBackedStateDir("/home/user/.openclaw", {
       platform: "linux",
       mountInfo,
+      resolveRealPath: (statePath) => statePath,
       resolveDeviceRealPath: (devicePath) => {
         if (devicePath === "/dev/disk/by-uuid/abcd-1234") {
           return "/dev/mmcblk0p2";

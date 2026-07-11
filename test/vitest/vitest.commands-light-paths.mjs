@@ -1,3 +1,4 @@
+// Test routing map for lightweight command tests and their source triggers.
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
 
 const commandsLightEntries = [
@@ -97,10 +98,6 @@ export const commandsLightTestFiles = commandsLightEntries.map(({ test }) => tes
 
 export function isCommandsLightTarget(file) {
   return commandsLightIncludePatternByFile.has(normalizeRepoPath(file));
-}
-
-export function isCommandsLightTestFile(file) {
-  return commandsLightTestFiles.includes(normalizeRepoPath(file));
 }
 
 export function resolveCommandsLightIncludePattern(file) {

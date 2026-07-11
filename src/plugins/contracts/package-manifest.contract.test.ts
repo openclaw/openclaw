@@ -1,3 +1,4 @@
+// Package manifest contract tests cover plugin package manifest requirements.
 import { describePackageManifestContract } from "openclaw/plugin-sdk/plugin-test-contracts";
 
 type PackageManifestContractParams = Parameters<typeof describePackageManifestContract>[0];
@@ -26,7 +27,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "amazon-bedrock-mantle" },
   {
     pluginId: "diffs",
-    pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme"],
+    pluginLocalRuntimeDeps: ["@pierre/diffs"],
   },
   { pluginId: "file-transfer" },
   {

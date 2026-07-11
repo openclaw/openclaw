@@ -1,3 +1,4 @@
+// Provider auth contract helpers define reusable tests for provider auth implementations.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots, type AuthProfileStore } from "../agent-runtime.js";
 import { createNonExitingRuntime } from "../runtime.js";
@@ -28,6 +29,7 @@ export type ProviderAuthContractPluginLoader = () => Promise<{
 }>;
 
 export type OpenAICodexProviderAuthContractOptions = {
+  expectedCodexDefaultModel: string;
   loginOpenAICodexOAuthMock: ReturnType<typeof vi.fn<LoginOpenAICodexOAuth>>;
 };
 
@@ -79,6 +81,7 @@ function buildOpenAICodexOAuthResult(params: {
   refresh: string;
   expires: number;
   email?: string;
+  defaultModel: string;
 }) {
   return {
     profiles: [
@@ -98,12 +101,12 @@ function buildOpenAICodexOAuthResult(params: {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": {},
+            [params.defaultModel]: {},
           },
         },
       },
     },
-    defaultModel: "openai/gpt-5.5",
+    defaultModel: params.defaultModel,
     notes: undefined,
   };
 }
@@ -145,7 +148,7 @@ export function describeOpenAICodexProviderAuthContract(
   const state = {
     authStore: { version: 1, profiles: {} } as AuthProfileStore,
   };
-  const { loginOpenAICodexOAuthMock } = options;
+  const { expectedCodexDefaultModel, loginOpenAICodexOAuthMock } = options;
 
   describe("openai provider ChatGPT auth contract", () => {
     installSharedAuthProfileStoreHooks(state);
@@ -165,6 +168,7 @@ export function describeOpenAICodexProviderAuthContract(
           access: params.access,
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     }
@@ -192,6 +196,7 @@ export function describeOpenAICodexProviderAuthContract(
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
           email: "user@example.com",
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     });
@@ -218,6 +223,7 @@ export function describeOpenAICodexProviderAuthContract(
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
           email: "jwt-user@example.com",
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     });
@@ -276,6 +282,7 @@ export function describeOpenAICodexProviderAuthContract(
           access: "not-a-jwt-token",
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     });

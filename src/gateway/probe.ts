@@ -1,3 +1,5 @@
+// Gateway reachability probe client.
+// Connects to a gateway and summarizes auth, health, status, and presence.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
@@ -58,7 +60,7 @@ export type GatewayProbeResult = {
   configSnapshot: unknown;
 };
 
-export const MIN_PROBE_TIMEOUT_MS = 250;
+const MIN_PROBE_TIMEOUT_MS = 250;
 export const MAX_TIMER_DELAY_MS = MAX_SAFE_TIMEOUT_DELAY_MS;
 const PAIRING_REQUIRED_PATTERN = /\bpairing required\b/i;
 const OPERATOR_READ_SCOPE = "operator.read";
@@ -105,6 +107,8 @@ function hasProbeAuth(auth: GatewayProbeAuth | undefined): boolean {
 }
 
 function shouldShortCircuitDeviceRequiredProbe(cacheKey: string, nowMs: number): boolean {
+  // Repeated unauthenticated probes can trigger pairing/device-required closes.
+  // Short-circuit briefly so status checks do not spam the gateway.
   const entry = deviceRequiredProbeCache.get(cacheKey);
   if (!entry) {
     return false;
@@ -189,14 +193,14 @@ function resolveProbeAuthSummary(params: {
   };
 }
 
-export function isPairingPendingProbeFailure(params: {
+function isPairingPendingProbeFailure(params: {
   error?: string | null;
   close?: GatewayProbeClose | null;
 }): boolean {
   return PAIRING_REQUIRED_PATTERN.test(params.close?.reason ?? params.error ?? "");
 }
 
-export function resolveGatewayProbeCapability(params: {
+function resolveGatewayProbeCapability(params: {
   auth?: Pick<GatewayProbeAuthSummary, "scopes"> | null;
   authMetadataPresent?: boolean;
   error?: string | null;
@@ -373,9 +377,14 @@ export async function probeGateway(opts: {
         connectError = formatErrorMessage(err);
         connectErrorDetails = err instanceof GatewayClientRequestError ? err.details : null;
       },
-      onClose: (code, reason) => {
+      onClose: (code, reason, info) => {
         close = { code, reason };
         if (connectLatencyMs == null) {
+          // Preserve the transport boundary: request-level handshake failures
+          // still prove the listener was reachable once the socket opened.
+          if (info?.transportValidated === true) {
+            connectLatencyMs = Date.now() - startedAt;
+          }
           settleProbe({
             ok: false,
             error: connectError || formatProbeCloseError(close),

@@ -6,14 +6,6 @@ internal fun normalizeMainKey(raw: String?): String {
   return if (!trimmed.isNullOrEmpty()) trimmed else "main"
 }
 
-/** Accepts only gateway session keys that can represent the main chat stream. */
-internal fun isCanonicalMainSessionKey(raw: String?): Boolean {
-  val trimmed = raw?.trim().orEmpty()
-  if (trimmed.isEmpty()) return false
-  if (trimmed == "global") return true
-  return trimmed.startsWith("agent:")
-}
-
 /** Extracts the agent id from canonical agent-scoped main session keys. */
 internal fun resolveAgentIdFromMainSessionKey(raw: String?): String? {
   val trimmed = raw?.trim().orEmpty()

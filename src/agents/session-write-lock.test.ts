@@ -1,3 +1,4 @@
+// Verifies session write locks handle reentrancy, stale locks, and symlinked paths.
 import { spawn } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -22,6 +23,7 @@ async function expectLockRemovedOnlyAfterFinalRelease(params: {
   firstLock: { release: () => Promise<void> };
   secondLock: { release: () => Promise<void> };
 }) {
+  // Reentrant locks share one file; only the final release removes it.
   await expect(fs.access(params.lockPath)).resolves.toBeUndefined();
   await params.firstLock.release();
   await expect(fs.access(params.lockPath)).resolves.toBeUndefined();
@@ -109,6 +111,7 @@ async function withSymlinkedSessionPaths(
     linkLockPath: string;
   }) => Promise<void>,
 ) {
+  // Symlinked session paths must resolve to the same lock ownership boundary.
   if (process.platform === "win32") {
     return;
   }
@@ -238,6 +241,29 @@ describe("acquireSessionWriteLock", () => {
         acquireSessionWriteLock({ sessionFile, timeoutMs: 5, staleMs: 60_000 }),
       ).rejects.toThrow(/session file locked/);
       await lock.release();
+    });
+  });
+
+  it("cancels a contended infinite acquisition without leaving a lock waiter", async () => {
+    await withTempSessionLockFile(async ({ sessionFile }) => {
+      const heldLock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      const abortController = new AbortController();
+      const abortError = new Error("stop requested");
+      abortError.name = "AbortError";
+      const pendingLock = acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: Number.POSITIVE_INFINITY,
+        signal: abortController.signal,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      abortController.abort(abortError);
+
+      await expect(pendingLock).rejects.toBe(abortError);
+      await heldLock.release();
+      const nextLock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      await nextLock.release();
     });
   });
 

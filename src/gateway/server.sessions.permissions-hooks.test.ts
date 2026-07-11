@@ -1,12 +1,21 @@
+// Session permissions and hooks tests protect gateway access control around
+// patch/delete/compact/restore APIs plus emitted internal hook payloads.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { afterAll, expect, test, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+
+const permHookTempDirs: string[] = [];
+
+afterAll(() => {
+  cleanupTempDirs(permHookTempDirs);
+});
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
+import { requireRecord } from "./test-helpers.assertions.js";
 import { connectWebchatClient, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -29,13 +38,6 @@ async function openPermissionClient(client: Pick<PermissionClient, "id" | "mode"
       mode: client.mode,
     },
   });
-}
-
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected record");
-  }
-  return value as Record<string, unknown>;
 }
 
 function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[])[] } }) {
@@ -122,7 +124,7 @@ test("webchat clients cannot patch, delete, compact, or restore sessions", async
 });
 
 test("session:patch hook fires with correct context", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-patch-hook-"));
+  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-patch-hook-");
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
 
@@ -144,22 +146,25 @@ test("session:patch hook fires with correct context", async () => {
   });
 
   expect(patched.ok).toBe(true);
-  const event = requireRecord(requireFirstCallArg(sessionHookMocks.triggerInternalHook));
+  const event = requireRecord(
+    requireFirstCallArg(sessionHookMocks.triggerInternalHook),
+    "internal hook event",
+  );
   expect(event.type).toBe("session");
   expect(event.action).toBe("patch");
   expect(event.sessionKey).toBe("agent:main:main");
-  const context = requireRecord(event.context);
-  const sessionEntry = requireRecord(context.sessionEntry);
+  const context = requireRecord(event.context, "internal hook context");
+  const sessionEntry = requireRecord(context.sessionEntry, "session entry");
   expect(sessionEntry.sessionId).toBe("sess-hook-test");
   expect(sessionEntry.label).toBe("updated-label");
-  expect(requireRecord(context.patch).label).toBe("updated-label");
-  requireRecord(context.cfg);
+  expect(requireRecord(context.patch, "session patch").label).toBe("updated-label");
+  requireRecord(context.cfg, "config");
 
   ws.close();
 });
 
 test("session:patch hook does not fire for webchat clients", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-webchat-hook-"));
+  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-webchat-hook-");
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
 
@@ -188,7 +193,7 @@ test("session:patch hook does not fire for webchat clients", async () => {
 });
 
 test("session:patch hook only fires after successful patch", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-success-hook-"));
+  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-success-hook-");
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
 
@@ -218,7 +223,10 @@ test("session:patch hook only fires after successful patch", async () => {
   });
 
   expect(validPatch.ok).toBe(true);
-  const event = requireRecord(requireFirstCallArg(sessionHookMocks.triggerInternalHook));
+  const event = requireRecord(
+    requireFirstCallArg(sessionHookMocks.triggerInternalHook),
+    "internal hook event",
+  );
   expect(event.type).toBe("session");
   expect(event.action).toBe("patch");
 
@@ -297,7 +305,7 @@ test("session:patch hook mutations cannot change the response path", async () =>
 });
 
 test("control-ui client can delete sessions even in webchat mode", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-control-ui-delete-"));
+  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-control-ui-delete-");
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
 

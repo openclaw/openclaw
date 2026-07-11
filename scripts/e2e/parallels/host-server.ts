@@ -1,9 +1,14 @@
+// Host Server script supports OpenClaw repository automation.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { sleep as delay } from "../../lib/sleep.mjs";
 import { die, run, say, sh, warn } from "./host-command.ts";
-import type { HostServer } from "./types.ts";
+import type { HostServer, NpmRegistryPackage, NpmRegistryServer } from "./types.ts";
 
 const HOST_SERVER_STDERR_LIMIT_BYTES = 64 * 1024;
 const HOST_SERVER_STDERR_DRAIN_MS = 5_000;
@@ -21,7 +26,7 @@ export function resolveHostIp(explicit = ""): string {
   return output;
 }
 
-export function allocateHostPort(): number {
+function allocateHostPort(): number {
   return Number(
     run(
       "python3",
@@ -34,7 +39,7 @@ export function allocateHostPort(): number {
   );
 }
 
-export async function isHostPortFree(port: number): Promise<boolean> {
+async function isHostPortFree(port: number): Promise<boolean> {
   return await new Promise((resolve) => {
     const server = createServer();
     server.once("error", () => resolve(false));
@@ -88,12 +93,50 @@ export async function startHostServer(input: {
   };
 }
 
+export async function startNpmRegistryServer(input: {
+  hostIp: string;
+  packages: NpmRegistryPackage[];
+}): Promise<NpmRegistryServer> {
+  if (input.packages.length === 0) {
+    die("npm registry server requires at least one package");
+  }
+  const port = allocateHostPort();
+  const portFile = path.join(tmpdir(), `openclaw-npm-registry-${randomUUID()}.port`);
+  const packageArgs = input.packages.flatMap((pkg) => [pkg.name, pkg.version, pkg.tarballPath]);
+  const child = spawn(
+    process.execPath,
+    ["scripts/e2e/lib/plugins/npm-registry-server.mjs", portFile, ...packageArgs],
+    {
+      env: {
+        ...process.env,
+        OPENCLAW_NPM_REGISTRY_BIND_HOST: "0.0.0.0",
+        OPENCLAW_NPM_REGISTRY_PORT: String(port),
+        OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  await waitForHostServer(child, port);
+  const url = `http://${input.hostIp}:${port}`;
+  say(`Serve prepared npm package set on ${url}`);
+  return {
+    url,
+    stop: async () => {
+      try {
+        await stopHostServerChild(child);
+      } finally {
+        await rm(portFile, { force: true });
+      }
+    },
+  };
+}
+
 async function stopHostServerChild(
   child: ChildProcessWithoutNullStreams,
   terminateTimeoutMs = 2_000,
   killTimeoutMs = 1_500,
 ): Promise<boolean> {
-  if (child.exitCode != null) {
+  if (hasHostServerChildExited(child)) {
     return true;
   }
   child.kill("SIGTERM");
@@ -108,13 +151,13 @@ async function waitForChildExit(
   child: ChildProcessWithoutNullStreams,
   timeoutMs: number,
 ): Promise<boolean> {
-  if (child.exitCode != null) {
+  if (hasHostServerChildExited(child)) {
     return true;
   }
   return await new Promise<boolean>((resolve) => {
     let settled = false;
     const onExit = () => settle(true);
-    const timeout = setTimeout(() => settle(child.exitCode != null), timeoutMs);
+    const timeout = setTimeout(() => settle(hasHostServerChildExited(child)), timeoutMs);
     timeout.unref();
     function settle(exited: boolean): void {
       if (settled) {
@@ -127,6 +170,10 @@ async function waitForChildExit(
     }
     child.once("exit", onExit);
   });
+}
+
+function hasHostServerChildExited(child: ChildProcessWithoutNullStreams): boolean {
+  return child.exitCode != null || child.signalCode != null;
 }
 
 async function waitForHostServer(
@@ -146,11 +193,11 @@ async function waitForHostServer(
   });
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10_000) {
-    if (child.exitCode != null) {
+    if (hasHostServerChildExited(child)) {
       if (!childClosed) {
         await Promise.race([childClose, delay(HOST_SERVER_STDERR_DRAIN_MS)]);
       }
-      die(`host artifact server exited early: ${stderr.trim() || `exit ${child.exitCode}`}`);
+      die(`host artifact server exited early: ${stderr.trim() || formatHostServerExit(child)}`);
     }
     if (await canConnect(port)) {
       return;
@@ -171,6 +218,10 @@ function appendBoundedOutput(previous: string, chunk: Buffer, limitBytes: number
   return combined.subarray(combined.byteLength - limitBytes).toString("utf8");
 }
 
+function formatHostServerExit(child: ChildProcessWithoutNullStreams): string {
+  return child.signalCode ? `signal ${child.signalCode}` : `exit ${child.exitCode ?? "unknown"}`;
+}
+
 async function canConnect(port: number): Promise<boolean> {
   return await new Promise((resolve) => {
     const socket = createConnection({ host: "127.0.0.1", port });
@@ -183,12 +234,6 @@ async function canConnect(port: number): Promise<boolean> {
       socket.destroy();
       resolve(false);
     });
-  });
-}
-
-async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
   });
 }
 

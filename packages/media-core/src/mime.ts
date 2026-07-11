@@ -1,8 +1,9 @@
+// Media Core module implements mime behavior.
 import path from "node:path";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
 import { createLazyImportLoader } from "./lazy-import.js";
 
-/** @internal */
+/** Maximum byte prefix passed to dependency MIME sniffers for bounded memory/CPU work. */
 export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;
 
 // Map common mimes to preferred file extensions.
@@ -71,7 +72,9 @@ const MIME_BY_EXT: Record<string, string> = {
   ...buildMimeByExt(),
   // Canonical extension mappings for common MIME aliases
   ".jpg": "image/jpeg",
+  ".m2a": "audio/mpeg",
   ".mp3": "audio/mpeg",
+  ".oga": "audio/ogg",
   ".wav": "audio/wav",
   ".webm": "video/webm",
   // Additional extension aliases
@@ -83,20 +86,9 @@ const MIME_BY_EXT: Record<string, string> = {
   ".yml": "application/yaml",
 };
 
-const AUDIO_FILE_EXTENSIONS = new Set([
-  ".aac",
-  ".caf",
-  ".flac",
-  ".m4a",
-  ".mp3",
-  ".oga",
-  ".ogg",
-  ".opus",
-  ".wav",
-]);
-
 const fileTypeModuleLoader = createLazyImportLoader(() => import("file-type"));
 
+/** Normalizes MIME strings by dropping parameters, lowercasing, and folding APNG to PNG. */
 export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
     return undefined;
@@ -108,7 +100,7 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
   return cleaned || undefined;
 }
 
-/** @internal */
+/** Returns the bounded buffer prefix used for dependency MIME sniffing. */
 export function sliceMimeSniffBuffer(buffer: Buffer): Buffer {
   if (buffer.byteLength <= FILE_TYPE_SNIFF_MAX_BYTES) {
     return buffer;
@@ -144,6 +136,7 @@ function sniffKnownAudioMagic(buffer: Buffer): string | undefined {
   return undefined;
 }
 
+/** Extracts a lowercase extension from a local path or HTTP URL pathname. */
 export function getFileExtension(filePath?: string | null): string | undefined {
   if (!filePath) {
     return undefined;
@@ -151,7 +144,15 @@ export function getFileExtension(filePath?: string | null): string | undefined {
   try {
     if (/^https?:\/\//i.test(filePath)) {
       const url = new URL(filePath);
-      return path.extname(url.pathname).toLowerCase() || undefined;
+      let filename = url.pathname.slice(url.pathname.lastIndexOf("/") + 1);
+      try {
+        // Decode only the URL filename while keeping encoded separators literal.
+        const decodable = filename.replace(/%2f/gi, "%252F").replace(/%5c/gi, "%255C");
+        filename = decodeURIComponent(decodable);
+      } catch {
+        // Preserve the raw filename when its own percent encoding is malformed.
+      }
+      return path.posix.extname(filename).toLowerCase() || undefined;
     }
   } catch {
     // fall back to plain path parsing
@@ -160,6 +161,7 @@ export function getFileExtension(filePath?: string | null): string | undefined {
   return ext || undefined;
 }
 
+/** Maps a file path or URL extension to the preferred MIME type when known. */
 export function mimeTypeFromFilePath(filePath?: string | null): string | undefined {
   const ext = getFileExtension(filePath);
   if (!ext) {
@@ -168,14 +170,12 @@ export function mimeTypeFromFilePath(filePath?: string | null): string | undefin
   return MIME_BY_EXT[ext];
 }
 
+/** Returns true when a filename extension is a supported audio container. */
 export function isAudioFileName(fileName?: string | null): boolean {
-  const ext = getFileExtension(fileName);
-  if (!ext) {
-    return false;
-  }
-  return AUDIO_FILE_EXTENSIONS.has(ext);
+  return mediaKindFromMime(mimeTypeFromFilePath(fileName)) === "audio";
 }
 
+/** Detects the best MIME type from bytes, file path, and header metadata. */
 export function detectMime(opts: {
   buffer?: Buffer;
   headerMime?: string | null;
@@ -232,6 +232,7 @@ async function detectMimeImpl(opts: {
   return undefined;
 }
 
+/** Returns the preferred file extension for a normalized or raw MIME string. */
 export function extensionForMime(mime?: string | null): string | undefined {
   const normalized = normalizeMimeType(mime);
   if (!normalized) {
@@ -240,17 +241,19 @@ export function extensionForMime(mime?: string | null): string | undefined {
   return EXT_BY_MIME[normalized];
 }
 
+/** Returns true when content type or filename identifies GIF media. */
 export function isGifMedia(opts: {
   contentType?: string | null;
   fileName?: string | null;
 }): boolean {
-  if (opts.contentType?.toLowerCase() === "image/gif") {
+  if (normalizeMimeType(opts.contentType) === "image/gif") {
     return true;
   }
   const ext = getFileExtension(opts.fileName);
   return ext === ".gif";
 }
 
+/** Maps image format labels from encoders/probes to MIME types. */
 export function imageMimeFromFormat(format?: string | null): string | undefined {
   if (!format) {
     return undefined;
@@ -274,6 +277,7 @@ export function imageMimeFromFormat(format?: string | null): string | undefined 
   }
 }
 
+/** Normalizes a MIME string before classifying it into a media family. */
 export function kindFromMime(mime?: string | null): MediaKind | undefined {
   return mediaKindFromMime(normalizeMimeType(mime));
 }

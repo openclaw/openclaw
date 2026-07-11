@@ -1,3 +1,4 @@
+/** Loads capability providers from bundled plugin public runtime artifacts. */
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
@@ -94,7 +95,7 @@ function shouldApplyVitestCapabilityAliasOverrides(params: {
   return Boolean(params.env?.VITEST && params.pluginSdkResolution === "dist");
 }
 
-export function buildBundledCapabilityRuntimeConfig(
+function buildBundledCapabilityRuntimeConfig(
   pluginIds: readonly string[],
   env?: PluginLoadOptions["env"],
 ): PluginLoadOptions["config"] {
@@ -354,7 +355,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       record.agentHarnessIds.push(...captured.agentHarnesses.map((entry) => entry.id));
       record.toolNames.push(...captured.tools.map((entry) => entry.name));
 
-      registry.cliBackends?.push(
+      registry.cliBackends.push(
         ...captured.cliBackends.map((backend) => ({
           pluginId: record.id,
           pluginName: record.name,

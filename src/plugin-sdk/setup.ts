@@ -24,7 +24,7 @@ export type {
 
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export { formatCliCommand } from "../cli/command-format.js";
-export { detectBinary } from "../plugins/setup-binary.js";
+export { detectBinary } from "../infra/detect-binary.js";
 export { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 export { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
 export { normalizeE164, pathExists } from "../utils.js";

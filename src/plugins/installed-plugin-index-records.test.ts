@@ -1,3 +1,4 @@
+// Covers installed plugin index record parsing and normalization.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -593,6 +594,12 @@ describe("plugin index install records store", () => {
           clawpackManifestSha256:
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           clawpackSize: 4096,
+          clawhubTrustDisposition: "review-required",
+          clawhubTrustScanStatus: "suspicious",
+          clawhubTrustReasons: ["payload_strings"],
+          clawhubTrustPending: true,
+          clawhubTrustCheckedAt: "2026-05-14T18:00:00.000Z",
+          clawhubTrustAcknowledgedAt: "2026-05-14T18:00:03.000Z",
         },
       },
       { stateDir, candidates: [candidate] },
@@ -611,6 +618,12 @@ describe("plugin index install records store", () => {
       clawpackSpecVersion: 1,
       clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       clawpackSize: 4096,
+      clawhubTrustDisposition: "review-required",
+      clawhubTrustScanStatus: "suspicious",
+      clawhubTrustReasons: ["payload_strings"],
+      clawhubTrustPending: true,
+      clawhubTrustCheckedAt: "2026-05-14T18:00:00.000Z",
+      clawhubTrustAcknowledgedAt: "2026-05-14T18:00:03.000Z",
     });
   });
 
@@ -671,6 +684,21 @@ describe("plugin index install records store", () => {
         },
       },
     });
+  });
+
+  it("preserves an authored empty plugins section while stripping transient install records", () => {
+    expect(
+      withoutPluginInstallRecords(
+        {
+          plugins: {
+            installs: {
+              twitch: { source: "npm", spec: "twitch@1.0.0" },
+            },
+          },
+        },
+        { preserveEmptyPlugins: true },
+      ),
+    ).toEqual({ plugins: {} });
   });
 
   it("returns empty records when the persisted plugin index is missing", async () => {

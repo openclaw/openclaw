@@ -1,3 +1,4 @@
+// Discord plugin module implements agent componentsispatch behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   formatInboundEnvelope,
@@ -5,6 +6,7 @@ import {
   runChannelInboundEvent,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
@@ -35,18 +37,11 @@ import {
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 
-let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
-let typingRuntimePromise: Promise<typeof import("./typing.js")> | undefined;
+const loadConversationRuntime = createLazyRuntimeModule(
+  () => import("./agent-components.runtime.js"),
+);
 
-async function loadConversationRuntime() {
-  conversationRuntimePromise ??= import("./agent-components.runtime.js");
-  return await conversationRuntimePromise;
-}
-
-async function loadTypingRuntime() {
-  typingRuntimePromise ??= import("./typing.js");
-  return await typingRuntimePromise;
-}
+const loadTypingRuntime = createLazyRuntimeModule(() => import("./typing.js"));
 
 function buildDiscordComponentConversationLabel(params: {
   interactionCtx: ComponentInteractionContext;

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Generates npm-shrinkwrap.json files that mirror pnpm lock policy for
+// published packages while stripping dev-only dependency state.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -380,10 +382,24 @@ function readShrinkwrapOverrides() {
 function packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides) {
   const normalized = { ...packageJson };
   delete normalized.devDependencies;
+  for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+    const dependencies = normalized[field];
+    if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) {
+      continue;
+    }
+    normalized[field] = Object.fromEntries(
+      Object.entries(dependencies).filter(
+        ([, spec]) => typeof spec !== "string" || !spec.startsWith("workspace:"),
+      ),
+    );
+  }
   normalized.overrides = mergeOverrides(packageJson.overrides, shrinkwrapOverrides, {});
   return normalized;
 }
 
+/**
+ * Resolves the npm command invocation used by shrinkwrap generation.
+ */
 export function createNpmShrinkwrapCommand(args, options = {}) {
   return resolveNpmRunner({
     comSpec: options.comSpec,
@@ -395,6 +411,9 @@ export function createNpmShrinkwrapCommand(args, options = {}) {
   });
 }
 
+/**
+ * Reads a positive integer env override for shrinkwrap subprocess limits.
+ */
 export function readPositiveIntEnv(name, fallback, env = process.env) {
   const text = String(env[name] ?? fallback).trim();
   if (!/^\d+$/u.test(text)) {
@@ -407,6 +426,9 @@ export function readPositiveIntEnv(name, fallback, env = process.env) {
   return value;
 }
 
+/**
+ * Builds execFileSync options with bounded timeout and output buffer limits.
+ */
 export function createNpmShrinkwrapExecOptions(invocation, cwd, env = process.env) {
   return {
     cwd,
@@ -675,8 +697,9 @@ function normalizeNpmVersionDrift(lockfile) {
     if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
       continue;
     }
-    // npm 11 patch releases disagree on these package-lock v3 metadata fields.
-    // Keep the shrinkwrap stable across supported Node 24 patch versions.
+    // npm versions and mutable registry metadata disagree on these package-lock
+    // fields. None affect resolution, so keep generated shrinkwraps stable.
+    delete metadata.deprecated;
     delete metadata.libc;
     if (metadata.peer === true) {
       delete metadata.peer;
@@ -1054,10 +1077,14 @@ function shrinkwrapPathForPackage(packageDir) {
 }
 
 function listPublishablePluginPackageDirs() {
-  const extensionsDir = path.join(ROOT_DIR, "extensions");
-  return readdirSync(extensionsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.posix.join("extensions", entry.name))
+  // Published workspace packages (packages/*) ship npm-shrinkwrap.json just
+  // like publishable plugins so their transitive dependency tree stays pinned.
+  return ["extensions", "packages"]
+    .flatMap((parentDir) =>
+      readdirSync(path.join(ROOT_DIR, parentDir), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.posix.join(parentDir, entry.name)),
+    )
     .filter((packageDir) => {
       const packageJsonPath = path.join(ROOT_DIR, packageDir, "package.json");
       if (!existsSync(packageJsonPath)) {
@@ -1087,11 +1114,11 @@ function shrinkwrapPackageDirsForChangedPaths(changedPaths) {
       packageDirs.add(ROOT_DIR);
       continue;
     }
-    const extensionMatch = changedPath.match(
-      /^(extensions\/[^/]+)\/(?:package\.json|npm-shrinkwrap\.json)$/u,
+    const workspacePackageMatch = changedPath.match(
+      /^((?:extensions|packages)\/[^/]+)\/(?:package\.json|npm-shrinkwrap\.json)$/u,
     );
-    if (extensionMatch && publishablePluginPackageDirs.has(extensionMatch[1])) {
-      packageDirs.add(path.resolve(ROOT_DIR, extensionMatch[1]));
+    if (workspacePackageMatch && publishablePluginPackageDirs.has(workspacePackageMatch[1])) {
+      packageDirs.add(path.resolve(ROOT_DIR, workspacePackageMatch[1]));
       continue;
     }
     if (changedPath === "pnpm-lock.yaml") {
@@ -1159,7 +1186,7 @@ function listCheckChangedPaths() {
   }
 }
 
-function resolvePackageDirs(args) {
+export function resolvePackageDirs(args) {
   const packageDirs = [];
   const check = args.includes("--check");
   const all = args.includes("--all");
@@ -1188,7 +1215,7 @@ function resolvePackageDirs(args) {
     }
     if (arg === "--package-dir") {
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error("--package-dir requires a package directory.");
       }
       packageDirs.push(path.resolve(ROOT_DIR, value));
@@ -1197,7 +1224,7 @@ function resolvePackageDirs(args) {
     }
     if (arg === "--base" || arg === "--head") {
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error(`${arg} requires a git ref.`);
       }
       index += 1;
@@ -1299,6 +1326,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 }
 
 export {
+  // Test-facing helpers cover lockfile normalization, override merging, and
+  // changed-package detection without invoking npm.
   collectCurrentShrinkwrapOverrides,
   collectOverrideViolations,
   collectPnpmLockViolations,

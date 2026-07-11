@@ -1,3 +1,4 @@
+// Vllm plugin module implements thinking policy behavior.
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
@@ -11,9 +12,7 @@ const VLLM_BINARY_THINKING_PROFILE = {
   defaultLevel: "off",
 } satisfies ProviderThinkingProfile;
 
-export function normalizeVllmQwenThinkingFormat(
-  value: unknown,
-): VllmQwenThinkingFormat | undefined {
+function normalizeVllmQwenThinkingFormat(value: unknown): VllmQwenThinkingFormat | undefined {
   if (typeof value !== "string") {
     return undefined;
   }

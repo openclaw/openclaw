@@ -1,3 +1,4 @@
+// Telegram tests cover session route plugin behavior.
 import { describe, expect, it } from "vitest";
 import { telegramPlugin } from "./channel.js";
 
@@ -43,6 +44,7 @@ describe("telegram session route", () => {
     expect(route?.baseSessionKey).toBe("agent:main:main");
     expect(route?.threadId).toBe(99);
     expect(route?.from).toBe("telegram:@alice:topic:99");
+    expect(route?.recipientSessionExact).toBe(false);
   });
 
   it("aligns isolated direct topic sessions with inbound reply routing", async () => {
@@ -100,6 +102,20 @@ describe("telegram session route", () => {
     expect(route?.sessionKey).toBe("agent:main:main");
     expect(route?.baseSessionKey).toBe("agent:main:main");
     expect(route?.threadId).toBeUndefined();
+    expect(route?.recipientSessionExact).toBe(true);
+  });
+
+  it("uses inbound named-account isolation for direct sessions", async () => {
+    const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      accountId: "work",
+      target: "12345",
+    });
+
+    expect(route?.sessionKey).toBe("agent:main:telegram:work:direct:12345");
+    expect(route?.baseSessionKey).toBe("agent:main:telegram:work:direct:12345");
+    expect(route?.recipientSessionExact).toBe(true);
   });
 
   it("keeps group topic ids in the group peer route instead of adding a thread suffix", async () => {
@@ -112,5 +128,18 @@ describe("telegram session route", () => {
     expect(route?.sessionKey).toBe("agent:main:telegram:group:-100:topic:99");
     expect(route?.baseSessionKey).toBe("agent:main:telegram:group:-100:topic:99");
     expect(route?.threadId).toBe(99);
+    expect(route?.recipientSessionExact).toBe(true);
+  });
+
+  it("does not treat directory-resolved usernames as canonical session ids", async () => {
+    const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      target: "@team",
+      resolvedTarget: { to: "@team", kind: "group", source: "directory" },
+    });
+
+    expect(route?.peer.kind).toBe("group");
+    expect(route?.recipientSessionExact).toBe(false);
   });
 });

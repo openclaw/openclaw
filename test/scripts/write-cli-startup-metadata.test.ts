@@ -1,8 +1,17 @@
+// Write Cli Startup Metadata tests cover write cli startup metadata script behavior.
+import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { PassThrough } from "node:stream";
+import { pathToFileURL } from "node:url";
+import { describe, expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import { __testing, writeCliStartupMetadata } from "../../scripts/write-cli-startup-metadata.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
+
+// These subprocess tests use explicit ready/close signals; timeout only catches broken fixtures.
+const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
 function writeFixtureFile(rootDir: string, relativePath: string, contents: string): void {
   const filePath = path.join(rootDir, relativePath);
@@ -30,6 +39,10 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
     ["src/cli/models-cli.ts", "export const modelsHelp = 'models';\n"],
     ["src/cli/nodes-cli/register.ts", "export const nodesHelp = 'nodes';\n"],
     ["src/cli/program/register.maintenance.ts", "export const maintenanceHelp = 'maintenance';\n"],
+    [
+      "src/cli/program/register.status-health-sessions.ts",
+      "export const statusHealthSessionsHelp = 'sessions';\n",
+    ],
     ["src/cli/program/context.ts", "export const context = 'context';\n"],
     ["src/cli/program/help.ts", "export const help = 'help';\n"],
     ["src/cli/plugins-cli.ts", "export const pluginsHelp = 'plugins';\n"],
@@ -55,7 +68,22 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void> {
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
+
+function createSpawnTextChild() {
+  return Object.assign(new EventEmitter(), {
+    kill: vi.fn(() => true),
+    stderr: new PassThrough(),
+    stdout: new PassThrough(),
+  });
+}
+
+async function waitForProcessExit(
+  pid: number,
+  timeoutMs = LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!processIsAlive(pid)) {
@@ -66,6 +94,21 @@ async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void>
     });
   }
   throw new Error(`process ${pid} was still alive after ${timeoutMs}ms`);
+}
+
+async function waitForChildClose(
+  child: ReturnType<typeof spawn>,
+  timeoutMs = LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error("child did not close before timeout"));
+    }, timeoutMs);
+    child.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal });
+    });
+  });
 }
 
 describe("write-cli-startup-metadata", () => {
@@ -102,6 +145,107 @@ describe("write-cli-startup-metadata", () => {
     ).rejects.toThrow("render failed: output exceeded 1024 bytes");
   });
 
+  it.each(["stdout", "stderr"] as const)(
+    "fails command help rendering when %s emits a stream error",
+    async (streamName) => {
+      const child = createSpawnTextChild();
+      const spawnProcess = vi.fn(() => child as unknown as ReturnType<typeof spawn>);
+      const streamError = new Error(`${streamName} pipe failed`);
+
+      const render = __testing.spawnText(["--help"], {
+        cwd: process.cwd(),
+        env: process.env,
+        failureMessage: "render failed",
+        killGraceMs: 25,
+        maxOutputBytes: 1024,
+        spawnProcess,
+        timeoutMs: 5_000,
+      });
+
+      child[streamName].emit("error", streamError);
+      child.emit("close", null, "SIGTERM");
+
+      await expect(render).rejects.toMatchObject({
+        message: `render failed: ${streamName} read error: ${streamName} pipe failed`,
+        cause: streamError,
+      });
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    },
+  );
+
+  it("preserves an output-limit failure when shutdown also errors a stream", async () => {
+    const child = createSpawnTextChild();
+    const spawnProcess = vi.fn(() => child as unknown as ReturnType<typeof spawn>);
+    const render = __testing.spawnText(["--help"], {
+      cwd: process.cwd(),
+      env: process.env,
+      failureMessage: "render failed",
+      killGraceMs: 25,
+      maxOutputBytes: 5,
+      spawnProcess,
+      timeoutMs: 5_000,
+    });
+
+    child.stdout.emit("data", "123456");
+    child.stdout.emit("error", new Error("pipe closed during shutdown"));
+    child.emit("close", null, "SIGTERM");
+
+    await expect(render).rejects.toThrow("render failed: output exceeded 5 bytes");
+  });
+
+  it("signals Windows command help render process trees with taskkill", () => {
+    const childKill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    __testing.signalCliStartupMetadataProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
+      stdio: "ignore",
+    });
+
+    __testing.signalCliStartupMetadataProcessTree({ pid: 123, kill: childKill }, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "123", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(childKill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows command help render process trees when graceful taskkill fails", () => {
+    const childKill = vi.fn(() => true);
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    __testing.signalCliStartupMetadataProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
+      stdio: "ignore",
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "123", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(childKill).not.toHaveBeenCalled();
+  });
+
   it.runIf(process.platform !== "win32")(
     "kills descendant processes when command help rendering times out",
     async () => {
@@ -133,6 +277,120 @@ describe("write-cli-startup-metadata", () => {
 
       const grandchildPid = Number(readFileSync(markerPath, "utf8"));
       await waitForProcessExit(grandchildPid);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "waits for all command help descendants before re-raising parent signals",
+    async () => {
+      const tempRoot = createTempDir("openclaw-startup-metadata-signal-");
+      const fastCommandPath = path.join(tempRoot, "fast-command.mjs");
+      const fastReadyPath = path.join(tempRoot, "fast-ready");
+      const commandPath = path.join(tempRoot, "command.mjs");
+      const runnerPath = path.join(tempRoot, "runner.mjs");
+      const grandchildPidPath = path.join(tempRoot, "grandchild.pid");
+      const grandchildScript = [
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      writeFixtureFile(
+        tempRoot,
+        "fast-command.mjs",
+        [
+          "import { writeFileSync } from 'node:fs';",
+          `writeFileSync(${JSON.stringify(fastReadyPath)}, "ready");`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      );
+      writeFixtureFile(
+        tempRoot,
+        "command.mjs",
+        [
+          "import { spawn } from 'node:child_process';",
+          "import { writeFileSync } from 'node:fs';",
+          `const grandchild = spawn(process.execPath, ["--eval", ${JSON.stringify(
+            grandchildScript,
+          )}], { stdio: "ignore" });`,
+          `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      );
+      writeFixtureFile(
+        tempRoot,
+        "runner.mjs",
+        [
+          `const { __testing } = await import(${JSON.stringify(
+            pathToFileURL(path.resolve("scripts/write-cli-startup-metadata.ts")).href,
+          )});`,
+          "void __testing.spawnText(",
+          `  [${JSON.stringify(fastCommandPath)}],`,
+          "  {",
+          `    cwd: ${JSON.stringify(tempRoot)},`,
+          "    env: process.env,",
+          "    failureMessage: 'fast render failed',",
+          "    killGraceMs: 100,",
+          "    maxOutputBytes: 1024,",
+          "    timeoutMs: 30_000,",
+          "  },",
+          ").catch(() => undefined);",
+          "void __testing.spawnText(",
+          `  [${JSON.stringify(commandPath)}],`,
+          "  {",
+          `    cwd: ${JSON.stringify(tempRoot)},`,
+          "    env: process.env,",
+          "    failureMessage: 'render failed',",
+          "    killGraceMs: 100,",
+          "    maxOutputBytes: 1024,",
+          "    timeoutMs: 30_000,",
+          "  },",
+          ").catch(() => undefined);",
+        ].join("\n"),
+      );
+
+      const runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
+        cwd: process.cwd(),
+        stdio: "ignore",
+      });
+      let grandchildPid = 0;
+
+      try {
+        const deadline = Date.now() + LOAD_SENSITIVE_PROCESS_TIMEOUT_MS;
+        while (Date.now() < deadline) {
+          try {
+            grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
+          } catch {}
+          let fastReady = false;
+          try {
+            fastReady = readFileSync(fastReadyPath, "utf8") === "ready";
+          } catch {}
+          if (fastReady && grandchildPid > 0 && processIsAlive(grandchildPid)) {
+            break;
+          }
+          await new Promise((resolve) => {
+            setTimeout(resolve, 10);
+          });
+        }
+        expect(readFileSync(fastReadyPath, "utf8")).toBe("ready");
+        expect(grandchildPid).toBeGreaterThan(0);
+        expect(processIsAlive(grandchildPid)).toBe(true);
+
+        runner.kill("SIGTERM");
+
+        await expect(waitForChildClose(runner)).resolves.toEqual({
+          code: null,
+          signal: "SIGTERM",
+        });
+        await waitForProcessExit(grandchildPid);
+      } finally {
+        if (runner.pid && processIsAlive(runner.pid)) {
+          runner.kill("SIGKILL");
+        }
+        if (grandchildPid > 0 && processIsAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+      }
     },
   );
 
@@ -174,6 +432,8 @@ describe("write-cli-startup-metadata", () => {
         gateway: "Usage: openclaw gateway\n",
         models: "Usage: openclaw models\n",
         plugins: "Usage: openclaw plugins\n",
+        sessions: "Usage: openclaw sessions\n",
+        tasks: "Usage: openclaw tasks\n",
       }),
     });
 
@@ -189,6 +449,8 @@ describe("write-cli-startup-metadata", () => {
         gateway: string;
         models: string;
         plugins: string;
+        sessions: string;
+        tasks: string;
       };
     };
     expect(written.channelOptions).toContain("matrix");
@@ -205,6 +467,8 @@ describe("write-cli-startup-metadata", () => {
     expect(written.subcommandHelpText.gateway).toContain("openclaw gateway");
     expect(written.subcommandHelpText.models).toContain("openclaw models");
     expect(written.subcommandHelpText.plugins).toContain("openclaw plugins");
+    expect(written.subcommandHelpText.sessions).toContain("openclaw sessions");
+    expect(written.subcommandHelpText.tasks).toContain("openclaw tasks");
   });
 
   it("renders independent startup help snapshots concurrently", async () => {
@@ -262,6 +526,8 @@ describe("write-cli-startup-metadata", () => {
           gateway: "Usage: openclaw gateway\n",
           models: "Usage: openclaw models\n",
           plugins: "Usage: openclaw plugins\n",
+          sessions: "Usage: openclaw sessions\n",
+          tasks: "Usage: openclaw tasks\n",
         };
       },
     });
@@ -310,6 +576,8 @@ describe("write-cli-startup-metadata", () => {
           gateway: "Usage: openclaw gateway\n",
           models: "Usage: openclaw models\n",
           plugins: "Usage: openclaw plugins\n",
+          sessions: "Usage: openclaw sessions\n",
+          tasks: "Usage: openclaw tasks\n",
         }),
       });
     };

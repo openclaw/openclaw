@@ -1,8 +1,17 @@
+/**
+ * Converts retry-limit exhaustion into failover errors or terminal replies.
+ */
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
 import type { RetryLimitFailoverDecision } from "./failover-policy.js";
 
+/**
+ * Converts retry-limit exhaustion into either a failover escalation or a local
+ * user-visible error payload. Replay-safe provider failures throw FailoverError
+ * so the outer run loop can switch models; non-escalating reasons preserve
+ * retry metadata on the returned run result.
+ */
 export function handleRetryLimitExhaustion(params: {
   message: string;
   decision: RetryLimitFailoverDecision;

@@ -1,3 +1,4 @@
+// Qa Lab tests cover model selection plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { resolveEnvApiKey, loadAuthProfileStoreForRuntime, listProfilesForProvider } = vi.hoisted(
@@ -36,7 +37,7 @@ describe("qa model selection runtime", () => {
     resolveEnvApiKey.mockReturnValue({ apiKey: "sk-test" });
 
     expect(resolveQaPreferredLiveModel()).toBeUndefined();
-    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.5");
+    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6");
     expect(loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
 
@@ -70,7 +71,7 @@ describe("qa model selection runtime", () => {
     });
 
     expect(resolveQaPreferredLiveModel()).toBeUndefined();
-    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.5");
+    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6");
   });
 
   it("leaves mock defaults unchanged", () => {

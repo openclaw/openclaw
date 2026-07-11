@@ -1,1 +1,2 @@
-export { qaRunnerCliRegistrations, registerMatrixQaCli } from "./src/cli.js";
+// Qa Matrix plugin module implements cli behavior.
+export { qaRunnerCliRegistrations } from "./src/cli.js";

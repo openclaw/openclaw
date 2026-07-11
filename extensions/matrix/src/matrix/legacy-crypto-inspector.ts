@@ -1,10 +1,11 @@
+// Matrix plugin module implements legacy crypto inspector behavior.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { ensureMatrixCryptoRuntime } from "./deps.js";
 
-export type MatrixLegacyCryptoInspectionResult = {
+type MatrixLegacyCryptoInspectionResult = {
   deviceId: string | null;
   roomKeyCounts: {
     total: number;

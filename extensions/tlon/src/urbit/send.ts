@@ -1,3 +1,4 @@
+// Tlon plugin module implements send behavior.
 import { scot, da } from "@urbit/aura";
 import {
   createMessageReceiptFromOutboundResults,
@@ -5,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { markdownToStory, createImageBlock, isImageUrl, type Story } from "./story.js";
 
-export type TlonPokeApi = {
+type TlonPokeApi = {
   poke: (params: { app: string; mark: string; json: unknown }) => Promise<unknown>;
 };
 

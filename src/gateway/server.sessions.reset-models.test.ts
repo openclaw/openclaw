@@ -1,3 +1,6 @@
+/**
+ * Gateway session reset model-selection tests.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
@@ -75,6 +78,7 @@ type ModelResetEntry = Pick<
   ResetSessionEntry,
   "providerOverride" | "modelOverride" | "modelOverrideSource" | "modelProvider" | "model"
 >;
+type ResolvedSessionModel = { modelProvider: string; model: string };
 type SessionEntryOverrides = NonNullable<Parameters<typeof sessionStoreEntry>[1]>;
 
 const ownedChildMetadata = {
@@ -139,17 +143,12 @@ function expectOwnedChildMetadata(entry: ResetSessionEntry | undefined, sessionF
   });
 }
 
-function expectModelResetFields(entry: ModelResetEntry | undefined, expected: ModelResetEntry) {
-  for (const key of Object.keys(expected) as Array<keyof ModelResetEntry>) {
-    expect(entry?.[key]).toBe(expected[key]);
-  }
-}
-
 async function expectMainResetModelFields(params: {
   defaultPrimary: string;
   sessionId: string;
   entry: SessionEntryOverrides & ModelResetEntry;
   expected: ModelResetEntry;
+  expectedResolved: ResolvedSessionModel;
 }) {
   const { storePath } = await createSessionStoreDir();
   testState.agentConfig = {
@@ -168,16 +167,29 @@ async function expectMainResetModelFields(params: {
     ok: true;
     key: string;
     entry: ModelResetEntry;
+    resolved: ResolvedSessionModel;
   }>("sessions.reset", { key: "main" });
 
   expect(reset.ok).toBe(true);
-  expectModelResetFields(reset.payload?.entry, params.expected);
+  expect(reset.payload?.resolved).toEqual(params.expectedResolved);
+  const selectionKeys: Array<
+    keyof Pick<ModelResetEntry, "providerOverride" | "modelOverride" | "modelOverrideSource">
+  > = ["providerOverride", "modelOverride", "modelOverrideSource"];
+  for (const key of selectionKeys) {
+    expect(reset.payload?.entry?.[key]).toBe(params.expected[key]);
+  }
+  expect(reset.payload?.entry.modelProvider).toBe(params.expectedResolved.modelProvider);
+  expect(reset.payload?.entry.model).toBe(params.expectedResolved.model);
 
   const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
     ModelResetEntry
   >;
-  expectModelResetFields(store["agent:main:main"], params.expected);
+  for (const key of selectionKeys) {
+    expect(store["agent:main:main"]?.[key]).toBe(params.expected[key]);
+  }
+  expect(store["agent:main:main"]?.modelProvider).toBeUndefined();
+  expect(store["agent:main:main"]?.model).toBeUndefined();
 }
 
 test("sessions.reset recomputes model from defaults instead of stale runtime model", async () => {
@@ -208,6 +220,7 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
       model?: string;
       contextTokens?: number;
     };
+    resolved: ResolvedSessionModel;
   }>("sessions.reset", { key: "main" });
 
   expect(reset.ok).toBe(true);
@@ -217,6 +230,10 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
   if (!sessionFile) {
     throw new Error("expected reset session file");
   }
+  expect(reset.payload?.resolved).toEqual({
+    modelProvider: "openai",
+    model: "gpt-test-a",
+  });
   expect(reset.payload?.entry.modelProvider).toBe("openai");
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
@@ -369,6 +386,56 @@ test("sessions.reset rotates generated topic transcript files with the new sessi
   expect(path.basename(persistedEntry?.sessionFile ?? "")).toBe(`${nextSessionId}-topic-456.jsonl`);
 });
 
+test("sessions.reset rotates an already-stale generated transcript file to the new session id", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  // Post-upgrade state: the stored sessionFile still embeds an OLDER generated id
+  // that no longer matches the entry's logical sessionId, so rotation must key off
+  // the file's embedded id rather than the current sessionId (issue #77770).
+  const staleFileSessionId = "11111111-1111-4111-8111-111111111111";
+  const currentSessionId = "22222222-2222-4222-8222-222222222222";
+  const staleSessionFile = path.join(dir, `${staleFileSessionId}.jsonl`);
+  await fs.writeFile(staleSessionFile, `${JSON.stringify({ role: "user", content: "old" })}\n`);
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(currentSessionId, {
+        sessionFile: staleSessionFile,
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: {
+      sessionId: string;
+      sessionFile?: string;
+    };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  const nextSessionId = reset.payload?.entry.sessionId;
+  const nextSessionFile = reset.payload?.entry.sessionFile;
+  if (!nextSessionId || !nextSessionFile) {
+    throw new Error("expected reset session id and file");
+  }
+  expect(nextSessionId).not.toBe(currentSessionId);
+  // The new session must adopt the new session id, not keep the stale generated name.
+  expect(path.basename(nextSessionFile)).toBe(`${nextSessionId}.jsonl`);
+  expect(path.basename(nextSessionFile)).not.toBe(`${staleFileSessionId}.jsonl`);
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      sessionId?: string;
+      sessionFile?: string;
+    }
+  >;
+  const persistedEntry = store["agent:main:main"];
+  expect(persistedEntry?.sessionId).toBe(nextSessionId);
+  expect(path.basename(persistedEntry?.sessionFile ?? "")).toBe(`${nextSessionId}.jsonl`);
+});
+
 test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {
   await expectMainResetModelFields({
     defaultPrimary: "openai/gpt-test-a",
@@ -383,9 +450,8 @@ test("sessions.reset preserves legacy explicit model overrides without modelOver
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-1",
       modelOverrideSource: "user",
-      modelProvider: "anthropic",
-      model: "claude-opus-4-1",
     },
+    expectedResolved: { modelProvider: "anthropic", model: "claude-opus-4-1" },
   });
 });
 
@@ -404,9 +470,8 @@ test("sessions.reset clears fallback-pinned model overrides and restores the sel
     expected: {
       providerOverride: undefined,
       modelOverride: undefined,
-      modelProvider: "openai",
-      model: "gpt-test-a",
     },
+    expectedResolved: { modelProvider: "openai", model: "gpt-test-a" },
   });
 });
 
@@ -425,9 +490,8 @@ test("sessions.reset follows the updated default after an auto fallback pinned a
     expected: {
       providerOverride: undefined,
       modelOverride: undefined,
-      modelProvider: "openai",
-      model: "gpt-test-c",
     },
+    expectedResolved: { modelProvider: "openai", model: "gpt-test-c" },
   });
 });
 

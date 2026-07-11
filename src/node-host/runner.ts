@@ -1,3 +1,4 @@
+/** CLI runner for node-host stdin/stdout command dispatch. */
 import fs from "node:fs";
 import {
   GATEWAY_CLIENT_MODES,
@@ -35,6 +36,8 @@ type NodeHostRunOptions = {
   gatewayPort: number;
   gatewayTls?: boolean;
   gatewayTlsFingerprint?: string;
+  /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
+  gatewayContextPath?: string;
   nodeId?: string;
   displayName?: string;
 };
@@ -245,13 +248,14 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     port: opts.gatewayPort,
     tls: opts.gatewayTls ?? getRuntimeConfig().gateway?.tls?.enabled ?? false,
     tlsFingerprint: opts.gatewayTlsFingerprint,
+    contextPath: opts.gatewayContextPath,
   };
   config.gateway = gateway;
   await saveNodeHostConfig(config);
 
   const cfg = getRuntimeConfig();
   await ensureNodeHostPluginRegistry({ config: cfg, env: process.env });
-  const pluginNodeHost = listRegisteredNodeHostCapsAndCommands();
+  const pluginNodeHost = listRegisteredNodeHostCapsAndCommands({ config: cfg, env: process.env });
   const { token, password } = await resolveNodeHostGatewayCredentials({
     config: cfg,
     env: process.env,
@@ -260,7 +264,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const host = gateway.host ?? "127.0.0.1";
   const port = gateway.port ?? 18789;
   const scheme = gateway.tls ? "wss" : "ws";
-  const url = `${scheme}://${host}:${port}`;
+  const contextPath = gateway.contextPath
+    ? gateway.contextPath.startsWith("/")
+      ? gateway.contextPath
+      : `/${gateway.contextPath}`
+    : "";
+  const url = `${scheme}://${host}:${port}${contextPath}`;
   const pathEnv = ensureNodePathEnv();
 
   const client = new GatewayClient({
@@ -300,6 +309,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     onConnectError: (err) => {
       // keep retrying (handled by GatewayClient)
       writeStderrLine(`node host gateway connect failed: ${err.message}`);
+    },
+    onHelloOk: () => {
+      writeStderrLine(`node host gateway connected: ${url}`);
     },
     onReconnectPaused: (info) => {
       handleNodeHostReconnectPaused(info);

@@ -1,7 +1,8 @@
+// OC Path module implements resolve value behavior.
 import { isPositionalSeg, parseArrayIndexSegment, resolvePositionalSeg } from "../oc-path.js";
 import type { JsoncEntry, JsoncValue } from "./ast.js";
 
-export type JsoncValueOcPathMatch =
+type JsoncValueOcPathMatch =
   | { readonly kind: "value"; readonly node: JsoncValue; readonly path: readonly string[] }
   | {
       readonly kind: "object-entry";

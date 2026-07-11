@@ -1,3 +1,4 @@
+// Typing indicator lifecycle controller for reply dispatchers.
 import {
   parseFiniteNumber,
   resolveTimerTimeoutMs,
@@ -24,6 +25,8 @@ export type CreateTypingCallbacksParams = {
   maxDurationMs?: number;
 };
 
+const DEFAULT_MAX_CONSECUTIVE_TYPING_FAILURES = 2;
+
 function resolvePositiveIntegerOption(value: number | undefined, fallback: number): number {
   const parsed = parseFiniteNumber(value);
   return parsed === undefined || parsed <= 0 ? fallback : Math.max(1, Math.floor(parsed));
@@ -40,8 +43,11 @@ function resolveDurationMsOption(value: number | undefined, fallback: number): n
 export function createTypingCallbacks(params: CreateTypingCallbacksParams): TypingCallbacks {
   const stop = params.stop;
   const keepaliveIntervalMs = resolveKeepaliveIntervalMs(params.keepaliveIntervalMs);
-  const maxConsecutiveFailures = resolvePositiveIntegerOption(params.maxConsecutiveFailures, 2);
-  const maxDurationMs = resolveDurationMsOption(params.maxDurationMs, 60_000); // Default 60s TTL
+  const maxConsecutiveFailures = resolvePositiveIntegerOption(
+    params.maxConsecutiveFailures,
+    DEFAULT_MAX_CONSECUTIVE_TYPING_FAILURES,
+  );
+  const maxDurationMs = resolveDurationMsOption(params.maxDurationMs, 60_000);
   let stopSent = false;
   let closed = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
@@ -64,7 +70,6 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     onTick: fireStart,
   });
 
-  // TTL safety: auto-stop typing after maxDurationMs
   const startTtlTimer = () => {
     if (maxDurationMs <= 0) {
       return;
@@ -108,7 +113,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   const fireStop = () => {
     closed = true;
     keepaliveLoop.stop();
-    clearTtlTimer(); // Clear TTL timer on normal stop
+    clearTtlTimer();
     if (!stop || stopSent) {
       return;
     }

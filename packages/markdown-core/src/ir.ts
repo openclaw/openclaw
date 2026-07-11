@@ -1,4 +1,7 @@
+// Markdown Core module implements ir behavior.
 import MarkdownIt from "markdown-it";
+import markdownItCjkFriendly from "markdown-it-cjk-friendly";
+import { visibleWidth } from "../../terminal-core/src/ansi.js";
 import { chunkText } from "./chunk-text.js";
 import type { MarkdownTableMode } from "./types.js";
 
@@ -13,12 +16,15 @@ type LinkState = {
   labelStart: number;
 };
 
+const OPEN_MARKDOWN_HTML_TAG_PATTERN = /<\/?[a-zA-Z][a-zA-Z0-9-]*\b[^<>]*$/;
+
 type RenderEnv = {
   listStack: ListState[];
 };
 
 type MarkdownToken = {
   type: string;
+  tag?: string;
   content?: string;
   info?: string;
   children?: MarkdownToken[];
@@ -35,7 +41,13 @@ export type MarkdownStyle =
   | "code"
   | "code_block"
   | "spoiler"
-  | "blockquote";
+  | "blockquote"
+  | "heading_1"
+  | "heading_2"
+  | "heading_3"
+  | "heading_4"
+  | "heading_5"
+  | "heading_6";
 
 export type MarkdownStyleSpan = {
   start: number;
@@ -68,13 +80,24 @@ function createStyleSpan(params: MarkdownStyleSpan): MarkdownStyleSpan {
   return span;
 }
 
+type MarkdownTableAlignment = "left" | "center" | "right";
+
 export type MarkdownTableData = {
   headers: string[];
   rows: string[][];
+  aligns?: (MarkdownTableAlignment | undefined)[];
+};
+
+export type MarkdownTableCell = {
+  text: string;
+  styles: MarkdownStyleSpan[];
+  links: MarkdownLinkSpan[];
 };
 
 export type MarkdownTableMeta = MarkdownTableData & {
   placeholderOffset: number;
+  headerCells: MarkdownTableCell[];
+  rowCells: MarkdownTableCell[][];
 };
 
 type OpenStyle = {
@@ -90,15 +113,12 @@ type RenderTarget = {
   linkStack: LinkState[];
 };
 
-type TableCell = {
-  text: string;
-  styles: MarkdownStyleSpan[];
-  links: MarkdownLinkSpan[];
-};
+type TableCell = MarkdownTableCell;
 
 type TableState = {
   headers: TableCell[];
   rows: TableCell[][];
+  aligns: (MarkdownTableAlignment | undefined)[];
   currentRow: TableCell[];
   currentCell: RenderTarget | null;
   inHeader: boolean;
@@ -106,7 +126,7 @@ type TableState = {
 
 type RenderState = RenderTarget & {
   env: RenderEnv;
-  headingStyle: "none" | "bold";
+  headingStyle: "none" | "bold" | "rich";
   blockquotePrefix: string;
   enableSpoilers: boolean;
   tableMode: MarkdownTableMode;
@@ -118,7 +138,7 @@ type RenderState = RenderTarget & {
 export type MarkdownParseOptions = {
   linkify?: boolean;
   enableSpoilers?: boolean;
-  headingStyle?: "none" | "bold";
+  headingStyle?: "none" | "bold" | "rich";
   blockquotePrefix?: string;
   autolink?: boolean;
   /** How to render tables (off|bullets|code|block). Default: off. */
@@ -132,6 +152,7 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
     breaks: false,
     typographer: false,
   });
+  md.use(markdownItCjkFriendly);
   md.enable("strikethrough");
   if (options.tableMode && options.tableMode !== "off") {
     md.enable("table");
@@ -156,6 +177,20 @@ function getAttr(token: MarkdownToken, name: string): string | null {
     }
   }
   return null;
+}
+
+function markdownTableAlignmentFromToken(token: MarkdownToken): MarkdownTableAlignment | undefined {
+  const value = getAttr(token, "style") ?? "";
+  if (/text-align\s*:\s*left/i.test(value)) {
+    return "left";
+  }
+  if (/text-align\s*:\s*center/i.test(value)) {
+    return "center";
+  }
+  if (/text-align\s*:\s*right/i.test(value)) {
+    return "right";
+  }
+  return undefined;
 }
 
 function createTextToken(base: MarkdownToken, content: string): MarkdownToken {
@@ -384,10 +419,41 @@ function handleLinkClose(state: RenderState) {
   target.links.push({ start, end, href });
 }
 
+function headingStyleFromToken(token: MarkdownToken): MarkdownStyle | null {
+  switch (token.tag) {
+    case "h1":
+      return "heading_1";
+    case "h2":
+      return "heading_2";
+    case "h3":
+      return "heading_3";
+    case "h4":
+      return "heading_4";
+    case "h5":
+      return "heading_5";
+    case "h6":
+      return "heading_6";
+    default:
+      return null;
+  }
+}
+
+function isInsideMarkdownHtmlTag(text: string): boolean {
+  const openTagStart = text.lastIndexOf("<");
+  if (openTagStart === -1) {
+    return false;
+  }
+  return (
+    text.lastIndexOf(">") < openTagStart &&
+    OPEN_MARKDOWN_HTML_TAG_PATTERN.test(text.slice(openTagStart))
+  );
+}
+
 function initTableState(): TableState {
   return {
     headers: [],
     rows: [],
+    aligns: [],
     currentRow: [],
     currentCell: null,
     inHeader: false,
@@ -471,11 +537,17 @@ function collectTableBlock(state: RenderState) {
   if (!state.table) {
     return;
   }
-  state.collectedTables.push({
-    headers: state.table.headers.map((cell) => trimCell(cell).text),
-    rows: state.table.rows.map((row) => row.map((cell) => trimCell(cell).text)),
+  const headerCells = state.table.headers.map(trimCell);
+  const rowCells = state.table.rows.map((row) => row.map(trimCell));
+  const table = {
+    headers: headerCells.map((cell) => cell.text),
+    rows: rowCells.map((row) => row.map((cell) => cell.text)),
+    headerCells,
+    rowCells,
     placeholderOffset: state.text.length,
-  });
+    ...(state.table.aligns.some(Boolean) ? { aligns: [...state.table.aligns] } : {}),
+  };
+  state.collectedTables.push(table);
 }
 
 function appendTableBulletValue(
@@ -579,7 +651,7 @@ function renderTableAsCode(state: RenderState) {
   const updateWidths = (cells: TableCell[]) => {
     for (let i = 0; i < columnCount; i += 1) {
       const cell = cells[i];
-      const width = cell?.text.length ?? 0;
+      const width = visibleWidth(cell?.text ?? "");
       if (widths[i] < width) {
         widths[i] = width;
       }
@@ -601,7 +673,7 @@ function renderTableAsCode(state: RenderState) {
         // Use text-only append to avoid overlapping styles with code_block
         appendCellTextOnly(state, cell);
       }
-      const pad = widths[i] - (cell?.text.length ?? 0);
+      const pad = widths[i] - visibleWidth(cell?.text ?? "");
       if (pad > 0) {
         state.text += " ".repeat(pad);
       }
@@ -677,8 +749,8 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         }
         break;
       case "link_open": {
-        const href = getAttr(token, "href") ?? "";
         const target = resolveRenderTarget(state);
+        const href = isInsideMarkdownHtmlTag(target.text) ? "" : (getAttr(token, "href") ?? "");
         target.linkStack.push({ href, labelStart: target.text.length });
         break;
       }
@@ -698,11 +770,21 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "heading_open":
         if (state.headingStyle === "bold") {
           openStyle(state, "bold");
+        } else if (state.headingStyle === "rich") {
+          const style = headingStyleFromToken(token);
+          if (style) {
+            openStyle(state, style);
+          }
         }
         break;
       case "heading_close":
         if (state.headingStyle === "bold") {
           closeStyle(state, "bold");
+        } else if (state.headingStyle === "rich") {
+          const style = headingStyleFromToken(token);
+          if (style) {
+            closeStyle(state, style);
+          }
         }
         appendParagraphSeparator(state);
         break;
@@ -816,6 +898,10 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "td_open":
         if (state.table) {
           state.table.currentCell = initRenderTarget();
+          if (token.type === "th_open" && state.table.inHeader) {
+            state.table.aligns[state.table.currentRow.length] =
+              markdownTableAlignmentFromToken(token);
+          }
         }
         break;
       case "th_close":

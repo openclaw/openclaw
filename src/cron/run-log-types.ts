@@ -1,3 +1,4 @@
+/** Shared cron run-log entry shape for SQLite and legacy JSONL stores. */
 import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import type {
   CronDeliveryStatus,
@@ -29,4 +30,5 @@ export type CronRunLogEntry = {
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;
+  triggerFired?: boolean;
 } & CronRunTelemetry;

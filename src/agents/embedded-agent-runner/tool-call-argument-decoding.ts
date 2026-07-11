@@ -1,14 +1,28 @@
+/**
+ * Decodes HTML-entity escaped tool-call arguments in stream wrappers.
+ */
 import { streamSimple } from "../../llm/stream.js";
 import { visitObjectContentBlocks } from "../../shared/message-content-blocks.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../stream-compat.js";
 
+/**
+ * Decodes HTML entities inside streamed tool-call arguments before downstream execution.
+ *
+ * Some providers HTML-escape JSON-ish argument strings in tool-call content blocks; this wrapper
+ * repairs only arguments, preserving user-facing assistant text exactly as emitted.
+ */
 const HTML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39|#x[0-9a-f]+|#\d+);/i;
 
 function decodeHtmlEntities(value: string): string {
   const decodeNumericEntity = (raw: string, radix: 10 | 16): string => {
     const codePoint = Number.parseInt(raw, radix);
-    return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+    const isValidCodePoint =
+      Number.isInteger(codePoint) &&
+      codePoint >= 0 &&
+      codePoint <= 0x10ffff &&
+      (codePoint < 0xd800 || codePoint > 0xdfff);
+    return isValidCodePoint
       ? String.fromCodePoint(codePoint)
       : `&#${radix === 16 ? "x" : ""}${raw};`;
   };
@@ -24,6 +38,7 @@ function decodeHtmlEntities(value: string): string {
     .replace(/&#(\d+);/gi, (_, dec: string) => decodeNumericEntity(dec, 10));
 }
 
+/** Recursively decodes common HTML entities in string leaves of an object graph. */
 export function decodeHtmlEntitiesInObject(value: unknown): unknown {
   if (typeof value === "string") {
     return HTML_ENTITY_RE.test(value) ? decodeHtmlEntities(value) : value;
@@ -41,15 +56,24 @@ export function decodeHtmlEntitiesInObject(value: unknown): unknown {
   return value;
 }
 
+const decodedToolCallArguments = new WeakSet<object>();
+
 function decodeToolCallArgumentsHtmlEntitiesInMessage(message: unknown): void {
   visitObjectContentBlocks(message, (block) => {
     const typedBlock = block as { type?: unknown; arguments?: unknown };
-    if (typedBlock.type !== "toolCall" || !typedBlock.arguments) {
+    if (
+      typedBlock.type !== "toolCall" ||
+      typeof typedBlock.arguments !== "object" ||
+      !typedBlock.arguments
+    ) {
       return;
     }
-    if (typeof typedBlock.arguments === "object") {
-      typedBlock.arguments = decodeHtmlEntitiesInObject(typedBlock.arguments);
+    if (decodedToolCallArguments.has(typedBlock.arguments)) {
+      return;
     }
+    const decoded = decodeHtmlEntitiesInObject(typedBlock.arguments) as object;
+    decodedToolCallArguments.add(decoded);
+    typedBlock.arguments = decoded;
   });
 }
 
@@ -65,6 +89,8 @@ function wrapStreamMessageObjects(
   };
 
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  // Patch both final result and streamed partial/message events. Tool execution can consume either
+  // path depending on provider wrapper shape, so one-sided decoding would leave escaped args live.
   (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
     function () {
       const iterator = originalAsyncIterator();
@@ -89,6 +115,7 @@ function wrapStreamMessageObjects(
   return stream;
 }
 
+/** Wraps a stream function so tool-call arguments are decoded before consumers inspect them. */
 export function createHtmlEntityToolCallArgumentDecodingWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {

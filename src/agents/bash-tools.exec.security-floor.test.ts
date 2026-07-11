@@ -1,9 +1,14 @@
+/**
+ * Exec security floor tests.
+ * Verifies tool config and exec-approvals policy combine by tightening
+ * security/ask rather than silently broadening execution.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { createExecTool } from "./bash-tools.exec.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -12,6 +17,41 @@ vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
   readGatewayCallOptions: vi.fn(() => ({})),
 }));
+
+function installAllowlistedGogFixture(root: string): string {
+  const binDir = path.join(root, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const gogPath = path.join(binDir, "gog");
+  fs.writeFileSync(gogPath, "#!/bin/sh\nprintf 'gog-ok %s\\n' \"$*\"\n", { mode: 0o755 });
+  writeExecApprovalsFixture(root, {
+    version: 1,
+    defaults: { security: "allowlist", ask: "off", askFallback: "allowlist" },
+    agents: { "*": { allowlist: [{ pattern: gogPath }] } },
+  });
+  return binDir;
+}
+
+function writeExecApprovalsFixture(root: string, file: Record<string, unknown>): void {
+  const stateDir = process.env.OPENCLAW_STATE_DIR ?? path.join(root, "state");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, "exec-approvals.json"), `${JSON.stringify(file)}\n`);
+}
+
+function writeDenyExecApprovalsFixture(root: string): void {
+  writeExecApprovalsFixture(root, {
+    version: 1,
+    defaults: { security: "deny", ask: "off" },
+    agents: {},
+  });
+}
+
+function writeFullAskExecApprovalsFixture(root: string): void {
+  writeExecApprovalsFixture(root, {
+    version: 1,
+    defaults: { security: "full", ask: "always" },
+    agents: {},
+  });
+}
 
 describe("exec security floor", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -28,17 +68,17 @@ describe("exec security floor", () => {
       "SHELL",
     ]);
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-security-floor-"));
-    process.env.HOME = tempRoot;
-    process.env.USERPROFILE = tempRoot;
-    process.env.OPENCLAW_HOME = tempRoot;
-    process.env.OPENCLAW_STATE_DIR = path.join(tempRoot, "state");
+    setTestEnvValue("HOME", tempRoot);
+    setTestEnvValue("USERPROFILE", tempRoot);
+    setTestEnvValue("OPENCLAW_HOME", tempRoot);
+    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempRoot, "state"));
     if (process.platform === "win32") {
       const parsed = path.parse(tempRoot);
-      process.env.HOMEDRIVE = parsed.root.slice(0, 2);
-      process.env.HOMEPATH = tempRoot.slice(2) || "\\";
+      setTestEnvValue("HOMEDRIVE", parsed.root.slice(0, 2));
+      setTestEnvValue("HOMEPATH", tempRoot.slice(2) || "\\");
     } else {
-      delete process.env.HOMEDRIVE;
-      delete process.env.HOMEPATH;
+      deleteTestEnvValue("HOMEDRIVE");
+      deleteTestEnvValue("HOMEPATH");
     }
     resetProcessRegistryForTests();
     vi.mocked(callGatewayTool).mockReset();
@@ -88,6 +128,52 @@ describe("exec security floor", () => {
     ).rejects.toThrow(/exec denied: allowlist miss/i);
   });
 
+  it("ignores model-supplied ask overrides when configured ask is off", async () => {
+    const root = tempRoot ?? os.tmpdir();
+    const binDir = installAllowlistedGogFixture(root);
+    const tool = createExecTool({
+      host: "gateway",
+      security: "allowlist",
+      ask: "off",
+      safeBins: [],
+      pathPrepend: [binDir],
+      messageProvider: "telegram",
+      currentChannelId: "telegram:12345",
+      accountId: "default",
+    });
+
+    const result = await tool.execute("call-model-ask-ignored", {
+      command: "gog tasks add tasklist --title test",
+      ask: "always",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect((result.content[0] as { text?: string }).text ?? "").toContain(
+      "gog-ok tasks add tasklist --title test",
+    );
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("honors per-call ask hardening for trusted callers without messageProvider", async () => {
+    const root = tempRoot ?? os.tmpdir();
+    const binDir = installAllowlistedGogFixture(root);
+    const tool = createExecTool({
+      host: "gateway",
+      security: "allowlist",
+      ask: "off",
+      safeBins: [],
+      pathPrepend: [binDir],
+    });
+
+    const result = await tool.execute("call-trusted-ask-always", {
+      command: "gog tasks add tasklist --title test",
+      ask: "always",
+    });
+
+    expect(callGatewayTool).toHaveBeenCalled();
+    expect(result.details.status).toBe("approval-pending");
+  });
+
   it("ignores model-supplied deny security when configured security is allowlist", async () => {
     const tool = createExecTool({
       security: "allowlist",
@@ -120,12 +206,7 @@ describe("exec security floor", () => {
   });
 
   it("does not let host approval defaults deny implicit sandbox execution", async () => {
-    const openclawDir = path.join(tempRoot ?? os.tmpdir(), ".openclaw");
-    fs.mkdirSync(openclawDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(openclawDir, "exec-approvals.json"),
-      `${JSON.stringify({ version: 1, defaults: { security: "deny", ask: "off" }, agents: {} })}\n`,
-    );
+    writeDenyExecApprovalsFixture(tempRoot ?? os.tmpdir());
     const buildExecSpec = vi.fn(async () => ({
       argv: ["/bin/sh", "-lc", "printf sandbox-ok"],
       env: process.env,
@@ -204,12 +285,7 @@ describe("exec security floor", () => {
   });
 
   it("intersects normalized gateway auto mode with host approval deny defaults", async () => {
-    const openclawDir = path.join(tempRoot ?? os.tmpdir(), ".openclaw");
-    fs.mkdirSync(openclawDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(openclawDir, "exec-approvals.json"),
-      `${JSON.stringify({ version: 1, defaults: { security: "deny", ask: "off" }, agents: {} })}\n`,
-    );
+    writeDenyExecApprovalsFixture(tempRoot ?? os.tmpdir());
     const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
       decision: "allow-once",
       risk: "low",
@@ -231,16 +307,11 @@ describe("exec security floor", () => {
   });
 
   it("uses agent-scoped host policy when clamping normalized modes", async () => {
-    const openclawDir = path.join(tempRoot ?? os.tmpdir(), ".openclaw");
-    fs.mkdirSync(openclawDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(openclawDir, "exec-approvals.json"),
-      `${JSON.stringify({
-        version: 1,
-        defaults: { security: "deny", ask: "off" },
-        agents: { main: { security: "full", ask: "off" } },
-      })}\n`,
-    );
+    writeExecApprovalsFixture(tempRoot ?? os.tmpdir(), {
+      version: 1,
+      defaults: { security: "deny", ask: "off" },
+      agents: { main: { security: "full", ask: "off" } },
+    });
     const tool = createExecTool({
       host: "gateway",
       mode: "full",
@@ -257,12 +328,7 @@ describe("exec security floor", () => {
   });
 
   it("preserves host ask floors for elevated full gateway exec", async () => {
-    const openclawDir = path.join(tempRoot ?? os.tmpdir(), ".openclaw");
-    fs.mkdirSync(openclawDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(openclawDir, "exec-approvals.json"),
-      `${JSON.stringify({ version: 1, defaults: { security: "full", ask: "always" }, agents: {} })}\n`,
-    );
+    writeFullAskExecApprovalsFixture(tempRoot ?? os.tmpdir());
     const calls: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method) => {
       calls.push(method);

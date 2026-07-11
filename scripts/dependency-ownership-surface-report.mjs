@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Reports dependency ownership, closure, and risk surface from lockfile data.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -36,6 +37,9 @@ function normalizeDependencies(record = {}) {
   return entries.toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
+/**
+ * Extracts the package name from a pnpm lockfile package key.
+ */
 export function packageNameFromLockKey(lockKey) {
   const peerSuffixIndex = lockKey.indexOf("(");
   const baseKey = peerSuffixIndex >= 0 ? lockKey.slice(0, peerSuffixIndex) : lockKey;
@@ -143,6 +147,9 @@ function collectReportTarget({ repoRoot, packageJson, ownershipPath }) {
   };
 }
 
+/**
+ * Collects dependency ownership and transitive surface metadata.
+ */
 export function collectDependencyOwnershipSurfaceReport(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const packageJson = readJson(path.join(repoRoot, "package.json"));
@@ -262,6 +269,9 @@ export function collectDependencyOwnershipSurfaceReport(params = {}) {
   };
 }
 
+/**
+ * Collects policy errors from a dependency ownership surface report.
+ */
 export function collectDependencyOwnershipSurfaceCheckErrors(report) {
   return report.ownershipGaps.map(
     (name) => `root dependency '${name}' is missing from ${DEFAULT_OWNERSHIP_PATH}`,
@@ -289,6 +299,9 @@ function pluralize(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+/**
+ * Renders a dependency ownership surface report as Markdown.
+ */
 export function renderDependencyOwnershipSurfaceMarkdownReport(report) {
   const lines = [
     "# Dependency Ownership and Install Surface Report",
@@ -384,12 +397,28 @@ function printTextReport(report) {
   process.stdout.write(renderTextReport(report));
 }
 
-function parseArgs(argv) {
+function readArtifactPath(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("-")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const options = {
     asJson: false,
     check: false,
     jsonPath: null,
     markdownPath: null,
+  };
+  const seen = new Set();
+  const setOnce = (flag, key, value) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once.`);
+    }
+    seen.add(flag);
+    options[key] = value;
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -401,14 +430,19 @@ function parseArgs(argv) {
       continue;
     }
     if (arg === "--json") {
+      if (seen.has(arg)) {
+        throw new Error(`${arg} was provided more than once.`);
+      }
+      seen.add(arg);
       options.asJson = true;
-      if (argv[index + 1] && !argv[index + 1].startsWith("--")) {
+      if (argv[index + 1] && !argv[index + 1].startsWith("-")) {
         options.jsonPath = argv[++index];
       }
       continue;
     }
     if (arg === "--markdown") {
-      options.markdownPath = argv[++index];
+      setOnce(arg, "markdownPath", readArtifactPath(argv, index, arg));
+      index += 1;
       continue;
     }
     throw new Error(`Unsupported argument: ${arg}`);

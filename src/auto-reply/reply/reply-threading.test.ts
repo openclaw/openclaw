@@ -1,9 +1,11 @@
+// Tests reply-to threading mode resolution across global and plugin config.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   resolveConfiguredReplyToMode,
+  resolveReplyDeliveryAccountId,
   resolveReplyToMode,
   resolveReplyToModeWithThreading,
 } from "./reply-threading.js";
@@ -133,6 +135,35 @@ describe("resolveReplyToMode", () => {
 
     expect(resolveReplyToMode({} as OpenClawConfig, "whatsapp", "work", "group")).toBe("first");
     expect(resolveReplyToMode({} as OpenClawConfig, "whatsapp", "default", "group")).toBe("all");
+  });
+
+  it("resolves the same listed default account used by routed delivery", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: {
+            id: "whatsapp",
+            meta: {
+              id: "whatsapp",
+              label: "WhatsApp",
+              selectionLabel: "WhatsApp",
+              docsPath: "/channels/whatsapp",
+              blurb: "test stub.",
+            },
+            capabilities: { chatTypes: ["direct", "group"] },
+            config: {
+              listAccountIds: () => ["work"],
+              resolveAccount: () => ({}),
+            },
+          },
+        },
+      ]),
+    );
+
+    expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp")).toBe("work");
+    expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp", "personal")).toBe("personal");
   });
 });
 

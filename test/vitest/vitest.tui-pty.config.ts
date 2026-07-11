@@ -1,3 +1,4 @@
+// Vitest tui pty config wires the tui pty test shard.
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
 import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
@@ -13,7 +14,7 @@ function toTuiPtyIncludePatterns(patterns: string[] | null) {
   return patterns?.map((pattern) => pattern.replace(/^src\//u, "")) ?? null;
 }
 
-export function createTuiPtyVitestConfig(env?: Record<string, string | undefined>) {
+function createTuiPtyVitestConfig(env?: Record<string, string | undefined>) {
   const baseTest = sharedVitestConfig.test ?? {};
   const exclude = (baseTest.exclude ?? []).filter((pattern) => pattern !== "**/*.e2e.test.ts");
   const configEnv = env ?? process.env;

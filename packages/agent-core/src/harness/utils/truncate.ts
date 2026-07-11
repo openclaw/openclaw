@@ -1,3 +1,4 @@
+// Agent Core module implements truncate behavior.
 export const DEFAULT_MAX_LINES = 2000;
 export const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
 export const GREP_MAX_LINE_LENGTH = 500; // Max chars per grep match line
@@ -358,6 +359,10 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 
 /**
  * Trim a single display line and mark it with the grep-style truncation suffix.
+ *
+ * The cut point is backed off by one code unit when it would otherwise split a
+ * surrogate pair, so emoji / CJK Extension B characters crossing the boundary
+ * stay intact instead of rendering as replacement characters.
  */
 export function truncateLine(
   line: string,
@@ -366,5 +371,16 @@ export function truncateLine(
   if (line.length <= maxChars) {
     return { text: line, wasTruncated: false };
   }
-  return { text: `${line.slice(0, maxChars)}... [truncated]`, wasTruncated: true };
+  let cut = maxChars;
+  // Avoid splitting a surrogate pair at the truncation boundary.
+  if (cut < line.length) {
+    const lastCode = line.charCodeAt(cut - 1);
+    if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
+      const nextCode = line.charCodeAt(cut);
+      if (nextCode >= 0xdc00 && nextCode <= 0xdfff) {
+        cut -= 1;
+      }
+    }
+  }
+  return { text: `${line.slice(0, cut)}... [truncated]`, wasTruncated: true };
 }

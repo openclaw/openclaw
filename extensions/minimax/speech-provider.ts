@@ -1,3 +1,4 @@
+// Minimax provider module implements model/runtime integration.
 import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import {
   isProviderAuthProfileConfigured,
@@ -199,7 +200,8 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
         ctx,
         overrideKey: "vol",
         range: { min: 0, minExclusive: true, max: 10 },
-        warning: (value) => `invalid MiniMax volume "${value}" (0-10, exclusive)`,
+        warning: (value) =>
+          `invalid MiniMax volume "${value}" (must be greater than 0 and at most 10)`,
       });
     }
     case "pitch": {

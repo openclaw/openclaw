@@ -1,3 +1,4 @@
+// Doctor repair flow tests cover repair plan output and repair execution.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";
@@ -291,7 +292,7 @@ describe("runDoctorHealthRepairs", () => {
           return {
             status: "skipped",
             reason: "manual confirmation required",
-            changes: [],
+            changes: ["Review required before changing gateway.mode."],
           };
         },
       }),
@@ -303,6 +304,7 @@ describe("runDoctorHealthRepairs", () => {
     expect(result.checksRepaired).toBe(0);
     expect(result.checksValidated).toBe(0);
     expect(result.remainingFindings).toEqual([]);
+    expect(result.changes).toEqual(["Review required before changing gateway.mode."]);
     expect(result.warnings).toEqual(["test/skipped repair skipped: manual confirmation required"]);
   });
 

@@ -1,3 +1,5 @@
+// OpenAI-compatible audio tests cover attribution headers, auth selection,
+// filename normalization, and stable malformed-response errors.
 import { describe, expect, it, vi } from "vitest";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import { VERSION } from "../version.js";
@@ -71,6 +73,29 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     const file = (form as FormData).get("file");
     expect(file).toBeInstanceOf(File);
     expect((file as File).name).toBe("voice-note.m4a");
+  });
+
+  it("omits the optional prompt field while preserving language hints", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+
+    await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "note.ogg",
+      mime: "audio/ogg",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+      provider: "groq",
+      baseUrl: "https://api.groq.com/openai/v1",
+      defaultBaseUrl: "https://api.groq.com/openai/v1",
+      defaultModel: "whisper-large-v3-turbo",
+      language: "ru",
+    });
+
+    const form = getRequest().init?.body;
+    expect(form).toBeInstanceOf(FormData);
+    expect((form as FormData).get("language")).toBe("ru");
+    expect((form as FormData).get("prompt")).toBeNull();
   });
 
   it("omits bearer auth for explicit no-auth requests", async () => {

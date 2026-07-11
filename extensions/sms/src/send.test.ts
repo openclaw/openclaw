@@ -1,3 +1,4 @@
+// Sms tests cover send plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSmsAccount } from "./types.js";
 
@@ -55,5 +56,16 @@ describe("sendSmsTextChunks", () => {
     expect(
       toSmsPlainText("**Hi** [docs](https://example.com)\n\n```bash\napprove 123\n```\nthere"),
     ).toBe("Hi docs (https://example.com)\n\napprove 123\nthere");
+  });
+
+  it("strips internal tool-trace banners before sending SMS chunks", async () => {
+    await sendSmsTextChunks({
+      account: createAccount(1500),
+      to: "+15551234567",
+      text: "**Done.**\n⚠️ 🛠️ `search repos (agent)` failed",
+    });
+
+    expect(sendSmsViaTwilio).toHaveBeenCalledOnce();
+    expect(sendSmsViaTwilio.mock.calls[0]?.[0].text).toBe("Done.");
   });
 });

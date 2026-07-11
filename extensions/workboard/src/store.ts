@@ -1,9 +1,11 @@
+// Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
 import {
   isFutureDateTimestampMs,
   MAX_DATE_TIMESTAMP_MS,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -101,7 +103,7 @@ function addWorkboardDurationMs(now: number, durationMs: number): number {
   return resolveExpiresAtMsFromDurationMs(durationMs, { nowMs: now }) ?? MAX_DATE_TIMESTAMP_MS;
 }
 
-export type WorkboardCardInput = {
+type WorkboardCardInput = {
   title?: unknown;
   notes?: unknown;
   status?: unknown;
@@ -130,63 +132,63 @@ export type WorkboardCardInput = {
   parents?: unknown;
 };
 
-export type WorkboardCardPatch = Partial<WorkboardCardInput>;
-export type WorkboardCommentInput = { body?: unknown };
-export type WorkboardLinkInput = {
+type WorkboardCardPatch = Partial<WorkboardCardInput>;
+type WorkboardCommentInput = { body?: unknown };
+type WorkboardLinkInput = {
   type?: unknown;
   targetCardId?: unknown;
   title?: unknown;
   url?: unknown;
 };
-export type WorkboardLinkedCreateInput = WorkboardCardInput & {
+type WorkboardLinkedCreateInput = WorkboardCardInput & {
   parents?: unknown;
 };
-export type WorkboardProofInput = {
+type WorkboardProofInput = {
   status?: unknown;
   label?: unknown;
   command?: unknown;
   url?: unknown;
   note?: unknown;
 };
-export type WorkboardArtifactInput = {
+type WorkboardArtifactInput = {
   label?: unknown;
   url?: unknown;
   path?: unknown;
   mimeType?: unknown;
 };
-export type WorkboardAttachmentInput = {
+type WorkboardAttachmentInput = {
   fileName?: unknown;
   contentBase64?: unknown;
   mimeType?: unknown;
   note?: unknown;
 };
-export type WorkboardWorkerLogInput = {
+type WorkboardWorkerLogInput = {
   level?: unknown;
   message?: unknown;
   sessionKey?: unknown;
   runId?: unknown;
 };
-export type WorkboardProtocolViolationInput = {
+type WorkboardProtocolViolationInput = {
   detail?: unknown;
   sessionKey?: unknown;
   runId?: unknown;
 };
-export type WorkboardClaimInput = {
+type WorkboardClaimInput = {
   ownerId?: unknown;
   token?: unknown;
   ttlSeconds?: unknown;
 };
-export type WorkboardHeartbeatInput = {
+type WorkboardHeartbeatInput = {
   token?: unknown;
   ownerId?: unknown;
   note?: unknown;
 };
-export type WorkboardBulkInput = {
+type WorkboardBulkInput = {
   ids?: unknown;
   patch?: unknown;
   archived?: unknown;
 };
-export type WorkboardCompleteInput = {
+type WorkboardCompleteInput = {
   ownerId?: unknown;
   token?: unknown;
   summary?: unknown;
@@ -194,7 +196,7 @@ export type WorkboardCompleteInput = {
   artifacts?: unknown;
   createdCardIds?: unknown;
 };
-export type WorkboardBlockInput = {
+type WorkboardBlockInput = {
   ownerId?: unknown;
   token?: unknown;
   reason?: unknown;
@@ -206,10 +208,13 @@ export type WorkboardDispatchResult = {
   orchestrated: WorkboardCard[];
   count: number;
 };
-export type WorkboardListOptions = {
+type WorkboardListOptions = {
   boardId?: unknown;
 };
-export type WorkboardBoardSummary = {
+type WorkboardDispatchOptions = WorkboardListOptions & {
+  now?: unknown;
+};
+type WorkboardBoardSummary = {
   id: string;
   name?: string;
   description?: string;
@@ -224,25 +229,25 @@ export type WorkboardBoardSummary = {
   updatedAt?: number;
   archivedAt?: number;
 };
-export type WorkboardStatsResult = WorkboardBoardSummary & {
+type WorkboardStatsResult = WorkboardBoardSummary & {
   byAgent: Record<string, number>;
   oldestReadyAgeMs?: number;
 };
-export type WorkboardPromoteInput = {
+type WorkboardPromoteInput = {
   force?: unknown;
   reason?: unknown;
 };
-export type WorkboardReassignInput = {
+type WorkboardReassignInput = {
   agentId?: unknown;
   status?: unknown;
   resetFailures?: unknown;
   reason?: unknown;
 };
-export type WorkboardReclaimInput = {
+type WorkboardReclaimInput = {
   status?: unknown;
   reason?: unknown;
 };
-export type WorkboardBoardInput = {
+type WorkboardBoardInput = {
   id?: unknown;
   name?: unknown;
   description?: unknown;
@@ -252,18 +257,18 @@ export type WorkboardBoardInput = {
   orchestration?: unknown;
   archived?: unknown;
 };
-export type WorkboardSpecifyInput = WorkboardCardPatch & {
+type WorkboardSpecifyInput = WorkboardCardPatch & {
   summary?: unknown;
 };
-export type WorkboardDecomposeChildInput = WorkboardLinkedCreateInput & {
+type WorkboardDecomposeChildInput = WorkboardLinkedCreateInput & {
   idempotencyKey?: unknown;
 };
-export type WorkboardDecomposeInput = {
+type WorkboardDecomposeInput = {
   summary?: unknown;
   children?: unknown;
   completeParent?: unknown;
 };
-export type WorkboardNotificationSubscribeInput = {
+type WorkboardNotificationSubscribeInput = {
   boardId?: unknown;
   cardId?: unknown;
   sessionKey?: unknown;
@@ -271,20 +276,20 @@ export type WorkboardNotificationSubscribeInput = {
   target?: unknown;
   eventKinds?: unknown;
 };
-export type WorkboardNotificationListOptions = {
+type WorkboardNotificationListOptions = {
   boardId?: unknown;
   cardId?: unknown;
 };
-export type WorkboardNotificationEventsInput = WorkboardNotificationListOptions & {
+type WorkboardNotificationEventsInput = WorkboardNotificationListOptions & {
   subscriptionId?: unknown;
   limit?: unknown;
 };
-export type WorkboardMutationScope = {
+type WorkboardMutationScope = {
   ownerId?: unknown;
   token?: unknown;
 };
 
-export type WorkboardDiagnosticsResult = {
+type WorkboardDiagnosticsResult = {
   diagnostics: Array<{
     card: WorkboardCard;
     diagnostics: WorkboardDiagnostic[];
@@ -430,6 +435,21 @@ function normalizeNotificationSubscription(
     throw new Error("notification subscription needs cardId, sessionKey, runId, or target.");
   }
   const eventKinds = normalizeNotificationKinds(input.eventKinds);
+  const preservedFields: Partial<WorkboardNotificationSubscription> = {};
+  if (fallback) {
+    if (fallback.lastEventAt) {
+      preservedFields.lastEventAt = fallback.lastEventAt;
+    }
+    if (fallback.lastEventId) {
+      preservedFields.lastEventId = fallback.lastEventId;
+    }
+    if (fallback.lastEventSequence) {
+      preservedFields.lastEventSequence = fallback.lastEventSequence;
+    }
+    if (fallback.deliveredEventIds?.length) {
+      preservedFields.deliveredEventIds = fallback.deliveredEventIds;
+    }
+  }
   return {
     id: fallback?.id ?? randomUUID(),
     boardId,
@@ -438,12 +458,7 @@ function normalizeNotificationSubscription(
     ...(runId ? { runId } : {}),
     ...(target ? { target } : {}),
     ...(eventKinds ? { eventKinds } : {}),
-    ...(fallback?.lastEventAt ? { lastEventAt: fallback.lastEventAt } : {}),
-    ...(fallback?.lastEventId ? { lastEventId: fallback.lastEventId } : {}),
-    ...(fallback?.lastEventSequence ? { lastEventSequence: fallback.lastEventSequence } : {}),
-    ...(fallback?.deliveredEventIds?.length
-      ? { deliveredEventIds: fallback.deliveredEventIds }
-      : {}),
+    ...preservedFields,
     createdAt: fallback?.createdAt ?? now,
     updatedAt: now,
   };
@@ -601,10 +616,27 @@ function normalizeWorkspace(
     throw new Error("dir workspace path must be absolute.");
   }
   const branch = normalizeBoundedString(record.branch, fallback?.branch, 160, "workspace branch");
+  const sourcePath = normalizeBoundedString(
+    record.sourcePath,
+    fallback?.sourcePath,
+    2000,
+    "workspace source path",
+  );
+  if (sourcePath && !isAbsoluteWorkspacePath(sourcePath)) {
+    throw new Error("workspace source path must be absolute.");
+  }
+  const sourceBranch = normalizeBoundedString(
+    record.sourceBranch,
+    fallback?.sourceBranch,
+    160,
+    "workspace source branch",
+  );
   return {
     kind,
     ...(workspacePath ? { path: workspacePath } : {}),
     ...(branch ? { branch } : {}),
+    ...(kind === "worktree" && sourcePath ? { sourcePath } : {}),
+    ...(kind === "worktree" && sourceBranch ? { sourceBranch } : {}),
   };
 }
 
@@ -1215,6 +1247,7 @@ function normalizeMetadata(
       : null;
   const hasArchivedAt = Object.hasOwn(record, "archivedAt");
   const hasStale = Object.hasOwn(record, "stale");
+  const hasLifecycleStatusSourceUpdatedAt = Object.hasOwn(record, "lifecycleStatusSourceUpdatedAt");
   const links = Array.isArray(record.links)
     ? record.links.map(normalizeLink).filter((link): link is WorkboardLink => link !== null)
     : undefined;
@@ -1311,6 +1344,9 @@ function normalizeMetadata(
           }
         : undefined
       : fallback.stale,
+    lifecycleStatusSourceUpdatedAt: hasLifecycleStatusSourceUpdatedAt
+      ? normalizeTimestamp(record.lifecycleStatusSourceUpdatedAt, 0)
+      : fallback.lifecycleStatusSourceUpdatedAt,
     failureCount:
       typeof record.failureCount === "number" && Number.isFinite(record.failureCount)
         ? Math.max(0, Math.trunc(record.failureCount))
@@ -1419,6 +1455,7 @@ function removeUndefinedMetadataFields(metadata: WorkboardMetadata): WorkboardMe
     "templateId",
     "archivedAt",
     "stale",
+    "lifecycleStatusSourceUpdatedAt",
     "failureCount",
   ] as const) {
     const value = next[key];
@@ -1637,6 +1674,49 @@ function latestMetadataIdChanged(
 ): boolean {
   const latestId = next?.at(-1)?.id;
   return Boolean(latestId && latestId !== existing?.at(-1)?.id);
+}
+
+function lifecycleStatusSourceUpdatedAtFromPatch(metadata: unknown): number | undefined {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined;
+  }
+  if (!Object.hasOwn(metadata, "lifecycleStatusSourceUpdatedAt")) {
+    return undefined;
+  }
+  const sourceUpdatedAt = normalizeTimestamp(
+    (metadata as Record<string, unknown>).lifecycleStatusSourceUpdatedAt,
+    0,
+  );
+  return sourceUpdatedAt;
+}
+
+function latestStatusTransitionAt(card: WorkboardCard): number | undefined {
+  for (let index = (card.events?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const event = card.events?.[index];
+    if (
+      (event?.kind === "moved" || event?.kind === "created") &&
+      ((event.kind === "created" && card.status !== "todo") ||
+        (event.kind === "moved" && event.fromStatus !== event.toStatus)) &&
+      event.toStatus === card.status &&
+      typeof event.at === "number" &&
+      Number.isFinite(event.at)
+    ) {
+      return event.at;
+    }
+  }
+  return undefined;
+}
+
+function shouldSkipPersistedLifecycleStatusUpdate(
+  existing: WorkboardCard,
+  sourceUpdatedAt: number,
+): boolean {
+  const lifecycleStatusSourceUpdatedAt = existing.metadata?.lifecycleStatusSourceUpdatedAt;
+  if (lifecycleStatusSourceUpdatedAt !== undefined) {
+    return sourceUpdatedAt < lifecycleStatusSourceUpdatedAt;
+  }
+  const statusTransitionAt = latestStatusTransitionAt(existing);
+  return statusTransitionAt !== undefined && sourceUpdatedAt < statusTransitionAt;
 }
 
 function updateEvent(
@@ -1960,7 +2040,7 @@ function capText(value: string | undefined, max: number): string | undefined {
   if (!value) {
     return undefined;
   }
-  return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
+  return value.length <= max ? value : `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
 }
 
 function cardBoardId(card: WorkboardCard): string {
@@ -2586,33 +2666,64 @@ export class WorkboardStore {
     if (!existing) {
       throw new Error(`card not found: ${id}`);
     }
-    const status = normalizeStatus(patch.status, existing.status);
+    const lifecycleStatusSourceUpdatedAt = lifecycleStatusSourceUpdatedAtFromPatch(patch.metadata);
+    const existingLifecycleStatusSourceUpdatedAt =
+      existing.metadata?.lifecycleStatusSourceUpdatedAt;
+    const hasFreshLifecycleStatusSource =
+      lifecycleStatusSourceUpdatedAt !== undefined &&
+      lifecycleStatusSourceUpdatedAt !== existingLifecycleStatusSourceUpdatedAt;
+    let effectivePatch = patch;
+    if (
+      patch.status !== undefined &&
+      lifecycleStatusSourceUpdatedAt !== undefined &&
+      shouldSkipPersistedLifecycleStatusUpdate(existing, lifecycleStatusSourceUpdatedAt)
+    ) {
+      // Ignore stale lifecycle status writes, but still accept any non-status updates in the patch.
+      effectivePatch = { ...patch, status: undefined };
+      if (patch.metadata && typeof patch.metadata === "object" && !Array.isArray(patch.metadata)) {
+        const metadataPatch = patch.metadata as Record<string, unknown>;
+        const { lifecycleStatusSourceUpdatedAt: _ignored, ...rest } = metadataPatch;
+        effectivePatch.metadata = Object.keys(rest).length > 0 ? rest : undefined;
+      }
+      const hasSemanticPatch = Object.entries(effectivePatch).some(
+        ([key, value]) => key !== "status" && key !== "metadata" && value !== undefined,
+      );
+      if (!hasSemanticPatch && effectivePatch.metadata === undefined) {
+        return existing;
+      }
+    }
+    const status = normalizeStatus(effectivePatch.status, existing.status);
     const now = Date.now();
     const startedAt =
-      patch.startedAt === undefined
+      effectivePatch.startedAt === undefined
         ? status === "running"
           ? (existing.startedAt ?? now)
           : existing.startedAt
-        : normalizeTimestamp(patch.startedAt, 0) || undefined;
+        : normalizeTimestamp(effectivePatch.startedAt, 0) || undefined;
     const completedAt =
-      patch.completedAt === undefined
+      effectivePatch.completedAt === undefined
         ? status === "done"
           ? (existing.completedAt ?? now)
           : undefined
-        : normalizeTimestamp(patch.completedAt, 0) || undefined;
+        : normalizeTimestamp(effectivePatch.completedAt, 0) || undefined;
     const sessionKey =
-      patch.sessionKey === undefined
+      effectivePatch.sessionKey === undefined
         ? existing.sessionKey
-        : normalizeOptionalString(patch.sessionKey);
+        : normalizeOptionalString(effectivePatch.sessionKey);
     const execution =
-      patch.execution === undefined
-        ? patch.sessionKey === undefined
+      effectivePatch.execution === undefined
+        ? effectivePatch.sessionKey === undefined
           ? existing.execution
           : syncExecutionSessionKey(existing.execution, sessionKey)
-        : normalizeExecution(patch.execution);
-    let metadata = normalizeMetadata(patch.metadata, existing.metadata, {
+        : normalizeExecution(effectivePatch.execution);
+    let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
     });
+    if (status !== existing.status && !hasFreshLifecycleStatusSource) {
+      // Status patches often spread existing metadata. Only a newly supplied
+      // lifecycle source is provenance; copied markers must not survive a manual transition.
+      metadata = { ...metadata, lifecycleStatusSourceUpdatedAt: undefined };
+    }
     const automationPatch: Record<string, unknown> = {};
     for (const key of [
       "tenant",
@@ -2625,8 +2736,8 @@ export class WorkboardStore {
       "maxRetries",
       "scheduledAt",
     ] as const) {
-      if (Object.hasOwn(patch, key) && patch[key] !== undefined) {
-        automationPatch[key] = patch[key];
+      if (Object.hasOwn(effectivePatch, key) && effectivePatch[key] !== undefined) {
+        automationPatch[key] = effectivePatch[key];
       }
     }
     if (Object.keys(automationPatch).length > 0) {
@@ -2637,32 +2748,45 @@ export class WorkboardStore {
     }
     const next = removeUndefinedCardFields({
       ...existing,
-      title: patch.title === undefined ? existing.title : normalizeTitle(patch.title),
-      notes: patch.notes === undefined ? existing.notes : normalizeNotes(patch.notes),
+      title:
+        effectivePatch.title === undefined ? existing.title : normalizeTitle(effectivePatch.title),
+      notes:
+        effectivePatch.notes === undefined ? existing.notes : normalizeNotes(effectivePatch.notes),
       status,
       priority:
-        patch.priority === undefined
+        effectivePatch.priority === undefined
           ? existing.priority
-          : normalizePriority(patch.priority, existing.priority),
-      labels: patch.labels === undefined ? existing.labels : normalizeLabels(patch.labels),
+          : normalizePriority(effectivePatch.priority, existing.priority),
+      labels:
+        effectivePatch.labels === undefined
+          ? existing.labels
+          : normalizeLabels(effectivePatch.labels),
       agentId:
-        patch.agentId === undefined ? existing.agentId : normalizeOptionalString(patch.agentId),
+        effectivePatch.agentId === undefined
+          ? existing.agentId
+          : normalizeOptionalString(effectivePatch.agentId),
       sessionKey,
-      runId: patch.runId === undefined ? existing.runId : normalizeOptionalString(patch.runId),
-      taskId: patch.taskId === undefined ? existing.taskId : normalizeOptionalString(patch.taskId),
+      runId:
+        effectivePatch.runId === undefined
+          ? existing.runId
+          : normalizeOptionalString(effectivePatch.runId),
+      taskId:
+        effectivePatch.taskId === undefined
+          ? existing.taskId
+          : normalizeOptionalString(effectivePatch.taskId),
       sourceUrl:
-        patch.sourceUrl === undefined
+        effectivePatch.sourceUrl === undefined
           ? existing.sourceUrl
-          : normalizeOptionalString(patch.sourceUrl),
+          : normalizeOptionalString(effectivePatch.sourceUrl),
       execution,
       metadata:
-        patch.templateId === undefined
+        effectivePatch.templateId === undefined
           ? metadata
-          : { ...metadata, templateId: normalizeTemplateId(patch.templateId) },
+          : { ...metadata, templateId: normalizeTemplateId(effectivePatch.templateId) },
       position:
-        patch.position === undefined
+        effectivePatch.position === undefined
           ? existing.position
-          : normalizePosition(patch.position, existing.position),
+          : normalizePosition(effectivePatch.position, existing.position),
       updatedAt: now,
       ...(startedAt ? { startedAt } : {}),
       ...(completedAt ? { completedAt } : {}),
@@ -2671,16 +2795,16 @@ export class WorkboardStore {
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
     );
     next.events = appendEvent(next, updateEvent(existing, next), now);
-    if (options.enforceStatusHolds && patch.status !== undefined) {
+    if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
       await this.assertActiveStatusAllowed(existing, next, now);
     }
     if (status !== "done") {
       delete next.completedAt;
     }
-    if (patch.startedAt !== undefined && !startedAt) {
+    if (effectivePatch.startedAt !== undefined && !startedAt) {
       delete next.startedAt;
     }
-    if (patch.completedAt !== undefined && !completedAt) {
+    if (effectivePatch.completedAt !== undefined && !completedAt) {
       delete next.completedAt;
     }
     if (metadataIsEmpty(next.metadata)) {
@@ -2872,17 +2996,6 @@ export class WorkboardStore {
       metadata: { ...child.metadata, links: nextChildLinks },
     });
     return await this.promoteDependencyReady(nextChild.id);
-  }
-
-  async linkParents(childId: string, parentIds: readonly string[]): Promise<WorkboardCard> {
-    let child = await this.get(childId);
-    if (!child) {
-      throw new Error(`card not found: ${childId}`);
-    }
-    for (const parentId of parentIds) {
-      child = await this.linkCards(parentId, child.id);
-    }
-    return child;
   }
 
   private async dependencyTargetStatus(card: WorkboardCard, now: number): Promise<WorkboardStatus> {
@@ -4005,14 +4118,18 @@ export class WorkboardStore {
     });
   }
 
-  async dispatch(now = Date.now()): Promise<WorkboardDispatchResult> {
+  async dispatch(
+    input: number | WorkboardDispatchOptions = Date.now(),
+  ): Promise<WorkboardDispatchResult> {
+    const now = typeof input === "number" ? input : normalizeTimestamp(input.now, Date.now());
+    const boardId = typeof input === "number" ? undefined : normalizeBoardId(input.boardId);
     return await this.enqueueMutation(async () => {
       const promoted: WorkboardCard[] = [];
       const reclaimed: WorkboardCard[] = [];
       const blocked: WorkboardCard[] = [];
       const orchestrated: WorkboardCard[] = [];
       const orchestratedByBoard = new Map<string, number>();
-      for (const card of await this.list()) {
+      for (const card of await this.list({ boardId })) {
         let latest = await this.promoteDependencyReady(card.id, now);
         const wasPromoted = latest.status !== card.status;
         const claim = latest.metadata?.claim;
@@ -4086,14 +4203,14 @@ export class WorkboardStore {
           latest = await this.recordDispatch(latest, now);
         }
         if (await this.shouldAutoOrchestrate(latest)) {
-          const boardId = cardBoardId(latest);
-          const board = await this.boardStore.lookup(boardId);
+          const latestBoardId = cardBoardId(latest);
+          const board = await this.boardStore.lookup(latestBoardId);
           const cap = board?.board.orchestration?.autoDecomposePerDispatch ?? 3;
-          const boardCount = orchestratedByBoard.get(boardId) ?? 0;
+          const boardCount = orchestratedByBoard.get(latestBoardId) ?? 0;
           if (boardCount < cap) {
             latest = await this.recordOrchestrationCandidate(latest, now);
             orchestrated.push(latest);
-            orchestratedByBoard.set(boardId, boardCount + 1);
+            orchestratedByBoard.set(latestBoardId, boardCount + 1);
           }
         }
         if (wasPromoted && latest.status !== "blocked") {

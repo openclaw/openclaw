@@ -7,12 +7,12 @@ read_when:
 title: "Moonshot AI"
 ---
 
-Moonshot provides the Kimi API with OpenAI-compatible endpoints. Configure the
-provider and set the default model to `moonshot/kimi-k2.6`, or use
-Kimi Coding with `kimi/kimi-for-coding`.
+Moonshot provides the Kimi API with OpenAI-compatible endpoints. Set the
+default model to `moonshot/kimi-k2.6` for the Moonshot Open Platform, or
+`kimi/kimi-for-coding` for Kimi Coding.
 
 <Warning>
-Moonshot and Kimi Coding are **separate providers**. Keys are not interchangeable, endpoints differ, and model refs differ (`moonshot/...` vs `kimi/...`).
+Moonshot and Kimi Coding are **separate providers**, each shipped as a separate external plugin. Keys are not interchangeable, endpoints differ, and model refs differ (`moonshot/...` vs `kimi/...`).
 </Warning>
 
 ## Built-in model catalog
@@ -22,6 +22,7 @@ Moonshot and Kimi Coding are **separate providers**. Keys are not interchangeabl
 | Model ref                         | Name                   | Reasoning | Input       | Context | Max output |
 | --------------------------------- | ---------------------- | --------- | ----------- | ------- | ---------- |
 | `moonshot/kimi-k2.6`              | Kimi K2.6              | No        | text, image | 262,144 | 262,144    |
+| `moonshot/kimi-k2.7-code`         | Kimi K2.7 Code         | Always on | text, image | 262,144 | 262,144    |
 | `moonshot/kimi-k2.5`              | Kimi K2.5              | No        | text, image | 262,144 | 262,144    |
 | `moonshot/kimi-k2-thinking`       | Kimi K2 Thinking       | Yes       | text        | 262,144 | 262,144    |
 | `moonshot/kimi-k2-thinking-turbo` | Kimi K2 Thinking Turbo | Yes       | text        | 262,144 | 262,144    |
@@ -29,21 +30,35 @@ Moonshot and Kimi Coding are **separate providers**. Keys are not interchangeabl
 
 [//]: # "moonshot-kimi-k2-ids:end"
 
-Bundled cost estimates for current Moonshot-hosted K2 models use Moonshot's
-published pay-as-you-go rates: Kimi K2.6 is $0.16/MTok cache hit,
-$0.95/MTok input, and $4.00/MTok output; Kimi K2.5 is $0.10/MTok cache hit,
-$0.60/MTok input, and $3.00/MTok output. Other legacy catalog entries keep
-zero-cost placeholders unless you override them in config.
+Catalog cost estimates use Moonshot's published pay-as-you-go rates: Kimi
+K2.7 Code is $0.19/MTok cache hit, $0.95/MTok input, $4.00/MTok output; Kimi
+K2.6 is $0.16/MTok cache hit, $0.95/MTok input, $4.00/MTok output; Kimi K2.5
+is $0.10/MTok cache hit, $0.60/MTok input, $3.00/MTok output. Other catalog
+entries keep zero-cost placeholders unless you override them in config.
+
+Kimi K2.7 Code always uses native thinking. OpenClaw exposes only the `on`
+thinking state for this model and omits outbound `thinking` and
+`reasoning_effort` fields, as required by Moonshot. It also omits sampling
+overrides (`temperature`, `top_p`, `n`, `presence_penalty`,
+`frequency_penalty`), which K2.7 fixes to provider defaults. Kimi K2.6 remains
+the onboarding default.
 
 ## Getting started
 
-Choose your provider and follow the setup steps.
+Both Moonshot and Kimi Coding are external plugins - install one before
+onboarding.
 
 <Tabs>
   <Tab title="Moonshot API">
     **Best for:** Kimi K2 models via the Moonshot Open Platform.
 
     <Steps>
+      <Step title="Install the plugin">
+        ```bash
+        openclaw plugins install @openclaw/moonshot-provider
+        openclaw gateway restart
+        ```
+      </Step>
       <Step title="Choose your endpoint region">
         | Auth choice            | Endpoint                       | Region        |
         | ---------------------- | ------------------------------ | ------------- |
@@ -109,6 +124,7 @@ Choose your provider and follow the setup steps.
           models: {
             // moonshot-kimi-k2-aliases:start
             "moonshot/kimi-k2.6": { alias: "Kimi K2.6" },
+            "moonshot/kimi-k2.7-code": { alias: "Kimi K2.7 Code" },
             "moonshot/kimi-k2.5": { alias: "Kimi K2.5" },
             "moonshot/kimi-k2-thinking": { alias: "Kimi K2 Thinking" },
             "moonshot/kimi-k2-thinking-turbo": { alias: "Kimi K2 Thinking Turbo" },
@@ -132,6 +148,15 @@ Choose your provider and follow the setup steps.
                 reasoning: false,
                 input: ["text", "image"],
                 cost: { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
+                contextWindow: 262144,
+                maxTokens: 262144,
+              },
+              {
+                id: "kimi-k2.7-code",
+                name: "Kimi K2.7 Code",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 262144,
               },
@@ -185,10 +210,16 @@ Choose your provider and follow the setup steps.
     **Best for:** code-focused tasks via the Kimi Coding endpoint.
 
     <Note>
-    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). The stable API model ref is `kimi/kimi-for-coding`; legacy refs `kimi/kimi-code` and `kimi/k2p5` remain accepted and normalize to that API model id.
+    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). The stable model ref is `kimi/kimi-for-coding`; legacy refs `kimi/kimi-code` and `kimi/k2p5` remain accepted and normalize to that model id.
     </Note>
 
     <Steps>
+      <Step title="Install the plugin">
+        ```bash
+        openclaw plugins install @openclaw/kimi-provider
+        openclaw gateway restart
+        ```
+      </Step>
       <Step title="Run onboarding">
         ```bash
         openclaw onboard --auth-choice kimi-code-api-key
@@ -233,8 +264,7 @@ Choose your provider and follow the setup steps.
 
 ## Kimi web search
 
-OpenClaw also ships **Kimi** as a `web_search` provider, backed by Moonshot web
-search.
+The Moonshot plugin also registers **Kimi** as a `web_search` provider, backed by Moonshot web search.
 
 <Steps>
   <Step title="Run interactive web search setup">
@@ -288,7 +318,13 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
 
 <AccordionGroup>
   <Accordion title="Native thinking mode">
-    Moonshot Kimi supports binary native thinking:
+    Kimi K2.7 Code always uses native thinking. Moonshot requires clients to
+    omit the `thinking` field for this model, so OpenClaw exposes only `on` and
+    ignores stale `off` settings. K2.7 also fixes `temperature`, `top_p`, `n`,
+    `presence_penalty`, and `frequency_penalty`; OpenClaw omits configured
+    overrides for those fields.
+
+    Other Moonshot Kimi models support binary native thinking:
 
     - `thinking: { type: "enabled" }`
     - `thinking: { type: "disabled" }`
@@ -311,7 +347,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     }
     ```
 
-    OpenClaw also maps runtime `/think` levels for Moonshot:
+    OpenClaw maps runtime `/think` levels for those models:
 
     | `/think` level       | Moonshot behavior          |
     | -------------------- | -------------------------- |
@@ -319,14 +355,16 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     | Any non-off level    | `thinking.type=enabled`    |
 
     <Warning>
-    When Moonshot thinking is enabled, `tool_choice` must be `auto` or `none`. OpenClaw normalizes incompatible `tool_choice` values to `auto` for compatibility.
+    When Moonshot thinking is enabled, `tool_choice` must be `auto` or `none`. A pinned tool choice (`type: "tool"` or `type: "function"`) forces thinking back to `disabled` instead, so the requested tool still runs; `tool_choice: "required"` is normalized to `auto` instead. This applies to every Moonshot model except Kimi K2.7 Code, whose thinking mode cannot be disabled - its `tool_choice` is normalized to `auto` when incompatible.
     </Warning>
 
     Kimi K2.6 also accepts an optional `thinking.keep` field that controls
     multi-turn retention of `reasoning_content`. Set it to `"all"` to keep full
     reasoning across turns; omit it (or leave it `null`) to use the server
     default strategy. OpenClaw only forwards `thinking.keep` for
-    `moonshot/kimi-k2.6` and strips it from other models.
+    `moonshot/kimi-k2.6` and strips it from other models. Kimi K2.7 Code
+    preserves full reasoning history by default while OpenClaw omits the entire
+    `thinking` field.
 
     ```json5
     {
@@ -347,33 +385,17 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
   </Accordion>
 
   <Accordion title="Tool call id sanitization">
-    Moonshot Kimi serves tool_call ids shaped like `functions.<name>:<index>`. OpenClaw preserves them unchanged so multi-turn tool calls keep working.
-
-    To force strict sanitization on a custom OpenAI-compatible provider, set `sanitizeToolCallIds: true`:
-
-    ```json5
-    {
-      models: {
-        providers: {
-          "my-kimi-proxy": {
-            api: "openai-completions",
-            sanitizeToolCallIds: true,
-          },
-        },
-      },
-    }
-    ```
-
+    Moonshot Kimi serves native tool_call ids shaped like `functions.<name>:<index>`. OpenClaw preserves the first occurrence of each native Kimi id and rewrites later duplicates to deterministic OpenAI-style `call_*` ids. Matching tool results are remapped with the same id so replay remains unique without stripping Kimi's first native id. This behavior is wired into the bundled Moonshot provider and is not a user-configurable setting.
   </Accordion>
 
   <Accordion title="Streaming usage compatibility">
     Native Moonshot endpoints (`https://api.moonshot.ai/v1` and
-    `https://api.moonshot.cn/v1`) advertise streaming usage compatibility on the
-    shared `openai-completions` transport. OpenClaw keys that off endpoint
-    capabilities, so compatible custom provider ids targeting the same native
-    Moonshot hosts inherit the same streaming-usage behavior.
+    `https://api.moonshot.cn/v1`) advertise streaming usage compatibility.
+    OpenClaw keys this off the endpoint host, not the provider id, so a custom
+    provider id pointed at the same native Moonshot host inherits the same
+    streaming-usage behavior.
 
-    With the bundled K2.6 pricing, streamed usage that includes input, output,
+    With the catalog K2.6 pricing, streamed usage that includes input, output,
     and cache-read tokens is also converted into local estimated USD cost for
     `/status`, `/usage full`, `/usage cost`, and transcript-backed session
     accounting.
@@ -382,11 +404,11 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
 
   <Accordion title="Endpoint and model ref reference">
     | Provider   | Model ref prefix | Endpoint                      | Auth env var        |
-    | ---------- | ---------------- | ----------------------------- | ------------------- |
+    | ---------- | ---------------- | ------------------------------ | ------------------- |
     | Moonshot   | `moonshot/`      | `https://api.moonshot.ai/v1`  | `MOONSHOT_API_KEY`  |
     | Moonshot CN| `moonshot/`      | `https://api.moonshot.cn/v1`  | `MOONSHOT_API_KEY`  |
-    | Kimi Coding| `kimi/`          | Kimi Coding endpoint          | `KIMI_API_KEY`      |
-    | Web search | N/A              | Same as Moonshot API region   | `KIMI_API_KEY` or `MOONSHOT_API_KEY` |
+    | Kimi Coding| `kimi/`          | Kimi Coding endpoint           | `KIMI_API_KEY`      |
+    | Web search | N/A              | Same as Moonshot API region    | `KIMI_API_KEY` or `MOONSHOT_API_KEY` |
 
     - Kimi web search uses `KIMI_API_KEY` or `MOONSHOT_API_KEY`, and defaults to `https://api.moonshot.ai/v1` with model `kimi-k2.6`.
     - Override pricing and context metadata in `models.providers` if needed.

@@ -1,6 +1,8 @@
+// Persists task registry records and events through the OpenClaw SQLite state database.
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -43,6 +45,7 @@ type TaskRegistryDatabase = {
   path: string;
 };
 
+// SQLite-backed task store mirrors task records and delivery state into openclaw-state.db.
 const TASK_RUN_SELECT_COLUMNS = [
   "task_id",
   "runtime",
@@ -55,6 +58,7 @@ const TASK_RUN_SELECT_COLUMNS = [
   "parent_flow_id",
   "parent_task_id",
   "agent_id",
+  "requester_agent_id",
   "run_id",
   "label",
   "task",
@@ -74,24 +78,18 @@ const TASK_RUN_SELECT_COLUMNS = [
 
 let cachedDatabase: TaskRegistryDatabase | null = null;
 
-function normalizeNumber(value: number | bigint | null): number | undefined {
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return typeof value === "number" ? value : undefined;
-}
-
 function serializeJson(value: unknown): string | null {
   return value == null ? null : JSON.stringify(value);
 }
 
 function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
-  const startedAt = normalizeNumber(row.started_at);
-  const endedAt = normalizeNumber(row.ended_at);
-  const lastEventAt = normalizeNumber(row.last_event_at);
-  const cleanupAfter = normalizeNumber(row.cleanup_after);
+  const startedAt = normalizeSqliteNumber(row.started_at);
+  const endedAt = normalizeSqliteNumber(row.ended_at);
+  const lastEventAt = normalizeSqliteNumber(row.last_event_at);
+  const cleanupAfter = normalizeSqliteNumber(row.cleanup_after);
   const scopeKind = parseTaskScopeKind(row.scope_kind);
   const terminalOutcome = parseOptionalTaskTerminalOutcome(row.terminal_outcome);
+  // System tasks intentionally have no requester session; ownerKey is the lookup anchor.
   const requesterSessionKey =
     scopeKind === "system" ? "" : row.requester_session_key?.trim() || row.owner_key;
   return {
@@ -106,13 +104,14 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     ...(row.parent_flow_id ? { parentFlowId: row.parent_flow_id } : {}),
     ...(row.parent_task_id ? { parentTaskId: row.parent_task_id } : {}),
     ...(row.agent_id ? { agentId: row.agent_id } : {}),
+    ...(row.requester_agent_id ? { requesterAgentId: row.requester_agent_id } : {}),
     ...(row.run_id ? { runId: row.run_id } : {}),
     ...(row.label ? { label: row.label } : {}),
     task: row.task,
     status: parseTaskStatus(row.status),
     deliveryStatus: parseTaskDeliveryStatus(row.delivery_status),
     notifyPolicy: parseTaskNotifyPolicy(row.notify_policy),
-    createdAt: normalizeNumber(row.created_at) ?? 0,
+    createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
     ...(startedAt != null ? { startedAt } : {}),
     ...(endedAt != null ? { endedAt } : {}),
     ...(lastEventAt != null ? { lastEventAt } : {}),
@@ -126,7 +125,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
 
 function rowToTaskDeliveryState(row: TaskDeliveryStateRow): TaskDeliveryState {
   const requesterOrigin = parseDeliveryContextJson(row.requester_origin_json);
-  const lastNotifiedEventAt = normalizeNumber(row.last_notified_event_at);
+  const lastNotifiedEventAt = normalizeSqliteNumber(row.last_notified_event_at);
   return {
     taskId: row.task_id,
     ...(requesterOrigin ? { requesterOrigin } : {}),
@@ -147,6 +146,7 @@ function bindTaskRecordBase(record: TaskRecord): Insertable<TaskRunsTable> {
     parent_flow_id: record.parentFlowId ?? null,
     parent_task_id: record.parentTaskId ?? null,
     agent_id: record.agentId ?? null,
+    requester_agent_id: record.requesterAgentId ?? null,
     run_id: record.runId ?? null,
     label: record.label ?? null,
     task: record.task,
@@ -235,6 +235,7 @@ function upsertTaskRow(db: DatabaseSync, row: Insertable<TaskRunsTable>): void {
           parent_flow_id: (eb) => eb.ref("excluded.parent_flow_id"),
           parent_task_id: (eb) => eb.ref("excluded.parent_task_id"),
           agent_id: (eb) => eb.ref("excluded.agent_id"),
+          requester_agent_id: (eb) => eb.ref("excluded.requester_agent_id"),
           run_id: (eb) => eb.ref("excluded.run_id"),
           label: (eb) => eb.ref("excluded.label"),
           task: (eb) => eb.ref("excluded.task"),

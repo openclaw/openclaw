@@ -1,3 +1,4 @@
+/** Parses and normalizes persisted cron run-log entry payloads. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.js";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
@@ -16,6 +17,7 @@ const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
   "timeout",
   "model_not_found",
   "session_expired",
+  "context_overflow",
   "empty_response",
   "no_error_details",
   "unclassified",
@@ -64,6 +66,8 @@ export function parseCronRunLogEntryObject(
     normalizeCronRunLogErrorReason(entryObj.errorReason) ??
     resolveFailoverReasonFromError(normalizedError, normalizedProvider) ??
     undefined;
+  // Recompute missing/legacy error reasons from the stored error text so old
+  // run-log rows can still drive retry/status filtering.
   const entry: CronRunLogEntry = {
     ts: entryObj.ts,
     jobId: entryObj.jobId,
@@ -77,6 +81,7 @@ export function parseCronRunLogEntryObject(
     runAtMs: entryObj.runAtMs,
     durationMs: entryObj.durationMs,
     nextRunAtMs: entryObj.nextRunAtMs,
+    triggerFired: entryObj.triggerFired === true ? true : undefined,
     model: typeof entryObj.model === "string" && entryObj.model.trim() ? entryObj.model : undefined,
     provider: normalizedProvider,
     usage: usage

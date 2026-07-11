@@ -1,3 +1,4 @@
+/** Shared Vitest mocks for get-reply tests that need agent/session/runtime isolation. */
 import { vi } from "vitest";
 import { createMockTypingController } from "./reply.test-helpers.js";
 
@@ -76,5 +77,3 @@ vi.mock("./stage-sandbox-media.runtime.js", () => ({
 vi.mock("./typing.js", () => ({
   createTypingController: vi.fn(() => createMockTypingController()),
 }));
-
-export function registerGetReplyCommonMocks(): void {}

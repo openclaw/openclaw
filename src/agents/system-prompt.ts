@@ -1,4 +1,14 @@
+/**
+ * OpenClaw system prompt renderer.
+ *
+ * Assembles runtime, workspace, tooling, memory, delegation, channel, and cache-boundary prompt sections.
+ */
 import { createHmac, createHash } from "node:crypto";
+import {
+  normalizePromptCapabilityIds,
+  normalizeStructuredPromptSection,
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+} from "@openclaw/ai/internal/shared";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -11,6 +21,7 @@ import {
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import {
   hasNativeApprovalPromptRuntimeCapability,
   isKnownNativeApprovalPromptChannel,
@@ -19,6 +30,7 @@ import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
+import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
@@ -33,10 +45,6 @@ import type {
   EmbeddedSandboxInfo,
 } from "./embedded-agent-runner/types.js";
 import {
-  normalizePromptCapabilityIds,
-  normalizeStructuredPromptSection,
-} from "./prompt-cache-stability.js";
-import {
   buildOpenClawToolFallbackText,
   shouldRenderOpenClawToolWorkflowHints,
 } from "./prompt-surface.js";
@@ -45,7 +53,6 @@ import {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
 } from "./skill-workshop-prompt.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import type {
   ProviderSystemPromptContribution,
   ProviderSystemPromptSectionId,
@@ -110,6 +117,23 @@ function buildSubagentDelegationPreferenceSection(params: {
       : "",
     "",
   ].filter(Boolean);
+}
+
+function buildProactiveSubagentOrchestrationSection(params: {
+  enabled: boolean;
+  hasSessionsSpawn: boolean;
+}): string[] {
+  if (!params.enabled || !params.hasSessionsSpawn) {
+    return [];
+  }
+  return [
+    "## Proactive Sub-Agent Orchestration",
+    "Ultra mode is active. Proactively use `sessions_spawn` for independent workstreams when it materially improves speed or quality.",
+    "- Parallelize independent investigation, implementation, and verification when useful.",
+    "- Keep simple or tightly coupled work local; do not delegate just to delegate.",
+    "- Give each child a clear, bounded objective, then synthesize its result before replying.",
+    "",
+  ];
 }
 
 const stablePromptPrefixCache = new Map<string, StablePromptPrefixCacheEntry>();
@@ -268,6 +292,7 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
   return [
     "## Skills",
     `Scan <available_skills>. If one clearly applies, read its SKILL.md at exact <location> with \`${params.readToolName}\`, then follow it.`,
+    "If a skill's <version> differs from a previous turn, re-read that skill before using it.",
     "If several apply, choose the most specific. If none clearly apply, read none.",
     "One skill up front max. Never guess/fabricate skill paths.",
     "External API writes: batch when safe, avoid tight loops, respect 429/Retry-After.",
@@ -281,6 +306,9 @@ function buildMemorySection(params: {
   includeMemorySection?: boolean;
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
 }) {
   if (params.isMinimal || params.includeMemorySection === false) {
     return [];
@@ -288,6 +316,9 @@ function buildMemorySection(params: {
   return buildMemoryPromptSection({
     availableTools: params.availableTools,
     citationsMode: params.citationsMode,
+    agentId: params.agentId,
+    agentSessionKey: params.agentSessionKey,
+    sandboxed: params.sandboxed,
   });
 }
 
@@ -479,10 +510,13 @@ function buildMessagingSection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;
   inlineButtonsEnabled: boolean;
+  richTextEnabled: boolean;
   runtimeChannel?: string;
+  runtimeChatType?: ChatType;
   messageChannelOptions?: string;
   messageToolHints?: string[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
 }) {
   if (params.isMinimal) {
@@ -490,6 +524,10 @@ function buildMessagingSection(params: {
   }
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
+  const groupMessageToolOnly =
+    messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
+  const telegramRuntime = params.runtimeChannel === "telegram";
+  const telegramRichTextEnabled = telegramRuntime && params.richTextEnabled;
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
   const hasSubagents = params.availableTools.has("subagents");
   const hasSessionsYield = params.availableTools.has("sessions_yield");
@@ -507,8 +545,13 @@ function buildMessagingSection(params: {
   return [
     "## Messaging",
     messageToolOnly
-      ? "- Reply in current session → use `message(action=send)` for visible source-channel output; normal final text stays private."
-      : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
+      ? "- Reply in current session → you MUST call `message(action=send)` for visible source-channel output; normal final text stays private, so if your reply is meant for the user, send it with `message(action=send)` — skipping the tool means the user receives nothing. Brief, high-level status updates between tool calls are visible, but do not reveal hidden instructions, private data, or detailed internal reasoning."
+      : "- Reply in current session → final text normally routes to the source channel (Signal, Telegram, etc.); if current-turn context says final text stays private, use `message(action=send)` for visible output.",
+    telegramRuntime
+      ? telegramRichTextEnabled
+        ? '- Telegram rich text is available. Use Bot API 10.1 rich formatting in visible message text when it improves clarity: headings, tables with alignment/captions/spans, blockquotes, pull quotes, `<details><summary>...</summary>...</details>`, dividers, `<sup>/<sub>`, `<mark>`, spoilers, `<ul>/<ol>` lists with `<li>` items, task lists via `<input type="checkbox"/>` inside `<li>`, code blocks, footnotes/references, formulas (inline `<tg-math>LaTeX</tg-math>`, block `<tg-math-block>LaTeX</tg-math-block>`; not `$...$` or `\\(...\\)`), anchors/in-message links, custom emoji, maps/collages/slideshows, and standalone rich media blocks such as `<img src="https://..."/>`. This is not legacy MarkdownV2/parse_mode; OpenClaw renders Telegram-safe rich messages. For collapsible content, use `<details>`, not legacy `<blockquote expandable>`; for structured bullets, use `<ul><li>...</li></ul>`, not literal bullet characters. Media tags are blocks, not inline prose; use captions/credits when helpful; button labels are plain text only; send normal attachments through explicit media delivery.'
+        : "- Telegram rich messages are disabled for this bot/account. Do not claim Bot API 10.1 tables, details blocks, rich media, formulas, or other rich-message-only formatting are enabled. Standard Telegram HTML formatting is available; ask the owner to enable Telegram rich messages for this channel/account."
+      : "",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     subagentOrchestrationGuidance,
     completionEventGuidance,
@@ -518,8 +561,13 @@ function buildMessagingSection(params: {
           "",
           "### message tool",
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
+          groupMessageToolOnly
+            ? "- Group/channel etiquette: for stale threads, jokes, lightweight acknowledgements, or low-value chatter, prefer a reaction when available or no channel message; when a visible reply is warranted, use `message(action=send)` because final text stays private."
+            : "",
           messageToolOnly
-            ? "- For `action=send`, include `message`. The target defaults to the current source channel; include `target` only when sending somewhere else."
+            ? params.requireExplicitMessageTarget
+              ? "- For `action=send`, include `target` and `message`; `target` is required for this turn."
+              : "- For `action=send`, include `message`. The target defaults to the current source channel; include `target` only when sending somewhere else."
             : "- For `action=send`, include `target` and `message`.",
           params.messageChannelOptions
             ? `- No current/default source channel: include \`channel\` for proactive sends; valid ids: ${params.messageChannelOptions}.`
@@ -527,7 +575,7 @@ function buildMessagingSection(params: {
           messageToolOnly
             ? "- If you use `message` (`action=send`) to deliver visible output, do not repeat that visible content in your final answer."
             : suppressSilentTokenGuidance
-              ? "- Do not use `message(action=send)` to deliver the current source-channel reply; reply normally so OpenClaw can route it once."
+              ? "- Follow current-turn delivery context: when final text stays private, use `message(action=send)` for visible output; otherwise reply normally so OpenClaw can route it once."
               : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled
@@ -584,12 +632,12 @@ function buildDocsSection(params: {
     docsPath ? "Mirror: https://docs.openclaw.ai" : undefined,
     sourcePath ? `Source: ${sourcePath}` : "Source: https://github.com/openclaw/openclaw",
     docsPath
-      ? "OpenClaw behavior/config/architecture: read local docs first."
-      : "OpenClaw behavior/config/architecture: read docs mirror first.",
+      ? `Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use \`${params.readToolName}\` or search local docs first; treat AGENTS.md/project context, workspace/profile/memory notes, and \`memory_search\` as instruction context or user memory, not OpenClaw design/implementation knowledge.`
+      : "Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use the docs mirror first when web tooling is available; treat AGENTS.md/project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory, not OpenClaw design/implementation knowledge.",
     "Config fields: use `gateway` action `config.schema.lookup`; broader config docs: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`.",
     sourcePath
-      ? "If docs are stale/incomplete, inspect local source."
-      : "If docs are stale/incomplete, inspect GitHub source.",
+      ? "If docs are silent/stale, say so and inspect local source."
+      : "If docs are silent/stale, say so and inspect GitHub source.",
     "Diagnosing issues: run `openclaw status` when possible; ask user only if blocked.",
     "",
   ];
@@ -663,6 +711,8 @@ export function buildAgentSystemPrompt(params: {
   ownerDisplaySecret?: string;
   reasoningTagHint?: boolean;
   toolNames?: string[];
+  /** Callable tool names used for capability guidance without listing them as visible tools. */
+  capabilityToolNames?: string[];
   toolSummaries?: Record<string, string>;
   modelAliasLines?: string[];
   userTimezone?: string;
@@ -682,8 +732,11 @@ export function buildAgentSystemPrompt(params: {
   /** Controls the generic silent-reply section. Channel-aware prompts can set "none". */
   silentReplyPromptMode?: SilentReplyPromptMode;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
   /** Prompt-only strength for delegating non-trivial work through sub-agents. Defaults to "suggest". */
   subagentDelegationMode?: SubagentDelegationMode;
+  /** Run-scoped Ultra behavior; independent from configured delegation preference. */
+  proactiveSubagentOrchestration?: boolean;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
   /** Prompt surface controls runtime-specific fallback fragments. Defaults to OpenClaw main. */
@@ -694,6 +747,8 @@ export function buildAgentSystemPrompt(params: {
   nativeCommandGuidanceLines?: string[];
   runtimeInfo?: {
     agentId?: string;
+    sessionKey?: string;
+    sessionId?: string;
     host?: string;
     os?: string;
     arch?: string;
@@ -702,11 +757,13 @@ export function buildAgentSystemPrompt(params: {
     defaultModel?: string;
     shell?: string;
     channel?: string;
+    chatType?: string;
     capabilities?: string[];
     repoRoot?: string;
     activeProcessSessions?: ActiveProcessSessionReference[];
   };
   messageToolHints?: string[];
+  toolSchemaDirectoryPrompt?: string;
   sandboxInfo?: EmbeddedSandboxInfo;
   /** Whether read/write/edit/apply_patch are restricted to the workspace root. */
   fsWorkspaceOnly?: boolean;
@@ -731,7 +788,10 @@ export function buildAgentSystemPrompt(params: {
     grep: "Search file contents for patterns",
     find: "Find files by glob pattern",
     ls: "List directory contents",
-    exec: "Run shell commands (pty available for TTY-required CLIs)",
+    exec:
+      promptSurface === "cli_backend"
+        ? "Run shell commands on connected OpenClaw nodes (synchronous; use host=node)"
+        : "Run shell commands (pty available for TTY-required CLIs)",
     process: "Manage background exec sessions",
     web_search: "Search the web using the configured provider",
     web_fetch: "Fetch and extract readable content from a URL",
@@ -807,7 +867,11 @@ export function buildAgentSystemPrompt(params: {
     canonicalByNormalized.get(normalized) ?? normalized;
 
   const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
-  const availableTools = new Set(normalizedTools);
+  const visibleTools = new Set(normalizedTools);
+  const availableTools = new Set([
+    ...visibleTools,
+    ...normalizeStringEntriesLower(params.capabilityToolNames),
+  ]);
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
   const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
   const nativeCommandGuidanceLines = normalizeUniqueStringEntries(
@@ -824,7 +888,7 @@ export function buildAgentSystemPrompt(params: {
   const extraTools = Array.from(
     new Set(normalizedTools.filter((tool) => !toolOrder.includes(tool))),
   );
-  const enabledTools = toolOrder.filter((tool) => availableTools.has(tool));
+  const enabledTools = toolOrder.filter((tool) => visibleTools.has(tool));
   const toolLines = enabledTools.map((tool) => {
     const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
     const name = resolveToolName(tool);
@@ -835,6 +899,7 @@ export function buildAgentSystemPrompt(params: {
     const name = resolveToolName(tool);
     toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
   }
+  const toolSchemaDirectoryPrompt = params.toolSchemaDirectoryPrompt?.trim();
   const renderOpenClawToolWorkflowHints = shouldRenderOpenClawToolWorkflowHints({
     surface: promptSurface,
     hasToolList: toolLines.length > 0,
@@ -881,6 +946,7 @@ export function buildAgentSystemPrompt(params: {
   const runtimeInfo = params.runtimeInfo;
   const modelIdentityLine = buildModelIdentityPromptLine(runtimeInfo?.model);
   const runtimeChannel = normalizeOptionalLowercaseString(runtimeInfo?.channel);
+  const runtimeChatType = normalizeChatType(runtimeInfo?.chatType);
   const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
   const runtimeCapabilitiesLower = new Set(normalizeStringEntriesLower(runtimeCapabilities));
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
@@ -888,6 +954,7 @@ export function buildAgentSystemPrompt(params: {
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
   const subagentDelegationMode = normalizeSubagentDelegationMode(params.subagentDelegationMode);
+  const proactiveSubagentOrchestration = params.proactiveSubagentOrchestration === true;
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const messageChannelOptions = availableTools.has("message")
     ? buildMessageChannelOptions(runtimeChannel)
@@ -937,6 +1004,9 @@ export function buildAgentSystemPrompt(params: {
     includeMemorySection: params.includeMemorySection,
     availableTools,
     citationsMode: params.memoryCitationsMode,
+    agentId: params.runtimeInfo?.agentId,
+    agentSessionKey: params.runtimeInfo?.sessionKey,
+    sandboxed: params.sandboxInfo?.enabled === true,
   });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
@@ -964,6 +1034,8 @@ export function buildAgentSystemPrompt(params: {
     promptMode,
     promptSurface,
     toolLines,
+    toolSchemaDirectoryPrompt,
+    capabilityToolNames: [...availableTools].toSorted(),
     renderOpenClawToolWorkflowHints,
     hasGateway,
     readToolName,
@@ -972,17 +1044,15 @@ export function buildAgentSystemPrompt(params: {
     nativeCommandGuidanceLines,
     providerSectionOverrides,
     providerStablePrefix,
-    ownerLine,
     reasoningHint,
     reasoningLevel,
     userTimezone,
     runtimeChannel,
-    runtimeCapabilities,
-    inlineButtonsEnabled,
     threadBoundAcpSpawnEnabled,
     sourceMessageToolOnly,
     silentReplyPromptMode,
     subagentDelegationMode,
+    proactiveSubagentOrchestration,
     sandboxInfo: params.sandboxInfo,
     displayWorkspaceDir,
     workspaceGuidance,
@@ -1013,6 +1083,9 @@ export function buildAgentSystemPrompt(params: {
             execToolName,
             processToolName,
           }),
+      ...(toolSchemaDirectoryPrompt
+        ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
+        : []),
       "TOOLS.md is usage guidance, not availability.",
       ...(renderOpenClawToolWorkflowHints
         ? [
@@ -1047,8 +1120,12 @@ export function buildAgentSystemPrompt(params: {
           ]
         : []),
       "",
+      ...buildProactiveSubagentOrchestrationSection({
+        enabled: proactiveSubagentOrchestration,
+        hasSessionsSpawn,
+      }),
       ...buildSubagentDelegationPreferenceSection({
-        mode: subagentDelegationMode,
+        mode: proactiveSubagentOrchestration ? "suggest" : subagentDelegationMode,
         isMinimal,
         hasSessionsSpawn,
         hasSubagents: availableTools.has("subagents"),
@@ -1065,11 +1142,6 @@ export function buildAgentSystemPrompt(params: {
           "Routine low-risk calls: no narration.",
           "Narrate only for complex, sensitive/destructive, or explicitly requested steps.",
           "First-class tool exists: use it; do not ask user to run equivalent CLI/slash command.",
-          buildExecApprovalPromptGuidance({
-            runtimeChannel: params.runtimeInfo?.channel,
-            inlineButtonsEnabled,
-            runtimeCapabilities,
-          }),
           "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
           "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
           "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run, but keep command/script previews separate from the /approve command and never substitute the shell command/script for the approval id or slug.",
@@ -1190,7 +1262,6 @@ export function buildAgentSystemPrompt(params: {
             .join("\n")
         : "",
       params.sandboxInfo?.enabled ? "" : "",
-      ...buildUserIdentitySection(ownerLine, isMinimal),
       ...buildTimeSection({
         userTimezone,
       }),
@@ -1247,6 +1318,18 @@ export function buildAgentSystemPrompt(params: {
   // Channel/session-specific guidance lives below the cache boundary so large
   // stable workspace context can remain a byte-identical prefix across turns.
   lines.push(
+    // Approval UI and owner identity vary by turn, so keep both below the stable prefix.
+    // A tool_call_style override owns the complete section and suppresses default guidance.
+    ...(providerSectionOverrides.tool_call_style
+      ? []
+      : [
+          buildExecApprovalPromptGuidance({
+            runtimeChannel: params.runtimeInfo?.channel,
+            inlineButtonsEnabled,
+            runtimeCapabilities,
+          }),
+        ]),
+    ...buildUserIdentitySection(ownerLine, isMinimal),
     ...buildWebchatCanvasSection({
       isMinimal,
       runtimeChannel,
@@ -1256,19 +1339,21 @@ export function buildAgentSystemPrompt(params: {
       isMinimal,
       availableTools,
       inlineButtonsEnabled,
+      richTextEnabled: runtimeCapabilitiesLower.has("richtext"),
       runtimeChannel,
+      runtimeChatType,
       messageChannelOptions,
       messageToolHints: params.messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      requireExplicitMessageTarget: params.requireExplicitMessageTarget,
       silentReplyPromptMode,
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   );
 
   if (extraSystemPrompt) {
-    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
     const contextHeader =
-      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+      promptMode === "minimal" ? "## Subagent Context" : "## Conversation Context";
     lines.push(contextHeader, extraSystemPrompt, "");
   }
   if (params.reactionGuidance) {
@@ -1331,6 +1416,8 @@ function buildActiveProcessSessionReferenceLines(
 export function buildRuntimeLine(
   runtimeInfo?: {
     agentId?: string;
+    sessionKey?: string;
+    sessionId?: string;
     host?: string;
     os?: string;
     arch?: string;
@@ -1346,8 +1433,16 @@ export function buildRuntimeLine(
   defaultThinkLevel?: ThinkLevel,
 ): string {
   const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
+  // Automatic literal-prefix caches include Runtime before the tool catalog. Rendering an
+  // isolated cron's volatile `:run:<id>` scope there defeats reuse across runs of the same job.
+  // Render the stable base key and drop the per-run session id it duplicates.
+  const { baseSessionKey, runId } = parseCronRunScopeSuffix(runtimeInfo?.sessionKey);
+  const stableSessionId =
+    runtimeInfo?.sessionId && runtimeInfo.sessionId !== runId ? runtimeInfo.sessionId : undefined;
   return `Runtime: ${[
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
+    baseSessionKey ? `session=${sanitizeForPromptLiteral(baseSessionKey)}` : "",
+    stableSessionId ? `sessionId=${sanitizeForPromptLiteral(stableSessionId)}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
     runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
     runtimeInfo?.os

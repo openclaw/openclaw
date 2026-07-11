@@ -1,3 +1,6 @@
+/**
+ * Tests agent wait dedupe behavior for repeated gateway wait requests.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_RUN_ABORTED_ERROR } from "../../agents/run-termination.js";
 import type { DedupeEntry } from "../server-shared.js";
@@ -135,11 +138,13 @@ describe("agent wait dedupe helper", () => {
     return waitForTerminalGatewayDedupe({ dedupe, runId, timeoutMs: 1_000, ...options });
   }
 
-  const RPC_QUEUE_TIMEOUT_SNAPSHOT = {
-    status: "timeout",
+  const RPC_QUEUE_CANCEL_SNAPSHOT = {
+    status: "error",
+    startedAt: undefined,
     endedAt: 100,
     error: undefined,
     stopReason: "rpc",
+    livenessState: undefined,
     timeoutPhase: "queue",
     providerStarted: false,
   } as const;
@@ -472,7 +477,7 @@ describe("agent wait dedupe helper", () => {
       payload: okPayload(runId, { endedAt: 200 }),
     });
 
-    expectTerminalSnapshot(dedupe, runId, RPC_QUEUE_TIMEOUT_SNAPSHOT);
+    expectTerminalSnapshot(dedupe, runId, RPC_QUEUE_CANCEL_SNAPSHOT);
   });
 
   it("preserves an RPC cancel snapshot when a later accepted write reuses the key", () => {
@@ -491,7 +496,7 @@ describe("agent wait dedupe helper", () => {
       payload: { runId, status: "accepted" },
     });
 
-    expectTerminalSnapshot(dedupe, runId, RPC_QUEUE_TIMEOUT_SNAPSHOT);
+    expectTerminalSnapshot(dedupe, runId, RPC_QUEUE_CANCEL_SNAPSHOT);
   });
 
   it("lets an earlier terminal completion correct a provisional timeout snapshot", () => {
@@ -557,7 +562,7 @@ describe("agent wait dedupe helper", () => {
       payload: { runId, status: "error", summary: "late failure", endedAt: 200 },
     });
 
-    expectTerminalSnapshot(dedupe, runId, RPC_QUEUE_TIMEOUT_SNAPSHOT);
+    expectTerminalSnapshot(dedupe, runId, RPC_QUEUE_CANCEL_SNAPSHOT);
   });
 
   it("resolves multiple waiters for the same run id", async () => {

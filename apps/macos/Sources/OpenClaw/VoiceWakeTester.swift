@@ -368,31 +368,6 @@ final class VoiceWakeTester {
         }
     }
 
-    private func holdUntilSilence(onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) {
-        Task { [weak self] in
-            guard let self else { return }
-            let detectedAt = Date()
-            let hardStop = detectedAt.addingTimeInterval(6) // cap overall listen after trigger
-
-            while !self.isStopping {
-                let now = Date()
-                if now >= hardStop { break }
-                if let last = self.lastHeard, now.timeIntervalSince(last) >= silenceWindow {
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
-            if !self.isStopping {
-                self.stop()
-                await MainActor.run { AppStateStore.shared.stopVoiceEars() }
-                if let detectedText {
-                    self.logger.info("voice wake hold finished; len=\(detectedText.count)")
-                    Task { @MainActor in onUpdate(.detected(detectedText)) }
-                }
-            }
-        }
-    }
-
     private func scheduleSilenceCheck(
         triggers: [String],
         onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void)

@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+// CLI for showing and applying exec policy presets across config and approvals.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -16,8 +16,8 @@ import {
   normalizeExecSecurity,
   normalizeExecTarget,
   readExecApprovalsSnapshot,
-  restoreExecApprovalsSnapshot,
-  saveExecApprovals,
+  restoreExecApprovalsSnapshotLocked,
+  updateExecApprovals,
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
@@ -125,11 +125,6 @@ function sanitizeExecPolicyTableCell(value: string): string {
 
 function sanitizeExecPolicyMessage(value: unknown): string {
   return sanitizeTerminalText(String(value));
-}
-
-function hashExecApprovalsFile(file: ExecApprovalsFile): string {
-  const raw = `${JSON.stringify(file, null, 2)}\n`;
-  return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
 function resolveExecPolicyInput(params: {
@@ -344,19 +339,20 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
   }
   const approvalsSnapshot = readExecApprovalsSnapshot();
   const nextApprovals = applyApprovalsDefaults(approvalsSnapshot.file, policy);
-  const writtenApprovalsHash = hashExecApprovalsFile(nextApprovals);
-  saveExecApprovals(nextApprovals);
+  const writtenApprovals = await updateExecApprovals({
+    baseHash: approvalsSnapshot.hash,
+    update: () => nextApprovals,
+  });
+  if (!writtenApprovals) {
+    throw new Error("Exec approvals changed; reload and retry.");
+  }
   try {
     await replaceConfigFile({
       baseHash: configSnapshot.hash,
       nextConfig,
     });
   } catch (err) {
-    const currentApprovalsSnapshot = readExecApprovalsSnapshot();
-    if (currentApprovalsSnapshot.hash !== writtenApprovalsHash) {
-      throw err;
-    }
-    restoreExecApprovalsSnapshot(approvalsSnapshot);
+    await restoreExecApprovalsSnapshotLocked(approvalsSnapshot, writtenApprovals.hash);
     throw err;
   }
   return await buildLocalExecPolicyShowPayload();

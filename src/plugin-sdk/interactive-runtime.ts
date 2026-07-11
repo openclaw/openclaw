@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for interactive replies and message presentation helpers.
+ */
 export {
   adaptMessagePresentationForChannel,
   applyPresentationActionLimits,
@@ -18,6 +21,9 @@ export type {
   MessagePresentationButton,
   MessagePresentationButtonStyle,
   MessagePresentationButtonsBlock,
+  MessagePresentationChartBlock,
+  MessagePresentationChartSegment,
+  MessagePresentationChartSeries,
   MessagePresentationContextBlock,
   MessagePresentationDividerBlock,
   MessagePresentationInteractiveBlock,
@@ -39,6 +45,7 @@ export {
   normalizeInteractiveReply,
   presentationToInteractiveControlsReply,
   presentationToInteractiveReply,
+  renderMessagePresentationChartFallbackText,
   renderMessagePresentationFallbackText,
   resolveMessagePresentationActionValue,
   resolveMessagePresentationControlValue,

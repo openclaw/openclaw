@@ -13,12 +13,12 @@ extension OnboardingView {
             self.welcomePage()
         case 1:
             self.connectionPage()
+        case 2:
+            self.cliPage()
         case 3:
-            self.wizardPage()
+            self.aiSetupPage()
         case 5:
             self.permissionsPage()
-        case 6:
-            self.cliPage()
         case 8:
             self.onboardingChatPage()
         case 9:
@@ -30,89 +30,121 @@ extension OnboardingView {
 
     func welcomePage() -> some View {
         self.onboardingPage {
-            VStack(spacing: 22) {
-                Text("Welcome to OpenClaw")
-                    .font(.largeTitle.weight(.semibold))
-                Text("OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
+            VStack(spacing: 18) {
+                VStack(spacing: 8) {
+                    Text("Welcome to OpenClaw")
+                        .font(.largeTitle.weight(.semibold))
+                    Text("Your personal AI assistant, living on your own Mac.")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+                Text(
+                    "It answers questions, works with your files and apps, and can chat with you " +
+                        "on WhatsApp or Telegram. Setup takes about two minutes.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .frame(maxWidth: 560)
+                    .frame(maxWidth: 520)
                     .fixedSize(horizontal: false, vertical: true)
 
-                self.onboardingCard(spacing: 10, padding: 14) {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(Color(nsColor: .systemOrange))
-                            .frame(width: 22)
-                            .padding(.top, 1)
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Security notice")
-                                .font(.headline)
-                            Text(
-                                "The connected AI agent (e.g. Claude) can trigger powerful actions on your Mac, " +
-                                    "including running commands, reading/writing files, and capturing screenshots — " +
-                                    "depending on the permissions you grant.\n\n" +
-                                    "Only enable OpenClaw if you understand the risks and trust the prompts and " +
-                                    "integrations you use.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
+                self.onboardingCard(spacing: 14, padding: 16) {
+                    self.featureRow(
+                        title: "Ask, create, and automate",
+                        subtitle: "Give your assistant tasks and let it help across your Mac.",
+                        systemImage: "sparkles")
+                    self.featureRow(
+                        title: "Chat wherever you like",
+                        subtitle: "This app, WhatsApp, Telegram, Discord, Slack — your choice.",
+                        systemImage: "bubble.left.and.bubble.right.fill")
+                    self.featureRow(
+                        title: "Stay in control",
+                        subtitle: "Everything runs where you decide, with permissions you grant.",
+                        systemImage: "hand.raised.fill")
                 }
                 .frame(maxWidth: 520)
+
+                Label {
+                    Text(
+                        "OpenClaw can take actions using the permissions and services you enable. " +
+                            "Review prompts and only connect tools you trust.")
+                } icon: {
+                    Image(systemName: "info.circle")
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 500, alignment: .leading)
             }
-            .padding(.top, 16)
+            .padding(.top, 8)
         }
     }
 
     func connectionPage() -> some View {
         self.onboardingPage {
-            Text("Choose your Gateway")
+            Text("Where should your assistant live?")
                 .font(.largeTitle.weight(.semibold))
             Text(
-                "OpenClaw uses a single Gateway that stays running. Pick this Mac, " +
-                    "connect to a discovered gateway nearby, or configure later.")
+                "Most people pick this Mac — OpenClaw installs everything and keeps it " +
+                    "running in the background. You can change this anytime in Settings.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
                 .frame(maxWidth: 520)
                 .fixedSize(horizontal: false, vertical: true)
 
             self.onboardingCard(spacing: 12, padding: 14) {
                 VStack(alignment: .leading, spacing: 10) {
                     self.connectionChoiceButton(
-                        title: "This Mac",
+                        title: "On this Mac",
+                        badge: "Recommended",
                         subtitle: self.localGatewaySubtitle,
-                        selected: self.state.connectionMode == .local)
+                        systemImage: "laptopcomputer",
+                        selected: self.selectedConnectionMode == .local)
                     {
                         self.selectLocalGateway()
                     }
 
-                    Divider().padding(.vertical, 4)
-
-                    self.gatewayDiscoverySection()
-
-                    if self.shouldShowRemoteConnectionSection {
-                        Divider().padding(.vertical, 4)
-                        self.remoteConnectionSection()
-                    }
-
                     self.connectionChoiceButton(
-                        title: "Configure later",
-                        subtitle: "Don’t start the Gateway yet.",
-                        selected: self.state.connectionMode == .unconfigured)
+                        title: "On another computer",
+                        badge: nil,
+                        subtitle: self.remoteChoiceSubtitle,
+                        systemImage: "network",
+                        selected: self.selectedConnectionMode == .remote)
                     {
-                        self.selectUnconfiguredGateway()
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                            self.showRemoteChoices.toggle()
+                        }
                     }
 
-                    self.advancedConnectionSection()
+                    if self.showRemoteChoices || self.selectedConnectionMode == .remote {
+                        self.gatewayDiscoverySection()
+
+                        if self.shouldShowRemoteConnectionSection {
+                            Divider().padding(.vertical, 4)
+                            self.remoteConnectionSection()
+                        }
+
+                        self.advancedConnectionSection()
+                    }
                 }
+            }
+
+            HStack {
+                Spacer(minLength: 0)
+                Button("Set up later") {
+                    self.selectUnconfiguredGateway()
+                }
+                .buttonStyle(.link)
+                .font(.callout)
+                .foregroundStyle(self.selectedConnectionMode == .unconfigured ? Color.accentColor : .secondary)
+                .help("Skip Gateway setup for now; pick Local or Remote later in Settings → General.")
+                Spacer(minLength: 0)
+            }
+            if self.selectedConnectionMode == .unconfigured {
+                Text("OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
             }
         }
         .onChange(of: self.state.connectionMode) { _, newValue in
@@ -131,11 +163,17 @@ extension OnboardingView {
         .onChange(of: self.state.remoteUrl) { _, _ in
             self.resetRemoteProbeFeedback()
         }
+        .onChange(of: self.state.remoteToken) { _, _ in
+            self.resetRemoteProbeFeedback()
+        }
+        .onChange(of: self.state.remoteIdentity) { _, _ in
+            self.resetRemoteProbeFeedback()
+        }
     }
 
     private var localGatewaySubtitle: String {
         guard let probe = self.localGatewayProbe else {
-            return "Gateway starts automatically on this Mac."
+            return "Private to this computer. Installs and starts automatically."
         }
         let base = probe.expected
             ? "Existing gateway detected"
@@ -144,41 +182,46 @@ extension OnboardingView {
         return "\(base)\(command). Will attach."
     }
 
+    private var remoteChoiceSubtitle: String {
+        let count = self.gatewayDiscovery.gateways.count
+        if count > 0 {
+            return count == 1
+                ? "1 gateway found on your network — click to choose it."
+                : "\(count) gateways found on your network — click to choose one."
+        }
+        return "For advanced setups — use a gateway that runs elsewhere."
+    }
+
     @ViewBuilder
     private func gatewayDiscoverySection() -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "dot.radiowaves.left.and.right")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(self.gatewayDiscovery.statusText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            if self.gatewayDiscovery.gateways.isEmpty {
-                ProgressView().controlSize(.small)
-                Button("Refresh") {
+        // Quiet by design: discovery runs in the background and must not make
+        // the page read as "loading" — no spinner, just a status line.
+        if self.gatewayDiscovery.gateways.isEmpty {
+            HStack(spacing: 8) {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Text("No gateways found on your network yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Look again") {
                     self.gatewayDiscovery.refreshRemoteFallbackNow(timeoutSeconds: 5.0)
                 }
                 .buttonStyle(.link)
-                .help("Retry remote discovery (Tailscale DNS-SD + Serve probe).")
-            }
-            Spacer(minLength: 0)
-        }
-
-        if self.gatewayDiscovery.gateways.isEmpty {
-            Text("Searching for nearby gateways…")
                 .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.leading, 4)
+                .help("Retry discovery (Bonjour + Tailscale DNS-SD).")
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, 4)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Nearby gateways")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 4)
                 ForEach(self.gatewayDiscovery.gateways.prefix(6)) { gateway in
                     self.connectionChoiceButton(
                         title: gateway.displayName,
+                        badge: nil,
                         subtitle: self.gatewaySubtitle(for: gateway),
+                        systemImage: "desktopcomputer",
+                        monospacedSubtitle: true,
                         selected: self.isSelectedGateway(gateway))
                     {
                         self.selectRemoteGateway(gateway)
@@ -321,7 +364,9 @@ extension OnboardingView {
                 return "Select a nearby gateway or open Advanced to enter a gateway URL."
             }
             if GatewayRemoteConfig.normalizeGatewayUrl(trimmedUrl) == nil {
-                return "Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, LAN, or Tailnet hosts."
+                return """
+                Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, LAN, or Tailnet hosts.
+                """
             }
             return nil
         case .ssh:
@@ -496,6 +541,7 @@ extension OnboardingView {
     private func resetRemoteProbeFeedback() {
         self.remoteProbeState = .idle
         self.remoteAuthIssue = nil
+        self.restartGatewayBoundAISetup()
     }
 
     static func remoteAuthPromptStyle(
@@ -558,7 +604,10 @@ extension OnboardingView {
 
     func connectionChoiceButton(
         title: String,
+        badge: String? = nil,
         subtitle: String?,
+        systemImage: String? = nil,
+        monospacedSubtitle: Bool = false,
         selected: Bool,
         action: @escaping () -> Void) -> some View
     {
@@ -567,18 +616,35 @@ extension OnboardingView {
                 action()
             }
         } label: {
-            HStack(alignment: .center, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                        .frame(width: 26)
+                }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.callout.weight(.semibold))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    HStack(spacing: 6) {
+                        Text(title)
+                            .font(.callout.weight(.semibold))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if let badge {
+                            Text(badge)
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Color.accentColor.opacity(0.16)))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
                     if let subtitle {
                         Text(subtitle)
-                            .font(.caption.monospaced())
+                            .font(monospacedSubtitle ? .caption.monospaced() : .caption)
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .lineLimit(2)
                             .truncationMode(.middle)
+                            .multilineTextAlignment(.leading)
                     }
                 }
                 Spacer(minLength: 0)
@@ -590,18 +656,28 @@ extension OnboardingView {
     }
 
     func permissionsPage() -> some View {
-        self.onboardingPage {
-            Text("Grant permissions")
-                .font(.largeTitle.weight(.semibold))
-            Text("These macOS permissions let OpenClaw automate apps and capture context on this Mac.")
+        // Fixed layout (no ScrollView): sorted by importance and sized so all
+        // permissions stay visible at once — no scrollbars during onboarding.
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Text("Grant permissions")
+                    .font(.largeTitle.weight(.semibold))
+                if self.isRequesting {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+            Text(
+                "These macOS permissions let OpenClaw automate apps and capture context on this Mac. " +
+                    "Status updates automatically.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
                 .fixedSize(horizontal: false, vertical: true)
 
-            self.onboardingCard(spacing: 8, padding: 12) {
-                ForEach(Capability.allCases, id: \.self) { cap in
+            self.onboardingCard(spacing: 4, padding: 12) {
+                ForEach(Capability.importanceOrdered, id: \.self) { cap in
                     PermissionRow(
                         capability: cap,
                         status: self.permissionMonitor.status[cap] ?? false,
@@ -610,82 +686,129 @@ extension OnboardingView {
                         Task { await self.request(cap) }
                     }
                 }
-
-                HStack(spacing: 12) {
-                    Button {
-                        Task { await self.refreshPerms() }
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("Refresh status")
-                    if self.isRequesting {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                }
-                .padding(.top, 4)
             }
         }
+        .padding(.horizontal, 28)
+        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
     }
 
     func cliPage() -> some View {
         self.onboardingPage {
-            Text("Install the CLI")
+            Text("Getting things ready")
                 .font(.largeTitle.weight(.semibold))
-            Text("Required for local mode: installs `openclaw` so launchd can run the gateway.")
+            Text(
+                "OpenClaw is setting up its background service on this Mac. " +
+                    "This usually takes under a minute — no Terminal, no administrator password.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
                 .fixedSize(horizontal: false, vertical: true)
 
-            self.onboardingCard(spacing: 10) {
-                HStack(spacing: 12) {
-                    Button {
-                        Task { await self.installCLI() }
-                    } label: {
-                        let title = self.cliInstalled ? "Reinstall CLI" : "Install CLI"
-                        ZStack {
-                            Text(title)
-                                .opacity(self.installingCLI ? 0 : 1)
-                            if self.installingCLI {
-                                ProgressView()
-                                    .controlSize(.mini)
-                            }
-                        }
-                        .frame(minWidth: 120)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(self.installingCLI)
+            self.onboardingCard(spacing: 14, padding: 16) {
+                self.installStepRow(
+                    title: "Install OpenClaw",
+                    detail: self.cliInstalled
+                        ? (self.cliInstallLocation ?? "Installed")
+                        : "A private copy inside your user folder.",
+                    state: self.installStepStateForInstall,
+                    monospacedDetail: self.cliInstalled && self.cliInstallLocation != nil)
+                self.installStepRow(
+                    title: "Start the background service",
+                    detail: "Runs quietly and starts again after a restart.",
+                    state: self.installStepStateForService)
+                self.installStepRow(
+                    title: "Ready for the next step",
+                    detail: "Once the service answers, you’ll connect your AI.",
+                    state: self.cliInstalled ? .done : .pending)
 
-                    Button(self.copied ? "Copied" : "Copy install command") {
-                        self.copyToPasteboard(self.devLinkCommand)
+                if self.installFailed {
+                    OnboardingErrorCard(
+                        title: "The Gateway didn’t start",
+                        message: self.cliStatus ?? "The installer did not finish.",
+                        docsSlug: "platforms/mac/bundled-gateway",
+                        retryTitle: "Try again")
+                    {
+                        self.startCLIInstall()
                     }
-                    .disabled(self.installingCLI)
-
-                    if self.cliInstalled, let loc = self.cliInstallLocation {
-                        Label("Installed at \(loc)", systemImage: "checkmark.circle.fill")
-                            .font(.footnote)
-                            .foregroundStyle(.green)
-                    }
-                }
-
-                if let cliStatus {
+                } else if let cliStatus, !self.cliInstalled {
                     Text(cliStatus)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                } else if !self.cliInstalled, self.cliInstallLocation == nil {
-                    Text(
-                        """
-                        Installs a user-space Node 22.19+ runtime and the CLI (no Homebrew).
-                        Rerun anytime to reinstall or update.
-                        """)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    private var installFailed: Bool {
+        self.cliStatusKnown && !self.installingCLI && !self.cliInstalled
+    }
+
+    /// Exactly one spinner at a time: the install row finishes before the
+    /// service row starts, mirroring the actual runCLIInstall phases.
+    private var installStepStateForInstall: InstallStepState {
+        if self.cliInstalled { return .done }
+        if self.installingCLI {
+            return self.cliInstallPhase == .startingService ? .done : .running
+        }
+        if self.installFailed { return .failed }
+        return .running // status probe still deciding
+    }
+
+    private var installStepStateForService: InstallStepState {
+        if self.cliInstalled { return .done }
+        if self.installingCLI {
+            return self.cliInstallPhase == .startingService ? .running : .pending
+        }
+        if self.installFailed { return .failed }
+        return .pending
+    }
+
+    enum InstallStepState {
+        case pending
+        case running
+        case done
+        case failed
+    }
+
+    private func installStepRow(
+        title: String,
+        detail: String,
+        state: InstallStepState,
+        monospacedDetail: Bool = false) -> some View
+    {
+        HStack(alignment: .top, spacing: 12) {
+            Group {
+                switch state {
+                case .pending:
+                    Image(systemName: "circle.dotted")
+                        .foregroundStyle(.tertiary)
+                case .running:
+                    ProgressView()
+                        .controlSize(.small)
+                case .done:
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                case .failed:
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.orange)
+                }
+            }
+            .font(.title3)
+            .frame(width: 26, height: 22)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(state == .pending ? Color.secondary : Color.primary)
+                Text(detail)
+                    .font(monospacedDetail ? .caption.monospaced() : .caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -780,13 +903,13 @@ extension OnboardingView {
     }
 
     func onboardingChatPage() -> some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Text("Meet your agent")
                 .font(.largeTitle.weight(.semibold))
             Text(
-                "This is a dedicated onboarding chat. Your agent will introduce itself, " +
-                    "learn who you are, and help you connect WhatsApp or Telegram if you want.")
-                .font(.body)
+                "Your agent introduces itself, picks a name with you, and helps you " +
+                    "connect WhatsApp, Telegram, or another channel — just chat.")
+                .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
@@ -804,8 +927,14 @@ extension OnboardingView {
 
     func readyPage() -> some View {
         self.onboardingPage {
-            Text("All set")
+            Text("You’re all set!")
                 .font(.largeTitle.weight(.semibold))
+            if self.state.connectionMode != .unconfigured {
+                Text("Finish opens the chat — say hi to your new agent.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
             self.onboardingCard {
                 if self.state.connectionMode == .unconfigured {
                     self.featureRow(
@@ -831,7 +960,7 @@ extension OnboardingView {
                     subtitle: "Click the OpenClaw menu bar icon for quick chat and status.",
                     systemImage: "bubble.left.and.bubble.right")
                 self.featureActionRow(
-                    title: "Connect WhatsApp or Telegram",
+                    title: "Connect Discord, Slack, Telegram, WhatsApp, …",
                     subtitle: "Open Settings → Channels to link channels and monitor status.",
                     systemImage: "link",
                     buttonTitle: "Open Settings → Channels")
@@ -863,10 +992,18 @@ extension OnboardingView {
             }
         }
         .task { await self.maybeLoadOnboardingSkills() }
+        .onChange(of: self.currentPage) { _, newValue in
+            // The pager builds every page up front, so the initial load above
+            // can run before the local gateway is configured and fail. Retry
+            // when the user actually lands here instead of latching the error.
+            guard self.activePageIndex(for: newValue) == self.pageOrder.last else { return }
+            Task { await self.maybeLoadOnboardingSkills() }
+        }
     }
 
     private func maybeLoadOnboardingSkills() async {
-        guard !self.didLoadOnboardingSkills else { return }
+        if self.onboardingSkillsModel.isLoading { return }
+        if self.didLoadOnboardingSkills, self.onboardingSkillsModel.error == nil { return }
         self.didLoadOnboardingSkills = true
         await self.onboardingSkillsModel.refresh()
     }

@@ -1,10 +1,10 @@
+/** Tests ACP event ledger recording, replay, retention, and SQLite migration. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
-  createFileAcpEventLedger,
   createInMemoryAcpEventLedger,
   createSqliteAcpEventLedger,
   migrateFileAcpEventLedgerToSqlite,
@@ -116,42 +116,6 @@ describe("ACP event ledger", () => {
     });
   });
 
-  it("persists file-backed replay state across ledger instances", async () => {
-    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const filePath = path.join(dir, "acp", "event-ledger.json");
-      const first = createFileAcpEventLedger({ filePath, now: () => 1000 });
-      await first.startSession({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        cwd: "/work",
-        complete: true,
-      });
-      await first.recordUpdate({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        runId: "run-1",
-        update: {
-          sessionUpdate: "agent_thought_chunk",
-          content: { type: "text", text: "Thinking" },
-        },
-      });
-
-      const second = createFileAcpEventLedger({ filePath });
-      const replay = await second.readReplay({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-      });
-
-      expect(replay.complete).toBe(true);
-      expect(replay.events).toHaveLength(1);
-      expect(replay.events[0]?.update).toEqual({
-        sessionUpdate: "agent_thought_chunk",
-        content: { type: "text", text: "Thinking" },
-      });
-      await expect(fs.readFile(filePath, "utf8")).resolves.toContain('"version":1');
-    });
-  });
-
   it("persists SQLite-backed replay state across ledger instances", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
       const databasePath = path.join(dir, "openclaw.sqlite");
@@ -192,22 +156,38 @@ describe("ACP event ledger", () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
       const filePath = path.join(dir, "acp", "event-ledger.json");
       const databasePath = path.join(dir, "openclaw.sqlite");
-      const legacy = createFileAcpEventLedger({ filePath, now: () => 1000 });
-      await legacy.startSession({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        cwd: "/work",
-        complete: true,
-      });
-      await legacy.recordUpdate({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        runId: "run-1",
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "Answer" },
-        },
-      });
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          version: 1,
+          sessions: {
+            "session-1": {
+              sessionId: "session-1",
+              sessionKey: "agent:main:work",
+              cwd: "/work",
+              complete: true,
+              createdAt: 1000,
+              updatedAt: 1000,
+              nextSeq: 2,
+              events: [
+                {
+                  seq: 1,
+                  at: 1000,
+                  sessionId: "session-1",
+                  sessionKey: "agent:main:work",
+                  runId: "run-1",
+                  update: {
+                    sessionUpdate: "agent_message_chunk",
+                    content: { type: "text", text: "Answer" },
+                  },
+                },
+              ],
+            },
+          },
+        }),
+        "utf8",
+      );
 
       const migrated = await migrateFileAcpEventLedgerToSqlite({
         filePath,
@@ -448,81 +428,4 @@ describe("ACP event ledger", () => {
     ).resolves.toEqual({ complete: false, events: [] });
   });
 
-  it("keeps the persisted ledger file under the serialized byte budget", async () => {
-    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const filePath = path.join(dir, "acp", "event-ledger.json");
-      const ledger = createFileAcpEventLedger({ filePath, maxSerializedBytes: 1024 });
-      await ledger.startSession({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        cwd: "/work",
-        complete: true,
-      });
-      await ledger.recordUpdate({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        update: {
-          sessionUpdate: "tool_call_update",
-          toolCallId: "tool-1",
-          status: "completed",
-          rawOutput: { content: "x".repeat(5_000) },
-        },
-      });
-
-      const bytes = Buffer.byteLength(await fs.readFile(filePath, "utf8"), "utf8");
-      expect(bytes).toBeLessThanOrEqual(1024);
-      await expect(
-        ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
-      ).resolves.toEqual({ complete: false, events: [] });
-    });
-  });
-
-  it("ignores corrupt ledger files instead of replaying unknown state", async () => {
-    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const filePath = path.join(dir, "event-ledger.json");
-      await fs.writeFile(filePath, "{bad json", "utf8");
-      const ledger = createFileAcpEventLedger({ filePath });
-
-      await expect(
-        ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
-      ).resolves.toEqual({ complete: false, events: [] });
-    });
-  });
-
-  it("reloads file-backed state under lock before writing", async () => {
-    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const filePath = path.join(dir, "acp", "event-ledger.json");
-      const first = createFileAcpEventLedger({ filePath });
-      const second = createFileAcpEventLedger({ filePath });
-
-      await first.startSession({
-        sessionId: "session-1",
-        sessionKey: "acp:gateway-session-1",
-        cwd: "/work",
-        complete: true,
-      });
-      await second.startSession({
-        sessionId: "session-2",
-        sessionKey: "acp:gateway-session-2",
-        cwd: "/work",
-        complete: true,
-      });
-      await first.recordUpdate({
-        sessionId: "session-1",
-        sessionKey: "acp:gateway-session-1",
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "Answer" },
-        },
-      });
-
-      const reader = createFileAcpEventLedger({ filePath });
-      const replay = await reader.readReplay({
-        sessionId: "session-2",
-        sessionKey: "acp:gateway-session-2",
-      });
-      expect(replay.complete).toBe(true);
-      expect(replay.sessionKey).toBe("acp:gateway-session-2");
-    });
-  });
 });

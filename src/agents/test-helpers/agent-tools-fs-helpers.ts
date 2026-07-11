@@ -1,7 +1,13 @@
+/**
+ * Filesystem tool assertion helpers for tests.
+ *
+ * Extracts text result blocks and asserts common read/write/edit tool bundles.
+ */
 import { expect } from "vitest";
 
 type TextResultBlock = { type: string; text?: string };
 
+/** Extracts the first text block from a tool result. */
 export function getTextContent(result?: { content?: TextResultBlock[] }) {
   const textBlock = result?.content?.find((block) => block.type === "text");
   return textBlock?.text ?? "";
@@ -15,6 +21,7 @@ function expectTool<T extends { name: string }>(tools: T[], name: string): T {
   return tool;
 }
 
+/** Asserts read/write/edit tools are present and returns them by name. */
 export function expectReadWriteEditTools<T extends { name: string }>(tools: T[]) {
   const names = tools.map((tool) => tool.name);
   expect(names).toContain("read");
@@ -27,6 +34,7 @@ export function expectReadWriteEditTools<T extends { name: string }>(tools: T[])
   };
 }
 
+/** Asserts read/write tools are present and returns them by name. */
 export function expectReadWriteTools<T extends { name: string }>(tools: T[]) {
   const names = tools.map((tool) => tool.name);
   expect(names).toContain("read");

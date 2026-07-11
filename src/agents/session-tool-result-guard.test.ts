@@ -1,3 +1,4 @@
+// Verifies session tool-result guard inserts, truncates, and repairs tool results.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
@@ -32,6 +33,7 @@ function appendAssistantToolCall(
   sm: SessionManager,
   params: { id: string; name: string; withArguments?: boolean },
 ) {
+  // Builds pending tool calls with optional missing arguments for repair cases.
   const toolCall: {
     type: "toolCall";
     id: string;
@@ -61,6 +63,7 @@ function getPersistedMessages(sm: SessionManager): AgentMessage[] {
 }
 
 function expectPersistedRoles(sm: SessionManager, expectedRoles: AgentMessage["role"][]) {
+  // Role-order assertions prove where synthetic toolResult messages were inserted.
   const messages = getPersistedMessages(sm);
   expect(messages.map((message) => message.role)).toEqual(expectedRoles);
   return messages;
@@ -387,9 +390,7 @@ describe("installSessionToolResultGuard", () => {
     );
 
     const messages = expectPersistedRoles(sm, ["assistant", "assistant", "toolResult"]);
-    expect((messages[2] as { toolCallId?: string; isError?: boolean }).toolCallId).toBe(
-      "call_1",
-    );
+    expect((messages[2] as { toolCallId?: string; isError?: boolean }).toolCallId).toBe("call_1");
     expect((messages[2] as { isError?: boolean }).isError).toBe(false);
     expect(JSON.stringify(messages)).not.toContain("missing tool result");
     expect(guard.getPendingIds()).toStrictEqual(["call_2"]);
@@ -456,8 +457,12 @@ describe("installSessionToolResultGuard", () => {
 
   it("blocks persistence when before_message_write returns block=true", () => {
     const sm = SessionManager.inMemory();
+    const blockedUserMessages: AgentMessage[] = [];
     installSessionToolResultGuard(sm, {
       beforeMessageWriteHook: () => ({ block: true }),
+      onUserMessageBlocked: (message) => {
+        blockedUserMessages.push(message);
+      },
     });
 
     sm.appendMessage(
@@ -469,6 +474,8 @@ describe("installSessionToolResultGuard", () => {
     );
 
     expect(getPersistedMessages(sm)).toHaveLength(0);
+    expect(blockedUserMessages).toHaveLength(1);
+    expect(blockedUserMessages[0]).toMatchObject({ role: "user", content: "hidden" });
   });
 
   it("applies before_message_write message mutations before persistence", () => {

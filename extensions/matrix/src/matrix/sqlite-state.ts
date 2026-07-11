@@ -1,7 +1,8 @@
+// Matrix plugin module implements sqlite state behavior.
 import os from "node:os";
 import { getMatrixRuntime } from "../runtime.js";
 
-export type MatrixSqliteStateOptions = {
+type MatrixSqliteStateOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   stateRootDir?: string;

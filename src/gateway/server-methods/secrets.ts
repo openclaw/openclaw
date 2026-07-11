@@ -1,3 +1,5 @@
+// Secrets gateway methods reload runtime secret snapshots and resolve scoped
+// command secrets while redacting validation detail to caller-friendly fields.
 import {
   ErrorCodes,
   errorShape,
@@ -5,7 +7,7 @@ import {
   validateSecretsResolveParams,
   validateSecretsResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { isKnownSecretTargetId } from "../../secrets/target-registry.js";
+import { isKnownCoreSecretTargetId, isKnownSecretTargetId } from "../../secrets/target-registry.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function errorMessage(error: unknown): string {
@@ -130,7 +132,7 @@ export function createSecretsHandlers(params: {
       // Target ids are a closed registry. Reject unknown ids before resolving
       // so callers cannot probe arbitrary config paths through this method.
       for (const targetId of targetIds) {
-        if (!isKnownSecretTargetId(targetId)) {
+        if (!isKnownCoreSecretTargetId(targetId) && !isKnownSecretTargetId(targetId)) {
           respond(
             false,
             undefined,

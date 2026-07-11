@@ -1,3 +1,4 @@
+/** Sends cron announce payloads and best-effort failure notifications. */
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
@@ -37,6 +38,7 @@ export type CronAnnounceTarget = {
   to?: string;
   accountId?: string;
   sessionKey?: string;
+  inheritSessionThread?: boolean;
 };
 
 type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
@@ -55,12 +57,21 @@ async function resolveCronAnnounceDelivery(params: {
     }
   | { ok: false; error: Error }
 > {
-  const resolvedTarget = await resolveDeliveryTarget(params.cfg, params.agentId, {
-    channel: params.target.channel as CronMessageChannel | undefined,
-    to: params.target.to,
-    accountId: params.target.accountId,
-    sessionKey: params.target.sessionKey,
-  });
+  // Resolve the target before building outbound identity/session so send errors
+  // report the configured route, not only the cron job id.
+  const targetResolutionOptions =
+    params.target.inheritSessionThread === false ? { inheritSessionThread: false } : undefined;
+  const resolvedTarget = await resolveDeliveryTarget(
+    params.cfg,
+    params.agentId,
+    {
+      channel: params.target.channel as CronMessageChannel | undefined,
+      to: params.target.to,
+      accountId: params.target.accountId,
+      sessionKey: params.target.sessionKey,
+    },
+    targetResolutionOptions,
+  );
 
   if (!resolvedTarget.ok) {
     return { ok: false, error: resolvedTarget.error };
@@ -95,6 +106,8 @@ async function deliverCronAnnouncePayload(params: {
   message: string;
   abortSignal: AbortSignal;
 }): Promise<void> {
+  // Cron delivery is durable and non-best-effort for primary announces; partial
+  // channel failure must surface as a cron run failure.
   const send = await sendDurableMessageBatch({
     cfg: params.cfg,
     channel: params.delivery.resolvedTarget.channel,

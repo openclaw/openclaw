@@ -1,3 +1,4 @@
+// Signal type declarations define plugin contracts.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   DmPolicy,
@@ -15,7 +16,10 @@ export type SignalEnvelope = {
   sourceName?: string | null;
   timestamp?: number | null;
   dataMessage?: SignalDataMessage | null;
-  editMessage?: { dataMessage?: SignalDataMessage | null } | null;
+  editMessage?: {
+    targetSentTimestamp?: number | null;
+    dataMessage?: SignalDataMessage | null;
+  } | null;
   syncMessage?: unknown;
   reactionMessage?: SignalReactionMessage | null;
 };
@@ -75,8 +79,19 @@ export type SignalReceivePayload = {
   exception?: { message?: string } | null;
 };
 
+export type SignalNativeReplyContext = {
+  replyToId?: string;
+  author?: string;
+  body?: string;
+  state?: {
+    hasReplied: boolean;
+  };
+};
+
 export type SignalEventHandlerDeps = {
   runtime: RuntimeEnv;
+  abortSignal?: AbortSignal;
+  runTrackedTask?: (task: () => Promise<void>) => void;
   cfg: OpenClawConfig;
   baseUrl: string;
   account?: string;
@@ -110,10 +125,13 @@ export type SignalEventHandlerDeps = {
     target: string;
     baseUrl: string;
     account?: string;
+    accountUuid?: string;
     accountId?: string;
     runtime: RuntimeEnv;
     maxBytes: number;
     textLimit: number;
+    replyContext?: SignalNativeReplyContext;
+    chatType?: "direct" | "group";
   }) => Promise<void>;
   resolveSignalReactionTargets: (reaction: SignalReactionMessage) => SignalReactionTarget[];
   isSignalReactionMessage: (

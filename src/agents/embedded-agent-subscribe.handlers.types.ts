@@ -1,3 +1,8 @@
+/**
+ * Shared state and context contracts for embedded-agent subscription handlers.
+ * Message, tool, compaction, and liveness handlers all mutate this single
+ * state shape while keeping their implementation files decoupled.
+ */
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
@@ -35,14 +40,18 @@ type EmbeddedSubscribeLogger = {
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
 
+/** Per-tool metadata tracked between tool start/update/end events. */
 export type ToolCallSummary = {
   meta?: string;
+  instanceReplaySafe: boolean;
+  replaySafe: boolean;
   mutatingAction: boolean;
   actionFingerprint?: string;
   fileTarget?: import("./tool-mutation.js").FileTarget;
 };
 
-export type AssistantStreamData = {
+/** User-visible assistant stream payload emitted to subscribers. */
+type AssistantStreamData = {
   text: string;
   delta: string;
   replace?: true;
@@ -50,16 +59,20 @@ export type AssistantStreamData = {
   phase?: AssistantPhase;
 };
 
-export type AssistantStreamDelivery = {
+/** Deferred assistant stream event plus whether it should emit partial replies. */
+type AssistantStreamDelivery = {
   data: AssistantStreamData;
   emitPartialReply: boolean;
 };
 
+/** Mutable subscription state shared by embedded-agent event handlers. */
 export type EmbeddedAgentSubscribeState = {
   assistantTexts: string[];
   toolMetas: Array<{
     toolName?: string;
     meta?: string;
+    replaySafe?: boolean;
+    isError?: true;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -119,6 +132,7 @@ export type EmbeddedAgentSubscribeState = {
   toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
+  lastAssistantStreamContentIndex?: number;
   lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;
   lastAssistantTextNormalized?: string;
@@ -142,6 +156,7 @@ export type EmbeddedAgentSubscribeState = {
   yielded?: boolean;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  terminalAborted?: boolean;
   hadDeterministicSideEffect?: boolean;
   pendingEventChain: Promise<void> | null;
 
@@ -151,6 +166,7 @@ export type EmbeddedAgentSubscribeState = {
   heartbeatToolResponse?: HeartbeatToolResponse;
   messagingToolSentMediaUrls: string[];
   messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
+  messageToolOnlySourceReplyDelivered: boolean;
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
   successfulCronAdds: number;
@@ -158,6 +174,7 @@ export type EmbeddedAgentSubscribeState = {
   pendingToolMediaUrls: string[];
   pendingToolAudioAsVoice: boolean;
   pendingToolTrustedLocalMedia: boolean;
+  hasToolMediaBlockReply: boolean;
   visibleBlockReplyCount: number;
   pendingAssistantReplyDirectives?: Pick<
     BlockReplyPayload,
@@ -168,6 +185,7 @@ export type EmbeddedAgentSubscribeState = {
   lastAssistant?: AgentMessage;
 };
 
+/** Handler context bundling params, mutable state, emitters, and helper hooks. */
 export type EmbeddedAgentSubscribeContext = {
   params: SubscribeEmbeddedAgentSessionParams;
   state: EmbeddedAgentSubscribeState;
@@ -225,6 +243,7 @@ export type EmbeddedAgentSubscribeContext = {
     chunkerHasBuffered: boolean;
   }) => void;
   trimMessagingToolSent: () => void;
+  consumeToolSendReceipt: (toolCallId: string) => unknown;
   ensureCompactionPromise: () => void;
   noteCompactionRetry: () => void;
   resolveCompactionRetry: () => void;
@@ -240,7 +259,10 @@ export type EmbeddedAgentSubscribeContext = {
     data: AssistantStreamData,
     options?: { emitPartialReply?: boolean },
   ) => void;
-  emitBlockReply: (payload: BlockReplyPayload) => void;
+  emitBlockReply: (
+    payload: BlockReplyPayload,
+    options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
+  ) => void;
   flushDeferredAssistantEvents: () => void;
   flushDeferredBlockReplies: () => void;
   clearDeferredAssistantEvents: () => void;
@@ -257,14 +279,26 @@ type ToolHandlerParams = Pick<
   | "runId"
   | "onBlockReplyFlush"
   | "onAgentEvent"
+  | "onToolStreamBoundary"
   | "onExecutionPhase"
   | "onHeartbeatToolResponse"
+  | "onAgentToolResult"
   | "onToolResult"
+  | "config"
+  | "messageChannel"
   | "sessionKey"
+  | "currentChannelId"
+  | "currentMessagingTarget"
+  | "currentThreadId"
+  | "currentMessageId"
+  | "replyToMode"
+  | "hasRepliedRef"
   | "sessionId"
   | "agentId"
+  | "replaySafeToolNames"
   | "toolResultFormat"
   | "toolProgressDetail"
+  | "sourceReplyDeliveryMode"
 >;
 
 type ToolHandlerState = Pick<
@@ -291,11 +325,13 @@ type ToolHandlerState = Pick<
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
   | "messagingToolSourceReplyPayloads"
+  | "messageToolOnlySourceReplyDelivered"
   | "messagingToolSentTargets"
   | "heartbeatToolResponse"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
   | "toolExecutionSinceLastBlockReply"
+  | "assistantMessageIndex"
 >;
 
 export type ToolHandlerContext = {
@@ -311,6 +347,7 @@ export type ToolHandlerContext = {
   emitToolSummary: (toolName?: string, meta?: string) => void;
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
   trimMessagingToolSent: () => void;
+  consumeToolSendReceipt?: (toolCallId: string) => unknown;
 };
 
 export type EmbeddedAgentSubscribeEvent =

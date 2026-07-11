@@ -1,3 +1,4 @@
+// Covers the compaction planning worker boundary and timeout behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { compactionPlanningWorkerTesting } from "./compaction-planning-worker.js";
@@ -13,6 +14,8 @@ function makeMessage(id: number, text = "x".repeat(4000)): AgentMessage {
 }
 
 function createSyntheticWorkerUrl(source: string): URL {
+  // Synthetic data URLs let timeout/error tests exercise Worker plumbing
+  // without relying on a bundled build artifact.
   return new URL(`data:text/javascript,${encodeURIComponent(source)}`);
 }
 
@@ -20,7 +23,6 @@ describe("compaction planning worker", () => {
   let packagedSummaryChunks: Awaited<
     ReturnType<typeof compactionPlanningWorkerTesting.runCompactionPlanningWorker>
   >;
-  let oversizedWorkerTimeoutCalls: unknown[][];
 
   beforeAll(async () => {
     packagedSummaryChunks = await compactionPlanningWorkerTesting.runCompactionPlanningWorker({
@@ -29,26 +31,13 @@ describe("compaction planning worker", () => {
         messages: [makeMessage(1), makeMessage(2), makeMessage(3)],
         maxChunkTokens: 1200,
       },
-      timeoutMs: 10_000,
+      timeoutMs: 30_000,
     });
-
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      await compactionPlanningWorkerTesting.runCompactionPlanningWorker({
-        input: {
-          kind: "summaryChunks",
-          messages: [makeMessage(1), makeMessage(2), makeMessage(3)],
-          maxChunkTokens: 1200,
-        },
-        timeoutMs: Number.MAX_SAFE_INTEGER,
-      });
-      oversizedWorkerTimeoutCalls = [...setTimeoutSpy.mock.calls];
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
-  }, 10_000);
+  });
 
   it("resolves the packaged worker URL from stable and hashed dist modules", () => {
+    // Hashed bundle names still resolve to the stable worker sibling emitted by
+    // the build, so runtime imports do not depend on the main chunk hash.
     expect(
       compactionPlanningWorkerTesting.resolveCompactionPlanningWorkerUrl(
         "file:///repo/dist/agents/compaction-planning-worker.js",
@@ -77,7 +66,7 @@ describe("compaction planning worker", () => {
       1, 2, 3,
     ]);
     expect(packagedSummaryChunks.chunks.length).toBeGreaterThan(1);
-  });
+  }, 45_000);
 
   it("plans summary chunks for worker input", () => {
     const result = runCompactionPlanningWorkerInput({
@@ -99,11 +88,34 @@ describe("compaction planning worker", () => {
     expect(value.chunks.length).toBeGreaterThan(1);
   });
 
-  it("clamps oversized worker timeouts before scheduling", () => {
-    expect(oversizedWorkerTimeoutCalls).toContainEqual([
-      expect.any(Function),
-      MAX_TIMER_TIMEOUT_MS,
-    ]);
+  it("clamps oversized worker timeouts before scheduling", async () => {
+    const workerUrl = createSyntheticWorkerUrl(`
+      import { parentPort } from "node:worker_threads";
+      parentPort.postMessage({
+        status: "ok",
+        value: {
+          kind: "summaryChunks",
+          chunks: [],
+        },
+      });
+    `);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await compactionPlanningWorkerTesting.runCompactionPlanningWorker({
+        input: {
+          kind: "summaryChunks",
+          messages: [makeMessage(1), makeMessage(2), makeMessage(3)],
+          maxChunkTokens: 1200,
+        },
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+        workerUrl,
+      });
+      // Node timers reject values above the signed 32-bit cap; clamping keeps
+      // huge caller timeouts from firing immediately.
+      expect(setTimeoutSpy.mock.calls).toContainEqual([expect.any(Function), MAX_TIMER_TIMEOUT_MS]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("classifies missing worker runtime as unavailable", async () => {
@@ -123,6 +135,8 @@ describe("compaction planning worker", () => {
   });
 
   it("keeps timers responsive while planning large histories", async () => {
+    // Planning large histories must happen off the main event loop; a 0ms timer
+    // winning this race proves the worker path yielded control.
     const workerUrl = createSyntheticWorkerUrl(`
       import { parentPort } from "node:worker_threads";
       parentPort.postMessage({

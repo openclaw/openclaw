@@ -1,18 +1,30 @@
+// Gateway mutable runtime handles.
+// Provides stop-safe defaults for timers, sidecars, subscriptions, and services.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
+import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
-type GatewayConfigReloaderHandle = {
+// Mutable server handles track timers, sidecars, subscriptions, and service
+// cleanup hooks that shutdown/reload code must stop exactly once.
+// `hotReloadStatus` is omitted (not defaulted to "active") when no real
+// watcher is running, so health can distinguish "no reloader" from "reloader
+// active" instead of guessing.
+export type GatewayConfigReloaderHandle = {
   stop: () => Promise<void>;
+  hotReloadStatus?: () => GatewayHotReloadStatus;
 };
 
+/** Mutable handles owned by a running gateway server process. */
 export type GatewayServerMutableState = {
   bonjourStop: (() => Promise<void>) | null;
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
+  worktreeCleanup: ReturnType<typeof setInterval> | null;
+  skillCuratorCleanup: () => void;
   heartbeatRunner: HeartbeatRunner;
   stopGatewayUpdateCheck: () => void;
   tailscaleCleanup: (() => Promise<void>) | null;
@@ -25,14 +37,18 @@ export type GatewayServerMutableState = {
   stopModelPricingRefresh: () => void;
   mcpServer: { port: number; close: () => Promise<void> } | undefined;
   configReloader: GatewayConfigReloaderHandle;
-  agentUnsub: (() => void) | null;
+  agentUnsub: (() => Promise<void> | void) | null;
   heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
+  taskUnsub: (() => void) | null;
 };
 
+/** Creates gateway mutable state with inert handles that are safe to stop before startup finishes. */
 export function createGatewayServerMutableState(): GatewayServerMutableState {
   const noopInterval = () => {
+    // Dummy unref'd timers give shutdown code a concrete handle to clear even
+    // when startup exits before real maintenance intervals are installed.
     const timer = setInterval(() => {}, 1 << 30);
     timer.unref?.();
     return timer;
@@ -43,6 +59,8 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     healthInterval: noopInterval(),
     dedupeCleanup: noopInterval(),
     mediaCleanup: null as ReturnType<typeof setInterval> | null,
+    worktreeCleanup: null as ReturnType<typeof setInterval> | null,
+    skillCuratorCleanup: () => {},
     heartbeatRunner: {
       stop: () => {},
       updateConfig: (_cfg: OpenClawConfig) => {},
@@ -58,9 +76,10 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     stopModelPricingRefresh: () => {},
     mcpServer: undefined as { port: number; close: () => Promise<void> } | undefined,
     configReloader: { stop: async () => {} } satisfies GatewayConfigReloaderHandle,
-    agentUnsub: null as (() => void) | null,
+    agentUnsub: null as (() => Promise<void> | void) | null,
     heartbeatUnsub: null as (() => void) | null,
     transcriptUnsub: null as (() => void) | null,
     lifecycleUnsub: null as (() => void) | null,
+    taskUnsub: null as (() => void) | null,
   };
 }

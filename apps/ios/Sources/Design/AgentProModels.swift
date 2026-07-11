@@ -329,14 +329,24 @@ struct AgentConfigLite: Decodable {
 struct ConfigPatchParams: Encodable {
     let raw: String
     let baseHash: String
+    let replacePaths: [String]?
+
+    init(raw: String, baseHash: String, replacePaths: [String]? = nil) {
+        self.raw = raw
+        self.baseHash = baseHash
+        self.replacePaths = replacePaths
+    }
 }
 
 enum SkillMutationError: LocalizedError {
+    case liveGatewayUnavailable
     case missingConfigHash
     case invalidPatchPayload
 
     var errorDescription: String? {
         switch self {
+        case .liveGatewayUnavailable:
+            "Connect a live gateway to edit agent skills."
         case .missingConfigHash:
             "Config hash missing; refresh and retry."
         case .invalidPatchPayload:

@@ -1,3 +1,4 @@
+// Gateway RPC handlers for plugin approval requests and decisions.
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -16,6 +17,7 @@ import {
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   bindApprovalRequesterMetadata,
+  bindApprovalReviewerDeviceIds,
   buildRequestedApprovalEvent,
   handleApprovalResolve,
   handleApprovalWaitDecision,
@@ -26,6 +28,7 @@ import {
 } from "./approval-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/** Create plugin approval handlers backed by the shared approval manager. */
 export function createPluginApprovalHandlers(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
   opts?: { forwarder?: ExecApprovalForwarder },
@@ -58,6 +61,7 @@ export function createPluginApprovalHandlers(
         allowedDecisions?: string[] | null;
         agentId?: string | null;
         sessionKey?: string | null;
+        approvalReviewerDeviceIds?: string[];
         turnSourceChannel?: string | null;
         turnSourceTo?: string | null;
         turnSourceAccountId?: string | null;
@@ -97,6 +101,12 @@ export function createPluginApprovalHandlers(
       // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       bindApprovalRequesterMetadata({ record, client });
+      if (client?.internal?.approvalRuntime === true) {
+        bindApprovalReviewerDeviceIds({
+          record,
+          deviceIds: p.approvalReviewerDeviceIds,
+        });
+      }
 
       const decisionPromise = registerPendingApprovalRecord({
         manager,

@@ -1,3 +1,5 @@
+// Covers directory cache key dimensions, TTL expiration, config invalidation,
+// recency refresh, bounded eviction, and matching clears.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DirectoryCache, buildDirectoryCacheKey } from "./directory-cache.js";
@@ -11,7 +13,7 @@ describe("buildDirectoryCacheKey", () => {
         kind: "channel",
         source: "cache",
       },
-      expected: "workspace:default:channel:cache:default",
+      expected: "workspace:default:channel:cache:default:query:",
     },
     {
       input: {
@@ -20,8 +22,9 @@ describe("buildDirectoryCacheKey", () => {
         kind: "user",
         source: "live",
         signature: "v2",
+        query: "alice",
       },
-      expected: "richchat:work:user:live:v2",
+      expected: "richchat:work:user:live:v2:query:alice",
     },
   ] satisfies Array<{ input: DirectoryCacheKey; expected: string }>)(
     "includes account and signature fallbacks for %j",

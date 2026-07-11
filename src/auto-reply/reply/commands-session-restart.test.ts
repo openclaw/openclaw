@@ -1,3 +1,4 @@
+// Tests session restart command behavior and runtime reset handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
@@ -6,7 +7,7 @@ import type { HandleCommandsParams } from "./commands-types.js";
 type ScheduleGatewayRestartArgs = Parameters<typeof scheduleGatewaySigusr1Restart>[0];
 
 const mocks = vi.hoisted(() => ({
-  unlink: vi.fn(async (_path: string) => undefined),
+  clearRestartSentinel: vi.fn(async () => undefined),
   isRestartEnabled: vi.fn(() => true),
   extractDeliveryInfo: vi.fn(() => ({
     deliveryContext: {
@@ -20,18 +21,11 @@ const mocks = vi.hoisted(() => ({
     () =>
       "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
   ),
-  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => "/tmp/sentinel.json"),
+  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
   scheduleGatewaySigusr1Restart: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
     scheduled: true,
   })),
   triggerOpenClawRestart: vi.fn(() => ({ ok: true, method: "launchctl" })),
-}));
-
-vi.mock("node:fs/promises", () => ({
-  default: {
-    unlink: mocks.unlink,
-  },
-  unlink: mocks.unlink,
 }));
 
 vi.mock("../../config/commands.flags.js", () => ({
@@ -66,6 +60,7 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   );
   return {
     ...actual,
+    clearRestartSentinel: mocks.clearRestartSentinel,
     formatDoctorNonInteractiveHint: mocks.formatDoctorNonInteractiveHint,
     writeRestartSentinel: mocks.writeRestartSentinel,
   };
@@ -118,7 +113,7 @@ describe("handleRestartCommand", () => {
   beforeEach(() => {
     mocks.isRestartEnabled.mockReset();
     mocks.isRestartEnabled.mockReturnValue(true);
-    mocks.unlink.mockClear();
+    mocks.clearRestartSentinel.mockClear();
     mocks.extractDeliveryInfo.mockClear();
     mocks.formatDoctorNonInteractiveHint.mockClear();
     mocks.writeRestartSentinel.mockClear();
@@ -179,6 +174,18 @@ describe("handleRestartCommand", () => {
     }
   });
 
+  it("threads sessionKey into scheduleGatewaySigusr1Restart so cross-session coalescing is rejected (#86742)", async () => {
+    const handler = () => {};
+    process.on("SIGUSR1", handler);
+    try {
+      await handleRestartCommand(restartCommandParams(), true);
+      const scheduledArgs = mocks.scheduleGatewaySigusr1Restart.mock.calls.at(-1)?.[0];
+      expect(scheduledArgs?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
+    } finally {
+      process.removeListener("SIGUSR1", handler);
+    }
+  });
+
   it("rejects authorized non-owner restart commands", async () => {
     const result = await handleRestartCommand(
       restartCommandParams({
@@ -205,7 +212,7 @@ describe("handleRestartCommand", () => {
     expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
   });
 
-  it("removes the success sentinel when fallback restart fails", async () => {
+  it("clears the success sentinel when fallback restart fails", async () => {
     mocks.triggerOpenClawRestart.mockReturnValueOnce({
       ok: false,
       method: "launchctl",
@@ -214,6 +221,6 @@ describe("handleRestartCommand", () => {
     const result = await handleRestartCommand(restartCommandParams(), true);
 
     expect(result?.reply?.text).toContain("Restart failed");
-    expect(mocks.unlink).toHaveBeenCalledWith("/tmp/sentinel.json");
+    expect(mocks.clearRestartSentinel).toHaveBeenCalledOnce();
   });
 });

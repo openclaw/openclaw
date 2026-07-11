@@ -1,7 +1,9 @@
+// Qa Lab tests cover run plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../evidence-summary.js";
 import { runMantisBeforeAfter } from "./run.runtime.js";
 
 describe("mantis before/after runtime", () => {
@@ -31,25 +33,31 @@ describe("mantis before/after runtime", () => {
       const videoPath = path.join(outputDir, `${lane}-timeline.mp4`);
       await fs.writeFile(screenshotPath, `${lane} screenshot`);
       await fs.writeFile(videoPath, `${lane} video`);
-      await fs.writeFile(
-        path.join(outputDir, "discord-qa-summary.json"),
-        `${JSON.stringify(
+      const summary = buildLiveTransportEvidenceSummary({
+        artifactPaths: [
+          { kind: "summary", path: QA_EVIDENCE_FILENAME },
+          { kind: "report", path: "discord-qa-report.md" },
+        ],
+        checks: [
           {
-            scenarios: [
-              {
-                artifactPaths: { screenshot: screenshotPath, video: videoPath },
-                details:
-                  lane === "baseline"
-                    ? "reaction timeline missing thinking/done"
-                    : "reaction timeline matched queued -> thinking -> done",
-                id: "discord-status-reactions-tool-only",
-                status: lane === "baseline" ? "fail" : "pass",
-              },
-            ],
+            artifactPaths: { screenshot: screenshotPath, video: videoPath },
+            details:
+              lane === "baseline"
+                ? "reaction timeline missing thinking/done"
+                : "reaction timeline matched queued -> thinking -> done",
+            id: "discord-status-reactions-tool-only",
+            status: lane === "baseline" ? "fail" : "pass",
+            title: "Discord explicit status reactions run in tool-only reply mode",
           },
-          null,
-          2,
-        )}\n`,
+        ],
+        generatedAt: "2026-05-03T12:00:00.000Z",
+        primaryModel: "openai/gpt-5.4",
+        providerMode: "live-frontier",
+        transportId: "discord",
+      });
+      await fs.writeFile(
+        path.join(outputDir, QA_EVIDENCE_FILENAME),
+        `${JSON.stringify(summary, null, 2)}\n`,
       );
     });
 

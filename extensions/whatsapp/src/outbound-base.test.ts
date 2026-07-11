@@ -1,3 +1,4 @@
+// Whatsapp tests cover outbound base plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createWhatsAppOutboundBase } from "./outbound-base.js";
 import { createWhatsAppPollFixture } from "./outbound-test-support.js";
@@ -103,6 +104,41 @@ describe("createWhatsAppOutboundBase", () => {
     expect(options.mediaUrl).toBe("/tmp/workspace/voice.ogg");
     expect(options.audioAsVoice).toBe(true);
     expect(options.accountId).toBe("default");
+  });
+
+  it("forwards internal send progress with channel identity", async () => {
+    const sendMessageWhatsApp = vi.fn(async (_to, _text, options) => {
+      await options.onDeliveryResult?.({
+        messageId: "msg-voice",
+        toJid: "15551234567@s.whatsapp.net",
+      });
+      return {
+        messageId: "msg-caption",
+        toJid: "15551234567@s.whatsapp.net",
+      };
+    });
+    const outbound = createWhatsAppOutboundBase({
+      chunker: (text) => [text],
+      sendMessageWhatsApp,
+      sendPollWhatsApp: vi.fn(),
+      shouldLogVerbose: () => false,
+      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
+    });
+    const onDeliveryResult = vi.fn();
+
+    await outbound.sendMedia!({
+      cfg: {} as never,
+      to: "whatsapp:+15551234567",
+      text: "voice",
+      mediaUrl: "/tmp/voice.ogg",
+      onDeliveryResult,
+    });
+
+    expect(onDeliveryResult).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      messageId: "msg-voice",
+      toJid: "15551234567@s.whatsapp.net",
+    });
   });
 
   it("uses the configured default account for quote metadata lookup when accountId is omitted", async () => {

@@ -1,3 +1,4 @@
+// Channels remove tests cover config mutation, plugin catalog repair hints, and account removal behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -58,7 +59,7 @@ vi.mock("./channel-setup/plugin-install.js", async () => {
   return createMockChannelSetupPluginInstallModule(actual);
 });
 
-vi.mock("../cli/plugins-registry-refresh.js", () => registryRefreshMocks);
+vi.mock("../plugins/registry-refresh.js", () => registryRefreshMocks);
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: gatewayMocks.callGateway,

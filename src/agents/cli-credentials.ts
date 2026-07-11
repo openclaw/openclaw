@@ -1,4 +1,8 @@
-import { execFileSync, execSync } from "node:child_process";
+/**
+ * Reads and refreshes credentials stored by external CLI runtimes such as
+ * Claude Code, Codex, Gemini, and MiniMax.
+ */
+import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,11 +11,10 @@ import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
-import { formatErrorMessage } from "../infra/errors.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { loadJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
-import type { OAuthCredentials, OAuthProvider } from "./auth-profiles/types.js";
+import type { OAuthProvider } from "./auth-profiles/types.js";
 
 const log = createSubsystemLogger("agents/auth-profiles");
 
@@ -22,8 +25,6 @@ const GEMINI_CLI_CREDENTIALS_RELATIVE_PATH = ".gemini/oauth_creds.json";
 const CODEX_CLI_FALLBACK_EXPIRY_MS = 60 * 60 * 1000;
 
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
-const CLAUDE_CLI_KEYCHAIN_ACCOUNT = "Claude Code";
-
 type CachedValue<T> = {
   value: T | null;
   readAt: number;
@@ -36,6 +37,7 @@ let codexCliCache: CachedValue<CodexCliCredential> | null = null;
 let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
 let geminiCliCache: CachedValue<GeminiCliCredential> | null = null;
 
+/** Clears in-memory CLI credential caches for isolated tests. */
 export function resetCliCredentialCachesForTest(): void {
   claudeCliCache = null;
   codexCliCache = null;
@@ -43,6 +45,7 @@ export function resetCliCredentialCachesForTest(): void {
   geminiCliCache = null;
 }
 
+/** Credential shape parsed from Claude Code CLI storage. */
 export type ClaudeCliCredential =
   | {
       type: "oauth";
@@ -50,14 +53,19 @@ export type ClaudeCliCredential =
       access: string;
       refresh: string;
       expires: number;
+      subscriptionType?: string;
+      rateLimitTier?: string;
     }
   | {
       type: "token";
       provider: "anthropic";
       token: string;
       expires: number;
+      subscriptionType?: string;
+      rateLimitTier?: string;
     };
 
+/** Credential shape parsed from Codex CLI storage. */
 export type CodexCliCredential = {
   type: "oauth";
   provider: OAuthProvider;
@@ -68,6 +76,7 @@ export type CodexCliCredential = {
   idToken?: string;
 };
 
+/** Credential shape parsed from MiniMax portal CLI storage. */
 export type MiniMaxCliCredential = {
   type: "oauth";
   provider: "minimax-portal";
@@ -76,6 +85,7 @@ export type MiniMaxCliCredential = {
   expires: number;
 };
 
+/** Credential shape parsed from Gemini CLI storage. */
 export type GeminiCliCredential = {
   type: "oauth";
   provider: "google-gemini-cli";
@@ -86,18 +96,7 @@ export type GeminiCliCredential = {
   email?: string;
 };
 
-type ClaudeCliFileOptions = {
-  homeDir?: string;
-};
-
-type ClaudeCliWriteOptions = ClaudeCliFileOptions & {
-  platform?: NodeJS.Platform;
-  writeKeychain?: (credentials: OAuthCredentials) => boolean;
-  writeFile?: (credentials: OAuthCredentials, options?: ClaudeCliFileOptions) => boolean;
-};
-
 type ExecSyncFn = typeof execSync;
-type ExecFileSyncFn = typeof execFileSync;
 
 function resolveClaudeCliCredentialsPath(homeDir?: string) {
   const baseDir = homeDir ?? resolveUserPath("~");
@@ -108,9 +107,24 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
   if (!claudeOauth || typeof claudeOauth !== "object") {
     return null;
   }
-  const accessToken = (claudeOauth as Record<string, unknown>).accessToken;
-  const refreshToken = (claudeOauth as Record<string, unknown>).refreshToken;
-  const expiresAt = (claudeOauth as Record<string, unknown>).expiresAt;
+  const data = claudeOauth as Record<string, unknown>;
+  const accessToken = data.accessToken;
+  const refreshToken = data.refreshToken;
+  const expiresAt = data.expiresAt;
+  // Plan metadata (e.g. subscriptionType "max", rateLimitTier "default_max_20x")
+  // lets usage surfaces label subscription windows without another API call.
+  const subscriptionType =
+    typeof data.subscriptionType === "string" && data.subscriptionType.trim()
+      ? data.subscriptionType.trim()
+      : undefined;
+  const rateLimitTier =
+    typeof data.rateLimitTier === "string" && data.rateLimitTier.trim()
+      ? data.rateLimitTier.trim()
+      : undefined;
+  const planFields = {
+    ...(subscriptionType ? { subscriptionType } : {}),
+    ...(rateLimitTier ? { rateLimitTier } : {}),
+  };
 
   if (typeof accessToken !== "string" || !accessToken) {
     return null;
@@ -125,6 +139,7 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
       access: accessToken,
       refresh: refreshToken,
       expires: expiresAt,
+      ...planFields,
     };
   }
   return {
@@ -132,6 +147,7 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
     provider: "anthropic",
     token: accessToken,
     expires: expiresAt,
+    ...planFields,
   };
 }
 
@@ -143,6 +159,14 @@ function resolveCodexHomePath(codexHome?: string) {
   } catch {
     return home;
   }
+}
+
+function codexAuthJsonUsesChatGptTokens(data: Record<string, unknown>): boolean {
+  const authMode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
+  if (authMode) {
+    return authMode === "chatgpt" || authMode === "chatgptauthtokens";
+  }
+  return typeof data.OPENAI_API_KEY !== "string";
 }
 
 function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
@@ -341,15 +365,9 @@ function readCodexKeychainCredentials(options?: {
   }
 }
 
-function readPortalCliOauthCredentials<TProvider extends string>(
-  credPath: string,
-  provider: TProvider,
-): { type: "oauth"; provider: TProvider; access: string; refresh: string; expires: number } | null {
-  const raw = loadJsonFile(credPath);
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const data = raw as Record<string, unknown>;
+function readCliOauthTokenFields(
+  data: Record<string, unknown>,
+): { access: string; refresh: string; expires: number } | null {
   const accessToken = data.access_token;
   const refreshToken = data.refresh_token;
   const expiresAt = data.expiry_date;
@@ -364,13 +382,19 @@ function readPortalCliOauthCredentials<TProvider extends string>(
     return null;
   }
 
-  return {
-    type: "oauth",
-    provider,
-    access: accessToken,
-    refresh: refreshToken,
-    expires: expiresAt,
-  };
+  return { access: accessToken, refresh: refreshToken, expires: expiresAt };
+}
+
+function readPortalCliOauthCredentials<TProvider extends string>(
+  credPath: string,
+  provider: TProvider,
+): { type: "oauth"; provider: TProvider; access: string; refresh: string; expires: number } | null {
+  const raw = loadJsonFile(credPath);
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const tokens = readCliOauthTokenFields(raw as Record<string, unknown>);
+  return tokens ? { type: "oauth", provider, ...tokens } : null;
 }
 
 function readMiniMaxCliCredentials(options?: { homeDir?: string }): MiniMaxCliCredential | null {
@@ -385,17 +409,8 @@ function readGeminiCliCredentials(options?: { homeDir?: string }): GeminiCliCred
     return null;
   }
   const data = raw as Record<string, unknown>;
-  const accessToken = data.access_token;
-  const refreshToken = data.refresh_token;
-  const expiresAt = data.expiry_date;
-
-  if (typeof accessToken !== "string" || !accessToken) {
-    return null;
-  }
-  if (typeof refreshToken !== "string" || !refreshToken) {
-    return null;
-  }
-  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
+  const tokens = readCliOauthTokenFields(data);
+  if (!tokens) {
     return null;
   }
 
@@ -413,9 +428,7 @@ function readGeminiCliCredentials(options?: { homeDir?: string }): GeminiCliCred
   return {
     type: "oauth",
     provider: "google-gemini-cli",
-    access: accessToken,
-    refresh: refreshToken,
-    expires: expiresAt,
+    ...tokens,
     ...(identity.email ? { email: identity.email } : {}),
     ...(identity.sub ? { accountId: identity.sub } : {}),
   };
@@ -437,6 +450,7 @@ function readClaudeCliKeychainCredentials(
   }
 }
 
+/** Reads Claude CLI credentials from macOS Keychain or the CLI credential file. */
 export function readClaudeCliCredentials(options?: {
   allowKeychainPrompt?: boolean;
   platform?: NodeJS.Platform;
@@ -494,124 +508,7 @@ export function readClaudeCliCredentialsCached(options?: {
   });
 }
 
-export function writeClaudeCliKeychainCredentials(
-  newCredentials: OAuthCredentials,
-  options?: { execFileSync?: ExecFileSyncFn },
-): boolean {
-  const execFileSyncImpl = options?.execFileSync ?? execFileSync;
-  try {
-    const existingResult = execFileSyncImpl(
-      "security",
-      ["find-generic-password", "-s", CLAUDE_CLI_KEYCHAIN_SERVICE, "-w"],
-      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
-    );
-
-    const existingData = JSON.parse(existingResult.trim());
-    const existingOauth = existingData?.claudeAiOauth;
-    if (!existingOauth || typeof existingOauth !== "object") {
-      return false;
-    }
-
-    existingData.claudeAiOauth = {
-      ...existingOauth,
-      accessToken: newCredentials.access,
-      refreshToken: newCredentials.refresh,
-      expiresAt: newCredentials.expires,
-    };
-
-    const newValue = JSON.stringify(existingData);
-
-    // Use execFileSync to avoid shell interpretation of user-controlled token values.
-    // This prevents command injection via $() or backtick expansion in OAuth tokens.
-    execFileSyncImpl(
-      "security",
-      [
-        "add-generic-password",
-        "-U",
-        "-s",
-        CLAUDE_CLI_KEYCHAIN_SERVICE,
-        "-a",
-        CLAUDE_CLI_KEYCHAIN_ACCOUNT,
-        "-w",
-        newValue,
-      ],
-      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
-    );
-
-    log.info("wrote refreshed credentials to claude cli keychain", {
-      expires: timestampMsToIsoString(newCredentials.expires),
-    });
-    return true;
-  } catch (error) {
-    log.warn("failed to write credentials to claude cli keychain", {
-      error: formatErrorMessage(error),
-    });
-    return false;
-  }
-}
-
-export function writeClaudeCliFileCredentials(
-  newCredentials: OAuthCredentials,
-  options?: ClaudeCliFileOptions,
-): boolean {
-  const credPath = resolveClaudeCliCredentialsPath(options?.homeDir);
-
-  if (!fs.existsSync(credPath)) {
-    return false;
-  }
-
-  try {
-    const raw = loadJsonFile(credPath);
-    if (!raw || typeof raw !== "object") {
-      return false;
-    }
-
-    const data = raw as Record<string, unknown>;
-    const existingOauth = data.claudeAiOauth as Record<string, unknown> | undefined;
-    if (!existingOauth || typeof existingOauth !== "object") {
-      return false;
-    }
-
-    data.claudeAiOauth = {
-      ...existingOauth,
-      accessToken: newCredentials.access,
-      refreshToken: newCredentials.refresh,
-      expiresAt: newCredentials.expires,
-    };
-
-    saveJsonFile(credPath, data);
-    log.info("wrote refreshed credentials to claude cli file", {
-      expires: timestampMsToIsoString(newCredentials.expires),
-    });
-    return true;
-  } catch (error) {
-    log.warn("failed to write credentials to claude cli file", {
-      error: formatErrorMessage(error),
-    });
-    return false;
-  }
-}
-
-export function writeClaudeCliCredentials(
-  newCredentials: OAuthCredentials,
-  options?: ClaudeCliWriteOptions,
-): boolean {
-  const platform = options?.platform ?? process.platform;
-  const writeKeychain = options?.writeKeychain ?? writeClaudeCliKeychainCredentials;
-  const writeFile =
-    options?.writeFile ??
-    ((credentials, fileOptions) => writeClaudeCliFileCredentials(credentials, fileOptions));
-
-  if (platform === "darwin") {
-    const didWriteKeychain = writeKeychain(newCredentials);
-    if (didWriteKeychain) {
-      return true;
-    }
-  }
-
-  return writeFile(newCredentials, { homeDir: options?.homeDir });
-}
-
+/** Reads Codex CLI OAuth credentials from Keychain or CODEX_HOME auth.json. */
 export function readCodexCliCredentials(options?: {
   codexHome?: string;
   allowKeychainPrompt?: boolean;
@@ -635,6 +532,9 @@ export function readCodexCliCredentials(options?: {
   }
 
   const data = raw as Record<string, unknown>;
+  if (!codexAuthJsonUsesChatGptTokens(data)) {
+    return null;
+  }
   const tokens = data.tokens as Record<string, unknown> | undefined;
   if (!tokens || typeof tokens !== "object") {
     return null;
@@ -673,6 +573,7 @@ export function readCodexCliCredentials(options?: {
   };
 }
 
+/** Reads Codex CLI credentials with optional short-lived cache and file fingerprinting. */
 export function readCodexCliCredentialsCached(options?: {
   codexHome?: string;
   allowKeychainPrompt?: boolean;
@@ -703,6 +604,7 @@ export function readCodexCliCredentialsCached(options?: {
   });
 }
 
+/** Reads MiniMax CLI credentials with optional short-lived cache. */
 export function readMiniMaxCliCredentialsCached(options?: {
   ttlMs?: number;
   homeDir?: string;
@@ -720,6 +622,7 @@ export function readMiniMaxCliCredentialsCached(options?: {
   });
 }
 
+/** Reads Gemini CLI credentials with optional short-lived cache. */
 export function readGeminiCliCredentialsCached(options?: {
   ttlMs?: number;
   homeDir?: string;

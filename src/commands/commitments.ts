@@ -1,6 +1,8 @@
+// Implements commitment listing and dismissal commands for scheduled follow-up records.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -23,7 +25,7 @@ const STATUS_VALUES = new Set<CommitmentStatus>([
 ]);
 
 function truncate(value: string, maxChars: number): string {
-  return value.length <= maxChars ? value : `${value.slice(0, maxChars - 1)}...`;
+  return value.length <= maxChars ? value : `${truncateUtf16Safe(value, maxChars - 1)}…`;
 }
 
 function safe(value: string): string {
@@ -88,6 +90,7 @@ function formatRows(commitments: CommitmentRecord[], rich: boolean): string[] {
   return lines;
 }
 
+/** List commitments with status/agent filters in text or JSON form. */
 export async function commitmentsListCommand(
   opts: { json?: boolean; status?: string; all?: boolean; agent?: string },
   runtime: RuntimeEnv,
@@ -135,6 +138,7 @@ export async function commitmentsListCommand(
   }
 }
 
+/** Mark one or more commitments as dismissed. */
 export async function commitmentsDismissCommand(
   opts: { ids: string[]; json?: boolean },
   runtime: RuntimeEnv,

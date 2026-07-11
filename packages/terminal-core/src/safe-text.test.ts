@@ -1,9 +1,10 @@
+// Terminal Core tests cover safe text behavior.
 import { describe, expect, it } from "vitest";
 import { sanitizeTerminalText } from "./safe-text.js";
 
 describe("sanitizeTerminalText", () => {
   it("removes C1 control characters", () => {
-    expect(sanitizeTerminalText("a\u009bb\u0085c")).toBe("abc");
+    expect(sanitizeTerminalText("ab\u0085\u008Dc")).toBe("abc");
   });
 
   it("strips cursor and erase ANSI sequences", () => {

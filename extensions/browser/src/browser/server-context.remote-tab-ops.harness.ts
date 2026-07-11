@@ -1,3 +1,6 @@
+/**
+ * Remote-tab operation harness for Browser server-context tests.
+ */
 import { vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
@@ -6,8 +9,10 @@ import { createProfileSelectionOps } from "./server-context.selection.js";
 import { createProfileTabOps } from "./server-context.tab-ops.js";
 import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
 
+/** Original global fetch restored between remote-tab harness tests. */
 export const originalFetch = globalThis.fetch;
 
+/** Creates Browser server state for remote or local profile tab tests. */
 export function makeState(
   profile: "remote" | "openclaw",
 ): BrowserServerState & { profiles: Map<string, { lastTargetId?: string | null }> } {
@@ -19,6 +24,8 @@ export function makeState(
       controlPort: 18791,
       cdpPortRangeStart: 18800,
       cdpPortRangeEnd: 18899,
+      extensionRelayDefaultPort: 18799,
+      extensionRelayPorts: {},
       cdpProtocol: profile === "remote" ? "https" : "http",
       cdpHost: profile === "remote" ? "1.1.1.1" : "127.0.0.1",
       cdpIsLoopback: profile !== "remote",
@@ -95,6 +102,7 @@ function resolveProfileForTest(
   };
 }
 
+/** Creates a minimal Browser route context for profile operation tests. */
 export function createTestBrowserRouteContext(opts: { getState: () => BrowserServerState }) {
   const forProfile = (profileName?: string) => {
     const state = opts.getState();
@@ -125,6 +133,7 @@ export function createTestBrowserRouteContext(opts: { getState: () => BrowserSer
   return { forProfile };
 }
 
+/** Creates a remote profile context with a preconnected fetch mock. */
 export function createRemoteRouteHarness(fetchMock?: (url: unknown) => Promise<Response>) {
   const activeFetchMock = fetchMock ?? makeUnexpectedFetchMock();
   global.fetch = withBrowserFetchPreconnect(activeFetchMock);
@@ -133,6 +142,7 @@ export function createRemoteRouteHarness(fetchMock?: (url: unknown) => Promise<R
   return { state, remote: ctx.forProfile("remote"), fetchMock: activeFetchMock };
 }
 
+/** Returns a page lister that yields prepared responses in order. */
 export function createSequentialPageLister<T>(responses: T[]) {
   return async () => {
     const next = responses.shift();
@@ -148,9 +158,10 @@ type JsonListEntry = {
   title: string;
   url: string;
   webSocketDebuggerUrl: string;
-  type: "page";
+  type: string;
 };
 
+/** Creates a /json/list fetch mock with static entries. */
 export function createJsonListFetchMock(entries: JsonListEntry[]) {
   return async (url: unknown) => {
     const u = String(url);
@@ -174,6 +185,7 @@ function makeManagedTab(id: string, ordinal: number): JsonListEntry {
   };
 }
 
+/** Creates eight old managed tabs plus one new tab for cleanup-limit tests. */
 export function makeManagedTabsWithNew(params?: { newFirst?: boolean }): JsonListEntry[] {
   const oldTabs = Array.from({ length: 8 }, (_, index) =>
     makeManagedTab(`OLD${index + 1}`, index + 1),

@@ -1,3 +1,5 @@
+// Base session-key helper keeps outbound-only delivery aligned with route
+// resolution session-scope rules.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
 
@@ -16,6 +18,7 @@ export function buildOutboundBaseSessionKey(params: {
 }): string {
   return buildAgentSessionKey({
     agentId: params.agentId,
+    mainKey: params.cfg.session?.mainKey,
     channel: params.channel,
     accountId: params.accountId,
     peer: params.peer,

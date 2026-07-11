@@ -1,5 +1,7 @@
+/** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { CliOutput } from "./cli-output.js";
 import { cliBackendLog } from "./cli-runner/log.js";
 
 // vi.mock factories are hoisted above imports, so any references inside them
@@ -27,9 +29,9 @@ const {
   runBeforeAgentReplyMock: vi.fn<(event: unknown, ctx: unknown) => Promise<BeforeAgentReplyResult>>(
     async () => undefined,
   ),
-  executePreparedCliRunMock: vi.fn(async (_context: unknown, _cliSessionIdToUse?: string) => ({
-    text: "",
-  })),
+  executePreparedCliRunMock: vi.fn<
+    (_context: unknown, _cliSessionIdToUse?: string) => Promise<CliOutput>
+  >(async () => ({ text: "" })),
   prepareCliRunContextMock: vi.fn(),
   closeClaudeLiveSessionForContextMock: vi.fn(),
   closeMcpLoopbackServerMock: vi.fn(),
@@ -52,6 +54,9 @@ vi.mock("./cli-runner/execute.runtime.js", () => ({
 
 vi.mock("./cli-runner/claude-live-session.js", () => ({
   closeClaudeLiveSessionForContext: closeClaudeLiveSessionForContextMock,
+  getClaudeLiveSessionGenerationForOwner: vi.fn(() => undefined),
+  hasClaudeLiveSessionForOwner: vi.fn(() => false),
+  shouldUseClaudeLiveSession: vi.fn(() => false),
 }));
 
 vi.mock("../gateway/mcp-http.js", () => ({
@@ -74,6 +79,7 @@ const baseRunParams = {
 let runCliAgent: typeof import("./cli-runner.js").runCliAgent;
 
 function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
+  // Stub only the prepared context shape runCliAgent needs after the hook gate.
   return {
     params,
     started: Date.now(),
@@ -85,8 +91,8 @@ function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
     bootstrapPromptWarningLines: [],
     authEpochVersion: 0,
     backendResolved: {},
-    preparedBackend: {},
-    reusableCliSession: {},
+    preparedBackend: { backend: { sessionMode: "none" } },
+    reusableCliSession: { mode: "none" },
   } as unknown;
 }
 
@@ -114,6 +120,21 @@ afterEach(() => {
 });
 
 describe("runCliAgent cron before_agent_reply seam", () => {
+  it("rejects stale lifecycle ownership before CLI preparation", async () => {
+    await expect(
+      runCliAgent({
+        ...baseRunParams,
+        lifecycleGeneration: "stale-generation",
+      }),
+    ).rejects.toMatchObject({
+      name: "AbortError",
+      message: "Agent run belongs to a stale gateway lifecycle",
+    });
+
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+  });
+
   it("lets before_agent_reply claim cron runs before the CLI subprocess is invoked", async () => {
     const logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
@@ -128,6 +149,7 @@ describe("runCliAgent cron before_agent_reply seam", () => {
         ...baseRunParams,
         trigger: "cron",
         jobId: "cron-job-123",
+        chatId: "native-chat-123",
         onExecutionPhase,
       });
 
@@ -146,12 +168,17 @@ describe("runCliAgent cron before_agent_reply seam", () => {
       expect(hookContext?.sessionKey).toBe(baseRunParams.sessionKey);
       expect(hookContext?.workspaceDir).toBe(baseRunParams.workspaceDir);
       expect(hookContext?.trigger).toBe("cron");
+      expect(hookContext?.chatId).toBeUndefined();
+      expect(hookContext?.channel).toBeUndefined();
       expect(executePreparedCliRunMock).not.toHaveBeenCalled();
       expect(result.payloads?.[0]?.text).toBe("dreaming claimed via cli runner");
+      expect(result.meta.agentMeta?.sessionId).toBe("");
+      expect(result.meta.agentMeta?.clearCliSessionBinding).toBeUndefined();
 
       const syntheticTurnLog = logInfoSpy.mock.calls
         .map(([message]) => message)
         .find((message) => message.startsWith("cli synthetic turn:"));
+      // Synthetic turn logs prove the branch without leaking hook reply text.
       expect(syntheticTurnLog).toContain("provider=codex-cli");
       expect(syntheticTurnLog).toContain("model=<synthetic>");
       expect(syntheticTurnLog).toContain("requestedModel=gpt-5.5");
@@ -160,6 +187,36 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     } finally {
       logInfoSpy.mockRestore();
     }
+  });
+
+  it("clears stateless CLI bindings when before_agent_reply claims a cron turn", async () => {
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({ handled: true });
+
+    const result = await runCliAgent({
+      ...baseRunParams,
+      trigger: "cron",
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "codex-cli": {
+                command: "codex",
+                args: ["exec"],
+                output: "text",
+                input: "arg",
+                sessionMode: "none",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.meta.agentMeta?.sessionId).toBe("");
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
   });
 
   it("does not run prepareCliRunContext when the cron hook claims (no resource allocation, no leak)", async () => {
@@ -244,6 +301,35 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
   });
 
+  it("reports confirmed CLI messaging delivery evidence without leaking it to later invocations", async () => {
+    executePreparedCliRunMock.mockResolvedValueOnce({
+      text: "sent",
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          to: "chat123",
+        },
+      ],
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "later" });
+
+    const firstResult = await runCliAgent(baseRunParams);
+    expect(firstResult.didSendViaMessagingTool).toBe(true);
+    expect(firstResult.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat123",
+      }),
+    ]);
+
+    const laterResult = await runCliAgent(baseRunParams);
+    expect(laterResult.didSendViaMessagingTool).toBeUndefined();
+    expect(laterResult.messagingToolSentTargets).toBeUndefined();
+  });
+
   it("can close temporary CLI live sessions after a run", async () => {
     executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
 
@@ -263,5 +349,28 @@ describe("runCliAgent cron before_agent_reply seam", () => {
 
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
     expect(closeMcpLoopbackServerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves confirmed delivery when bundle MCP cleanup fails", async () => {
+    executePreparedCliRunMock.mockResolvedValue({
+      text: "",
+      didSendViaMessagingTool: true,
+    });
+    closeMcpLoopbackServerMock.mockRejectedValue(new Error("loopback cleanup failed"));
+
+    await expect(
+      runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true }),
+    ).resolves.toMatchObject({
+      didSendViaMessagingTool: true,
+    });
+  });
+
+  it("surfaces bundle MCP cleanup failures when nothing was delivered", async () => {
+    executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
+    closeMcpLoopbackServerMock.mockRejectedValue(new Error("loopback cleanup failed"));
+
+    await expect(runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true })).rejects.toThrow(
+      "loopback cleanup failed",
+    );
   });
 });

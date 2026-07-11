@@ -1,3 +1,4 @@
+// QR/setup-code CLI for mobile/device pairing with local or remote Gateway credentials.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -40,6 +41,7 @@ function shouldResolveLocalGatewayPasswordSecret(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): boolean {
+  // Default/implicit password auth may require resolving a local SecretRef before encoding setup.
   if (trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD)) {
     return false;
   }
@@ -218,6 +220,7 @@ export function registerQrCli(program: Command) {
           defaultRuntime.writeJson({
             setupCode,
             gatewayUrl: resolved.payload.url,
+            ...(resolved.payload.urls ? { gatewayUrls: resolved.payload.urls } : {}),
             auth: resolved.authLabel,
             urlSource: resolved.urlSource,
           });
@@ -238,6 +241,8 @@ export function registerQrCli(program: Command) {
         lines.push(
           `${theme.muted("Setup code:")} ${setupCode}`,
           `${theme.muted("Gateway:")} ${resolved.payload.url}`,
+          ...(resolved.payload.urls?.slice(1).map((url) => `${theme.muted("Fallback:")} ${url}`) ??
+            []),
           `${theme.muted("Auth:")} ${resolved.authLabel}`,
           `${theme.muted("Source:")} ${resolved.urlSource}`,
           "",

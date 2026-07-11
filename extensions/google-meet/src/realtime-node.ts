@@ -1,3 +1,4 @@
+// Google Meet plugin module implements realtime node behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
@@ -676,7 +677,7 @@ export async function startNodeRealtimeAudioBridge(params: {
         payload: { name: event.name, args: event.args },
       });
       const turnId = ensureTalkTurn();
-      handleGoogleMeetRealtimeConsultToolCall({
+      return handleGoogleMeetRealtimeConsultToolCall({
         strategy,
         session,
         event,

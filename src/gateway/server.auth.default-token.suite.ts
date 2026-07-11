@@ -1,5 +1,11 @@
+// Default token auth suite covers gateway handshake auth, nonce validation,
+// protocol version checks, and token-backed operator/node clients.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import {
+  GATEWAY_SERVER_CAPS,
+  MIN_NODE_PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/index.js";
 import {
   connectReq,
   ConnectErrorDetailCodes,
@@ -23,7 +29,7 @@ import {
   waitForWsClose,
   withGatewayServer,
   withRuntimeVersionEnv,
-} from "./server.auth.shared.js";
+} from "./server.auth.test-helpers.js";
 
 export function registerDefaultAuthTokenSuite(): void {
   describe("default auth (token)", () => {
@@ -80,6 +86,26 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(health.ok).toBe(true);
     }
 
+    function readHelloOkAuth(payload: unknown):
+      | {
+          role?: unknown;
+          scopes?: unknown;
+          deviceToken?: unknown;
+        }
+      | undefined {
+      return (
+        payload as
+          | {
+              auth?: {
+                role?: unknown;
+                scopes?: unknown;
+                deviceToken?: unknown;
+              };
+            }
+          | undefined
+      )?.auth;
+    }
+
     test("closes silent handshakes after timeout", async () => {
       vi.useRealTimers();
       const prevHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
@@ -133,10 +159,14 @@ export function registerDefaultAuthTokenSuite(): void {
       const payload = res.payload as
         | {
             type?: unknown;
+            features?: { capabilities?: unknown };
             snapshot?: { configPath?: string; stateDir?: string };
           }
         | undefined;
       expect(payload?.type).toBe("hello-ok");
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+      );
       expect(payload?.snapshot?.configPath).toBe(createConfigIO().configPath);
       expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);
 
@@ -250,18 +280,10 @@ export function registerDefaultAuthTokenSuite(): void {
       try {
         const res = await connectReq(ws, { scopes: ["operator.read"], device: null });
         expect(res.ok).toBe(true);
-        const helloOk = res.payload as
-          | {
-              auth?: {
-                role?: unknown;
-                scopes?: unknown;
-                deviceToken?: unknown;
-              };
-            }
-          | undefined;
-        expect(helloOk?.auth?.role).toBe("operator");
-        expect(helloOk?.auth?.scopes).toEqual([]);
-        expect(helloOk?.auth?.deviceToken).toBeUndefined();
+        const auth = readHelloOkAuth(res.payload);
+        expect(auth?.role).toBe("operator");
+        expect(auth?.scopes).toEqual([]);
+        expect(auth?.deviceToken).toBeUndefined();
       } finally {
         ws.close();
       }
@@ -286,20 +308,12 @@ export function registerDefaultAuthTokenSuite(): void {
           deviceIdentityPath,
         });
         expect(initial.ok).toBe(true);
-        const helloOk = initial.payload as
-          | {
-              auth?: {
-                role?: unknown;
-                scopes?: unknown;
-                deviceToken?: unknown;
-              };
-            }
-          | undefined;
-        expect(helloOk?.auth?.role).toBe("operator");
-        expect(Array.isArray(helloOk?.auth?.scopes)).toBe(true);
-        expect(typeof helloOk?.auth?.deviceToken).toBe("string");
-        pairedDeviceToken = helloOk?.auth?.deviceToken as string | undefined;
-        pairedDeviceScopes = helloOk?.auth?.scopes;
+        const auth = readHelloOkAuth(initial.payload);
+        expect(auth?.role).toBe("operator");
+        expect(Array.isArray(auth?.scopes)).toBe(true);
+        expect(typeof auth?.deviceToken).toBe("string");
+        pairedDeviceToken = auth?.deviceToken as string | undefined;
+        pairedDeviceScopes = auth?.scopes;
       } finally {
         wsInitial.close();
       }
@@ -312,19 +326,11 @@ export function registerDefaultAuthTokenSuite(): void {
           deviceIdentityPath,
         });
         expect(reconnect.ok).toBe(true);
-        const helloOk = reconnect.payload as
-          | {
-              auth?: {
-                role?: unknown;
-                scopes?: unknown;
-                deviceToken?: unknown;
-              };
-            }
-          | undefined;
-        expect(helloOk?.auth?.role).toBe("operator");
-        expect(helloOk?.auth?.deviceToken).toBe(pairedDeviceToken);
-        expect(helloOk?.auth?.scopes).toEqual(pairedDeviceScopes);
-        expect(helloOk?.auth?.scopes).not.toEqual(["operator.read"]);
+        const auth = readHelloOkAuth(reconnect.payload);
+        expect(auth?.role).toBe("operator");
+        expect(auth?.deviceToken).toBe(pairedDeviceToken);
+        expect(auth?.scopes).toEqual(pairedDeviceScopes);
+        expect(auth?.scopes).not.toEqual(["operator.read"]);
       } finally {
         wsReconnect.close();
       }
@@ -459,12 +465,82 @@ export function registerDefaultAuthTokenSuite(): void {
       ws.close();
     });
 
+    test("allows authenticated previous-protocol nodes to register for maintenance", async () => {
+      const nodeWs = await openWs(port);
+      const operatorWs = await openWs(port);
+      try {
+        const legacyVersion = "2026.5.7";
+        const nodeRes = await connectReq(nodeWs, {
+          minProtocol: MIN_NODE_PROTOCOL_VERSION,
+          maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+          role: "node",
+          client: { ...NODE_CLIENT, version: legacyVersion },
+        });
+        expect(nodeRes.ok).toBe(true);
+
+        const operatorRes = await connectReq(operatorWs);
+        expect(operatorRes.ok).toBe(true);
+        const listRes = await rpcReq<{ nodes?: Array<{ connected?: boolean; version?: string }> }>(
+          operatorWs,
+          "node.list",
+          {},
+        );
+        expect(listRes.ok).toBe(true);
+        expect(
+          listRes.payload?.nodes?.some(
+            (node) => node.connected === true && node.version === legacyVersion,
+          ),
+        ).toBe(true);
+      } finally {
+        nodeWs.close();
+        operatorWs.close();
+      }
+    });
+
+    test("keeps previous-protocol node connections behind gateway auth", async () => {
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          minProtocol: MIN_NODE_PROTOCOL_VERSION,
+          maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+          role: "node",
+          client: NODE_CLIENT,
+          token: "invalid-token",
+        });
+        expect(res.ok).toBe(false);
+        expect((res.error?.details as { code?: unknown } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+        );
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("rejects node protocols older than the N-1 window", async () => {
+      const ws = await openWs(port);
+      try {
+        const unsupportedProtocol = MIN_NODE_PROTOCOL_VERSION - 1;
+        const res = await connectReq(ws, {
+          minProtocol: unsupportedProtocol,
+          maxProtocol: unsupportedProtocol,
+          role: "node",
+          client: NODE_CLIENT,
+        });
+        expect(res.ok).toBe(false);
+        expect((res.error?.details as { code?: unknown } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+        );
+      } finally {
+        ws.close();
+      }
+    });
+
     test("keeps previous protocol rejected for non-probe clients", async () => {
       const ws = await openWs(port);
       try {
         const res = await connectReq(ws, {
-          minProtocol: MIN_PROBE_PROTOCOL_VERSION,
-          maxProtocol: MIN_PROBE_PROTOCOL_VERSION,
+          minProtocol: MIN_NODE_PROTOCOL_VERSION,
+          maxProtocol: MIN_NODE_PROTOCOL_VERSION,
         });
         expect(res.ok).toBe(false);
       } catch {

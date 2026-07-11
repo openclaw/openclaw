@@ -1,3 +1,4 @@
+// Covers model auth resolution across env, profiles, CLI, and provider aliases.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +30,8 @@ async function expectVertexAdcEnvApiKey(params: {
   env?: NodeJS.ProcessEnv;
   tempPrefix?: string;
 }) {
+  // Vertex ADC credentials are file evidence, not a raw API key. Tests create
+  // a temporary credentials file and expect the non-secret marker to win.
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix ?? "openclaw-adc-"));
   const credentialsPath = path.join(tempDir, "adc.json");
   await fs.writeFile(credentialsPath, params.credentialsJson, "utf8");
@@ -111,6 +114,8 @@ vi.mock("./provider-auth-aliases.js", () => ({
 }));
 
 vi.mock("./model-auth-env-vars.js", () => {
+  // Workspace-provided auth evidence is only trusted when the plugin is in the
+  // effective allowlist, mirroring runtime plugin scoping.
   const hasAllowedPlugin = (config: unknown, pluginId: string): boolean => {
     if (!config || typeof config !== "object") {
       return false;
@@ -147,7 +152,7 @@ vi.mock("./model-auth-env-vars.js", () => {
     bedrock: "amazon-bedrock",
     "aws-bedrock": "amazon-bedrock",
   };
-  const resolveProviderEnvAuthEvidence = (params?: { config?: OpenClawConfig }) => {
+  const resolveMockProviderAuthEvidence = (params?: { config?: OpenClawConfig }) => {
     const evidence = {
       "google-vertex": [
         {
@@ -181,12 +186,10 @@ vi.mock("./model-auth-env-vars.js", () => {
   };
   return {
     listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
-    resolveProviderEnvApiKeyCandidates: () => candidates,
-    resolveProviderEnvAuthEvidence,
     resolveProviderEnvAuthLookupMaps: (params?: { config?: OpenClawConfig }) => ({
       aliasMap,
       envCandidateMap: candidates,
-      authEvidenceMap: resolveProviderEnvAuthEvidence(params),
+      authEvidenceMap: resolveMockProviderAuthEvidence(params),
       setupProviderFallbackRefs: ["anthropic-vertex"],
     }),
   };
@@ -648,9 +651,11 @@ describe("getApiKeyForModel", () => {
         },
       },
       async () => {
-        await expect(resolveApiKeyForProvider({ provider: "openai" })).rejects.toThrow(
-          'No API key found for provider "openai".',
-        );
+        await expect(resolveApiKeyForProvider({ provider: "openai" })).rejects.toMatchObject({
+          code: "missing-provider-auth",
+          message: expect.stringContaining('No API key found for provider "openai".'),
+          provider: "openai",
+        });
       },
     );
 
@@ -724,6 +729,33 @@ describe("getApiKeyForModel", () => {
         });
         expect(resolved.apiKey).toBe("zai-test-key");
         expect(resolved.source).toContain("Z_AI_API_KEY");
+      },
+    );
+  });
+
+  it("skips malformed stored ZAI command profiles and uses current env auth", async () => {
+    await withEnvAsync(
+      {
+        ZAI_API_KEY: "zai-current-key", // pragma: allowlist secret
+        Z_AI_API_KEY: undefined,
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "zai",
+          store: {
+            version: 1,
+            profiles: {
+              "zai:default": {
+                type: "api_key",
+                provider: "zai",
+                key: "openclaw onboard --auth-choice zai-coding-global",
+              },
+            },
+          },
+        });
+        expect(resolved.apiKey).toBe("zai-current-key");
+        expect(resolved.source).toContain("ZAI_API_KEY");
+        expect(resolved.profileId).toBeUndefined();
       },
     );
   });

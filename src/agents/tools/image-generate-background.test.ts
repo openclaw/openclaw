@@ -1,3 +1,5 @@
+// Image generation background tests cover detached task creation, progress
+// updates, and completion wake delivery for generated image results.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { IMAGE_GENERATION_TASK_KIND } from "../image-generation-task-status.js";
 import {
@@ -17,8 +19,8 @@ vi.mock("../subagent-announce-delivery.js", () => announceDeliveryMocks);
 
 const {
   createImageGenerationTaskRun,
+  imageGenerationTaskLifecycle,
   recordImageGenerationTaskProgress,
-  wakeImageGenerationTaskCompletion,
 } = await import("./image-generate-background.js");
 
 describe("image generate background helpers", () => {
@@ -78,12 +80,14 @@ describe("image generate background helpers", () => {
   });
 
   it("queues a completion event through the shared generated-media wake path", async () => {
+    // Successful media completion is routed through the announce handoff so the
+    // requesting session receives model-mediated visible reply instructions.
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: true,
       path: "direct",
     });
 
-    await wakeImageGenerationTaskCompletion({
+    await imageGenerationTaskLifecycle.wakeTaskCompletion({
       ...createMediaCompletionFixture({
         runId: "tool:image_generate:abc",
         taskLabel: "small watercolor robot",
@@ -118,7 +122,7 @@ describe("image generate background helpers", () => {
       result: "provider failed",
     });
 
-    await wakeImageGenerationTaskCompletion({
+    await imageGenerationTaskLifecycle.wakeTaskCompletion({
       ...completion,
       status: "error",
       statusLabel: "failed",

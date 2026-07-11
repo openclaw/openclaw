@@ -1,3 +1,4 @@
+// Covers TUI submit handler behavior for chat input and slash commands.
 import type { TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { CustomEditor } from "./components/custom-editor.js";
@@ -87,6 +88,7 @@ describe("createEditorSubmitHandler", () => {
       handleCommand: vi.fn(),
       sendMessage,
       handleBangLine: vi.fn(),
+      onSubmitError: vi.fn(),
       canSubmitMessage: () => false,
       onBlockedMessageSubmit,
     });
@@ -121,6 +123,30 @@ describe("createEditorSubmitHandler", () => {
     expect(editor.addToHistory).toHaveBeenCalledWith("Line 1\nLine 2\nLine 3");
     expect(handleCommand).not.toHaveBeenCalled();
     expect(handleBangLine).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["local shell", "!false", "handleBangLine"],
+    ["command", "/broken", "handleCommand"],
+    ["message", "hello", "sendMessage"],
+  ] as const)("reports rejected %s handlers", async (action, input, handler) => {
+    const harness = createSubmitHarness();
+    harness[handler].mockRejectedValueOnce(new Error("gateway unavailable"));
+
+    harness.onSubmit(input);
+    await Promise.resolve();
+
+    expect(harness.onSubmitError).toHaveBeenCalledWith(action, expect.any(Error));
+  });
+
+  it("reports synchronous submit handler failures", () => {
+    const harness = createSubmitHarness();
+    harness.handleCommand.mockImplementationOnce(() => {
+      throw new Error("command exploded");
+    });
+
+    expect(() => harness.onSubmit("/broken")).not.toThrow();
+    expect(harness.onSubmitError).toHaveBeenCalledWith("command", expect.any(Error));
   });
 });
 

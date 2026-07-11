@@ -1,3 +1,9 @@
+/**
+ * Process-control tool factory.
+ * Lists, polls, logs, writes to, sends keys to, pastes into, kills, clears,
+ * and removes background exec sessions.
+ */
+import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { killProcessTree } from "../process/kill-tree.js";
@@ -14,7 +20,11 @@ import {
   setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
-import { handleProcessSendKeys, type WritableStdin } from "./bash-tools.process-send-keys.js";
+import {
+  handleProcessSendKeys,
+  type WritableStdin,
+  writeProcessStdin,
+} from "./bash-tools.process-send-keys.js";
 import { processSchema } from "./bash-tools.schemas.js";
 import {
   clampWithDefault,
@@ -30,6 +40,7 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 
+/** Defaults injected by tests, agent scopes, and scoped process registries. */
 export type ProcessToolDefaults = {
   cleanupMs?: number;
   hasCronTool?: boolean;
@@ -139,9 +150,7 @@ function createAbortError(reason: unknown): Error {
   if (reason instanceof Error) {
     return reason;
   }
-  const error = new Error(typeof reason === "string" ? reason : "Aborted");
-  error.name = "AbortError";
-  return error;
+  return createNamedAbortError(typeof reason === "string" ? reason : "Aborted");
 }
 
 async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void> {
@@ -171,6 +180,7 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
   });
 }
 
+/** Build the process-control tool with optional cleanup, scope, and input-idle defaults. */
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
 ): AgentToolWithMeta<typeof processSchema, unknown> {
@@ -357,18 +367,6 @@ export function createProcessTool(
         return { ok: true as const, session: scopedSession, stdin };
       };
 
-      const writeToStdin = async (stdin: WritableStdin, data: string) => {
-        await new Promise<void>((resolve, reject) => {
-          stdin.write(data, (err) => {
-            if (err) {
-              reject(err);
-            } else {
-              resolve();
-            }
-          });
-        });
-      };
-
       const runningSessionResult = (
         sessionLocal: ProcessSession,
         text: string,
@@ -406,6 +404,20 @@ export function createProcessTool(
                   status: scopedFinished.status === "completed" ? "completed" : "failed",
                   sessionId: params.sessionId,
                   exitCode: scopedFinished.exitCode ?? undefined,
+                  ...(scopedFinished.exitSignal != null
+                    ? { exitSignal: scopedFinished.exitSignal }
+                    : {}),
+                  ...(scopedFinished.exitReason
+                    ? {
+                        exitReason: scopedFinished.exitReason,
+                        timedOut:
+                          scopedFinished.exitReason === "overall-timeout" ||
+                          scopedFinished.exitReason === "no-output-timeout",
+                      }
+                    : {}),
+                  ...(scopedFinished.noOutputTimedOut !== undefined
+                    ? { noOutputTimedOut: scopedFinished.noOutputTimedOut }
+                    : {}),
                   aggregated: scopedFinished.aggregated,
                   name: deriveSessionName(scopedFinished.command),
                 },
@@ -435,6 +447,8 @@ export function createProcessTool(
               scopedSession.exitCode ?? null,
               scopedSession.exitSignal ?? null,
               status,
+              scopedSession.exitReason,
+              scopedSession.noOutputTimedOut,
             );
           }
           const status = exited
@@ -468,6 +482,20 @@ export function createProcessTool(
               status,
               sessionId: params.sessionId,
               exitCode: exited ? exitCode : undefined,
+              ...(exited && scopedSession.exitSignal != null
+                ? { exitSignal: scopedSession.exitSignal }
+                : {}),
+              ...(exited && scopedSession.exitReason
+                ? {
+                    exitReason: scopedSession.exitReason,
+                    timedOut:
+                      scopedSession.exitReason === "overall-timeout" ||
+                      scopedSession.exitReason === "no-output-timeout",
+                  }
+                : {}),
+              ...(exited && scopedSession.noOutputTimedOut !== undefined
+                ? { noOutputTimedOut: scopedSession.noOutputTimedOut }
+                : {}),
               aggregated: scopedSession.aggregated,
               name: deriveSessionName(scopedSession.command),
               ...(runtime ? runningSessionInputDetails(runtime) : {}),
@@ -559,7 +587,7 @@ export function createProcessTool(
           if (!resolved.ok) {
             return resolved.result;
           }
-          await writeToStdin(resolved.stdin, params.data ?? "");
+          await writeProcessStdin(resolved.stdin, params.data ?? "");
           if (params.eof) {
             resolved.stdin.end();
           }
@@ -591,7 +619,7 @@ export function createProcessTool(
           if (!resolved.ok) {
             return resolved.result;
           }
-          await writeToStdin(resolved.stdin, "\r");
+          await writeProcessStdin(resolved.stdin, "\r");
           return runningSessionResult(
             resolved.session,
             `Submitted session ${params.sessionId} (sent CR).`,
@@ -615,7 +643,7 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
-          await writeToStdin(resolved.stdin, payload);
+          await writeProcessStdin(resolved.stdin, payload);
           return runningSessionResult(
             resolved.session,
             `Pasted ${params.text?.length ?? 0} chars to session ${params.sessionId}.`,
@@ -737,4 +765,5 @@ export function createProcessTool(
   };
 }
 
+/** Shared process-control tool instance used by the default Bash tool barrel. */
 export const processTool = createProcessTool();

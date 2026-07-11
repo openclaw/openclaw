@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -23,7 +25,6 @@ import kotlinx.coroutines.launch
 class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
-  private var didStartForeground = false
   private var voiceCaptureMode = VoiceCaptureMode.Off
 
   override fun onCreate() {
@@ -37,21 +38,21 @@ class NodeForegroundService : Service() {
       stopSelf()
       return
     }
-    // Split connection and capture flows before combining so notification text
+    // Keep the connection tuple atomic, then split connection and capture work so notification text
     // can update without restarting runtime-owned connection work.
     notificationJob =
       scope.launch {
         combine(
           combine(
-            runtime.statusText,
+            runtime.gatewayConnectionDisplay,
             runtime.serverName,
-            runtime.isConnected,
             runtime.voiceCaptureMode,
-          ) { status, server, connected, mode ->
+            runtime.locationMode,
+          ) { connection, server, mode, _ ->
             VoiceNotificationBase(
-              status = status,
+              status = connection.statusText,
               server = server,
-              connected = connected,
+              connected = connection.isConnected,
               mode = mode,
             )
           },
@@ -147,17 +148,8 @@ class NodeForegroundService : Service() {
     title: String,
     text: String,
   ): Notification {
-    val launchIntent =
-      Intent(this, MainActivity::class.java).apply {
-        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-      }
-    val launchPending =
-      PendingIntent.getActivity(
-        this,
-        1,
-        launchIntent,
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-      )
+    val launchPending = mainActivityPendingIntent(this, requestCode = 1)
+    val visibleText = text + backgroundLocationNotificationSuffix(isBackgroundLocationActive())
 
     val stopIntent = Intent(this, NodeForegroundService::class.java).setAction(ACTION_STOP)
     val stopPending =
@@ -172,7 +164,7 @@ class NodeForegroundService : Service() {
       .Builder(this, CHANNEL_ID)
       .setSmallIcon(R.mipmap.ic_launcher)
       .setContentTitle(title)
-      .setContentText(text)
+      .setContentText(visibleText)
       .setContentIntent(launchPending)
       .setOngoing(true)
       .setOnlyAlertOnce(true)
@@ -182,14 +174,27 @@ class NodeForegroundService : Service() {
   }
 
   private fun startForegroundWithTypes(notification: Notification) {
-    val serviceTypes = foregroundServiceTypesForVoiceMode(voiceCaptureMode)
-    if (didStartForeground) {
-      // Re-issue startForeground when Talk mode toggles so Android sees the microphone service type.
-      ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceTypes)
-      return
-    }
+    val serviceTypes =
+      foregroundServiceTypes(
+        voiceMode = voiceCaptureMode,
+        backgroundLocationActive = isBackgroundLocationActive(),
+      )
     ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceTypes)
-    didStartForeground = true
+  }
+
+  private fun isBackgroundLocationActive(): Boolean {
+    if (!SensitiveFeatureConfig.backgroundLocationEnabled) return false
+    if ((application as NodeApp).prefs.locationMode.value != LocationMode.Always) return false
+    val fineGranted =
+      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    val coarseGranted =
+      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    val backgroundGranted =
+      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    return (fineGranted || coarseGranted) && backgroundGranted
   }
 
   companion object {
@@ -200,19 +205,16 @@ class NodeForegroundService : Service() {
     private const val ACTION_SET_VOICE_CAPTURE_MODE = "ai.openclaw.app.action.SET_VOICE_CAPTURE_MODE"
     private const val EXTRA_VOICE_CAPTURE_MODE = "ai.openclaw.app.extra.VOICE_CAPTURE_MODE"
 
-    /** Starts the persistent node foreground service from UI lifecycle code. */
     fun start(context: Context) {
       val intent = Intent(context, NodeForegroundService::class.java)
       context.startForegroundService(intent)
     }
 
-    /** Requests disconnect through the service action path so notification actions and UI share behavior. */
     fun stop(context: Context) {
       val intent = Intent(context, NodeForegroundService::class.java).setAction(ACTION_STOP)
       context.startService(intent)
     }
 
-    /** Updates Android's foreground-service type before voice capture mode changes require microphone access. */
     fun setVoiceCaptureMode(
       context: Context,
       mode: VoiceCaptureMode,
@@ -231,21 +233,32 @@ class NodeForegroundService : Service() {
   }
 }
 
-/**
- * Foreground-service type mask required by Android for the current voice capture mode.
- */
-internal fun foregroundServiceTypesForVoiceMode(mode: VoiceCaptureMode): Int {
-  val base = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-  return if (mode == VoiceCaptureMode.TalkMode) {
-    base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+internal fun foregroundServiceTypes(
+  voiceMode: VoiceCaptureMode,
+  backgroundLocationActive: Boolean,
+): Int {
+  val base = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+  val voiceTypes =
+    when (voiceMode) {
+      VoiceCaptureMode.Off -> base
+      VoiceCaptureMode.ManualMic,
+      VoiceCaptureMode.TalkMode,
+      -> base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+    }
+  return if (backgroundLocationActive) {
+    voiceTypes or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
   } else {
-    base
+    voiceTypes
   }
 }
 
-/**
- * Compact notification suffix for voice state; kept pure for service-notification tests.
- */
+internal fun backgroundLocationNotificationSuffix(active: Boolean): String =
+  if (active) {
+    " · Location: Always"
+  } else {
+    ""
+  }
+
 internal fun voiceNotificationSuffix(
   mode: VoiceCaptureMode,
   manualMicEnabled: Boolean,

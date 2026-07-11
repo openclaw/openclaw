@@ -1,5 +1,8 @@
+// Gateway iOS exec-approval push delivery.
+// Sends APNs request/resolution wakes to paired operator devices.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
+import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 import {
   hasEffectivePairedDeviceRole,
   listDevicePairing,
@@ -22,7 +25,12 @@ import {
 } from "../infra/push-apns.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 
+// iOS exec-approval push delivery targets paired operator devices with APNs
+// registrations. Request pushes require approval scope plus identity-read access
+// so the client can validate gateway ownership before presenting or resolving.
+// Cleanup pushes reuse original targets so badges can clear after scope changes.
 const APPROVALS_SCOPE = "operator.approvals";
+const READ_SCOPE = "operator.read";
 const OPERATOR_ROLE = "operator";
 
 type GatewayLikeLogger = {
@@ -77,14 +85,14 @@ function resolveActiveOperatorToken(device: PairedDevice): DeviceAuthToken | nul
   return operatorToken;
 }
 
-function canApproveExecRequests(device: PairedDevice): boolean {
+function canReceiveExecApprovalRequests(device: PairedDevice): boolean {
   const operatorToken = resolveActiveOperatorToken(device);
   if (!operatorToken) {
     return false;
   }
   return roleScopesAllow({
     role: OPERATOR_ROLE,
-    requestedScopes: [APPROVALS_SCOPE],
+    requestedScopes: [APPROVALS_SCOPE, READ_SCOPE],
     allowedScopes: operatorToken.scopes,
   });
 }
@@ -102,7 +110,7 @@ function shouldTargetDevice(params: {
   if (!params.requireApprovalScope) {
     return true;
   }
-  return canApproveExecRequests(params.device);
+  return canReceiveExecApprovalRequests(params.device);
 }
 
 async function loadRegisteredTargets(params: {
@@ -146,6 +154,8 @@ async function resolveDeliveryPlan(params: {
   isTargetVisible?: (target: ApprovalPushTarget) => boolean;
   log: GatewayLikeLogger;
 }): Promise<DeliveryPlan> {
+  // Request delivery requires current approval scope; resolution delivery may
+  // target prior node ids so existing notification badges can be cleared.
   const targets = params.explicitNodeIds?.length
     ? await loadRegisteredTargets({ deviceIds: params.explicitNodeIds })
     : await resolvePairedTargets({
@@ -187,6 +197,8 @@ async function resolveDeliveryPlan(params: {
   }
   const relayConfig = relayConfigByNodeId.values().next().value;
 
+  // Relay sends are grouped by one base URL because the wake helpers accept a
+  // single relay config; targets on other relay origins are skipped this round.
   return {
     targets: targets.filter((target) =>
       target.registration.transport === "direct"
@@ -222,6 +234,7 @@ async function sendRequestedPushes(params: {
   plan: DeliveryPlan;
   log: GatewayLikeLogger;
 }): Promise<{ attempted: number; delivered: number }> {
+  const gatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
   return await sendApprovalPushes({
     approvalId: params.request.id,
     plan: params.plan,
@@ -234,12 +247,14 @@ async function sendRequestedPushes(params: {
             registration: target.registration,
             nodeId: target.nodeId,
             approvalId,
+            gatewayDeviceId,
             auth: plan.directAuth!,
           })
         : await sendApnsExecApprovalAlert({
             registration: target.registration,
             nodeId: target.nodeId,
             approvalId,
+            gatewayDeviceId,
             relayConfig: plan.relayConfig!,
           }),
   });
@@ -253,6 +268,8 @@ async function sendApprovalPushes(params: {
   logThrown: boolean;
   send: ApprovalPushSender;
 }): Promise<{ attempted: number; delivered: number }> {
+  // Stale registrations are cleared on both direct and relay failures so future
+  // approval prompts do not keep targeting dead APNs device tokens.
   const results = await Promise.allSettled(
     params.plan.targets.map(async (target) => {
       const result = await params.send({
@@ -290,6 +307,7 @@ async function sendResolvedPushes(params: {
   plan: DeliveryPlan;
   log: GatewayLikeLogger;
 }): Promise<void> {
+  const gatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
   await sendApprovalPushes({
     approvalId: params.approvalId,
     plan: params.plan,
@@ -302,12 +320,14 @@ async function sendResolvedPushes(params: {
             registration: target.registration,
             nodeId: target.nodeId,
             approvalId,
+            gatewayDeviceId,
             auth: plan.directAuth!,
           })
         : await sendApnsExecApprovalResolvedWake({
             registration: target.registration,
             nodeId: target.nodeId,
             approvalId,
+            gatewayDeviceId,
             relayConfig: plan.relayConfig!,
           }),
   });
@@ -318,6 +338,8 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
   const pendingDeliveryStateById = new Map<string, Promise<ApprovalDeliveryState | null>>();
 
   const sendCleanupPushForApproval = async (approvalId: string): Promise<void> => {
+    // A resolve/expire event can arrive before the request push plan finishes;
+    // wait for the pending state so cleanup reaches the same target set.
     const deliveryState =
       approvalDeliveriesById.get(approvalId) ?? (await pendingDeliveryStateById.get(approvalId));
     approvalDeliveriesById.delete(approvalId);
@@ -345,6 +367,7 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
   };
 
   return {
+    /** Sends the initial approval notification to visible iOS operator devices. */
     async handleRequested(
       request: ExecApprovalRequest,
       opts?: { isTargetVisible?: (target: ApprovalPushTarget) => boolean },
@@ -399,10 +422,12 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
       return true;
     },
 
+    /** Sends cleanup wakes for resolved approval requests. */
     async handleResolved(resolved: ExecApprovalResolved): Promise<void> {
       await sendCleanupPushForApproval(resolved.id);
     },
 
+    /** Sends cleanup wakes for expired approval requests. */
     async handleExpired(request: ExecApprovalRequest): Promise<void> {
       await sendCleanupPushForApproval(request.id);
     },

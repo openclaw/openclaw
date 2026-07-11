@@ -1,3 +1,4 @@
+// ACP Core module implements session behavior.
 import { randomUUID } from "node:crypto";
 import { resolveIntegerOption } from "./numeric-options.js";
 import type { AcpSession } from "./types.js";
@@ -148,6 +149,9 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     const session = sessions.get(sessionId);
     if (!session) {
       return;
+    }
+    if (session.activeRunId && session.activeRunId !== runId) {
+      runIdToSessionId.delete(session.activeRunId);
     }
     session.activeRunId = runId;
     session.abortController = abortController;

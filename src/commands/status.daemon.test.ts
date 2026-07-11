@@ -1,3 +1,4 @@
+// Status daemon tests cover managed gateway daemon summary resolution.
 import { describe, expect, it, vi } from "vitest";
 import { getDaemonStatusSummary } from "./status.daemon.js";
 
@@ -97,5 +98,24 @@ describe("status daemon summary", () => {
 
     const summary = await getDaemonStatusSummary();
     expect(summary.runtimeShort).toBe("running (pid 1234)");
+  });
+
+  it("keeps gateway status readable for unsupported service adapters", async () => {
+    mocks.readServiceStatusSummary.mockResolvedValueOnce({
+      label: "Gateway service",
+      installed: false,
+      loaded: false,
+      managedByOpenClaw: false,
+      externallyManaged: false,
+      loadedText: "not installed",
+      runtime: { status: "unknown", detail: "Gateway service install not supported on aix" },
+    });
+
+    const summary = await getDaemonStatusSummary();
+
+    expect(mocks.resolveGatewayService).toHaveBeenCalled();
+    expect(summary.label).toBe("Gateway service");
+    expect(summary.installed).toBe(false);
+    expect(summary.runtimeShort).toBe("unknown (Gateway service install not supported on aix)");
   });
 });

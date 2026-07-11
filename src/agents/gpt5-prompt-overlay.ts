@@ -1,3 +1,8 @@
+/**
+ * Deprecated GPT-5 prompt overlay helpers.
+ * Kept for OpenAI/Codex provider-owned compatibility while prompt behavior
+ * moves toward provider plugin ownership.
+ */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderSystemPromptContribution } from "./system-prompt-contribution.js";
@@ -6,7 +11,6 @@ const GPT5_MODEL_ID_PATTERN = /(?:^|[/:])gpt-5(?:[.-]|$)/i;
 const OPENAI_FAMILY_GPT5_PROMPT_OVERLAY_PROVIDERS = new Set([
   "codex",
   "codex-cli",
-  "openai",
   "openai",
   "azure-openai",
   "azure-openai-responses",

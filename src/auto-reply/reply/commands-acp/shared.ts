@@ -1,3 +1,4 @@
+// Shared ACP command helpers for session identity and reply formatting.
 import { randomUUID } from "node:crypto";
 import { toAcpRuntimeErrorText } from "@openclaw/acp-core/runtime/error-text";
 import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
@@ -34,8 +35,6 @@ export const ACP_INSTALL_USAGE = "Usage: /acp install";
 export const ACP_DOCTOR_USAGE = "Usage: /acp doctor";
 export const ACP_SESSIONS_USAGE = "Usage: /acp sessions";
 export const ACP_STEER_OUTPUT_LIMIT = 800;
-export { SESSION_ID_RE } from "../../../sessions/session-id.js";
-
 export type AcpAction =
   | "spawn"
   | "cancel"

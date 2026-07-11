@@ -1,3 +1,4 @@
+// Covers config audit reporting for files, paths, and values.
 import fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
 import path from "node:path";
@@ -347,6 +348,15 @@ describe("config io audit helpers", () => {
       "--rotated-signing-key=PEM-LIKE-MATERIAL",
       "--ops-master-key",
       "ABCDEF1234567890",
+      "--secret-key",
+      "opaque-secret-key",
+      "--aws-secret-access-key=opaque-aws-secret",
+      "--openai_api_key",
+      "opaque-underscore-key",
+      "--aws_secret_access_key=opaque-underscore-aws-secret",
+      "--credentials",
+      "opaque-plural-credential",
+      "--service-credentials=opaque-inline-plural-credential",
     ];
     const result = redactConfigAuditArgv(argv);
     expect(result).toEqual([
@@ -357,6 +367,15 @@ describe("config io audit helpers", () => {
       "--rotated-signing-key=***",
       "--ops-master-key",
       "***",
+      "--secret-key",
+      "***",
+      "--aws-secret-access-key=***",
+      "--openai_api_key",
+      "***",
+      "--aws_secret_access_key=***",
+      "--credentials",
+      "***",
+      "--service-credentials=***",
     ]);
   });
 

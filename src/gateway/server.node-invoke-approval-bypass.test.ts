@@ -1,3 +1,5 @@
+// Node invoke approval-bypass tests protect signed node identity checks so
+// unpaired or spoofed devices cannot receive forwarded invoke requests.
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -11,6 +13,7 @@ import {
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
+import { issueOperatorToken } from "./device-authz.test-helpers.js";
 import {
   connectReq,
   installGatewayTestHooks,
@@ -19,7 +22,10 @@ import {
   startServerWithClient,
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
-import { acknowledgeNodeInvokeRequestForTest } from "./test-helpers.node-invoke.js";
+import {
+  acknowledgeNodeInvokeRequestForTest,
+  getConnectedNodeIdForTest,
+} from "./test-helpers.node-invoke.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const NODE_CONNECT_TIMEOUT_MS = 10_000;
@@ -113,19 +119,6 @@ function requireRecord(
   return value;
 }
 
-async function getConnectedNodeId(ws: WebSocket): Promise<string> {
-  const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
-    ws,
-    "node.list",
-    {},
-  );
-  expect(nodes.ok).toBe(true);
-  return requireNonEmptyString(
-    nodes.payload?.nodes?.find((n) => n.connected)?.nodeId,
-    "connected node id",
-  );
-}
-
 async function getConnectedNodeIds(ws: WebSocket): Promise<string[]> {
   const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
     ws,
@@ -163,11 +156,17 @@ async function requestAllowOnceApproval(
     nodeId,
     cwd: null,
     host: "node",
+    requireDeliveryRoute: false,
+    twoPhase: true,
     timeoutMs: 30_000,
   });
-  await rpcReq(ws, "exec.approval.resolve", { id: approvalId, decision: "allow-once" });
   const requested = await requestP;
   expect(requested.ok).toBe(true);
+  const resolved = await rpcReq(ws, "exec.approval.resolve", {
+    id: approvalId,
+    decision: "allow-once",
+  });
+  expect(resolved.ok).toBe(true);
   return approvalId;
 }
 
@@ -240,14 +239,17 @@ async function requestChatAllowOnceApproval(params: {
     turnSourceTo: params.context.turnSourceTo,
     turnSourceAccountId: params.context.turnSourceAccountId,
     turnSourceThreadId: params.context.turnSourceThreadId,
+    requireDeliveryRoute: false,
+    twoPhase: true,
     timeoutMs: 30_000,
-  });
-  await rpcReq(params.ws, "exec.approval.resolve", {
-    id: approvalId,
-    decision: "allow-once",
   });
   const requested = await requestP;
   expect(requested.ok).toBe(true);
+  const resolved = await rpcReq(params.ws, "exec.approval.resolve", {
+    id: approvalId,
+    decision: "allow-once",
+  });
+  expect(resolved.ok).toBe(true);
   return approvalId;
 }
 
@@ -260,7 +262,7 @@ describe("node.invoke approval bypass", () => {
       gateway: {
         nodes: {
           pairing: { autoApproveCidrs: ["127.0.0.1/32", "::1/128"] },
-          allowCommands: ["system.run", "system.run.prepare", "system.which"],
+          allowCommands: ["system.run", "system.run.prepare", "system.which", "browser.proxy"],
         },
       },
     });
@@ -406,6 +408,29 @@ describe("node.invoke approval bypass", () => {
     });
   };
 
+  const connectDeviceTokenOperator = async (scopes: string[]) => {
+    const issued = await issueOperatorToken({
+      name: `browser-proxy-scope-${crypto.randomUUID()}`,
+      approvedScopes: scopes,
+      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+    });
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    trackConnectChallengeNonce(ws);
+    await new Promise<void>((resolve) => {
+      ws.once("open", resolve);
+    });
+    const res = await connectReq(ws, {
+      skipDefaultAuth: true,
+      deviceIdentityPath: issued.identityPath,
+      deviceToken: issued.token,
+      scopes,
+      timeoutMs: CONNECT_REQ_TIMEOUT_MS,
+    });
+    expect(res.ok).toBe(true);
+    return ws;
+  };
+
   const connectLinuxNode = async (
     onInvoke: (payload: unknown) => void,
     deviceIdentity?: DeviceIdentity,
@@ -471,7 +496,7 @@ describe("node.invoke approval bypass", () => {
     });
     const ws = await connectOperator(["operator.write"]);
     try {
-      const nodeId = await getConnectedNodeId(ws);
+      const nodeId = await getConnectedNodeIdForTest(ws);
       const cases = [
         {
           name: "rawCommand mismatch",
@@ -536,7 +561,7 @@ describe("node.invoke approval bypass", () => {
     );
     const ws = await connectOperator(["operator.write"]);
     try {
-      const nodeId = await getConnectedNodeId(ws);
+      const nodeId = await getConnectedNodeIdForTest(ws);
       const res = await rpcReq(ws, "node.invoke", {
         nodeId,
         command: "browser.proxy",
@@ -558,6 +583,72 @@ describe("node.invoke approval bypass", () => {
     }
   });
 
+  test("requires admin scope for direct browser.proxy node.invoke", async () => {
+    let sawInvoke = false;
+    const nodeIdentity = createDeviceIdentity();
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      nodeIdentity,
+      ["browser.proxy"],
+    );
+    const ws = await connectDeviceTokenOperator(["operator.write"]);
+    try {
+      const browserRequest = await rpcReq(ws, "browser.request", {
+        method: "GET",
+        path: "/profiles",
+      });
+      expect(browserRequest.ok).toBe(false);
+      expect(browserRequest.error?.message ?? "").toContain("missing scope: operator.admin");
+
+      const directProxy = await rpcReq(ws, "node.invoke", {
+        nodeId: nodeIdentity.deviceId,
+        command: "browser.proxy",
+        params: {
+          method: "GET",
+          path: "/profiles",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(directProxy.ok).toBe(false);
+      expect(directProxy.error?.message ?? "").toContain("missing scope: operator.admin");
+      await expectNoForwardedInvoke(() => sawInvoke);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
+  test("allows direct browser.proxy node.invoke for admin-scoped operators", async () => {
+    let sawInvoke = false;
+    const nodeIdentity = createDeviceIdentity();
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      nodeIdentity,
+      ["browser.proxy"],
+    );
+    const ws = await connectDeviceTokenOperator(["operator.admin"]);
+    try {
+      const directProxy = await rpcReq(ws, "node.invoke", {
+        nodeId: nodeIdentity.deviceId,
+        command: "browser.proxy",
+        params: {
+          method: "GET",
+          path: "/profiles",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(directProxy.ok, JSON.stringify(directProxy.error)).toBe(true);
+      expect(sawInvoke).toBe(true);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
   test("binds approvals to decision/device and blocks cross-device replay", async () => {
     const invokeCapture = createInvokeParamCapture();
     const node = await connectLinuxNode(invokeCapture.onInvoke);
@@ -567,7 +658,7 @@ describe("node.invoke approval bypass", () => {
     const wsOtherDevice = await connectOperatorWithNewDevice(["operator.write"]);
 
     try {
-      const nodeId = await getConnectedNodeId(wsApprover);
+      const nodeId = await getConnectedNodeIdForTest(wsApprover);
 
       const approvalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);
       // Separate caller connection simulates per-call clients.
@@ -580,7 +671,7 @@ describe("node.invoke approval bypass", () => {
         }),
         idempotencyKey: crypto.randomUUID(),
       });
-      expect(invoke.ok).toBe(true);
+      expect(invoke.ok, JSON.stringify(invoke.error)).toBe(true);
       await expectForwardedApprovedParams({ invokeCapture, absentKey: "injected" });
 
       const replayApprovalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);
@@ -610,7 +701,7 @@ describe("node.invoke approval bypass", () => {
     const wsReplay = await connectTrustedBackend(["operator.write", "operator.approvals"]);
 
     try {
-      const nodeId = await getConnectedNodeId(wsRequest);
+      const nodeId = await getConnectedNodeIdForTest(wsRequest);
       const context: ChatApprovalContext = {
         agentId: "main",
         sessionKey: "agent:main:telegram:direct:12345",

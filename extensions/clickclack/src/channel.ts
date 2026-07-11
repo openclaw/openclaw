@@ -1,3 +1,7 @@
+/**
+ * ClickClack channel plugin definition: target parsing, account config, status,
+ * gateway startup, and outbound delivery wiring.
+ */
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
@@ -68,6 +72,9 @@ const clickClackMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
+/**
+ * Channel plugin instance registered by the bundled ClickClack entry.
+ */
 export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = createChatChannelPlugin({
   base: {
     id: CHANNEL_ID,
@@ -113,6 +120,7 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
           agentId,
           channel: CHANNEL_ID,
           accountId,
+          recipientSessionExact: parsed.kind === "dm",
           peer: {
             kind: parsed.chatType === "direct" ? "direct" : "channel",
             id: buildClickClackTarget(parsed),
@@ -126,6 +134,7 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
           replyToId,
           threadId: threadId ?? (parsed.kind === "thread" ? parsed.id : undefined),
           currentSessionKey,
+          useSuffix: false,
           canRecoverCurrentThread: () => true,
         });
       },

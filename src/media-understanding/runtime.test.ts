@@ -1,3 +1,5 @@
+// Media-understanding runtime tests cover file APIs, provider dispatch, disabled
+// state, cleanup, remote references, and direct model-backed image calls.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -62,6 +64,8 @@ vi.mock("../media/media-services.js", () => ({
 }));
 
 function requireRunCapabilityRequest(): unknown {
+  // File API tests verify the normalized request handed to runCapability, not
+  // just the public return shape.
   const [call] = mocks.runCapability.mock.calls;
   if (!call) {
     throw new Error("expected runCapability call");
@@ -238,8 +242,9 @@ describe("media-understanding runtime", () => {
     });
   });
 
-  it("does not force typed remote URLs into the requested capability", async () => {
-    const media = [{ index: 0, url: "https://example.com/clip.mp4", mime: "video/mp4" }];
+  it("does not force encoded video URLs into the requested image capability", async () => {
+    const mediaUrl = "https://example.com/clip%2Emp4?download=1#preview";
+    const media = [{ index: 0, url: mediaUrl, mime: "video/mp4" }];
     mocks.normalizeMediaAttachments.mockReturnValue(media);
     mocks.runCapability.mockResolvedValue({
       outputs: [],
@@ -248,7 +253,7 @@ describe("media-understanding runtime", () => {
 
     await expect(
       describeImageFile({
-        filePath: "https://example.com/clip.mp4",
+        filePath: mediaUrl,
         cfg: {} as OpenClawConfig,
         agentDir: "/tmp/agent",
       }),
@@ -258,12 +263,12 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
-      MediaUrl: "https://example.com/clip.mp4",
+      MediaUrl: mediaUrl,
       MediaType: "video/mp4",
     });
     expect(requireRunCapabilityRequest()).toMatchObject({
       capability: "image",
-      ctx: { MediaUrl: "https://example.com/clip.mp4", MediaType: "video/mp4" },
+      ctx: { MediaUrl: mediaUrl, MediaType: "video/mp4" },
       media,
     });
   });

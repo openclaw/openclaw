@@ -1,3 +1,5 @@
+// Gateway exec approval manager.
+// Tracks pending operator decisions and short-lived resolved approval records.
 import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -8,7 +10,7 @@ import type {
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 // Grace period to keep resolved entries for late awaitDecision calls
-const RESOLVED_ENTRY_GRACE_MS = 15_000;
+export const EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS = 15_000;
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
   const unref = (timer as { unref?: () => void }).unref;
@@ -18,7 +20,9 @@ function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
 }
 
 function scheduleResolvedEntryCleanup(cleanup: () => void): void {
-  const timer = setTimeout(cleanup, RESOLVED_ENTRY_GRACE_MS);
+  // Resolved approvals stay visible briefly so node.invoke sanitizers can
+  // consume a just-approved id after the UI decision races the command retry.
+  const timer = setTimeout(cleanup, EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS);
   unrefTimer(timer);
 }
 
@@ -27,6 +31,8 @@ function resolveApprovalTimeoutMs(timeoutMs: number): number {
 }
 
 type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
+
+export type ExecApprovalResolutionSource = "operator" | "auto-review";
 
 export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   id: string;
@@ -38,9 +44,12 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   requestedByDeviceId?: string | null;
   requestedByClientId?: string | null;
   requestedByDeviceTokenAuth?: boolean;
+  approvalReviewerDeviceIds?: string[];
   resolvedAtMs?: number;
   decision?: ExecApprovalDecision;
   consumedDecision?: ExecApprovalDecision;
+  resolutionSource?: ExecApprovalResolutionSource;
+  askFallbackConsumed?: boolean;
   resolvedBy?: string | null;
 };
 
@@ -117,17 +126,12 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     return promise;
   }
 
-  /**
-   * @deprecated Use register() instead for explicit separation of registration and waiting.
-   */
-  async waitForDecision(
-    record: ExecApprovalRecord<TPayload>,
-    timeoutMs: number,
-  ): Promise<ExecApprovalDecision | null> {
-    return this.register(record, timeoutMs);
-  }
-
-  resolve(recordId: string, decision: ExecApprovalDecision, resolvedBy?: string | null): boolean {
+  private resolveWithSource(
+    recordId: string,
+    decision: ExecApprovalDecision,
+    resolvedBy: string | null | undefined,
+    resolutionSource: ExecApprovalResolutionSource,
+  ): boolean {
     const pending = this.pending.get(recordId);
     if (!pending) {
       return false;
@@ -139,6 +143,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     clearTimeout(pending.timer);
     pending.record.resolvedAtMs = Date.now();
     pending.record.decision = decision;
+    pending.record.resolutionSource = resolutionSource;
     pending.record.resolvedBy = resolvedBy ?? null;
     // Resolve the promise first, then delete after a grace period.
     // This allows in-flight awaitDecision calls to find the resolved entry.
@@ -150,6 +155,14 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       }
     });
     return true;
+  }
+
+  resolve(recordId: string, decision: ExecApprovalDecision, resolvedBy?: string | null): boolean {
+    return this.resolveWithSource(recordId, decision, resolvedBy, "operator");
+  }
+
+  resolveAutoReview(recordId: string, resolvedBy?: string | null): boolean {
+    return this.resolveWithSource(recordId, "allow-once", resolvedBy, "auto-review");
   }
 
   expire(recordId: string, resolvedBy?: string | null): boolean {
@@ -197,6 +210,24 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     // cannot be replayed during the resolved-entry grace window.
     record.consumedDecision = record.decision;
     record.decision = undefined;
+    return true;
+  }
+
+  consumeAskFallback(recordId: string): boolean {
+    const entry = this.pending.get(recordId);
+    if (!entry) {
+      return false;
+    }
+    const record = entry.record;
+    if (
+      record.resolvedAtMs === undefined ||
+      record.decision !== undefined ||
+      record.consumedDecision !== undefined ||
+      record.askFallbackConsumed === true
+    ) {
+      return false;
+    }
+    record.askFallbackConsumed = true;
     return true;
   }
 

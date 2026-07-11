@@ -1,6 +1,8 @@
+/** Builds fallback-model handoff messages that preserve active subagent state. */
 import type { AgentMessage } from "../agents/runtime/index.js";
 
-export interface HandoffSnapshot {
+/** Summary of the prior model state used to brief the fallback model. */
+interface HandoffSnapshot {
   summary: string;
   activeSubagents: Array<{
     sessionId: string;

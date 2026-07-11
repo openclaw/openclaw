@@ -1,15 +1,19 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+/**
+ * Session runtime compatibility helpers.
+ *
+ * Resolves persisted runtime overrides without leaking provider-specific CLI runtime bindings across model routes.
+ */
 import type { SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import { resolveCliRuntimeModelBackendBinding } from "./cli-backends.js";
-import { resolveContextConfigProviderForRuntime } from "./openai-routing.js";
+import { isCliRuntimeAliasForProvider } from "./model-runtime-aliases.js";
 
-export type SessionRuntimeCompatEntry = Pick<
-  SessionEntry,
-  "agentHarnessId" | "agentRuntimeOverride"
->;
+/** Persisted runtime fields used to recover session runtime compatibility. */
+type SessionRuntimeCompatEntry = Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
+type SessionRuntimeOverrideEntry = Pick<SessionEntry, "agentRuntimeOverride">;
 
+/** Resolves the persisted runtime id, preferring explicit overrides. */
 export function resolvePersistedSessionRuntimeId(
   entry?: SessionRuntimeCompatEntry,
 ): string | undefined {
@@ -20,33 +24,38 @@ export function resolvePersistedSessionRuntimeId(
   return normalizeOptionalAgentRuntimeId(entry?.agentHarnessId);
 }
 
-export function resolveSessionRuntimeOverrideForProvider(params: {
-  provider: string;
-  entry?: Pick<SessionEntry, "agentRuntimeOverride">;
+/** Resolves a runtime id only when it can serve the selected provider. */
+export function resolveCompatibleAgentRuntimeForProvider(params: {
+  provider?: string | null;
+  runtime?: string | null;
+  cfg?: OpenClawConfig;
 }): string | undefined {
-  const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  const runtime = normalizeOptionalAgentRuntimeId(params.entry?.agentRuntimeOverride);
+  const runtime = normalizeOptionalAgentRuntimeId(params.runtime);
   if (!runtime || isDefaultAgentRuntimeId(runtime)) {
     return undefined;
   }
   if (runtime === "openclaw") {
-    return "openclaw";
+    return runtime;
   }
-  if (provider === "openai" && runtime === "codex") {
-    return "codex";
+  const provider = params.provider?.trim().toLowerCase() ?? "";
+  // The Codex harness owns both OpenClaw's virtual Codex namespace and canonical OpenAI routes.
+  if (runtime === "codex" && (provider === "codex" || provider === "openai")) {
+    return runtime;
   }
-  return resolveCliRuntimeModelBackendBinding({ provider, runtime })?.runtime;
+  return isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg }) ? runtime : undefined;
 }
 
-export function resolveContextConfigProviderForSessionRuntime(params: {
-  provider: string;
-  entry?: SessionRuntimeCompatEntry;
+/** Resolves a persisted runtime override only when it can serve the selected provider. */
+export function resolveSessionRuntimeOverrideForProvider(params: {
+  provider?: string | null;
+  entry?: SessionRuntimeOverrideEntry;
+  cfg?: OpenClawConfig;
 }): string | undefined {
-  const runtimeId = resolvePersistedSessionRuntimeId(params.entry);
-  return runtimeId
-    ? resolveContextConfigProviderForRuntime({
-        provider: params.provider,
-        runtimeId,
-      })
-    : undefined;
+  // agentHarnessId records the runtime that produced the existing transcript;
+  // it must not override the runtime selected for the next turn.
+  return resolveCompatibleAgentRuntimeForProvider({
+    provider: params.provider,
+    runtime: params.entry?.agentRuntimeOverride,
+    cfg: params.cfg,
+  });
 }

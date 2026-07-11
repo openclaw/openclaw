@@ -1,3 +1,8 @@
+/**
+ * Loaded-channel target parsing helpers.
+ *
+ * Bridges deprecated explicit target parsing with modern channel route target helpers.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -20,7 +25,7 @@ export type ParsedChannelExplicitTarget = {
   chatType?: "direct" | "group" | "channel";
 };
 
-export function resolveCompatParsedRouteTarget(params: {
+function resolveCompatParsedRouteTarget(params: {
   channel: string;
   rawTarget?: string | null;
   fallbackThreadId?: string | number | null;

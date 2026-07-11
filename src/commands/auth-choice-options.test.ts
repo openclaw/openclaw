@@ -1,3 +1,4 @@
+// Auth-choice option tests cover provider wizard options, grouping, and onboarding scope filters.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
@@ -36,6 +37,7 @@ vi.mock("../flows/provider-flow.js", () => ({
         ...resolveManifestProviderAuthChoices()
           .filter((choice) => includesOnboardingScope(choice.onboardingScopes, scope))
           .map((choice) => ({
+            providerId: choice.providerId,
             option: {
               value: choice.choiceId,
               label: choice.choiceLabel,
@@ -61,6 +63,7 @@ vi.mock("../flows/provider-flow.js", () => ({
         ...resolveProviderWizardOptions()
           .filter((option) => includesOnboardingScope(option.onboardingScopes, scope))
           .map((option) => ({
+            providerId: option.groupId,
             option: {
               value: option.value,
               label: option.label,
@@ -509,6 +512,15 @@ describe("buildAuthChoiceOptions", () => {
         groupId: "byteplus",
         groupLabel: "BytePlus",
       },
+      {
+        pluginId: "openrouter",
+        providerId: "openrouter",
+        methodId: "oauth",
+        choiceId: "openrouter-oauth",
+        choiceLabel: "OpenRouter OAuth",
+        groupId: "openrouter",
+        groupLabel: "OpenRouter",
+      },
     ]);
 
     const { groups } = buildAuthChoiceGroups({
@@ -521,6 +533,7 @@ describe("buildAuthChoiceOptions", () => {
       "Anthropic",
       "xAI (Grok)",
       "Google",
+      "OpenRouter",
       "BytePlus",
       "Custom Provider",
       "LiteLLM",
@@ -614,6 +627,7 @@ describe("buildAuthChoiceOptions", () => {
       "openai-chatgpt-device-code",
       "openai-api-key",
     ]);
+    expect(openAIGroup.providerIds).toEqual(["openai"]);
     expect(openAIGroup.options[0]?.onboardingFeatured).toBe(true);
   });
 

@@ -55,13 +55,14 @@ git_root="/tmp/openclaw-git"
 mkdir -p "$git_root"
 # Build the fake git install from the packed package contents, not the checkout.
 tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
+node scripts/e2e/lib/package-git-fixture.mjs prepare "$git_root"
 # The package-derived fixture can carry patchedDependencies whose targets are
 # absent from the trimmed tarball install; that should not block update preflight.
 node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$git_root"
 (
   cd "$git_root"
   if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
-    cat /tmp/openclaw-git-install.log >&2 || true
+    openclaw_e2e_print_log /tmp/openclaw-git-install.log >&2
     exit 1
   fi
 )
@@ -81,7 +82,7 @@ pkg_tgz_path="$package_tgz"
 
 package_install_log="/tmp/openclaw-update-channel-switch-package-install.log"
 if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix /tmp/npm-prefix --omit=optional "$pkg_tgz_path" >"$package_install_log" 2>&1; then
-  cat "$package_install_log" >&2 || true
+  openclaw_e2e_print_log "$package_install_log" >&2
   exit 1
 fi
 package_version="$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"/tmp/npm-prefix/lib/node_modules/openclaw/package.json\", \"utf8\")).version")"

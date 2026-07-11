@@ -1,7 +1,7 @@
 ---
 title: Claw Supervisor
-description: Fleet supervision plan for Codex app-server sessions controlled by OpenClaw.
-readWhen:
+summary: "Fleet supervision plan for Codex app-server sessions controlled by OpenClaw."
+read_when:
   - Designing Codex fleet supervision
   - Building OpenClaw tools that read, steer, or spawn Codex sessions
   - Choosing between local, Cloudflare, and VPS deployment for supervised Codex
@@ -53,6 +53,29 @@ The supervisor runs:
 - MCP server for Codex-to-Claw calls.
 - OpenClaw tools for Claw-to-Codex control.
 - Policy engine for autonomous actions, approvals, and loop prevention.
+
+## Federated Session Catalog
+
+The plugin's current read-only catalog lists interactive Codex sessions from
+the Gateway host and opted-in paired computers. Each computer queries a
+dedicated local Codex App Server over stdio, so raw App Server endpoints remain
+local.
+
+The catalog flow is:
+
+```text
+Control UI or openclaw codex sessions
+  -> codex-supervisor.sessions.list on the Gateway
+      -> dedicated local Codex App Server over stdio
+      -> node.invoke for each connected catalog-capable node
+          -> dedicated node-local Codex App Server over stdio
+```
+
+This catalog is a metadata projection, not the durable registry or live-control
+plane described below. See the [Codex Supervisor plugin
+reference](/plugins/reference/codex-supervisor) for activation ownership, node
+consent, CLI and Control UI use, pagination, partial failures, and the exact
+security boundary.
 
 ## Codex App-Server Contract
 

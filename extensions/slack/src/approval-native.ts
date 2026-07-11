@@ -1,7 +1,5 @@
-import {
-  createApproverRestrictedNativeApprovalCapability,
-  splitChannelApprovalCapability,
-} from "openclaw/plugin-sdk/approval-delivery-runtime";
+// Slack plugin module implements approval native behavior.
+import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
@@ -227,8 +225,6 @@ export const slackApprovalCapability: ChannelApprovalCapability = {
       }
     : undefined,
 };
-
-export const slackNativeApprovalAdapter = splitChannelApprovalCapability(slackApprovalCapability);
 
 export const testing = {
   resolveSessionSlackOriginTarget,

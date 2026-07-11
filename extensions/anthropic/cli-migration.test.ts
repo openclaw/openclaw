@@ -1,3 +1,4 @@
+// Anthropic tests cover cli migration plugin behavior.
 import type {
   ProviderAuthContext,
   ProviderAuthMethodNonInteractiveContext,
@@ -19,7 +20,7 @@ vi.mock("./cli-auth-seam.js", async (importActual) => {
   };
 });
 
-const { buildAnthropicCliMigrationResult, hasClaudeCliAuth } = await import("./cli-migration.js");
+const { buildAnthropicCliMigrationResult } = await import("./cli-migration.js");
 const { resolveKnownAnthropicModelRef } = await import("./claude-model-refs.js");
 const { createTestWizardPrompter, registerSingleProviderPlugin } =
   await import("openclaw/plugin-sdk/plugin-test-runtime");
@@ -134,23 +135,6 @@ function createProviderAuthMethodNonInteractiveContext(
 }
 
 describe("anthropic cli migration", () => {
-  it("detects local Claude CLI auth", () => {
-    readClaudeCliCredentialsForSetup.mockReturnValue({ type: "oauth" });
-
-    expect(hasClaudeCliAuth()).toBe(true);
-  });
-
-  it("uses the non-interactive Claude auth probe without keychain prompts", () => {
-    readClaudeCliCredentialsForSetup.mockReset();
-    readClaudeCliCredentialsForSetupNonInteractive.mockReset();
-    readClaudeCliCredentialsForSetup.mockReturnValue(null);
-    readClaudeCliCredentialsForSetupNonInteractive.mockReturnValue({ type: "oauth" });
-
-    expect(hasClaudeCliAuth({ allowKeychainPrompt: false })).toBe(true);
-    expect(readClaudeCliCredentialsForSetup).not.toHaveBeenCalled();
-    expect(readClaudeCliCredentialsForSetupNonInteractive).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps anthropic defaults and selects the claude-cli runtime", () => {
     const result = buildAnthropicCliMigrationResult({
       agents: {
@@ -183,6 +167,7 @@ describe("anthropic cli migration", () => {
               agentRuntime: { id: "claude-cli" },
             },
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": {
               alias: "Opus",
@@ -275,6 +260,7 @@ describe("anthropic cli migration", () => {
           models: {
             "openai/gpt-5.2": {},
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
@@ -319,6 +305,7 @@ describe("anthropic cli migration", () => {
           model: { primary: "anthropic/claude-opus-4-7" },
           models: {
             "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },

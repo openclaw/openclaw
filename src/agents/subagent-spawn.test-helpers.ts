@@ -1,6 +1,9 @@
+// Subagent spawn test helpers install mocked runtime seams so sessions_spawn
+// tests can exercise orchestration without real gateway/session-store effects.
 import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect, vi } from "vitest";
+import { resolveLeastPrivilegeOperatorScopesForMethod } from "../gateway/method-scopes.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 
 type MockFn = (...args: unknown[]) => unknown;
@@ -20,6 +23,7 @@ type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> 
   resetSubagentRegistryForTests: MockFn;
 };
 
+/** Build a minimal runtime config for sessions_spawn tests. */
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
   overrides?: Record<string, unknown>,
@@ -48,6 +52,7 @@ export function createSubagentSpawnTestConfig(
   };
 }
 
+/** Mock gateway calls for the common accepted-spawn flow. */
 export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementationTarget) {
   callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
     if (opts.method === "sessions.patch") {
@@ -75,6 +80,7 @@ function createDefaultSessionHelperMocks() {
   };
 }
 
+/** Install an updateSessionStore mock that captures mutations in memory. */
 export function installSessionStoreCaptureMock(
   updateSessionStoreMock: {
     mockImplementation: (
@@ -97,6 +103,7 @@ export function installSessionStoreCaptureMock(
   );
 }
 
+/** Assert the persisted session entry captured the expected runtime model. */
 export function expectPersistedRuntimeModel(params: {
   persistedStore: SessionStore | undefined;
   sessionKey: string | RegExp;
@@ -119,12 +126,16 @@ export function expectPersistedRuntimeModel(params: {
   }
 }
 
+/** Load subagent-spawn with runtime dependencies replaced by test doubles. */
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
+  dispatchGatewayMethodInProcessMock?: MockFn;
+  hasInProcessGatewayContextMock?: MockFn;
   getRuntimeConfig?: () => Record<string, unknown>;
   loadSessionStoreMock?: MockFn;
   ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
+  forkSessionEntryFromParentMock?: MockFn;
   forkSessionFromParentMock?: MockFn;
   resolveContextEngineMock?: MockFn;
   resolveParentForkDecisionMock?: MockFn;
@@ -189,6 +200,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resetModules?: boolean;
 }): Promise<SubagentSpawnModuleForTest> {
   if (params.resetModules ?? true) {
+    // The helper rewires imports with vi.doMock, so each test starts from a
+    // fresh module graph unless explicitly sharing mocks.
     vi.resetModules();
   }
 
@@ -200,7 +213,40 @@ export async function loadSubagentSpawnModuleForTest(params: {
 
   vi.doMock("./subagent-spawn.runtime.js", () => ({
     callGateway: (opts: unknown) => params.callGatewayMock(opts),
+    dispatchGatewayMethodInProcess: (...args: unknown[]) =>
+      params.dispatchGatewayMethodInProcessMock?.(...args),
+    hasInProcessGatewayContext: () => Boolean(params.hasInProcessGatewayContextMock?.()),
     buildSubagentSystemPrompt: () => "system-prompt",
+    forkSessionEntryFromParent:
+      params.forkSessionEntryFromParentMock ??
+      (async () => {
+        const fork = (
+          params.forkSessionFromParentMock
+            ? await params.forkSessionFromParentMock()
+            : { sessionId: "forked-session-id", sessionFile: "/tmp/forked-session.jsonl" }
+        ) as { sessionId: string; sessionFile: string } | null;
+        if (!fork) {
+          return { status: "failed" };
+        }
+        return {
+          status: "forked",
+          fork,
+          parentEntry: {
+            sessionId: "parent-session-id",
+            sessionFile: "/tmp/parent-session.jsonl",
+            updatedAt: Date.now(),
+          },
+          sessionEntry: {
+            sessionId: fork.sessionId,
+            sessionFile: fork.sessionFile,
+            forkedFromParent: true,
+          },
+          decision: {
+            status: "fork",
+            maxTokens: 100_000,
+          },
+        };
+      }),
     forkSessionFromParent:
       params.forkSessionFromParentMock ??
       (async () => ({ sessionId: "forked-session-id", sessionFile: "/tmp/forked-session.jsonl" })),
@@ -258,8 +304,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
         await mutator(store);
         return store;
       }),
-    isAdminOnlyMethod: (method: string) =>
-      method === "sessions.patch" || method === "sessions.delete",
+    // Real scope resolver: spawn's admin-tier pinning depends on params-aware
+    // sessions.patch policy, so a stub here would hide policy regressions.
+    resolveLeastPrivilegeOperatorScopesForMethod,
     pruneLegacyStoreKeys: (...args: unknown[]) => params.pruneLegacyStoreKeysMock?.(...args),
     getSessionBindingService:
       params.getSessionBindingService ??

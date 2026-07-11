@@ -1,8 +1,14 @@
+// Msteams plugin module implements download behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  resolveMSTeamsRequestTimeoutMs,
+  type MSTeamsRequestDeadline,
+  withMSTeamsRequestDeadline,
+} from "../request-timeout.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
@@ -128,6 +134,7 @@ async function fetchWithAuthFallback(params: {
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
   policy: MSTeamsAttachmentFetchPolicy;
+  deadline?: MSTeamsRequestDeadline;
 }): Promise<Response> {
   const firstAttempt = await safeFetchWithPolicy({
     url: params.url,
@@ -136,6 +143,7 @@ async function fetchWithAuthFallback(params: {
     fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
     requestInit: params.requestInit,
     resolveFn: params.resolveFn,
+    timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
   });
   if (firstAttempt.ok) {
     return firstAttempt;
@@ -143,6 +151,7 @@ async function fetchWithAuthFallback(params: {
   if (!params.tokenProvider) {
     return firstAttempt;
   }
+  const tokenProvider = params.tokenProvider;
   if (firstAttempt.status !== 401 && firstAttempt.status !== 403) {
     return firstAttempt;
   }
@@ -155,7 +164,11 @@ async function fetchWithAuthFallback(params: {
   const fetchFn = params.fetchFn ?? fetch;
   for (const scope of scopes) {
     try {
-      const token = await params.tokenProvider.getAccessToken(scope);
+      const token = await withMSTeamsRequestDeadline({
+        deadline: params.deadline,
+        label: "MS Teams attachment token",
+        work: () => tokenProvider.getAccessToken(scope),
+      });
       const authHeaders = new Headers(params.requestInit?.headers);
       authHeaders.set("Authorization", `Bearer ${token}`);
       const authAttempt = await safeFetchWithPolicy({
@@ -168,6 +181,7 @@ async function fetchWithAuthFallback(params: {
           headers: authHeaders,
         },
         resolveFn: params.resolveFn,
+        timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
       });
       if (authAttempt.ok) {
         return authAttempt;
@@ -203,6 +217,7 @@ export async function downloadMSTeamsAttachments(params: {
   fetchFn?: typeof fetch;
   fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
+  deadline?: MSTeamsRequestDeadline;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
   /**
@@ -312,6 +327,7 @@ export async function downloadMSTeamsAttachments(params: {
             requestInit: init,
             resolveFn: params.resolveFn,
             policy,
+            deadline: params.deadline,
           }),
       });
       out.push(media);

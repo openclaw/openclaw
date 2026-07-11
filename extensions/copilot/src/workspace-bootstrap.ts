@@ -1,3 +1,4 @@
+// Copilot plugin module implements workspace bootstrap behavior.
 import path from "node:path";
 import type {
   AgentHarnessAttemptParams,
@@ -33,7 +34,7 @@ const COPILOT_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["memory.md", 70],
 ]);
 
-export type CopilotWorkspaceBootstrapResult = {
+type CopilotWorkspaceBootstrapResult = {
   bootstrapFiles: Awaited<ReturnType<typeof resolveBootstrapContextForRun>>["bootstrapFiles"];
   contextFiles: EmbeddedContextFile[];
   instructions?: string;

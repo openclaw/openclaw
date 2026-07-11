@@ -1,3 +1,4 @@
+/** Resolves and validates session-target keys used by cron jobs and delivery. */
 const INVALID_CRON_SESSION_TARGET_ID_ERROR = "invalid cron sessionTarget session id";
 
 /** Returns whether an error came from cron session target id validation. */
@@ -61,16 +62,4 @@ export function resolveCronNotificationSessionKey(params: {
   return typeof params.sessionKey === "string" && params.sessionKey.trim()
     ? params.sessionKey.trim()
     : `cron:${params.jobId}:failure`;
-}
-
-/** Resolves the session key used to deliver failure notifications for a cron job. */
-export function resolveCronFailureNotificationSessionKey(job: {
-  id: string;
-  sessionTarget?: string | null;
-  sessionKey?: string | null;
-}): string {
-  return resolveCronNotificationSessionKey({
-    jobId: job.id,
-    sessionKey: resolveCronDeliverySessionKey(job),
-  });
 }

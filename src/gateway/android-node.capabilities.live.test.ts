@@ -1,7 +1,12 @@
+// Android node capability live tests verify paired node command allowlists and remote policy behavior.
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { unwrapRemoteConfigSnapshot } from "../../test/helpers/gateway/android-node-capabilities-policy-config.js";
 import { shouldFetchRemotePolicyConfig } from "../../test/helpers/gateway/android-node-capabilities-policy-source.js";
+import {
+  ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS,
+  findMissingRequiredAndroidNodeCommands,
+} from "../../test/helpers/gateway/android-node-capabilities-required-commands.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -99,6 +104,36 @@ function assertObjectPayload(command: string, payload: unknown): Record<string, 
   return obj;
 }
 
+const VALID_A2UI_JSONL = [
+  JSON.stringify({
+    surfaceUpdate: {
+      surfaceId: "main",
+      components: [
+        {
+          id: "root",
+          component: { Column: { children: { explicitList: ["text"] } } },
+        },
+        {
+          id: "text",
+          component: {
+            Text: {
+              text: { literalString: "Android Canvas live test" },
+              usageHint: "body",
+            },
+          },
+        },
+      ],
+    },
+  }),
+  JSON.stringify({ beginRendering: { surfaceId: "main", root: "root" } }),
+].join("\n");
+
+function assertA2uiPushPayload(command: string, payload: unknown) {
+  const obj = assertObjectPayload(command, payload);
+  expect(obj.ok).toBe(true);
+  expect(readStringArray(obj.surfaces)).toContain("main");
+}
+
 const COMMAND_PROFILES: Record<string, CommandProfile> = {
   "canvas.present": {
     buildParams: () => ({ url: "about:blank" }),
@@ -135,14 +170,20 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     },
   },
   "canvas.a2ui.push": {
-    buildParams: () => ({ jsonl: '{"beginRendering":{}}\n' }),
+    buildParams: () => ({ jsonl: VALID_A2UI_JSONL }),
     timeoutMs: 30_000,
     outcome: "success",
+    onSuccess: (payload) => {
+      assertA2uiPushPayload("canvas.a2ui.push", payload);
+    },
   },
   "canvas.a2ui.pushJSONL": {
-    buildParams: () => ({ jsonl: '{"beginRendering":{}}\n' }),
+    buildParams: () => ({ jsonl: VALID_A2UI_JSONL }),
     timeoutMs: 30_000,
     outcome: "success",
+    onSuccess: (payload) => {
+      assertA2uiPushPayload("canvas.a2ui.pushJSONL", payload);
+    },
   },
   "canvas.a2ui.reset": {
     buildParams: () => ({}),
@@ -574,6 +615,21 @@ describeLive("android node capability integration (preconditioned)", () => {
     if (missingProfiles.length > 0) {
       throw new Error(
         `unmapped advertised commands: ${missingProfiles.join(", ")} (update COMMAND_PROFILES before running this suite)`,
+      );
+    }
+
+    const missingRequiredCommands = findMissingRequiredAndroidNodeCommands({
+      commandsToRun,
+      requiredCommands: ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS,
+    });
+    if (missingRequiredCommands.length > 0) {
+      throw new Error(
+        [
+          `Android node missing required non-interactive command(s): ${missingRequiredCommands.join(", ")}`,
+          `runnable after policy filtering (${commandsToRun.length}/${ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS.length}): ${commandsToRun.join(", ")}`,
+          `advertised by node.describe: ${commands.join(", ")}`,
+          "precondition: update the Android node, or fix gateway.nodes allowCommands/denyCommands before running this suite",
+        ].join("\n"),
       );
     }
   }, 60_000);

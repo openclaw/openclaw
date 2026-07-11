@@ -1,19 +1,34 @@
+/**
+ * Browser permission routes.
+ *
+ * Grants required and optional browser permissions for an origin, preferring
+ * Playwright context APIs when available and falling back to raw CDP.
+ */
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { resolveCdpControlPolicy } from "../cdp-reachability-policy.js";
 import { withCdpSocket } from "../cdp.helpers.js";
 import { getChromeWebSocketUrl } from "../chrome.js";
+import { toBrowserErrorResponse } from "../errors.js";
 import { getPwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { ProfileContext } from "../server-context.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
+import {
+  asyncBrowserRoute,
+  getProfileContext,
+  jsonBrowserError,
+  jsonError,
+  toStringOrEmpty,
+} from "./utils.js";
 
 const permissionRouteDeps = {
   getPwAiModule,
 };
 
+/** Test hook for replacing optional Playwright permission dependencies. */
 export const testing = {
   setDepsForTest(deps: { getPwAiModule?: typeof getPwAiModule } | null) {
     permissionRouteDeps.getPwAiModule = deps?.getPwAiModule ?? getPwAiModule;
@@ -138,6 +153,7 @@ function toPlaywrightPermission(permission: string): string | undefined {
   }
 }
 
+/** Register permission grant endpoints on the browser control server. */
 export function registerBrowserPermissionRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -170,11 +186,11 @@ export function registerBrowserPermissionRoutes(
 
       try {
         await profileCtx.ensureBrowserAvailable();
-        const wsUrl = await getChromeWebSocketUrl(
-          profileCtx.profile.cdpUrl,
-          timeoutMs,
+        const cdpPolicy = resolveCdpControlPolicy(
+          profileCtx.profile,
           ctx.state().resolved.ssrfPolicy,
         );
+        const wsUrl = await getChromeWebSocketUrl(profileCtx.profile.cdpUrl, timeoutMs, cdpPolicy);
         if (!wsUrl) {
           return jsonError(res, 409, "browser CDP WebSocket unavailable");
         }
@@ -186,10 +202,14 @@ export function registerBrowserPermissionRoutes(
           requiredPermissions,
           optionalPermissions,
           timeoutMs,
-          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+          ssrfPolicy: cdpPolicy,
         });
         return res.json({ ok: true, origin, ...granted });
       } catch (error) {
+        const mapped = toBrowserErrorResponse(error);
+        if (mapped) {
+          return jsonBrowserError(res, mapped);
+        }
         return jsonError(res, 500, error instanceof Error ? error.message : String(error));
       }
     }),

@@ -1,11 +1,18 @@
+/**
+ * Provider-scoped web-search config helpers.
+ *
+ * Bridges legacy top-level credentials with plugin-owned provider configuration.
+ */
 import { resolvePluginWebSearchConfig } from "../../config/plugin-web-search-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isLegacyWebSearchProviderConfigKey } from "../../config/web-search-legacy-provider-keys.js";
 
+/** Reads the legacy top-level web search credential value. */
 export function getTopLevelCredentialValue(searchConfig?: Record<string, unknown>): unknown {
   return searchConfig?.apiKey;
 }
 
+/** Writes the legacy top-level web search credential value. */
 export function setTopLevelCredentialValue(
   searchConfigTarget: Record<string, unknown>,
   value: unknown,
@@ -13,6 +20,7 @@ export function setTopLevelCredentialValue(
   searchConfigTarget.apiKey = value;
 }
 
+/** Reads a provider-scoped credential value from a web search config object. */
 export function getScopedCredentialValue(
   searchConfig: Record<string, unknown> | undefined,
   key: string,
@@ -24,6 +32,7 @@ export function getScopedCredentialValue(
   return (scoped as Record<string, unknown>).apiKey;
 }
 
+/** Writes a provider-scoped credential value, creating the scoped object when needed. */
 export function setScopedCredentialValue(
   searchConfigTarget: Record<string, unknown>,
   key: string,
@@ -37,6 +46,7 @@ export function setScopedCredentialValue(
   (scoped as Record<string, unknown>).apiKey = value;
 }
 
+/** Merges plugin web-search config into a provider-scoped legacy-compatible shape. */
 export function mergeScopedSearchConfig(
   searchConfig: Record<string, unknown> | undefined,
   key: string,
@@ -60,6 +70,7 @@ export function mergeScopedSearchConfig(
   const shouldHideRuntimeInjectedLegacyShape =
     isLegacyWebSearchProviderConfigKey(key) && existingDescriptor === undefined;
 
+  // Runtime-injected legacy provider keys should be addressable but absent from JSON writes.
   Object.defineProperty(next, key, {
     value: {
       ...currentScoped,
@@ -77,6 +88,7 @@ export function mergeScopedSearchConfig(
   return next;
 }
 
+/** Resolves plugin-owned web-search config for a provider plugin id. */
 export function resolveProviderWebSearchPluginConfig(
   config: OpenClawConfig | undefined,
   pluginId: string,
@@ -94,6 +106,7 @@ function ensureObject(target: Record<string, unknown>, key: string): Record<stri
   return next;
 }
 
+/** Writes a single plugin-owned web-search config value and enables the plugin entry if needed. */
 export function setProviderWebSearchPluginConfigValue(
   configTarget: OpenClawConfig,
   pluginId: string,

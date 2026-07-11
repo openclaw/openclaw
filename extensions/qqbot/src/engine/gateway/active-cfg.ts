@@ -13,15 +13,13 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 
-export type GatewayCfg = OpenClawConfig;
-
 export type GatewayCfgLoader = () => OpenClawConfig;
 
-export interface ActiveCfgProvider {
+interface ActiveCfgProvider {
   getActiveCfg(): OpenClawConfig;
 }
 
-export interface ActiveCfgProviderOptions {
+interface ActiveCfgProviderOptions {
   fallback: OpenClawConfig;
   load?: GatewayCfgLoader;
 }

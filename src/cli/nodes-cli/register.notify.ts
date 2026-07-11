@@ -1,3 +1,4 @@
+// Local notification command for paired nodes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { randomIdempotencyKey } from "../../gateway/call.js";
@@ -11,11 +12,12 @@ import {
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
+/** Register node notification command. */
 export function registerNodesNotifyCommand(nodes: Command) {
   nodesCallOpts(
     nodes
       .command("notify")
-      .description("Send a local notification on a node (mac only)")
+      .description("Send a local notification on a node")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--title <text>", "Notification title")
       .option("--body <text>", "Notification body")

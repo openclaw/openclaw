@@ -1,3 +1,4 @@
+// Covers resolving the active agent id from session keys and explicit config.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
@@ -34,6 +35,8 @@ describe("resolveSessionAgentIds", () => {
   });
 
   it("keeps the agent id for provider-qualified agent sessions", () => {
+    // Channel-qualified agent session keys still carry the owning agent in the
+    // second segment.
     const { sessionAgentId } = resolveSessionAgentIds({
       sessionKey: "agent:beta:quietchat:channel:c1",
       config: cfg,
@@ -64,5 +67,33 @@ describe("resolveSessionAgentIds", () => {
       config: cfg,
     });
     expect(sessionAgentId).toBe("main");
+  });
+
+  it("uses fallbackAgentId for unscoped channel session keys", () => {
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: "feishu:direct:ou_user1",
+      fallbackAgentId: "main",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("main");
+  });
+
+  it("prefers session-key agent over fallbackAgentId", () => {
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: "agent:beta:feishu:direct:ou_user1",
+      fallbackAgentId: "main",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("beta");
+  });
+
+  it("prefers explicit agentId over fallbackAgentId", () => {
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: "feishu:direct:ou_user1",
+      agentId: "beta",
+      fallbackAgentId: "main",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("beta");
   });
 });

@@ -1,3 +1,4 @@
+// Discord plugin module implements runtime.guild behavior.
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
@@ -36,6 +37,7 @@ import {
   uploadStickerDiscord,
   resolveEventCoverImage,
 } from "../send.js";
+import { createDiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 import {
   createDiscordActionOptions,
   readDiscordChannelCreateParams,
@@ -363,8 +365,22 @@ export async function handleDiscordGuildAction(
   }
   assertGuildAdminActionEnabled(action, isActionEnabled);
   await verifySenderGuildAdminPermission({ action, values: params, accountId, cfg });
+  const readTargetGate = createDiscordMessagingActionContext({
+    action,
+    input: params,
+    isActionEnabled,
+    cfg,
+    options,
+  });
   const withOpts = (extra?: Record<string, unknown>) =>
     createDiscordActionOptions({ cfg, accountId, extra });
+  const assertGuildMetadataReadAllowed = async (guildId: string) => {
+    await readTargetGate.assertGuildReadTargetAllowed({
+      guildId,
+      channelTargetRequiredMessage:
+        "Discord guild metadata reads require a wildcard channel allowlist for this guild.",
+    });
+  };
   switch (action) {
     case "memberInfo": {
       if (!isActionEnabled("memberInfo")) {
@@ -373,6 +389,7 @@ export async function handleDiscordGuildAction(
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
+      await assertGuildMetadataReadAllowed(guildId);
       const userId = readStringParam(params, "userId", {
         required: true,
       });
@@ -394,6 +411,7 @@ export async function handleDiscordGuildAction(
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
+      await assertGuildMetadataReadAllowed(guildId);
       const roles = await discordGuildActionRuntime.fetchRoleInfoDiscord(guildId, withOpts());
       return jsonResult({ ok: true, roles });
     }
@@ -404,6 +422,7 @@ export async function handleDiscordGuildAction(
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
+      await assertGuildMetadataReadAllowed(guildId);
       const emojis = await discordGuildActionRuntime.listGuildEmojisDiscord(guildId, withOpts());
       return jsonResult({ ok: true, emojis });
     }
@@ -488,6 +507,7 @@ export async function handleDiscordGuildAction(
       const channelId = readStringParam(params, "channelId", {
         required: true,
       });
+      await readTargetGate.assertReadTargetAllowed({ channelId });
       const channel = await discordGuildActionRuntime.fetchChannelInfoDiscord(
         channelId,
         withOpts(),
@@ -501,6 +521,7 @@ export async function handleDiscordGuildAction(
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
+      await assertGuildMetadataReadAllowed(guildId);
       const channels = await discordGuildActionRuntime.listGuildChannelsDiscord(
         guildId,
         withOpts(),
@@ -514,6 +535,7 @@ export async function handleDiscordGuildAction(
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
+      await assertGuildMetadataReadAllowed(guildId);
       const userId = readStringParam(params, "userId", {
         required: true,
       });
@@ -531,6 +553,7 @@ export async function handleDiscordGuildAction(
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
+      await assertGuildMetadataReadAllowed(guildId);
       const events = await discordGuildActionRuntime.listScheduledEventsDiscord(
         guildId,
         withOpts(),

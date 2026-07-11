@@ -1,3 +1,4 @@
+// OC Path module implements edit behavior.
 import {
   Document,
   isMap,
@@ -21,7 +22,7 @@ import {
 import { guardSentinel } from "../sentinel.js";
 import type { YamlAst } from "./ast.js";
 
-export type YamlEditResult =
+type YamlEditResult =
   | { readonly ok: true; readonly ast: YamlAst }
   | {
       readonly ok: false;

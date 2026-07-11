@@ -1,3 +1,4 @@
+// Media Core tests cover inbound path policy behavior.
 import { describe, expect, it } from "vitest";
 import {
   isInboundPathAllowed,
@@ -44,6 +45,15 @@ describe("inbound-path-policy", () => {
     },
   ] as const)("matches wildcard roots for %s => $expected", ({ filePath, expected }) => {
     expectInboundPathAllowedCase(filePath, expected);
+  });
+
+  it("matches Windows drive roots case-insensitively", () => {
+    expect(
+      isInboundPathAllowed({
+        filePath: "C:\\Users\\Alice\\Library\\Messages\\Attachments\\12\\34\\ABCDEF\\IMG_0001.jpeg",
+        roots: ["c:/users/*/library/messages/attachments"],
+      }),
+    ).toBe(true);
   });
 
   it.each([

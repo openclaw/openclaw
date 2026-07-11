@@ -1,3 +1,4 @@
+// Nextcloud Talk plugin module implements inbound behavior.
 import {
   channelIngressRoutes,
   resolveStableChannelMessageIngress,
@@ -7,6 +8,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -96,9 +98,9 @@ async function deliverNextcloudTalkReply(params: {
   roomToken: string;
   accountId: string;
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
-}): Promise<void> {
+}): Promise<{ visibleReplySent: boolean }> {
   const { cfg, payload, roomToken, accountId, statusSink } = params;
-  await deliverFormattedTextWithAttachments({
+  const visibleReplySent = await deliverFormattedTextWithAttachments({
     payload,
     send: async ({ text, replyToId }) => {
       await sendMessageNextcloudTalk(roomToken, text, {
@@ -109,6 +111,7 @@ async function deliverNextcloudTalkReply(params: {
       statusSink?.({ lastOutboundAt: Date.now() });
     },
   });
+  return { visibleReplySent };
 }
 
 export async function handleNextcloudTalkInbound(params: {
@@ -360,8 +363,15 @@ export async function handleNextcloudTalkInbound(params: {
     dispatchReplyWithBufferedBlockDispatcher:
       core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
+      preparePayload: (payload) =>
+        payload.text === undefined
+          ? payload
+          : {
+              ...payload,
+              text: sanitizeAssistantVisibleText(payload.text),
+            },
       deliver: async (payload) => {
-        await deliverNextcloudTalkReply({
+        return await deliverNextcloudTalkReply({
           cfg: config,
           payload,
           roomToken,

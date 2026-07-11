@@ -4,11 +4,11 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { defaultApiRegistry, registerApiProvider } from "@openclaw/ai/internal/runtime";
+import { resetApiProviders } from "@openclaw/ai/providers";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
-import { registerApiProvider } from "../../llm/api-registry.js";
-import { resetApiProviders } from "../../llm/providers/register-builtins.js";
 import type {
   AnthropicMessagesCompat,
   Api,
@@ -21,6 +21,7 @@ import type {
 } from "../../llm/types.js";
 import { registerOAuthProvider, resetOAuthProviders } from "../../llm/utils/oauth/index.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentDir } from "../config.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import {
@@ -37,6 +38,8 @@ import {
   resolveConfigValueUncached,
   resolveHeadersOrThrow,
 } from "./resolve-config-value.js";
+
+const log = createSubsystemLogger("agents/model-registry");
 
 // Schema for OpenRouter routing preferences
 const PercentileCutoffsSchema = Type.Object({
@@ -159,7 +162,16 @@ const ModelDefinitionSchema = Type.Object({
   baseUrl: Type.Optional(Type.String({ minLength: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
   thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
-  input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
+  input: Type.Optional(
+    Type.Array(
+      Type.Union([
+        Type.Literal("text"),
+        Type.Literal("image"),
+        Type.Literal("audio"),
+        Type.Literal("video"),
+      ]),
+    ),
+  ),
   cost: Type.Optional(
     Type.Object({
       input: Type.Number(),
@@ -170,6 +182,7 @@ const ModelDefinitionSchema = Type.Object({
   ),
   contextWindow: Type.Optional(Type.Number()),
   maxTokens: Type.Optional(Type.Number()),
+  params: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),
   compat: Type.Optional(ProviderCompatSchema),
 });
@@ -344,7 +357,7 @@ export class ModelRegistry {
     this.loadError = undefined;
 
     // Ensure dynamic API/OAuth registrations are rebuilt from current provider state.
-    resetApiProviders();
+    resetApiProviders(defaultApiRegistry);
     resetOAuthProviders();
 
     this.loadModels();
@@ -354,9 +367,7 @@ export class ModelRegistry {
     }
   }
 
-  /**
-   * Get any error from loading models.json (undefined if no error).
-   */
+  /** Get any root or generated plugin catalog load error. */
   getError(): string | undefined {
     return this.loadError;
   }
@@ -370,7 +381,8 @@ export class ModelRegistry {
 
     if (error) {
       this.loadError = error;
-      // Keep the prior empty/default registry shape when models.json failed to load.
+      log.warn(`model catalog load issue: ${error}`);
+      // Plugin catalog failures can return salvaged models; root failures return empty.
     }
 
     let combined = customModels;
@@ -443,6 +455,7 @@ export class ModelRegistry {
       }
 
       const models = this.parseModels(configForUse);
+      const pluginCatalogErrors: string[] = [];
       if (options.includePluginCatalogs !== false) {
         for (const pluginCatalog of listPluginModelCatalogFiles(dirname(modelsJsonPath))) {
           const pluginResult = this.loadCustomModels(pluginCatalog.path, {
@@ -451,13 +464,14 @@ export class ModelRegistry {
             requireGeneratedCatalog: true,
           });
           if (pluginResult.error) {
-            return pluginResult;
+            pluginCatalogErrors.push(pluginResult.error);
+            continue;
           }
           models.push(...pluginResult.models);
         }
       }
 
-      return { models, error: undefined };
+      return { models, error: pluginCatalogErrors.join("\n\n") || undefined };
     } catch (error) {
       if (error instanceof SyntaxError) {
         if (options.requireGeneratedCatalog === true) {
@@ -537,9 +551,17 @@ export class ModelRegistry {
           continue;
         }
 
+        // Project richer persisted metadata to runtime's text/image contract.
+        // Unsupported-only rows are not runnable; explicit empty input stays valid.
+        const runtimeInput = (modelDef.input ?? ["text"]).filter(
+          (input): input is "text" | "image" => input === "text" || input === "image",
+        );
+        if ((modelDef.input?.length ?? 0) > 0 && runtimeInput.length === 0) {
+          continue;
+        }
+
         const compat = mergeCompat(providerConfig.compat, modelDef.compat);
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
-
         const defaultCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
         models.push({
           id: modelDef.id,
@@ -549,10 +571,11 @@ export class ModelRegistry {
           baseUrl,
           reasoning: modelDef.reasoning ?? false,
           thinkingLevelMap: modelDef.thinkingLevelMap,
-          input: modelDef.input ?? ["text"],
+          input: runtimeInput,
           cost: modelDef.cost ?? defaultCost,
           contextWindow: modelDef.contextWindow ?? 128000,
           maxTokens: modelDef.maxTokens ?? 16384,
+          params: modelDef.params,
           headers: undefined,
           compat,
         } as Model);
@@ -878,6 +901,7 @@ export class ModelRegistry {
           cost: modelDef.cost,
           contextWindow: modelDef.contextWindow,
           maxTokens: modelDef.maxTokens,
+          params: modelDef.params,
           headers: undefined,
           compat: modelDef.compat,
         } as Model);
@@ -923,6 +947,7 @@ export interface ProviderConfigInput {
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     contextWindow: number;
     maxTokens: number;
+    params?: Record<string, unknown>;
     headers?: Record<string, string>;
     compat?: Model["compat"];
   }>;

@@ -1,3 +1,4 @@
+// Normalizes plugin command specs for CLI and slash command surfaces.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveReadOnlyChannelCommandDefaults } from "../channels/plugins/read-only-command-defaults.js";
@@ -78,23 +79,6 @@ export function getPluginCommandSpecs(
   return listProviderPluginCommandSpecs(providerName);
 }
 
-export function getPluginCommandSpecsFromRegistrations(
-  commands: readonly PluginCommandRegistration[],
-  provider?: string,
-  options: PluginCommandSpecOptions = {},
-): Array<{
-  name: string;
-  description: string;
-  descriptionLocalizations?: Record<string, string>;
-  acceptsArgs: boolean;
-}> {
-  const providerName = normalizeOptionalLowercaseString(provider);
-  if (!pluginNativeCommandsEnabled(providerName, options)) {
-    return [];
-  }
-  return listProviderPluginCommandSpecsFromRegistrations(commands, providerName);
-}
-
 export function getPluginCommandEntrySpecs(
   provider?: string,
   options: PluginCommandSpecOptions = {},
@@ -128,21 +112,6 @@ export function listProviderPluginCommandSpecs(provider?: string): Array<{
   acceptsArgs: boolean;
 }> {
   return Array.from(pluginCommands.values())
-    .filter((cmd) => pluginCommandSupportsChannel(cmd, provider))
-    .map((cmd) => serializePluginCommandSpec(cmd, provider));
-}
-
-export function listProviderPluginCommandSpecsFromRegistrations(
-  commands: readonly PluginCommandRegistration[],
-  provider?: string,
-): Array<{
-  name: string;
-  description: string;
-  descriptionLocalizations?: Record<string, string>;
-  acceptsArgs: boolean;
-}> {
-  return commands
-    .map((entry) => entry.command)
     .filter((cmd) => pluginCommandSupportsChannel(cmd, provider))
     .map((cmd) => serializePluginCommandSpec(cmd, provider));
 }

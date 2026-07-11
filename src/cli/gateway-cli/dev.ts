@@ -1,7 +1,9 @@
+// Dev gateway bootstrap for a local loopback config and seeded dev workspace.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { extractFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { resolveWorkspaceTemplateSearchDirs } from "../../agents/workspace-templates.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { handleReset } from "../../commands/onboard-helpers.js";
@@ -15,6 +17,7 @@ const DEV_IDENTITY_EMOJI = "🤖";
 const DEV_AGENT_WORKSPACE_SUFFIX = "dev";
 
 async function loadDevTemplate(name: string, fallback: string): Promise<string> {
+  // Template frontmatter is metadata only; workspace files receive the body content.
   try {
     const templateDirs = await resolveWorkspaceTemplateSearchDirs();
     for (const templateDir of templateDirs) {
@@ -27,14 +30,7 @@ async function loadDevTemplate(name: string, fallback: string): Promise<string> 
         }
         throw error;
       }
-      if (!raw.startsWith("---")) {
-        return raw;
-      }
-      const endIndex = raw.indexOf("\n---", 3);
-      if (endIndex === -1) {
-        return raw;
-      }
-      return raw.slice(endIndex + "\n---".length).replace(/^\s+/, "");
+      return extractFrontmatterBlock(raw)?.body.replace(/^\s+/, "") ?? raw;
     }
   } catch {
     return fallback;

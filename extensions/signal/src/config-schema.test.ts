@@ -1,3 +1,4 @@
+// Signal tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { SignalConfigSchema } from "../config-api.js";
 
@@ -68,6 +69,22 @@ describe("signal groups schema", () => {
   it("accepts accountUuid for loop protection", () => {
     expectValidSignalConfig({
       accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    });
+  });
+
+  it("accepts top-level and per-account aliases", () => {
+    expectValidSignalConfig({
+      aliases: {
+        me: "+15551234567",
+        ops: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+      },
+      accounts: {
+        work: {
+          aliases: {
+            jane: "uuid:123e4567-e89b-12d3-a456-426614174000",
+          },
+        },
+      },
     });
   });
 

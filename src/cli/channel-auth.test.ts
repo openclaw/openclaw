@@ -1,3 +1,4 @@
+// Channel auth CLI tests cover channel auth command routing and credential prompts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
 
@@ -65,7 +66,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
 
-vi.mock("./plugins-install-record-commit.js", () => ({
+vi.mock("../plugins/install-record-commit.js", () => ({
   commitConfigWithPendingPluginInstalls: mocks.commitConfigWithPendingPluginInstalls,
 }));
 

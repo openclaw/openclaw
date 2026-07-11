@@ -1,3 +1,8 @@
+/**
+ * Nodes command action executor.
+ *
+ * Handles non-media node reads/actions and guarded raw command invocation through Gateway.
+ */
 import crypto from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -13,6 +18,7 @@ import { POLICY_REDIRECT_INVOKE_COMMANDS } from "./nodes-tool-media.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
 const BLOCKED_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
+const DEDICATED_TOOL_INVOKE_COMMANDS = new Map([["computer.act", "computer"]]);
 
 const NODE_READ_ACTION_COMMANDS = {
   camera_list: "camera.list",
@@ -120,6 +126,12 @@ export async function executeNodeCommandAction(params: {
           `invokeCommand "${invokeCommand}" is reserved for shell execution; use exec with host=node instead`,
         );
       }
+      const dedicatedTool = DEDICATED_TOOL_INVOKE_COMMANDS.get(invokeCommandNormalized);
+      if (dedicatedTool) {
+        throw new Error(
+          `invokeCommand "${invokeCommand}" cannot be invoked through the generic nodes surface; use the dedicated ${dedicatedTool} tool`,
+        );
+      }
       const dedicatedAction = params.mediaInvokeActions[invokeCommandNormalized];
       // Policy-redirect commands (file-transfer) ALWAYS reroute to their
       // dedicated tool. The dedicated tool runs gatekeep() + path policy
@@ -179,7 +191,5 @@ async function invokeNodeCommandPayload(params: {
     params: params.commandParams ?? {},
     idempotencyKey: crypto.randomUUID(),
   });
-  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload")
-    ? raw.payload
-    : {};
+  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : {};
 }

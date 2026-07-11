@@ -1,3 +1,4 @@
+// Reasoning effort utility tests cover provider reasoning effort normalization.
 import { describe, expect, it } from "vitest";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 
@@ -12,6 +13,10 @@ describe("mapThinkingLevelToReasoningEffort", () => {
 
   it('maps "max" to "xhigh"', () => {
     expect(mapThinkingLevelToReasoningEffort("max")).toBe("xhigh");
+  });
+
+  it('defensively maps logical "ultra" to the strongest generic wire effort', () => {
+    expect(mapThinkingLevelToReasoningEffort("ultra")).toBe("xhigh");
   });
 
   it.each(["minimal", "low", "medium", "high", "xhigh"] as const)(

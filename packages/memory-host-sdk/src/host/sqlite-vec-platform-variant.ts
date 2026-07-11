@@ -1,5 +1,9 @@
+// Memory Host SDK module implements sqlite vec platform variant behavior.
 import { createRequire } from "node:module";
 
+// Resolves optional sqlite-vec native extension packages for the current platform.
+
+/** Package/file pair for one sqlite-vec native platform build. */
 type PlatformVariant = { readonly pkg: string; readonly file: string };
 
 const PLATFORM_VARIANTS: Readonly<Record<string, PlatformVariant | undefined>> = {
@@ -10,6 +14,7 @@ const PLATFORM_VARIANTS: Readonly<Record<string, PlatformVariant | undefined>> =
   "win32-x64": { pkg: "sqlite-vec-windows-x64", file: "vec0.dll" },
 };
 
+/** Resolve the installed sqlite-vec native extension for the current platform if present. */
 export function resolveSqliteVecPlatformVariant():
   | { pkg: string; extensionPath: string }
   | undefined {

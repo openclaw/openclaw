@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Tests session lifecycle commands for fork, reset, restart, and cleanup.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -494,10 +495,8 @@ function expectIdleTimeoutSetReply(
 }
 
 describe("/session idle and /session max-age", () => {
-  beforeEach(async () => {
-    if (!handleSessionCommand) {
-      ({ handleSessionCommand } = await import("./commands-session.js"));
-    }
+  beforeAll(async () => {
+    ({ handleSessionCommand } = await import("./commands-session.js"));
   });
 
   beforeEach(() => {

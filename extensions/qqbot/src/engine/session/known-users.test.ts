@@ -1,3 +1,4 @@
+// Qqbot tests cover known users plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,10 +26,6 @@ function createTempDir(prefix: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   createdDirs.push(dir);
   return dir;
-}
-
-function knownUsersFile(homeDir: string): string {
-  return path.join(homeDir, ".openclaw", "qqbot", "data", "known-users.json");
 }
 
 async function useMockHome(homeDir: string): Promise<void> {
@@ -97,38 +94,6 @@ describe("engine/session/known-users", () => {
         interactionCount: 2,
       },
     ]);
-    expect(fs.existsSync(knownUsersFile(process.env.HOME!))).toBe(false);
-  });
-
-  it("imports legacy known-users.json once", async () => {
-    const { recordKnownUser } = await import("./known-users.js");
-    const stateDir = process.env.OPENCLAW_STATE_DIR!;
-    const legacyPath = knownUsersFile(process.env.HOME!);
-    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
-    fs.writeFileSync(
-      legacyPath,
-      JSON.stringify([
-        {
-          openid: "legacy-user",
-          type: "group",
-          groupOpenid: "group-1",
-          accountId: "acct-1",
-          firstSeenAt: 1,
-          lastSeenAt: 2,
-          interactionCount: 3,
-        },
-      ]),
-    );
-
-    recordKnownUser({
-      openid: "new-user",
-      type: "c2c",
-      accountId: "acct-1",
-    });
-
-    const rows = knownUserRows(stateDir);
-    expect(rows.map((row) => row.openid).toSorted()).toEqual(["legacy-user", "new-user"]);
-    expect(fs.existsSync(legacyPath)).toBe(false);
   });
 
   it("keeps known-user tracking best-effort when SQLite is unavailable", async () => {

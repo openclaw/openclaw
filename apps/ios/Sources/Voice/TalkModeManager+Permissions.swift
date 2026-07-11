@@ -50,33 +50,9 @@ extension TalkModeManager {
                 onTimeout: { NSError(domain: "TalkMode", code: 6, userInfo: [
                     NSLocalizedDescriptionKey: "permission request timed out",
                 ]) },
-                operation: {
-                    await withCheckedContinuation(isolation: nil) { cont in
-                        Task { @MainActor in
-                            operation { ok in
-                                cont.resume(returning: ok)
-                            }
-                        }
-                    }
-                })
+                operation: { await PermissionRequestBridge.awaitRequest(operation) })
         } catch {
             return false
-        }
-    }
-
-    static func permissionMessage(
-        kind: String,
-        status: AVAudioSession.RecordPermission) -> String
-    {
-        switch status {
-        case .denied:
-            return "\(kind) permission denied"
-        case .undetermined:
-            return "\(kind) permission not granted"
-        case .granted:
-            return "\(kind) permission denied"
-        @unknown default:
-            return "\(kind) permission denied"
         }
     }
 

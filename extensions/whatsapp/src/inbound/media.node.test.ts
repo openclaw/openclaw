@@ -1,3 +1,4 @@
+// Whatsapp tests cover media plugin behavior.
 import { Readable } from "node:stream";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockNormalizeMessageContent } from "../../../../test/mocks/baileys.js";
@@ -134,5 +135,16 @@ describe("downloadInboundMedia", () => {
       ),
     ).rejects.toThrow(/Media exceeds/i);
     expect(downloadMediaMessage.mock.calls[0]?.[1]).toBe("stream");
+  });
+
+  it("propagates transport download failures to the message owner", async () => {
+    downloadMediaMessage.mockRejectedValueOnce(new Error("expired media reference"));
+
+    await expect(
+      downloadInboundMedia(
+        { message: { imageMessage: { mimetype: "image/jpeg" } } } as never,
+        mockSock as never,
+      ),
+    ).rejects.toThrow("expired media reference");
   });
 });

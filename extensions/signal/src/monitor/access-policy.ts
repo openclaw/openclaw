@@ -1,3 +1,4 @@
+// Signal plugin module implements access policy behavior.
 import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
@@ -177,6 +178,7 @@ export async function handleSignalDirectMessageAccess(params: {
   if (params.dmPolicy === "pairing") {
     await createChannelPairingChallengeIssuer({
       channel: "signal",
+      accountId: params.accountId,
       upsertPairingRequest: async ({ id, meta }) =>
         await upsertChannelPairingRequest({
           channel: "signal",

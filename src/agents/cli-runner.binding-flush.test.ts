@@ -1,3 +1,4 @@
+/** Tests bounded transcript-flush probing before reusing CLI bindings. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isCliBindingFlushed,
@@ -65,6 +66,8 @@ describe("isCliBindingFlushed", () => {
   it("schedules at most 0 + 50 + 150ms of delay across the bounded retry", async () => {
     vi.useFakeTimers();
     try {
+      // Fake timers enforce the retry contract without introducing wall-clock
+      // sleeps into this import-heavy agent test.
       const probe = vi.fn(async () => false);
       setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
 
@@ -102,5 +105,29 @@ describe("isCliBindingFlushed", () => {
 
     expect(await isCliBindingFlushed("sid-x", undefined)).toBe(true);
     expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("returns true without probing when the caller owns continuity outside native transcripts", async () => {
+    const probe = vi.fn(async () => false);
+    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+
+    expect(
+      await isCliBindingFlushed("sid-warm", "claude-cli", workspaceDir, {
+        skipTranscriptProbe: true,
+      }),
+    ).toBe(true);
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("still probes when transcript-probe skipping is disabled", async () => {
+    const probe = vi.fn(async () => true);
+    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+
+    expect(
+      await isCliBindingFlushed("sid-probe", "claude-cli", workspaceDir, {
+        skipTranscriptProbe: false,
+      }),
+    ).toBe(true);
+    expect(probe).toHaveBeenCalledTimes(1);
   });
 });

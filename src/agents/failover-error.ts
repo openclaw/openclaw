@@ -1,8 +1,14 @@
+/**
+ * Provider/model failover error classification.
+ * Converts nested provider, transport, timeout, auth, and local coordination
+ * failures into structured failover reasons and remediation metadata.
+ */
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { formatCliCommand } from "../cli/command-format.js";
 import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
+  extractFailoverSignalDetails,
   inferSignalStatus,
   isUnclassifiedNoBodyHttpSignal,
   type FailoverClassification,
@@ -14,12 +20,16 @@ import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
+const MISSING_TOOL_RESULT_REASON = "missing_tool_result";
+const MISSING_TOOL_RESULT_TEXT_RE = /native Codex tool\.call without a matching tool\.result/i;
 
+/** Structured error used to carry model fallback/failover metadata across layers. */
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
   readonly provider?: string;
   readonly model?: string;
   readonly profileId?: string;
+  readonly authMode?: string;
   readonly status?: number;
   readonly code?: string;
   readonly rawError?: string;
@@ -39,6 +49,7 @@ export class FailoverError extends Error {
       provider?: string;
       model?: string;
       profileId?: string;
+      authMode?: string;
       status?: number;
       code?: string;
       rawError?: string;
@@ -55,6 +66,7 @@ export class FailoverError extends Error {
     this.provider = params.provider;
     this.model = params.model;
     this.profileId = params.profileId;
+    this.authMode = params.authMode;
     this.status = params.status;
     this.code = params.code;
     this.rawError = params.rawError;
@@ -65,6 +77,7 @@ export class FailoverError extends Error {
   }
 }
 
+/** Return true for native or serialized failover errors. */
 export function isFailoverError(err: unknown): err is FailoverError {
   if (err instanceof FailoverError) {
     return true;
@@ -77,6 +90,7 @@ export function isFailoverError(err: unknown): err is FailoverError {
   );
 }
 
+/** Map a failover reason to the closest HTTP-like status code. */
 export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
   switch (reason) {
     case "billing":
@@ -93,6 +107,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 403;
     case "timeout":
       return 408;
+    case "context_overflow":
+      return 413;
     case "format":
       return 400;
     case "model_not_found":
@@ -229,6 +245,26 @@ function getProvider(err: unknown): string | undefined {
   return findErrorProperty(err, readDirectProvider);
 }
 
+function readDirectErrorDetails(err: unknown): string[] | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const candidate = err as {
+    body?: unknown;
+    detail?: unknown;
+    error?: unknown;
+    errorBody?: unknown;
+    param?: unknown;
+  };
+  return extractFailoverSignalDetails(
+    candidate.param,
+    candidate.errorBody,
+    candidate.body,
+    candidate.detail,
+    candidate.error,
+  );
+}
+
 function readDirectErrorMessage(err: unknown): string | undefined {
   if (err instanceof Error) {
     return err.message || undefined;
@@ -263,6 +299,7 @@ function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
     errorType: readDirectErrorType(err),
     message: message || undefined,
     provider: readDirectProvider(err),
+    details: readDirectErrorDetails(err),
   };
 }
 
@@ -292,6 +329,21 @@ function isEmbeddedAttemptSessionTakeover(err: unknown): boolean {
   );
 }
 
+function hasPreservedTakeoverPromptError(err: unknown): err is Record<"promptError", unknown> {
+  return Boolean(
+    isEmbeddedAttemptSessionTakeover(err) &&
+    err &&
+    typeof err === "object" &&
+    Object.hasOwn(err, "promptError"),
+  );
+}
+
+function resolveFailoverSourceError(err: unknown): unknown {
+  // Cleanup takeover is a secondary failure when the wrapper preserves the
+  // prompt error. Classify and report that provider-facing source instead.
+  return hasPreservedTakeoverPromptError(err) ? err.promptError : err;
+}
+
 function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new Set()): boolean {
   if (isEmbeddedAttemptSessionTakeover(err)) {
     return true;
@@ -311,24 +363,61 @@ function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new
   );
 }
 
-/**
- * True when the error is a local runtime coordination error (session write-lock
- * timeout or embedded attempt session takeover) rather than a provider/model
- * failure. The model fallback chain must abort on these instead of consuming
- * candidate slots — retrying any model would hit the same local condition.
- * See #83510.
- */
-export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
-  if (!hasSessionWriteLockContention(err) && !hasEmbeddedAttemptSessionTakeover(err)) {
-    return false;
+function readField(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object") {
+    return undefined;
   }
-  if (isFailoverError(err)) {
-    return false;
-  }
-  if (isEmbeddedAttemptSessionTakeover(err)) {
+  return (value as Record<string, unknown>)[key];
+}
+
+function readStringField(value: unknown, key: string): string | undefined {
+  const field = readField(value, key);
+  return typeof field === "string" ? field : undefined;
+}
+
+function isMissingToolResultMessage(value: string): boolean {
+  return MISSING_TOOL_RESULT_TEXT_RE.test(value);
+}
+
+function isMissingToolResultMarker(value: string): boolean {
+  return value.trim() === MISSING_TOOL_RESULT_REASON;
+}
+
+function readMissingToolResultMarker(err: unknown): true | undefined {
+  const message = readDirectErrorMessage(err);
+  if (message && isMissingToolResultMessage(message)) {
     return true;
   }
-  return resolveFailoverClassificationFromError(err) === null;
+  for (const key of ["code", "reason", "status"] as const) {
+    const value = readStringField(err, key);
+    if (value && isMissingToolResultMarker(value)) {
+      return true;
+    }
+  }
+  const output = readStringField(err, "output");
+  if (output && isMissingToolResultMessage(output)) {
+    return true;
+  }
+  const resultReason = readStringField(readField(err, "result"), "reason");
+  const detailReason = readStringField(readField(err, "detail"), "reason");
+  if (resultReason === MISSING_TOOL_RESULT_REASON || detailReason === MISSING_TOOL_RESULT_REASON) {
+    return true;
+  }
+  return undefined;
+}
+
+function hasMissingToolResultFailure(err: unknown): boolean {
+  return findErrorProperty(err, readMissingToolResultMarker) === true;
+}
+
+/**
+ * True when the error is a local runtime coordination/tool-execution error
+ * rather than a provider/model failure. The model fallback chain must abort on
+ * these instead of consuming candidate slots — retrying any model would hit the
+ * same local condition. See #83510 and #95474.
+ */
+export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
+  return resolveModelFallbackError(err).kind === "coordination";
 }
 
 function hasTimeoutHint(err: unknown): boolean {
@@ -345,6 +434,7 @@ function hasTimeoutHint(err: unknown): boolean {
   return Boolean(message && isTimeoutErrorMessage(message));
 }
 
+/** Return true when an unknown error shape represents a timeout. */
 export function isTimeoutError(err: unknown): boolean {
   if (hasTimeoutHint(err)) {
     return true;
@@ -367,10 +457,18 @@ export function isTimeoutError(err: unknown): boolean {
   return hasTimeoutHint(cause) || hasTimeoutHint(reason);
 }
 
+/** Return true when an abort-signal reason is an intentional timeout; plain AbortError is a cancellation, not a timeout. */
+export function isSignalTimeoutReason(reason: unknown): boolean {
+  return readErrorName(reason) === "TimeoutError";
+}
+
 function failoverReasonFromClassification(
   classification: FailoverClassification | null,
 ): FailoverReason | null {
-  return classification?.kind === "reason" ? classification.reason : null;
+  if (!classification) {
+    return null;
+  }
+  return classification.kind === "reason" ? classification.reason : "context_overflow";
 }
 
 function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSignal {
@@ -381,6 +479,7 @@ function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSign
     errorType: getErrorType(err),
     message: message || undefined,
     provider: getProvider(err) ?? providerHint,
+    details: readDirectErrorDetails(err),
   };
 }
 
@@ -530,6 +629,7 @@ function resolveFailoverClassificationFromError(
   return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0, providerHint);
 }
 
+/** Resolve the failover reason represented by an unknown provider/runtime error. */
 export function resolveFailoverReasonFromError(
   err: unknown,
   providerHint?: string,
@@ -568,6 +668,7 @@ function quotePosixShellArg(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+/** Build the operator command for reauthenticating one provider. */
 export function buildProviderReauthCommand(
   provider: string,
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -592,6 +693,7 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
+/** Convert a failover or raw error into structured fields for logs/UI. */
 export function describeFailoverError(err: unknown): {
   message: string;
   rawError?: string;
@@ -601,6 +703,7 @@ export function describeFailoverError(err: unknown): {
   provider?: string;
   model?: string;
   profileId?: string;
+  authMode?: string;
   sessionId?: string;
   lane?: string;
 } {
@@ -614,6 +717,7 @@ export function describeFailoverError(err: unknown): {
       provider: err.provider,
       model: err.model,
       profileId: err.profileId,
+      authMode: err.authMode,
       sessionId: err.sessionId,
       lane: err.lane,
     };
@@ -629,26 +733,55 @@ export function describeFailoverError(err: unknown): {
   };
 }
 
+type FailoverErrorContext = {
+  provider?: string;
+  model?: string;
+  profileId?: string;
+  authMode?: string;
+  sessionId?: string;
+  lane?: string;
+};
+
+type ModelFallbackErrorResolution =
+  | { kind: "failover"; error: FailoverError }
+  | { kind: "coordination"; error: unknown }
+  | { kind: "unknown"; error: unknown };
+
+/** Convert a classified raw error into a FailoverError with optional request context. */
 export function coerceToFailoverError(
   err: unknown,
-  context?: {
-    provider?: string;
-    model?: string;
-    profileId?: string;
-    sessionId?: string;
-    lane?: string;
-  },
+  context?: FailoverErrorContext,
 ): FailoverError | null {
-  if (isFailoverError(err)) {
-    return err;
+  const sourceError = resolveFailoverSourceError(err);
+  if (isFailoverError(sourceError)) {
+    if (context?.authMode && !sourceError.authMode) {
+      const message =
+        typeof sourceError.message === "string" ? sourceError.message : String(sourceError);
+      return new FailoverError(message, {
+        reason: sourceError.reason,
+        provider: sourceError.provider,
+        model: sourceError.model,
+        profileId: sourceError.profileId,
+        authMode: context.authMode,
+        status: sourceError.status,
+        code: sourceError.code,
+        rawError: sourceError.rawError,
+        authProfileFailure: sourceError.authProfileFailure,
+        sessionId: sourceError.sessionId,
+        lane: sourceError.lane,
+        cause: sourceError.cause,
+        suspend: sourceError.suspend,
+      });
+    }
+    return sourceError;
   }
-  const reason = resolveFailoverReasonFromError(err, context?.provider);
+  const reason = resolveFailoverReasonFromError(sourceError, context?.provider);
   if (!reason) {
     return null;
   }
 
-  const signal = normalizeErrorSignal(err);
-  const message = signal.message ?? String(err);
+  const signal = normalizeErrorSignal(sourceError);
+  const message = signal.message ?? String(sourceError);
   const status = signal.status ?? resolveFailoverStatus(reason);
   const code = signal.code;
 
@@ -661,6 +794,7 @@ export function coerceToFailoverError(
     provider: context?.provider ?? signal.provider,
     model: context?.model,
     profileId: context?.profileId,
+    authMode: context?.authMode,
     sessionId: context?.sessionId,
     lane: context?.lane,
     status,
@@ -669,4 +803,29 @@ export function coerceToFailoverError(
     cause: err instanceof Error ? err : undefined,
     suspend: shouldSuspend,
   });
+}
+
+/** Classify one candidate failure once so fallback routing and diagnostics share it. */
+export function resolveModelFallbackError(
+  err: unknown,
+  context?: FailoverErrorContext,
+): ModelFallbackErrorResolution {
+  // A direct takeover remains a coordination failure unless the dedicated
+  // cleanup wrapper owns a preserved prompt error. Its message alone must not
+  // reclassify session-state loss as a provider failure.
+  if (isEmbeddedAttemptSessionTakeover(err) && !hasPreservedTakeoverPromptError(err)) {
+    return { kind: "coordination", error: err };
+  }
+  const failoverError = coerceToFailoverError(err, context);
+  if (failoverError) {
+    return { kind: "failover", error: failoverError };
+  }
+  if (
+    hasSessionWriteLockContention(err) ||
+    hasEmbeddedAttemptSessionTakeover(err) ||
+    hasMissingToolResultFailure(err)
+  ) {
+    return { kind: "coordination", error: err };
+  }
+  return { kind: "unknown", error: err };
 }

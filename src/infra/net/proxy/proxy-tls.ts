@@ -1,3 +1,5 @@
+// Managed proxy TLS helpers resolve and load CA trust only for HTTPS forward
+// proxies that OpenClaw owns or inherited from a parent process.
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
@@ -28,7 +30,7 @@ function isHttpsProxyUrl(value: string | undefined): boolean {
 }
 
 /** Resolves the configured managed proxy CA file, with env/CLI override first. */
-export function resolveManagedProxyCaFile(params: {
+function resolveManagedProxyCaFile(params: {
   config?: ProxyConfig;
   caFileOverride?: string;
 }): string | undefined {

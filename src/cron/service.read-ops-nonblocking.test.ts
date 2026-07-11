@@ -1,3 +1,4 @@
+// Cron read operation tests cover nonblocking list/get behavior during service work.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -82,6 +83,8 @@ function expectCronStatus(
 ) {
   expect(status.enabled).toBe(true);
   expect(status.storePath).toBe(params.storePath);
+  expect(status.storage).toBe("sqlite");
+  expect(status.sqlitePath).toContain("openclaw.sqlite");
   expect(status.jobs).toBe(params.jobs);
   if (status.nextWakeAtMs !== null) {
     expect(status.nextWakeAtMs).toBeTypeOf("number");

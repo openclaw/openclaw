@@ -1,3 +1,9 @@
+/**
+ * JSON schema for the Browser agent tool.
+ *
+ * The schema stays intentionally flat because provider function-tool validators
+ * reject several nested union shapes that TypeBox can otherwise emit.
+ */
 import {
   optionalFiniteNumberSchema,
   optionalNonNegativeIntegerSchema,
@@ -38,6 +44,8 @@ const BROWSER_TOOL_ACTIONS = [
   "navigate",
   "console",
   "pdf",
+  "download",
+  "waitfordownload",
   "upload",
   "dialog",
   "act",
@@ -99,6 +107,7 @@ const BrowserActSchema = Type.Object({
 // IMPORTANT: OpenAI function tool schemas must have a top-level `type: "object"`.
 // A root-level `Type.Union([...])` compiles to `{ anyOf: [...] }` (no `type`),
 // which OpenAI rejects ("Invalid schema ... type: None"). Keep this schema an object.
+/** Provider-compatible Browser tool argument schema. */
 export const BrowserToolSchema = Type.Object({
   action: stringEnum(BROWSER_TOOL_ACTIONS),
   target: optionalStringEnum(BROWSER_TARGETS),
@@ -122,6 +131,7 @@ export const BrowserToolSchema = Type.Object({
   urls: Type.Optional(Type.Boolean()),
   fullPage: Type.Optional(Type.Boolean()),
   ref: Type.Optional(Type.String()),
+  path: Type.Optional(Type.String()),
   element: Type.Optional(Type.String()),
   type: optionalStringEnum(BROWSER_IMAGE_TYPES),
   level: Type.Optional(Type.String()),

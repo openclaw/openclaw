@@ -1,3 +1,4 @@
+// Msteams tests cover remote media plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the runtime so we can assert whether the strict-dispatcher path
@@ -142,6 +143,25 @@ describe("downloadAndStoreMSTeamsRemoteMedia", () => {
         }),
       ).rejects.toThrow(/exceeds maxBytes/);
       expect(runtimeSaveRemoteMediaMock).not.toHaveBeenCalled();
+    });
+
+    it("cancels a guarded response when storage fails before reading the body", async () => {
+      const cancel = vi.fn();
+      const body = new ReadableStream<Uint8Array>({ cancel });
+      const fetchImpl = vi.fn(async () => new Response(body, { status: 200 }));
+      saveResponseMediaMock.mockRejectedValueOnce(new Error("mkdir failed"));
+
+      await expect(
+        downloadAndStoreMSTeamsRemoteMedia({
+          url: "https://graph.microsoft.com/v1.0/shares/abc/driveItem/content",
+          filePathHint: "file.png",
+          maxBytes: 1024,
+          useDirectFetch: true,
+          fetchImpl,
+        }),
+      ).rejects.toThrow("mkdir failed");
+
+      expect(cancel).toHaveBeenCalledTimes(1);
     });
 
     it("falls back to the runtime saveRemoteMedia path when useDirectFetch is omitted", async () => {

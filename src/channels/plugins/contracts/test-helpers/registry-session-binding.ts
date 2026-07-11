@@ -1,3 +1,8 @@
+/**
+ * Session binding contract registry fixtures.
+ *
+ * Builds bundled channel binding contract entries and hermetic plugin-state stores.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
@@ -51,7 +56,7 @@ async function getContractApi<T extends Record<string, unknown>>(pluginId: strin
   if (existing) {
     return (await existing) as T;
   }
-  const next = importBundledChannelContractArtifact<T>(pluginId, "contract-api");
+  const next = importBundledChannelContractArtifact<T>(pluginId, "session-binding-contract-api");
   contractApiPromises.set(pluginId, next);
   return await next;
 }

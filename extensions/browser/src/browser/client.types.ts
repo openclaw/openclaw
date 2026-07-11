@@ -1,4 +1,10 @@
-export type BrowserTransport = "cdp" | "chrome-mcp";
+/**
+ * Browser client response types.
+ *
+ * Shared by the browser control client, CLI, and Browser agent tool.
+ */
+/** Browser transport backing the selected profile. */
+export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
 type BrowserHeadlessSource =
   | "request"
   | "env"
@@ -7,10 +13,11 @@ type BrowserHeadlessSource =
   | "linux-display-fallback"
   | "default";
 
+/** Browser status response returned by the control server. */
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
-  driver?: "openclaw" | "existing-session";
+  driver?: "openclaw" | "existing-session" | "extension";
   transport?: BrowserTransport;
   running: boolean;
   cdpReady?: boolean;
@@ -38,6 +45,7 @@ export type BrowserStatus = {
   attachOnly: boolean;
 };
 
+/** Browser tab record exposed by tab listing and tab mutation endpoints. */
 export type BrowserTab = {
   /** Best handle for agents to pass back as targetId: label, then tabId, then raw targetId. */
   suggestedTargetId?: string;
@@ -52,6 +60,7 @@ export type BrowserTab = {
   type?: string;
 };
 
+/** ARIA snapshot node exposed in structured snapshot responses. */
 export type SnapshotAriaNode = {
   ref: string;
   role: string;

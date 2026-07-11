@@ -1,4 +1,6 @@
+// Discord plugin module implements native command behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
+import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
@@ -14,6 +16,7 @@ import {
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
@@ -111,13 +114,15 @@ export function createDiscordNativeCommand(params: {
           includeBundledChannelFallback: false,
         }) ?? fallbackCommandDefinition);
   const argDefinitions = commandDefinition.args ?? command.args;
+  const resolveCurrentConfig = () => getRuntimeConfigSnapshot() ?? cfg;
   const commandOptions = buildDiscordCommandOptions({
     command: commandDefinition,
     cfg,
+    resolveConfig: resolveCurrentConfig,
     authorizeChoiceContext: async (interaction) =>
       await resolveDiscordNativeAutocompleteAuthorized({
         interaction,
-        cfg,
+        cfg: resolveCurrentConfig(),
         discordConfig,
         accountId,
         skipCommandOwnerAllowFrom: pluginCommandMatch !== null,
@@ -125,7 +130,7 @@ export function createDiscordNativeCommand(params: {
     resolveChoiceContext: async (interaction) =>
       resolveDiscordNativeChoiceContext({
         interaction,
-        cfg,
+        cfg: resolveCurrentConfig(),
         accountId,
         threadBindings,
       }),
@@ -214,7 +219,7 @@ async function dispatchDiscordCommandInteraction(params: {
     prompt,
     command,
     commandArgs,
-    cfg,
+    cfg: inputConfig,
     discordConfig,
     accountId,
     sessionPrefix,
@@ -223,6 +228,7 @@ async function dispatchDiscordCommandInteraction(params: {
     responseEphemeral,
     suppressReplies,
   } = params;
+  const cfg = getRuntimeConfigSnapshot() ?? inputConfig;
   const commandName = command.nativeName ?? command.key;
   const respond = async (content: string, options?: { ephemeral?: boolean }) => {
     const ephemeral = options?.ephemeral ?? responseEphemeral;
@@ -480,12 +486,19 @@ async function dispatchDiscordCommandInteraction(params: {
         threadBindings,
       })
     : null;
+  // Native /think must not wait on provider discovery; persisted rows retain its metadata.
+  const menuModelCatalog =
+    command.key === "think" && menuNeedsModelContext
+      ? await loadModelCatalog({ config: cfg, readOnly: true })
+      : undefined;
   const menu = resolveCommandArgMenu({
     command,
     args: commandArgs,
     cfg,
     provider: menuModelContext?.provider,
     model: menuModelContext?.model,
+    agentRuntime: menuModelContext?.agentRuntime,
+    ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
   });
   if (menu) {
     const menuPayload = buildDiscordCommandArgMenu({
@@ -561,6 +574,9 @@ async function dispatchDiscordCommandInteraction(params: {
       messageThreadId,
       threadParentId: pluginThreadParentId,
     });
+    if (pluginReply.suppressReply === true) {
+      return { accepted: true, effectiveRoute };
+    }
     if (!hasRenderableReplyPayload(pluginReply)) {
       await respond(DISCORD_EMPTY_VISIBLE_REPLY_WARNING);
       return { accepted: true, effectiveRoute };

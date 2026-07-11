@@ -1,3 +1,6 @@
+/**
+ * Installs bundled plugin registration contract cases used across provider tests.
+ */
 import { describePluginRegistrationContract } from "./plugin-registration-contract.js";
 
 type PluginRegistrationContractParams = Parameters<typeof describePluginRegistrationContract>[0];
@@ -182,6 +185,10 @@ export const pluginRegistrationContractCases = {
     requireGenerateImage: true,
     requireGenerateVideo: true,
   },
+  parallel: {
+    pluginId: "parallel",
+    webSearchProviderIds: ["parallel", "parallel-free"],
+  },
   perplexity: {
     pluginId: "perplexity",
     webSearchProviderIds: ["perplexity"],
@@ -201,6 +208,8 @@ export const pluginRegistrationContractCases = {
       "qwen-oauth",
       "qwen-portal",
       "qwen-cli",
+      "qwen-token-plan",
+      "bailian-token-plan",
     ],
     mediaUnderstandingProviderIds: ["qwen"],
     videoGenerationProviderIds: ["qwen"],

@@ -1,3 +1,8 @@
+/**
+ * video_generate built-in tool.
+ *
+ * Validates media references, resolves provider/model capabilities, and schedules video generation.
+ */
 import { Type, type TSchema } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -265,6 +270,7 @@ function collectVideoGenerationModelProviderIds(params: {
 function isVideoGenerationProviderConfigured(params: {
   snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
   providerId: string;
@@ -280,6 +286,8 @@ function isVideoGenerationProviderConfigured(params: {
     }) ||
     hasAuthForProvider({
       provider: params.providerId,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
     })
@@ -342,6 +350,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
       isVideoGenerationProviderConfigured({
         snapshot,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
         providerId,
@@ -1000,6 +1009,7 @@ export function createVideoGenerateTool(options?: {
 
       const activeDuplicateGuardResult = createVideoGenerateDuplicateGuardResult(
         options?.agentSessionKey,
+        { prompt },
       );
       if (activeDuplicateGuardResult) {
         return activeDuplicateGuardResult;
@@ -1108,7 +1118,7 @@ export function createVideoGenerateTool(options?: {
       });
       const duplicateGuardResult = createVideoGenerateDuplicateGuardResult(
         options?.agentSessionKey,
-        { requestKey },
+        { prompt, requestKey },
       );
       if (duplicateGuardResult) {
         return duplicateGuardResult;

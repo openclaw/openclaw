@@ -1,3 +1,5 @@
+// Subagent registry query tests cover liveness, descendant counting, requester
+// lookup, and stale-row handling for in-memory run snapshots.
 import { describe, expect, it } from "vitest";
 import {
   countActiveRunsForSessionFromRuns,
@@ -10,7 +12,8 @@ import {
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { STALE_UNENDED_SUBAGENT_RUN_MS } from "./subagent-run-liveness.js";
+
+const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
 function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
   const runId = overrides.runId ?? "run-default";
@@ -33,6 +36,36 @@ function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {
 }
 
 describe("subagent registry query regressions", () => {
+  it("selects the newer generation when child runs share a timestamp", () => {
+    const childSessionKey = "agent:main:subagent:same-millisecond";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-old-tombstone",
+        childSessionKey,
+        requesterSessionKey: "agent:main:old-parent",
+        generation: 1,
+        createdAt: 100,
+        endedAt: 100,
+      }),
+      makeRun({
+        runId: "run-live-successor",
+        childSessionKey,
+        requesterSessionKey: "agent:main:new-parent",
+        generation: 2,
+        createdAt: 100,
+        startedAt: 100,
+      }),
+    ]);
+
+    expect(isSubagentSessionRunActiveFromRuns(runs, childSessionKey)).toBe(true);
+    expect(resolveRequesterForChildSessionFromRuns(runs, childSessionKey)).toMatchObject({
+      requesterSessionKey: "agent:main:new-parent",
+    });
+    expect(getSubagentRunByChildSessionKeyFromRuns(runs, childSessionKey)?.runId).toBe(
+      "run-live-successor",
+    );
+  });
+
   it("does not treat stale unended rows as active child-session liveness", () => {
     const now = Date.now();
     const childSessionKey = "agent:main:subagent:stale-live-check";
@@ -223,7 +256,7 @@ describe("subagent registry query regressions", () => {
   });
 
   it("regression nested parallel counting, traversal includes child and grandchildren pending states", () => {
-    // Regression guard: nested fan-out once under-counted grandchildren and announced too early.
+    // Nested fan-out once under-counted grandchildren and announced too early.
     const parentSessionKey = "agent:main:subagent:parent-nested";
     const middleSessionKey = `${parentSessionKey}:subagent:middle`;
     const runs = toRunMap([

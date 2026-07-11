@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements approval auth behavior.
 import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
@@ -7,7 +8,7 @@ import { normalizeWhatsAppTarget } from "./normalize.js";
 
 type ApprovalKind = "exec" | "plugin";
 
-export function normalizeWhatsAppApproverId(value: string | number): string | undefined {
+function normalizeWhatsAppApproverId(value: string | number): string | undefined {
   const normalized = normalizeWhatsAppTarget(String(value));
   if (!normalized || normalized.endsWith("@g.us")) {
     return undefined;

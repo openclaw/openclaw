@@ -1,17 +1,25 @@
+/**
+ * Snapshot, navigation, viewport, close, and PDF helpers for Playwright-backed
+ * browser tools.
+ */
 import { parseFiniteNumber, resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Page } from "playwright-core";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "./act-policy.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
+import type { BrowserDownloadResult } from "./download-types.js";
 import {
   assertBrowserNavigationAllowed,
+  assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
@@ -26,6 +34,7 @@ import {
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   gotoPageWithNavigationGuard,
+  isDownloadStartingNavigationError,
   isPolicyDenyNavigationError,
   storeRoleRefsForTarget,
 } from "./pw-session.js";
@@ -72,7 +81,7 @@ async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
           (anchor.textContent || anchor.getAttribute("aria-label") || "")
             .replace(/\s+/g, " ")
             .trim()
-            .slice(0, 120) || href;
+            .slice(0, 121) || href;
         seen.add(href);
         out.push({ text, url: href });
         if (out.length >= 100) {
@@ -82,7 +91,12 @@ async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
       return out;
     })
     .catch(() => []);
-  return Array.isArray(urls) ? urls : [];
+  return Array.isArray(urls)
+    ? urls.map((entry) => {
+        entry.text = truncateUtf16Safe(entry.text, 120) || entry.url;
+        return entry;
+      })
+    : [];
 }
 
 function buildStoredAriaRefs(
@@ -100,7 +114,12 @@ function buildStoredAriaRefs(
     const key = `${role}:${name ?? ""}`;
     const nth = counts.get(key) ?? 0;
     counts.set(key, nth + 1);
-    refsByKey.set(key, [...(refsByKey.get(key) ?? []), node.ref]);
+    const refsForKey = refsByKey.get(key);
+    if (refsForKey) {
+      refsForKey.push(node.ref);
+    } else {
+      refsByKey.set(key, [node.ref]);
+    }
     refs[node.ref] = {
       role,
       ...(name ? { name } : {}),
@@ -122,6 +141,7 @@ function buildStoredAriaRefs(
   return refs;
 }
 
+/** Stores aria snapshot refs so later tool calls can resolve stable element refs. */
 export async function storeAriaSnapshotRefsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -174,6 +194,7 @@ async function prepareSnapshotPageViaPlaywright(opts: {
   return page;
 }
 
+/** Captures a raw accessibility tree snapshot and stores matching role refs. */
 export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -231,6 +252,7 @@ export async function snapshotAriaViaPlaywright(opts: {
   return { nodes: formatted };
 }
 
+/** Captures Playwright's AI aria snapshot with optional URL appendix and truncation. */
 export async function snapshotAiViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -259,7 +281,7 @@ export async function snapshotAiViaPlaywright(opts: {
       : undefined;
   let truncated = false;
   if (limit && snapshot.length > limit) {
-    snapshot = `${snapshot.slice(0, limit)}\n\n[...TRUNCATED - page too large]`;
+    snapshot = `${truncateUtf16Safe(snapshot, limit)}\n\n[...TRUNCATED - page too large]`;
     truncated = true;
   }
 
@@ -305,6 +327,7 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   };
 }
 
+/** Captures a role-ref snapshot used by model-facing browser interaction tools. */
 export async function snapshotRoleViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -370,6 +393,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   });
 }
 
+/** Navigates the target page while enforcing browser SSRF policy before and after load. */
 export async function navigateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -377,7 +401,7 @@ export async function navigateViaPlaywright(opts: {
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
-}): Promise<{ url: string }> {
+}): Promise<{ url: string; download?: BrowserDownloadResult }> {
   const isRetryableNavigateError = (err: unknown): boolean => {
     const msg =
       typeof err === "string"
@@ -395,15 +419,16 @@ export async function navigateViaPlaywright(opts: {
   if (!url) {
     throw new Error("url is required");
   }
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
   await assertBrowserNavigationAllowed({
     url,
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy, {
-      browserProxyMode: opts.browserProxyMode,
-    }),
+    ...navigationPolicy,
   });
   const timeout = resolveNavigationTimeoutMs(opts.timeoutMs);
   let page = await getPageForTargetId(opts);
-  ensurePageState(page);
+  let pageState = ensurePageState(page);
   const navigate = async () =>
     await gotoPageWithNavigationGuard({
       cdpUrl: opts.cdpUrl,
@@ -414,9 +439,54 @@ export async function navigateViaPlaywright(opts: {
       browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
-  let response;
+  const navigateWithDownloadCapture = async (): Promise<{
+    response: Awaited<ReturnType<typeof navigate>> | null;
+    download?: BrowserDownloadResult;
+  }> => {
+    const downloadCapture = createDownloadCaptureForPage(page, pageState, timeout, {
+      mode: "passive",
+      timeoutMessage: "Timeout waiting for navigation download",
+      beforeSave: async (download) => {
+        await assertBrowserNavigationResultAllowed({
+          url: download.url || url,
+          ...navigationPolicy,
+        });
+      },
+    });
+    void downloadCapture.promise.catch(() => {});
+    try {
+      const response = await navigate();
+      downloadCapture.cancel();
+      return { response };
+    } catch (err) {
+      if (!isDownloadStartingNavigationError(err, url) || !downloadCapture.armed) {
+        downloadCapture.cancel();
+        throw err;
+      }
+      try {
+        return { response: null, download: await downloadCapture.promise };
+      } catch (downloadErr) {
+        if (
+          downloadErr instanceof Error &&
+          downloadErr.message === "Timeout waiting for navigation download"
+        ) {
+          throw err;
+        }
+        if (isPolicyDenyNavigationError(downloadErr)) {
+          await closeBlockedNavigationTarget({
+            cdpUrl: opts.cdpUrl,
+            page,
+            targetId: opts.targetId,
+          });
+        }
+        throw downloadErr;
+      }
+    }
+  };
+
+  let navigationResult: Awaited<ReturnType<typeof navigateWithDownloadCapture>>;
   try {
-    response = await navigate();
+    navigationResult = await navigateWithDownloadCapture();
   } catch (err) {
     if (!isRetryableNavigateError(err)) {
       throw err;
@@ -426,21 +496,24 @@ export async function navigateViaPlaywright(opts: {
     await forceDisconnectPlaywrightForTarget({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
+      ssrfPolicy: opts.ssrfPolicy,
       reason: "retry navigate after detached frame",
     }).catch(() => {});
     page = await getPageForTargetId(opts);
-    ensurePageState(page);
-    response = await navigate();
+    pageState = ensurePageState(page);
+    navigationResult = await navigateWithDownloadCapture();
   }
   try {
-    await assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page,
-      response,
-      ssrfPolicy: opts.ssrfPolicy,
-      browserProxyMode: opts.browserProxyMode,
-      targetId: opts.targetId,
-    });
+    if (!navigationResult.download) {
+      await assertPageNavigationCompletedSafely({
+        cdpUrl: opts.cdpUrl,
+        page,
+        response: navigationResult.response,
+        ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
+        targetId: opts.targetId,
+      });
+    }
   } catch (err) {
     if (isPolicyDenyNavigationError(err)) {
       await closeBlockedNavigationTarget({
@@ -451,10 +524,14 @@ export async function navigateViaPlaywright(opts: {
     }
     throw err;
   }
-  const finalUrl = page.url();
-  return { url: finalUrl };
+  const finalUrl = navigationResult.download?.url || page.url();
+  return {
+    url: finalUrl,
+    ...(navigationResult.download ? { download: navigationResult.download } : {}),
+  };
 }
 
+/** Resizes the target page viewport within the browser action policy bounds. */
 export async function resizeViewportViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -469,6 +546,7 @@ export async function resizeViewportViaPlaywright(opts: {
   });
 }
 
+/** Closes the target Playwright page. */
 export async function closePageViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -478,6 +556,7 @@ export async function closePageViaPlaywright(opts: {
   await page.close();
 }
 
+/** Renders the target page to a PDF buffer. */
 export async function pdfViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

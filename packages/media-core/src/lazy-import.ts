@@ -1,12 +1,15 @@
-export type LazyPromiseLoader<T> = {
+/** Cached async loader used by runtime boundaries that should import on first use. */
+type LazyPromiseLoader<T> = {
   load(): Promise<T>;
   clear(): void;
 };
 
-export type LazyPromiseLoaderOptions = {
+/** Controls whether a failed first import stays cached or is retried later. */
+type LazyPromiseLoaderOptions = {
   cacheRejections?: boolean;
 };
 
+/** Creates a single-flight promise cache around a lazy import or other async loader. */
 export function createLazyImportLoader<T>(
   load: () => Promise<T>,
   options: LazyPromiseLoaderOptions = {},
@@ -16,6 +19,7 @@ export function createLazyImportLoader<T>(
   const createPromise = (): Promise<T> => {
     const loaded = Promise.resolve().then(load);
     if (options.cacheRejections !== true) {
+      // Failed optional-runtime imports should retry after install/config changes.
       void loaded.catch(() => {
         if (promise === loaded) {
           promise = undefined;

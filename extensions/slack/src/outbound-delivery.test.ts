@@ -1,3 +1,4 @@
+// Slack tests cover outbound delivery plugin behavior.
 import {
   addTestHook,
   createEmptyPluginRegistry,
@@ -107,11 +108,16 @@ describe("slack outbound shared hook wiring", () => {
       replyToId: "1712000000.000001",
     });
 
-    expect(sendMessageSlackMock).toHaveBeenCalledWith("C123", "hello", {
-      cfg,
-      threadTs: "1712000000.000001",
-      accountId: "default",
-    });
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        cfg,
+        threadTs: "1712000000.000001",
+        accountId: "default",
+        onDeliveryResult: expect.any(Function),
+      }),
+    );
   });
 
   it("respects cancel from the shared hook without a second adapter pass", async () => {

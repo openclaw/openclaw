@@ -1,13 +1,16 @@
+// Memory Host SDK helper module supports retry utils behavior.
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 
-export type RetryConfig = {
+/** Retry timing configuration with optional jitter. */
+type RetryConfig = {
   attempts?: number;
   minDelayMs?: number;
   maxDelayMs?: number;
   jitter?: number;
 };
 
-export type RetryInfo = {
+/** Retry callback payload. */
+type RetryInfo = {
   attempt: number;
   maxAttempts: number;
   delayMs: number;
@@ -15,7 +18,8 @@ export type RetryInfo = {
   label?: string;
 };
 
-export type RetryOptions = RetryConfig & {
+/** Retry options for retryAsync. */
+type RetryOptions = RetryConfig & {
   label?: string;
   shouldRetry?: (err: unknown, attempt: number) => boolean;
   retryAfterMs?: (err: unknown) => number | undefined;
@@ -59,7 +63,8 @@ function resolveAttempts(value: unknown, fallback: number): number {
   return Math.max(1, value);
 }
 
-export function resolveRetryConfig(
+/** Resolve retry settings with clamped positive timeout values. */
+function resolveRetryConfig(
   defaults: Required<RetryConfig> = DEFAULT_RETRY_CONFIG,
   overrides?: RetryConfig,
 ): Required<RetryConfig> {
@@ -87,6 +92,7 @@ function applyJitter(delayMs: number, jitter: number): number {
   return Math.max(0, Math.round(delayMs * (1 + offset)));
 }
 
+/** Run an async operation with exponential backoff retry handling. */
 export async function retryAsync<T>(
   fn: () => Promise<T>,
   attemptsOrOptions: number | RetryOptions = 3,
@@ -154,7 +160,7 @@ export async function retryAsync<T>(
   throw toLintErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+export function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
   }

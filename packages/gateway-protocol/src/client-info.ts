@@ -1,3 +1,9 @@
+/**
+ * Shared gateway client identity contract.
+ *
+ * These values cross the WebSocket handshake boundary, so additions must stay
+ * aligned with protocol schemas and server policy checks.
+ */
 function normalizeOptionalLowercaseString(raw?: string | null): string | undefined {
   if (typeof raw !== "string") {
     return undefined;
@@ -6,6 +12,7 @@ function normalizeOptionalLowercaseString(raw?: string | null): string | undefin
   return normalized || undefined;
 }
 
+/** Canonical client ids accepted in gateway hello/connect payloads. */
 export const GATEWAY_CLIENT_IDS = {
   WEBCHAT_UI: "webchat-ui",
   CONTROL_UI: "openclaw-control-ui",
@@ -15,6 +22,7 @@ export const GATEWAY_CLIENT_IDS = {
   GATEWAY_CLIENT: "gateway-client",
   MACOS_APP: "openclaw-macos",
   IOS_APP: "openclaw-ios",
+  WATCHOS_APP: "openclaw-watchos",
   ANDROID_APP: "openclaw-android",
   NODE_HOST: "node-host",
   TEST: "test",
@@ -30,6 +38,7 @@ export const GATEWAY_CLIENT_NAMES = GATEWAY_CLIENT_IDS;
 /** Compatibility alias for internal callers that still use "name" terminology. */
 export type GatewayClientName = GatewayClientId;
 
+/** Coarse modes let policy group clients without matching every product id. */
 export const GATEWAY_CLIENT_MODES = {
   WEBCHAT: "webchat",
   CLI: "cli",
@@ -45,17 +54,28 @@ export type GatewayClientMode = (typeof GATEWAY_CLIENT_MODES)[keyof typeof GATEW
 
 /** Client metadata sent during gateway connection setup. */
 export type GatewayClientInfo = {
+  /** Stable product/client identifier from `GATEWAY_CLIENT_IDS`. */
   id: GatewayClientId;
+  /** Human-readable label for diagnostics; not used for policy decisions. */
   displayName?: string;
+  /** Client app or package version reported by the connecting process. */
   version: string;
+  /** Runtime platform string, such as `darwin`, `ios`, `android`, or `web`. */
   platform: string;
+  /** Optional device family used by native clients for display and routing hints. */
   deviceFamily?: string;
+  /** Native hardware/model identifier when available. */
   modelIdentifier?: string;
+  /** Coarse category from `GATEWAY_CLIENT_MODES` for policy and diagnostics. */
   mode: GatewayClientMode;
+  /** Per-installation or per-process id used to distinguish same-product clients. */
   instanceId?: string;
 };
 
+/** Capability flags a client may advertise during the gateway handshake. */
 export const GATEWAY_CLIENT_CAPS = {
+  INLINE_WIDGETS: "inline-widgets",
+  TASK_SUGGESTIONS: "task-suggestions",
   TOOL_EVENTS: "tool-events",
 } as const;
 
@@ -67,6 +87,8 @@ const GATEWAY_CLIENT_MODE_SET = new Set<GatewayClientMode>(Object.values(GATEWAY
 
 /** Normalizes untrusted client ids and rejects unknown values. */
 export function normalizeGatewayClientId(raw?: string | null): GatewayClientId | undefined {
+  // Handshake input is intentionally case-insensitive, but policy decisions use
+  // the canonical lowercase ids from the closed registry above.
   const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
     return undefined;

@@ -1,3 +1,4 @@
+// Video dimension tests cover ffprobe parsing and fallback behavior.
 import { describe, expect, it, vi } from "vitest";
 import { parseFfprobeVideoDimensions, probeVideoDimensions } from "./video-dimensions.js";
 
@@ -24,6 +25,12 @@ describe("parseFfprobeVideoDimensions", () => {
     expect(
       parseFfprobeVideoDimensions(JSON.stringify({ streams: [{ width: 720.5, height: 1280 }] })),
     ).toBeUndefined();
+  });
+
+  it("returns undefined for malformed JSON instead of throwing", () => {
+    for (const stdout of ["{", "", "not json", "null", "42", '"text"', '{"streams":{}}']) {
+      expect(parseFfprobeVideoDimensions(stdout)).toBeUndefined();
+    }
   });
 });
 

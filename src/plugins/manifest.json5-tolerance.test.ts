@@ -1,3 +1,4 @@
+// Covers JSON5 tolerance in plugin manifest parsing.
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
@@ -144,6 +145,26 @@ describe("loadPluginManifest JSON5 tolerance", () => {
         modelPrefixes: ["gpt-", "claude-"],
         modelPatterns: ["^o[0-9].*"],
       });
+    }
+  });
+
+  it("normalizes catalog curation metadata from the manifest", () => {
+    const dir = makeTempDir();
+    const json5Content = `{
+  id: "catalog-plugin",
+  catalog: {
+    featured: false,
+    order: 0,
+  },
+  configSchema: { type: "object" }
+}`;
+    fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), json5Content, "utf-8");
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.catalog).toEqual({ featured: false, order: 0 });
     }
   });
 

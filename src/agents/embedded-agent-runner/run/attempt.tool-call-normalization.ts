@@ -1,4 +1,9 @@
+/**
+ * Normalizes tool-call names, ids, and standalone text calls for providers.
+ */
 import { randomUUID } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { normalizeStringEntries } from "../../../../packages/normalization-core/src/string-normalization.js";
 import {
   extractStandalonePlainTextToolCallText,
   normalizePlainTextToolCallStreamEvents,
@@ -8,8 +13,6 @@ import {
   type PlainTextToolCallNameMatcher,
 } from "../../../../packages/tool-call-repair/src/index.js";
 import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../../packages/normalization-core/src/string-coerce.js";
-import { normalizeStringEntries } from "../../../../packages/normalization-core/src/string-normalization.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
@@ -28,6 +31,7 @@ import {
 import { couldNormalizeToolNamePrefixToAllowedTool, normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
+import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 const BLANK_TOOL_CALL_NAME_DESCRIPTION = "blank tool name";
@@ -235,10 +239,6 @@ function normalizeToolCallNameForDispatch(
   return resolveStructuredAllowedToolName(trimmed, allowedToolNames) ?? trimmed;
 }
 
-function isToolCallBlockType(type: unknown): boolean {
-  return type === "toolCall" || type === "toolUse" || type === "functionCall";
-}
-
 const REPLAY_TOOL_CALL_NAME_MAX_CHARS = 64;
 
 type ReplayToolCallBlock = {
@@ -295,7 +295,7 @@ function isReplayToolCallBlock(block: unknown): block is ReplayToolCallBlock {
   if (!block || typeof block !== "object") {
     return false;
   }
-  return isToolCallBlockType((block as { type?: unknown }).type);
+  return isRunnerToolCallBlockType((block as { type?: unknown }).type);
 }
 
 function replayToolCallHasInput(block: ReplayToolCallBlock): boolean {
@@ -530,7 +530,7 @@ function sanitizeAnthropicReplayToolResults(
             continue;
           }
           const typedBlock = block as { type?: unknown; id?: unknown };
-          if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+          if (!isRunnerToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
             continue;
           }
           const trimmedId = typedBlock.id.trim();
@@ -607,7 +607,7 @@ function stripTrailingAssistantPrefillTurns(messages: AgentMessage[]): AgentMess
   return end === messages.length ? messages : messages.slice(0, end);
 }
 
-function normalizeToolCallIdsInMessage(message: unknown): void {
+function normalizeToolCallIdsInMessage(message: unknown, fallbackIdByContentIndex: string[]): void {
   if (!message || typeof message !== "object") {
     return;
   }
@@ -622,7 +622,7 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
       continue;
     }
     const typedBlock = block as { type?: unknown; id?: unknown };
-    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+    if (!isRunnerToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
       continue;
     }
     const trimmedId = typedBlock.id.trim();
@@ -632,14 +632,13 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
     usedIds.add(trimmedId);
   }
 
-  let fallbackIndex = 1;
   const assignedIds = new Set<string>();
-  for (const block of content) {
+  for (const [contentIndex, block] of content.entries()) {
     if (!block || typeof block !== "object") {
       continue;
     }
     const typedBlock = block as { type?: unknown; id?: unknown };
-    if (!isToolCallBlockType(typedBlock.type)) {
+    if (!isRunnerToolCallBlockType(typedBlock.type)) {
       continue;
     }
     if (typeof typedBlock.id === "string") {
@@ -655,10 +654,11 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
       }
     }
 
-    let fallbackId = "";
+    let fallbackId = fallbackIdByContentIndex[contentIndex];
     while (!fallbackId || usedIds.has(fallbackId) || assignedIds.has(fallbackId)) {
-      fallbackId = `call_auto_${fallbackIndex++}`;
+      fallbackId = createStandaloneTextToolCallId();
     }
+    fallbackIdByContentIndex[contentIndex] = fallbackId;
     typedBlock.id = fallbackId;
     usedIds.add(fallbackId);
     assignedIds.add(fallbackId);
@@ -667,11 +667,12 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
 
 function trimWhitespaceFromToolCallNamesInMessage(
   message: unknown,
-  allowedToolNames?: Set<string>,
+  allowedToolNames: Set<string> | undefined,
+  fallbackIdByContentIndex: string[],
 ): void {
   visitObjectContentBlocks(message, (block) => {
     const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
-    if (!isToolCallBlockType(typedBlock.type)) {
+    if (!isRunnerToolCallBlockType(typedBlock.type)) {
       return;
     }
     const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
@@ -687,7 +688,7 @@ function trimWhitespaceFromToolCallNamesInMessage(
       typedBlock.name = inferred;
     }
   });
-  normalizeToolCallIdsInMessage(message);
+  normalizeToolCallIdsInMessage(message, fallbackIdByContentIndex);
 }
 
 function classifyToolCallMessage(
@@ -718,7 +719,7 @@ function classifyToolCallMessage(
       continue;
     }
     const typedBlock = block as { type?: unknown; name?: unknown };
-    if (!isToolCallBlockType(typedBlock.type)) {
+    if (!isRunnerToolCallBlockType(typedBlock.type)) {
       continue;
     }
     sawToolCall = true;
@@ -827,6 +828,8 @@ function guardUnknownToolLoopInMessage(
   const unknownToolName = toolCallState.toolName;
 
   if (!params.countAttempt) {
+    // Partial stream events can rewrite after the threshold, but only final
+    // messages advance the loop counter.
     if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
       rewriteUnknownToolLoopMessage(message, unknownToolName);
     }
@@ -1036,6 +1039,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
   return stream;
 }
 
+/** Promotes standalone plain-text tool-call replies into structured toolCall blocks when safe. */
 export function wrapStreamFnPromoteStandaloneTextToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
@@ -1063,11 +1067,15 @@ function wrapStreamTrimToolCallNames(
     count: 0,
     countedMessages: new WeakSet<object>(),
   };
+  // Provider-omitted ids are only message-local. Reuse one generated id per
+  // content position across this response's partial/final projections, while a
+  // later assistant response gets a fresh namespace and cannot alias it.
+  const fallbackIdByContentIndex: string[] = [];
   let streamAttemptAlreadyCounted = false;
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames);
+    trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames, fallbackIdByContentIndex);
     guardUnknownToolLoopInMessage(message, unknownToolGuardState, {
       allowedToolNames,
       threshold: options?.unknownToolThreshold,
@@ -1079,8 +1087,16 @@ function wrapStreamTrimToolCallNames(
   };
 
   wrapStreamObjectEvents(stream, (event) => {
-    trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
-    trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
+    trimWhitespaceFromToolCallNamesInMessage(
+      event.partial,
+      allowedToolNames,
+      fallbackIdByContentIndex,
+    );
+    trimWhitespaceFromToolCallNamesInMessage(
+      event.message,
+      allowedToolNames,
+      fallbackIdByContentIndex,
+    );
     if (event.message && typeof event.message === "object") {
       const countedStreamAttempt = guardUnknownToolLoopInMessage(
         event.message,
@@ -1105,6 +1121,7 @@ function wrapStreamTrimToolCallNames(
   return stream;
 }
 
+/** Normalizes streamed tool-call names and guards repeated unknown-tool loops. */
 export function wrapStreamFnTrimToolCallNames(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
@@ -1137,6 +1154,7 @@ type ReplayToolCallIdSanitizerDecision = {
   isOpenAIResponsesApi: boolean;
 };
 
+/** Returns whether replayed tool-call ids should be sanitized for non-Responses providers. */
 export function shouldApplyReplayToolCallIdSanitizer(
   params: ReplayToolCallIdSanitizerDecision,
 ): params is ReplayToolCallIdSanitizerDecision & { toolCallIdMode: ToolCallIdMode } {
@@ -1145,16 +1163,19 @@ export function shouldApplyReplayToolCallIdSanitizer(
   );
 }
 
+/** Rewrites replayed tool-call ids into provider-safe ids and optionally repairs result pairing. */
 export function sanitizeReplayToolCallIdsForStream(params: {
   messages: AgentMessage[];
   mode: ToolCallIdMode;
   allowedToolNames?: Set<string>;
   preserveNativeAnthropicToolUseIds?: boolean;
+  duplicateToolCallIdStyle?: "openai";
   preserveReplaySafeThinkingToolCallIds?: boolean;
   repairToolUseResultPairing?: boolean;
 }): AgentMessage[] {
   const sanitized = sanitizeToolCallIdsForCloudCodeAssist(params.messages, params.mode, {
     preserveNativeAnthropicToolUseIds: params.preserveNativeAnthropicToolUseIds,
+    duplicateToolCallIdStyle: params.duplicateToolCallIdStyle,
     preserveReplaySafeThinkingToolCallIds: params.preserveReplaySafeThinkingToolCallIds,
     allowedToolNames: params.allowedToolNames,
   });
@@ -1164,12 +1185,23 @@ export function sanitizeReplayToolCallIdsForStream(params: {
   return sanitizeToolUseResultPairing(sanitized);
 }
 
+/** Downgrades OpenAI Responses replay turns into the stream format expected by runtime callers. */
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
+  const repaired = sanitizeToolUseResultPairing(messages, {
+    erroredAssistantResultPolicy: "drop",
+    missingToolResultText: "aborted",
+  });
   return downgradeOpenAIFunctionCallReasoningPairs(
-    normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(messages)),
+    normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(repaired)),
   );
 }
 
+/**
+ * Sanitizes malformed replay tool calls before provider submission. The wrapper
+ * drops invalid assistant tool calls, repairs adjacent tool results when needed,
+ * strips trailing assistant prefill turns for strict providers, and revalidates
+ * Anthropic/Gemini transcripts after mutations.
+ */
 export function wrapStreamFnSanitizeMalformedToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
@@ -1199,10 +1231,19 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       allowedToolNames,
       allowProviderOwnedThinkingReplay,
     );
+    const isOpenAIResponsesApi =
+      (model as { api?: unknown }).api === "openai-responses" ||
+      (model as { api?: unknown }).api === "openai-chatgpt-responses" ||
+      (model as { api?: unknown }).api === "azure-openai-responses";
     const replayInputsChanged = sanitized.messages !== messages;
-    let nextMessages = replayInputsChanged
-      ? sanitizeToolUseResultPairing(sanitized.messages)
-      : sanitized.messages;
+    let nextMessages = isOpenAIResponsesApi
+      ? sanitizeToolUseResultPairing(sanitized.messages, {
+          erroredAssistantResultPolicy: "drop",
+          missingToolResultText: "aborted",
+        })
+      : replayInputsChanged
+        ? sanitizeToolUseResultPairing(sanitized.messages)
+        : sanitized.messages;
     let strippedTrailingAssistantPrefill = false;
     if (transcriptPolicy?.validateAnthropicTurns) {
       nextMessages = sanitizeAnthropicReplayToolResults(nextMessages, {

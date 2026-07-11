@@ -1,14 +1,69 @@
+/** Doctor repair for redacting historical config audit log argv records. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { scrubConfigAuditLog } from "../config/io.audit.js";
+import {
+  resolveConfigAuditLogPath,
+  scrubConfigAuditLog,
+  type ConfigAuditScrubResult,
+} from "../config/io.audit.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 
 const NOTE_TITLE = "Config audit";
+const CONFIG_AUDIT_SCRUB_CHECK_ID = "core/doctor/config-audit-scrub";
 
 function formatEntryCount(count: number): string {
   return `${count} ${count === 1 ? "entry" : "entries"}`;
 }
 
+export async function detectConfigAuditScrubIssue(params?: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): Promise<ConfigAuditScrubResult & { auditPath: string }> {
+  const env = params?.env ?? process.env;
+  const homedir = params?.homedir ?? os.homedir;
+  const result = await scrubConfigAuditLog({
+    fs: { promises: fs },
+    env,
+    homedir,
+    dryRun: true,
+  });
+  return {
+    ...result,
+    auditPath: resolveConfigAuditLogPath(env, homedir),
+  };
+}
+
+export function configAuditScrubToHealthFinding(
+  result: ConfigAuditScrubResult & { auditPath: string },
+): HealthFinding {
+  return {
+    checkId: CONFIG_AUDIT_SCRUB_CHECK_ID,
+    severity: "warning",
+    message: `${formatEntryCount(result.rewritten)} in config-audit.jsonl still contain pre-redactor argv values.`,
+    path: result.auditPath,
+    fixHint:
+      "Run `openclaw doctor --fix` to rewrite argv/execArgv fields through the current redactor.",
+  };
+}
+
+export function configAuditScrubToRepairEffect(
+  result: ConfigAuditScrubResult & { auditPath: string },
+): HealthRepairEffect {
+  return {
+    kind: "file",
+    action: "would-scrub-config-audit-log",
+    target: result.auditPath,
+    dryRunSafe: false,
+  };
+}
+
+/**
+ * Scrubs pre-redactor config audit records or previews the number of affected entries.
+ *
+ * The rewrite aborts if new records are appended while doctor is processing the JSONL file, so
+ * live gateways do not lose audit entries during cleanup.
+ */
 export async function maybeScrubConfigAuditLog(params: {
   shouldRepair: boolean;
   env?: NodeJS.ProcessEnv;

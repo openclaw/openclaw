@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+// Produces redacted runtime config snapshots for diagnostics and UI surfaces.
+import { sha256Base64Url } from "../infra/crypto-digest.js";
 import type { OpenClawConfig } from "./types.js";
 
 export type RuntimeConfigSnapshotRefreshOptions = {
@@ -120,7 +121,7 @@ function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): bool
 }
 
 export function hashRuntimeConfigValue(value: OpenClawConfig): string {
-  return createHash("sha256").update(stableConfigStringify(value)).digest("base64url");
+  return sha256Base64Url(stableConfigStringify(value));
 }
 
 function createRuntimeConfigSnapshotMetadata(

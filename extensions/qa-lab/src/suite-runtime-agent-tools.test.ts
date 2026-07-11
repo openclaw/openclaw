@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite runtime agent tools plugin behavior.
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -51,6 +52,7 @@ import {
   callPluginToolsMcp,
   findSkill,
   handleQaAction,
+  resolveWorkspaceSkillPath,
   writeWorkspaceSkill,
 } from "./suite-runtime-agent-tools.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -88,6 +90,25 @@ describe("qa suite runtime agent tools helpers", () => {
 
     await expect(fs.readFile(skillPath, "utf8")).resolves.toBe("hello world\n");
     expect(skillPath).toBe(path.join(workspaceDir, "skills", "my-skill", "SKILL.md"));
+  });
+
+  it("rejects workspace skill names that escape the skills directory", async () => {
+    const workspaceDir = await makeTempDir("qa-workspace-");
+
+    for (const name of ["", " spaced", "spaced ", ".", "..", "../escape", "..\\escape", "a/b"]) {
+      expect(() => resolveWorkspaceSkillPath(workspaceDir, name), name).toThrow(
+        `invalid QA workspace skill name: ${JSON.stringify(name)}`,
+      );
+      await expect(
+        writeWorkspaceSkill({
+          env: { gateway: { workspaceDir } } as never,
+          name,
+          body: "escape",
+        }),
+      ).rejects.toThrow(`invalid QA workspace skill name: ${JSON.stringify(name)}`);
+    }
+
+    await expect(fs.readdir(path.join(workspaceDir, "skills"))).rejects.toThrow();
   });
 
   it("routes generic transport actions through the payload extractor", async () => {

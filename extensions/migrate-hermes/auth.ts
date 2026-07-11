@@ -1,5 +1,9 @@
+// Migrate Hermes plugin module implements auth behavior.
 import { createHash } from "node:crypto";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  resolveAuthStorePathForDisplay,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   createMigrationItem,
   createMigrationManualItem,
@@ -21,6 +25,10 @@ import {
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
+  applyAgentDefaultModelPrimary,
+  resolveAgentModelPrimaryValue,
+} from "openclaw/plugin-sdk/provider-onboard";
+import {
   applyAuthProfileConfigWithConflictCheck,
   hasAuthProfileConfigConflict,
   hasCurrentAuthProfileConfigConflict,
@@ -39,7 +47,7 @@ import type { HermesSource } from "./source.js";
 import type { PlannedTargets } from "./targets.js";
 
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_DEFAULT_MODEL = "openai/gpt-5.5";
+const OPENAI_CODEX_DEFAULT_MODEL = "openai/gpt-5.6-sol";
 const HERMES_AUTH_DISPLAY_NAME = "Hermes import";
 
 type AgentDefaultModelConfigs = NonNullable<
@@ -64,6 +72,10 @@ type HermesCodexAuthProfile = {
   result: ProviderAuthResult;
   sourceProfileId: string;
 };
+
+function authProfileTarget(agentDir: string, profileId: string): string {
+  return `${resolveAuthStorePathForDisplay(agentDir)}#${profileId}`;
+}
 
 function sourceCredentialFingerprint(candidate: HermesCodexAuthCandidate): string {
   const hash = createHash("sha256");
@@ -164,7 +176,7 @@ function buildAuthResult(
   });
   return buildOauthProviderAuthResult({
     providerId: OPENAI_PROVIDER_ID,
-    defaultModel: OPENAI_DEFAULT_MODEL,
+    defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
     access: candidate.access,
     refresh: candidate.refresh,
     expires: resolveOpenAICodexAccessTokenExpiry(candidate.access),
@@ -180,7 +192,7 @@ function readProviderAuthModelConfigs(result: ProviderAuthResult): AgentDefaultM
   if (isRecord(models)) {
     return { ...models };
   }
-  const defaultModel = readString(result.defaultModel) ?? OPENAI_DEFAULT_MODEL;
+  const defaultModel = readString(result.defaultModel) ?? OPENAI_CODEX_DEFAULT_MODEL;
   return { [defaultModel]: {} };
 }
 
@@ -389,7 +401,7 @@ export async function buildAuthItems(params: {
         kind: "auth",
         action: skipped ? "skip" : "create",
         source: profile.candidate.sourcePath,
-        target: `${params.targets.agentDir}/auth-profiles.json#${profileId}`,
+        target: authProfileTarget(params.targets.agentDir, profileId),
         status: skipped ? "skipped" : conflict ? "conflict" : "planned",
         sensitive: true,
         reason: skipped
@@ -495,7 +507,10 @@ export async function applyAuthItem(
     ctx,
     profile: configProfile,
     applyConfigPatch(config) {
-      return applyOAuthModelConfigsToConfig(config, profile.result);
+      const next = applyOAuthModelConfigsToConfig(config, profile.result);
+      return resolveAgentModelPrimaryValue(next.agents?.defaults?.model) === undefined
+        ? applyAgentDefaultModelPrimary(next, OPENAI_CODEX_DEFAULT_MODEL)
+        : next;
     },
   });
   if (configResult === "conflict") {

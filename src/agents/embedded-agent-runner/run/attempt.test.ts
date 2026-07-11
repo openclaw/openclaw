@@ -1,21 +1,22 @@
+// Broad helper coverage for runEmbeddedAttempt prompt, stream, and tool seams.
 import { describe, expect, it, vi } from "vitest";
 import { streamSimple } from "../../../llm/stream.js";
 
 vi.mock("../context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: async () => ({ llm: undefined }),
 }));
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { addSession, resetProcessRegistryForTests } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
+import type { NormalizedUsage } from "../../usage.js";
 import {
   resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
-import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
 import { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   buildAfterTurnRuntimeContext,
@@ -28,10 +29,7 @@ import {
   shouldWarnOnOrphanedUserRepair,
 } from "./attempt.prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
-import {
-  decodeHtmlEntitiesInObject,
-  wrapStreamFnRepairMalformedToolCallArguments,
-} from "./attempt.tool-call-argument-repair.js";
+import { wrapStreamFnRepairMalformedToolCallArguments } from "./attempt.tool-call-argument-repair.js";
 import {
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
@@ -47,6 +45,8 @@ function createFakeStream(params: {
   events: unknown[];
   resultMessage: unknown;
 }): FakeWrappedStream {
+  // Minimal stream compatible with wrappers that decorate result and iteration
+  // without needing a real provider stream.
   return {
     async result() {
       return params.resultMessage;
@@ -67,6 +67,7 @@ async function invokeWrappedTestStream(
   ) => (...args: never[]) => FakeWrappedStream | Promise<FakeWrappedStream>,
   baseFn: (...args: never[]) => unknown,
 ): Promise<FakeWrappedStream> {
+  // Helper keeps wrapper tests focused on mutated stream behavior.
   const wrappedFn = wrap(baseFn);
   return await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
 }
@@ -101,6 +102,7 @@ function expectSingleToolCallContent(content: unknown[], name: string) {
 }
 
 function firstBaseContext(baseFn: ReturnType<typeof vi.fn>): { messages: unknown[] } {
+  // Wrapper tests assert the context passed to the underlying stream function.
   const call = baseFn.mock.calls.at(0);
   if (!call) {
     throw new Error("expected base stream call");
@@ -178,6 +180,8 @@ describe("resolvePromptBuildHookResult", () => {
   });
 
   it("merges prompt-build and before_agent_start context fields in deterministic order", async () => {
+    // Prompt-build hook context comes before before_agent_start context so plugin
+    // injections are replayed in stable order.
     const hookRunner = {
       hasHooks: vi.fn(() => true),
       runBeforePromptBuild: vi.fn(async () => ({
@@ -322,23 +326,6 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession(undefined)).toBe("full");
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
-  });
-});
-
-describe("resolveBootstrapContextTargets", () => {
-  it("keeps BOOTSTRAP.md in system Project Context only for full bootstrap turns", () => {
-    expect(resolveBootstrapContextTargets({ bootstrapMode: "full" })).toEqual({
-      includeBootstrapInSystemContext: true,
-      includeBootstrapInRuntimeContext: false,
-    });
-    expect(resolveBootstrapContextTargets({ bootstrapMode: "limited" })).toEqual({
-      includeBootstrapInSystemContext: false,
-      includeBootstrapInRuntimeContext: false,
-    });
-    expect(resolveBootstrapContextTargets({ bootstrapMode: "none" })).toEqual({
-      includeBootstrapInSystemContext: false,
-      includeBootstrapInRuntimeContext: false,
-    });
   });
 });
 
@@ -1305,7 +1292,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expectSingleTextContent(result.content, '"blank tool name"');
     expect(finalToolCall.name).toBe("");
-    expect(finalToolCall.id).toBe("call_auto_1");
+    expect(finalToolCall.id).toMatch(/^call_[0-9a-f]{24}$/);
   });
 
   it("assigns fallback ids when both name and id are missing", async () => {
@@ -1322,7 +1309,33 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await stream.result();
 
     expect(finalToolCall.name).toBeUndefined();
-    expect(finalToolCall.id).toBe("call_auto_1");
+    expect(finalToolCall.id).toMatch(/^call_[0-9a-f]{24}$/);
+  });
+
+  it("does not reuse fallback ids across assistant response streams", async () => {
+    const ids: string[] = [];
+    for (let responseIndex = 0; responseIndex < 2; responseIndex += 1) {
+      const finalToolCall: { type: string; name: string; id?: string } = {
+        type: "toolCall",
+        name: "read",
+      };
+      const baseFn = vi.fn(() =>
+        createFakeStream({
+          events: [],
+          resultMessage: { role: "assistant", content: [finalToolCall] },
+        }),
+      );
+      const stream = await invokeWrappedStream(baseFn, new Set(["read"]));
+      await stream.result();
+      if (!finalToolCall.id) {
+        throw new Error("missing fallback tool call id");
+      }
+      ids.push(finalToolCall.id);
+    }
+
+    expect(ids[0]).toMatch(/^call_[0-9a-f]{24}$/);
+    expect(ids[1]).toMatch(/^call_[0-9a-f]{24}$/);
+    expect(ids[1]).not.toBe(ids[0]);
   });
 
   it("prefers explicit canonical names over conflicting canonical ids", async () => {
@@ -1510,11 +1523,12 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     const result = await stream.result();
 
     expect(partialToolCall.name).toBe("read");
-    expect(partialToolCall.id).toBe("call_auto_1");
+    expect(partialToolCall.id).toMatch(/^call_[0-9a-f]{24}$/);
     expect(finalToolCallA.name).toBe("exec");
-    expect(finalToolCallA.id).toBe("call_auto_1");
+    expect(finalToolCallA.id).toBe(partialToolCall.id);
     expect(finalToolCallB.name).toBe("write");
-    expect(finalToolCallB.id).toBe("call_auto_2");
+    expect(finalToolCallB.id).toMatch(/^call_[0-9a-f]{24}$/);
+    expect(finalToolCallB.id).not.toBe(finalToolCallA.id);
     expect(result).toBe(finalMessage);
   });
 
@@ -1552,7 +1566,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCallA.name).toBe("read");
     expect(finalToolCallB.name).toBe("write");
     expect(finalToolCallA.id).toBe("edit:22");
-    expect(finalToolCallB.id).toBe("call_auto_1");
+    expect(finalToolCallB.id).toMatch(/^call_[0-9a-f]{24}$/);
   });
 });
 
@@ -1610,6 +1624,43 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       preserveSignatures: true,
       dropThinkingBlocks: false,
     } as never);
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = firstBaseContext(baseFn);
+    expect(seenContext.messages).toBe(messages);
+  });
+
+  it("preserves deferred directory tool calls allowed only for replay", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_hidden", name: "hidden_catalog_tool", arguments: {} },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "call_hidden",
+        content: [{ type: "toolResult", result: { ok: true } }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["tool_describe", "tool_call", "hidden_catalog_tool"]),
+      {
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      } as never,
+    );
     const stream = wrapped({} as never, { messages } as never, {} as never) as
       | FakeWrappedStream
       | Promise<FakeWrappedStream>;
@@ -3205,44 +3256,6 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
   });
 });
 
-describe("decodeHtmlEntitiesInObject", () => {
-  it("decodes HTML entities in string values", () => {
-    const result = decodeHtmlEntitiesInObject(
-      "source .env &amp;&amp; psql &quot;$DB&quot; -c &lt;query&gt;",
-    );
-    expect(result).toBe('source .env && psql "$DB" -c <query>');
-  });
-
-  it("recursively decodes nested objects", () => {
-    const input = {
-      command: "cd ~/dev &amp;&amp; npm run build",
-      args: ["--flag=&quot;value&quot;", "&lt;input&gt;"],
-      nested: { deep: "a &amp; b" },
-    };
-    const result = decodeHtmlEntitiesInObject(input) as Record<string, unknown>;
-    expect(result.command).toBe("cd ~/dev && npm run build");
-    expect((result.args as string[])[0]).toBe('--flag="value"');
-    expect((result.args as string[])[1]).toBe("<input>");
-    expect((result.nested as Record<string, string>).deep).toBe("a & b");
-  });
-
-  it("passes through non-string primitives unchanged", () => {
-    expect(decodeHtmlEntitiesInObject(42)).toBe(42);
-    expect(decodeHtmlEntitiesInObject(null)).toBe(null);
-    expect(decodeHtmlEntitiesInObject(true)).toBe(true);
-    expect(decodeHtmlEntitiesInObject(undefined)).toBe(undefined);
-  });
-
-  it("returns strings without entities unchanged", () => {
-    const input = "plain string with no entities";
-    expect(decodeHtmlEntitiesInObject(input)).toBe(input);
-  });
-
-  it("decodes numeric character references", () => {
-    expect(decodeHtmlEntitiesInObject("&#39;hello&#39;")).toBe("'hello'");
-    expect(decodeHtmlEntitiesInObject("&#x27;world&#x27;")).toBe("'world'");
-  });
-});
 describe("prependSystemPromptAddition", () => {
   it("prepends context-engine addition to the system prompt", () => {
     const result = prependSystemPromptAddition({
@@ -3352,8 +3365,13 @@ describe("buildAfterTurnRuntimeContext", () => {
         config: {
           agents: {
             defaults: {
+              models: {
+                "openrouter/anthropic/claude-sonnet-4-5": {
+                  alias: "summary",
+                },
+              },
               compaction: {
-                model: "openrouter/anthropic/claude-sonnet-4-5",
+                model: "summary",
               },
             },
           },
@@ -3371,9 +3389,8 @@ describe("buildAfterTurnRuntimeContext", () => {
       agentDir: "/tmp/agent",
     });
 
-    // buildEmbeddedCompactionRuntimeContext now resolves the override eagerly
-    // so that context engines (including third-party ones) receive the correct
-    // compaction model in the runtime context.
+    // Resolve aliases before handing runtime context to any context engine;
+    // otherwise third-party engines can dispatch the bare alias as a model id.
     expect(legacy.provider).toBe("openrouter");
     expect(legacy.model).toBe("anthropic/claude-sonnet-4-5");
     // Auth profile dropped because provider changed from openai to openrouter.
@@ -3430,8 +3447,13 @@ describe("buildAfterTurnRuntimeContext", () => {
       output: 5,
       cacheRead: 40,
       cacheWrite: 2,
+      contextUsage: {
+        state: "available",
+        promptTokens: 23,
+        totalTokens: 28,
+      },
       total: 57,
-    };
+    } satisfies NormalizedUsage;
     const promptCache = buildContextEnginePromptCacheInfo({ lastCallUsage });
     const legacy = buildAfterTurnRuntimeContextFromUsage({
       attempt: {
@@ -3456,7 +3478,7 @@ describe("buildAfterTurnRuntimeContext", () => {
       promptCache,
     });
 
-    expect(legacy.currentTokenCount).toBe(52);
+    expect(legacy.currentTokenCount).toBe(23);
     expect(legacy.promptCache?.lastCallUsage?.total).toBe(57);
   });
 

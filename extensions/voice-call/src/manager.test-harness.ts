@@ -1,3 +1,4 @@
+// Voice Call plugin module implements manager harness behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,11 @@ import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import { persistCallRecord } from "./manager/store.js";
 import type { VoiceCallProvider } from "./providers/base.js";
-import { getOptionalVoiceCallStateRuntime, setVoiceCallStateRuntime } from "./runtime-state.js";
+import {
+  getOptionalVoiceCallStateRuntime,
+  setVoiceCallStateRuntime,
+  type VoiceCallStateRuntime,
+} from "./runtime-state.js";
 import { CallRecordSchema } from "./types.js";
 import type {
   GetCallStatusInput,
@@ -77,23 +82,24 @@ export function createTestStorePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-test-"));
 }
 
+function createVoiceCallStateRuntimeForTests(): VoiceCallStateRuntime["state"] {
+  return {
+    resolveStateDir: () => "",
+    openKeyedStore: (() => {
+      throw new Error("openKeyedStore is not used by voice-call manager tests");
+    }) as VoiceCallStateRuntime["state"]["openKeyedStore"],
+    openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateSyncKeyedStoreForTests<T>("voice-call", options),
+    openChannelIngressQueue: (() => {
+      throw new Error("openChannelIngressQueue is not used by voice-call manager tests");
+    }) as VoiceCallStateRuntime["state"]["openChannelIngressQueue"],
+  };
+}
+
 export function installVoiceCallStateRuntimeForTests(): void {
-  if (getOptionalVoiceCallStateRuntime()) {
-    return;
+  if (!getOptionalVoiceCallStateRuntime()) {
+    setVoiceCallStateRuntime({ state: createVoiceCallStateRuntimeForTests() });
   }
-  setVoiceCallStateRuntime({
-    state: {
-      resolveStateDir: () => "",
-      openKeyedStore: (() => {
-        throw new Error("openKeyedStore is not used by voice-call manager tests");
-      }) as never,
-      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateSyncKeyedStoreForTests("voice-call", options),
-      openChannelIngressQueue: (() => {
-        throw new Error("openChannelIngressQueue is not used by voice-call manager tests");
-      }) as never,
-    },
-  });
 }
 
 export async function createManagerHarness(

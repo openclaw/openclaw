@@ -1,3 +1,7 @@
+/**
+ * Guards Codex app-server thread reuse during startup by rotating bindings when
+ * native transcripts exceed byte or token budgets.
+ */
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,7 +11,11 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
-import { clearCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
+import type {
+  CodexAppServerBindingIdentity,
+  CodexAppServerBindingStore,
+  CodexAppServerThreadBinding,
+} from "./session-binding.js";
 
 // Codex owns proactive auto-compaction, but OpenClaw must not resume a native
 // thread that is already too close to the server-side window for the next turn.
@@ -320,8 +328,11 @@ function hasContextEngineThreadBootstrapProjection(binding: CodexAppServerThread
   return binding.contextEngine?.projection?.mode === "thread_bootstrap";
 }
 
+/** Clears and drops a binding when the native Codex thread is too large to resume safely. */
 export async function rotateOversizedCodexAppServerStartupBinding(params: {
   binding: CodexAppServerThreadBinding | undefined;
+  bindingStore: CodexAppServerBindingStore;
+  identity: CodexAppServerBindingIdentity;
   sessionFile: string;
   agentDir: string;
   codexHome?: string;
@@ -357,7 +368,10 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
             files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
           },
         );
-        await clearCodexAppServerBinding(params.sessionFile);
+        await params.bindingStore.mutate(params.identity, {
+          kind: "clear",
+          threadId: binding.threadId,
+        });
         return undefined;
       }
     }
@@ -405,7 +419,10 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
         projectedTurnTokens: params.projectedTurnTokens,
       },
     );
-    await clearCodexAppServerBinding(params.sessionFile);
+    await params.bindingStore.mutate(params.identity, {
+      kind: "clear",
+      threadId: binding.threadId,
+    });
     return undefined;
   }
   if (compaction?.truncateAfterCompaction !== true) {
@@ -426,6 +443,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   return binding;
 }
 
+/** Internal sizing helpers exposed for startup-binding regression tests. */
 export const testing = {
   parseCodexAppServerByteLimit,
   readCodexAppServerRolloutTokenSnapshotLine,

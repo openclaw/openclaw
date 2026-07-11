@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements outbound media contract behavior.
 import path from "node:path";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
@@ -6,6 +7,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import { formatError } from "./session-errors.js";
+import { isWhatsAppSocketOperationTimeoutError } from "./socket-timing.js";
 import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
@@ -267,6 +269,9 @@ function deriveWhatsAppDocumentFileName(mediaUrl: string | undefined): string | 
 }
 
 function isRetryableWhatsAppOutboundError(error: unknown): boolean {
+  if (isWhatsAppSocketOperationTimeoutError(error)) {
+    return false;
+  }
   return /closed|reset|timed\s*out|disconnect/i.test(formatError(error));
 }
 

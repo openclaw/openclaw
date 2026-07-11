@@ -1,3 +1,5 @@
+// Session usage tests cover aggregate cost/token usage across configured and
+// discovered agent session logs.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -63,8 +65,8 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
       }
       return [];
     }),
-    loadSessionCostSummaryFromCache: vi.fn(async () => ({
-      summary: {
+    loadSessionCostSummariesFromCache: vi.fn(async (params: { sessions: unknown[] }) => ({
+      summaries: params.sessions.map(() => ({
         input: 0,
         output: 0,
         cacheRead: 0,
@@ -76,10 +78,10 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
         cacheReadCost: 0,
         cacheWriteCost: 0,
         missingCostEntries: 0,
-      },
+      })),
       cacheStatus: {
         status: "fresh",
-        cachedFiles: 1,
+        cachedFiles: params.sessions.length,
         pendingFiles: 0,
         staleFiles: 0,
       },
@@ -94,7 +96,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
 
 import {
   discoverAllSessions,
-  loadSessionCostSummaryFromCache,
+  loadSessionCostSummariesFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
 } from "../../infra/session-cost-usage.js";
@@ -272,7 +274,7 @@ describe("sessions.usage", () => {
     expect(sessions[0].agentId).toBe("opus");
   });
 
-  it("loads selected session summaries concurrently and reports cache refresh status", async () => {
+  it("loads selected session summaries in one batched cache read and reports refresh status", async () => {
     vi.mocked(discoverAllSessions).mockResolvedValueOnce([
       {
         sessionId: "s-a",
@@ -290,29 +292,10 @@ describe("sessions.usage", () => {
         mtime: 100,
       },
     ]);
-    const pending: Array<{
-      sessionId?: string;
-      resolve: (value: Awaited<ReturnType<typeof loadSessionCostSummaryFromCache>>) => void;
-    }> = [];
-    for (let i = 0; i < 3; i += 1) {
-      vi.mocked(loadSessionCostSummaryFromCache).mockImplementationOnce(
-        async ({ sessionId }) =>
-          await new Promise<Awaited<ReturnType<typeof loadSessionCostSummaryFromCache>>>(
-            (resolve) => {
-              pending.push({ sessionId, resolve });
-            },
-          ),
-      );
-    }
-
-    const respondPromise = runSessionsUsage({ ...BASE_USAGE_RANGE, limit: 3 });
-    await vi.waitFor(() =>
-      expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalledTimes(3),
-    );
-    for (const item of pending) {
-      const tokens = item.sessionId === "s-a" ? 10 : item.sessionId === "s-b" ? 20 : 30;
-      item.resolve({
-        summary: {
+    vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async ({ sessions }) => ({
+      summaries: sessions.map((session) => {
+        const tokens = session.sessionId === "s-a" ? 10 : session.sessionId === "s-b" ? 20 : 30;
+        return {
           input: tokens,
           output: 0,
           cacheRead: 0,
@@ -324,17 +307,20 @@ describe("sessions.usage", () => {
           cacheReadCost: 0,
           cacheWriteCost: 0,
           missingCostEntries: 0,
-        },
-        cacheStatus: {
-          status: item.sessionId === "s-b" ? "refreshing" : "fresh",
-          cachedFiles: item.sessionId === "s-b" ? 0 : 1,
-          pendingFiles: item.sessionId === "s-b" ? 1 : 0,
-          staleFiles: item.sessionId === "s-b" ? 1 : 0,
-        },
-      });
-    }
+        };
+      }),
+      cacheStatus: {
+        status: "refreshing",
+        cachedFiles: 2,
+        pendingFiles: 1,
+        staleFiles: 1,
+      },
+    }));
 
-    const respond = await respondPromise;
+    const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, limit: 3 });
+
+    // All three sessions belong to one agent, so the whole cache is read exactly once.
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledTimes(1);
     expect(respond).toHaveBeenCalledTimes(1);
     const result = mockArg(respond, 0, 1) as {
       cacheStatus?: { status: string };
@@ -344,6 +330,91 @@ describe("sessions.usage", () => {
     expect(result.cacheStatus?.status).toBe("refreshing");
     expect(result.sessions.map((session) => session.sessionId)).toEqual(["s-a", "s-b", "s-c"]);
     expect(result.totals.totalTokens).toBe(60);
+  });
+
+  it("passes the requested timezone offset to session daily summaries", async () => {
+    await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      mode: "specific",
+      utcOffset: "UTC-5",
+    });
+
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: -300 },
+      }),
+    );
+  });
+
+  it("falls back to the legacy offset when Gateway ICU does not recognize the browser timezone", async () => {
+    await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      mode: "specific",
+      timeZone: "Newer/BrowserZone",
+      utcOffset: "UTC-5",
+    });
+
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: -300 },
+      }),
+    );
+  });
+
+  it("uses an IANA timezone for session range boundaries, labels, and daily summaries", async () => {
+    const respond = await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      startDate: "2026-10-25",
+      endDate: "2026-10-25",
+      mode: "specific",
+      timeZone: "Europe/Vienna",
+      // The zone takes precedence and changes offset during this local day.
+      utcOffset: "UTC+2",
+    });
+
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startMs: Date.UTC(2026, 9, 24, 22),
+        endMs: Date.UTC(2026, 9, 25, 23) - 1,
+        dayBucket: { mode: "time-zone", timeZone: "Europe/Vienna" },
+      }),
+    );
+    const result = mockArg(respond, 0, 1) as { startDate: string; endDate: string };
+    expect(result.startDate).toBe("2026-10-25");
+    expect(result.endDate).toBe("2026-10-25");
+  });
+
+  it("formats response date labels in the requested timezone offset", async () => {
+    const respond = await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      startDate: "2026-07-06",
+      endDate: "2026-07-06",
+      mode: "specific",
+      utcOffset: "UTC+8",
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(mockArg(respond, 0, 0)).toBe(true);
+    const result = mockArg(respond, 0, 1) as { startDate: string; endDate: string };
+    expect(result.startDate).toBe("2026-07-06");
+    expect(result.endDate).toBe("2026-07-06");
+  });
+
+  it("keeps explicit gateway response date labels on DST-short days", async () => {
+    await withEnvAsync({ TZ: "America/New_York" }, async () => {
+      const respond = await runSessionsUsage({
+        ...BASE_USAGE_RANGE,
+        startDate: "2026-03-08",
+        endDate: "2026-03-08",
+        mode: "gateway",
+      });
+
+      expect(respond).toHaveBeenCalledTimes(1);
+      expect(mockArg(respond, 0, 0)).toBe(true);
+      const result = mockArg(respond, 0, 1) as { startDate: string; endDate: string };
+      expect(result.startDate).toBe("2026-03-08");
+      expect(result.endDate).toBe("2026-03-08");
+    });
   });
 
   it("discovers usage for requested disk-only agents not listed in config", async () => {
@@ -383,10 +454,10 @@ describe("sessions.usage", () => {
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.key).toBe("agent:opus:s-opus");
     expect(sessions[0]?.agentId).toBe("opus");
-    expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalledWith(
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "opus",
-        sessionId: "s-opus",
+        sessions: expect.arrayContaining([expect.objectContaining({ sessionId: "s-opus" })]),
       }),
     );
   });
@@ -416,11 +487,15 @@ describe("sessions.usage", () => {
       const sessions = expectSuccessfulSessionsUsage(respond);
       expect(sessions).toHaveLength(1);
       expect(sessions[0]?.key).toBe("agent:opus:main");
-      expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalledWith(
+      expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: "opus",
-          sessionFile: fs.realpathSync(sessionFile),
-          sessionId: "main",
+          sessions: expect.arrayContaining([
+            expect.objectContaining({
+              sessionFile: fs.realpathSync(sessionFile),
+              sessionId: "main",
+            }),
+          ]),
         }),
       );
     });
@@ -463,12 +538,15 @@ describe("sessions.usage", () => {
       expect(sessions).toHaveLength(1);
       expect(sessions[0]?.key).toBe("global");
       expect(sessions[0]?.agentId).toBe("opus");
-      expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalledWith(
+      expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: "opus",
-          sessionEntry,
-          sessionFile: fs.realpathSync(sessionFile),
-          sessionId: "current",
+          sessions: expect.arrayContaining([
+            expect.objectContaining({
+              sessionFile: fs.realpathSync(sessionFile),
+              sessionId: "current",
+            }),
+          ]),
         }),
       );
     });
@@ -500,12 +578,15 @@ describe("sessions.usage", () => {
       expect(sessions).toHaveLength(1);
       expect(sessions[0]?.key).toBe("agent:opus:shared");
       expect(sessions[0]?.agentId).toBe("opus");
-      expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalledWith(
+      expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: "opus",
-          sessionEntry: undefined,
-          sessionFile: fs.realpathSync(sessionFile),
-          sessionId: "shared",
+          sessions: expect.arrayContaining([
+            expect.objectContaining({
+              sessionFile: fs.realpathSync(sessionFile),
+              sessionId: "shared",
+            }),
+          ]),
         }),
       );
     });
@@ -536,16 +617,11 @@ describe("sessions.usage", () => {
       const sessions = expectSuccessfulSessionsUsage(respond);
       expect(sessions).toHaveLength(1);
       expect(sessions[0]?.key).toBe(storeKey);
-      expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalled();
+      expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalled();
       expect(
         vi
-          .mocked(loadSessionCostSummaryFromCache)
+          .mocked(loadSessionCostSummariesFromCache)
           .mock.calls.some((call) => call[0]?.agentId === "opus"),
-      ).toBe(true);
-      expect(
-        vi
-          .mocked(loadSessionCostSummaryFromCache)
-          .mock.calls.every((call) => call[0]?.refreshMode === "background"),
       ).toBe(true);
     });
   });
@@ -569,15 +645,15 @@ describe("sessions.usage", () => {
           },
         },
       });
-      vi.mocked(loadSessionCostSummaryFromCache).mockImplementation(async ({ sessionId }) => ({
-        summary: {
-          input: sessionId === "old" ? 10 : 20,
+      vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async ({ sessions }) => ({
+        summaries: sessions.map((session) => ({
+          input: session.sessionId === "old" ? 10 : 20,
           output: 0,
           cacheRead: 0,
           cacheWrite: 0,
-          totalTokens: sessionId === "old" ? 10 : 20,
-          totalCost: sessionId === "old" ? 0.01 : 0.02,
-          inputCost: sessionId === "old" ? 0.01 : 0.02,
+          totalTokens: session.sessionId === "old" ? 10 : 20,
+          totalCost: session.sessionId === "old" ? 0.01 : 0.02,
+          inputCost: session.sessionId === "old" ? 0.01 : 0.02,
           outputCost: 0,
           cacheReadCost: 0,
           cacheWriteCost: 0,
@@ -590,10 +666,10 @@ describe("sessions.usage", () => {
             toolResults: 0,
             errors: 0,
           },
-        },
+        })),
         cacheStatus: {
           status: "fresh",
-          cachedFiles: 1,
+          cachedFiles: sessions.length,
           pendingFiles: 0,
           staleFiles: 0,
         },
@@ -723,5 +799,95 @@ describe("sessions.usage", () => {
         },
       ],
     ]);
+  });
+
+  it("aggregate totals include all sessions even when limit restricts the page (#76496)", async () => {
+    // Override discoverAllSessions to return 3 sessions with distinct costs
+    vi.mocked(discoverAllSessions)
+      .mockResolvedValueOnce([
+        { sessionId: "s-a", sessionFile: "/tmp/agents/main/sessions/s-a.jsonl", mtime: 300 },
+        { sessionId: "s-b", sessionFile: "/tmp/agents/main/sessions/s-b.jsonl", mtime: 200 },
+        { sessionId: "s-c", sessionFile: "/tmp/agents/main/sessions/s-c.jsonl", mtime: 100 },
+        // Discovered because its mtime is past range start, but all of its
+        // activity got filtered out of the requested window.
+        { sessionId: "s-late", sessionFile: "/tmp/agents/main/sessions/s-late.jsonl", mtime: 50 },
+      ])
+      .mockResolvedValueOnce([]); // second agent (opus) — no extra sessions
+
+    const buildUsage = (sessionId?: string) => {
+      const emptyUsage = {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      };
+      if (sessionId === "s-late") {
+        // Range-filtered summary with no in-range entries: zero counts, no
+        // first/last activity. Must not count as an active session.
+        return emptyUsage;
+      }
+      const cost = sessionId === "s-a" ? 0.08 : sessionId === "s-b" ? 0.04 : 0.02;
+      const tokens = sessionId === "s-a" ? 15 : sessionId === "s-b" ? 10 : 5;
+      // Longest span lives on the oldest active session (s-c), which the limit
+      // hides from the page, so the aggregate must not depend on visible rows.
+      // durationMs is derived from first/last activity during summary merge.
+      const lastActivity = sessionId === "s-c" ? 90_000 : 5_000;
+      return {
+        ...emptyUsage,
+        input: tokens,
+        totalTokens: tokens,
+        totalCost: cost,
+        firstActivity: 0,
+        lastActivity,
+      };
+    };
+    vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async ({ sessions }) => {
+      return {
+        summaries: sessions.map((session) => buildUsage(session.sessionId)),
+        cacheStatus: {
+          status: "fresh",
+          cachedFiles: sessions.length,
+          pendingFiles: 0,
+          staleFiles: 0,
+        },
+      };
+    });
+
+    const respond = await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      agentScope: "all",
+      limit: 1,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(mockArg(respond, 0, 0)).toBe(true);
+    const result = mockArg(respond, 0, 1) as {
+      sessions: Array<{ key: string }>;
+      totals: { totalCost: number; totalTokens: number };
+      aggregates: { sessionCount?: number; longestSessionDurationMs?: number };
+    };
+
+    // Only the most-recent session (s-a, mtime=300) appears in the page
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].key).toContain("s-a");
+    // Both visible and hidden sessions load through the same batched per-agent
+    // cache read, so the whole cache is parsed once per agent, not once per session.
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledTimes(1);
+
+    // But aggregate totals must include all 3 sessions (0.08 + 0.04 + 0.02 = 0.14)
+    expect(result.totals.totalCost).toBeCloseTo(0.14);
+    expect(result.totals.totalTokens).toBe(30);
+    // Aggregate session stats also cover hidden rows: the longest duration
+    // belongs to s-c, which the page dropped. s-late was discovered but has no
+    // in-range activity, so it stays out of the count.
+    expect(result.aggregates.sessionCount).toBe(3);
+    expect(result.aggregates.longestSessionDurationMs).toBe(90_000);
   });
 });

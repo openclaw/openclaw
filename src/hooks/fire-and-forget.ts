@@ -1,3 +1,5 @@
+// Fire-and-forget hook helpers schedule hook work without blocking hot paths.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -20,6 +22,7 @@ type FireAndForgetHookState = {
   queue: FireAndForgetHookJob[];
 };
 
+/** Queue limits for bounded fire-and-forget hook execution. */
 export type FireAndForgetBoundedHookOptions = {
   maxConcurrency?: number;
   maxQueue?: number;
@@ -65,13 +68,15 @@ function replaceLogControlCharacters(value: string): string {
   return result;
 }
 
+/** Format hook errors as bounded single-line log messages with secrets redacted upstream. */
 export function formatHookErrorForLog(err: unknown): string {
   const formatted = replaceLogControlCharacters(formatErrorMessage(err))
     .replace(/\s+/g, " ")
     .trim();
-  return (formatted || "unknown error").slice(0, MAX_HOOK_LOG_MESSAGE_LENGTH);
+  return truncateUtf16Safe(formatted || "unknown error", MAX_HOOK_LOG_MESSAGE_LENGTH);
 }
 
+/** Run a hook promise without awaiting it, logging rejection safely. */
 export function fireAndForgetHook(
   task: Promise<unknown>,
   label: string,
@@ -92,6 +97,8 @@ function runFireAndForgetHookJob(
   const timeout =
     job.timeoutMs > 0
       ? setTimeout(() => {
+          // Timeout is informational only; the hook promise may still settle
+          // later, but the log should not double-report an eventual rejection.
           didLogTimeout = true;
           job.logger(`${job.label}: timed out after ${job.timeoutMs}ms`);
         }, job.timeoutMs)
@@ -126,6 +133,7 @@ function drainFireAndForgetHookQueue(
   }
 }
 
+/** Queue a fire-and-forget hook with bounded concurrency, queue depth, and timeout logs. */
 export function fireAndForgetBoundedHook(
   task: () => Promise<unknown>,
   label: string,

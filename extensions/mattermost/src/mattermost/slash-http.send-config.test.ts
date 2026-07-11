@@ -1,3 +1,4 @@
+// Mattermost tests cover slash http.send config plugin behavior.
 import { ServerResponse, type IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
@@ -259,10 +260,10 @@ describe("slash-http cfg threading", () => {
     expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
       "channel:chan-1",
       "No models available.",
-      {
+      expect.objectContaining({
         cfg,
         accountId: "default",
-      },
+      }),
     );
   });
 

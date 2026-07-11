@@ -1,10 +1,16 @@
+// Agents add tests cover agent creation, workspace setup, channel binding, and onboarding integration.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -80,9 +86,9 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: replaceConfigFileMock,
 }));
 
-vi.mock("../cli/plugins-install-record-commit.js", async () => ({
-  ...(await vi.importActual<typeof import("../cli/plugins-install-record-commit.js")>(
-    "../cli/plugins-install-record-commit.js",
+vi.mock("../plugins/install-record-commit.js", async () => ({
+  ...(await vi.importActual<typeof import("../plugins/install-record-commit.js")>(
+    "../plugins/install-record-commit.js",
   )),
   commitConfigWithPendingPluginInstalls: commitConfigWithPendingPluginInstallsMock,
   transformConfigWithPendingPluginInstalls: transformConfigWithPendingPluginInstallsMock,
@@ -111,6 +117,18 @@ import { agentsAddCommand, testing } from "./agents.commands.add.js";
 const runtime = createTestRuntime();
 
 describe("agents add command", () => {
+  const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-agents-add-" });
+
+  beforeAll(async () => {
+    await suiteTempDirs.setup();
+  });
+
+  afterAll(async () => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    await suiteTempDirs.cleanup();
+  });
+
   beforeEach(() => {
     readConfigFileSnapshotMock.mockClear();
     writeConfigFileMock.mockClear();
@@ -126,6 +144,14 @@ describe("agents add command", () => {
     runtime.error.mockClear();
     runtime.exit.mockClear();
   });
+
+  async function withAgentsAddStateRoot(
+    prefix: string,
+    run: (root: string) => Promise<void>,
+  ): Promise<void> {
+    const root = await suiteTempDirs.make(prefix);
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => await run(root));
+  }
 
   it("requires --workspace when flags are present", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
@@ -199,69 +225,76 @@ describe("agents add command", () => {
   });
 
   it("copies only portable auth profiles when seeding a new agent store", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-auth-copy-"));
-    try {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-copy-", async (root) => {
       const sourceAgentDir = path.join(root, "main", "agent");
       const destAgentDir = path.join(root, "work", "agent");
-      const destAuthPath = path.join(destAgentDir, "auth-profiles.json");
       await fs.mkdir(sourceAgentDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sourceAgentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: AUTH_STORE_VERSION,
-            profiles: {
-              "openai:default": {
-                type: "api_key",
-                provider: "openai",
-                key: "sk-test",
-              },
-              "github-copilot:default": {
-                type: "token",
-                provider: "github-copilot",
-                token: "gho-test",
-              },
-              "openai:oauth": {
-                type: "oauth",
-                provider: "openai",
-                access: "codex-access",
-                refresh: "codex-refresh",
-                expires: Date.now() + 60_000,
-              },
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-test",
+            },
+            "openai:backup": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-backup",
+            },
+            "github-copilot:default": {
+              type: "token",
+              provider: "github-copilot",
+              token: "gho-test",
+            },
+            "openai:oauth": {
+              type: "oauth",
+              provider: "openai",
+              access: "codex-access",
+              refresh: "codex-refresh",
+              expires: Date.now() + 60_000,
             },
           },
-          null,
-          2,
-        )}\n`,
-        "utf8",
+          order: {
+            openai: ["openai:oauth", "openai:backup", "openai:default"],
+            "github-copilot": ["github-copilot:default"],
+          },
+          lastGood: { openai: "openai:default" },
+          usageStats: { "openai:default": { lastUsed: 1_000 } },
+        },
+        sourceAgentDir,
       );
 
       const result = await testing.copyPortableAuthProfiles({
         sourceAgentDir,
-        destAuthPath,
+        destAgentDir,
       });
 
-      expect(result).toEqual({ copied: 2, skipped: 1 });
-      const copied = JSON.parse(await fs.readFile(destAuthPath, "utf8")) as {
-        profiles: Record<string, unknown>;
-      };
-      expect(Object.keys(copied.profiles).toSorted()).toEqual([
+      expect(result).toEqual({ copied: 3, skipped: 1 });
+      const copied = loadPersistedAuthProfileStore(destAgentDir);
+      expect(Object.keys(copied?.profiles ?? {}).toSorted()).toEqual([
         "github-copilot:default",
+        "openai:backup",
         "openai:default",
       ]);
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+      expect(copied?.order).toEqual({
+        openai: ["openai:backup", "openai:default"],
+        "github-copilot": ["github-copilot:default"],
+      });
+      expect(copied?.lastGood).toBeUndefined();
+      expect(copied?.usageStats).toBeUndefined();
+      expect(resolveAuthProfileOrder({ store: copied!, provider: "openai" })).toEqual([
+        "openai:backup",
+        "openai:default",
+      ]);
+    });
   });
 
   it("copies portable Codex OAuth profiles inline", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-oauth-copy-"));
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = root;
-    try {
+    await withAgentsAddStateRoot("openclaw-agents-add-oauth-copy-", async (root) => {
       const sourceAgentDir = path.join(root, "main", "agent");
       const destAgentDir = path.join(root, "work", "agent");
-      const destAuthPath = path.join(destAgentDir, "auth-profiles.json");
       const expires = Date.now() + 60_000;
       await fs.mkdir(sourceAgentDir, { recursive: true });
       saveAuthProfileStore(
@@ -283,17 +316,12 @@ describe("agents add command", () => {
 
       const result = await testing.copyPortableAuthProfiles({
         sourceAgentDir,
-        destAuthPath,
+        destAgentDir,
       });
 
       expect(result).toEqual({ copied: 1, skipped: 0 });
-      const copiedRaw = await fs.readFile(destAuthPath, "utf8");
-      expect(copiedRaw).toContain("codex-copy-access-token");
-      expect(copiedRaw).toContain("codex-copy-refresh-token");
-      const copied = JSON.parse(copiedRaw) as {
-        profiles: Record<string, Record<string, unknown>>;
-      };
-      const credential = copied.profiles["openai:oauth"];
+      const copied = loadPersistedAuthProfileStore(destAgentDir);
+      const credential = copied?.profiles["openai:oauth"];
       expect(credential).toStrictEqual({
         type: "oauth",
         provider: "openai",
@@ -302,22 +330,13 @@ describe("agents add command", () => {
         expires,
         copyToAgents: true,
       });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    });
   });
 
   it("skips unresolved OAuth profiles when seeding a new agent store", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-oauth-ref-skip-"));
-    try {
+    await withAgentsAddStateRoot("openclaw-agents-add-oauth-ref-skip-", async (root) => {
       const sourceAgentDir = path.join(root, "main", "agent");
       const destAgentDir = path.join(root, "work", "agent");
-      const destAuthPath = path.join(destAgentDir, "auth-profiles.json");
       const profileId = "openai:oauth";
       const ref = {
         source: "openclaw-credentials" as const,
@@ -325,36 +344,29 @@ describe("agents add command", () => {
         id: "0123456789abcdef0123456789abcdef",
       };
       await fs.mkdir(sourceAgentDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sourceAgentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: AUTH_STORE_VERSION,
-            profiles: {
-              [profileId]: {
-                type: "oauth",
-                provider: "openai",
-                copyToAgents: true,
-                expires: Date.now() + 60_000,
-                oauthRef: ref,
-              },
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [profileId]: {
+              type: "oauth",
+              provider: "openai",
+              copyToAgents: true,
+              expires: Date.now() + 60_000,
+              oauthRef: ref,
             },
           },
-          null,
-          2,
-        )}\n`,
-        "utf8",
+        } as never,
+        sourceAgentDir,
       );
       const result = await testing.copyPortableAuthProfiles({
         sourceAgentDir,
-        destAuthPath,
+        destAgentDir,
       });
 
       expect(result).toEqual({ copied: 0, skipped: 1 });
-      await expect(fs.stat(destAuthPath)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+      expect(loadPersistedAuthProfileStore(destAgentDir)).toBeNull();
+    });
   });
 
   it("does not claim skipped OAuth profiles stay shared from a non-main source agent", () => {

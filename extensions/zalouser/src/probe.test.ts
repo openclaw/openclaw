@@ -1,3 +1,4 @@
+// Zalouser tests cover probe plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeZalouser } from "./probe.js";
@@ -57,6 +58,23 @@ describe("probeZalouser", () => {
       ok: false,
       error: "Not authenticated",
     });
+  });
+
+  it("clears the probe timeout after auth resolves", async () => {
+    vi.useFakeTimers();
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    mockGetUserInfo.mockResolvedValueOnce({
+      userId: "123",
+      displayName: "Alice",
+    });
+
+    await expect(probeZalouser("default", 10)).resolves.toEqual({
+      ok: true,
+      user: { userId: "123", displayName: "Alice" },
+    });
+
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("caps oversized lookup timeout before scheduling", async () => {

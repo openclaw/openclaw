@@ -1,3 +1,4 @@
+// Gmail hook ops helpers run Gmail setup and watcher support commands.
 import { spawn } from "node:child_process";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -321,7 +322,9 @@ export async function runGmailService(opts: GmailRunOptions) {
 
   const renewMs = runtimeConfig.renewEveryMinutes * 60_000;
   const renewTimer = setInterval(() => {
-    void startGmailWatch(runtimeConfig);
+    void startGmailWatch(runtimeConfig).catch((err: unknown) => {
+      defaultRuntime.error(`gmail watch renew failed: ${String(err)}`);
+    });
   }, renewMs);
 
   const detachSignals = () => {

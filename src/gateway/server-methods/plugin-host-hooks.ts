@@ -1,3 +1,5 @@
+// Plugin host hook methods expose plugin UI descriptors and validate plugin
+// session action payload/result JSON against declared schemas.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -7,6 +9,7 @@ import {
   validatePluginsSessionActionParams,
   validatePluginsSessionActionResult,
   validatePluginsUiDescriptorsParams,
+  validatePluginsUiDescriptorsResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -52,13 +55,44 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const descriptors = (getActivePluginRegistry()?.controlUiDescriptors ?? []).map((entry) =>
-      Object.assign({}, entry.descriptor, {
+    const descriptors = (getActivePluginRegistry()?.controlUiDescriptors ?? []).map((entry) => {
+      const descriptor: Record<string, unknown> = {
+        id: entry.descriptor.id,
         pluginId: entry.pluginId,
         pluginName: entry.pluginName,
-      }),
-    );
-    respond(true, { ok: true, descriptors }, undefined);
+        surface: entry.descriptor.surface,
+        label: entry.descriptor.label,
+      };
+      if (entry.descriptor.description !== undefined) {
+        descriptor.description = entry.descriptor.description;
+      }
+      if (entry.descriptor.placement !== undefined) {
+        descriptor.placement = entry.descriptor.placement;
+      }
+      if (entry.descriptor.schema !== undefined) {
+        descriptor.schema = entry.descriptor.schema;
+      }
+      if (entry.descriptor.requiredScopes !== undefined) {
+        descriptor.requiredScopes = entry.descriptor.requiredScopes;
+      }
+      return descriptor;
+    });
+    const result = { ok: true, descriptors };
+    if (!validatePluginsUiDescriptorsResult(result)) {
+      log.warn("invalid plugins.uiDescriptors result", {
+        errors: validatePluginsUiDescriptorsResult.errors,
+      });
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `invalid plugins.uiDescriptors result: ${formatValidationErrors(validatePluginsUiDescriptorsResult.errors)}`,
+        ),
+      );
+      return;
+    }
+    respond(true, result, undefined);
   },
   "plugins.sessionAction": async ({ params, client, respond }) => {
     if (!validatePluginsSessionActionParams(params)) {

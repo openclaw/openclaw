@@ -1,3 +1,4 @@
+// Entry status helpers resolve display metadata for run and queue entries.
 import { resolveEmojiAndHomepage } from "./entry-metadata.js";
 import {
   evaluateRequirementsFromMetadataWithRemote,
@@ -7,7 +8,7 @@ import {
   type RequirementsMetadata,
 } from "./requirements.js";
 
-export type EntryMetadataRequirementsParams = Parameters<
+type EntryMetadataRequirementsParams = Parameters<
   typeof evaluateEntryMetadataRequirements
 >[0];
 

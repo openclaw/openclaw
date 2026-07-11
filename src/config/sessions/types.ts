@@ -1,3 +1,4 @@
+// Session store types define durable per-session metadata and merge/usage helpers.
 import crypto from "node:crypto";
 import type {
   AcpSessionRuntimeOptions,
@@ -6,7 +7,7 @@ import type {
   SessionAcpIdentityState,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -42,6 +43,13 @@ export type {
   SessionAcpMeta,
 };
 
+export type CliSessionReseedReceipt = {
+  version: 1;
+  promptHash: string;
+  localSessionId: string;
+  userTurnDisposition: "persisted" | "omitted";
+};
+
 export type CliSessionBinding = {
   sessionId: string;
   /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
@@ -50,10 +58,13 @@ export type CliSessionBinding = {
   authEpoch?: string;
   authEpochVersion?: number;
   extraSystemPromptHash?: string;
+  messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
   cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
+  /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
+  reseedReceipt?: CliSessionReseedReceipt;
 };
 
 export type SessionCompactionCheckpointReason =
@@ -108,6 +119,13 @@ export type SessionContextBudgetStatus = {
   messageCount: number;
   unwindowedMessageCount: number;
   sessionId?: string;
+};
+
+export type AmbientTranscriptWatermark = {
+  sessionId: string;
+  messageId: string;
+  timestampMs?: number;
+  updatedAt: number;
 };
 
 export type SessionPluginDebugEntry = {
@@ -200,6 +218,16 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
+export type PendingSkillSuggestion = {
+  skillName: string;
+  detectedAt: number;
+};
+
+export type RestartRecoveryRun = {
+  runId: string;
+  lifecycleGeneration: string;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -224,6 +252,23 @@ export type SessionEntry = {
   pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;
   updatedAt: number;
+  /** Opaque owner revision used to reject stale lifecycle mutations. */
+  lifecycleRevision?: string;
+  // archivedAt/pinnedAt mirror the Codex thread-management shape (state DB
+  // threads.archived_at: the boolean is always derived from the timestamp and
+  // stamped server-side). Codex serializes camelCase but in epoch SECONDS;
+  // these are epoch MS like every other session timestamp — convert at the
+  // codex plugin seam when exchanging thread metadata.
+  /** Timestamp (ms) when the session was archived from active session lists. */
+  archivedAt?: number;
+  /** Timestamp (ms) when the session was pinned for quick access. */
+  pinnedAt?: number;
+  /** Timestamp (ms) when an operator client last marked the session read. */
+  lastReadAt?: number;
+  /** Timestamp (ms) when an operator explicitly marked the session unread; cleared on read. */
+  markedUnreadAt?: number;
+  /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
+  lastActivityAt?: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
@@ -231,6 +276,11 @@ export type SessionEntry = {
   spawnedWorkspaceDir?: string;
   /** Task working directory inherited by spawned sessions and reused on later turns. */
   spawnedCwd?: string;
+  /**
+   * Managed worktree bound to this session; set with spawnedCwd at worktree
+   * creation and cleared together when a plain New Chat detaches the checkout.
+   */
+  worktree?: { id: string; branch: string; repoRoot: string };
   /** Explicit parent session linkage for dashboard-created child sessions. */
   parentSessionKey?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */
@@ -249,12 +299,18 @@ export type SessionEntry = {
   pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /** Interrupted run generations whose late lifecycle events must be ignored. */
+  restartRecoveryRuns?: RestartRecoveryRun[];
   /** Durable guard state for automatic subagent orphan recovery. */
   subagentRecovery?: SubagentRecoveryState;
   /** Quota cascade protection and state-aware failover status. */
   quotaSuspension?: QuotaSuspension;
   /** Core-owned durable goal state for this thread/session. */
   goal?: SessionGoal;
+  /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
+  pendingSkillSuggestion?: PendingSkillSuggestion;
+  /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
+  skillCaptureSignalHashes?: string[];
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
   /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
@@ -281,7 +337,29 @@ export type SessionEntry = {
   abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
-  fastMode?: boolean;
+  /**
+   * Exact isolated-cron continuation policy. Only hidden `:run:` session rows
+   * carry this while detached generated-media work may still wake the run.
+   */
+  cronRunContinuation?: {
+    lifecycleRevision: string;
+    phase: "running" | "ready" | "continuing";
+    /** True only after this row's session changes were projected to the stable cron row. */
+    basePersisted?: boolean;
+    ownerRunId?: string;
+    /** Gateway lifecycle generation that owns a continuing claim. */
+    ownerLifecycleGeneration?: string;
+    /** CLI backend whose native session must exist before media work detaches. */
+    cliExecutionProvider?: string;
+    toolsAllow?: string[];
+    toolsAllowIsDefault?: boolean;
+    cliSessionBindingFacts?: {
+      extraSystemPromptStatic?: string;
+      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+      requireExplicitMessageTarget?: boolean;
+    };
+  };
+  fastMode?: FastMode;
   verboseLevel?: string;
   traceLevel?: string;
   reasoningLevel?: string;
@@ -387,6 +465,8 @@ export type SessionEntry = {
   cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
   label?: string;
+  /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
+  category?: string;
   displayName?: string;
   channel?: string;
   groupId?: string;
@@ -396,6 +476,8 @@ export type SessionEntry = {
   origin?: SessionOrigin;
   route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
+  /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
+  ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
   lastChannel?: SessionChannelId;
   lastTo?: string;
   lastAccountId?: string;
@@ -425,6 +507,7 @@ function resolveSessionPluginLines(
   entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
   includeLine: (line: string) => boolean,
 ): string[] {
+  // Status and trace surfaces share the same plugin-owned lines but apply different filters.
   return Array.isArray(entry?.pluginDebugEntries)
     ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
         Array.isArray(pluginEntry?.lines)
@@ -455,6 +538,7 @@ export function normalizeSessionRuntimeModelFields(entry: SessionEntry): Session
   let next = entry;
 
   if (!normalizedModel) {
+    // A model without a valid provider/model pair is not durable runtime metadata.
     if (entry.model !== undefined || entry.modelProvider !== undefined) {
       next = { ...next };
       delete next.model;
@@ -557,6 +641,7 @@ export function mergeSessionEntryWithPolicy(
   };
 
   if (existing.sessionId !== sessionId) {
+    // Session id rotations should move transcript paths when they match known reset/fork shapes.
     const patchHasSessionFile = Object.hasOwn(patch, "sessionFile");
     const candidateSessionFile = patchHasSessionFile ? patch.sessionFile : existing.sessionFile;
     const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
@@ -618,12 +703,6 @@ export function resolveFreshSessionTotalTokens(
     return undefined;
   }
   return total;
-}
-
-export function isSessionTotalTokensFresh(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
-): boolean {
-  return resolveFreshSessionTotalTokens(entry) !== undefined;
 }
 
 export type GroupKeyResolution = {
@@ -692,6 +771,9 @@ export type SessionSystemPromptReport = {
     kind?: "user_request" | "room_event";
     promptChars: number;
     runtimeContextChars: number;
+    // Hook prepend/append context sent to the model but absent from the
+    // persisted transcript prompt; consumers add it on top of transcript sums.
+    modelOnlyPromptChars?: number;
   };
   injectedWorkspaceFiles: Array<{
     name: string;
@@ -720,6 +802,5 @@ export type SessionSystemPromptReport = {
   };
 };
 
-export const DEFAULT_RESET_TRIGGER = "/new";
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
 export const DEFAULT_IDLE_MINUTES = 0;

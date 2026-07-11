@@ -1,3 +1,4 @@
+// Browser tests cover server context.stop running browser plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteContext } from "./server-context.js";
 import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
@@ -18,6 +19,7 @@ vi.mock("./chrome.js", () => ({
 }));
 vi.mock("./chrome-mcp.js", () => ({
   closeChromeMcpSession: vi.fn(async () => false),
+  countChromeMcpTabs: vi.fn(async () => 0),
   ensureChromeMcpAvailable: vi.fn(async () => {}),
   listChromeMcpTabs: vi.fn(async () => []),
 }));

@@ -1,3 +1,4 @@
+// Covers update channel and npm tag normalization.
 import { describe, expect, it } from "vitest";
 import {
   channelToNpmTag,
@@ -51,9 +52,11 @@ describe("update-channels tag detection", () => {
 describe("normalizeUpdateChannel", () => {
   it.each([
     { value: "stable", expected: "stable" },
+    { value: " extended-stable ", expected: "extended-stable" },
     { value: " BETA ", expected: "beta" },
     { value: "Dev", expected: "dev" },
     { value: "", expected: null },
+    { value: "daily", expected: null },
     { value: " nightly ", expected: null },
     { value: null, expected: null },
     { value: undefined, expected: null },
@@ -68,6 +71,7 @@ describe("normalizeUpdateChannel", () => {
 describe("channelToNpmTag", () => {
   it.each([
     { channel: "stable", expected: "latest" },
+    { channel: "extended-stable", expected: "extended-stable" },
     { channel: "beta", expected: "beta" },
     { channel: "dev", expected: "dev" },
   ] satisfies Array<{ channel: UpdateChannel; expected: string }>)(
@@ -97,6 +101,15 @@ describe("resolveEffectiveUpdateChannel", () => {
         installKind: "package" as const,
       },
       expected: { channel: "beta", source: "installed-version" },
+    },
+    {
+      name: "keeps explicit extended-stable config on an installed beta version",
+      params: {
+        configChannel: "extended-stable",
+        currentVersion: "2026.5.2-beta.1",
+        installKind: "package" as const,
+      },
+      expected: { channel: "extended-stable", source: "config" },
     },
     {
       name: "uses beta git tag",
@@ -282,5 +295,14 @@ describe("resolveRegistryUpdateChannel", () => {
         currentVersion: "2026.5.2-beta.1",
       }),
     ).toBe("beta");
+  });
+
+  it("keeps explicit extended-stable config on an installed beta version", () => {
+    expect(
+      resolveRegistryUpdateChannel({
+        configChannel: "extended-stable",
+        currentVersion: "2026.5.2-beta.1",
+      }),
+    ).toBe("extended-stable");
   });
 });

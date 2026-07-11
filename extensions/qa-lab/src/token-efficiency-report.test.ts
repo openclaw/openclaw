@@ -1,9 +1,11 @@
+// Qa Lab tests cover token efficiency report plugin behavior.
 import { describe, expect, it } from "vitest";
 import type {
   RuntimeId,
   RuntimeParityCell,
   RuntimeParityResult,
   RuntimeParityToolCall,
+  RuntimeParityUsagePolicy,
 } from "./runtime-parity.js";
 import {
   buildTokenEfficiencyReport,
@@ -39,9 +41,11 @@ function makeRuntimeParity(
   scenarioId: string,
   openclaw: RuntimeParityCell,
   codex: RuntimeParityCell,
+  runtimeParityUsage?: RuntimeParityUsagePolicy,
 ): RuntimeParityResult {
   return {
     scenarioId,
+    ...(runtimeParityUsage ? { runtimeParityUsage } : {}),
     drift: "none",
     cells: { openclaw, codex },
   };
@@ -131,6 +135,115 @@ describe("token efficiency report", () => {
       "missing-live-usage openclaw live usage totalTokens=0",
       "missing-live-usage codex live usage totalTokens=0",
     ]);
+  });
+
+  it("excludes explicit non-assistant scenarios from live usage aggregates", () => {
+    const report = buildTokenEfficiencyReport({
+      summary: makeLiveSummary([
+        makeRuntimeParity(
+          "usage-applicable",
+          makeCell("openclaw", { inputTokens: 80, outputTokens: 20, totalTokens: 100 }),
+          makeCell("codex", { inputTokens: 85, outputTokens: 20, totalTokens: 105 }),
+        ),
+        makeRuntimeParity(
+          "local-fixture",
+          makeCell("openclaw", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+          makeCell("codex", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+          {
+            expectation: "not-applicable",
+            reason: "Local fixture only; no assistant turn runs.",
+          },
+        ),
+      ]),
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.rows.map((row) => row.scenarioId)).toEqual(["usage-applicable"]);
+    expect(report.aggregate.openclaw.totalTokens).toBe(100);
+    expect(report.aggregate.codex.totalTokens).toBe(105);
+    expect(report.notApplicableScenarios).toEqual([
+      {
+        scenarioId: "local-fixture",
+        reason: "Local fixture only; no assistant turn runs.",
+      },
+    ]);
+    expect(renderTokenEfficiencyMarkdownReport(report)).toContain(
+      "- local-fixture: Local fixture only; no assistant turn runs.",
+    );
+  });
+
+  it("fails live reports with only usage-not-applicable captures", () => {
+    const report = buildTokenEfficiencyReport({
+      summary: makeLiveSummary([
+        makeRuntimeParity(
+          "local-fixture",
+          makeCell("openclaw", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+          makeCell("codex", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+          {
+            expectation: "not-applicable",
+            reason: "Local fixture only; no assistant turn runs.",
+          },
+        ),
+      ]),
+    });
+
+    expect(report.status).toBe("evaluated");
+    expect(report.pass).toBe(false);
+    expect(report.rows).toEqual([]);
+    expect(report.failures).toEqual([
+      "No usage-applicable runtime parity captures were present in the suite summary.",
+    ]);
+    expect(renderTokenEfficiencyMarkdownReport(report)).toContain("- Verdict: fail");
+  });
+
+  it("fails live reports with non-integer token usage evidence", () => {
+    const report = buildTokenEfficiencyReport({
+      summary: makeLiveSummary([
+        makeRuntimeParity(
+          "fractional-live-usage",
+          makeCell("openclaw", { inputTokens: 100.5, outputTokens: 0, totalTokens: 100.5 }),
+          makeCell("codex", { inputTokens: 101, outputTokens: 0, totalTokens: 101 }),
+        ),
+      ]),
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.failures).toEqual([
+      "fractional-live-usage openclaw live usage inputTokens must be a non-negative integer",
+      "fractional-live-usage openclaw live usage totalTokens must be a non-negative integer",
+    ]);
+  });
+
+  it("fails empty live runtime summaries instead of treating them as skipped proof", () => {
+    const report = buildTokenEfficiencyReport({
+      generatedAt: "2026-05-10T00:00:00.000Z",
+      summary: makeLiveSummary([]),
+    });
+
+    expect(report.status).toBe("evaluated");
+    expect(report.pass).toBe(false);
+    expect(report.failures).toEqual([
+      "No runtime parity captures were present in the suite summary.",
+    ]);
+    expect(report.rows).toEqual([]);
+    expect(report.skipReason).toBeUndefined();
+    expect(renderTokenEfficiencyMarkdownReport(report)).toContain("- Verdict: fail");
+  });
+
+  it("keeps empty mock runtime summaries skipped as non-live estimates", () => {
+    const report = buildTokenEfficiencyReport({
+      summary: {
+        scenarios: [],
+        run: {
+          providerMode: "mock-openai",
+          runtimePair: ["openclaw", "codex"],
+        },
+      },
+    });
+
+    expect(report.status).toBe("skipped");
+    expect(report.pass).toBe(true);
+    expect(report.failures).toEqual([]);
   });
 
   it("labels mock-estimated Codex increases as regressions without failing the live gate", () => {

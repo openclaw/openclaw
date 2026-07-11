@@ -1,3 +1,4 @@
+// Fal tests cover video generation provider plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
@@ -36,9 +37,7 @@ describe("fal video generation provider", () => {
 
   function releasedJson(value: unknown) {
     return {
-      response: {
-        json: async () => value,
-      },
+      response: Response.json(value),
       release: vi.fn(async () => {}),
     };
   }
@@ -171,6 +170,42 @@ describe("fal video generation provider", () => {
     });
   });
 
+  it("parses raw fal queue result payloads with top-level video output", async () => {
+    mockFalProviderRuntime();
+    fetchGuardMock
+      .mockResolvedValueOnce(
+        releasedJson({
+          request_id: "req-raw",
+          status_url: "https://queue.fal.run/fal-ai/wan/requests/req-raw/status",
+          response_url: "https://queue.fal.run/fal-ai/wan/requests/req-raw",
+        }),
+      )
+      .mockResolvedValueOnce(releasedJson({ status: "COMPLETED" }))
+      .mockResolvedValueOnce(
+        releasedJson({
+          video: { url: "https://fal.run/files/raw-output.mp4" },
+          prompt: "A calm harbor at sunrise",
+          seed: 443600358,
+        }),
+      )
+      .mockResolvedValueOnce(releasedVideo({ contentType: "video/mp4", bytes: "mp4-bytes" }));
+
+    const provider = buildFalVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "fal",
+      model: "fal-ai/wan/v2.2-a14b/image-to-video",
+      prompt: "A calm harbor at sunrise",
+      cfg: {},
+    });
+
+    expect(result.videos[0]?.url).toBe("https://fal.run/files/raw-output.mp4");
+    expect(result.metadata).toEqual({
+      requestId: "req-raw",
+      prompt: "A calm harbor at sunrise",
+      seed: 443600358,
+    });
+  });
+
   it("returns URL-only videos when generated video downloads exceed the configured media cap", async () => {
     mockFalProviderRuntime();
     mockCompletedFalVideoJob({
@@ -217,11 +252,10 @@ describe("fal video generation provider", () => {
   it("wraps non-JSON successful fal submit responses", async () => {
     mockFalProviderRuntime();
     fetchGuardMock.mockResolvedValueOnce({
-      response: {
-        json: async () => {
-          throw new SyntaxError("Unexpected token < in JSON");
-        },
-      },
+      response: new Response("<html><body>Bad Gateway</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
       release: vi.fn(async () => {}),
     });
 

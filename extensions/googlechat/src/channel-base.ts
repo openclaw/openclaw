@@ -1,3 +1,4 @@
+// Googlechat plugin module implements channel base behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
@@ -19,7 +20,7 @@ import { googlechatSetupWizard } from "./setup-surface.js";
 
 export const GOOGLECHAT_CHANNEL_ID = "googlechat" as const;
 
-export const googlechatMeta = {
+const googlechatMeta = {
   id: GOOGLECHAT_CHANNEL_ID,
   label: "Google Chat",
   selectionLabel: "Google Chat (Chat API)",

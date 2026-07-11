@@ -1,3 +1,8 @@
+/**
+ * Tests auth profile failure messages.
+ * Verifies actionable recovery hints, transient-copy suppression, provider
+ * naming, and diagnostic cause handling.
+ */
 import { describe, expect, it, vi } from "vitest";
 
 const LOGIN_HINT_SENTINEL = "<<login-hint-for-provider>>";
@@ -18,12 +23,13 @@ const REASONS_WITH_RECOVERY: readonly FailoverReason[] = [
   "auth_permanent",
   "billing",
 ];
-const REASONS_TRANSIENT: readonly FailoverReason[] = [
+const REASONS_WITHOUT_RECOVERY: readonly FailoverReason[] = [
   "rate_limit",
   "overloaded",
   "timeout",
   "server_error",
   "model_not_found",
+  "format",
 ];
 
 describe("formatAuthProfileFailureMessage", () => {
@@ -40,7 +46,7 @@ describe("formatAuthProfileFailureMessage", () => {
     });
 
     it("omits the login command for transient cooldown reasons", () => {
-      for (const reason of REASONS_TRANSIENT) {
+      for (const reason of REASONS_WITHOUT_RECOVERY) {
         const message = formatAuthProfileFailureMessage({
           reason,
           provider: PROVIDER,
@@ -60,7 +66,11 @@ describe("formatAuthProfileFailureMessage", () => {
     });
 
     it("always mentions the provider name", () => {
-      for (const reason of [...REASONS_WITH_RECOVERY, ...REASONS_TRANSIENT, "unknown"] as const) {
+      for (const reason of [
+        ...REASONS_WITH_RECOVERY,
+        ...REASONS_WITHOUT_RECOVERY,
+        "unknown",
+      ] as const) {
         const message = formatAuthProfileFailureMessage({
           reason,
           provider: PROVIDER,

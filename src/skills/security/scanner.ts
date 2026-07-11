@@ -1,5 +1,7 @@
+// Skill security scanner inspects skill files and manifests for unsafe patterns.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { isPathInside } from "../../security/scan-paths.js";
 
@@ -274,7 +276,7 @@ function truncateEvidence(evidence: string, maxLen = 120): string {
   if (evidence.length <= maxLen) {
     return evidence;
   }
-  return `${evidence.slice(0, maxLen)}…`;
+  return `${truncateUtf16Safe(evidence, maxLen)}…`;
 }
 
 function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean {
@@ -386,7 +388,7 @@ function findSourceRuleMatch(params: {
     return null;
   }
 
-  return { line: 1, evidence: params.source.slice(0, 120) };
+  return { line: 1, evidence: truncateUtf16Safe(params.source, 120) };
 }
 
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {
@@ -768,28 +770,6 @@ async function scanFileWithCache(params: {
     findings,
   });
   return { scanned: true, findings };
-}
-
-export async function scanDirectory(
-  dirPath: string,
-  opts?: SkillScanOptions,
-): Promise<SkillScanFinding[]> {
-  const scanOptions = normalizeScanOptions(opts);
-  const { files } = await collectScannableFiles(dirPath, scanOptions);
-  const allFindings: SkillScanFinding[] = [];
-
-  for (const file of files) {
-    const scanResult = await scanFileWithCache({
-      filePath: file,
-      maxFileBytes: scanOptions.maxFileBytes,
-    });
-    if (!scanResult.scanned) {
-      continue;
-    }
-    allFindings.push(...scanResult.findings);
-  }
-
-  return allFindings;
 }
 
 export async function scanDirectoryWithSummary(

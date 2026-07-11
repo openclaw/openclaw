@@ -1,3 +1,7 @@
+/**
+ * Integration-style tests for the public Bash/process tool barrel.
+ * Exercises exec and process behavior through the shared exported tool factory.
+ */
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
@@ -230,7 +234,6 @@ vi.mock("../process/supervisor/index.js", () => {
       },
       cancel: vi.fn(),
       cancelScope: vi.fn(),
-      reconcileOrphans: vi.fn(),
       getRecord: vi.fn(),
     }),
   };
@@ -302,7 +305,6 @@ const createNotifyOnExitExecTool = (overrides: Partial<ExecToolConfig> = {}) =>
     allowBackground: true,
     backgroundMs: 0,
     notifyOnExit: true,
-    notifyOnExitEmptySuccess: true,
     sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
     ...overrides,
   });
@@ -523,12 +525,26 @@ type DisallowedElevationCase = LabeledCase & {
   expectedOutputIncludes?: string;
 };
 type NotifyNoopCase = LabeledCase & {
-  notifyOnExitEmptySuccess: boolean;
+  defaults?: Partial<ExecToolConfig>;
+  expectNotification: boolean;
 };
 const NOOP_NOTIFY_CASES: NotifyNoopCase[] = [
-  withLabel("default behavior skips no-op completion events", { notifyOnExitEmptySuccess: false }),
+  withLabel("default behavior skips no-op completion events", { expectNotification: false }),
+  withLabel("chat providers default no-op completion notifications on", {
+    defaults: { messageProvider: " Telegram " },
+    expectNotification: true,
+  }),
+  withLabel("explicit false keeps chat provider no-op completions silent", {
+    defaults: { messageProvider: "telegram", notifyOnExitEmptySuccess: false },
+    expectNotification: false,
+  }),
+  withLabel("generic providers keep no-op completions silent by default", {
+    defaults: { messageProvider: "generic" },
+    expectNotification: false,
+  }),
   withLabel("explicitly enabling no-op completion emits completion events", {
-    notifyOnExitEmptySuccess: true,
+    defaults: { notifyOnExitEmptySuccess: true },
+    expectNotification: true,
   }),
 ];
 const DISALLOWED_ELEVATION_CASES: DisallowedElevationCase[] = [
@@ -578,11 +594,11 @@ const LONG_LOG_EXPECTATION_CASES: LongLogExpectationCase[] = [
 ];
 const expectNotifyNoopEvents = (
   events: string[],
-  notifyOnExitEmptySuccess: boolean,
+  expectNotification: boolean,
   sessionId: string,
   label: string,
 ) => {
-  if (!notifyOnExitEmptySuccess) {
+  if (!expectNotification) {
     expect(events, label).toStrictEqual([]);
     return;
   }
@@ -678,13 +694,13 @@ const runLongLogExpectationCase = async ({
   expectTextContainsValues(snapshot.text, mustContain, true);
   expectTextContainsValues(snapshot.text, mustNotContain, false);
 };
-const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoopCase) => {
-  const tool = createNotifyOnExitExecTool({ notifyOnExitEmptySuccess });
+const runNotifyNoopCase = async ({ label, defaults, expectNotification }: NotifyNoopCase) => {
+  const tool = createNotifyOnExitExecTool(defaults);
 
   const { sessionId, status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
   expect(status).toBe(PROCESS_STATUS_COMPLETED);
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
-  expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, sessionId, label);
+  expectNotifyNoopEvents(events, expectNotification, sessionId, label);
 };
 
 describe("tool descriptions", () => {
@@ -1064,23 +1080,20 @@ describe("exec backgrounded onUpdate suppression", () => {
   it(
     "suppresses onUpdate after abort signal fires",
     async () => {
-      const onUpdateSpy = vi.fn();
       const abortController = new AbortController();
+      const onUpdateSpy = vi.fn(() => abortController.abort());
       // Run a command that produces output over time.
       const command = joinCommands([
         shellEcho("before-abort"),
         shortDelayCmd,
         shellEcho("after-abort"),
       ]);
-      // Abort almost immediately so the signal fires while the command
-      // is still producing output.
-      setImmediate(() => abortController.abort());
       await execTool.execute(nextCallId(), { command }, abortController.signal, onUpdateSpy);
-      const callsAtAbort = onUpdateSpy.mock.calls.length;
+      expect(onUpdateSpy).toHaveBeenCalledTimes(1);
       // Allow a tick for any straggling stdout data events.
       await waitOneTurn();
       // After abort, no new onUpdate calls should have been made.
-      expect(onUpdateSpy.mock.calls.length).toBe(callsAtAbort);
+      expect(onUpdateSpy).toHaveBeenCalledTimes(1);
     },
     isWin ? 10_000 : 5_000,
   );

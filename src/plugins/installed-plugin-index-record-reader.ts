@@ -1,9 +1,9 @@
+/** Reads installed-index records back into manifest registry records. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveDefaultPluginNpmDir, validatePluginId } from "./install-paths.js";
 import {
@@ -12,9 +12,11 @@ import {
   setInstalledPluginIndexInstallRecordsCache,
 } from "./installed-plugin-index-record-cache.js";
 import {
+  resolveInstalledPluginIndexStateDatabaseOptions,
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
+import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import { listManagedPluginNpmProjectRootsSync } from "./npm-project-roots.js";
 
 export { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
@@ -124,6 +126,9 @@ function buildRecoveredManagedNpmInstallRecordsForRoot(
       continue;
     }
     if (!stat.isDirectory()) {
+      continue;
+    }
+    if (hasRetainedManagedNpmInstallMarker(packageDir)) {
       continue;
     }
     const pluginId = resolveRecoveredManagedNpmPluginId({ packageName, packageDir });
@@ -245,26 +250,6 @@ type InstalledPluginIndexRecordRow = {
   plugins_json: string;
 };
 
-function resolveStateDatabaseOptions(
-  options: InstalledPluginIndexStoreOptions = {},
-): OpenClawStateDatabaseOptions {
-  if (options.filePath) {
-    return {
-      ...(options.env ? { env: options.env } : {}),
-      path: options.filePath,
-    };
-  }
-  if (options.stateDir) {
-    return {
-      env: {
-        ...(options.env ?? process.env),
-        OPENCLAW_STATE_DIR: options.stateDir,
-      },
-    };
-  }
-  return options.env ? { env: options.env } : {};
-}
-
 function parseJsonColumn(value: string): unknown {
   try {
     return JSON.parse(value) as unknown;
@@ -284,7 +269,9 @@ function readPersistedInstalledPluginIndexForRecords(
     return tryReadJsonSync(options.filePath);
   }
   try {
-    const database = openOpenClawStateDatabase(resolveStateDatabaseOptions(options));
+    const database = openOpenClawStateDatabase(
+      resolveInstalledPluginIndexStateDatabaseOptions(options),
+    );
     const row = database.db
       .prepare(
         `
@@ -306,6 +293,7 @@ function readPersistedInstalledPluginIndexForRecords(
   }
 }
 
+/** Reads install records from the persisted installed plugin index. */
 export async function readPersistedInstalledPluginIndexInstallRecords(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<Record<string, PluginInstallRecord> | null> {
@@ -313,6 +301,7 @@ export async function readPersistedInstalledPluginIndexInstallRecords(
   return extractPluginInstallRecordsFromPersistedInstalledPluginIndex(parsed);
 }
 
+/** Synchronously reads install records from the persisted installed plugin index. */
 export function readPersistedInstalledPluginIndexInstallRecordsSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> | null {
@@ -327,6 +316,7 @@ function resolveInstallRecordsCacheKey(options: InstalledPluginIndexStoreOptions
   ].join("\0");
 }
 
+/** Loads installed plugin records, recovering managed npm installs and caching the result. */
 export async function loadInstalledPluginIndexInstallRecords(
   params: InstalledPluginIndexStoreOptions = {},
 ): Promise<Record<string, PluginInstallRecord>> {
@@ -342,6 +332,7 @@ export async function loadInstalledPluginIndexInstallRecords(
       params,
     ),
   );
+  // A concurrent cache clear means the caller expects fresh data, so retry with the new generation.
   if (cacheGeneration !== getInstalledPluginIndexInstallRecordsCacheGeneration()) {
     return await loadInstalledPluginIndexInstallRecords(params);
   }
@@ -349,6 +340,7 @@ export async function loadInstalledPluginIndexInstallRecords(
   return cloneInstallRecords(records);
 }
 
+/** Synchronously loads installed plugin records, recovering managed npm installs and caching them. */
 export function loadInstalledPluginIndexInstallRecordsSync(
   params: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> {

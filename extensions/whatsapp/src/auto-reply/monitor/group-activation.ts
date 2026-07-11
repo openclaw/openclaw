@@ -1,9 +1,14 @@
+// Whatsapp plugin module implements group activation behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { updateSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  patchSessionEntry,
+  resolveStorePath,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveWhatsAppLegacyGroupSessionKey } from "../../group-session-key.js";
 import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
-import { loadSessionStore, resolveStorePath } from "../config.runtime.js";
 import { normalizeGroupActivation } from "./group-activation.runtime.js";
 
 function hasNamedWhatsAppAccounts(cfg: OpenClawConfig) {
@@ -27,6 +32,7 @@ function isActivationOnlyEntry(
   );
 }
 
+/** Resolves group activation for a WhatsApp conversation and backfills scoped session metadata. */
 export async function resolveGroupActivationFor(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -37,13 +43,15 @@ export async function resolveGroupActivationFor(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.agentId,
   });
-  const store = loadSessionStore(storePath);
+  const sessionScope = { storePath, agentId: params.agentId };
   const legacySessionKey = resolveWhatsAppLegacyGroupSessionKey({
     sessionKey: params.sessionKey,
     accountId: params.accountId,
   });
-  const legacyEntry = legacySessionKey ? store[legacySessionKey] : undefined;
-  const scopedEntry = store[params.sessionKey];
+  const legacyEntry = legacySessionKey
+    ? getSessionEntry({ ...sessionScope, sessionKey: legacySessionKey })
+    : undefined;
+  const scopedEntry = getSessionEntry({ ...sessionScope, sessionKey: params.sessionKey });
   const normalizedAccountId = normalizeAccountId(params.accountId);
   const ignoreScopedActivation =
     normalizedAccountId === DEFAULT_ACCOUNT_ID &&
@@ -53,15 +61,22 @@ export async function resolveGroupActivationFor(params: {
     (ignoreScopedActivation ? undefined : scopedEntry?.groupActivation) ??
     legacyEntry?.groupActivation;
   if (activation !== undefined && scopedEntry?.groupActivation === undefined) {
-    await updateSessionStore(storePath, (nextStore) => {
-      const nextScopedEntry = nextStore[params.sessionKey];
-      if (nextScopedEntry?.groupActivation !== undefined) {
-        return;
-      }
-      nextStore[params.sessionKey] = {
-        ...nextScopedEntry,
-        groupActivation: activation,
-      };
+    // Activation-only backfills must not synthesize session ids or activity.
+    // replaceEntry preserves existing scoped metadata while keeping fallback writes sparse.
+    await patchSessionEntry({
+      ...sessionScope,
+      sessionKey: params.sessionKey,
+      fallbackEntry: {} as SessionEntry,
+      replaceEntry: true,
+      update: (entry) => {
+        if (entry.groupActivation !== undefined) {
+          return null;
+        }
+        return {
+          ...entry,
+          groupActivation: activation,
+        };
+      },
     });
   }
   const requireMention = resolveWhatsAppInboundPolicy({

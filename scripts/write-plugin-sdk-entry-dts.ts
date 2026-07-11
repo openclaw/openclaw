@@ -1,3 +1,4 @@
+// Write Plugin Sdk Entry Dts script supports OpenClaw repository automation.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -43,6 +44,8 @@ const RUNTIME_SHIMS: Partial<Record<string, string>> = {
   ].join("\n"),
 };
 
+const USE_CANONICAL_DECLARATIONS = process.env.OPENCLAW_PLUGIN_SDK_CANONICAL_DTS === "1";
+
 function isBareImportSpecifier(id: string): boolean {
   if (
     id === "@openclaw/llm-core" ||
@@ -80,35 +83,46 @@ function copyFlatDeclarations(fromDir: string, toDir: string): void {
 }
 
 const distPluginSdkDir = path.join(process.cwd(), "dist/plugin-sdk");
-const flatDeclarationTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sdk-dts-"));
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 const flatDeclarationEntrypoints = shouldBuildPrivateQaEntries
   ? pluginSdkEntrypoints
   : publicPluginSdkEntrypoints;
 const flatDeclarationEntrypointSet = new Set(flatDeclarationEntrypoints);
 
-try {
-  await build({
-    clean: true,
-    config: false,
-    deps: { neverBundle: (id) => isBareImportSpecifier(id) },
-    dts: true,
-    entry: buildPluginSdkEntrySources(flatDeclarationEntrypoints),
-    failOnWarn: false,
-    fixedExtension: false,
-    format: "esm",
-    logLevel: "error",
-    outDir: flatDeclarationTempDir,
-    outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
-    platform: "node",
-    report: false,
-    tsconfig: "tsconfig.plugin-sdk.dts.json",
-  });
+if (USE_CANONICAL_DECLARATIONS) {
+  for (const entry of flatDeclarationEntrypoints) {
+    const declarationPath = path.join(distPluginSdkDir, `${entry}.d.ts`);
+    if (!fs.existsSync(declarationPath)) {
+      throw new Error(
+        `Missing canonical plugin SDK declaration: ${path.relative(process.cwd(), declarationPath)}`,
+      );
+    }
+  }
+} else {
+  const flatDeclarationTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sdk-dts-"));
+  try {
+    await build({
+      clean: true,
+      config: false,
+      deps: { neverBundle: (id) => isBareImportSpecifier(id) },
+      dts: true,
+      entry: buildPluginSdkEntrySources(flatDeclarationEntrypoints),
+      failOnWarn: false,
+      fixedExtension: false,
+      format: "esm",
+      logLevel: "error",
+      outDir: flatDeclarationTempDir,
+      outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
+      platform: "node",
+      report: false,
+      tsconfig: "tsconfig.plugin-sdk.dts.json",
+    });
 
-  removeExistingFlatDeclarations(distPluginSdkDir);
-  copyFlatDeclarations(flatDeclarationTempDir, distPluginSdkDir);
-} finally {
-  fs.rmSync(flatDeclarationTempDir, { recursive: true, force: true });
+    removeExistingFlatDeclarations(distPluginSdkDir);
+    copyFlatDeclarations(flatDeclarationTempDir, distPluginSdkDir);
+  } finally {
+    fs.rmSync(flatDeclarationTempDir, { recursive: true, force: true });
+  }
 }
 
 // The root npm package ships flat bundled declarations under `dist/plugin-sdk`.

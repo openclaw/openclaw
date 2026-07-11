@@ -1,3 +1,4 @@
+// Slack tests cover blocks plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
@@ -21,6 +22,24 @@ describe("buildSlackBlocksFallbackText", () => {
         { type: "image", image_url: "https://example.com/image.png", alt_text: "Latency chart" },
       ] as never),
     ).toBe("Latency chart");
+  });
+
+  it("uses complete data visualization text", () => {
+    expect(
+      buildSlackBlocksFallbackText([
+        {
+          type: "data_visualization",
+          title: "Revenue mix",
+          chart: {
+            type: "pie",
+            segments: [
+              { label: "Product", value: 60 },
+              { label: "Services", value: 40 },
+            ],
+          },
+        },
+      ] as never),
+    ).toBe("Revenue mix (pie chart)\n- Product: 60\n- Services: 40");
   });
 
   it("uses generic defaults for file and unknown blocks", () => {

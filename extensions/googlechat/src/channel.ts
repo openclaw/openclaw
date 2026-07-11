@@ -1,3 +1,4 @@
+// Googlechat plugin module implements channel behavior.
 import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
@@ -7,7 +8,10 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
-import { googleChatApprovalAuth } from "./approval-auth.js";
+import {
+  googleChatApprovalCapability,
+  shouldSuppressLocalGoogleChatExecApprovalPrompt,
+} from "./approval-native.js";
 import { createGoogleChatPluginBase, GOOGLECHAT_CHANNEL_ID } from "./channel-base.js";
 import {
   googlechatDirectoryAdapter,
@@ -27,6 +31,7 @@ import {
   listGoogleChatAccountIds,
   normalizeGoogleChatTarget,
   resolveGoogleChatAccount,
+  resolveGoogleChatOutboundSessionRoute,
   type ChannelMessageActionAdapter,
   type ChannelStatusIssue,
   type ResolvedGoogleChatAccount,
@@ -78,7 +83,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     ...createGoogleChatPluginBase({
       configSchema: buildChannelConfigSchema(GoogleChatConfigSchema),
     }),
-    approvalCapability: googleChatApprovalAuth,
+    approvalCapability: googleChatApprovalCapability,
     secrets: {
       secretTargetRegistryEntries,
       collectRuntimeConfigAssignments,
@@ -87,6 +92,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     messaging: {
       targetPrefixes: ["googlechat", "google-chat", "gchat"],
       normalizeTarget: normalizeGoogleChatTarget,
+      resolveOutboundSessionRoute: (params) => resolveGoogleChatOutboundSessionRoute(params),
       targetResolver: {
         looksLikeId: (raw, normalized) => {
           const value = normalized ?? raw.trim();
@@ -194,5 +200,17 @@ export const googlechatPlugin = createChatChannelPlugin({
   },
   security: googlechatSecurityAdapter,
   threading: googlechatThreadingAdapter,
-  outbound: googlechatOutboundAdapter,
+  outbound: {
+    ...googlechatOutboundAdapter,
+    base: {
+      ...googlechatOutboundAdapter.base,
+      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
+        shouldSuppressLocalGoogleChatExecApprovalPrompt({
+          cfg,
+          accountId,
+          payload,
+          hint,
+        }),
+    },
+  },
 });

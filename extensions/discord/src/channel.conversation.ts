@@ -1,3 +1,4 @@
+// Discord plugin module implements channel.conversation behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalStringifiedId,
@@ -118,7 +119,7 @@ export function resolveDiscordCommandConversation(params: {
   return conversationId ? { conversationId } : null;
 }
 
-export function resolveDiscordThreadConversationRef(params: {
+function resolveDiscordThreadConversationRef(params: {
   threadId?: string | number | null;
   threadParentId?: string | number | null;
   parentSessionKey?: string | null;

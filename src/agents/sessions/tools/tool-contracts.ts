@@ -1,3 +1,8 @@
+/**
+ * Shared built-in session tool input/detail contracts.
+ *
+ * Keeps tool factories, renderers, and callers aligned on typed payload and metadata shapes.
+ */
 import type { Edit } from "./edit-diff.js";
 import type { TruncationResult } from "./truncate.js";
 
@@ -9,6 +14,10 @@ export interface BashToolInput {
 export interface BashToolDetails {
   truncation?: TruncationResult;
   fullOutputPath?: string;
+}
+
+export function formatFullOutputFooter(path: string): string {
+  return `Full output: ${path}`;
 }
 
 export interface EditToolInput {

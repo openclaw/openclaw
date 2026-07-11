@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Validates docs MDX files for syntax and repository-specific conventions.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -91,6 +92,17 @@ function parsePositiveIntegerArg(raw, label) {
   return value;
 }
 
+function readRequiredValue(argv, index, label) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${label} requires a value`);
+  }
+  return value;
+}
+
+/**
+ * Parses docs MDX check arguments.
+ */
 export function parseArgs(argv) {
   const roots = [];
   let jsonOut = "";
@@ -99,12 +111,15 @@ export function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const part = argv[index];
     if (part === "--json-out") {
-      jsonOut = argv[index + 1] ?? "";
+      jsonOut = readRequiredValue(argv, index, "--json-out");
       index += 1;
       continue;
     }
     if (part === "--max-errors") {
-      maxErrors = parsePositiveIntegerArg(argv[index + 1], "--max-errors");
+      maxErrors = parsePositiveIntegerArg(
+        readRequiredValue(argv, index, "--max-errors"),
+        "--max-errors",
+      );
       index += 1;
       continue;
     }

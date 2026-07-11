@@ -1,3 +1,8 @@
+/**
+ * sessions_spawn built-in tool.
+ *
+ * Starts subagent or ACP-backed sessions with inherited tool policy and delivery context.
+ */
 import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import {
@@ -395,6 +400,7 @@ export function createSessionsSpawnTool(
           },
           {
             agentSessionKey: opts?.agentSessionKey,
+            requesterAgentIdOverride: opts?.requesterAgentIdOverride,
             agentChannel: opts?.agentChannel,
             agentAccountId: opts?.agentAccountId,
             agentTo: opts?.agentTo,
@@ -410,10 +416,7 @@ export function createSessionsSpawnTool(
         const childSessionKey = result.childSessionKey?.trim();
         const childRunId = isSpawnAcpAcceptedResult(result) ? result.runId?.trim() : undefined;
         const shouldTrackViaRegistry =
-          result.status === "accepted" &&
-          Boolean(childSessionKey) &&
-          Boolean(childRunId) &&
-          streamTo !== "parent";
+          result.status === "accepted" && Boolean(childSessionKey) && Boolean(childRunId);
         if (shouldTrackViaRegistry && childSessionKey && childRunId) {
           const cfg = getRuntimeConfig();
           const trackedSpawnMode = resolveTrackedSpawnMode({
@@ -445,6 +448,7 @@ export function createSessionsSpawnTool(
               requesterDisplayKey: ownership.completionRequesterDisplayKey,
               task,
               taskName,
+              requesterAgentId: opts?.requesterAgentIdOverride,
               cleanup: trackedCleanup,
               label: label || undefined,
               runTimeoutSeconds: result.runTimeoutSeconds,

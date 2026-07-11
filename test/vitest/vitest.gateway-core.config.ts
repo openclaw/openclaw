@@ -1,3 +1,4 @@
+// Vitest gateway core config wires the gateway core test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 const nonCoreGatewayTestExclude = [
@@ -18,7 +19,7 @@ const nonCoreGatewayTestExclude = [
   "src/gateway/sessions-history-http.test.ts",
 ];
 
-export function createGatewayCoreVitestConfig(env?: Record<string, string | undefined>) {
+function createGatewayCoreVitestConfig(env?: Record<string, string | undefined>) {
   return createScopedVitestConfig(["src/gateway/**/*.test.ts"], {
     dir: "src/gateway",
     env,

@@ -1,3 +1,6 @@
+/**
+ * Resolves default exec tool settings from session and config context.
+ */
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -15,12 +18,20 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModeFromPolicy,
   resolveExecModePolicy,
-  resolveExecPolicyForMode,
 } from "../infra/exec-approvals.js";
+import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
 import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 
+/** Session-scoped exec fields that may be carried across an isolated runtime boundary. */
+export type ExecSessionDefaults = Pick<
+  SessionEntry,
+  "execHost" | "execSecurity" | "execAsk" | "execNode"
+>;
+
+// Resolved exec config layers come from global config, agent config, legacy
+// session fields, and per-call overrides.
 type ResolvedExecConfig = {
   host?: ExecTarget;
   mode?: ExecMode;
@@ -29,43 +40,19 @@ type ResolvedExecConfig = {
   node?: string;
 };
 
-type ExecOverridesConfig = Omit<ResolvedExecConfig, "mode">;
+export type ExecPolicyOverrides = Omit<ResolvedExecConfig, "mode">;
 
-function hasLegacyExecPolicyOverride(exec?: ResolvedExecConfig): boolean {
-  return exec?.security !== undefined || exec?.ask !== undefined;
-}
-
+// Layering keeps the most specific mode/security/ask while preserving policy
+// bounds from approvals and sandbox availability later in resolution.
 type LayeredExecPolicy = {
   mode?: ExecMode;
   security: ExecSecurity;
   ask: ExecAsk;
 };
 
-function applyExecPolicyLayer(
-  base: LayeredExecPolicy,
-  layer?: ResolvedExecConfig,
-): LayeredExecPolicy {
-  if (!layer) {
-    return base;
-  }
-  if (layer.mode) {
-    return {
-      mode: layer.mode,
-      ...resolveExecPolicyForMode(layer.mode),
-    };
-  }
-  if (hasLegacyExecPolicyOverride(layer)) {
-    return {
-      security: layer.security ?? base.security,
-      ask: layer.ask ?? base.ask,
-    };
-  }
-  return base;
-}
-
 function applySessionLegacyExecPolicyLayer(
   base: LayeredExecPolicy,
-  sessionEntry?: SessionEntry,
+  sessionEntry?: ExecSessionDefaults,
 ): LayeredExecPolicy {
   const security = normalizeExecSecurity(sessionEntry?.execSecurity);
   const ask = normalizeExecAsk(sessionEntry?.execAsk);
@@ -78,10 +65,12 @@ function applySessionLegacyExecPolicyLayer(
   return base;
 }
 
+// Gather the shared config state once so canExecRequestNode and
+// resolveExecDefaults stay aligned on agent/global/session precedence.
 function resolveExecConfigState(params: {
   cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  execOverrides?: ExecOverridesConfig;
+  sessionEntry?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
 }): {
@@ -133,10 +122,11 @@ function resolveExecSandboxAvailability(params: {
   );
 }
 
+/** Returns whether the current exec policy allows requesting host node execution. */
 export function canExecRequestNode(params: {
   cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  execOverrides?: ExecOverridesConfig;
+  sessionEntry?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
   sandboxAvailable?: boolean;
@@ -153,10 +143,11 @@ export function canExecRequestNode(params: {
   });
 }
 
+/** Resolves effective exec host, mode, approval policy, and node availability. */
 export function resolveExecDefaults(params: {
   cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  execOverrides?: ExecOverridesConfig;
+  sessionEntry?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
   sandboxAvailable?: boolean;
@@ -211,6 +202,8 @@ export function resolveExecDefaults(params: {
     params.execOverrides,
   );
   const modePolicy = resolveExecModePolicy(layeredPolicy);
+  // Approval files are safety bounds: they can only reduce security/ask from
+  // config-derived policy, never grant a less restrictive effective mode.
   const security =
     approvalDefaults?.security !== undefined
       ? minSecurity(modePolicy.security, approvalDefaults.security)

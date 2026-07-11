@@ -1,3 +1,4 @@
+/** Reserves session-entry keys so plugin extension slots cannot collide with core session state. */
 import type { SessionEntry } from "../config/sessions/types.js";
 
 const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
@@ -12,11 +13,18 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pluginExtensionSlotKeys",
   "pluginNextTurnInjections",
   "sessionId",
+  "lifecycleRevision",
   "updatedAt",
+  "archivedAt",
+  "pinnedAt",
+  "lastReadAt",
+  "markedUnreadAt",
+  "lastActivityAt",
   "sessionFile",
   "spawnedBy",
   "spawnedWorkspaceDir",
   "spawnedCwd",
+  "worktree",
   "parentSessionKey",
   "forkedFromParent",
   "spawnDepth",
@@ -28,8 +36,12 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pluginOwnerId",
   "systemSent",
   "abortedLastRun",
+  "restartRecoveryRuns",
   "goal",
+  "pendingSkillSuggestion",
+  "skillCaptureSignalHashes",
   "sessionStartedAt",
+  "ambientTranscriptWatermarks",
   "lastInteractionAt",
   "startedAt",
   "endedAt",
@@ -39,6 +51,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "abortCutoffTimestamp",
   "chatType",
   "thinkingLevel",
+  "cronRunContinuation",
   "fastMode",
   "verboseLevel",
   "traceLevel",
@@ -108,6 +121,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "cliSessionBindings",
   "claudeCliSessionId",
   "label",
+  "category",
   "displayName",
   "channel",
   "groupId",
@@ -134,6 +148,7 @@ type ReservedSessionEntrySlotKey = Extract<
 >;
 type MissingSessionEntryReservedSlotKeys = Exclude<keyof SessionEntry, ReservedSessionEntrySlotKey>;
 type AssertNever<T extends never> = T;
+/** Compile-time guard that every SessionEntry key is excluded from plugin extension slot names. */
 export type _AssertAllSessionEntryKeysAreReserved =
   AssertNever<MissingSessionEntryReservedSlotKeys>;
 

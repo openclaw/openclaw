@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements tool behavior.
 import path from "node:path";
 import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
@@ -81,7 +82,12 @@ const WikiClaimSchema = Type.Object(
 );
 const WikiApplySchema = Type.Object(
   {
-    op: Type.Union([Type.Literal("create_synthesis"), Type.Literal("update_metadata")]),
+    op: Type.Union([
+      Type.Literal("create_synthesis"),
+      Type.Literal("update_metadata"),
+      Type.Literal("synthesis"),
+      Type.Literal("metadata"),
+    ]),
     title: Type.Optional(Type.String({ minLength: 1 })),
     body: Type.Optional(Type.String({ minLength: 1 })),
     lookup: Type.Optional(Type.String({ minLength: 1 })),
@@ -111,6 +117,7 @@ type WikiToolMemoryContext = {
 export function createWikiStatusTool(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
+  memoryContext: WikiToolMemoryContext = {},
 ): AnyAgentTool {
   return {
     name: "wiki_status",
@@ -122,6 +129,7 @@ export function createWikiStatusTool(
       await syncImportedSourcesIfNeeded(config, appConfig);
       const status = await resolveMemoryWikiStatus(config, {
         appConfig,
+        callerAgentId: memoryContext.agentId,
       });
       return {
         content: [{ type: "text", text: renderMemoryWikiStatus(status) }],

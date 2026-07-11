@@ -1,3 +1,4 @@
+// Qqbot tests cover audio plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   pcmToWav,
@@ -94,6 +95,12 @@ describe("engine/utils/audio", () => {
       expect(isVoiceAttachment({ filename: "msg.silk" })).toBe(true);
       expect(isVoiceAttachment({ filename: "msg.slk" })).toBe(true);
       expect(isVoiceAttachment({ filename: "msg.slac" })).toBe(true);
+    });
+
+    it("treats content_type case-insensitively", () => {
+      expect(isVoiceAttachment({ content_type: "Voice" })).toBe(true);
+      expect(isVoiceAttachment({ content_type: "Audio/Silk" })).toBe(true);
+      expect(isVoiceAttachment({ content_type: "Image/PNG" })).toBe(false);
     });
 
     it("rejects non-voice attachments", () => {

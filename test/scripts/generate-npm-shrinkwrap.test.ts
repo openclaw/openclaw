@@ -1,3 +1,4 @@
+// Generate Npm Shrinkwrap tests cover generate npm shrinkwrap script behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -11,10 +12,12 @@ import {
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   normalizeNpmVersionDrift,
+  packageJsonForShrinkwrap,
   packageDependencyInputsChanged,
   pnpmLockOverrideVersionForVersions,
   parsePnpmPackageKey,
   parseLockPackagePath,
+  resolvePackageDirs,
   restoreCurrentPnpmLockedPackages,
   shouldUseLegacyPeerDepsForShrinkwrap,
   shrinkwrapPackageDirsForChangedPaths,
@@ -24,6 +27,21 @@ describe("generate-npm-shrinkwrap", () => {
   function repoRelativePath(value: string): string {
     return path.relative(process.cwd(), value).replaceAll("\\", "/");
   }
+
+  it("omits workspace packages that are published beside the package", () => {
+    const normalized = packageJsonForShrinkwrap(
+      {
+        dependencies: { "@openclaw/ai": "workspace:2026.6.11", chalk: "5.6.2" },
+        devDependencies: { local: "workspace:*" },
+        peerDependencies: { host: "workspace:^1.2.3" },
+      },
+      {},
+    );
+
+    expect(normalized).not.toHaveProperty("devDependencies");
+    expect(normalized.dependencies).toEqual({ chalk: "5.6.2" });
+    expect(normalized.peerDependencies).toEqual({});
+  });
 
   it("runs npm shrinkwrap through cmd.exe for Windows npm shims", () => {
     const execPath = "C:\\nodejs\\node.exe";
@@ -54,6 +72,18 @@ describe("generate-npm-shrinkwrap", () => {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10 * 60 * 1000,
     });
+  });
+
+  it("rejects short flag package selectors before resolving shrinkwrap targets", () => {
+    expect(() => resolvePackageDirs(["--package-dir", "-h"])).toThrow(
+      "--package-dir requires a package directory.",
+    );
+    expect(() => resolvePackageDirs(["--changed", "--base", "-h"])).toThrow(
+      "--base requires a git ref.",
+    );
+    expect(() => resolvePackageDirs(["--changed", "--head", "-h"])).toThrow(
+      "--head requires a git ref.",
+    );
   });
 
   it("accepts strict npm shrinkwrap command timeout and buffer overrides", () => {
@@ -334,6 +364,7 @@ describe("generate-npm-shrinkwrap", () => {
           },
           "node_modules/zod": {
             version: "4.4.3",
+            deprecated: "Use another package",
             peer: true,
           },
           "node_modules/keeps-peer-false": {

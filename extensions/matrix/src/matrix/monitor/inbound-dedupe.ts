@@ -1,3 +1,4 @@
+// Matrix plugin module implements inbound dedupe behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -115,12 +116,21 @@ function pruneSeenEvents(params: {
   }
 }
 
-function createInboundDedupeStore(params: { env?: NodeJS.ProcessEnv; stateDir?: string }) {
-  return getMatrixRuntime().state.openKeyedStore<StoredMatrixInboundDedupeEntry>({
+export function openMatrixInboundDedupeStoreOptions(params: {
+  env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+}) {
+  return {
     namespace: INBOUND_DEDUPE_NAMESPACE,
     maxEntries: DEFAULT_MAX_ENTRIES,
     env: resolveMatrixSqliteStateEnv(params),
-  });
+  };
+}
+
+function createInboundDedupeStore(params: { env?: NodeJS.ProcessEnv; stateDir?: string }) {
+  return getMatrixRuntime().state.openKeyedStore<StoredMatrixInboundDedupeEntry>(
+    openMatrixInboundDedupeStoreOptions(params),
+  );
 }
 
 function createInboundDedupeMigrationStore(params: { env?: NodeJS.ProcessEnv; stateDir?: string }) {

@@ -1,3 +1,5 @@
+// Gateway chat display sanitizer.
+// Removes OpenClaw-only envelopes before messages are shown in UI/RPC results.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   stripInternalMetadataForDisplay,
@@ -6,9 +8,14 @@ import {
 import { extractInboundSenderLabel } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../shared/chat-envelope.js";
 
+// Gateway chat history display strips internal/user envelopes while preserving
+// sender labels for UI rows. The helpers return original object identities when
+// nothing changes so callers can avoid unnecessary snapshot churn.
 export { stripEnvelope };
 
 function extractMessageSenderLabel(entry: Record<string, unknown>): string | null {
+  // Sender labels can be explicit fields or embedded in text/envelope content.
+  // Preserve the first label found so user-origin rows keep human context.
   if (typeof entry.senderLabel === "string" && entry.senderLabel.trim()) {
     return entry.senderLabel.trim();
   }
@@ -36,17 +43,24 @@ function extractMessageSenderLabel(entry: Record<string, unknown>): string | nul
   return null;
 }
 
+// Text content blocks need role-aware stripping because user messages carry
+// inbound envelopes while assistant/tool content may carry internal metadata.
 function stripEnvelopeFromContentWithRole(
   content: unknown[],
-  stripUserEnvelope: boolean,
+  role: string,
 ): { content: unknown[]; changed: boolean } {
+  const stripUserEnvelope = role === "user";
   let changed = false;
   const next = content.map((item) => {
     if (!item || typeof item !== "object") {
       return item;
     }
     const entry = item as Record<string, unknown>;
-    if (entry.type !== "text" || typeof entry.text !== "string") {
+    const isRoleTextBlock =
+      entry.type === "text" ||
+      (role === "user" && entry.type === "input_text") ||
+      (role === "assistant" && (entry.type === "input_text" || entry.type === "output_text"));
+    if (!isRoleTextBlock || typeof entry.text !== "string") {
       return item;
     }
     const stripped = stripUserEnvelope
@@ -64,6 +78,7 @@ function stripEnvelopeFromContentWithRole(
   return { content: next, changed };
 }
 
+/** Strips OpenClaw envelope metadata from one display message without mutating it. */
 export function stripEnvelopeFromMessage(message: unknown): unknown {
   if (!message || typeof message !== "object") {
     return message;
@@ -89,7 +104,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
       changed = true;
     }
   } else if (Array.isArray(entry.content)) {
-    const updated = stripEnvelopeFromContentWithRole(entry.content, stripUserEnvelope);
+    const updated = stripEnvelopeFromContentWithRole(entry.content, role);
     if (updated.changed) {
       next.content = updated.content;
       changed = true;
@@ -107,6 +122,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   return changed ? next : message;
 }
 
+/** Strips envelope metadata from a message array, preserving the original array when unchanged. */
 export function stripEnvelopeFromMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;

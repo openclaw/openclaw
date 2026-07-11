@@ -1,27 +1,48 @@
+// skill_workshop tests cover proposal creation/revision/listing without
+// applying generated skills to the workspace.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
-let envSnapshot: ReturnType<typeof captureEnv>;
+let testState: OpenClawTestState;
 let stateDir = "";
 
 beforeEach(async () => {
-  envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  stateDir = await tempDirs.make("openclaw-skill-workshop-state-");
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  testState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-skill-workshop-state-",
+  });
+  stateDir = testState.stateDir;
 });
 
 afterEach(async () => {
-  envSnapshot.restore();
+  await testState.cleanup();
   await tempDirs.cleanup();
 });
 
 describe("skill_workshop tool", () => {
+  it("describes action selection and pending-proposal discovery in its schema", () => {
+    const tool = createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" });
+    const schema = JSON.stringify(tool.parameters);
+
+    expect(schema).toContain("create = new skill");
+    expect(schema).toContain("update = existing live skill");
+    expect(schema).toContain("revise = existing pending proposal");
+    expect(schema).toContain("not filesystem search");
+    expect(schema).toContain("when proposal_id is unknown");
+    expect(schema).toContain("returns candidates");
+    expect(schema).toContain("max 160 bytes");
+    expect(schema).toContain("shortens the proposal listing entry");
+  });
+
   it("is exposed in the OpenClaw tool set", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
     const tools = createOpenClawTools({
@@ -63,6 +84,8 @@ describe("skill_workshop tool", () => {
   });
 
   it("creates pending skill proposals without applying them", async () => {
+    // Creation writes reviewable proposal artifacts under state, not live skill
+    // files in the workspace.
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
     const tool = createSkillWorkshopTool({
       workspaceDir,
@@ -111,6 +134,19 @@ describe("skill_workshop tool", () => {
         "utf8",
       ),
     ).resolves.toContain("status: proposal");
+    await expect(
+      fs
+        .readFile(
+          path.join(
+            stateDir,
+            "skill-workshop",
+            "proposals",
+            (result.details as { id: string }).id,
+            "PROPOSAL.md",
+          ),
+        )
+        .then((buffer) => buffer.at(-1)),
+    ).resolves.toBe(0x0a);
     await expect(
       fs
         .readFile(
@@ -248,6 +284,45 @@ describe("skill_workshop tool", () => {
     expect((revisedByName.content[0] as { text: string }).text).toBe(
       `Revised skill proposal ${(result.details as { id: string }).id} (pending) for weather-planner.`,
     );
+  });
+
+  it("rejects whitespace-only proposal content while preserving raw valid markdown", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+    });
+
+    await expect(
+      tool.execute("call-blank", {
+        action: "create",
+        name: "Blank Proposal",
+        description: "Rejected blank content",
+        proposal_content: " \n\t\n ",
+      }),
+    ).rejects.toThrow("proposal_content required");
+
+    const result = await tool.execute("call-valid", {
+      action: "create",
+      name: "Raw Markdown",
+      description: "Valid content keeps trailing newline",
+      proposal_content: "# Raw Markdown\n\nKeep this terminal newline.\n",
+    });
+
+    await expect(
+      fs
+        .readFile(
+          path.join(
+            stateDir,
+            "skill-workshop",
+            "proposals",
+            (result.details as { id: string }).id,
+            "PROPOSAL.md",
+          ),
+        )
+        .then((buffer) => buffer.at(-1)),
+    ).resolves.toBe(0x0a);
   });
 
   it("applies, rejects, and quarantines proposals through the workshop service", async () => {

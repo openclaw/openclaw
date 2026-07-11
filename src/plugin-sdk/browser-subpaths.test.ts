@@ -1,3 +1,4 @@
+// Browser subpath tests cover plugin SDK browser subpath exports and lazy boundaries.
 import { describe, expect, it } from "vitest";
 import { parseBrowserHttpUrl, redactCdpUrl } from "./browser-cdp.js";
 import { resolveBrowserControlAuth } from "./browser-control-auth.js";
@@ -18,6 +19,9 @@ describe("plugin-sdk browser subpaths", () => {
     const parsed = parseBrowserHttpUrl("http://user:pass@127.0.0.1:9222/", "browser.cdpUrl");
     expect(parsed.port).toBe(9222);
     expect(redactCdpUrl(parsed.normalized)).toBe("http://127.0.0.1:9222");
+    expect(redactCdpUrl("wss://browser.example/cdp?token=browser-token&view=full")).toBe(
+      "wss://browser.example/cdp?token=***&view=full",
+    );
   });
 
   it("preserves explicit default ports and rejects explicit port zero", () => {

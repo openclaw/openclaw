@@ -1,3 +1,4 @@
+// Defines WhatsApp provider schema fragments for config parsing.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
@@ -179,6 +180,7 @@ const WhatsAppConfigObjectSchema = z
         reactions: z.boolean().optional(),
         sendMessage: z.boolean().optional(),
         polls: z.boolean().optional(),
+        calls: z.boolean().optional(),
       })
       .strict()
       .optional(),

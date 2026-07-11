@@ -1,3 +1,4 @@
+// Local Heavy Check Runtime tests cover local heavy check runtime script behavior.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -31,6 +32,9 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
   };
   if (!Object.hasOwn(overrides, "OPENCLAW_LOCAL_CHECK_MODE")) {
     delete env.OPENCLAW_LOCAL_CHECK_MODE;
+  }
+  if (!Object.hasOwn(overrides, "GITHUB_ACTIONS")) {
+    delete env.GITHUB_ACTIONS;
   }
   return env;
 }
@@ -294,6 +298,35 @@ describe("local-heavy-check-runtime", () => {
     expect(env.GOGC).toBeUndefined();
     expect(env.GOMEMLIMIT).toBeUndefined();
   });
+
+  it("uses stylish oxlint output in GitHub Actions before the command separator", () => {
+    const { args } = applyLocalOxlintPolicy(
+      ["--", "src/example.ts"],
+      makeEnv({
+        GITHUB_ACTIONS: "true",
+        OPENCLAW_LOCAL_CHECK_MODE: "full",
+      }),
+      ROOMY_HOST,
+    );
+
+    expect(args.slice(-4)).toEqual(["--format", "stylish", "--", "src/example.ts"]);
+  });
+
+  it.each(["--format", "--format=json", "-f", "-f=json", "-fjson"])(
+    "preserves an explicit oxlint format argument: %s",
+    (formatArg) => {
+      const { args } = applyLocalOxlintPolicy(
+        [formatArg],
+        makeEnv({
+          GITHUB_ACTIONS: "true",
+          OPENCLAW_LOCAL_CHECK_MODE: "full",
+        }),
+        ROOMY_HOST,
+      );
+
+      expect(args).not.toContain("stylish");
+    },
+  );
 
   it("skips the heavy-check lock for explicit oxlint file targets", () => {
     const cwd = createTempDir("openclaw-oxlint-lock-skip-");

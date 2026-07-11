@@ -1,3 +1,4 @@
+// Codex tests cover attempt timeouts plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -109,6 +110,25 @@ describe("Codex app-server attempt timeouts", () => {
     expect(resolveCodexTurnTerminalIdleTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
       MAX_TIMER_TIMEOUT_MS,
     );
+  });
+
+  it("derives the terminal idle timeout from the effective run budget", () => {
+    const overFloor = CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS + 15 * 60_000;
+    // A run budget above the 30-minute floor extends the watchdog (the #85242 fix).
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, overFloor)).toBe(overFloor);
+    // A run budget below the floor keeps the 30-minute floor (protection never shortened).
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, 10 * 60_000)).toBe(
+      CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
+    );
+    // A non-finite budget falls back to the 30-minute default.
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, Number.POSITIVE_INFINITY)).toBe(
+      CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
+    );
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+    // An explicit override still wins even when a run budget is present.
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(5 * 60_000, overFloor)).toBe(5 * 60_000);
   });
 
   it("caps gateway timeout grace", () => {

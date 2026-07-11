@@ -1,3 +1,4 @@
+// Tests shared infra error formatting and classification.
 import { describe, expect, it } from "vitest";
 import {
   collectErrorGraphCandidates,
@@ -132,6 +133,14 @@ describe("error helpers", () => {
     },
     {
       value: Object.assign(new Error("Too many requests"), { code: 429 }),
+      expected: "rate_limit",
+    },
+    {
+      value: new Error("Rate limit exceeded, timeout: 30s"),
+      expected: "rate_limit",
+    },
+    {
+      value: Object.assign(new Error("HTTP 429 Too Many Requests"), { code: "ETIMEDOUT" }),
       expected: "rate_limit",
     },
     {

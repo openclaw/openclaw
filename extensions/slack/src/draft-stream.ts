@@ -1,3 +1,4 @@
+// Slack plugin module implements draft stream behavior.
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-outbound";
@@ -22,7 +23,7 @@ type SlackDraftStream = {
   channelId: () => string | undefined;
 };
 
-export type SlackDraftStreamUpdate =
+type SlackDraftStreamUpdate =
   | string
   | {
       text: string;

@@ -12,7 +12,7 @@ Adds Cerebras model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/cerebras-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/cerebras-provider`
 
 ## Surface
 

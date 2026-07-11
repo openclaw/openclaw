@@ -1,3 +1,4 @@
+// Status helpers normalize plugin health and setup state into user-facing status summaries.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ChannelStatusAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
@@ -37,6 +38,7 @@ type RuntimeLifecycleSnapshot = {
   lastEventAt?: number | null;
   lastTransportActivityAt?: number | null;
   healthState?: string | null;
+  terminalDisconnect?: boolean | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastError?: string | null;
@@ -319,6 +321,7 @@ export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotE
       ? { lastTransportActivityAt: runtime.lastTransportActivityAt }
       : {}),
     ...(typeof runtime?.healthState === "string" ? { healthState: runtime.healthState } : {}),
+    ...(runtime?.terminalDisconnect ? { terminalDisconnect: runtime.terminalDisconnect } : {}),
     ...(extra ?? ({} as TExtra)),
   };
 }

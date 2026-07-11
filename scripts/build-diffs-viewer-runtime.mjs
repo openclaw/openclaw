@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Builds browser runtime bundles for the diffs viewer assets.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,10 +16,12 @@ const targets = {
     entry: "extensions/diffs/src/viewer-client.ts",
     output: "extensions/diffs/assets/viewer-runtime.js",
     shikiAlias: "scripts/diffs-shiki-curated.ts",
+    languagePackAvailable: false,
   },
   full: {
     entry: "extensions/diffs/src/viewer-client.ts",
     output: "extensions/diffs-language-pack/assets/viewer-runtime.js",
+    languagePackAvailable: true,
   },
 };
 
@@ -26,6 +29,9 @@ function toPosixPath(value) {
   return String(value ?? "").replaceAll("\\", "/");
 }
 
+/**
+ * Creates the esbuild plugin that neutralizes Pierre diffs' browser side-effect import.
+ */
 export function createPierreDiffsSideEffectImportPlugin() {
   return {
     name: "openclaw-diffs-pierre-side-effect-imports",
@@ -55,7 +61,10 @@ export function createPierreDiffsSideEffectImportPlugin() {
   };
 }
 
-export async function buildDiffsViewerRuntime(targetName) {
+/**
+ * Builds one configured diffs viewer runtime target.
+ */
+async function buildDiffsViewerRuntime(targetName) {
   const target = targets[targetName];
   if (!target) {
     throw new Error(
@@ -74,6 +83,7 @@ export async function buildDiffsViewerRuntime(targetName) {
     format: "esm",
     minify: true,
     define: {
+      __OPENCLAW_DIFFS_LANGUAGE_PACK__: String(target.languagePackAvailable),
       NaN: "Number.NaN",
     },
     legalComments: "none",

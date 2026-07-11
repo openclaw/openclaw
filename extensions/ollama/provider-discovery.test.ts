@@ -1,3 +1,4 @@
+// Ollama tests cover provider discovery plugin behavior.
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -102,16 +103,16 @@ describe("Ollama provider", () => {
 
   const createTagModel = (name: string) => ({ name, modified_at: "", size: 1, digest: "" });
 
-  const tagsResponse = (names: string[]) => ({
-    ok: true,
-    json: async () => ({ models: names.map((name) => createTagModel(name)) }),
-  });
+  const jsonResponse = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
 
-  const notFoundJsonResponse = () => ({
-    ok: false,
-    status: 404,
-    json: async () => ({}),
-  });
+  const tagsResponse = (names: string[]) =>
+    jsonResponse({ models: names.map((name) => createTagModel(name)) });
+
+  const notFoundJsonResponse = () => jsonResponse({}, 404);
 
   const stubTagsFetch = (names: string[] = []) => {
     const fetchMock = vi.fn(async (input: unknown) => {
@@ -149,7 +150,7 @@ describe("Ollama provider", () => {
     });
   });
 
-  it("should preserve explicit ollama baseUrl on implicit provider injection", async () => {
+  it("should preserve explicit ollama baseUrl and api on implicit provider injection", async () => {
     const fetchMock = stubTagsFetch();
 
     await withOllamaApiKey(async () => {
@@ -170,8 +171,33 @@ describe("Ollama provider", () => {
 
       expect(countFetchCallUrls(fetchMock, "/api/tags")).toBe(1);
 
-      // Native API strips /v1 suffix via resolveOllamaApiBase()
+      expect(provider?.baseUrl).toBe("http://192.168.20.14:11434/v1");
+      expect(provider?.api).toBe("openai-completions");
+    });
+  });
+
+  it("should normalize explicit native ollama baseUrl on implicit provider injection", async () => {
+    const fetchMock = stubTagsFetch();
+
+    await withOllamaApiKey(async () => {
+      const provider = await runOllamaCatalog({
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://192.168.20.14:11434/v1",
+                api: "ollama",
+                models: [],
+              },
+            },
+          },
+        },
+        env: { OLLAMA_API_KEY: "test-key" },
+      });
+
+      expect(countFetchCallUrls(fetchMock, "/api/tags")).toBe(1);
       expect(provider?.baseUrl).toBe("http://192.168.20.14:11434");
+      expect(provider?.api).toBe("ollama");
     });
   });
 
@@ -187,16 +213,10 @@ describe("Ollama provider", () => {
         const bodyText = typeof rawBody === "string" ? rawBody : "{}";
         const parsed = JSON.parse(bodyText) as { name?: string };
         if (parsed.name === "qwen3:32b") {
-          return {
-            ok: true,
-            json: async () => ({ model_info: { "qwen3.context_length": 131072 } }),
-          };
+          return jsonResponse({ model_info: { "qwen3.context_length": 131072 } });
         }
         if (parsed.name === "llama3.3:70b") {
-          return {
-            ok: true,
-            json: async () => ({ model_info: { "llama.context_length": 65536 } }),
-          };
+          return jsonResponse({ model_info: { "llama.context_length": 65536 } });
         }
       }
       return notFoundJsonResponse();
@@ -223,10 +243,7 @@ describe("Ollama provider", () => {
           return tagsResponse(["deepseek-r1:latest", "llama3.3:latest"]);
         }
         if (url.endsWith("/api/show")) {
-          return {
-            ok: true,
-            json: async () => ({ model_info: {} }),
-          };
+          return jsonResponse({ model_info: {} });
         }
         return notFoundJsonResponse();
       });
@@ -305,10 +322,7 @@ describe("Ollama provider", () => {
         return tagsResponse(["qwen3:32b"]);
       }
       if (url.endsWith("/api/show")) {
-        return {
-          ok: false,
-          status: 500,
-        };
+        return jsonResponse({}, 500);
       }
       return notFoundJsonResponse();
     });
@@ -333,15 +347,9 @@ describe("Ollama provider", () => {
     const fetchMock = vi.fn(async (input: unknown) => {
       const url = String(input);
       if (url.endsWith("/api/tags")) {
-        return {
-          ok: true,
-          json: async () => ({ models: manyModels }),
-        };
+        return jsonResponse({ models: manyModels });
       }
-      return {
-        ok: true,
-        json: async () => ({ model_info: { "llama.context_length": 65536 } }),
-      };
+      return jsonResponse({ model_info: { "llama.context_length": 65536 } });
     });
     vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
@@ -649,7 +657,7 @@ describe("Ollama provider", () => {
       });
 
       expect(provider?.apiKey).toBe("config-ollama-key");
-      expect(provider?.baseUrl).toBe("http://remote-ollama:11434");
+      expect(provider?.baseUrl).toBe("http://remote-ollama:11434/v1");
       expect(provider?.api).toBe("openai-completions");
       expect(fetchMock).not.toHaveBeenCalled();
     });

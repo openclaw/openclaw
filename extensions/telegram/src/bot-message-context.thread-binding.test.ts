@@ -1,3 +1,4 @@
+// Telegram tests cover bot message context.thread binding plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramRouteTestSessionRuntime } from "./bot-message-context.route-test-support.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
@@ -130,6 +131,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
     });
 
     expect(ctx?.ctxPayload?.SessionKey).toBe("plugin-binding:openclaw-codex-app-server:session-1");
+    expect(ctx?.ctxPayload?.GroupRequireMention).toBe(true);
   });
 
   it("keeps mention gating for normal channel binding routes", async () => {

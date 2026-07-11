@@ -1,3 +1,5 @@
+// Covers identifier-preservation instructions through single and staged
+// compaction summarization paths.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +15,7 @@ vi.mock("./sessions/index.js", async () => {
 
 const mockGenerateSummary = vi.mocked(agentSessions.generateSummary);
 type SummarizeInStagesInput = Parameters<typeof import("./compaction.js").summarizeInStages>[0];
+const MESSAGE_TIME_BASE_MS = Date.UTC(2026, 0, 1);
 
 const { buildCompactionSummarizationInstructions, summarizeInStages } =
   await import("./compaction.js");
@@ -21,7 +24,7 @@ function makeMessage(index: number, size = 1200): AgentMessage {
   return {
     role: "user",
     content: `m${index}-${"x".repeat(size)}`,
-    timestamp: index,
+    timestamp: MESSAGE_TIME_BASE_MS + index * 60_000,
   };
 }
 
@@ -49,6 +52,8 @@ describe("compaction identifier-preservation instructions", () => {
     messageCount: number,
     overrides: Partial<Omit<SummarizeInStagesInput, "messages">> = {},
   ) {
+    // Each run gets a fresh AbortSignal because summarizeInStages treats the
+    // signal as a per-request lifecycle boundary.
     await summarizeInStages({
       ...summarizeBase,
       ...overrides,
@@ -109,6 +114,14 @@ describe("compaction identifier-preservation instructions", () => {
         "Preserve all opaque identifiers exactly as written",
       );
     }
+
+    type SyntheticMergeMessage = { role: "user"; content: string; timestamp: number };
+    const mergeMessages = mockGenerateSummary.mock.calls[2]![0] as SyntheticMergeMessage[];
+    expect(mergeMessages.map((message) => message.content)).toEqual([
+      "[Chunk 1 — oldest messages [2026-01-01 00:01 — 2026-01-01 00:02 UTC]]\nsummary",
+      "[Chunk 2 — most recent messages [2026-01-01 00:03 — 2026-01-01 00:04 UTC]]\nsummary",
+    ]);
+    expect(mergeMessages[1]!.timestamp).toBe(mergeMessages[0]!.timestamp + 1);
   });
 
   it("avoids duplicate additional-focus headers in split+merge path", async () => {
@@ -129,6 +142,8 @@ describe("compaction identifier-preservation instructions", () => {
 });
 
 function extractSummaryInstructions(call: unknown[] | undefined): string {
+  // generateSummary has compatibility parameters; scan from the tail so the
+  // instruction argument is found across old and new call shapes.
   if (!call) {
     return "";
   }
@@ -156,6 +171,8 @@ describe("buildCompactionSummarizationInstructions", () => {
   });
 
   it("appends custom instructions in a stable format", () => {
+    // Stable formatting matters because staged merge prompts append this block
+    // again if duplicate headers are not guarded.
     const result = buildCompactionSummarizationInstructions("Keep deployment details.");
     expect(result).toContain("Preserve all opaque identifiers exactly as written");
     expect(result).toContain("Additional focus:");

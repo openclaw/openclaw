@@ -1,3 +1,4 @@
+// Tests approval command behavior for pending tool and execution requests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -440,7 +441,7 @@ describe("handleApproveCommand", () => {
 
   function createTelegramApproveCfg(
     execApprovals: {
-      enabled: true;
+      enabled: boolean;
       approvers: string[];
       target: "dm";
     } | null = { enabled: true, approvers: ["123"], target: "dm" },
@@ -541,6 +542,28 @@ describe("handleApproveCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
     expectApprovalResolverCall({ method: "exec.approval.resolve", id: "abc12345" });
+  });
+
+  it("accepts forwarded Telegram plugin approvals from approvers when native delivery is disabled", async () => {
+    const params = buildApproveParams(
+      "/approve plugin:abc12345 allow-once",
+      createTelegramApproveCfg({ enabled: false, approvers: ["123"], target: "dm" }),
+      {
+        Provider: "telegram",
+        Surface: "telegram",
+        SenderId: "123",
+      },
+    );
+    params.command.isAuthorizedSender = false;
+    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
+
+    const result = await handleApproveCommand(params, true);
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Approval allow-once submitted");
+    expectApprovalResolverCall({
+      method: "plugin.approval.resolve",
+      id: "plugin:abc12345",
+    });
   });
 
   it("honors the configured default account for omitted-account /approve auth", async () => {

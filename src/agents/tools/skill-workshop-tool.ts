@@ -1,3 +1,8 @@
+/**
+ * Skill Workshop built-in tool.
+ *
+ * Exposes proposal create/update/review/apply actions while the workshop service owns persistence.
+ */
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -50,7 +55,7 @@ const SkillWorkshopToolSchema = Type.Object(
   {
     action: stringEnum(SKILL_WORKSHOP_ACTIONS, {
       description:
-        "create for a new skill proposal, update for an existing skill, revise for a pending proposal, list or inspect proposals for proposal discovery, apply/reject/quarantine for explicit proposal lifecycle actions.",
+        "create = new skill; update = existing live skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); apply/reject/quarantine are explicit lifecycle actions.",
     }),
     proposal_id: Type.Optional(
       Type.String({
@@ -61,7 +66,7 @@ const SkillWorkshopToolSchema = Type.Object(
     name: Type.Optional(
       Type.String({
         description:
-          "Skill/proposal name. Required for action=create; optional resolver for action=inspect or action=revise when proposal_id is unknown.",
+          "Skill/proposal name. Required for create; for inspect/revise when proposal_id is unknown, resolves a pending proposal or returns candidates.",
       }),
     ),
     query: Type.Optional(Type.String({ description: "Optional query for action=list." })),
@@ -81,7 +86,7 @@ const SkillWorkshopToolSchema = Type.Object(
       Type.String({
         maxLength: 160,
         description:
-          "Skill description for action=create, action=update, or action=revise. Keep it concise; max 160 bytes.",
+          "Skill description for create/update/revise; max 160 bytes. On update, concise text shortens the proposal listing entry.",
       }),
     ),
     skill_name: Type.Optional(
@@ -119,13 +124,14 @@ const SkillWorkshopToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export type SkillWorkshopToolOptions = {
+type SkillWorkshopToolOptions = {
   workspaceDir: string;
   config?: OpenClawConfig;
   agentId?: string;
   origin?: SkillProposalOrigin;
 };
 
+/** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
 export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
   return {
     label: "Skill Workshop",
@@ -164,6 +170,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       if (action === "apply") {
         const applied = await applySkillProposal({
           workspaceDir: options.workspaceDir,
+          config: options.config,
           proposalId: readLifecycleProposalIdParam(params),
           reason: readStringParam(params, "reason"),
         });
@@ -198,7 +205,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       const proposalContent = readStringParam(params, "proposal_content", {
         required: true,
         label: "proposal_content",
+        trim: false,
       });
+      if (proposalContent.trim().length === 0) {
+        throw new ToolInputError("proposal_content required");
+      }
       const supportFiles = readSupportFilesParam(params);
       const goal = readStringParam(params, "goal");
       const evidence = readStringParam(params, "evidence");
@@ -373,6 +384,8 @@ function listProposalEntries(params: {
   const query = params.query?.trim().toLowerCase();
   const normalizedQuery = query ? normalizeProposalSearchText(query) : undefined;
   const limit = Math.min(Math.max(params.limit, 1), 50);
+  // Pending proposals sort first so the model sees actionable work before
+  // historical applied/rejected records.
   return params.proposals
     .filter((proposal) => !params.status || proposal.status === params.status)
     .filter((proposal) => {
@@ -386,9 +399,6 @@ function listProposalEntries(params: {
         proposal.skillName,
         proposal.skillKey,
       ].some((value) => {
-        if (typeof value !== "string") {
-          return false;
-        }
         const lower = value.toLowerCase();
         return (
           lower.includes(query) ||

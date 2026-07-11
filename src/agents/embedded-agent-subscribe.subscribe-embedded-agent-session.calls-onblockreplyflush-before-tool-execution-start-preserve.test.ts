@@ -1,3 +1,5 @@
+// Block-reply flush ordering tests ensure text buffered before tool execution
+// is delivered before the tool lifecycle event advances the turn.
 import { describe, expect, it, vi } from "vitest";
 import {
   createStubSessionHarness,
@@ -6,6 +8,7 @@ import {
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 
 function firstBlockReplyText(onBlockReply: ReturnType<typeof vi.fn>): string | undefined {
+  // Flush tests only care about the first emitted user-visible chunk.
   const firstCall = onBlockReply.mock.calls[0];
   if (!firstCall) {
     throw new Error("expected onBlockReply to be called");
@@ -96,6 +99,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("waits for async block replies before tool_execution_start flush", async () => {
+    // The flush callback should observe delivered block replies, not merely
+    // scheduled async promises.
     const { session, emit } = createStubSessionHarness();
     const delivered: string[] = [];
     const flushSnapshots: string[][] = [];
@@ -206,5 +211,104 @@ describe("subscribeEmbeddedAgentSession", () => {
       expect(delivered).toEqual(["Final reply before lifecycle end."]);
       expect(flushSnapshots).toEqual([["Final reply before lifecycle end."]]);
     });
+  });
+
+  it("repairs final usage before persistence when delivery work is queued", async () => {
+    const { session, emit } = createStubSessionHarness();
+    let releaseFirstReply: (() => void) | undefined;
+    const firstReplyPending = new Promise<void>((resolve) => {
+      releaseFirstReply = resolve;
+    });
+    let blockReplyCount = 0;
+
+    subscribeEmbeddedAgentSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
+      runId: "run-queued-usage-persistence",
+      onBlockReply: () => {
+        blockReplyCount += 1;
+        return blockReplyCount === 1 ? firstReplyPending : undefined;
+      },
+      onBlockReplyFlush: vi.fn(),
+      blockReplyBreak: "message_end",
+    });
+
+    emit({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "First reply." }],
+        usage: {
+          input: 3,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 5,
+        },
+      },
+    });
+
+    emit({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        api: "openai-completions",
+        content: [{ type: "text", text: "Second reply." }],
+      },
+      assistantMessageEvent: {
+        type: "text_end",
+        usage: {
+          input: 7,
+          output: 5,
+          cacheRead: 0,
+          cacheWrite: 0,
+          reasoningTokens: 2,
+          totalTokens: 12,
+        },
+      },
+    });
+    const finalMessage = {
+      role: "assistant",
+      api: "openai-completions",
+      content: [{ type: "text", text: "Second reply." }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+      },
+    };
+    emit({ type: "message_end", message: finalMessage });
+
+    // AgentSession persists immediately after notifying listeners, so this
+    // mutation must happen before the queued message_end handler executes.
+    expect(finalMessage.usage).toMatchObject({
+      input: 7,
+      output: 5,
+      reasoningTokens: 2,
+      totalTokens: 12,
+    });
+
+    releaseFirstReply?.();
+    await vi.waitFor(() => {
+      expect(blockReplyCount).toBeGreaterThanOrEqual(2);
+    });
+
+    const transcriptOnlyMessage = {
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: "Already delivered." }],
+    };
+    emit({ type: "message_end", message: transcriptOnlyMessage });
+    expect(transcriptOnlyMessage).not.toHaveProperty("usage");
   });
 });

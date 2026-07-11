@@ -1,3 +1,8 @@
+/**
+ * Resolves model-provider credentials from config, env, auth profiles, and
+ * provider synthetic auth hooks. This module is the shared auth boundary for
+ * runtime dispatch, setup checks, and model metadata reporting.
+ */
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -5,7 +10,12 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../cli/command-format.js";
-import { getRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  hashRuntimeConfigValue,
+  selectApplicableRuntimeConfig,
+} from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
@@ -21,6 +31,7 @@ import {
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { resolveRuntimeSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveDefaultAgentDir } from "./agent-scope-config.js";
 import {
@@ -35,6 +46,7 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
+import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import * as cliCredentials from "./cli-credentials.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
@@ -46,10 +58,16 @@ import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
+  isSecretRefHeaderValueMarker,
   NON_ENV_SECRETREF_MARKER,
+  SECRETREF_ENV_HEADER_MARKER_PREFIX,
 } from "./model-auth-markers.js";
 import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
+import {
+  attachModelProviderRequestTransport,
+  getModelProviderRequestTransport,
+} from "./provider-request-config.js";
 
 export {
   ensureAuthProfileStore,
@@ -68,6 +86,26 @@ export {
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
+function sentinelizeSecretRefProfileApiKey(params: {
+  apiKey: string;
+  enabled?: boolean;
+  profileId: string;
+  provider: string;
+  store: AuthProfileStore;
+}): string {
+  const credential = params.store.profiles[params.profileId];
+  const ref =
+    credential?.type === "api_key"
+      ? coerceSecretRef(credential.keyRef)
+      : credential?.type === "token"
+        ? coerceSecretRef(credential.tokenRef)
+        : null;
+  return ref && params.enabled
+    ? mintSecretSentinel(params.apiKey, { label: `model-auth:${params.provider}` })
+    : params.apiKey;
+}
+
+/** Precomputed provider-auth lookup tables reused during one runtime turn. */
 export type RuntimeProviderAuthLookup = {
   envApiKey: Pick<
     EnvApiKeyLookupOptions,
@@ -145,6 +183,7 @@ function resolveProviderConfig(
   );
 }
 
+/** Builds stable env/synthetic auth lookup data for repeated provider checks. */
 export function createRuntimeProviderAuthLookup(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -213,6 +252,7 @@ function resolveRuntimeEnvApiKeyLookupOptions(params: {
   };
 }
 
+/** Reads a literal or env-secret marker for a custom provider entry. */
 export function getCustomProviderApiKey(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -254,10 +294,12 @@ function canResolveEnvSecretRefInReadOnlyPath(params: {
   return !allowlist || allowlist.includes(params.id);
 }
 
+/** Resolves custom provider API keys that are usable without mutating secret stores. */
 export function resolveUsableCustomProviderApiKey(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   env?: NodeJS.ProcessEnv;
+  secretSentinels?: boolean;
 }): ResolvedCustomProviderApiKey | null {
   const customProviderConfig = resolveProviderConfig(params.cfg, params.provider);
   const apiKeyRef = coerceSecretRef(customProviderConfig?.apiKey);
@@ -284,7 +326,9 @@ export function resolveUsableCustomProviderApiKey(params: {
     }
     const applied = new Set(getShellEnvAppliedKeys());
     return {
-      apiKey: envValue,
+      apiKey: params.secretSentinels
+        ? mintSecretSentinel(envValue, { label: `model-auth:${params.provider}` })
+        : envValue,
       source: resolveEnvSourceLabel({
         applied,
         envVars: [envVarName],
@@ -330,6 +374,7 @@ export function resolveUsableCustomProviderApiKey(params: {
   return null;
 }
 
+/** True when a custom provider has a literal/env/local key available now. */
 export function hasUsableCustomProviderApiKey(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -338,6 +383,7 @@ export function hasUsableCustomProviderApiKey(
   return Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env }));
 }
 
+/** True when explicit provider config should outrank profile/environment auth. */
 export function shouldPreferExplicitConfigApiKeyAuth(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -451,6 +497,7 @@ function isBearerProfileCredential(credential: AuthProfileCredential): boolean {
   return credential.type === "api_key" || credential.type === "token";
 }
 
+/** True when a bearer auth profile can safely satisfy a provider-entry apiKey reference. */
 export function canUseProfileAsProviderEntryApiKey(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -478,6 +525,7 @@ export function canUseProfileAsProviderEntryApiKey(params: {
   });
 }
 
+/** Classifies a provider entry apiKey as literal/profile/marker before resolving secrets. */
 export function resolveProviderEntryApiKeyProfileReference(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -526,11 +574,13 @@ export function resolveProviderEntryApiKeyProfileReference(params: {
   };
 }
 
+/** Resolves a provider-entry apiKey profile reference into runtime auth when possible. */
 export async function resolveProviderEntryApiKeyBinding(params: {
   cfg?: OpenClawConfig;
   provider: string;
   store: AuthProfileStore;
   agentDir?: string;
+  secretSentinels?: boolean;
 }): Promise<ProviderEntryApiKeyBindingResolution> {
   const reference = resolveProviderEntryApiKeyProfileReference(params);
   if (reference.kind === "none" || reference.kind === "marker") {
@@ -556,7 +606,13 @@ export async function resolveProviderEntryApiKeyBinding(params: {
     return {
       kind: "profile-resolved",
       auth: {
-        apiKey: resolved.apiKey,
+        apiKey: sentinelizeSecretRefProfileApiKey({
+          apiKey: resolved.apiKey,
+          enabled: params.secretSentinels,
+          profileId: resolvedProfileId,
+          provider: params.provider,
+          store: params.store,
+        }),
         profileId: resolvedProfileId,
         source: `profile:${resolvedProfileId}`,
         mode: resolved.profileType ? profileTypeToAuthMode(resolved.profileType) : reference.mode,
@@ -640,6 +696,134 @@ function isManagedSecretRefApiKeyMarker(apiKey: string | undefined): boolean {
   return apiKey?.trim() === NON_ENV_SECRETREF_MARKER;
 }
 
+function hasSecretRefProviderApiKey(cfg: OpenClawConfig | undefined, provider: string): boolean {
+  const apiKey = resolveProviderConfig(cfg, provider)?.apiKey;
+  if (coerceSecretRef(apiKey)) {
+    return true;
+  }
+  return (
+    typeof apiKey === "string" &&
+    (isManagedSecretRefApiKeyMarker(apiKey) ||
+      apiKey.trim().startsWith(SECRETREF_ENV_HEADER_MARKER_PREFIX))
+  );
+}
+
+function providerConfigMatchesRuntimeSnapshot(params: {
+  inputConfig: OpenClawConfig | undefined;
+  runtimeConfig: OpenClawConfig | null;
+  provider: string;
+}): boolean {
+  const inputProvider = resolveProviderConfig(params.inputConfig, params.provider);
+  const runtimeProvider = resolveProviderConfig(params.runtimeConfig ?? undefined, params.provider);
+  if (!inputProvider || !runtimeProvider) {
+    return false;
+  }
+  const toComparableConfig = (providerConfig: ModelProviderConfig): OpenClawConfig => ({
+    models: { providers: { [params.provider]: providerConfig } },
+  });
+  return (
+    hashRuntimeConfigValue(toComparableConfig(inputProvider)) ===
+    hashRuntimeConfigValue(toComparableConfig(runtimeProvider))
+  );
+}
+
+function sentinelizeConfigSecretRefEnvApiKey(params: {
+  apiKey: string;
+  source: string;
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  enabled?: boolean;
+}): string {
+  if (!params.enabled) {
+    return params.apiKey;
+  }
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  const sourceConfig = providerConfigMatchesRuntimeSnapshot({
+    inputConfig: params.cfg,
+    runtimeConfig,
+    provider: params.provider,
+  })
+    ? (runtimeSourceConfig ?? params.cfg)
+    : params.cfg;
+  const configured = resolveProviderConfig(sourceConfig, params.provider)?.apiKey;
+  const ref = coerceSecretRef(configured);
+  const envId =
+    ref?.source === "env"
+      ? ref.id
+      : typeof configured === "string" &&
+          configured.trim().startsWith(SECRETREF_ENV_HEADER_MARKER_PREFIX)
+        ? configured.trim().slice(SECRETREF_ENV_HEADER_MARKER_PREFIX.length)
+        : undefined;
+  return envId && params.source.includes(envId)
+    ? mintSecretSentinel(params.apiKey, { label: `model-auth:${params.provider}` })
+    : params.apiKey;
+}
+
+function resolveLiteralProviderConfigApiKeyAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): ResolvedProviderAuth | undefined {
+  const apiKey = normalizeOptionalSecretInput(
+    resolveProviderConfig(params.cfg, params.provider)?.apiKey,
+  );
+  if (!apiKey || isNonSecretApiKeyMarker(apiKey)) {
+    return undefined;
+  }
+  return {
+    apiKey,
+    source: `models.providers.${params.provider}`,
+    mode: "api-key",
+  };
+}
+
+function resolveManagedSecretRefRuntimeProviderAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  secretSentinels?: boolean;
+}): ResolvedProviderAuth | undefined {
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  if (params.cfg && params.cfg !== runtimeConfig && !runtimeSourceConfig) {
+    return undefined;
+  }
+  const applicableConfig = selectApplicableRuntimeConfig({
+    inputConfig: params.cfg,
+    runtimeConfig,
+    runtimeSourceConfig,
+  });
+  const usesRuntimeProvider =
+    applicableConfig === runtimeConfig ||
+    providerConfigMatchesRuntimeSnapshot({
+      inputConfig: params.cfg,
+      runtimeConfig,
+      provider: params.provider,
+    });
+  const sourceConfig = usesRuntimeProvider ? (runtimeSourceConfig ?? undefined) : params.cfg;
+  if (!hasSecretRefProviderApiKey(sourceConfig, params.provider)) {
+    return undefined;
+  }
+  if (!runtimeConfig || !usesRuntimeProvider) {
+    return undefined;
+  }
+  const resolved = resolveLiteralProviderConfigApiKeyAuth({
+    cfg: runtimeConfig,
+    provider: params.provider,
+  });
+  if (!resolved?.apiKey) {
+    return undefined;
+  }
+  return {
+    ...resolved,
+    apiKey: params.secretSentinels
+      ? mintSecretSentinel(resolved.apiKey, {
+          label: `model-auth:${params.provider}`,
+        })
+      : resolved.apiKey,
+  };
+}
+
+/** True when a custom local provider can use a synthetic no-auth placeholder. */
 export function hasSyntheticLocalProviderAuthConfig(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -705,6 +889,7 @@ function shouldResolvePluginSyntheticAuth(params: {
   return listProviderSyntheticAuthRefs(params).some((ref) => eligibleRefs.has(ref));
 }
 
+/** Fast auth-availability check for runtime provider/model selection. */
 export function hasRuntimeAvailableProviderAuth(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -740,6 +925,9 @@ export function hasRuntimeAvailableProviderAuth(params: {
   if (resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider, env: params.env })) {
     return true;
   }
+  if (resolveManagedSecretRefRuntimeProviderAuth({ cfg: params.cfg, provider })) {
+    return true;
+  }
   if (hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })) {
     return true;
   }
@@ -766,7 +954,16 @@ function resolveProviderSyntheticRuntimeAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelApi?: string;
+  secretSentinels?: boolean;
 }): SyntheticProviderAuthResolution {
+  const runtimeAuth = resolveManagedSecretRefRuntimeProviderAuth(params);
+  if (runtimeAuth) {
+    return { auth: runtimeAuth };
+  }
+  if (hasSecretRefProviderApiKey(params.cfg, params.provider)) {
+    return { blockedOnManagedSecretRef: true };
+  }
+
   const resolveFromConfig = (
     config: OpenClawConfig | undefined,
   ): ResolvedProviderAuth | undefined => {
@@ -798,13 +995,20 @@ function resolveProviderSyntheticRuntimeAuth(params: {
     return { blockedOnManagedSecretRef: true };
   }
 
-  const runtimeAuth = resolveFromConfig(runtimeConfig);
-  const runtimeApiKey = runtimeAuth?.apiKey;
-  if (!runtimeAuth || !runtimeApiKey || isNonSecretApiKeyMarker(runtimeApiKey)) {
+  const runtimePluginAuth = resolveFromConfig(runtimeConfig);
+  const runtimeApiKey = runtimePluginAuth?.apiKey;
+  if (!runtimePluginAuth || !runtimeApiKey || isNonSecretApiKeyMarker(runtimeApiKey)) {
     return { blockedOnManagedSecretRef: true };
   }
   return {
-    auth: runtimeAuth,
+    auth: {
+      ...runtimePluginAuth,
+      apiKey: params.secretSentinels
+        ? mintSecretSentinel(runtimeApiKey, {
+            label: `model-auth:${params.provider}`,
+          })
+        : runtimeApiKey,
+    },
   };
 }
 
@@ -812,6 +1016,7 @@ function resolveSyntheticLocalProviderAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelApi?: string;
+  secretSentinels?: boolean;
 }): ResolvedProviderAuth | null {
   const syntheticProviderAuth = resolveProviderSyntheticRuntimeAuth(params);
   if (syntheticProviderAuth.auth) {
@@ -919,6 +1124,7 @@ function resolveScopedAuthProfileStore(params: {
   });
 }
 
+/** Resolves the credential that should be used for one provider request. */
 export async function resolveApiKeyForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -933,6 +1139,8 @@ export async function resolveApiKeyForProvider(params: {
   forceRefresh?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
   modelApi?: string;
+  /** Keep SecretRef-backed model credentials opaque until a sentinel-aware transport boundary. */
+  secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
   const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
@@ -952,6 +1160,15 @@ export async function resolveApiKeyForProvider(params: {
         profileId,
         preferredProfile,
       });
+    const configuredProfileType = store.profiles[profileId]?.type;
+    if (configuredProfileType) {
+      assertAuthModeAllowedForModel({
+        provider,
+        modelApi: params.modelApi,
+        profileId,
+        mode: profileTypeToAuthMode(configuredProfileType),
+      });
+    }
     const resolved = await resolveApiKeyForProfile({
       cfg,
       store,
@@ -965,7 +1182,13 @@ export async function resolveApiKeyForProvider(params: {
     const resolvedProfileId = resolved.profileId ?? profileId;
     const mode = resolved.profileType ?? store.profiles[resolvedProfileId]?.type;
     const result: ResolvedProviderAuth = {
-      apiKey: resolved.apiKey,
+      apiKey: sentinelizeSecretRefProfileApiKey({
+        apiKey: resolved.apiKey,
+        enabled: params.secretSentinels,
+        profileId: resolvedProfileId,
+        provider,
+        store,
+      }),
       profileId: resolvedProfileId,
       source: `profile:${resolvedProfileId}`,
       mode: mode ? profileTypeToAuthMode(mode) : "api-key",
@@ -1050,7 +1273,13 @@ export async function resolveApiKeyForProvider(params: {
         return resolveApiKeyForProvider({ ...params, credentialPrecedence: "profile-first" });
       }
       return {
-        apiKey: envResolved.apiKey,
+        apiKey: sentinelizeConfigSecretRefEnvApiKey({
+          apiKey: envResolved.apiKey,
+          source: envResolved.source,
+          cfg,
+          provider,
+          enabled: params.secretSentinels,
+        }),
         source: envResolved.source,
         mode: resolvedMode,
       };
@@ -1071,6 +1300,7 @@ export async function resolveApiKeyForProvider(params: {
     provider,
     store: scopedStore,
     agentDir,
+    secretSentinels: params.secretSentinels,
   });
   if (providerEntryBinding.kind === "profile-resolved") {
     assertAuthModeAllowedForModel({
@@ -1104,7 +1334,19 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   if (shouldPreferExplicitConfigApiKeyAuth(cfg, provider)) {
-    const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+    const runtimeCustomKey = resolveManagedSecretRefRuntimeProviderAuth({
+      cfg,
+      provider,
+      secretSentinels: params.secretSentinels,
+    });
+    if (runtimeCustomKey) {
+      return runtimeCustomKey;
+    }
+    const customKey = resolveUsableCustomProviderApiKey({
+      cfg,
+      provider,
+      secretSentinels: params.secretSentinels,
+    });
     if (customKey) {
       return {
         apiKey: customKey.apiKey,
@@ -1114,7 +1356,11 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
   const providerConfig = resolveProviderConfig(cfg, provider);
-  const configuredLocalKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+  const configuredLocalKey = resolveUsableCustomProviderApiKey({
+    cfg,
+    provider,
+    secretSentinels: params.secretSentinels,
+  });
   if (configuredLocalKey && isNonSecretApiKeyMarker(configuredLocalKey.apiKey)) {
     return {
       apiKey: configuredLocalKey.apiKey,
@@ -1145,7 +1391,9 @@ export async function resolveApiKeyForProvider(params: {
     preferredProfile,
   });
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
+  let refreshFailure: OAuthRefreshFailureError | undefined;
   for (const candidate of order) {
+    let candidateMode: ResolvedProviderAuth["mode"] | undefined;
     try {
       const awsSdkProfileAuth = resolveConfiguredAwsSdkProfileAuth({
         cfg,
@@ -1154,6 +1402,18 @@ export async function resolveApiKeyForProvider(params: {
       });
       if (awsSdkProfileAuth) {
         return awsSdkProfileAuth;
+      }
+      const candidateType = store.profiles[candidate]?.type;
+      candidateMode = candidateType ? profileTypeToAuthMode(candidateType) : undefined;
+      if (
+        candidateMode &&
+        !isAuthModeAllowedForModel({
+          provider,
+          modelApi: params.modelApi,
+          mode: candidateMode,
+        })
+      ) {
+        continue;
       }
       const resolved = await resolveApiKeyForProfile({
         cfg,
@@ -1169,7 +1429,13 @@ export async function resolveApiKeyForProvider(params: {
           ? profileTypeToAuthMode(mode)
           : "api-key";
         const result: ResolvedProviderAuth = {
-          apiKey: resolved.apiKey,
+          apiKey: sentinelizeSecretRefProfileApiKey({
+            apiKey: resolved.apiKey,
+            enabled: params.secretSentinels,
+            profileId: resolvedProfileId,
+            provider,
+            store,
+          }),
           profileId: resolvedProfileId,
           source: `profile:${resolvedProfileId}`,
           mode: resolvedMode,
@@ -1197,6 +1463,18 @@ export async function resolveApiKeyForProvider(params: {
         return result;
       }
     } catch (err) {
+      if (
+        !refreshFailure &&
+        err instanceof OAuthRefreshFailureError &&
+        (!candidateMode ||
+          isAuthModeAllowedForModel({
+            provider,
+            modelApi: params.modelApi,
+            mode: candidateMode,
+          }))
+      ) {
+        refreshFailure = err;
+      }
       log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
     }
   }
@@ -1214,7 +1492,13 @@ export async function resolveApiKeyForProvider(params: {
       })
     ) {
       const result: ResolvedProviderAuth = {
-        apiKey: envResolved.apiKey,
+        apiKey: sentinelizeConfigSecretRefEnvApiKey({
+          apiKey: envResolved.apiKey,
+          source: envResolved.source,
+          cfg,
+          provider,
+          enabled: params.secretSentinels,
+        }),
         source: envResolved.source,
         mode: resolvedMode,
       };
@@ -1222,7 +1506,20 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+  const managedRuntimeAuth = resolveManagedSecretRefRuntimeProviderAuth({
+    cfg,
+    provider,
+    secretSentinels: params.secretSentinels,
+  });
+  if (managedRuntimeAuth) {
+    return managedRuntimeAuth;
+  }
+
+  const customKey = resolveUsableCustomProviderApiKey({
+    cfg,
+    provider,
+    secretSentinels: params.secretSentinels,
+  });
   if (customKey) {
     const result = { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" as const };
     return result;
@@ -1236,9 +1533,14 @@ export async function resolveApiKeyForProvider(params: {
     cfg,
     provider,
     modelApi: params.modelApi,
+    secretSentinels: params.secretSentinels,
   });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
+  }
+
+  if (refreshFailure) {
+    throw refreshFailure;
   }
 
   const hasInlineConfiguredModels =
@@ -1262,7 +1564,7 @@ export async function resolveApiKeyForProvider(params: {
       },
     });
     if (pluginMissingAuthMessage) {
-      throw new Error(pluginMissingAuthMessage);
+      throw new ProviderAuthError("missing-provider-auth", provider, pluginMissingAuthMessage);
     }
   }
 
@@ -1284,6 +1586,7 @@ export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" 
 export { resolveEnvApiKey } from "./model-auth-env.js";
 export type { EnvApiKeyResult } from "./model-auth-env.js";
 
+/** Reports the strongest configured auth mode for provider-list UI and diagnostics. */
 export function resolveModelAuthMode(
   provider?: string,
   cfg?: OpenClawConfig,
@@ -1349,6 +1652,7 @@ export function resolveModelAuthMode(
   return "unknown";
 }
 
+/** Checks provider auth availability, including profile fallback order. */
 export async function hasAvailableAuthForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -1400,6 +1704,17 @@ export async function hasAvailableAuthForProvider(params: {
       if (resolveConfiguredAwsSdkProfileAuth({ cfg, provider, profileId: candidate })) {
         return true;
       }
+      const candidateType = store.profiles[candidate]?.type;
+      if (
+        candidateType &&
+        !isAuthModeAllowedForModel({
+          provider,
+          modelApi: params.modelApi,
+          mode: profileTypeToAuthMode(candidateType),
+        })
+      ) {
+        continue;
+      }
       const resolved = await resolveApiKeyForProfile({
         cfg,
         store,
@@ -1424,6 +1739,7 @@ export async function hasAvailableAuthForProvider(params: {
   return false;
 }
 
+/** Resolves request credentials from the provider attached to a model descriptor. */
 export async function getApiKeyForModel(params: {
   model: Model;
   cfg?: OpenClawConfig;
@@ -1434,6 +1750,7 @@ export async function getApiKeyForModel(params: {
   workspaceDir?: string;
   lockedProfile?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
+  secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
   return resolveApiKeyForProvider({
     provider: params.model.provider,
@@ -1446,9 +1763,11 @@ export async function getApiKeyForModel(params: {
     lockedProfile: params.lockedProfile,
     credentialPrecedence: params.credentialPrecedence,
     modelApi: params.model.api,
+    secretSentinels: params.secretSentinels,
   });
 }
 
+/** Clears auth for local OpenAI-compatible servers that explicitly use no auth. */
 export function applyLocalNoAuthHeaderOverride<T extends Model>(
   model: T,
   auth: ResolvedProviderAuth | null | undefined,
@@ -1471,6 +1790,144 @@ export function applyLocalNoAuthHeaderOverride<T extends Model>(
   };
 }
 
+export function applySecretRefHeaderSentinels<T extends Model>(
+  model: T,
+  cfg: OpenClawConfig | undefined,
+): T {
+  if (!model.headers) {
+    return model;
+  }
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  const applicableConfig = selectApplicableRuntimeConfig({
+    inputConfig: cfg,
+    runtimeConfig,
+    runtimeSourceConfig,
+  });
+  const usesRuntimeProvider =
+    applicableConfig === runtimeConfig ||
+    providerConfigMatchesRuntimeSnapshot({
+      inputConfig: cfg,
+      runtimeConfig,
+      provider: model.provider,
+    });
+  if (!runtimeConfig || !runtimeSourceConfig || !usesRuntimeProvider) {
+    return model;
+  }
+  const sourceProvider = resolveProviderConfig(runtimeSourceConfig, model.provider);
+  const runtimeProvider = resolveProviderConfig(runtimeConfig, model.provider);
+  const replacements = new Map<string, { value: string; replacement: string }>();
+  const isManagedSecret = (value: unknown) =>
+    coerceSecretRef(value) !== null ||
+    (typeof value === "string" && isSecretRefHeaderValueMarker(value));
+  const addReplacement = (name: string, value: string, replacement?: string) => {
+    replacements.set(name.trim().toLowerCase(), {
+      value,
+      replacement:
+        replacement ?? mintSecretSentinel(value, { label: `model-auth:${model.provider}` }),
+    });
+  };
+  for (const [name, sourceValue] of Object.entries(sourceProvider?.headers ?? {})) {
+    if (!isManagedSecret(sourceValue)) {
+      continue;
+    }
+    const value = normalizeOptionalSecretInput(runtimeProvider?.headers?.[name]);
+    if (value) {
+      addReplacement(name, value);
+    }
+  }
+  for (const [name, sourceValue] of Object.entries(sourceProvider?.request?.headers ?? {})) {
+    if (!isManagedSecret(sourceValue)) {
+      continue;
+    }
+    const value = normalizeOptionalSecretInput(runtimeProvider?.request?.headers?.[name]);
+    if (value) {
+      addReplacement(name, value);
+    }
+  }
+  const sourceAuth = sourceProvider?.request?.auth;
+  const runtimeAuth = runtimeProvider?.request?.auth;
+  const attachedRequest = getModelProviderRequestTransport(model);
+  let protectedRequest = attachedRequest;
+  let protectedRequestHeaders: Record<string, string> | undefined;
+  for (const [name, sourceValue] of Object.entries(sourceProvider?.request?.headers ?? {})) {
+    if (!isManagedSecret(sourceValue)) {
+      continue;
+    }
+    const value = normalizeOptionalSecretInput(runtimeProvider?.request?.headers?.[name]);
+    if (!value || attachedRequest?.headers?.[name] !== value) {
+      continue;
+    }
+    protectedRequestHeaders ??= { ...attachedRequest.headers };
+    protectedRequestHeaders[name] = mintSecretSentinel(value, {
+      label: `model-auth:${model.provider}`,
+    });
+  }
+  if (protectedRequestHeaders && attachedRequest) {
+    protectedRequest = { ...attachedRequest, headers: protectedRequestHeaders };
+  }
+  if (
+    sourceAuth?.mode === "authorization-bearer" &&
+    runtimeAuth?.mode === "authorization-bearer" &&
+    isManagedSecret(sourceAuth.token)
+  ) {
+    const token = normalizeOptionalSecretInput(runtimeAuth.token)?.trim();
+    if (token) {
+      if (attachedRequest?.auth?.mode === "authorization-bearer") {
+        protectedRequest = {
+          ...protectedRequest,
+          auth: {
+            ...attachedRequest.auth,
+            token: mintSecretSentinel(token, { label: `model-auth:${model.provider}` }),
+          },
+        };
+      }
+      addReplacement(
+        "Authorization",
+        `Bearer ${token}`,
+        `Bearer ${mintSecretSentinel(token, { label: `model-auth:${model.provider}` })}`,
+      );
+    }
+  } else if (
+    sourceAuth?.mode === "header" &&
+    runtimeAuth?.mode === "header" &&
+    isManagedSecret(sourceAuth.value)
+  ) {
+    const value = normalizeOptionalSecretInput(runtimeAuth.value)?.trim();
+    const headerName = runtimeAuth.headerName.trim();
+    const prefix = runtimeAuth.prefix?.trim() ?? "";
+    if (headerName && value) {
+      if (attachedRequest?.auth?.mode === "header") {
+        protectedRequest = {
+          ...protectedRequest,
+          auth: {
+            ...attachedRequest.auth,
+            value: mintSecretSentinel(value, { label: `model-auth:${model.provider}` }),
+          },
+        };
+      }
+      addReplacement(
+        headerName,
+        `${prefix}${value}`,
+        `${prefix}${mintSecretSentinel(value, { label: `model-auth:${model.provider}` })}`,
+      );
+    }
+  }
+  let headers: Record<string, string> | undefined;
+  for (const [name, value] of Object.entries(model.headers)) {
+    const replacement = replacements.get(name.trim().toLowerCase());
+    if (replacement?.value !== value) {
+      continue;
+    }
+    headers ??= { ...model.headers };
+    headers[name] = replacement.replacement;
+  }
+  const protectedModel = headers ? { ...model, headers } : model;
+  return protectedRequest && protectedRequest !== attachedRequest
+    ? attachModelProviderRequestTransport(protectedModel, protectedRequest)
+    : protectedModel;
+}
+
 /**
  * When the provider config sets `authHeader: true`, inject an explicit
  * `Authorization: Bearer <apiKey>` header into the model so downstream SDKs
@@ -1486,23 +1943,24 @@ export function applyAuthHeaderOverride<T extends Model>(
   auth: ResolvedProviderAuth | null | undefined,
   cfg: OpenClawConfig | undefined,
 ): T {
+  const sentinelModel = applySecretRefHeaderSentinels(model, cfg);
   if (!auth?.apiKey) {
-    return model;
+    return sentinelModel;
   }
   // Reject synthetic marker values that are not real credentials.
   if (isNonSecretApiKeyMarker(auth.apiKey)) {
-    return model;
+    return sentinelModel;
   }
-  const providerConfig = resolveProviderConfig(cfg, model.provider);
+  const providerConfig = resolveProviderConfig(cfg, sentinelModel.provider);
   if (!providerConfig?.authHeader) {
-    return model;
+    return sentinelModel;
   }
 
   // Strip any existing authorization header (case-insensitive) before
   // injecting the canonical one so we don't produce a comma-joined value.
   const headers: Record<string, string> = {};
-  if (model.headers) {
-    for (const [key, value] of Object.entries(model.headers)) {
+  if (sentinelModel.headers) {
+    for (const [key, value] of Object.entries(sentinelModel.headers)) {
       if (normalizeOptionalLowercaseString(key) !== "authorization") {
         headers[key] = value;
       }
@@ -1511,7 +1969,7 @@ export function applyAuthHeaderOverride<T extends Model>(
   headers.Authorization = `Bearer ${auth.apiKey}`;
 
   return {
-    ...model,
+    ...sentinelModel,
     headers,
   };
 }

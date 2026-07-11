@@ -1,3 +1,8 @@
+/**
+ * Subagent completion announcement delivery.
+ *
+ * Routes completion payloads through gateway/channel/session paths and records delivery evidence.
+ */
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -21,7 +26,11 @@ import {
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
-import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
+import {
+  isCronRunSessionKey,
+  isCronSessionKey,
+  parseCronRunScopeSuffix,
+} from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
 import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
@@ -31,6 +40,7 @@ import {
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import {
   collectDeliveredMediaUrls,
   collectMessagingToolDeliveredMediaUrls,
@@ -42,6 +52,7 @@ import {
 import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/run-state.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
+import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 import {
@@ -81,6 +92,7 @@ type SubagentAnnounceDeliveryDeps = {
     isActive: boolean;
   };
   isRequesterSessionAbandoned: (requesterSessionKey: string, sessionId?: string) => boolean;
+  loadRequesterSessionEntry: typeof loadRequesterSessionEntry;
   queueEmbeddedAgentMessageWithOutcome: (
     sessionId: string,
     text: string,
@@ -103,6 +115,7 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
   },
   isRequesterSessionAbandoned: (requesterSessionKey, sessionId) =>
     isEmbeddedRunAbandoned({ sessionKey: requesterSessionKey, sessionId }),
+  loadRequesterSessionEntry,
   queueEmbeddedAgentMessageWithOutcome: queueEmbeddedAgentMessageWithOutcomeAsync,
   sendMessage,
 };
@@ -124,6 +137,7 @@ async function resolveQueueEmbeddedAgentMessageOutcome(
 
 async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
+  cronRunContinuation?: boolean;
   expectFinal?: boolean;
   timeoutMs?: number;
 }): Promise<unknown> {
@@ -131,10 +145,11 @@ async function runAnnounceAgentCall(params: {
     "agent",
     params.agentParams,
     {
+      allowSyntheticCronRunContinuation: params.cronRunContinuation,
       expectFinal: params.expectFinal,
-      forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
-        params.agentParams.inputProvenance,
-      ),
+      forceSyntheticClient:
+        params.cronRunContinuation === true ||
+        shouldPreserveUserFacingSessionStateForInputProvenance(params.agentParams.inputProvenance),
       timeoutMs: params.timeoutMs,
     },
   );
@@ -279,6 +294,18 @@ async function resolveActiveWakeWithRetries(
       outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
       continue;
     }
+    if (
+      outcome.reason === "source_reply_delivery_mode_mismatch" &&
+      currentOptions.sourceReplyDeliveryMode !== undefined
+    ) {
+      // Active requester runs own their final delivery mode. Direct-completion
+      // policy must not make an already-running automatic parent unreachable.
+      const activeRunOptions = { ...currentOptions };
+      delete activeRunOptions.sourceReplyDeliveryMode;
+      currentOptions = activeRunOptions;
+      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+      continue;
+    }
     if (outcome.reason === "compacting") {
       const remainingDeliveryTimeoutMs =
         compactionDeadlineMs === undefined ? undefined : compactionDeadlineMs - Date.now();
@@ -362,6 +389,9 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
 ];
 
+const SESSION_FILE_CHANGED_ANNOUNCE_RE =
+  /session file changed while embedded prompt lock was released/i;
+
 const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unsupported channel/i,
   /unknown channel/i,
@@ -372,14 +402,85 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
+  SESSION_FILE_CHANGED_ANNOUNCE_RE,
 ];
+
+function isSessionFileChangedAnnounceError(message: string): boolean {
+  return SESSION_FILE_CHANGED_ANNOUNCE_RE.test(message);
+}
+
+const ANNOUNCE_ERROR_CHAIN_KEYS = [
+  "cause",
+  "cleanupError",
+  "error",
+  "promptError",
+  "reason",
+] as const;
+type AnnounceErrorChainKey = (typeof ANNOUNCE_ERROR_CHAIN_KEYS)[number];
+type AnnounceErrorRecord = Partial<Record<AnnounceErrorChainKey, unknown>> & {
+  sentBeforeError?: unknown;
+  visibleReplySent?: unknown;
+};
+
+function isAnnounceErrorRecord(error: unknown): error is AnnounceErrorRecord {
+  return Boolean(error && typeof error === "object");
+}
+
+function hasAnnounceErrorMatch(
+  error: unknown,
+  matches: (candidate: unknown) => boolean,
+  seen: Set<object> = new Set(),
+): boolean {
+  if (matches(error)) {
+    return true;
+  }
+  if (!isAnnounceErrorRecord(error)) {
+    return false;
+  }
+  if (seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+
+  return ANNOUNCE_ERROR_CHAIN_KEYS.some((key) => hasAnnounceErrorMatch(error[key], matches, seen));
+}
+
+function hasSessionFileChangedAnnounceError(error: unknown): boolean {
+  return hasAnnounceErrorMatch(error, (candidate) =>
+    isSessionFileChangedAnnounceError(summarizeDeliveryError(candidate)),
+  );
+}
 
 function isTransientAnnounceDeliveryError(error: unknown): boolean {
   const message = summarizeDeliveryError(error);
+  const topLevelPermanent = Boolean(
+    message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message)),
+  );
+  if (topLevelPermanent && !isSessionFileChangedAnnounceError(message)) {
+    return false;
+  }
+
+  const sessionFileChanged = hasSessionFileChangedAnnounceError(error);
+  if (sessionFileChanged) {
+    return !hasAnnounceSendEvidence(error);
+  }
+
+  if (
+    hasAnnounceErrorMatch(
+      error,
+      (candidate) =>
+        Boolean(candidate && typeof candidate === "object") &&
+        (candidate as { gatewayCode?: unknown }).gatewayCode === "UNAVAILABLE" &&
+        /cron run continuation/i.test(summarizeDeliveryError(candidate)),
+    )
+  ) {
+    return true;
+  }
+
   if (!message) {
     return false;
   }
-  if (PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) {
+  if (topLevelPermanent) {
     return false;
   }
   return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
@@ -387,8 +488,9 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
 
 function isPermanentAnnounceDeliveryError(error: unknown): boolean {
   const message = summarizeDeliveryError(error);
-  return Boolean(
-    message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message)),
+  return (
+    (message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) ||
+    hasSessionFileChangedAnnounceError(error)
   );
 }
 
@@ -408,17 +510,18 @@ function isSessionWriteLockAnnounceAgentError(error: unknown): boolean {
   );
 }
 
-function didVisibleSendFailAfterPartialDelivery(error: unknown): boolean {
+function hasDirectAnnounceSendEvidence(error: unknown): boolean {
   if (isOutboundDeliveryError(error) && error.sentBeforeError) {
     return true;
   }
-  const maybeDeliveryError = error as {
-    sentBeforeError?: unknown;
-    visibleReplySent?: unknown;
-  };
-  return (
-    maybeDeliveryError.sentBeforeError === true || maybeDeliveryError.visibleReplySent === true
-  );
+  if (!isAnnounceErrorRecord(error)) {
+    return false;
+  }
+  return error.sentBeforeError === true || error.visibleReplySent === true;
+}
+
+function hasAnnounceSendEvidence(error: unknown): boolean {
+  return hasAnnounceErrorMatch(error, hasDirectAnnounceSendEvidence);
 }
 
 async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -445,6 +548,48 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
       resolve();
     };
     signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function readCronRunContinuation(params: {
+  sessionKey: string;
+  expectedLifecycleRevision?: string;
+}): { lifecycleRevision: string; sessionId: string } | undefined {
+  const entry = subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(params.sessionKey).entry;
+  const lifecycleRevision = entry?.cronRunContinuation?.lifecycleRevision;
+  if (
+    !lifecycleRevision ||
+    (params.expectedLifecycleRevision !== undefined &&
+      lifecycleRevision !== params.expectedLifecycleRevision)
+  ) {
+    return undefined;
+  }
+  const sessionId = entry?.sessionId?.trim();
+  return sessionId ? { lifecycleRevision, sessionId } : undefined;
+}
+
+function cronRunContinuationLostError(message: string): Error & {
+  cronRunContinuationLost: true;
+} {
+  const error = new Error(message) as Error & { cronRunContinuationLost: true };
+  error.cronRunContinuationLost = true;
+  return error;
+}
+
+function isCronRunContinuationLostError(error: unknown): boolean {
+  return hasAnnounceErrorMatch(error, (candidate) => {
+    if (!candidate || typeof candidate !== "object") {
+      return false;
+    }
+    if ((candidate as { cronRunContinuationLost?: unknown }).cronRunContinuationLost === true) {
+      return true;
+    }
+    return (
+      (candidate as { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
+      /cron run continuation (?:owner was lost|base session was not persisted)/i.test(
+        summarizeDeliveryError(candidate),
+      )
+    );
   });
 }
 
@@ -638,6 +783,12 @@ async function maybeSteerSubagentAnnounce(params: {
     };
   }
 
+  // A stale_run refusal means the requester run is evidence-dead: it will not
+  // drain its steer queue, so "dropped" would discard the handoff. Report
+  // not-active so dispatch takes the direct fallback instead.
+  if (queueOutcome.reason === "stale_run") {
+    return { status: "none" };
+  }
   const currentActivity = resolveRequesterSessionActivity(canonicalKey);
   return { status: currentActivity.isActive ? "dropped" : "none" };
 }
@@ -649,9 +800,62 @@ function hasVisibleGatewayAgentPayload(response: unknown): boolean {
   );
 }
 
+function hasVisibleNonSilentGatewayAgentPayload(response: unknown): boolean {
+  const result = getGatewayAgentResult(response);
+  if (!result) {
+    return false;
+  }
+  if (hasMessagingToolDeliveryEvidence(result)) {
+    return true;
+  }
+  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
+  return payloads.some(isVisibleNonSilentGatewayAgentPayload);
+}
+
+function isVisibleNonSilentGatewayAgentPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const record = payload as {
+    text?: unknown;
+    mediaUrl?: unknown;
+    mediaUrls?: unknown;
+    presentation?: unknown;
+    interactive?: unknown;
+    channelData?: unknown;
+  };
+  if (
+    record.mediaUrl ||
+    (Array.isArray(record.mediaUrls) && record.mediaUrls.length > 0) ||
+    record.presentation ||
+    record.interactive ||
+    record.channelData
+  ) {
+    return true;
+  }
+  return (
+    typeof record.text === "string" &&
+    record.text.trim() !== "" &&
+    !isSilentReplyPayloadText(record.text, SILENT_REPLY_TOKEN)
+  );
+}
+
 function hasGatewayAgentMessagingToolDeliveryEvidence(response: unknown): boolean {
   const result = getGatewayAgentResult(response);
   return Boolean(result && hasMessagingToolDeliveryEvidence(result));
+}
+
+function hasGatewayAgentCompletionSideEffectEvidence(response: unknown): boolean {
+  const result = getGatewayAgentResult(response);
+  if (!result) {
+    return false;
+  }
+  return (
+    hasMessagingToolDeliveryEvidence(result) ||
+    (Array.isArray(result.acceptedSessionSpawns) &&
+      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
+    hasPositiveDeliveryCount(result.successfulCronAdds)
+  );
 }
 
 function hasIntentionalSilentGatewayAgentPayload(response: unknown): boolean {
@@ -659,32 +863,38 @@ function hasIntentionalSilentGatewayAgentPayload(response: unknown): boolean {
   if (!result || !Array.isArray(result.payloads)) {
     return false;
   }
-  return result.payloads.some((payload) => {
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-      return false;
-    }
-    const record = payload as {
-      text?: unknown;
-      mediaUrl?: unknown;
-      mediaUrls?: unknown;
-      presentation?: unknown;
-      interactive?: unknown;
-      channelData?: unknown;
-    };
-    if (
-      typeof record.text !== "string" ||
-      !isSilentReplyPayloadText(record.text, SILENT_REPLY_TOKEN)
-    ) {
-      return false;
-    }
-    return !(
-      record.mediaUrl ||
-      (Array.isArray(record.mediaUrls) && record.mediaUrls.length > 0) ||
-      record.presentation ||
-      record.interactive ||
-      record.channelData
-    );
-  });
+  return result.payloads.some(isIntentionalSilentGatewayAgentPayload);
+}
+
+function isIntentionalSilentGatewayAgentPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const record = payload as {
+    text?: unknown;
+    mediaUrl?: unknown;
+    mediaUrls?: unknown;
+    presentation?: unknown;
+    interactive?: unknown;
+    channelData?: unknown;
+  };
+  if (
+    typeof record.text !== "string" ||
+    !isSilentReplyPayloadText(record.text, SILENT_REPLY_TOKEN)
+  ) {
+    return false;
+  }
+  return !(
+    record.mediaUrl ||
+    (Array.isArray(record.mediaUrls) && record.mediaUrls.length > 0) ||
+    record.presentation ||
+    record.interactive ||
+    record.channelData
+  );
+}
+
+function hasPositiveDeliveryCount(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 function requiresAgentMediatedCompletionDelivery(params: {
@@ -814,7 +1024,7 @@ async function deliverGeneratedMediaCompletionDirect(params: {
       path: "direct",
     };
   } catch (err) {
-    const terminal = didVisibleSendFailAfterPartialDelivery(err);
+    const terminal = hasAnnounceSendEvidence(err);
     return {
       delivered: false,
       path: "direct",
@@ -1215,7 +1425,9 @@ async function sendSubagentAnnounceDirectly(params: {
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
-    const requesterEntry = loadRequesterSessionEntry(params.targetRequesterSessionKey).entry;
+    const requesterEntry = subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(
+      params.targetRequesterSessionKey,
+    ).entry;
     const deliveryTarget = !params.requesterIsSubagent
       ? resolveExternalBestEffortDeliveryTarget({
           channel: effectiveDirectOrigin?.channel,
@@ -1275,6 +1487,12 @@ async function sendSubagentAnnounceDirectly(params: {
       };
     }
     let activeRequesterWakeFailed = false;
+    let cronContinuation:
+      | {
+          sessionId: string;
+          lifecycleRevision: string;
+        }
+      | undefined;
     const tryGeneratedMediaDirectDelivery = async (
       announceResponse?: unknown,
       knownMissingMediaUrls?: readonly string[],
@@ -1362,7 +1580,8 @@ async function sendSubagentAnnounceDirectly(params: {
     if (
       params.expectsCompletionMessage &&
       isCronRunSessionKey(canonicalRequesterSessionKey) &&
-      !resolveRequesterSessionActivity(canonicalRequesterSessionKey).isActive
+      !resolveRequesterSessionActivity(canonicalRequesterSessionKey).isActive &&
+      !agentMediatedCompletion
     ) {
       const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
       if (generatedMediaDelivery) {
@@ -1380,6 +1599,24 @@ async function sendSubagentAnnounceDirectly(params: {
         delivered: false,
         path: "none",
       };
+    }
+    if (
+      params.expectsCompletionMessage &&
+      parseCronRunScopeSuffix(canonicalRequesterSessionKey).runId !== undefined &&
+      hasGeneratedMediaCompletionEvent(params.internalEvents)
+    ) {
+      const continuation = readCronRunContinuation({
+        sessionKey: canonicalRequesterSessionKey,
+      });
+      if (!continuation) {
+        return {
+          delivered: false,
+          path: "none",
+          reason: "completion_handoff_unavailable",
+          error: "cron run continuation is unavailable",
+        };
+      }
+      cronContinuation = continuation;
     }
     const directAgentThreadId = shouldDeliverAgentFinal
       ? stringifyRouteThreadId(deliveryTarget.threadId)
@@ -1422,15 +1659,29 @@ async function sendSubagentAnnounceDirectly(params: {
           ? "completion direct announce agent call"
           : "direct announce agent call",
         signal: params.signal,
-        run: async () =>
-          await runAnnounceAgentCall({
-            agentParams: directAgentParams,
+        run: async () => {
+          let agentParams = directAgentParams;
+          if (cronContinuation) {
+            const continuation = readCronRunContinuation({
+              sessionKey: canonicalRequesterSessionKey,
+              expectedLifecycleRevision: cronContinuation.lifecycleRevision,
+            });
+            if (!continuation) {
+              throw cronRunContinuationLostError("cron run continuation changed before delivery");
+            }
+            cronContinuation = continuation;
+            agentParams = { ...directAgentParams, sessionId: continuation.sessionId };
+          }
+          return await runAnnounceAgentCall({
+            agentParams,
+            cronRunContinuation: cronContinuation !== undefined,
             expectFinal: true,
             timeoutMs: announceTimeoutMs,
-          }),
+          });
+        },
       });
     } catch (err) {
-      if (isPermanentAnnounceDeliveryError(err)) {
+      if (isPermanentAnnounceDeliveryError(err) && hasAnnounceSendEvidence(err)) {
         throw err;
       }
       if (
@@ -1469,18 +1720,6 @@ async function sendSubagentAnnounceDirectly(params: {
 
     const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
     if (directAnnounceStillPending) {
-      if (
-        params.expectsCompletionMessage &&
-        expectedMediaUrls.length === 0 &&
-        !requiresMessageToolDelivery
-      ) {
-        return {
-          delivered: false,
-          path: "direct",
-          reason: "completion_handoff_pending",
-          error: "completion agent handoff is still pending",
-        };
-      }
       return {
         delivered: true,
         path: "direct",
@@ -1587,6 +1826,29 @@ async function sendSubagentAnnounceDirectly(params: {
         error: "completion agent did not use the message tool for message-tool-only delivery",
       };
     }
+    const hasVisibleCompletionReply =
+      hasVisibleNonSilentGatewayAgentPayload(directAnnounceResponse);
+    const hasCompletionSideEffect =
+      hasGatewayAgentCompletionSideEffectEvidence(directAnnounceResponse);
+    const hasIntentionalSilentCompletionReply =
+      hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse);
+    const acceptsIntentionalSilentCompletion =
+      hasIntentionalSilentCompletionReply && !isSubagentCompletion;
+    if (
+      params.expectsCompletionMessage &&
+      !shouldDeliverAgentFinal &&
+      !requiresMessageToolDelivery &&
+      !hasVisibleCompletionReply &&
+      !hasCompletionSideEffect &&
+      !acceptsIntentionalSilentCompletion
+    ) {
+      return {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+      };
+    }
     if (
       params.expectsCompletionMessage &&
       shouldDeliverAgentFinal &&
@@ -1606,10 +1868,21 @@ async function sendSubagentAnnounceDirectly(params: {
       path: "direct",
     };
   } catch (err) {
+    const terminal = isPermanentAnnounceDeliveryError(err) && hasAnnounceSendEvidence(err);
+    const continuationUnavailable = isCronRunContinuationLostError(err);
+    const continuationPending =
+      !terminal &&
+      !continuationUnavailable &&
+      params.expectsCompletionMessage &&
+      parseCronRunScopeSuffix(canonicalRequesterSessionKey).runId !== undefined &&
+      hasGeneratedMediaCompletionEvent(params.internalEvents);
     return {
       delivered: false,
       path: "direct",
       error: summarizeDeliveryError(err),
+      ...(terminal ? { terminal: true } : {}),
+      ...(continuationUnavailable ? { reason: "completion_handoff_unavailable" as const } : {}),
+      ...(continuationPending ? { reason: "completion_handoff_pending" as const } : {}),
     };
   }
 }
@@ -1696,5 +1969,8 @@ export const testing = {
         }
       : defaultSubagentAnnounceDeliveryDeps;
   },
+  hasAnnounceSendEvidence,
+  hasSessionFileChangedAnnounceError,
+  isSessionFileChangedAnnounceError,
 };
 export { testing as __testing };

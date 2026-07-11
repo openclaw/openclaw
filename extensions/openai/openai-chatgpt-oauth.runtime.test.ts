@@ -1,3 +1,4 @@
+// Openai tests cover openai chatgpt oauth plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing } from "./openai-chatgpt-oauth.runtime.js";
@@ -20,5 +21,20 @@ describe("OpenAI Codex OAuth runtime", () => {
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels reachable TLS preflight response bodies", async () => {
+    const response = new Response("reachable", { status: 302 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const fetchImpl = vi.fn(async () => response);
+
+    await expect(
+      testing.runOpenAIOAuthTlsPreflight({
+        timeoutMs: 20,
+        fetchImpl,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });

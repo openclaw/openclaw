@@ -1,7 +1,11 @@
+/**
+ * Resolves MCP transport command, environment, and timeout configuration.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import {
   describeHttpMcpServerLaunchConfig,
   resolveHttpMcpServerLaunchConfig,
@@ -12,6 +16,9 @@ import {
   resolveStdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
 
+// Resolves raw MCP server config into the transport shape used by bundle MCP
+// runtime startup. Stdio is preferred when launch config is valid; otherwise
+// HTTP/SSE transports are attempted with normalized timeout fields.
 type ResolvedBaseMcpTransportConfig = {
   description: string;
   connectionTimeoutMs: number;
@@ -101,14 +108,7 @@ function getStringField(rawServer: unknown, keys: readonly string[]): string | u
   if (!rawServer || typeof rawServer !== "object") {
     return undefined;
   }
-  const record = rawServer as Record<string, unknown>;
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim().length > 0) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(rawServer as Record<string, unknown>, keys);
 }
 
 function getRequestedTransport(rawServer: unknown): string {
@@ -189,6 +189,7 @@ function resolveHttpTransportConfig(
   };
 }
 
+/** Resolve one MCP server's launch transport config, or null when unsupported. */
 export function resolveMcpTransportConfig(
   serverName: string,
   rawServer: unknown,
@@ -205,6 +206,8 @@ export function resolveMcpTransportConfig(
     },
   });
   if (stdioLaunch.ok) {
+    // A command-bearing server is always treated as stdio even when HTTP-ish
+    // aliases are present, matching existing MCP config precedence.
     return {
       kind: "stdio",
       transportType: "stdio",

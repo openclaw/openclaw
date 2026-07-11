@@ -1,3 +1,4 @@
+// Line tests cover send plugin behavior.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -153,6 +154,16 @@ describe("LINE send helpers", () => {
     const quickReply = sendModule.createQuickReplyItems(labels);
 
     expect(quickReply.items).toHaveLength(13);
+  });
+
+  it("truncates quick reply labels without leaving lone surrogates", () => {
+    const label = "1234567890123456789😀";
+    const quickReply = sendModule.createQuickReplyItems([label]);
+    const item = quickReply.items?.[0] as { action: { label: string; text: string } } | undefined;
+
+    expect(item?.action.label).toBe("1234567890123456789");
+    expect(item?.action.text).toBe(label);
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(item?.action.label ?? "")).toBe(false);
   });
 
   it("pushes images via normalized LINE target", async () => {

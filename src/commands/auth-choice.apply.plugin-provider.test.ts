@@ -1,3 +1,4 @@
+// Auth-choice plugin provider tests cover loaded provider setup, plugin install, and credential routing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyAuthChoiceLoadedPluginProvider,
@@ -68,9 +69,12 @@ vi.mock("../plugins/provider-auth-helpers.js", () => ({
 
 const isRemoteEnvironment = vi.hoisted(() => vi.fn(() => false));
 const openUrl = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("../plugins/setup-browser.js", () => ({
-  isRemoteEnvironment,
+vi.mock("../infra/browser-open.js", () => ({
   openUrl,
+}));
+
+vi.mock("../infra/remote-env.js", () => ({
+  isRemoteEnvironment,
 }));
 
 const createVpsAwareOAuthHandlers = vi.hoisted(() => vi.fn());

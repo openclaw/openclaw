@@ -1,3 +1,4 @@
+/** Tests model fallback notice formatting and transition state tracking. */
 import { afterEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 import {
@@ -110,6 +111,15 @@ describe("fallback-state", () => {
 
     expect(resolved.reasonSummary).toContain("HTTP 429: Too Many Requests");
     expect(resolved.reasonSummary).toContain("Claude Max usage limit reached");
+  });
+
+  it("keeps truncated transient error details UTF-16 safe", () => {
+    const detail = "x".repeat(68);
+    const resolved = resolveDemoFallbackTransition({
+      attempts: [{ ...baseAttempt, error: `429 ${detail}😀tail` }],
+    });
+
+    expect(resolved.reasonSummary).toBe(`HTTP 429: ${detail}…`);
   });
 
   it("refreshes reason when fallback remains active with same model pair", () => {

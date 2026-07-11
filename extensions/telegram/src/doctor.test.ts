@@ -1,3 +1,4 @@
+// Telegram tests cover doctor plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -225,6 +226,113 @@ describe("telegram doctor", () => {
     expect(result.changes).toEqual([
       "Removed channels.telegram.dm.",
       "Removed channels.telegram.accounts.work.dm.",
+    ]);
+  });
+
+  it("removes retired native draft preview keys", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            streaming: {
+              mode: "partial",
+              preview: {
+                toolProgress: true,
+                nativeToolProgress: true,
+                nativeToolProgressAllowFrom: ["123"],
+              },
+            },
+            accounts: {
+              work: {
+                streaming: {
+                  preview: {
+                    nativeToolProgress: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    const telegram = result.config.channels?.telegram;
+    expect(telegram?.streaming).toEqual({
+      mode: "partial",
+      preview: {
+        toolProgress: true,
+      },
+    });
+    expect(telegram?.accounts?.work?.streaming).toBeUndefined();
+    expect(result.changes).toEqual([
+      "Removed channels.telegram.streaming.preview native draft keys; Telegram previews now use rich send/edit messages.",
+      "Removed channels.telegram.accounts.work.streaming.preview native draft keys; Telegram previews now use rich send/edit messages.",
+    ]);
+  });
+
+  it("removes retired group history context mode keys", () => {
+    expect(
+      telegramDoctor.legacyConfigRules?.some((rule) =>
+        rule.match?.(
+          {
+            includeGroupHistoryContext: "mention-only",
+          },
+          {},
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      telegramDoctor.legacyConfigRules?.some((rule) =>
+        rule.match?.(
+          {
+            work: { includeGroupHistoryContext: "none" },
+          },
+          {},
+        ),
+      ),
+    ).toBe(true);
+
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            includeGroupHistoryContext: "none",
+            historyLimit: 12,
+            accounts: {
+              work: {
+                includeGroupHistoryContext: "none",
+                historyLimit: 4,
+              },
+              ops: {
+                includeGroupHistoryContext: "recent",
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    const telegram = result.config.channels?.telegram;
+    expect(Object.hasOwn(telegram ?? {}, "includeGroupHistoryContext")).toBe(false);
+    expect(telegram?.historyLimit).toBe(0);
+    expect(Object.hasOwn(telegram?.accounts?.work ?? {}, "includeGroupHistoryContext")).toBe(false);
+    expect(telegram?.accounts?.work?.historyLimit).toBe(0);
+    expect(Object.hasOwn(telegram?.accounts?.ops ?? {}, "includeGroupHistoryContext")).toBe(false);
+    expect(telegram?.accounts?.ops?.historyLimit).toBe(12);
+    expect(result.changes).toEqual([
+      "Removed channels.telegram.includeGroupHistoryContext and set historyLimit to 0; Telegram group history is always on for groups and bounded by historyLimit.",
+      "Removed channels.telegram.accounts.work.includeGroupHistoryContext and set historyLimit to 0; Telegram group history is always on for groups and bounded by historyLimit.",
+      "Removed channels.telegram.accounts.ops.includeGroupHistoryContext and set historyLimit to 12; Telegram group history is always on for groups and bounded by historyLimit.",
     ]);
   });
 

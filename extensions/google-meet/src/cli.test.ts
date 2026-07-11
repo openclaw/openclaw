@@ -1,3 +1,4 @@
+// Google Meet tests cover cli plugin behavior.
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -734,6 +735,7 @@ describe("google-meet CLI", () => {
                 state: "active",
                 transport: "twilio",
                 mode: "agent",
+                agentId: "main",
                 participantIdentity: "Twilio PSTN participant",
                 createdAt: "2026-04-25T00:00:00.000Z",
                 updatedAt: "2026-04-25T00:00:01.000Z",
@@ -765,6 +767,7 @@ describe("google-meet CLI", () => {
           state: "active",
           transport: "chrome-node",
           mode: "agent",
+          agentId: "main",
           participantIdentity: "signed-in Google Chrome profile on a paired node",
           createdAt: "2026-04-25T00:00:00.000Z",
           updatedAt: "2026-04-25T00:00:01.000Z",
@@ -808,6 +811,7 @@ describe("google-meet CLI", () => {
         state: "active",
         transport: "chrome-node",
         mode: "realtime",
+        agentId: "main",
         participantIdentity: "signed-in Google Chrome profile on a paired node",
         createdAt: "2026-04-25T00:00:00.000Z",
         updatedAt: "2026-04-25T00:00:01.000Z",
@@ -881,6 +885,7 @@ describe("google-meet CLI", () => {
         state: "active",
         transport: "chrome",
         mode: "bidi",
+        agentId: "main",
         participantIdentity: "signed-in Google Chrome profile",
         createdAt: "2026-04-25T00:00:00.000Z",
         updatedAt: "2026-04-25T00:00:01.000Z",
@@ -943,6 +948,7 @@ describe("google-meet CLI", () => {
         state: "active" as const,
         transport: "chrome-node" as const,
         mode: "transcribe" as const,
+        agentId: "main",
         participantIdentity: "signed-in Google Chrome profile on a paired node",
         createdAt: "2026-04-25T00:00:00.000Z",
         updatedAt: "2026-04-25T00:00:01.000Z",
@@ -1092,6 +1098,7 @@ describe("google-meet CLI", () => {
               state: "active",
               transport: "chrome-node",
               mode: "agent",
+              agentId: "main",
               participantIdentity: "signed-in Google Chrome profile on a paired node",
               createdAt: "2026-04-25T00:00:00.000Z",
               updatedAt: "2026-04-25T00:00:01.000Z",
@@ -1148,6 +1155,7 @@ describe("google-meet CLI", () => {
               state: "active",
               transport: "twilio",
               mode: "agent",
+              agentId: "main",
               participantIdentity: "Twilio phone participant",
               createdAt: "2026-04-25T00:00:00.000Z",
               updatedAt: "2026-04-25T00:00:01.000Z",

@@ -1,3 +1,4 @@
+// Cron service regression fixtures build reusable scheduled job states.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -5,7 +6,11 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { clearAllBootstrapSnapshots } from "../../../src/agents/bootstrap-cache.js";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store.js";
-import { createCronServiceState, type CronServiceDeps } from "../../../src/cron/service/state.js";
+import type { CronServiceDeps } from "../../../src/cron/service/state.js";
+import {
+  createDeferred,
+  createRunningCronServiceState,
+} from "../../../src/cron/service.test-harness.js";
 import type { CronJob, CronJobState } from "../../../src/cron/types.js";
 import { resetAgentRunContextForTest } from "../../../src/infra/agent-events.js";
 import {
@@ -63,38 +68,7 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
   };
 }
 
-export function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-export function createRunningCronServiceState(params: {
-  storePath: string;
-  log: CronServiceDeps["log"];
-  nowMs: () => number;
-  jobs: CronJob[];
-}) {
-  const state = createCronServiceState({
-    cronEnabled: true,
-    storePath: params.storePath,
-    log: params.log,
-    nowMs: params.nowMs,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-  });
-  state.running = true;
-  state.store = {
-    version: 1,
-    jobs: params.jobs,
-  };
-  return state;
-}
+export { createDeferred, createRunningCronServiceState };
 
 export function topOfHourOffsetMs(jobId: string) {
   const digest = crypto.createHash("sha256").update(jobId).digest();
@@ -178,10 +152,6 @@ export function createIsolatedRegressionJob(params: {
     delivery: { mode: "announce" },
     state: params.state ?? {},
   };
-}
-
-export async function writeCronJobs(storePath: string, jobs: CronJob[]) {
-  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }), "utf-8");
 }
 
 export async function writeCronStoreSnapshot(storePath: string, jobs: unknown[]) {

@@ -1,3 +1,4 @@
+// Plugin uninstall command implementation and confirmation-driven removal plan execution.
 import os from "node:os";
 import path from "node:path";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -17,6 +18,7 @@ export type PluginUninstallOptions = {
   keepConfig?: boolean;
   force?: boolean;
   dryRun?: boolean;
+  invalidateRuntimeCache?: boolean;
 };
 
 function isPromptInputClosedError(
@@ -31,6 +33,7 @@ export async function runPluginUninstallCommand(
   opts: PluginUninstallOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
+  // Uninstall mutates config/install records and optionally managed files, so guard write mode first.
   assertConfigWriteAllowedInCurrentMode();
 
   const {
@@ -49,9 +52,9 @@ export async function runPluginUninstallCommand(
     UNINSTALL_ACTION_LABELS,
   } = await import("../plugins/uninstall.js");
   const { commitPluginInstallRecordsWithConfig } =
-    await import("./plugins-install-record-commit.js");
+    await import("../plugins/install-record-commit.js");
   const { refreshPluginRegistryAfterConfigMutation } =
-    await import("./plugins-registry-refresh.js");
+    await import("../plugins/registry-refresh.js");
   const { resolvePluginUninstallId } = await import("./plugins-uninstall-selection.js");
   const { PromptInputClosedError, promptYesNo } = await import("./prompt.js");
   const snapshot = await tracePluginLifecyclePhaseAsync(
@@ -102,7 +105,7 @@ export async function runPluginUninstallCommand(
     runtime.exit(1);
     return;
   }
-  const hasInstall = pluginId in (cfg.plugins?.installs ?? {});
+  const hasInstall = Object.hasOwn(cfg.plugins?.installs ?? {}, pluginId);
 
   const preview: string[] = [];
   if (plan.actions.entry) {
@@ -194,6 +197,7 @@ export async function runPluginUninstallCommand(
     config: nextConfig,
     reason: "source-changed",
     installRecords: nextInstallRecords,
+    invalidateRuntimeCache: opts.invalidateRuntimeCache,
     traceCommand: "uninstall",
     logger: {
       warn: (message) => runtime.log(theme.warn(message)),

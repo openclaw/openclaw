@@ -1,10 +1,11 @@
+// Vitest ui e2e config wires the ui e2e test shard.
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
 
 const uiE2eIncludePatterns = ["ui/src/**/*.e2e.test.ts"];
 
-export function createUiE2eVitestConfig(
+function createUiE2eVitestConfig(
   env: Record<string, string | undefined> = process.env,
   argv: string[] = process.argv,
 ) {

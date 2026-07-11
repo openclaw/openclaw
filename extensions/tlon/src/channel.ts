@@ -1,3 +1,4 @@
+// Tlon plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -10,6 +11,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { tlonDoctor } from "./doctor.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
@@ -63,6 +65,7 @@ const tlonConfigAdapter = createHybridChannelConfigAdapter({
 const tlonChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 10000,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
   deliveryCapabilities: {
     durableFinal: {

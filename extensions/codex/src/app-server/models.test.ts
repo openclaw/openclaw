@@ -1,3 +1,4 @@
+// Codex tests cover models plugin behavior.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import { createClientHarness } from "./test-support.js";
@@ -69,7 +70,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.125.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.143.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const list = JSON.parse(harness.writes[2] ?? "{}") as { id?: number; method?: string };
@@ -131,7 +132,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.125.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.143.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const firstList = JSON.parse(harness.writes[2] ?? "{}") as {
@@ -211,7 +212,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.125.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.143.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const firstList = JSON.parse(harness.writes[2] ?? "{}") as { id?: number };

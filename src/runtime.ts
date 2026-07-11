@@ -1,3 +1,4 @@
+// Re-exports terminal runtime helpers used by CLI command implementations.
 import { clearActiveProgressLine } from "../packages/terminal-core/src/progress-line.js";
 import { restoreTerminalState } from "../packages/terminal-core/src/restore.js";
 
@@ -94,11 +95,22 @@ export const defaultRuntime: OutputRuntimeEnv = {
   },
 };
 
+/** Signals a deferred or non-exiting runtime exit so callers can unwind owned resources. */
+export class ExitError extends Error {
+  constructor(
+    public readonly code: number,
+    message?: string,
+  ) {
+    super(message ?? `exit ${code}`);
+    this.name = "ExitError";
+  }
+}
+
 export function createNonExitingRuntime(): OutputRuntimeEnv {
   return {
     ...createRuntimeIo(),
     exit: (code: number) => {
-      throw new Error(`exit ${code}`);
+      throw new ExitError(code);
     },
   };
 }

@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OpenClawKit
 import OSLog
 import Speech
 import SwabbleKit
@@ -120,9 +121,7 @@ actor VoiceWakeRuntime {
 
         let config = snapshot.1
 
-        if self.isStarting {
-            return
-        }
+        if self.isStarting { return }
 
         if self.scheduledRestartTask != nil, config == self.currentConfig, self.recognitionTask == nil {
             return
@@ -142,9 +141,7 @@ actor VoiceWakeRuntime {
     }
 
     private func start(with config: RuntimeConfig) async {
-        if self.isStarting {
-            return
-        }
+        if self.isStarting { return }
         self.isStarting = true
         defer { self.isStarting = false }
         do {
@@ -188,7 +185,7 @@ actor VoiceWakeRuntime {
             input.removeTap(onBus: 0)
             input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self, weak request] buffer, _ in
                 request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
-                guard let rms = Self.rmsLevel(buffer: buffer) else { return }
+                let rms = TalkAudioLevel.rms(buffer: buffer)
                 Task.detached { [weak self] in
                     await self?.noteAudioLevel(rms: rms)
                     await self?.noteAudioTap(rms: rms)
@@ -724,18 +721,6 @@ actor VoiceWakeRuntime {
                 VoiceSessionCoordinator.shared.updateLevel(token: token, clamped)
             }
         }
-    }
-
-    private static func rmsLevel(buffer: AVAudioPCMBuffer) -> Double? {
-        guard let channelData = buffer.floatChannelData?.pointee else { return nil }
-        let frameCount = Int(buffer.frameLength)
-        guard frameCount > 0 else { return nil }
-        var sum: Double = 0
-        for i in 0..<frameCount {
-            let sample = Double(channelData[i])
-            sum += sample * sample
-        }
-        return sqrt(sum / Double(frameCount))
     }
 
     private func restartRecognizer() {

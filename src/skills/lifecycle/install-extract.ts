@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs";
+// Install extraction helpers validate and unpack skill archives into install roots.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   createTarEntryPreflightChecker,
@@ -8,30 +7,17 @@ import {
   prepareArchiveDestinationDir,
   withStagedArchiveDestination,
 } from "../../infra/archive.js";
+import { sha256File } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { hasBinary } from "../loading/config.js";
 import { parseTarVerboseMetadata } from "./install-tar-verbose.js";
 
-export type ArchiveExtractResult = { stdout: string; stderr: string; code: number | null };
+type ArchiveExtractResult = { stdout: string; stderr: string; code: number | null };
 type TarPreflightResult = {
   entries: string[];
   metadata: ReturnType<typeof parseTarVerboseMetadata>;
 };
-
-async function hashFileSha256(filePath: string): Promise<string> {
-  const hash = createHash("sha256");
-  const stream = fs.createReadStream(filePath);
-  return await new Promise<string>((resolve, reject) => {
-    stream.on("data", (chunk) => {
-      hash.update(chunk as Buffer);
-    });
-    stream.on("error", reject);
-    stream.on("end", () => {
-      resolve(hash.digest("hex"));
-    });
-  });
-}
 
 function commandFailureResult(
   result: { stdout: string; stderr: string; code: number | null },
@@ -95,7 +81,7 @@ async function verifyArchiveHashStable(params: {
   archivePath: string;
   expectedHash: string;
 }): Promise<ArchiveExtractResult | null> {
-  const postPreflightHash = await hashFileSha256(params.archivePath);
+  const postPreflightHash = await sha256File(params.archivePath);
   if (postPreflightHash === params.expectedHash) {
     return null;
   }
@@ -179,7 +165,7 @@ export async function extractArchive(params: {
       }
 
       const destinationRealDir = await prepareArchiveDestinationDir(targetDir);
-      const preflightHash = await hashFileSha256(archivePath);
+      const preflightHash = await sha256File(archivePath);
 
       // Preflight list to prevent zip-slip style traversal before extraction.
       const preflight = await readTarPreflight({ archivePath, timeoutMs });

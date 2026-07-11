@@ -1,3 +1,4 @@
+// Vitest extension codex app server support config wires the extension codex app server support test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 const coveredAppServerPatterns = [
@@ -34,7 +35,7 @@ const coveredAppServerPatterns = [
   "extensions/codex/src/app-server/user-input-bridge.test.ts",
 ];
 
-export function createExtensionCodexAppServerSupportVitestConfig(
+function createExtensionCodexAppServerSupportVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
   return createScopedVitestConfig(["extensions/codex/src/app-server/**/*.test.ts"], {

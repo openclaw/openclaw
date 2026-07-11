@@ -1,8 +1,9 @@
+// Matrix tests cover reaction events plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMatrixApprovalReactionTargetsForTest,
   registerMatrixApprovalReactionTarget,
-  resolveMatrixApprovalReactionTarget,
+  resolveMatrixApprovalReactionTargetWithPersistence,
 } from "../../approval-reactions.js";
 import type { CoreConfig } from "../../types.js";
 import { handleInboundMatrixReaction } from "./reaction-events.js";
@@ -294,7 +295,7 @@ describe("matrix approval reactions", () => {
 
     expect(client.getEvent).not.toHaveBeenCalled();
     expect(
-      resolveMatrixApprovalReactionTarget({
+      await resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!ops:example.org",
         eventId: "$approval-msg",
         reactionKey: "❌",
