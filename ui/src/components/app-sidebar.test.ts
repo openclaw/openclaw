@@ -291,7 +291,10 @@ describe("AppSidebar session pagination", () => {
   });
 
   it("reveals sessions ten at a time and offers See less after thirty", async () => {
-    const keys = Array.from({ length: 41 }, (_, index) => `agent:main:session-${index + 1}`);
+    const keys = [
+      "agent:main:main",
+      ...Array.from({ length: 40 }, (_, index) => `agent:main:session-${index + 1}`),
+    ];
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", keys));
     const rows = () => sidebar.querySelectorAll(".sidebar-recent-session");
@@ -318,9 +321,16 @@ describe("AppSidebar session pagination", () => {
     expect(button("See more")).not.toBeNull();
     expect(button("See less")).not.toBeNull();
 
+    button("See more")?.click();
+    await sidebar.updateComplete;
+    expect(rows()).toHaveLength(41);
+    expect(button("See more")).toBeNull();
+    expect(button("See less")).not.toBeNull();
+
     button("See less")?.click();
     await sidebar.updateComplete;
-    expect(rows()).toHaveLength(30);
+    expect(rows()).toHaveLength(10);
+    expect(button("See more")).not.toBeNull();
     expect(button("See less")).toBeNull();
   });
 });

@@ -2021,10 +2021,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               class="sidebar-session-pagination__button"
               aria-label=${t("chat.sidebar.seeMore")}
               @click=${() => {
-                this.visibleSessionLimit = Math.min(
-                  total,
-                  this.visibleSessionLimit + SIDEBAR_SESSION_PAGE_SIZE,
-                );
+                this.visibleSessionLimit += SIDEBAR_SESSION_PAGE_SIZE;
               }}
             >
               ${t("chat.sidebar.seeMore")}
@@ -2037,10 +2034,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               aria-label=${t("chat.sidebar.seeLess")}
               @click=${() => {
                 this.clearSessionSelection();
-                this.visibleSessionLimit = Math.max(
-                  SIDEBAR_SESSION_PAGE_SIZE,
-                  this.visibleSessionLimit - SIDEBAR_SESSION_PAGE_SIZE,
-                );
+                this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
               }}
             >
               ${t("chat.sidebar.seeLess")}
