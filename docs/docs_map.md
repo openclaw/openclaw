@@ -517,6 +517,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Setup
   - H2: Configure
   - H2: Access control
+  - H3: Mention gating for non-text messages
   - H2: Message behavior
   - H2: Channel data (rich messages)
   - H2: ACP support
