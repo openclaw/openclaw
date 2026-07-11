@@ -27,7 +27,6 @@ export type MockBaileysSocket = {
 };
 
 type MockBaileysModule = {
-  Browsers: BaileysExports["Browsers"];
   BufferJSON: {
     replacer: (key: string, value: unknown) => unknown;
     reviver: (key: string, value: unknown) => unknown;
@@ -154,13 +153,6 @@ export function createMockBaileys(): {
   });
 
   const mod: MockBaileysModule = {
-    Browsers: {
-      ubuntu: (browser: string) => ["Ubuntu", browser, "22.04.4"],
-      macOS: (browser: string) => ["Mac OS", browser, "14.4.1"],
-      baileys: (browser: string) => ["Baileys", browser, "6.5.0"],
-      windows: (browser: string) => ["Windows", browser, "10.0.22631"],
-      appropriate: (browser: string) => ["Ubuntu", browser, "22.04.4"],
-    },
     BufferJSON: {
       replacer: (_key: string, value: unknown) => value,
       reviver: (_key: string, value: unknown) => value,
