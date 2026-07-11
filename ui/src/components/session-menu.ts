@@ -72,6 +72,20 @@ class SessionMenu extends OpenClawLightDomElement {
     super.connectedCallback();
     document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    // Sidebar-hosted menus live inside the nav stacking context (z-index 10),
+    // which paints below the sidebar resizer divider (z-index 20); promoting
+    // the menu to the popover top layer keeps app chrome from bleeding
+    // through it (same pattern as openclaw-native-link-menu).
+    this.setAttribute("popover", "manual");
+    if (typeof this.showPopover === "function") {
+      try {
+        this.showPopover();
+        return;
+      } catch {
+        // Fall through to in-flow rendering when the top-layer API is unavailable.
+      }
+    }
+    this.removeAttribute("popover");
   }
 
   override disconnectedCallback() {
