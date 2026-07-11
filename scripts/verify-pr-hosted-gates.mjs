@@ -183,8 +183,8 @@ function successfulRunOrThrow(
 }
 
 function hasSuccessfulRecentReleaseGate(workflowRuns, sha, nowMs) {
-  const run = latestRun(workflowRuns.filter((run) => isReleaseGateCiRun(run, sha)));
-  return isSuccessfulRecentRun(run, nowMs);
+  const releaseGate = latestRun(workflowRuns.filter((run) => isReleaseGateCiRun(run, sha)));
+  return isSuccessfulRecentRun(releaseGate, nowMs);
 }
 
 function canCoverQueuedBuildArtifacts(workflowRuns, sha, nowMs) {
