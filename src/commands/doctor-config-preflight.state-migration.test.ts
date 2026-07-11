@@ -425,15 +425,16 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
-  it("does NOT block gateway readiness for informational 'already existed' warnings", async () => {
+  it("does NOT block gateway readiness when migrations produce only notices (no warnings)", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
     autoMigrateLegacyStateDir.mockResolvedValueOnce({
       migrated: false,
       skipped: false,
       changes: [],
-      warnings: [
-        "Left task registry sidecar in place because 3 rows already existed in shared state: key1",
-        "Left plugin-state sidecar in place because 2 rows already existed in shared state: key2",
+      warnings: [],
+      notices: [
+        "Skipped Memory Core session import because SQLite rows already exist",
+        "Skipped short-term recall import because SQLite rows already exist",
       ],
     });
 
@@ -448,13 +449,16 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
-  it("still blocks gateway readiness for real migration failure warnings", async () => {
+  it("still blocks gateway readiness for conflict warnings even when notices are present", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
     autoMigrateLegacyStateDir.mockResolvedValueOnce({
       migrated: false,
       skipped: false,
       changes: [],
-      warnings: ["Failed migrating task registry sidecar: permission denied"],
+      warnings: [
+        "Left task registry sidecar in place because 3 rows already existed in shared state: key1",
+      ],
+      notices: ["Skipped Memory Core session import because SQLite rows already exist"],
     });
 
     await expect(

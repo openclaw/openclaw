@@ -159,39 +159,6 @@ function formatStartupMigrationFailure(params: { warnings: string[]; blockers: s
   ].join("\n");
 }
 
-/**
- * Informational migration warnings that indicate data already exists in SQLite
- * (i.e. the migration target was already reached on a previous run). These
- * should NOT block gateway startup — they are the expected state after a
- * successful prior migration.
- */
-const INFORMATIONAL_MIGRATION_WARNING_PATTERNS: RegExp[] = [
-  /already existed in shared state/i,
-  /already exists in shared state/i,
-  /already has/i,
-];
-
-/**
- * Separates migration warnings into informational (data already migrated) and
- * blocking (real migration failures). Only blocking warnings should prevent the
- * gateway from reporting ready.
- */
-function partitionMigrationWarnings(warnings: string[]): {
-  informational: string[];
-  blocking: string[];
-} {
-  const informational: string[] = [];
-  const blocking: string[] = [];
-  for (const warning of warnings) {
-    if (INFORMATIONAL_MIGRATION_WARNING_PATTERNS.some((p) => p.test(warning))) {
-      informational.push(warning);
-    } else {
-      blocking.push(warning);
-    }
-  }
-  return { informational, blocking };
-}
-
 function throwStartupMigrationGuardRejected(): never {
   throw new Error(
     "OpenClaw startup migrations were skipped because the selected config changed during startup; refusing to report the gateway ready. Retry startup so the new config can be validated.",
@@ -390,24 +357,16 @@ export async function runDoctorConfigPreflight(
           ? startupMigrationHeartbeatError
           : new Error("OpenClaw startup migration lease heartbeat failed.");
       }
-      const { informational: infoWarnings, blocking: blockingWarnings } =
-        partitionMigrationWarnings(startupMigrationWarnings);
-      if (infoWarnings.length > 0) {
-        note(
-          infoWarnings.map((w) => `- ${w}`).join("\n"),
-          "Doctor informational migration notices",
-        );
-      }
       const blockers =
-        blockingWarnings.length > 0
+        startupMigrationWarnings.length > 0
           ? []
           : snapshot.valid
             ? await runStartupUpgradeConvergence({ cfg: baseConfig, env: process.env })
             : ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'];
-      if (blockingWarnings.length > 0 || blockers.length > 0) {
+      if (startupMigrationWarnings.length > 0 || blockers.length > 0) {
         throw new Error(
           formatStartupMigrationFailure({
-            warnings: blockingWarnings,
+            warnings: startupMigrationWarnings,
             blockers,
           }),
         );
