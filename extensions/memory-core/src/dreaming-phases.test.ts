@@ -427,7 +427,7 @@ describe("memory-core dreaming phases", () => {
 
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreams).toContain(
-      "(Fallback entry: narrative generation produced no usable text for this run.) A memory trace surfaced, but details were unavailable.",
+      "(Fallback entry: this run could not generate a diary narrative.) A memory trace surfaced, but details were unavailable.",
     );
     expect(dreams).not.toContain("Move backups to S3 Glacier.");
     expect(logger.error).not.toHaveBeenCalled();

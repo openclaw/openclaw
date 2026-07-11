@@ -146,8 +146,11 @@ function formatFallbackWriteFailure(err: unknown): string {
   return "unknown error";
 }
 
+// Cause-neutral marker: this fallback covers no-text completions, failed
+// runs, and request-scoped runtime unavailability alike — the specific cause
+// belongs in the gateway log line, never in DREAMS.md.
 const REQUEST_SCOPED_FALLBACK_NARRATIVE =
-  "(Fallback entry: narrative generation produced no usable text for this run.) A memory trace surfaced, but details were unavailable.";
+  "(Fallback entry: this run could not generate a diary narrative.) A memory trace surfaced, but details were unavailable.";
 
 export async function appendFallbackNarrativeEntry(params: {
   workspaceDir: string;

@@ -936,7 +936,7 @@ describe("generateAndAppendDreamNarrative", () => {
       expect(subagent.getSessionMessages).toHaveBeenCalledTimes(5);
       const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
       expect(content).toContain(
-        "(Fallback entry: narrative generation produced no usable text for this run.) A memory trace surfaced, but details were unavailable.",
+        "(Fallback entry: this run could not generate a diary narrative.) A memory trace surfaced, but details were unavailable.",
       );
       expectLogIncludes(logger.warn, "produced no text");
     } finally {
@@ -1105,7 +1105,7 @@ describe("generateAndAppendDreamNarrative", () => {
     // placeholder is written on fallback.
     expect(content).not.toContain("some memory");
     expect(content).toContain(
-      "(Fallback entry: narrative generation produced no usable text for this run.) A memory trace surfaced, but details were unavailable.",
+      "(Fallback entry: this run could not generate a diary narrative.) A memory trace surfaced, but details were unavailable.",
     );
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("status=timeout"));
   });
@@ -1138,7 +1138,7 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(content).not.toContain("Session Key:");
     expect(content).not.toContain("agent:main:dashboard");
     expect(content).toContain(
-      "(Fallback entry: narrative generation produced no usable text for this run.) A memory trace surfaced, but details were unavailable.",
+      "(Fallback entry: this run could not generate a diary narrative.) A memory trace surfaced, but details were unavailable.",
     );
   });
 
@@ -1203,7 +1203,7 @@ describe("generateAndAppendDreamNarrative", () => {
     // Raw staging snippets must never leak into the diary on fallback.
     expect(content).not.toContain("API endpoints need authentication");
     expect(content).toContain(
-      "(Fallback entry: narrative generation produced no usable text for this run.) A memory trace surfaced, but details were unavailable.",
+      "(Fallback entry: this run could not generate a diary narrative.) A memory trace surfaced, but details were unavailable.",
     );
     expectLogIncludes(logger.info, "request-scoped");
     expectLogExcludes(logger.warn, "request-scoped");
@@ -1237,7 +1237,7 @@ describe("generateAndAppendDreamNarrative", () => {
     // Raw staging promotions must never leak into the diary on fallback.
     expect(content).not.toContain("A durable candidate surfaced.");
     expect(content).toContain(
-      "(Fallback entry: narrative generation produced no usable text for this run.) A memory trace surfaced, but details were unavailable.",
+      "(Fallback entry: this run could not generate a diary narrative.) A memory trace surfaced, but details were unavailable.",
     );
     expectLogIncludes(logger.info, "request-scoped");
     expectLogExcludes(logger.warn, "request-scoped");
