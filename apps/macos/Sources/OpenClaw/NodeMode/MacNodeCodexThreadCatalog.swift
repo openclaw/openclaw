@@ -1150,13 +1150,8 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
         Self.setNonBlocking(self.stderrPipe.fileHandleForReading)
         self.stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             guard let session = self else { return }
-            let chunk = Self.readAvailable(from: handle, maxBytes: session.maxLineBytes)
-            if chunk.reachedEOF {
-                handle.readabilityHandler = nil
-            }
-            guard !chunk.data.isEmpty else { return }
             session.queue.async { [session] in
-                session.consumeStdout(chunk.data)
+                session.drainStdout(from: handle)
             }
         }
         // Drain stderr so the child cannot block. App Server stderr is deliberately
@@ -1169,6 +1164,9 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
         self.process.terminationHandler = { [weak self] _ in
             guard let session = self else { return }
             session.queue.async { [session] in
+                // A short-lived App Server can exit before its readability callback
+                // is admitted. Drain its final frame before projecting termination.
+                session.drainStdout(from: session.stdoutPipe.fileHandleForReading)
                 guard !session.finished else { return }
                 session.finish(.failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable))
             }
@@ -1189,6 +1187,16 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
         } catch {
             self.finish(.failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable))
         }
+    }
+
+    private func drainStdout(from handle: FileHandle) {
+        guard !self.finished else { return }
+        let chunk = Self.readAvailable(from: handle, maxBytes: self.maxLineBytes)
+        if chunk.reachedEOF {
+            handle.readabilityHandler = nil
+        }
+        guard !chunk.data.isEmpty else { return }
+        self.consumeStdout(chunk.data)
     }
 
     private func consumeStdout(_ data: Data) {
