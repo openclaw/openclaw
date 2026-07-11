@@ -339,10 +339,11 @@ describe("createEmbeddedRunAuthController", () => {
 
     await controller.initializeAuthProfile();
     expect(harness.runtimeModel.baseUrl).toBe("https://default-runtime.example.com/v1");
-    expect(harness.runtimeModel.headers).toEqual({
-      "x-base": "base",
-      "x-profile-token": "default-profile-token",
-    });
+    expect(harness.runtimeModel.headers?.["x-base"]).toBe("base");
+    expectProtectedRuntimeValue(
+      harness.runtimeModel.headers?.["x-profile-token"],
+      "default-profile-token",
+    );
 
     await controller.advanceAuthProfile();
 
