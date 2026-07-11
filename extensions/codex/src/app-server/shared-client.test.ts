@@ -7,7 +7,11 @@ import { createClientHarness } from "./test-support.js";
 const mocks = vi.hoisted(() => ({
   bridgeCodexAppServerStartOptions: vi.fn(async ({ startOptions }) => startOptions),
   applyCodexAppServerAuthProfile: vi.fn(
-    async (_params?: { agentDir?: string; authProfileId?: string; config?: unknown }) => undefined,
+    async (_params?: {
+      agentDir?: string;
+      authProfileId?: string;
+      config?: unknown;
+    }): Promise<void> => undefined,
   ),
   resolveCodexAppServerAuthProfileIdForAgent: vi.fn(
     (params?: { authProfileId?: string }) => params?.authProfileId,
@@ -128,8 +132,8 @@ function clientStartCall(startSpy: unknown) {
 
 function deferNextAuthProfileApplication(): () => void {
   let release: () => void = () => {};
-  const gate = new Promise<undefined>((resolve) => {
-    release = () => resolve(undefined);
+  const gate = new Promise<void>((resolve) => {
+    release = () => resolve();
   });
   mocks.applyCodexAppServerAuthProfile.mockReturnValueOnce(gate);
   return release;
