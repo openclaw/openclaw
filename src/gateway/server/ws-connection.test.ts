@@ -97,6 +97,11 @@ describe("attachGatewayWsConnectionHandler", () => {
 
   it("keeps worker sockets off the legacy challenge, plugin surface, and gateway budget", async () => {
     const socket = createGatewayWsTestSocket();
+    const previous = {
+      socket: { terminate: vi.fn() },
+      worker: { environmentId: "worker-1" },
+    };
+    const clients = new Set<unknown>([previous]);
     const gatewayBudget = { release: vi.fn() };
     const workerBudget = { release: vi.fn() };
     const getPluginNodeCapabilities = vi.fn(() => [{ surface: "canvas" }]);
@@ -108,6 +113,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     });
 
     await connectTestWs({
+      clients,
       socket,
       options: {
         preauthConnectionBudget: gatewayBudget as never,
@@ -118,7 +124,18 @@ describe("attachGatewayWsConnectionHandler", () => {
 
     expect(socket.send).not.toHaveBeenCalled();
     expect(getPluginNodeCapabilities).not.toHaveBeenCalled();
-    expect(firstAttachedWorkerHandlerParams()).toMatchObject({ connId: expect.any(String) });
+    const handler = firstAttachedWorkerHandlerParams() as {
+      setClient(client: never): boolean;
+    };
+    const client = {
+      socket,
+      connect: { client: { id: "openclaw-worker", mode: "worker" } },
+      worker: { environmentId: "worker-1" },
+    };
+    expect(handler.setClient(client as never)).toBe(true);
+    expect(previous).toMatchObject({ invalidated: true });
+    expect(previous.socket.terminate).toHaveBeenCalledOnce();
+    expect(clients).toEqual(new Set([client]));
     expect(attachGatewayWsMessageHandlerMock).not.toHaveBeenCalled();
     socket.emit("close", 1000, Buffer.alloc(0));
     expect(buildRequestContext).not.toHaveBeenCalled();

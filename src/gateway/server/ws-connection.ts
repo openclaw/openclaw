@@ -586,6 +586,20 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       if (closed) {
         return false;
       }
+      if (next.worker) {
+        for (const existing of clients) {
+          if (existing.worker?.environmentId === next.worker.environmentId) {
+            // Fence queued frames before transport teardown releases the old handler and timers.
+            existing.invalidated = true;
+            clients.delete(existing);
+            try {
+              existing.socket.terminate();
+            } catch {
+              existing.socket.close(1008, "credential-replaced");
+            }
+          }
+        }
+      }
       releasePreauthBudget();
       client = next;
       clients.add(next);

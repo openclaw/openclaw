@@ -253,6 +253,10 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
 
   const handleMessage = async (data: RawData, admissionOpen: boolean) => {
     const client = params.getClient();
+    if (client?.invalidated) {
+      failFrame(1008, "credential-replaced");
+      return;
+    }
     if (rawDataByteLength(data) > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
       if (client) {
         failFrame(1009, "invalid-frame");

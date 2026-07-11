@@ -6,6 +6,7 @@ import {
   WorkerAdmissionResponseFrameSchema,
   WorkerHeartbeatRequestFrameSchema,
   WorkerHeartbeatResponseFrameSchema,
+  WorkerProtocolCloseReasonSchema,
   WORKER_RPC_SET_VERSION,
   validateWorkerAdmissionHandshake,
   validateWorkerConnectRequestFrame,
@@ -111,23 +112,8 @@ describe("worker protocol schemas", () => {
     expect(Value.Check(WorkerHeartbeatResponseFrameSchema, response)).toBe(true);
   });
 
-  it("keeps worker response errors bounded to closed reasons", () => {
-    const failure = {
-      type: "res" as const,
-      id: "connect-1",
-      ok: false as const,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "worker credential rejected",
-        details: { reason: "invalid-credential" },
-      },
-    };
-    expect(Value.Check(WorkerAdmissionResponseFrameSchema, failure)).toBe(true);
-    expect(
-      Value.Check(WorkerAdmissionResponseFrameSchema, {
-        ...failure,
-        error: { ...failure.error, details: { reason: "not-a-worker-reason" } },
-      }),
-    ).toBe(false);
+  it("keeps worker close reasons closed", () => {
+    expect(Value.Check(WorkerProtocolCloseReasonSchema, "credential-replaced")).toBe(true);
+    expect(Value.Check(WorkerProtocolCloseReasonSchema, "not-a-worker-reason")).toBe(false);
   });
 });
