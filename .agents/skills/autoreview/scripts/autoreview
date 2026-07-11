@@ -9,6 +9,7 @@ import json
 import os
 import queue
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -137,8 +138,8 @@ TRACKED_TOKEN_CREDENTIAL_EXTENSIONS = {
 }
 SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)(?:"
-    r"[\"'](?:api[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|auth[_-]?token|id[_-]?token|token|secret|password)[\"']"
-    r"|(?:api[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|auth[_-]?token|id[_-]?token|token|secret|password)"
+    r"[\"'](?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|auth[_-]?token|id[_-]?token|token|secret|password)[\"']"
+    r"|(?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|auth[_-]?token|id[_-]?token|token|secret|password)"
     r")\s*[:=]\s*"
     r"(?:\"(?P<double_value>[^\"\r\n]{12,})\"|"
     r"'(?P<single_value>[^'\r\n]{12,})'|"
@@ -193,7 +194,7 @@ UNQUOTED_SECRET_REFERENCE_PATTERNS = (
     re.compile(
         r"^(?:process\.env|os\.environ|env|cfg|config|params|payload|provider|"
         r"request|response|result|account|client|auth|auth_response|oauth_response|"
-        r"token_response|api_response|authentication|credentials|settings)"
+        r"token_response|api_response|authentication|credentials|settings|self|this)"
         r"(?:[.\[].*)$"
     ),
 )
@@ -476,11 +477,27 @@ def external_env_path(repo: Path, value: str) -> bool:
 
 
 def external_env_path_value(repo: Path, key: str, value: str) -> bool:
+    return normalize_external_env_path_value(repo, key, value) is not None
+
+
+def normalize_external_env_path_value(
+    repo: Path,
+    key: str,
+    value: str,
+) -> str | None:
     values = value.split(os.pathsep) if key == "SSL_CERT_DIR" else [value]
-    return bool(values) and all(
-        item and external_env_path(repo, item)
-        for item in values
-    )
+    normalized: list[str] = []
+    for item in values:
+        if not item:
+            return None
+        try:
+            resolved = Path(item).expanduser().resolve()
+        except OSError:
+            return None
+        if is_within(resolved, repo.resolve()):
+            return None
+        normalized.append(str(resolved))
+    return os.pathsep.join(normalized) if normalized else None
 
 
 def safe_dbus_session_address(repo: Path, value: str) -> bool:
@@ -707,13 +724,23 @@ def safe_engine_env(
             env["XDG_RUNTIME_DIR"] = xdg_runtime_dir
         for key in CODEX_TRUST_PATH_ENV_KEYS:
             value = os.environ.get(key)
-            if value and external_env_path_value(repo, key, value):
-                env[key] = value
+            normalized = (
+                normalize_external_env_path_value(repo, key, value)
+                if value
+                else None
+            )
+            if normalized:
+                env[key] = normalized
     if engine in {"claude", "opencode", "pi"}:
         for key in PROVIDER_CREDENTIAL_PATH_ENV_KEYS:
             value = os.environ.get(key)
-            if value and external_env_path_value(repo, key, value):
-                env[key] = value
+            normalized = (
+                normalize_external_env_path_value(repo, key, value)
+                if value
+                else None
+            )
+            if normalized:
+                env[key] = normalized
     if engine == "opencode" and (xdg_data_home := os.environ.get("XDG_DATA_HOME")):
         if external_env_path(repo, xdg_data_home):
             env["XDG_DATA_HOME"] = xdg_data_home
@@ -1110,7 +1137,12 @@ def find_command(name: str, repo: Path) -> str | None:
     command = Path(name)
     if has_directory_component(name, command):
         base = command if command.is_absolute() else repo / command
-        return first_executable_candidate(base)
+        if is_within(
+            Path(os.path.abspath(base)),
+            Path(os.path.abspath(repo)),
+        ):
+            return None
+        return first_executable_candidate(base, reject_root=repo.resolve())
     for part in os.environ.get("PATH", "").split(os.pathsep):
         if not part or part == ".":
             continue
@@ -1149,13 +1181,17 @@ def first_executable_candidate(path: Path, *, reject_root: Path | None = None) -
         candidates = [path]
     for candidate in candidates:
         if candidate.is_file() and os.access(candidate, os.X_OK):
-            if reject_root is not None:
-                try:
-                    if is_within(candidate.resolve(), reject_root):
-                        continue
-                except OSError:
-                    continue
-            return str(candidate)
+            try:
+                lexical_candidate = Path(os.path.abspath(candidate))
+                resolved_candidate = candidate.resolve(strict=True)
+            except OSError:
+                continue
+            if reject_root is not None and (
+                is_within(lexical_candidate, reject_root)
+                or is_within(resolved_candidate, reject_root)
+            ):
+                continue
+            return str(lexical_candidate)
     return None
 
 
@@ -1198,11 +1234,44 @@ def bounded_field(text: str, limit: int) -> str:
 
 
 def read_prefix(path: Path, limit: int) -> tuple[bytes, bool]:
+    descriptor: int | None = None
     try:
-        with path.open("rb") as handle:
-            data = handle.read(limit + 1)
+        before = path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode):
+            raise OSError("not a regular file")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
+        ):
+            raise OSError("file changed while opening")
+        chunks: list[bytes] = []
+        remaining = limit + 1
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        if (
+            (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        ):
+            raise OSError("file changed while reading")
+        data = b"".join(chunks)
     except OSError as exc:
         raise SystemExit(f"unreadable file: {path}: {exc}") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     return data[:limit], len(data) > limit
 
 
@@ -1213,7 +1282,10 @@ def read_text_with_status(path: Path, limit: int = MAX_BUNDLE_TEXT_BYTES) -> tup
         return f"[unreadable: {exc}]", True
     if b"\0" in data:
         return "[binary file omitted]", True
-    text = data.decode("utf-8", errors="replace")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return "[non-UTF-8 file omitted]", True
     if len(text) > limit:
         text = text[:limit]
         truncated = True
@@ -1454,34 +1526,55 @@ def file_bundle_risk(
     *,
     allow_binary_omission: bool = False,
 ) -> str | None:
+    return file_bundle_snapshot(
+        repo,
+        path,
+        rel,
+        allow_binary_omission=allow_binary_omission,
+    )[2]
+
+
+def file_bundle_snapshot(
+    repo: Path,
+    path: Path,
+    rel: str,
+    *,
+    allow_binary_omission: bool = False,
+) -> tuple[str, bool, str | None]:
     normalized = rel.replace(os.sep, "/")
     path_risk = sensitive_repo_path_risk(normalized)
     if path_risk:
-        return path_risk
+        return "", True, path_risk
     if path.is_symlink():
-        return "symlink"
+        return "", True, "symlink"
     try:
         resolved = path.resolve(strict=True)
     except OSError as exc:
-        return f"unreadable file: {exc}"
+        return "", True, f"unreadable file: {exc}"
     if not is_within(resolved, repo.resolve()):
-        return "path outside repository"
+        return "", True, "path outside repository"
     if not path.is_file():
-        return "not a regular file"
+        return "", True, "not a regular file"
     try:
         data, truncated = read_prefix(path, MAX_BUNDLE_TEXT_BYTES)
     except SystemExit as exc:
-        return str(exc)
+        return "", True, str(exc)
     if b"\0" in data:
-        return None if allow_binary_omission else "binary file"
+        if allow_binary_omission:
+            return "[binary file omitted]", True, None
+        return "", True, "binary file"
     if truncated:
-        return "file too large to scan safely"
-    if secret_text_risk(data.decode("utf-8", errors="replace")):
-        return "secret-like content"
-    return None
+        return "", True, "file too large to scan safely"
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return "", True, "non-UTF-8 file"
+    if secret_text_risk(text):
+        return "", True, "secret-like content"
+    return text, False, None
 
 
-def safe_untracked_files(repo: Path) -> list[str]:
+def safe_untracked_file_snapshots(repo: Path) -> list[tuple[str, str, bool]]:
     args: list[str] = []
     if excludes_file := global_excludes_file(repo):
         args.extend(["-c", f"core.excludesFile={excludes_file}"])
@@ -1494,13 +1587,18 @@ def safe_untracked_files(repo: Path) -> list[str]:
         "-z",
     )
     blocked: list[str] = []
-    included: list[str] = []
+    included: list[tuple[str, str, bool]] = []
     for rel in files:
-        risk = file_bundle_risk(repo, repo / rel, rel, allow_binary_omission=True)
+        content, truncated, risk = file_bundle_snapshot(
+            repo,
+            repo / rel,
+            rel,
+            allow_binary_omission=True,
+        )
         if risk:
             blocked.append(f"{rel} ({risk})")
         else:
-            included.append(rel)
+            included.append((rel, content, truncated))
     if blocked:
         details = "\n".join(f"- {item}" for item in blocked[:20])
         more = f"\n... {len(blocked) - 20} more" if len(blocked) > 20 else ""
@@ -1510,6 +1608,10 @@ def safe_untracked_files(repo: Path) -> list[str]:
             f"{details}{more}"
         )
     return included
+
+
+def safe_untracked_files(repo: Path) -> list[str]:
+    return [rel for rel, _content, _truncated in safe_untracked_file_snapshots(repo)]
 
 
 def local_status(repo: Path, untracked: list[str]) -> str:
@@ -1545,7 +1647,8 @@ def local_bundle(repo: Path) -> tuple[str, bool]:
         "--name-only",
         "-z",
     )
-    untracked = safe_untracked_files(repo)
+    untracked_snapshots = safe_untracked_file_snapshots(repo)
+    untracked = [rel for rel, _content, _truncated in untracked_snapshots]
     if not staged_patch.strip() and not unstaged_patch.strip() and not untracked:
         raise SystemExit("no local changes to review")
     staged_patch = validate_review_patch("local staged diff", staged_paths, staged_patch)
@@ -1563,9 +1666,7 @@ def local_bundle(repo: Path) -> tuple[str, bool]:
     input_truncated = len(staged_patch) > 180_000 or len(unstaged_patch) > 180_000
     if untracked:
         parts.append("# Untracked Files")
-        for rel in untracked:
-            path = repo / rel
-            content, truncated = read_text_with_status(path)
+        for rel, content, truncated in untracked_snapshots:
             input_truncated = input_truncated or truncated
             parts.append(f"## {rel}\n{content}")
     return "\n\n".join(parts), input_truncated
@@ -1730,10 +1831,9 @@ def validate_evidence_file(repo: Path, raw_path: str, label: str) -> tuple[Path,
     if not is_within(path, repo.resolve()):
         raise SystemExit(f"{label} must be inside the reviewed repository: {raw_path}")
     rel = str(path.relative_to(repo.resolve()))
-    risk = file_bundle_risk(repo, path, rel)
+    content, truncated, risk = file_bundle_snapshot(repo, path, rel)
     if risk:
         raise SystemExit(f"refusing to include unsafe {label}: {rel} ({risk})")
-    content, truncated = read_text_with_status(path)
     require_no_secret_values(f"{label} {rel}", content)
     return path, content, truncated
 
@@ -2169,6 +2269,7 @@ def codex_model_access_failure(result: subprocess.CompletedProcess[str], model: 
                 "does not exist or you do not have access",
                 "do not have access to",
                 "don't have access to",
+                "does not appear in the list of models available to your account",
                 "not supported when using codex",
             )
         ):
