@@ -296,7 +296,7 @@ function createSessionSyncYield(total: number): () => Promise<void> {
 }
 
 export abstract class MemoryManagerSyncOps {
-  protected abstract readonly acquireLocalService?: MemoryCoreAcquireLocalService;
+  protected readonly acquireLocalService?: MemoryCoreAcquireLocalService;
   protected abstract readonly cfg: OpenClawConfig;
   protected abstract readonly agentId: string;
   protected abstract readonly workspaceDir: string;
