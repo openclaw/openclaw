@@ -172,16 +172,6 @@ export const tr: TranslationMap = {
       node: "Düğüm",
     },
   },
-  instances: {
-    title: "Bağlı Örnekler",
-    subtitle: "Gateway ve istemcilerden gelen varlık işaretçileri.",
-    showHosts: "Ana bilgisayarları ve IP'leri göster",
-    hideHosts: "Ana bilgisayarları ve IP'leri gizle",
-    toggleHostVisibility: "Ana bilgisayar görünürlüğünü değiştir",
-    noInstances: "Henüz bildirilmiş örnek yok.",
-    lastInput: "Son giriş {time}",
-    reason: "Neden {reason}",
-  },
   worktrees: {
     newWorktree: "Yeni worktree",
     owner: "Sahip",
@@ -393,6 +383,7 @@ export const tr: TranslationMap = {
       skills: "Skills",
       channels: "Kanallar",
       cronJobs: "Cron İşleri",
+      memory: "Bellek",
     },
     context: {
       title: "Agent Context",
@@ -625,7 +616,6 @@ export const tr: TranslationMap = {
     workboard: "Çalışma panosu",
     worktrees: "Worktree'ler",
     channels: "Kanallar",
-    instances: "Örnekler",
     sessions: "Oturumlar",
     usage: "Kullanım",
     cron: "Cron İşleri",
@@ -647,7 +637,6 @@ export const tr: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Hata Ayıklama",
     logs: "Günlükler",
-    dreams: "Düşler",
     plugin: "Eklenti",
   },
   subtitles: {
@@ -657,7 +646,6 @@ export const tr: TranslationMap = {
     workboard: "Ajan iş kuyruğu ve oturum devri.",
     worktrees: "Yalıtılmış aracı görev checkout'ları ve kurtarma anlık görüntüleri.",
     channels: "Kanallar ve ayarlar.",
-    instances: "Bağlı istemciler ve düğümler.",
     sessions: "Etkin oturumlar ve varsayılanlar.",
     usage: "API kullanımı ve maliyetler.",
     cron: "Uyandırmalar ve yinelenen çalıştırmalar.",
@@ -680,8 +668,10 @@ export const tr: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Anlık görüntüler, olaylar, RPC.",
     logs: "Canlı Gateway günlükleri.",
-    dreams: "Uyku sırasında bellek birleştirme.",
     plugin: "Eklenti tarafından sağlanan panel.",
+  },
+  mcpPage: {
+    manageServersLink: "Eklentiler sayfasında sunucuları yönetin.",
   },
   pluginsPage: {
     searchLabel: "Eklentileri ara",
@@ -1607,10 +1597,6 @@ export const tr: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Aracı",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Sahne",
       diary: "Günlük",
@@ -2205,9 +2191,9 @@ export const tr: TranslationMap = {
       workSessions: "Çalışma",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Son sohbetler",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
@@ -2514,6 +2500,50 @@ export const tr: TranslationMap = {
       howHeading: "Nasıl çalışmalı?",
       howHint: "Sonuçların nasıl iletileceğini seçin.",
       title: "Yeni Otomasyon",
+      createAndRun: "Oluştur ve şimdi çalıştır",
+    },
+    suggestions: {
+      title: "Otomasyon fikirleri",
+      hint: "Başlangıç otomasyonları — birini seçin ve oluşturmadan önce düzenleyin.",
+      use: "Fikri kullan →",
+      ideas: {
+        repoPulse: {
+          name: "Repo nabzı",
+          tagline: "Gece açılan sorunlar, PR'lar ve CI hataları, aciliyete göre sıralanmış.",
+          prompt:
+            "Depolarımdaki gece aktivitesini incele: yeni sorunlar, pull request'ler ve CI hataları. Bugün en çok dikkat etmem gereken üç şeyi özetle; her biri için bir bağlantı ve tek satırlık bir neden ekle.",
+        },
+        standupGhostwriter: {
+          name: "Standup yazarı",
+          tagline: "Dünkü çalışmalarınızdan hazırlanmış standup güncellemesi.",
+          prompt:
+            "Dünkü commit'lerimden, birleştirilen pull request'lerden ve açık inceleme başlıklarından standup güncellememi taslak olarak hazırla. En fazla üç madde: yapıldı, yapılıyor, engellendi.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News kaşifi",
+          tagline: "Kahvenize değer üç bağlantı, sıcak yorumlarıyla.",
+          prompt:
+            "Bugünkü Hacker News ana sayfasını AI ajanları, geliştirici araçları ve TypeScript hakkındaki gönderiler için tara. En ilginç üç bağlantıyı, her biri için tek satırlık sıcak bir yorumla bana gönder.",
+        },
+        dependencyRadar: {
+          name: "Bağımlılık radarı",
+          tagline: "Güncel olmayan veya güvenlik açığı olan bağımlılıklar, güncelleme notlarıyla.",
+          prompt:
+            "Ana projemi güncel olmayan veya güvenlik açığı bulunan bağımlılıklar açısından kontrol et. Önemli güncellemeleri tek satırlık risk notu ile listele ve güncelleme komutunu taslak olarak hazırla.",
+        },
+        watchdog: {
+          name: "Gece nöbeti",
+          tagline: "Tek satırlık kararla saatlik sağlık kontrolü.",
+          prompt:
+            "Hizmetlerimin ve Gateway'imin sağlıklı olduğunu kontrol et: son günlükleri yeni hatalar, yeniden başlatmalar veya olağandışı yük için tara. Her şey yolundaysa tek bir kısa 'sorun yok' satırıyla yanıt ver; bir şey bozuk görünüyorsa neyin başarısız olduğunu ve nereden bakmaya başlanacağını bildir.",
+        },
+        polyglotMinute: {
+          name: "Poliglot dakikası",
+          tagline: "Sabah kahvenizle birlikte işe yarar bir yabancı dil ifadesi.",
+          prompt:
+            "Bana Japonca'da işe yarar bir ifade öğret: ifadeyi, nasıl telaffuz edileceğini, gerçek anlamını ve ne zaman kullanılacağını. Beş satırı geçmesin.",
+        },
+      },
     },
     summary: {
       enabled: "Etkin",

@@ -422,7 +422,7 @@ function pruneAuthProfileStoreReferences(
             provider,
             profileIds.filter((profileId) => keptOrderProfileIds.has(profileId)),
           ])
-          .filter(([, profileIds]) => profileIds.length > 0),
+          .filter(([, profileIds]) => Array.isArray(profileIds) && profileIds.length > 0),
       )
     : undefined;
   store.lastGood = store.lastGood
@@ -758,7 +758,12 @@ export async function updateAuthProfileStoreWithLock(params: {
       }
       return store;
     });
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn(`auth profile store update failed: ${message}`, {
+      agentDir: params.agentDir,
+      error: message,
+    });
     return null;
   }
 }

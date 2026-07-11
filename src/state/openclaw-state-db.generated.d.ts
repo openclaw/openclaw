@@ -12,6 +12,7 @@ export type Generated<T> =
 
 export interface AcpReplayEvents {
   at: number;
+  estimated_bytes: Generated<number>;
   run_id: string | null;
   seq: number;
   session_id: string;
@@ -23,6 +24,7 @@ export interface AcpReplaySessions {
   complete: number;
   created_at: number;
   cwd: string;
+  estimated_bytes: Generated<number>;
   next_seq: number;
   session_id: string;
   session_key: string;
@@ -81,23 +83,44 @@ export interface ApnsRegistrations {
 }
 
 export interface AuditEvents {
+  account_ref: string | null;
   action: string;
   actor_id: string;
   actor_type: string;
-  agent_id: string;
+  agent_id: string | null;
+  channel: string | null;
+  conversation_kind: string | null;
+  conversation_ref: string | null;
+  delivery_kind: string | null;
+  direction: string | null;
+  duration_ms: number | null;
   error_code: string | null;
   event_id: string;
+  failure_stage: string | null;
   kind: string;
+  message_outcome: string | null;
+  message_ref: string | null;
   occurred_at: number;
-  run_id: string;
+  reason_code: string | null;
+  result_count: number | null;
+  run_id: string | null;
+  schema_version: Generated<number>;
   sequence: Generated<number>;
   session_id: string | null;
   session_key: string | null;
   source_id: string;
   source_sequence: number;
   status: string;
+  target_ref: string | null;
   tool_call_id: string | null;
   tool_name: string | null;
+}
+
+export interface AuditIdentityKeys {
+  created_at: number;
+  id: Generated<number>;
+  key: Uint8Array;
+  key_id: string;
 }
 
 export interface AuthProfileState {
@@ -1043,6 +1066,17 @@ export interface WebPushVapidKeys {
   updated_at_ms: number;
 }
 
+export interface WorkerEnvironmentCredentials {
+  bundle_hash: string;
+  credential_hash: string;
+  delivered_at_ms: number | null;
+  environment_id: string;
+  expires_at_ms: number;
+  owner_epoch: number;
+  rpc_set_version: number;
+  session_id: string | null;
+}
+
 export interface WorkerEnvironments {
   attached_session_ids_json: Generated<string>;
   bootstrap_bundle_hash: string | null;
@@ -1054,6 +1088,7 @@ export interface WorkerEnvironments {
   idle_since_at_ms: number | null;
   last_error: string | null;
   lease_id: string | null;
+  owner_epoch: Generated<number>;
   profile_id: string;
   profile_snapshot_json: string;
   provider_id: string;
@@ -1102,6 +1137,7 @@ export interface DB {
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registrations: ApnsRegistrations;
   audit_events: AuditEvents;
+  audit_identity_keys: AuditIdentityKeys;
   auth_profile_state: AuthProfileState;
   auth_profile_stores: AuthProfileStores;
   backup_runs: BackupRuns;
@@ -1168,6 +1204,7 @@ export interface DB {
   voicewake_triggers: VoicewakeTriggers;
   web_push_subscriptions: WebPushSubscriptions;
   web_push_vapid_keys: WebPushVapidKeys;
+  worker_environment_credentials: WorkerEnvironmentCredentials;
   worker_environments: WorkerEnvironments;
   workspace_setup_state: WorkspaceSetupState;
   worktrees: Worktrees;

@@ -170,16 +170,6 @@ export const hi: TranslationMap = {
       node: "नोड",
     },
   },
-  instances: {
-    title: "कनेक्टेड इंस्टेंस",
-    subtitle: "गेटवे और क्लाइंट्स से उपस्थिति बीकन।",
-    showHosts: "होस्ट और IP दिखाएँ",
-    hideHosts: "होस्ट और IP छिपाएँ",
-    toggleHostVisibility: "होस्ट दृश्यता टॉगल करें",
-    noInstances: "अभी तक कोई इंस्टेंस रिपोर्ट नहीं किया गया है।",
-    lastInput: "अंतिम इनपुट {time}",
-    reason: "कारण {reason}",
-  },
   worktrees: {
     newWorktree: "नया worktree",
     owner: "स्वामी",
@@ -389,6 +379,7 @@ export const hi: TranslationMap = {
       skills: "स्किल्स",
       channels: "चैनल",
       cronJobs: "Cron Jobs",
+      memory: "मेमोरी",
     },
     context: {
       title: "एजेंट संदर्भ",
@@ -620,7 +611,6 @@ export const hi: TranslationMap = {
     workboard: "वर्कबोर्ड",
     worktrees: "Worktrees",
     channels: "चैनल",
-    instances: "इंस्टेंस",
     sessions: "सत्र",
     usage: "उपयोग",
     cron: "Cron Jobs",
@@ -642,7 +632,6 @@ export const hi: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "डीबग",
     logs: "लॉग्स",
-    dreams: "ड्रीमिंग",
     plugin: "प्लगइन",
   },
   subtitles: {
@@ -652,7 +641,6 @@ export const hi: TranslationMap = {
     workboard: "एजेंट कार्य कतार और सेशन हैंडऑफ़।",
     worktrees: "पृथक agent task checkouts और recovery snapshots.",
     channels: "चैनल और सेटिंग्स।",
-    instances: "कनेक्टेड क्लाइंट्स और नोड्स।",
     sessions: "सक्रिय सेशन और डिफ़ॉल्ट्स।",
     usage: "API उपयोग और लागतें।",
     cron: "वेकअप्स और आवर्ती रन।",
@@ -674,8 +662,10 @@ export const hi: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "स्नैपशॉट, इवेंट, RPC।",
     logs: "लाइव gateway लॉग।",
-    dreams: "मेमोरी ड्रीमिंग, कंसॉलिडेशन, और रिफ्लेक्शन।",
     plugin: "प्लगइन द्वारा उपलब्ध कराया गया पैनल।",
+  },
+  mcpPage: {
+    manageServersLink: "Plugins पेज पर सर्वर प्रबंधित करें।",
   },
   pluginsPage: {
     searchLabel: "प्लगइन खोजें",
@@ -1582,10 +1572,6 @@ export const hi: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "एजेंट",
-      ariaLabel: "ड्रीमिंग एजेंट",
-    },
     tabs: {
       scene: "दृश्य",
       diary: "डायरी",
@@ -2167,9 +2153,9 @@ export const hi: TranslationMap = {
       workSessions: "कार्य",
     },
     welcome: {
-      ready: "चैट के लिए तैयार",
       hintBeforeShortcut: "नीचे संदेश टाइप करें ·",
       hintAfterShortcut: "कमांड के लिए",
+      recentSessions: "हाल की चैट्स",
       suggestions: {
         whatCanYouDo: "आप क्या कर सकते हैं?",
         summarizeRecentSessions: "मेरे हाल के सेशन का सारांश दें",
@@ -2474,6 +2460,50 @@ export const hi: TranslationMap = {
       howHeading: "यह कैसे काम करना चाहिए?",
       howHint: "चुनें कि परिणाम कैसे डिलीवर किए जाएँ।",
       title: "नया Cron Job",
+      createAndRun: "बनाएं और अभी चलाएं",
+    },
+    suggestions: {
+      title: "ऑटोमेशन के विचार",
+      hint: "शुरुआती ऑटोमेशन — एक चुनें और बनाने से पहले इसे अपने अनुसार बदलें।",
+      use: "विचार उपयोग करें →",
+      ideas: {
+        repoPulse: {
+          name: "Repo pulse",
+          tagline: "रात भर की issues, PRs और CI failures, तात्कालिकता के अनुसार क्रमबद्ध।",
+          prompt:
+            "मेरे repositories में रात भर की गतिविधि की समीक्षा करें: नई issues, pull requests और CI failures। तीन चीज़ें सारांशित करें जिन पर आज मुझे सबसे अधिक ध्यान देने की ज़रूरत है, प्रत्येक के साथ एक लिंक और एक पंक्ति का कारण।",
+        },
+        standupGhostwriter: {
+          name: "Standup ghostwriter",
+          tagline: "आपका standup अपडेट, कल के काम से तैयार।",
+          prompt:
+            "कल के commits, merged pull requests और open review threads से मेरा standup अपडेट तैयार करें। अधिकतम तीन बुलेट: किया, कर रहे हैं, अटका हुआ।",
+        },
+        hackerNewsScout: {
+          name: "Hacker News scout",
+          tagline: "आपकी कॉफी के साथ पढ़ने लायक तीन लिंक, hot takes के साथ।",
+          prompt:
+            "AI agents, developer tooling और TypeScript पर आज के Hacker News front page को स्कैन करें। मुझे तीन सबसे दिलचस्प लिंक भेजें, प्रत्येक के साथ एक पंक्ति का hot take।",
+        },
+        dependencyRadar: {
+          name: "Dependency radar",
+          tagline: "पुरानी या असुरक्षित dependencies, अपग्रेड नोट्स के साथ।",
+          prompt:
+            "मेरे मुख्य प्रोजेक्ट में पुरानी या असुरक्षित dependencies जांचें। उल्लेखनीय अपडेट की सूची बनाएं, प्रत्येक के साथ एक पंक्ति का जोखिम नोट, और अपग्रेड कमांड तैयार करें।",
+        },
+        watchdog: {
+          name: "Night watch",
+          tagline: "प्रति घंटे स्वास्थ्य जांच, एक पंक्ति में परिणाम।",
+          prompt:
+            "मेरी सेवाओं और Gateway की जांच करें: हाल के लॉग में नई त्रुटियाँ, पुनरारंभ, या असामान्य लोड खोजें। सब ठीक हो तो एक छोटी सी क्लियर लाइन दें; कुछ गड़बड़ लगे तो बताएं क्या विफल हुआ और कहाँ से जांच शुरू करें।",
+        },
+        polyglotMinute: {
+          name: "पॉलीग्लॉट मिनट",
+          tagline: "सुबह की कॉफी के साथ एक उपयोगी विदेशी वाक्यांश।",
+          prompt:
+            "मुझे जापानी में एक उपयोगी वाक्यांश सिखाएं: वाक्यांश, उसका उच्चारण, उसका शाब्दिक अर्थ, और इसे कब उपयोग करें। पांच पंक्तियों के अंदर रखें।",
+        },
+      },
     },
     summary: {
       enabled: "सक्षम",
