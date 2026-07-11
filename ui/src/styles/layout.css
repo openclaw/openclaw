@@ -1781,8 +1781,9 @@ openclaw-session-menu[popover] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  /* 28px keeps the fixed-width footer row from ellipsizing "commit · age". */
+  width: 28px;
+  height: 28px;
   flex: 0 0 auto;
   border: none;
   border-radius: var(--radius-md);
@@ -1835,6 +1836,13 @@ openclaw-session-menu[popover] {
   height: 8px;
   border-radius: var(--radius-full);
   flex-shrink: 0;
+}
+
+/* The online/offline glow spreads 4px beyond the dot; the footer bar's 2px gap
+   alone lets it collide with the build text. 6px + gap matches the 8px dot
+   spacing in the settings sidebar footer. */
+.sidebar-footer-bar .sidebar-status__dot {
+  margin-right: 6px;
 }
 
 .sidebar-status__dot.sidebar-connection-status--online {
