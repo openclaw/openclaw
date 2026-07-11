@@ -162,7 +162,9 @@ describe("Codex sidebar", () => {
     document.body.append(sidebar);
 
     await vi.waitFor(() => expect(sidebar.textContent).toContain("Recent Claude task"));
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
     expect(request).toHaveBeenCalledTimes(1);
     expect(sidebar.textContent).toContain("More sessions are available in the full catalog.");
   });

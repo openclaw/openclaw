@@ -375,28 +375,26 @@ async function discoverCliRecords(
         let pending = Buffer.alloc(0);
         let fileOffset = 0;
         let stopFile = false;
-        const inspectLine = (line: Buffer): void => {
+        const inspectLine = (line: Buffer): boolean => {
           let raw: unknown;
           try {
             raw = JSON.parse(line.toString("utf8")) as unknown;
           } catch {
-            return;
+            return false;
           }
           if (!isRecord(raw) || raw.sessionId !== sessionId) {
-            return;
+            return false;
           }
           if (raw.type === "ai-title") {
             aiTitle = optionalString(raw.aiTitle, 500) ?? aiTitle;
-            return;
+            return false;
           }
           if (typeof raw.entrypoint === "string" && raw.entrypoint !== "sdk-cli") {
-            stopFile = true;
-            return;
+            return true;
           }
           if (raw.entrypoint === "sdk-cli" && raw.isSidechain === true) {
             sidechainIds.add(sessionId);
-            stopFile = true;
-            return;
+            return true;
           }
           if (
             raw.entrypoint !== "sdk-cli" ||
@@ -404,7 +402,7 @@ async function discoverCliRecords(
             !isRecord(raw.message) ||
             raw.message.role !== "user"
           ) {
-            return;
+            return false;
           }
           const fragments: string[] = [];
           collectTranscriptText(raw.message.content, fragments);
@@ -429,7 +427,7 @@ async function discoverCliRecords(
             archived: false,
             filePath,
           });
-          stopFile = true;
+          return true;
         };
         while (
           !stopFile &&
@@ -455,7 +453,7 @@ async function discoverCliRecords(
             : chunk.subarray(0, bytesRead);
           let newline: number;
           while (!stopFile && (newline = pending.indexOf(0x0a)) >= 0) {
-            inspectLine(pending.subarray(0, newline));
+            stopFile = inspectLine(pending.subarray(0, newline));
             pending = pending.subarray(newline + 1);
           }
         }
@@ -1064,11 +1062,10 @@ export async function listClaudeSessionCatalog(params: {
         nodeId: node.nodeId,
       };
       if (node.connected !== true) {
-        return {
-          ...common,
+        return Object.assign(common, {
           sessions: [],
           error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
-        };
+        });
       }
       try {
         const raw = await params.runtime.nodes.invoke({
@@ -1081,16 +1078,15 @@ export async function listClaudeSessionCatalog(params: {
           },
           timeoutMs: NODE_INVOKE_TIMEOUT_MS,
         });
-        return { ...common, ...parseCatalogPage(unwrapNodePayload(raw)) };
+        return Object.assign(common, parseCatalogPage(unwrapNodePayload(raw)));
       } catch {
-        return {
-          ...common,
+        return Object.assign(common, {
           sessions: [],
           error: {
             code: "NODE_INVOKE_FAILED",
             message: "Paired node Claude sessions are unavailable",
           },
-        };
+        });
       }
     }),
   );

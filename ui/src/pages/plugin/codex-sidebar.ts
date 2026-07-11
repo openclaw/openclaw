@@ -106,20 +106,20 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
   }
 
   private async loadSessions(): Promise<void> {
-    const state = this.sessionsState();
+    const catalogState = this.sessionsState();
     if (this.catalogKind === "claude") {
-      await loadClaudeSessions(state, this.client);
+      await loadClaudeSessions(catalogState, this.client);
     } else {
-      await loadCodexSessions(state, this.client);
+      await loadCodexSessions(catalogState, this.client);
     }
   }
 
   private async loadMoreSessions(hostId: string): Promise<void> {
-    const state = this.sessionsState();
+    const catalogState = this.sessionsState();
     if (this.catalogKind === "claude") {
-      await loadMoreClaudeSessions(state, this.client, hostId);
+      await loadMoreClaudeSessions(catalogState, this.client, hostId);
     } else {
-      await loadMoreCodexSessions(state, this.client, hostId);
+      await loadMoreCodexSessions(catalogState, this.client, hostId);
     }
   }
 
