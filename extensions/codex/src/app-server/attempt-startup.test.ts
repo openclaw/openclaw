@@ -96,9 +96,9 @@ function startThreadWithHarness(
 ) {
   const harness = overrides?.harness ?? createClientHarness();
   const paths = overrides?.paths ?? createAttemptPaths();
-  if (!overrides?.skipStartSpy) {
-    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
-  }
+  const startSpy = overrides?.skipStartSpy
+    ? undefined
+    : vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
   const effectivePluginConfig = overrides?.pluginConfig ?? pluginConfig;
 
   const run = startCodexAttemptThread({
@@ -133,7 +133,7 @@ function startThreadWithHarness(
     spawnedBy: undefined,
   });
 
-  return { harness, run };
+  return { harness, run, startSpy };
 }
 
 async function answerInitialize(harness: ClientHarness): Promise<void> {
@@ -337,7 +337,7 @@ describe("startCodexAttemptThread", () => {
       pluginConfig: sharedInitializePluginConfig,
     });
     const paths = createAttemptPaths();
-    const { harness, run } = startThreadWithHarness(1_000, new AbortController().signal, {
+    const { harness, run, startSpy } = startThreadWithHarness(1_000, new AbortController().signal, {
       pluginConfig: sharedInitializePluginConfig,
       paths,
     });
@@ -359,7 +359,7 @@ describe("startCodexAttemptThread", () => {
         timeoutMs: 1_000,
       }),
     ).resolves.toBe(harness.client);
-    expect(CodexAppServerClient.start).toHaveBeenCalledTimes(1);
+    expect(startSpy).toHaveBeenCalledTimes(1);
     expect(releaseLeasedSharedCodexAppServerClient(harness.client)).toBe(true);
     expect(releaseLeasedSharedCodexAppServerClient(harness.client)).toBe(true);
   });
