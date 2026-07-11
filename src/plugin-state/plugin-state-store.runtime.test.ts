@@ -145,4 +145,21 @@ describe("plugin runtime state proxy", () => {
       api.runtime.state.openKeyedStore({ namespace: "runtime", maxEntries: 10 }),
     ).toThrow("openKeyedStore is only available for trusted plugins");
   });
+
+  it("allows bundled plugins to access openKeyedStore even when record not yet registered", () => {
+    // This tests the edge case where a bundled plugin's runtime is accessed
+    // before its registry record has been populated (e.g., during module initialization).
+    const registry = createTestPluginRegistry();
+    // Create a bundled plugin record but DON'T add it to the registry yet
+    const record = createPluginRecord("whatsapp", "bundled");
+
+    // Manually resolve the runtime for this plugin ID without registering the record
+    // This simulates the scenario where runtime is accessed before registration completes
+    const api = registry.createApi(record, { config: {} });
+
+    // Should NOT throw - bundled plugins are inherently trusted
+    expect(() =>
+      api.runtime.state.openKeyedStore({ namespace: "test", maxEntries: 10 }),
+    ).not.toThrow();
+  });
 });
