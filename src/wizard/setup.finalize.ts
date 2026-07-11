@@ -355,16 +355,20 @@ export async function ensureGatewayServiceForOnboarding(params: {
             t("wizard.finalize.gatewayInstallFixAuth"),
           ].join(" ");
         } else {
+          const installWarnings: Array<{ message: string; title?: string }> = [];
           const { programArguments, workingDirectory, environment, environmentValueSources } =
             await buildGatewayInstallPlan({
               env: process.env,
               port: settings.port,
               runtime: daemonRuntime,
               warn: (message, title) => {
-                void prompter.note(message, title);
+                installWarnings.push({ message, title });
               },
               config: nextConfig,
             });
+          for (const warning of installWarnings) {
+            await prompter.note(warning.message, warning.title);
+          }
 
           progress.update(t("wizard.finalize.gatewayServiceInstalling"));
           await service.install({

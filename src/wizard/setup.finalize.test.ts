@@ -32,7 +32,7 @@ const resolveDefaultModelAuthStatus = vi.hoisted(() =>
   vi.fn(() => ({ provider: "anthropic", model: "claude-opus-4-8", hasAuth: true })),
 );
 const buildGatewayInstallPlan = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn(async (_params?: { warn?: (message: string, title?: string) => void }) => ({
     programArguments: [],
     workingDirectory: "/tmp",
     environment: {},
@@ -920,6 +920,44 @@ describe("finalizeSetupWizard", () => {
         },
       }),
     );
+  });
+
+  it("waits for gateway install warnings before installing the service", async () => {
+    let acknowledgeWarning: (() => void) | undefined;
+    const warningAcknowledged = new Promise<void>((resolve) => {
+      acknowledgeWarning = resolve;
+    });
+    const prompter = buildWizardPrompter({
+      select: vi.fn(async () => "later") as never,
+      confirm: vi.fn(async () => false),
+      note: vi.fn(async (message: string) => {
+        if (message === "Gateway install warning") {
+          await warningAcknowledged;
+        }
+      }),
+    });
+    buildGatewayInstallPlan.mockImplementationOnce(async (params) => {
+      params?.warn?.("Gateway install warning", "Gateway service");
+      return {
+        programArguments: [],
+        workingDirectory: "/tmp",
+        environment: {},
+        environmentValueSources: {},
+      };
+    });
+
+    const finalizePromise = finalizeSetupWizard(
+      createAdvancedFinalizeArgs({ installDaemon: true, prompter }),
+    );
+    await vi.waitFor(() => {
+      expect(prompter.note).toHaveBeenCalledWith("Gateway install warning", "Gateway service");
+    });
+    expect(gatewayServiceInstall).not.toHaveBeenCalled();
+
+    acknowledgeWarning?.();
+    await finalizePromise;
+
+    expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses token-bearing onboarding output when requested", async () => {
