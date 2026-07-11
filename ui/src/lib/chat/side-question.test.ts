@@ -4,6 +4,7 @@ import {
   buildSideChatComposerDraft,
   CHAT_SELECTION_SNIPPET_MAX_CHARS,
   collapseChatSelectionSnippet,
+  combineSideChatComposerDraft,
   extractSideQuestionDisplayText,
 } from "./side-question.ts";
 
@@ -34,6 +35,35 @@ describe("side question builders", () => {
   it("returns null for whitespace-only selections", () => {
     expect(buildMoreDetailsSideCommand("  \n\t ")).toBeNull();
     expect(buildSideChatComposerDraft("")).toBeNull();
+  });
+});
+
+describe("combineSideChatComposerDraft", () => {
+  it("keeps an unsent prose draft as the question part", () => {
+    expect(combineSideChatComposerDraft("cron scan job", "why does this run twice?")).toBe(
+      `/btw Regarding "cron scan job": why does this run twice?`,
+    );
+  });
+
+  it("collapses multiline drafts so the single-line /btw send loses nothing", () => {
+    expect(combineSideChatComposerDraft("cron scan job", "first line\nsecond line")).toBe(
+      `/btw Regarding "cron scan job": first line second line`,
+    );
+  });
+
+  it("replaces slash-command drafts instead of embedding them", () => {
+    expect(combineSideChatComposerDraft("cron scan job", "/compact")).toBe(
+      `/btw Regarding "cron scan job": `,
+    );
+  });
+
+  it("behaves like the plain prefill when the composer is empty", () => {
+    expect(combineSideChatComposerDraft("cron scan job", "")).toBe(
+      `/btw Regarding "cron scan job": `,
+    );
+    expect(combineSideChatComposerDraft("cron scan job", undefined)).toBe(
+      `/btw Regarding "cron scan job": `,
+    );
   });
 });
 

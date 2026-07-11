@@ -323,14 +323,19 @@ export const en: TranslationMap = {
     unpinSession: "Unpin session",
     markUnread: "Mark as unread",
     markRead: "Mark as read",
+    markUnreadCount: "Mark {count} as unread",
+    markReadCount: "Mark {count} as read",
     forkSession: "Fork",
     openChat: "Open chat",
     openPullRequest: "Open PR",
     openInEditorMenu: "Open in",
     archiveSession: "Archive session",
+    archiveSessionCount: "Archive {count}",
     restoreSession: "Restore session",
     deleteSessionMenu: "Delete…",
+    deleteSessionCount: "Delete {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',
+    deleteSessionsConfirm: "Delete {count} sessions and their transcripts?",
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
@@ -344,6 +349,7 @@ export const en: TranslationMap = {
     newGroupPrompt: "New group name",
     moveToGroup: "Move session to a group",
     moveToGroupMenu: "Move to group",
+    moveToGroupMenuCount: "Move {count} to group",
     removeFromGroup: "Remove from group",
     groupMenu: "Group options for {group}",
     renameGroupMenu: "Rename group…",
@@ -500,8 +506,7 @@ export const en: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
-    allowAlwaysUnavailable:
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    allowAlwaysUnavailable: "Allow Always is unavailable for this command.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -791,6 +796,7 @@ export const en: TranslationMap = {
     artifactDetails: "Control UI build details",
     version: "Version",
     commit: "Commit",
+    branch: "Branch",
     built: "Built",
     unavailable: "Unavailable",
     copyCommit: "Copy full commit hash",
@@ -937,7 +943,7 @@ export const en: TranslationMap = {
     eyebrow: "Codex fleet",
     title: "Sessions across your computers",
     interactiveSubtitle:
-      "Start a Chat branch whose model selection stays under Codex App Server control, archive eligible local sessions with confirmation, and view paired-computer sessions.",
+      "Read paginated Codex transcripts from every connected computer, start a Codex-controlled Chat branch, or archive eligible local sessions.",
     summaryLabel: "Codex session summary",
     summary: {
       sessions: "sessions",
@@ -960,6 +966,8 @@ export const en: TranslationMap = {
       openChat: "Open Chat",
       continuing: "Continuing…",
       archive: "Archive",
+      readTranscript: "Read",
+      readTranscriptLabel: "Read transcript for {title}",
       continueLabel: "Continue {title}",
       continueAsBranchLabel: "Continue {title} as a branch",
       openChatLabel: "Open Chat for {title}",
@@ -974,7 +982,7 @@ export const en: TranslationMap = {
       statusUnavailable: "This Codex session cannot be managed in its current state.",
       hostOffline: "Reconnect this computer before managing its Codex sessions.",
       gatewayOffline: "Reconnect to the gateway before managing Codex sessions.",
-      remoteReadOnly: "Paired-computer sessions are view-only for now.",
+      remoteReadOnly: "Transcript available; continue and archive stay on the owning computer.",
     },
     status: {
       active: "Active",
@@ -999,6 +1007,24 @@ export const en: TranslationMap = {
       search: "No sessions on this host match your search.",
       nonArchived: "No non-archived sessions on this host.",
     },
+    sidebar: {
+      title: "Codex sessions",
+      unavailable: "Codex sessions unavailable",
+      viewAll: "View all Codex sessions",
+      truncated: "More sessions are available in the full catalog.",
+    },
+    transcript: {
+      eyebrow: "Codex transcript",
+      back: "All Codex sessions",
+      you: "You",
+      reasoning: "Reasoning",
+      command: "Command",
+      fileChange: "File change",
+      item: "Codex item",
+      details: "Full details",
+      loading: "Loading transcript…",
+      loadMore: "Load older transcript items",
+    },
   },
   logbook: {
     duration: {
@@ -1022,7 +1048,7 @@ export const en: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1053,6 +1079,100 @@ export const en: TranslationMap = {
       title: "Ask your day",
       placeholder: "When did I review the gateway PR?",
       submit: "Ask",
+    },
+  },
+  workspaces: {
+    tabs: {
+      label: "Workspaces",
+      hidden: "Hidden ({count})",
+    },
+    error: {
+      title: "Couldn't load your workspaces",
+      subtitle: "Something went wrong loading your workspaces. Try reloading.",
+      detailSummary: "Show details",
+    },
+    header: {
+      subtitle: "Arrange widgets and tabs for this workspace.",
+    },
+    onboarding: {
+      title: "Build your first workspace tab",
+      primary: "Ask your agent to build a tab.",
+      secondary: "Or create one from the command line:",
+    },
+    empty: {
+      onboardingTitle: "No workspaces yet",
+      onboardingSubtitle:
+        "Ask your agent to build a workspace, or create one from the command line.",
+      onboardingCommand: "openclaw workspaces tabs create --title Main",
+      tabTitle: "This workspace is empty",
+      tabSubtitle: "Ask your agent to add a widget, or add one yourself.",
+      noVisibleTabs: "Every workspace tab is hidden. Restore one from the hidden menu.",
+    },
+    widget: {
+      collapse: "Collapse widget",
+      expand: "Expand widget",
+      moveHandle: "Move widget",
+      resizeHandle: "Resize widget",
+      menuLabel: "Widget options",
+      provenanceChip: "AI",
+      provenanceTooltip: "Built by {agent}",
+      errorTitle: "This widget couldn't load",
+      errorHumane: "This widget ran into a problem while rendering.",
+      errorDetailSummary: "Show details",
+      customPlaceholder: "Custom widget — coming soon.",
+      customLoading: "Loading custom widget…",
+      approval: {
+        title: "Custom widget awaiting approval",
+        byAgent: "Built by {agent}",
+        byUnknown: "Built by an unknown agent",
+        approve: "Approve",
+        reject: "Reject",
+        unavailable:
+          "This custom widget isn't available. Ask your agent to rebuild it, or remove it.",
+      },
+      markdownEmpty: "No content yet.",
+      unknownKind: "Unknown widget type: {kind}",
+      editTitleTitle: "Edit widget title",
+      editTitleLabel: "Widget title",
+      moveToTabTitle: "Move to tab",
+      moveToTabEmpty: "There are no other tabs to move this widget to.",
+      menu: {
+        editTitle: "Edit title",
+        moveToTab: "Move to tab…",
+        hide: "Hide",
+        remove: "Remove",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "No rows to show.",
+        more: "+{count} more",
+      },
+      sessions: {
+        empty: "No sessions yet.",
+      },
+      usage: {
+        cost: "Cost",
+        tokens: "Tokens",
+      },
+      cron: {
+        empty: "No scheduled jobs.",
+        next: "Next {time}",
+        noNext: "Not scheduled",
+      },
+      instances: {
+        empty: "No connected instances.",
+        idle: "Idle for {duration}",
+      },
+      activity: {
+        empty: "No recent activity.",
+      },
+      embed: {
+        missing: "This embed has no URL yet.",
+        blockedExternal: "External embeds are disabled by your gateway policy.",
+        blockedScheme: "This embed URL uses an unsupported scheme.",
+      },
     },
   },
   workboard: {
@@ -1996,6 +2116,7 @@ export const en: TranslationMap = {
       sortSessions: "Sort sessions",
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
+      sessionMenuMany: "Actions for {count} sessions",
       workSessions: "Work",
     },
     welcome: {

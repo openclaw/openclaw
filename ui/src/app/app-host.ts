@@ -493,12 +493,14 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     document.addEventListener("keydown", this.handleDocumentKeydown);
     window.addEventListener("resize", this.handleWindowResize);
+    window.addEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
   }
 
   override disconnectedCallback() {
     this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     document.removeEventListener("keydown", this.handleDocumentKeydown);
     window.removeEventListener("resize", this.handleWindowResize);
+    window.removeEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
     this.resetShellEpochState();
     super.disconnectedCallback();
   }
@@ -625,6 +627,13 @@ class OpenClawShell extends OpenClawLightDomElement {
     );
     context.navigation.update({ navWidth });
   }
+
+  /** The macOS app's titlebar sidebar button dispatches this window event
+   * (DashboardWindowController) because AppKit drag regions cover the row
+   * where an in-page control would live. */
+  private readonly handleNativeToggleSidebar = () => {
+    this.toggleNavigationSurface();
+  };
 
   private readonly handleWindowResize = () => {
     const dismissedHiddenMenus =
@@ -853,10 +862,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
     const activeRoute = this.routeState.routeId ?? "chat";
     // Plugin tabs share one route; the search picks the active item.
-    const activePluginTabId =
+    const activePluginRef =
       activeRoute === "plugin"
-        ? pluginTabKey(pluginTabRefFromSearch(this.routeState.location?.search ?? ""))
-        : "";
+        ? pluginTabRefFromSearch(this.routeState.location?.search ?? "")
+        : null;
+    const activePluginTabId = activePluginRef ? pluginTabKey(activePluginRef) : "";
     const settingsTakeover = isSettingsNavigationRoute(activeRoute);
     const navDrawerOpen = this.navDrawerOpen && !this.onboarding;
     // Drawer navigation always opens expanded; the desktop collapse preference
@@ -945,6 +955,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .basePath=${context.basePath}
                 .activeRouteId=${activeRoute}
                 .activePluginTabId=${activePluginTabId}
+                .activePluginHostId=${activePluginRef?.hostId ?? ""}
+                .activePluginThreadId=${activePluginRef?.threadId ?? ""}
                 .enabledRouteIds=${this.enabledRouteIds()}
                 .sessionKey=${this.activeSessionKey}
                 .connected=${gatewaySnapshot.connected}

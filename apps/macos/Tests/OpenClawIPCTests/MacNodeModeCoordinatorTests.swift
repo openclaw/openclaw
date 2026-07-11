@@ -460,6 +460,7 @@ struct MacNodeModeCoordinatorTests {
 
         #expect(!caps.contains(MacNodeCodexThreadCatalogContract.capability))
         #expect(!commands.contains(MacNodeCodexThreadCatalogContract.listCommand))
+        #expect(!commands.contains(MacNodeCodexThreadCatalogContract.turnsCommand))
     }
 
     @Test func `remote mode advertises native Codex thread catalog`() {
@@ -474,11 +475,15 @@ struct MacNodeModeCoordinatorTests {
 
         #expect(caps.contains(MacNodeCodexThreadCatalogContract.capability))
         #expect(commands.contains(MacNodeCodexThreadCatalogContract.listCommand))
+        #expect(commands.contains(MacNodeCodexThreadCatalogContract.turnsCommand))
         #expect(MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
             command: MacNodeCodexThreadCatalogContract.listCommand,
             catalogAdvertised: true))
         #expect(!MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
             command: MacNodeCodexThreadCatalogContract.listCommand,
+            catalogAdvertised: false))
+        #expect(!MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
+            command: MacNodeCodexThreadCatalogContract.turnsCommand,
             catalogAdvertised: false))
         #expect(MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
             command: OpenClawSystemCommand.notify.rawValue,
