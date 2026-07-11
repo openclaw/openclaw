@@ -34,11 +34,7 @@ const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action
 const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
 const MATURITY_SCORECARD_WORKFLOW_REF =
   "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
-// Reusable-workflow refs cannot use expressions. This exact callee resolves and
-// verifies its main SHA through OIDC before any credentialed work.
-const OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS = new Set([
-  "openclaw/openclaw/.github/workflows/openclaw-release-telegram-qa.yml@main",
-]);
+const OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS = new Set<string>();
 const MATURITY_GENERATED_PR_PATHS = [
   "qa/maturity-scores.yaml",
   "docs/maturity/scorecard.md",
@@ -475,10 +471,8 @@ describe("ci workflow guards", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
   });
 
-  it("limits moving reusable workflows to the OIDC-bound Telegram QA callee", () => {
-    expect([...OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS]).toEqual([
-      readReleaseChecksWorkflow().jobs.qa_live_telegram_release_checks.uses,
-    ]);
+  it("forbids moving reusable workflow references", () => {
+    expect([...OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS]).toEqual([]);
   });
 
   it("keeps locale refresh matrices alive and publishes each aggregate through a PR", () => {
