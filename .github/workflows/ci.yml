@@ -1596,7 +1596,9 @@ jobs:
       - name: Check docs
         env:
           OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: ${{ github.workspace }}/clawhub-source
-        run: pnpm check:docs
+        run: |
+          pnpm check:docs
+          pnpm format:check
 
   skills-python:
     permissions:
