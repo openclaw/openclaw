@@ -189,6 +189,7 @@ async function fetchSearxngResults(params: {
   timeoutSeconds: number;
   count: number;
   endpointMode: SearxngEndpointMode;
+  signal?: AbortSignal;
 }): Promise<SearxngResult[]> {
   const url = buildSearxngSearchUrl({
     baseUrl: params.baseUrl,
@@ -205,6 +206,7 @@ async function fetchSearxngResults(params: {
     {
       url,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "GET",
         headers: {
@@ -238,6 +240,7 @@ export async function runSearxngSearch(params: {
   baseUrl?: string;
   timeoutSeconds?: number;
   cacheTtlMinutes?: number;
+  signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   const count = resolveSearchCount(params.count, DEFAULT_SEARCH_COUNT);
   const categories = params.categories ?? resolveSearxngCategories(params.config);
@@ -277,6 +280,7 @@ export async function runSearxngSearch(params: {
     timeoutSeconds,
     count,
     endpointMode,
+    signal: params.signal,
   });
   if (results.length === 0 && shouldRetryEmptyCategorySearchWithGeneral(categories)) {
     results = await fetchSearxngResults({
@@ -287,6 +291,7 @@ export async function runSearxngSearch(params: {
       timeoutSeconds,
       count,
       endpointMode,
+      signal: params.signal,
     });
   }
 
