@@ -558,6 +558,57 @@ export const de: TranslationMap = {
     dockRight: "Dock to right",
     unavailable: "The terminal is not available on this gateway.",
   },
+  browser: {
+    title: "Browser",
+    toggle: "Browser-Bereich ein-/ausblenden",
+    hide: "Browser-Bereich ausblenden",
+    resize: "Browser-Bereich anpassen",
+    newTab: "Neuer Tab",
+    closeTab: "Tab schließen",
+    untitledTab: "Neuer Tab",
+    back: "Zurück",
+    forward: "Weiter",
+    reload: "Neu laden",
+    openExternal: "In Ihrem Browser öffnen",
+    urlPlaceholder: "URL eingeben und Eingabetaste drücken",
+    dockBottom: "Unten andocken",
+    dockRight: "Rechts andocken",
+    annotate: "Seite kommentieren",
+    inspect: "Element untersuchen",
+    annotateSend: "An Chat senden",
+    annotateUndo: "Rückgängig",
+    annotateClear: "Löschen",
+    annotateDone: "Kommentarmodus beenden",
+    annotateHint:
+      "Zeichnen Sie auf der Seite und senden Sie anschließend die Markierung an Ihren Chat.",
+    inspectHint:
+      "Zum Untersuchen den Mauszeiger darüber bewegen; klicken, um das Element an Ihren Chat zu senden.",
+    inspectName: "Name",
+    inspectRole: "Rolle",
+    inspectFocusable: "Fokussierbar",
+    loading: "Seite wird geladen…",
+    starting: "Browser wird gestartet…",
+    notRunning: "Der Gateway-Browser wird nicht ausgeführt.",
+    start: "Browser starten",
+    empty: "Keine geöffneten Tabs. Geben Sie oben eine URL ein, um zu browsen.",
+    refresh: "Ansicht aktualisieren",
+    noChatTarget: "Öffnen Sie zuerst eine Chat-Sitzung, damit die Annotation ein Ziel hat.",
+    inspectUnavailable: "Elementprüfung ist deaktiviert (browser.evaluateEnabled=false).",
+    annotationSent: "Annotation zum Chat-Composer hinzugefügt.",
+    annotatePrompt: {
+      introTitled:
+        'Ich habe die Seite unter {url} annotiert (von der Seite gemeldeter Titel: "{title}") — der angehängte Screenshot zeigt meine Markierung.',
+      introUntitled:
+        "Ich habe die Seite unter {url} annotiert — der angehängte Screenshot zeigt meine Markierung.",
+      region:
+        "Markierter Bereich {index}: zentriert bei {x}% horizontal / {y}% vertikal, umfasst etwa {width}% × {height}% der Ansicht.",
+      moreRegions: "…plus {count} weitere markierte Region(en), alle im Screenshot sichtbar.",
+      elementDetail:
+        "Markiertes Element (von der Seite gemeldet): {descriptor} — {width}×{height}px bei ({x}, {y}).",
+      outro:
+        "Bitte sehen Sie sich den markierten Bereich an und sagen Sie mir, was Sie davon halten.",
+    },
+  },
   tabs: {
     agents: "Agenten",
     activity: "Aktivität",

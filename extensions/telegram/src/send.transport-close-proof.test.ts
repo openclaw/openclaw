@@ -22,7 +22,7 @@ describe("telegram transport cache eviction over real sockets", () => {
     server = createServer((req, res) => {
       let body = "";
       req.on("data", (chunk: Buffer) => {
-        body += chunk;
+        body += chunk.toString("utf8");
       });
       req.on("end", () => {
         const url = req.url ?? "";
@@ -55,7 +55,9 @@ describe("telegram transport cache eviction over real sockets", () => {
         liveSockets.delete(socket);
       });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     ({ sendMessageTelegram, resetTelegramClientOptionsCacheForTests } = await import("./send.js"));
   });
@@ -66,7 +68,9 @@ describe("telegram transport cache eviction over real sockets", () => {
     for (const socket of liveSockets) {
       socket.destroy();
     }
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   });
 
   it("closes evicted transports, deferring close for an in-flight send", async () => {

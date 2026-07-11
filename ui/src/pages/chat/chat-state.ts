@@ -1251,6 +1251,7 @@ export function createPageState(
     connectionEpoch: 0,
     hello: null,
     terminalAvailable: false,
+    browserPanelAvailable: false,
     assistantAgentId: context.agentSelection.state.selectedId,
     sessionKey: settings.sessionKey,
     chatLoading: false,

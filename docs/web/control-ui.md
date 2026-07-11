@@ -274,6 +274,17 @@ Sessions survive disconnects: a page reload, laptop sleep, or network blip detac
 
 The terminal is also available as a full-screen, terminal-only document at `/?view=terminal`. The iOS and Android apps embed this page in their Terminal screens, reusing the stored gateway credentials; availability follows the same `gateway.terminal.enabled` and `operator.admin` gate, and the page shows a notice when the connected Gateway does not offer the terminal.
 
+## Browser panel
+
+The Control UI ships a dockable browser panel that renders the Gateway-controlled browser (the same one agents drive through the [browser tool](/tools/browser-control)) in any regular web browser - no native webview required. It appears when the connected Gateway advertises `browser.request` to an `operator.admin` connection; the globe button in the session workspace rail toggles it. The panel shows a live page snapshot with tabs, an editable URL bar, back/forward/reload, and open-in-your-browser, docks right or bottom, and forwards clicks, wheel scrolling, and basic typing to the remote page.
+
+Two capture modes package page context for the agent:
+
+- **Annotate (pencil)**: draw freehand markup over the page. **Send to chat** composites the strokes into the screenshot, attaches the image to the active chat composer, and prefills a prompt describing the page URL, title, and each marked region so the agent knows exactly what you circled.
+- **Inspect (pointer)**: hover to see the element under the cursor (selector, accessible name, role, size); click to send that element's details plus a highlighted screenshot through the same composer flow. Inspect, wheel scrolling, and back/forward need `browser.evaluateEnabled` (on by default).
+
+The macOS app keeps its native link-browser sidebar for links clicked in the dashboard; the browser panel works there too, and is the way to annotate pages on every other platform.
+
 ## Chat behavior
 
 <AccordionGroup>
