@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Normalizes plugin config and resolves effective enablement, slots, and activation sources. */
 import {
   normalizeOptionalLowercaseString,
@@ -100,7 +101,11 @@ export function normalizePluginTargetConfig(
     Object.entries(rawEntries).filter(([entryId]) => normalizePluginId(entryId) !== normalizedId),
   );
   if (hasTargetEntry) {
-    entries[normalizedId] = normalized.entries[normalizedId];
+    const { config: pluginConfig, ...entry } = normalized.entries[normalizedId] ?? {};
+    entries[normalizedId] = {
+      ...entry,
+      ...(isRecord(pluginConfig) ? { config: pluginConfig } : {}),
+    };
   }
   return {
     ...config,

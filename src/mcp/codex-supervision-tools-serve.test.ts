@@ -8,9 +8,18 @@ import {
   serveCodexSupervisionToolsMcp,
 } from "./codex-supervision-tools-serve.js";
 
-const ensureStandalonePluginToolRegistryLoadedMock = vi.hoisted(() => vi.fn(() => ({})));
+type EnsureStandalonePluginToolRegistryLoaded =
+  typeof import("../plugins/tools.js").ensureStandalonePluginToolRegistryLoaded;
+type ConnectToolsMcpServerToStdio =
+  typeof import("./tools-stdio-server.js").connectToolsMcpServerToStdio;
+
+const ensureStandalonePluginToolRegistryLoadedMock = vi.hoisted(() =>
+  vi.fn<EnsureStandalonePluginToolRegistryLoaded>(() => undefined),
+);
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
-const connectToolsMcpServerToStdioMock = vi.hoisted(() => vi.fn(async () => {}));
+const connectToolsMcpServerToStdioMock = vi.hoisted(() =>
+  vi.fn<ConnectToolsMcpServerToStdio>(async () => {}),
+);
 const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../agents/harness/registry.js", async (importOriginal) => {
@@ -121,7 +130,7 @@ describe("createCodexSupervisionToolsMcpServer", () => {
     });
 
     const context = ensureStandalonePluginToolRegistryLoadedMock.mock.calls[0]?.[0]?.context;
-    expect(context?.config.plugins).toMatchObject({
+    expect(context?.config?.plugins).toMatchObject({
       allow: ["codex"],
       deny: [],
       entries: {
@@ -134,7 +143,7 @@ describe("createCodexSupervisionToolsMcpServer", () => {
         },
       },
     });
-    expect(context?.config.plugins?.entries).not.toHaveProperty(" CODEX ");
+    expect(context?.config?.plugins?.entries).not.toHaveProperty(" CODEX ");
   });
 
   it("disposes the Codex harness when the stdio bridge shuts down", async () => {

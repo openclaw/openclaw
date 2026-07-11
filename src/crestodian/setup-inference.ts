@@ -184,7 +184,8 @@ function probedTargetChangedError(params: {
 }
 
 function hasExplicitCodexSupervisionOptOut(config: OpenClawConfig): boolean {
-  const supervision = normalizePluginsConfig(config.plugins).entries.codex?.config?.supervision;
+  const pluginConfig = normalizePluginsConfig(config.plugins).entries.codex?.config;
+  const supervision = isRecord(pluginConfig) ? pluginConfig.supervision : undefined;
   return isRecord(supervision) && supervision.enabled === false;
 }
 
