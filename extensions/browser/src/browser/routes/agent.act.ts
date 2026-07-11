@@ -618,7 +618,7 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk({ result });
+                return await jsonOk({ result }, { resolveCurrentTarget: true });
               }
               case "close":
                 await profileCtx.closeTab(tab.targetId, {

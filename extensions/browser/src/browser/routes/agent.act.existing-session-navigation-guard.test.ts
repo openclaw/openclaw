@@ -43,12 +43,13 @@ vi.mock("../navigation-guard.js", () => navigationGuardMocks);
 vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
 
 const DEFAULT_SSRF_POLICY = { allowPrivateNetwork: false } as const;
-const GUARDED_NON_CLICK_ACTIONS = [
+const GUARDED_TARGET_REFRESH_ACTIONS = [
   { kind: "hover", ref: "btn-1" },
   { kind: "scrollIntoView", ref: "btn-1" },
   { kind: "drag", startRef: "item-1", endRef: "slot-1" },
   { kind: "select", ref: "menu-1", values: ["alpha"] },
   { kind: "fill", fields: [{ ref: "input-1", value: "Ada" }] },
+  { kind: "evaluate", fn: "() => document.title" },
 ] as const;
 
 const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
@@ -157,7 +158,7 @@ describe("existing-session interaction navigation guard", () => {
     expectNavigationProbeUrls(Array.from({ length: 8 }, () => "https://example.com"));
   });
 
-  it.each(GUARDED_NON_CLICK_ACTIONS)(
+  it.each(GUARDED_TARGET_REFRESH_ACTIONS)(
     "resolves current target after guarded $kind interaction",
     async (body) => {
       routeState.profileCtx.listTabs.mockResolvedValueOnce([routeState.tab]).mockResolvedValue([
