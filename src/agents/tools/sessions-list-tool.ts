@@ -428,7 +428,10 @@ export function createSessionsListTool(opts?: {
             if (next >= titleTargets.length) {
               return;
             }
-            const target = titleTargets[next];
+            const target = titleTargets.at(next);
+            if (!target) {
+              return;
+            }
             const fields = await readSessionTitleFieldsFromTranscriptAsync({
               agentId: target.agentId,
               sessionEntry: target.sessionEntry,
@@ -460,7 +463,10 @@ export function createSessionsListTool(opts?: {
             if (next >= historyTargets.length) {
               return;
             }
-            const target = historyTargets[next];
+            const target = historyTargets.at(next);
+            if (!target) {
+              return;
+            }
             const history = await gatewayCall<{ messages: Array<unknown> }>({
               method: "chat.history",
               params: { sessionKey: target.resolvedKey, limit: messageLimit },
