@@ -1092,7 +1092,8 @@ async function initSessionStateAttemptLocked(
   });
   if (!committed.ok) {
     if (staleRetryCount < SESSION_INIT_MAX_RETRIES) {
-      return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
+      await new Promise((resolve) => setTimeout(resolve, SESSION_INIT_RETRY_BASE_MS * 2 ** Math.min(staleRetryCount, 4)));
+      return await initSessionStateAttemptLocked(params, attemptContext, staleRetryCount + 1, undefined);
     }
     throw new Error(`reply session initialization conflicted for ${sessionKey}`);
   }
