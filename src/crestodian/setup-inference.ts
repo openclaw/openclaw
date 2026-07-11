@@ -150,6 +150,7 @@ export type ActivateSetupInferenceParams = {
   signal?: AbortSignal;
   /** Session cancellation gate; interactive credentials must never persist after cancel. */
   isCancelled?: () => boolean;
+  onCommitStarted?: () => void;
   deps?: ActivateSetupInferenceDeps;
 };
 
@@ -1353,6 +1354,9 @@ async function activateSetupInferenceUnredacted(
     const assertCommitPreconditions = (): void => {
       throwIfSetupInferenceCancelled(params);
       manualAuthWrite?.assertUnchanged();
+      // applyCrestodianSetup calls this at its config-write linearization point.
+      // Past here cancellation cannot truthfully promise that nothing persisted.
+      params.onCommitStarted?.();
     };
     let applied: Awaited<ReturnType<typeof applyCrestodianSetup>>;
     try {

@@ -257,7 +257,9 @@ async function sleepGitHubDevicePollDelay(
     await new Promise<void>((resolve, reject) => {
       const onAbort = () => {
         clearTimeout(timeout);
-        reject(signal?.reason);
+        reject(
+          signal?.reason instanceof Error ? signal.reason : new Error("GitHub login cancelled"),
+        );
       };
       const timeout = setTimeout(() => {
         signal?.removeEventListener("abort", onAbort);

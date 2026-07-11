@@ -366,7 +366,7 @@ async function resolveOpenRouterOAuthCode(
       onProgress: params.onProgress,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
     })
-    .catch(async (error) => {
+    .catch(async (error: unknown) => {
       if (ctx.signal?.aborted) {
         throw error;
       }

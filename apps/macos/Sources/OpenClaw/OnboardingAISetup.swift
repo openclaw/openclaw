@@ -755,15 +755,20 @@ final class OnboardingAISetupModel {
     func cancelProviderAuth() {
         let sessionID = self.authSessionID
         let authServerLease = self.serverLease
-        self.authAttemptID = UUID()
-        self.providerAuthReconciliationPending = false
-        self.clearProviderAuth()
         guard let sessionID, let authServerLease else { return }
+        let authAttemptID = self.authAttemptID
+        self.authBusy = true
         Task {
-            await GatewayConnection.shared.cancelWizardSession(
+            let cancelled = await GatewayConnection.shared.cancelWizardSession(
                 sessionID,
                 on: authServerLease
             )
+            guard authAttemptID == self.authAttemptID else { return }
+            if cancelled {
+                self.authAttemptID = UUID()
+                self.providerAuthReconciliationPending = false
+                self.clearProviderAuth()
+            }
         }
     }
 

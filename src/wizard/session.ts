@@ -175,6 +175,7 @@ export class WizardSession {
   private currentStep: WizardStep | null = null;
   private stepDeferred: Deferred<WizardStep | null> | null = null;
   private pendingTerminalResolution = false;
+  private cancellationLocked = false;
   private answerDeferred = new Map<
     string,
     {
@@ -231,9 +232,9 @@ export class WizardSession {
     return undefined;
   }
 
-  cancel() {
-    if (this.status !== "running") {
-      return;
+  cancel(): boolean {
+    if (this.status !== "running" || this.cancellationLocked) {
+      return false;
     }
     this.status = "cancelled";
     this.error = "cancelled";
@@ -246,6 +247,12 @@ export class WizardSession {
     }
     this.answerDeferred.clear();
     this.resolveStep(null);
+    return true;
+  }
+
+  /** The underlying mutation crossed its durable commit point and must finish. */
+  lockCancellation() {
+    this.cancellationLocked = true;
   }
 
   get signal(): AbortSignal {

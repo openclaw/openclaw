@@ -254,7 +254,7 @@ export async function loginChutes(params: {
       hostname: redirect.hostname,
       onProgress: params.onProgress,
       ...(params.signal ? { signal: params.signal } : {}),
-    }).catch(async (error) => {
+    }).catch(async (error: unknown) => {
       if (params.signal?.aborted) {
         throw error;
       }

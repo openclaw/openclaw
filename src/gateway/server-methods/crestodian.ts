@@ -120,6 +120,7 @@ export const crestodianHandlers: GatewayRequestHandlers = {
           prompter,
           signal,
           isCancelled: () => signal.aborted,
+          onCommitStarted: () => session.lockCancellation(),
         });
       });
       if (!result.ok) {

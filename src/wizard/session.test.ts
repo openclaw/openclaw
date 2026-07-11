@@ -134,6 +134,24 @@ describe("WizardSession", () => {
     expect(session.signal.aborted).toBe(true);
   });
 
+  test("refuses cancellation after the durable commit point", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const session = new WizardSession(async () => {
+      await gate;
+    });
+
+    session.lockCancellation();
+    expect(session.cancel()).toBe(false);
+    expect(session.getStatus()).toBe("running");
+    expect(session.signal.aborted).toBe(false);
+
+    finish();
+    expect((await session.next()).status).toBe("done");
+  });
+
   test("a runner finishing after cancellation cannot overwrite cancelled state", async () => {
     let finish!: () => void;
     const gate = new Promise<void>((resolve) => {

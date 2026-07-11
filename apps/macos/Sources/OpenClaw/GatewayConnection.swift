@@ -374,15 +374,20 @@ actor GatewayConnection {
 
     private func sendWizardCancellation(_ sessionID: String, on lease: ServerLease) async -> Bool {
         do {
-            _ = try await lease.client.request(
+            let data = try await lease.client.request(
                 method: "wizard.cancel",
                 params: ["sessionId": AnyCodable(sessionID)],
                 timeoutMs: 10000,
                 ifCurrentConnectionGeneration: lease.socketGeneration)
-            return true
+            let status = try self.decoder.decode(WizardCancellationStatus.self, from: data)
+            return status.status == "cancelled"
         } catch {
             return false
         }
+    }
+
+    private struct WizardCancellationStatus: Decodable {
+        let status: String
     }
 
     func requestRaw(

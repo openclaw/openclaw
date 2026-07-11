@@ -318,7 +318,9 @@ export async function loginMiniMaxPortalOAuth(params: {
 
 async function waitForMiniMaxOAuthPoll(delayMs: number, signal?: AbortSignal): Promise<void> {
   if (!signal) {
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
     return;
   }
   if (signal.aborted) {
@@ -327,7 +329,7 @@ async function waitForMiniMaxOAuthPoll(delayMs: number, signal?: AbortSignal): P
   await new Promise<void>((resolve, reject) => {
     const onAbort = () => {
       clearTimeout(timeout);
-      reject(signal.reason);
+      reject(signal.reason instanceof Error ? signal.reason : new Error("MiniMax login cancelled"));
     };
     const timeout = setTimeout(() => {
       signal.removeEventListener("abort", onAbort);

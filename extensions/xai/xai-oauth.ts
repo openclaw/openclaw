@@ -506,13 +506,15 @@ async function pollXaiDeviceCodeToken(
 
 async function waitForXaiDeviceCodePoll(delayMs: number, signal?: AbortSignal): Promise<void> {
   if (!signal) {
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
     return;
   }
   await new Promise<void>((resolve, reject) => {
     const onAbort = () => {
       clearTimeout(timeout);
-      reject(signal.reason);
+      reject(signal.reason instanceof Error ? signal.reason : new Error("xAI login cancelled"));
     };
     const timeout = setTimeout(() => {
       signal.removeEventListener("abort", onAbort);
