@@ -444,7 +444,7 @@ describe("handleLoginCommand", () => {
     };
     updateSessionStoreEntryMock.mockImplementationOnce(
       async (params: { update: (entry: SessionEntry) => Partial<SessionEntry> | null }) => {
-        const patch = await params.update({ ...concurrentlySelectedEntry });
+        const patch = params.update({ ...concurrentlySelectedEntry });
         return patch ? { ...concurrentlySelectedEntry, ...patch } : concurrentlySelectedEntry;
       },
     );
@@ -482,7 +482,7 @@ describe("handleLoginCommand", () => {
     };
     updateSessionStoreEntryMock.mockImplementationOnce(
       async (params: { update: (entry: SessionEntry) => Partial<SessionEntry> | null }) => {
-        const patch = await params.update({ ...concurrentlySelectedEntry });
+        const patch = params.update({ ...concurrentlySelectedEntry });
         return patch ? { ...concurrentlySelectedEntry, ...patch } : concurrentlySelectedEntry;
       },
     );
