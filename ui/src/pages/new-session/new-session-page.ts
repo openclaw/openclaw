@@ -587,7 +587,9 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private handleMessageKeydown(event: KeyboardEvent) {
-    if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+    // keyCode 229 mirrors the chat composer's IME guard: some browsers emit
+    // the candidate-confirm Enter with isComposing === false.
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) {
       return;
     }
     // Honor the chat composer's send-shortcut setting so the draft picker
