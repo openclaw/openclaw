@@ -1259,7 +1259,7 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
 .sidebar-session-pagination {
   display: flex;
   gap: 14px;
-  padding: 0 10px 2px;
+  padding: 0 10px 10px;
 }
 
 .sidebar-session-pagination__button {
