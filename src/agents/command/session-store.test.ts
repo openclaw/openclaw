@@ -10,6 +10,9 @@ import { loadSessionStore } from "../../config/sessions.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import {
   clearCliSessionInStore,
+  consumeCliSessionForkInStore,
+  persistCliSessionForkSuccessorInStore,
+  restoreCliSessionForkInStore,
   recordCliCompactionInStore,
   updateSessionStoreAfterAgentRun,
 } from "./session-store.js";
@@ -2579,6 +2582,137 @@ describe("recordCliCompactionInStore", () => {
 
       expect(result).toEqual(sessionStore[sessionKey]);
       expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+    });
+  });
+});
+
+describe("consumeCliSessionForkInStore", () => {
+  it("clears the one-shot marker while preserving the bound source id", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:catalog-adopt:claude:test";
+      const entry: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "claude-source-session",
+            forceReuse: true,
+            forkNextResume: true,
+          },
+        },
+      };
+      const sessionStore = { [sessionKey]: entry };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({ [sessionKey]: { ...entry, label: "concurrent update" } }, null, 2),
+        "utf8",
+      );
+      const consumed = await consumeCliSessionForkInStore({
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedCliSessionId: "claude-source-session",
+      });
+      expect(consumed?.cliSessionBindings?.["claude-cli"]).toEqual({
+        sessionId: "claude-source-session",
+        forceReuse: true,
+      });
+      expect(consumed?.label).toBe("concurrent update");
+      expect(
+        loadSessionStore(storePath, { skipCache: true })[sessionKey]?.cliSessionBindings?.[
+          "claude-cli"
+        ],
+      ).toEqual({ sessionId: "claude-source-session", forceReuse: true });
+      await expect(
+        consumeCliSessionForkInStore({
+          provider: "claude-cli",
+          sessionKey,
+          sessionStore,
+          storePath,
+          expectedCliSessionId: "claude-source-session",
+        }),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  it("re-arms a claimed marker after a failed turn", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:plugin:anthropic:catalog-adopt:claude:test";
+      const entry: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "claude-source-session", forceReuse: true },
+        },
+      };
+      const sessionStore = { [sessionKey]: entry };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+      const restored = await restoreCliSessionForkInStore({
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedCliSessionId: "claude-source-session",
+      });
+
+      expect(restored?.cliSessionBindings?.["claude-cli"]?.forkNextResume).toBe(true);
+      expect(
+        loadSessionStore(storePath, { skipCache: true })[sessionKey]?.cliSessionBindings?.[
+          "claude-cli"
+        ]?.forkNextResume,
+      ).toBe(true);
+    });
+  });
+
+  it("persists the fork successor before turn finalization", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:plugin:anthropic:catalog-adopt:claude:test";
+      const entry: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "claude-source-session",
+            forceReuse: true,
+            authProfileId: "claude:work",
+            authEpoch: "epoch-1",
+            authEpochVersion: 3,
+          },
+        },
+      };
+      const sessionStore = { [sessionKey]: entry };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+      const persisted = await persistCliSessionForkSuccessorInStore({
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedCliSessionId: "claude-source-session",
+        successorCliSessionId: "claude-fork-session",
+      });
+
+      expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({
+        sessionId: "claude-fork-session",
+        forceReuse: true,
+        authProfileId: "claude:work",
+        authEpoch: "epoch-1",
+        authEpochVersion: 3,
+      });
+      expect(
+        loadSessionStore(storePath, { skipCache: true })[sessionKey]?.cliSessionBindings?.[
+          "claude-cli"
+        ],
+      ).toEqual({
+        sessionId: "claude-fork-session",
+        forceReuse: true,
+        authProfileId: "claude:work",
+        authEpoch: "epoch-1",
+        authEpochVersion: 3,
+      });
     });
   });
 });

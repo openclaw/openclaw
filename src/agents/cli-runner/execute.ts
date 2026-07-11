@@ -558,6 +558,7 @@ export async function executePreparedCliRun(
     imagePaths,
     promptArg: argsPrompt,
     useResume,
+    forkResume: params.forkCliSessionOnResume,
     sendSystemPromptOnResume: resendSystemPromptForSoftResume,
   });
 
@@ -580,6 +581,30 @@ export async function executePreparedCliRun(
 
   let completedOutput: CliOutput | undefined;
   let executionError: unknown;
+  let forkResumeClaimed = false;
+  let forkSuccessorObserved = false;
+  let forkSuccessorPersistence: Promise<void> | undefined;
+  const observeForkSuccessor = (sessionId: string) => {
+    if (
+      forkSuccessorObserved ||
+      !forkResumeClaimed ||
+      !resolvedSessionId ||
+      sessionId === resolvedSessionId
+    ) {
+      return;
+    }
+    forkSuccessorObserved = true;
+    forkSuccessorPersistence = params.persistCliSessionForkSuccessor?.(sessionId);
+    void forkSuccessorPersistence?.catch(() => undefined);
+  };
+  const finishForkSuccessorPersistence = async () => {
+    try {
+      await forkSuccessorPersistence;
+    } catch (error) {
+      forkSuccessorObserved = false;
+      throw error;
+    }
+  };
   const cleanupOuterResource = async (cleanup: (() => Promise<void>) | undefined) => {
     try {
       await cleanup?.();
@@ -603,6 +628,15 @@ export async function executePreparedCliRun(
     completedOutput = await enqueueCliRun(queueKey, async () => {
       if (params.lifecycleGeneration) {
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      }
+      if (params.forkCliSessionOnResume && useResume) {
+        if (!params.persistCliSessionForkSuccessor) {
+          throw new Error("CLI session fork successor persistence is unavailable");
+        }
+        forkResumeClaimed = (await params.claimCliSessionFork?.()) === true;
+        if (!forkResumeClaimed) {
+          throw new Error("CLI session fork marker is no longer available");
+        }
       }
       await context.preparedBackend.beforeExecution?.();
       const cliTurnStartedAt = Date.now();
@@ -1558,6 +1592,9 @@ export async function executePreparedCliRun(
             cleanup: async () => {
               await fallbackClaudeSkillsPlugin?.cleanup();
             },
+            onSessionId: (sessionId) => {
+              observeForkSuccessor(sessionId);
+            },
           });
           const rawText = liveResult.output.text;
           runOutput = {
@@ -1583,6 +1620,9 @@ export async function executePreparedCliRun(
                   emitLiveEvents && context.params.emitCommentaryText
                     ? emitCliCommentaryText
                     : undefined,
+                onSessionId: (sessionId) => {
+                  observeForkSuccessor(sessionId);
+                },
               })
             : null;
           const supervisor = executeDeps.getProcessSupervisor();
@@ -1998,10 +2038,31 @@ export async function executePreparedCliRun(
       }
       return withExecutionEvidence(runOutput);
     });
+    if (completedOutput.sessionId) {
+      observeForkSuccessor(completedOutput.sessionId);
+    }
+    await finishForkSuccessorPersistence();
+    if (forkResumeClaimed && !forkSuccessorObserved) {
+      await params.restoreCliSessionFork?.();
+      forkResumeClaimed = false;
+      throw new Error("forked CLI session did not report a successor session id");
+    }
     return completedOutput;
   } catch (error) {
     executionError = error;
-    throw error;
+    let failure = error;
+    try {
+      await finishForkSuccessorPersistence();
+    } catch (persistenceError) {
+      failure = new AggregateError(
+        [error, persistenceError],
+        "CLI turn failed and its fork successor could not be persisted",
+      );
+    }
+    if (forkResumeClaimed && !forkSuccessorObserved) {
+      await params.restoreCliSessionFork?.();
+    }
+    throw failure;
   } finally {
     if (!fallbackClaudeSkillsPluginCleanupOwned) {
       await cleanupOuterResource(fallbackClaudeSkillsPlugin?.cleanup);
