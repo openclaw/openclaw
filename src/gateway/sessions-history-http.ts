@@ -73,9 +73,12 @@ function resolveLimit(req: IncomingMessage): number | undefined {
     return undefined;
   }
   const trimmed = raw.trim();
-  const value = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
-  if (!Number.isSafeInteger(value) || value < 1) {
+  if (!/^\d+$/.test(trimmed)) {
     return 1;
+  }
+  const value = Number(trimmed);
+  if (!Number.isSafeInteger(value)) {
+    return MAX_SESSION_HISTORY_LIMIT;
   }
   return Math.min(MAX_SESSION_HISTORY_LIMIT, Math.max(1, value));
 }
