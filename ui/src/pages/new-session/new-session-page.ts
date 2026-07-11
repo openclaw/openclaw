@@ -205,6 +205,11 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (this.submitting || !this.message.trim() || !this.context?.gateway.snapshot.connected) {
       return false;
     }
+    // Pre-hydration the selection is a provisional fallback; submitting then
+    // would create the session under the wrong agent.
+    if (this.agents().length === 0) {
+      return false;
+    }
     if (this.usesCustomFolder() && (!this.worktree || !this.isAdmin())) {
       return false;
     }
@@ -474,6 +479,11 @@ class NewSessionPage extends OpenClawLightDomElement {
             placeholder=${this.workspacePath() || t("newSession.folderPlaceholder")}
             .value=${this.folder}
             ?disabled=${!isAdmin}
+            @input=${(event: Event) => {
+              // Track keystrokes so a re-render (e.g. agent hydration) cannot
+              // overwrite an in-progress edit; side effects wait for change.
+              this.folder = (event.target as HTMLInputElement).value;
+            }}
             @change=${(event: Event) => this.applyFolder((event.target as HTMLInputElement).value)}
           />
           ${this.browseAvailable()
