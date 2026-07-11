@@ -67,7 +67,8 @@ class AgentAvatarTest {
   private fun agent(
     avatar: String? = null,
     avatarUrl: String? = null,
-  ) = GatewayAgentSummary(
+  ) =
+    GatewayAgentSummary(
       id = "main",
       name = "Main",
       emoji = null,
