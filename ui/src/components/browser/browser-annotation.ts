@@ -61,6 +61,16 @@ function percent(value: number): string {
   return String(Math.round(clamp01(value) * 100));
 }
 
+/**
+ * Page-controlled strings (title, element names) enter the prompt as quoted
+ * data only. Collapse whitespace and cap the length so a hostile page cannot
+ * smuggle multi-line directives that read as the user's own instructions; the
+ * prompt template additionally labels these values as page-reported.
+ */
+function sanitizePageText(value: string, maxLength = 80): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
 /** Compact human/agent-readable element descriptor, e.g. `button#save.btn "Save"`. */
 export function describeInspectedNode(node: BrowserInspectedNode): string {
   const classes = node.classes
@@ -68,8 +78,9 @@ export function describeInspectedNode(node: BrowserInspectedNode): string {
     .map((cls) => `.${cls}`)
     .join("");
   const selector = `${node.tag}${node.id ? `#${node.id}` : ""}${classes}`;
-  const name = node.name ? ` "${node.name}"` : "";
-  const role = node.role ? ` (role=${node.role})` : "";
+  const sanitizedName = sanitizePageText(node.name);
+  const name = sanitizedName ? ` "${sanitizedName}"` : "";
+  const role = node.role ? ` (role=${sanitizePageText(node.role, 40)})` : "";
   return `${selector}${name}${role}`;
 }
 
@@ -86,7 +97,7 @@ export function buildAnnotationPrompt(params: {
   strokes: AnnotationStroke[];
   element?: BrowserInspectedNode | null;
 }): string {
-  const title = params.title.trim();
+  const title = sanitizePageText(params.title);
   const lines: string[] = [
     title
       ? t("browser.annotatePrompt.intro", { url: params.url, title })

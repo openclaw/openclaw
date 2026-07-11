@@ -146,12 +146,18 @@ function tabLabel(tab: BrowserPanelTab): string {
   }
 }
 
-function normalizeUrlDraft(raw: string): string | null {
+export function normalizeUrlDraft(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
   }
-  const candidate = /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  // A colon followed by digits is a port (`localhost:3000`), not a scheme.
+  // Any other explicit scheme must be http(s); everything else gets https://.
+  const hasExplicitScheme = /^[a-z][a-z0-9+.-]*:(?![0-9])/i.test(trimmed);
+  if (hasExplicitScheme && !/^https?:\/\//i.test(trimmed)) {
+    return null;
+  }
+  const candidate = hasExplicitScheme ? trimmed : `https://${trimmed}`;
   try {
     const parsed = new URL(candidate);
     return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : null;
