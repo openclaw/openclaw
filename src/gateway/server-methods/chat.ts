@@ -717,6 +717,7 @@ function buildAbortedChatSendPayload(params: {
 function buildActiveChatSendDedupeKey(params: {
   attachmentCount: number;
   explicitDeliverRoute: boolean;
+  idempotencyKey: string;
   message: string;
   originatingChannel: string;
   sessionKey: string;
@@ -733,8 +734,8 @@ function buildActiveChatSendDedupeKey(params: {
     return null;
   }
   const dedupeParts = params.systemScope?.trim()
-    ? [params.sessionKey, message, params.systemScope.trim()]
-    : [params.sessionKey, message];
+    ? [params.sessionKey, params.idempotencyKey, message, params.systemScope.trim()]
+    : [params.sessionKey, params.idempotencyKey, message];
   const digest = createHash("sha256")
     .update(JSON.stringify(dedupeParts))
     .digest("hex")
@@ -4092,6 +4093,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const activeChatSendDedupeKey = buildActiveChatSendDedupeKey({
       attachmentCount: normalizedAttachments.length,
       explicitDeliverRoute: originatingRoute.explicitDeliverRoute,
+      idempotencyKey: clientRunId,
       message: rawMessage,
       originatingChannel: originatingRoute.originatingChannel,
       sessionKey: activeRunScopeKey,
