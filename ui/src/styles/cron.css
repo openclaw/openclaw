@@ -1,0 +1,1077 @@
+/* ── Automations (cron) page: task list pane + detail pane ── */
+
+/* Fixed app-frame layout (like the logs page): the page never scrolls; the
+   list and detail panes own their scroll regions. */
+.content:has(openclaw-cron-page) {
+  overflow: hidden;
+}
+
+.content:has(openclaw-cron-page) > openclaw-router-outlet {
+  display: flex;
+  flex-direction: column;
+  margin-top: 0;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+}
+
+openclaw-cron-page {
+  display: contents;
+}
+
+.content:has(openclaw-cron-page) .content-header {
+  flex: 0 0 auto;
+}
+
+.settings-workspace--fill-height .cron-layout {
+  flex: 1 1 auto;
+}
+
+.cron-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+  min-height: 0;
+}
+
+/* ── List pane ── */
+
+.cron-list-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+}
+
+.cron-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cron-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+}
+
+.cron-tab {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.cron-tab:hover {
+  color: var(--text);
+}
+
+.cron-tab--active {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.cron-new-task {
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.cron-new-task svg {
+  width: 14px;
+  height: 14px;
+}
+
+.cron-list-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.cron-search-box {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cron-search-box__icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.cron-search-box__icon svg {
+  width: 100%;
+  height: 100%;
+  stroke: currentColor;
+  fill: none;
+}
+
+.cron-search-box input {
+  width: 100%;
+  padding-left: 32px;
+}
+
+.cron-filter-popover {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.cron-filter-popover__trigger {
+  list-style: none;
+  width: 32px;
+  justify-content: center;
+  padding: 0;
+  height: 32px;
+}
+
+.cron-filter-popover__trigger::-webkit-details-marker {
+  display: none;
+}
+
+.cron-filter-popover__trigger svg {
+  width: 14px;
+  height: 14px;
+}
+
+.cron-filter-popover__panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(280px, calc(100vw - 48px));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  box-shadow: var(--shadow-lg);
+}
+
+.cron-error-banner {
+  margin-top: 10px;
+  border: 1px solid var(--danger-subtle);
+  background: var(--danger-subtle);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.cron-list-scroll {
+  flex: 1 1 auto;
+  min-height: 120px;
+  overflow-y: auto;
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cron-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cron-task {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.cron-task:hover {
+  background: var(--bg-hover);
+}
+
+.cron-task--selected {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.cron-task__icon {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+.cron-task__icon svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  fill: none;
+}
+
+.cron-task--paused .cron-task__name,
+.cron-task--paused .cron-task__meta {
+  color: var(--muted);
+}
+
+.cron-task__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.cron-task__name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 0;
+}
+
+.cron-task__name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-task__chip {
+  flex: 0 0 auto;
+  font-size: 10px;
+}
+
+.cron-task__meta {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-task__status {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.cron-task__status--error {
+  background: var(--danger);
+}
+
+.cron-load-more {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+
+.cron-empty-state {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  display: grid;
+  gap: 6px;
+  background: color-mix(in srgb, var(--bg-elevated) 58%, transparent);
+}
+
+.cron-empty-state__title {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.cron-empty-state__copy {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* ── Suggestions ── */
+
+.cron-suggestions {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cron-suggestions__title {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 10px 4px;
+}
+
+.cron-suggestion {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.cron-suggestion:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.cron-suggestion:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.cron-suggestion__icon {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--accent-2, var(--accent));
+  margin-top: 1px;
+}
+
+.cron-suggestion__icon svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+}
+
+.cron-suggestion__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cron-suggestion__title-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cron-suggestion__name {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cron-suggestion__schedule {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.cron-suggestion__desc {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.cron-list-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.cron-list-footer__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cron-refresh {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+}
+
+.cron-refresh svg {
+  width: 13px;
+  height: 13px;
+}
+
+.cron-refresh--loading svg {
+  animation: cron-refresh-spin 0.9s linear infinite;
+}
+
+@keyframes cron-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cron-refresh--loading svg {
+    animation: none;
+  }
+}
+
+/* ── Detail pane ── */
+
+.cron-detail-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 14px 16px;
+}
+
+.cron-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cron-detail-header__copy {
+  min-width: 0;
+}
+
+.cron-detail-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  min-width: 0;
+}
+
+.cron-detail-sub {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.cron-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.cron-detail-actions .btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.cron-detail-close {
+  width: 30px;
+  justify-content: center;
+  padding: 0;
+}
+
+.cron-detail-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 14px;
+}
+
+.cron-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 720px;
+}
+
+/* Prompt block */
+
+.cron-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cron-prompt__label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cron-prompt textarea {
+  min-height: 96px;
+  resize: vertical;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Row groups (Details / Frequency) */
+
+.cron-row-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cron-row-group__title {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cron-rows {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+  display: flex;
+  flex-direction: column;
+}
+
+.cron-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+  gap: 4px 16px;
+  align-items: center;
+  padding: 9px 14px;
+}
+
+.cron-row + .cron-row {
+  border-top: 1px solid var(--border);
+}
+
+.cron-row__label {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.cron-row__control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  justify-self: end;
+  width: min(100%, 320px);
+}
+
+.cron-row__control input,
+.cron-row__control select,
+.cron-row__control textarea {
+  width: 100%;
+}
+
+.cron-row--checkbox .cron-row__control {
+  align-items: flex-end;
+}
+
+.cron-row--checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.cron-row--checkbox .cron-help,
+.cron-row__control .cron-help {
+  text-align: right;
+}
+
+.cron-inline-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.cron-help {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.cron-error {
+  color: var(--danger-color);
+}
+
+.cron-required-marker {
+  color: var(--danger-color);
+  font-weight: 700;
+  margin-left: 3px;
+}
+
+.cron-required-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.cron-row input[aria-invalid="true"],
+.cron-prompt textarea[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+/* Advanced */
+
+.cron-advanced {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: color-mix(in srgb, var(--bg-elevated) 55%, transparent);
+  display: grid;
+  gap: 10px;
+}
+
+.cron-advanced__summary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* Validation status */
+
+.cron-form-status {
+  border: 1px solid var(--danger-subtle);
+  background: var(--danger-subtle);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+}
+
+.cron-form-status__title {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.cron-form-status__list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.cron-form-status__link {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 0;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cron-form-status__link:hover {
+  color: var(--text-strong);
+}
+
+.cron-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+}
+
+.cron-submit-reason {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Job actions menu */
+
+.cron-job-menu {
+  position: relative;
+}
+
+.cron-job-menu__trigger {
+  list-style: none;
+  width: 30px;
+  justify-content: center;
+  padding: 0;
+}
+
+.cron-job-menu__trigger::-webkit-details-marker {
+  display: none;
+}
+
+/* Invisible full-viewport hit area so clicking anywhere outside closes the menu. */
+.cron-job-menu[open] > .cron-job-menu__trigger::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  cursor: default;
+}
+
+.cron-job-menu__panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 170px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  padding: 6px;
+  display: grid;
+  gap: 2px;
+  box-shadow: var(--shadow-lg);
+}
+
+.cron-job-menu__item {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.cron-job-menu__item:hover {
+  background: var(--bg-hover);
+}
+
+.cron-job-menu__item.danger {
+  color: var(--danger-color);
+}
+
+/* ── Overview (recent activity) ── */
+
+.cron-overview-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 28px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.cron-overview-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cron-overview-stat__label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cron-overview-stat__value {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ── Run history ── */
+
+.cron-history {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cron-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cron-run-filters {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(140px, 180px) minmax(140px, 180px) minmax(
+      130px,
+      160px
+    );
+  gap: 10px;
+  align-items: end;
+}
+
+.cron-run-filter-search {
+  min-width: 0;
+}
+
+.cron-runs__empty {
+  font-size: 13px;
+}
+
+.cron-runs__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cron-filter-dropdown {
+  min-width: 0;
+}
+
+.cron-filter-dropdown__details {
+  position: relative;
+}
+
+.cron-filter-dropdown__details > summary {
+  list-style: none;
+}
+
+.cron-filter-dropdown__details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.cron-filter-dropdown__trigger {
+  width: 100%;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.cron-filter-dropdown__panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(300px, calc(100vw - 48px));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+  box-shadow: var(--shadow-lg);
+}
+
+.cron-filter-dropdown__list {
+  display: grid;
+  gap: 6px;
+}
+
+.cron-filter-dropdown__option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.cron-filter-dropdown__option input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* Run entries */
+
+.list-item.cron-run-entry {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.cron-run-entry__header {
+  display: flex;
+  flex-direction: column;
+  align-items: baseline;
+  gap: 8px;
+  padding: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--secondary);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  border-bottom: 1px solid var(--border);
+}
+
+@media (min-width: 1400px) {
+  .cron-run-entry__header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
+    gap: 16px;
+    align-items: start;
+  }
+
+  .cron-run-entry__meta {
+    text-align: right;
+  }
+}
+
+:root[data-theme-mode="light"] .cron-run-entry__header {
+  background: var(--bg-muted);
+}
+
+.cron-run-entry__meta {
+  min-width: 0;
+}
+
+.cron-run-entry__body {
+  padding: 12px;
+  line-height: 1.45;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.cron-run-entry__body pre,
+.cron-run-entry__body table {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Cron markdown overrides out-specify the base .chat-text rules in chat/text.css. */
+.cron-run-entry__body.chat-text table {
+  display: table;
+  width: 100%;
+}
+
+.cron-run-entry__body.chat-text pre,
+.cron-run-entry__body.chat-text blockquote {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.cron-run-entry__body.chat-text pre + p,
+.cron-run-entry__body.chat-text blockquote + p,
+.cron-run-entry__body.chat-text table + p,
+.cron-run-entry__body.chat-text p + pre,
+.cron-run-entry__body.chat-text p + blockquote,
+.cron-run-entry__body.chat-text p + table {
+  margin-top: 0.75em;
+}
+
+.cron-run-entry__body.chat-text pre,
+.cron-run-entry__body.chat-text blockquote,
+.cron-run-entry__body.chat-text table {
+  margin-bottom: 0.75em;
+}
+
+.cron-run-entry__body.chat-text > :last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 600px) {
+  .cron-run-entry__body table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* ── Responsive ── */
+
+@media (max-width: 1100px) {
+  /* Single column: fall back to normal page scrolling. */
+  .content:has(openclaw-cron-page) {
+    overflow: auto;
+  }
+
+  .cron-layout {
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+
+  .cron-list-scroll,
+  .cron-detail-scroll {
+    overflow-y: visible;
+  }
+
+  /* With one column the editor matters more than the list: show it first. */
+  .cron-layout[data-panel-mode="create"] .cron-detail-pane,
+  .cron-layout[data-panel-mode="job"] .cron-detail-pane {
+    order: -1;
+  }
+
+  .cron-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .cron-row__control {
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .cron-row--checkbox .cron-row__control {
+    align-items: flex-start;
+  }
+
+  .cron-row--checkbox .cron-help,
+  .cron-row__control .cron-help {
+    text-align: left;
+  }
+
+  .cron-run-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .cron-filter-dropdown__panel {
+    width: 100%;
+    max-width: none;
+    position: static;
+    margin-top: 8px;
+  }
+}
