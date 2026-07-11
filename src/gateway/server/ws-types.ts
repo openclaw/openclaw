@@ -1,6 +1,9 @@
 // Gateway WebSocket client types describe authenticated client state retained by the server.
 import type { WebSocket } from "ws";
-import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type {
+  ConnectParams,
+  GatewayPrincipal,
+} from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
 import type { WorkerConnectionIdentity } from "../worker-environments/connection-identity.js";
@@ -23,6 +26,7 @@ export type GatewayIngressWebSocket = WebSocket & {
 export type GatewayWsClient = PluginNodeCapabilityClient & {
   socket: WebSocket;
   connect: ConnectParams;
+  principal?: GatewayPrincipal;
   connId: string;
   connectionKind?: GatewayWsConnectionKind;
   worker?: WorkerConnectionIdentity;

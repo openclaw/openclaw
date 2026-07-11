@@ -38,7 +38,7 @@ const {
   getHealthCacheMock: vi.fn(() => null),
   getHealthVersionMock: vi.fn(() => 1),
   incrementPresenceVersionMock: vi.fn(() => 2),
-  loadConfigMock: vi.fn(() => ({
+  loadConfigMock: vi.fn<() => MockGatewayConfig>(() => ({
     gateway: {
       auth: { mode: "none" },
       controlUi: {
@@ -74,6 +74,17 @@ vi.mock("../health-state.js", () => ({
 }));
 
 import { testing, attachGatewayWsMessageHandler } from "./message-handler.js";
+
+type MockGatewayConfig = {
+  gateway: {
+    auth: { mode: string };
+    trustedProxies?: string[];
+    controlUi: {
+      allowedOrigins: string[];
+      dangerouslyDisableDeviceAuth: boolean;
+    };
+  };
+};
 
 const DEVICE_TOKEN_MUTATION_PARAMS = {
   deviceId: "device-1",
@@ -181,6 +192,7 @@ function attachGatewayHarness(options: {
   refreshHealthSnapshot?: GatewayRequestContext["refreshHealthSnapshot"];
   requestOrigin?: string;
   requestHost?: string;
+  requestHeaders?: Record<string, string>;
   remoteAddr?: string;
   localAddr?: string;
   resolvedAuth?: ResolvedGatewayAuth;
@@ -219,6 +231,7 @@ function attachGatewayHarness(options: {
       headers: {
         host: requestHost,
         ...(options.requestOrigin ? { origin: options.requestOrigin } : {}),
+        ...options.requestHeaders,
       },
       socket: { localAddress: localAddr, remoteAddress: remoteAddr },
     } as unknown as IncomingMessage,
@@ -290,6 +303,75 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
     vi.clearAllMocks();
+    loadConfigMock.mockReturnValue({
+      gateway: {
+        auth: { mode: "none" },
+        controlUi: {
+          allowedOrigins: ["http://127.0.0.1:19001"],
+          dangerouslyDisableDeviceAuth: true,
+        },
+      },
+    });
+  });
+
+  it("retains the server-issued trusted-proxy principal on the connected client", async () => {
+    loadConfigMock.mockReturnValue({
+      gateway: {
+        auth: { mode: "trusted-proxy" },
+        trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: ["http://127.0.0.1:19001"],
+          dangerouslyDisableDeviceAuth: true,
+        },
+      },
+    });
+    const harness = attachGatewayHarness({
+      connId: "conn-trusted-principal",
+      connectNonce: "nonce-trusted-principal",
+      requestOrigin: "http://127.0.0.1:19001",
+      requestHeaders: { "x-forwarded-user": "alice@example.com" },
+      resolvedAuth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          allowLoopback: true,
+        },
+      },
+    });
+
+    harness.sendConnect("connect-trusted-principal", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "openclaw-control-ui",
+        version: "dev",
+        platform: "test",
+        mode: "ui",
+      },
+      role: "operator",
+      scopes: [],
+      caps: [],
+    });
+
+    await vi.waitFor(() => {
+      expect(harness.client).toMatchObject({
+        principal: {
+          issuer: "trusted-proxy",
+          subject: "alice@example.com",
+          kind: "human",
+        },
+      });
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    const helloFrame = JSON.parse(harness.socketSend.mock.calls.at(0)?.[0] ?? "{}") as {
+      payload?: { auth?: { principal?: unknown } };
+    };
+    expect(helloFrame.payload?.auth?.principal).toEqual({
+      issuer: "trusted-proxy",
+      subject: "alice@example.com",
+      kind: "human",
+    });
   });
 
   it("closes invalidated clients before dispatching queued requests", () => {

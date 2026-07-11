@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { GatewayPrincipal } from "../../packages/gateway-protocol/src/schema/frames.js";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
@@ -46,7 +47,8 @@ export type GatewayAuthResult = {
     | "device-token"
     | "bootstrap-token"
     | "trusted-proxy";
-  user?: string;
+  /** `issuer` identifies the OpenClaw authenticator, not an upstream IdP claim. */
+  principal?: GatewayPrincipal;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
   rateLimited?: boolean;
@@ -525,7 +527,11 @@ async function authorizeGatewayConnectCore(
       if (originResult) {
         return originResult;
       }
-      return { ok: true, method: "trusted-proxy", user: result.user };
+      return {
+        ok: true,
+        method: "trusted-proxy",
+        principal: { issuer: "trusted-proxy", subject: result.user, kind: "human" },
+      };
     }
     if (localDirect && auth.password && connectAuth?.password) {
       const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
@@ -576,7 +582,11 @@ async function authorizeGatewayConnectCore(
       return {
         ok: true,
         method: "tailscale",
-        user: tailscaleCheck.user.login,
+        principal: {
+          issuer: "tailscale",
+          subject: tailscaleCheck.user.login,
+          kind: "human",
+        },
       };
     }
   }

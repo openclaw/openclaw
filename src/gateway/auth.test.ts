@@ -8,12 +8,17 @@ import {
   assertGatewayAuthConfigured,
   authorizeGatewayConnect,
   authorizeHttpGatewayConnect,
+  type GatewayAuthResult,
   hasForwardedRequestHeaders,
   isLocalDirectRequest,
   resolveEffectiveSharedGatewayAuth,
   authorizeWsControlUiGatewayConnect,
   resolveGatewayAuth,
 } from "./auth.js";
+
+function expectHumanPrincipal(result: GatewayAuthResult, issuer: string, subject: string): void {
+  expect(result.principal).toEqual({ issuer, subject, kind: "human" });
+}
 
 function createLimiterSpy(): AuthRateLimiter & {
   check: ReturnType<typeof vi.fn>;
@@ -77,7 +82,13 @@ describe("gateway auth", () => {
 
   async function expectTailscaleHeaderAuthResult(params: {
     authorize: typeof authorizeHttpGatewayConnect | typeof authorizeWsControlUiGatewayConnect;
-    expected: { ok: false; reason: string } | { ok: true; method: string; user: string };
+    expected:
+      | { ok: false; reason: string }
+      | {
+          ok: true;
+          method: string;
+          principal: { issuer: string; subject: string; kind: "human" };
+        };
   }) {
     const res = await params.authorize({
       auth: { mode: "token", token: "secret", allowTailscale: true },
@@ -91,7 +102,7 @@ describe("gateway auth", () => {
       return;
     }
     expect(res.method).toBe(params.expected.method);
-    expect(res.user).toBe(params.expected.user);
+    expect(res.principal).toEqual(params.expected.principal);
   }
 
   it("resolves token/password from OPENCLAW gateway env vars", () => {
@@ -470,7 +481,7 @@ describe("gateway auth", () => {
 
     expect(res.ok).toBe(true);
     expect(res.method).toBe("tailscale");
-    expect(res.user).toBe("peter");
+    expectHumanPrincipal(res, "tailscale", "peter");
   });
 
   it("serializes async auth attempts per rate-limit key", async () => {
@@ -527,7 +538,11 @@ describe("gateway auth", () => {
   it("enables tailscale header auth on ws control-ui auth wrapper", async () => {
     await expectTailscaleHeaderAuthResult({
       authorize: authorizeWsControlUiGatewayConnect,
-      expected: { ok: true, method: "tailscale", user: "peter" },
+      expected: {
+        ok: true,
+        method: "tailscale",
+        principal: { issuer: "tailscale", subject: "peter", kind: "human" },
+      },
     });
   });
 
@@ -727,7 +742,11 @@ describe("trusted-proxy auth", () => {
 
     expect(res.ok).toBe(true);
     expect(res.method).toBe("trusted-proxy");
-    expect(res.user).toBe("nick@example.com");
+    expect(res.principal).toEqual({
+      issuer: "trusted-proxy",
+      subject: "nick@example.com",
+      kind: "human",
+    });
   });
 
   it("rejects trusted-proxy headers from the host non-loopback interface address", async () => {
@@ -839,7 +858,7 @@ describe("trusted-proxy auth", () => {
 
     expect(res.ok).toBe(true);
     expect(res.method).toBe("trusted-proxy");
-    expect(res.user).toBe("nick@example.com");
+    expectHumanPrincipal(res, "trusted-proxy", "nick@example.com");
   });
 
   it("keeps origin-less trusted-proxy HTTP requests working", async () => {
@@ -867,7 +886,7 @@ describe("trusted-proxy auth", () => {
 
     expect(res.ok).toBe(true);
     expect(res.method).toBe("trusted-proxy");
-    expect(res.user).toBe("nick@example.com");
+    expectHumanPrincipal(res, "trusted-proxy", "nick@example.com");
   });
 
   it("rejects request from untrusted source", async () => {
@@ -941,7 +960,7 @@ describe("trusted-proxy auth", () => {
 
     expect(res.ok).toBe(true);
     expect(res.method).toBe("trusted-proxy");
-    expect(res.user).toBe("nick@example.com");
+    expectHumanPrincipal(res, "trusted-proxy", "nick@example.com");
   });
 
   it("rejects when no trustedProxies configured", async () => {
@@ -1043,7 +1062,7 @@ describe("trusted-proxy auth", () => {
 
     expect(res.ok).toBe(true);
     expect(res.method).toBe("trusted-proxy");
-    expect(res.user).toBe("nick@example.com");
+    expectHumanPrincipal(res, "trusted-proxy", "nick@example.com");
   });
 
   it("trims whitespace from user header value", async () => {
@@ -1061,7 +1080,7 @@ describe("trusted-proxy auth", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(res.user).toBe("nick@example.com");
+    expectHumanPrincipal(res, "trusted-proxy", "nick@example.com");
   });
 
   describe("local-direct trusted-proxy requests", () => {
@@ -1251,7 +1270,11 @@ describe("trusted-proxy auth", () => {
       expect(res).toEqual({
         ok: true,
         method: "trusted-proxy",
-        user: "nick@example.com",
+        principal: {
+          issuer: "trusted-proxy",
+          subject: "nick@example.com",
+          kind: "human",
+        },
       });
     });
 
