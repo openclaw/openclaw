@@ -6,7 +6,7 @@ import {
 } from "./deferred-activation.js";
 
 const TOKEN = "activation-secret";
-const SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
+const SIGNALS = ["SIGTERM", "SIGINT"] as const;
 type ParkingSignal = (typeof SIGNALS)[number];
 
 function deferredActivationEnv(port: number) {
@@ -155,6 +155,45 @@ async function openPartialHeaderClient(port: number): Promise<{
   };
 }
 
+async function sendCompleteActivationThenAbort(port: number, activationId: string): Promise<void> {
+  const socket = createConnection({ host: "127.0.0.1", port });
+  socket.on("error", () => {});
+  const connected = new Promise<void>((resolve, reject) => {
+    socket.once("connect", () => resolve());
+    socket.once("error", reject);
+  });
+  const closed = new Promise<void>((resolve) => {
+    socket.once("close", () => resolve());
+  });
+  const body = JSON.stringify({ activationId });
+  const request = [
+    "POST /activate HTTP/1.1",
+    "Host: 127.0.0.1",
+    "content-type: application/json",
+    `content-length: ${Buffer.byteLength(body)}`,
+    `x-openclaw-activation-token: ${TOKEN}`,
+    "",
+    body,
+  ].join("\r\n");
+
+  await connected;
+  await new Promise<void>((resolve, reject) => {
+    socket.write(request, (error?: Error) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    });
+  });
+  if (typeof socket.resetAndDestroy === "function") {
+    socket.resetAndDestroy();
+  } else {
+    socket.destroy();
+  }
+  await closed;
+}
+
 function captureSignalListeners() {
   return Object.fromEntries(
     SIGNALS.map((signal) => [signal, new Set(process.listeners(signal))]),
@@ -186,6 +225,15 @@ function countAddedSignalListeners(
       ).length,
     ]),
   ) as Record<ParkingSignal, number>;
+}
+
+function countAddedListenersForSignal(
+  signal: NodeJS.Signals,
+  existing: Set<(...args: unknown[]) => void>,
+): number {
+  return (process.listeners(signal) as Array<(...args: unknown[]) => void>).filter(
+    (listener) => !existing.has(listener),
+  ).length;
 }
 
 afterEach(async () => {
@@ -280,6 +328,20 @@ describe("waitForDeferredGatewayActivation", () => {
     }
   });
 
+  it("commits the first valid activation even when the client aborts after sending the full request", async () => {
+    const port = await reserveLoopbackPort();
+    const { waiting } = await waitForParkedGateway(port);
+
+    await sendCompleteActivationThenAbort(port, "activation-client-abort");
+
+    await expect(expectSettlesWithin(waiting, 1_000)).resolves.toEqual({
+      mode: "activated",
+      activationId: "activation-client-abort",
+    });
+    await expectLoopbackListenerClosed(port);
+    await expectFreshProcessEquivalentCanReuseControlPort(port, "restart-after-client-abort");
+  });
+
   it.each([
     ["missing", {}, 400],
     ["non-string", { activationId: 7 }, 400],
@@ -340,6 +402,32 @@ describe("waitForDeferredGatewayActivation", () => {
     });
   });
 
+  it("parks only SIGTERM and SIGINT temporary listeners", async () => {
+    const signalListeners = captureSignalListeners();
+    const sigusr1Listeners = new Set(
+      process.listeners("SIGUSR1") as Array<(...args: unknown[]) => void>,
+    );
+    const port = await reserveLoopbackPort();
+    const { waiting } = await waitForParkedGateway(port);
+
+    try {
+      expect(countAddedSignalListeners(signalListeners)).toEqual({
+        SIGTERM: 1,
+        SIGINT: 1,
+      });
+      expect(countAddedListenersForSignal("SIGUSR1", sigusr1Listeners)).toBe(0);
+      expect((await postActivate(port, TOKEN, { activationId: "cleanup-signals" })).status).toBe(
+        202,
+      );
+      await expect(waiting).resolves.toEqual({
+        mode: "activated",
+        activationId: "cleanup-signals",
+      });
+    } finally {
+      await resetDeferredGatewayActivationForTest();
+    }
+  });
+
   it.each(["SIGTERM", "SIGINT"] as const)(
     "re-signals %s only after cleanup and listener close, even with a slow parked socket",
     async (signal) => {
@@ -351,7 +439,6 @@ describe("waitForDeferredGatewayActivation", () => {
         expect(countAddedSignalListeners(signalListeners)).toEqual({
           SIGTERM: 0,
           SIGINT: 0,
-          SIGUSR1: 0,
         });
         killPortReuse.current = expectPortReusable(port);
         return true;
@@ -364,7 +451,6 @@ describe("waitForDeferredGatewayActivation", () => {
         expect(countAddedSignalListeners(signalListeners)).toEqual({
           SIGTERM: 1,
           SIGINT: 1,
-          SIGUSR1: 1,
         });
 
         const addedSignalListener = findAddedSignalListener(signal, signalListeners[signal]);
@@ -379,7 +465,6 @@ describe("waitForDeferredGatewayActivation", () => {
         expect(countAddedSignalListeners(signalListeners)).toEqual({
           SIGTERM: 0,
           SIGINT: 0,
-          SIGUSR1: 0,
         });
         await expectFreshProcessEquivalentCanReuseControlPort(port, `restart-${signal}`);
       } finally {
@@ -387,37 +472,4 @@ describe("waitForDeferredGatewayActivation", () => {
       }
     },
   );
-
-  it("rejects SIGUSR1 without re-signaling and closes slow parked sockets", async () => {
-    const signalListeners = captureSignalListeners();
-    const killSpy = vi.spyOn(process, "kill");
-    const port = await reserveLoopbackPort();
-    const { waiting } = await waitForParkedGateway(port);
-    const slowClient = await openPartialHeaderClient(port);
-
-    try {
-      expect(countAddedSignalListeners(signalListeners)).toEqual({
-        SIGTERM: 1,
-        SIGINT: 1,
-        SIGUSR1: 1,
-      });
-
-      const addedSignalListener = findAddedSignalListener("SIGUSR1", signalListeners.SIGUSR1);
-      expect(addedSignalListener).not.toBeNull();
-      addedSignalListener?.();
-
-      await expect(waiting).rejects.toThrow("deferred activation interrupted by SIGUSR1");
-      expect(killSpy).not.toHaveBeenCalled();
-      await expect(expectSettlesWithin(slowClient.closed, 1_000)).resolves.toBeUndefined();
-      await expectLoopbackListenerClosed(port);
-      expect(countAddedSignalListeners(signalListeners)).toEqual({
-        SIGTERM: 0,
-        SIGINT: 0,
-        SIGUSR1: 0,
-      });
-      await expectFreshProcessEquivalentCanReuseControlPort(port, "restart-SIGUSR1");
-    } finally {
-      slowClient.destroy();
-    }
-  });
 });

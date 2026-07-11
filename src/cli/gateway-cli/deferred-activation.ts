@@ -7,9 +7,8 @@ const TOKEN_HEADER = "x-openclaw-activation-token";
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_ACTIVATION_ID_BYTES = 256;
 const CONTROL_HOST = "127.0.0.1";
-const SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
+const SIGNALS = ["SIGTERM", "SIGINT"] as const;
 type ShutdownSignal = (typeof SIGNALS)[number];
-type DefaultExitSignal = "SIGTERM" | "SIGINT";
 
 type ProcessEnv = Record<string, string | undefined>;
 
@@ -181,7 +180,7 @@ async function waitForDeferredGatewayActivationOnce(
     };
 
     const closeServerAndResolve = (result: DeferredActivationResult) => {
-      if (state === "settled") {
+      if (state !== "accepted") {
         return;
       }
       state = "closing";
@@ -195,7 +194,7 @@ async function waitForDeferredGatewayActivationOnce(
       });
     };
 
-    const closeServerAndReject = (error: Error, resignal?: DefaultExitSignal) => {
+    const closeServerAndReject = (error: Error, resignal?: ShutdownSignal) => {
       if (state === "settled") {
         return;
       }
@@ -222,10 +221,7 @@ async function waitForDeferredGatewayActivationOnce(
       if (state !== "open") {
         return;
       }
-      closeServerAndReject(
-        new Error(`deferred activation interrupted by ${signal}`),
-        signal === "SIGTERM" || signal === "SIGINT" ? signal : undefined,
-      );
+      closeServerAndReject(new Error(`deferred activation interrupted by ${signal}`), signal);
     };
 
     for (const signal of SIGNALS) {
@@ -309,12 +305,30 @@ async function waitForDeferredGatewayActivationOnce(
           return;
         }
 
+        const acceptedResult: DeferredActivationResult = { mode: "activated", activationId };
+        let activationCommitted = false;
+        const commitAcceptedActivation = () => {
+          if (activationCommitted) {
+            return;
+          }
+          activationCommitted = true;
+          response.removeListener("finish", commitAcceptedActivation);
+          response.removeListener("close", commitAcceptedActivation);
+          closeServerAndResolve(acceptedResult);
+        };
+
         state = "accepted";
+        // A valid authenticated activation must still commit after the body is read
+        // even if the client disappears before it can receive the best-effort 202.
+        response.on("finish", commitAcceptedActivation);
+        response.on("close", commitAcceptedActivation);
+        if (response.destroyed) {
+          commitAcceptedActivation();
+          return;
+        }
+
         response.writeHead(202, { "content-type": "application/json" });
-        response.end(JSON.stringify({ status: "accepted", activationId }), () => {
-          // Let the accepted 202 body flush before forcing all parked sockets closed.
-          closeServerAndResolve({ mode: "activated", activationId });
-        });
+        response.end(JSON.stringify({ status: "accepted", activationId }));
       } catch (error) {
         const message = error instanceof Error ? error.message : "invalid activation request";
         const statusCode = message === "activation body too large" ? 413 : 400;
