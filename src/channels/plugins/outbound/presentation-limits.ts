@@ -96,8 +96,11 @@ function splitPresentationText(value: string, limits: TextLimits | undefined): s
       // supplementary-plane emoji at a utf16-units limit of 1). Advance
       // past one full code point rather than producing an empty chunk or
       // bailing out with the entire untruncated text.
-      const firstCodePoint = [...remaining][0];
-      remaining = remaining.slice(firstCodePoint?.length ?? remaining.length);
+      const cp = remaining.codePointAt(0);
+      if (cp === undefined) {
+        break;
+      }
+      remaining = remaining.slice(cp > 0xffff ? 2 : 1);
       continue;
     }
     // Keep complete fallback lines together when possible. Retain the newline

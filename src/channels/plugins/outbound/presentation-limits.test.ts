@@ -124,6 +124,41 @@ describe("splitPresentationText (via adapter path)", () => {
       }
     });
 
+    test("long emoji-only fallback with tiny utf16-units limit", () => {
+      // Generated fallback text is entirely supplementary-plane emoji.
+      // With limit=1, each emoji (2 UTF-16 units) must be dropped one by
+      // one; no empty blocks, no lone surrogates, no monolithic bail-out.
+      const p: MessagePresentation = {
+        blocks: [
+          {
+            type: "table",
+            caption: "🎉🎉🎉",
+            headers: ["🚀🚀"],
+            rows: [["💡💡"]],
+          },
+        ],
+      };
+      const caps: ChannelPresentationCapabilities = {
+        ...noTables,
+        limits: { text: utf16Unit(1) },
+      };
+      const result = adaptMessagePresentationForChannel({ presentation: p, capabilities: caps });
+
+      expect(result.blocks.length).toBeGreaterThan(0);
+      for (const b of result.blocks) {
+        if (b.type === "context" || b.type === "text") {
+          expect(hasLoneSurrogate(b.text)).toBe(false);
+          expect(b.text.length).toBeLessThanOrEqual(1);
+          // No block should start with a partial emoji
+          if (b.text.length === 1) {
+            const cp = b.text.codePointAt(0);
+            expect(cp).not.toBeUndefined();
+            expect(cp! <= 0xffff).toBe(true);
+          }
+        }
+      }
+    });
+
     test("normal ASCII text still splits correctly", () => {
       const p: MessagePresentation = {
         blocks: [
