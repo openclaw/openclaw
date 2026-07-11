@@ -310,7 +310,7 @@ export function createCodexSessionCatalogControl(params: {
           assertEnabled,
           connectionFingerprint: buildCodexAppServerConnectionFingerprint(
             runtime,
-            resolveDefaultAgentDir(runtimeConfig),
+            resolveDefaultAgentDir(runtimeConfig ?? {}),
           ),
           createRequestSnapshot: () => requests,
           now,
