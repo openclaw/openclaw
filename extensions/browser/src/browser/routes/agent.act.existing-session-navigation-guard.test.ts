@@ -43,6 +43,13 @@ vi.mock("../navigation-guard.js", () => navigationGuardMocks);
 vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
 
 const DEFAULT_SSRF_POLICY = { allowPrivateNetwork: false } as const;
+const GUARDED_NON_CLICK_ACTIONS = [
+  { kind: "hover", ref: "btn-1" },
+  { kind: "scrollIntoView", ref: "btn-1" },
+  { kind: "drag", startRef: "item-1", endRef: "slot-1" },
+  { kind: "select", ref: "menu-1", values: ["alpha"] },
+  { kind: "fill", fields: [{ ref: "input-1", value: "Ada" }] },
+] as const;
 
 const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
 const routeState = existingSessionRouteState;
@@ -150,42 +157,23 @@ describe("existing-session interaction navigation guard", () => {
     expectNavigationProbeUrls(Array.from({ length: 8 }, () => "https://example.com"));
   });
 
-  it("resolves current target after guarded non-click interactions", async () => {
-    const guardedActions = [
-      { kind: "hover", ref: "btn-1" },
-      { kind: "scrollIntoView", ref: "btn-1" },
-      { kind: "drag", startRef: "item-1", endRef: "slot-1" },
-      { kind: "select", ref: "menu-1", values: ["alpha"] },
-      { kind: "fill", fields: [{ ref: "input-1", value: "Ada" }] },
-    ] as const;
-
-    for (const [index, body] of guardedActions.entries()) {
-      const nextTargetId = `new-${index}`;
-      routeState.profileCtx.listTabs
-        .mockResolvedValueOnce([
-          {
-            targetId: "7",
-            url: "https://example.com",
-          },
-        ])
-        .mockResolvedValue([
-          {
-            targetId: nextTargetId,
-            url: "https://example.com",
-          },
-        ]);
+  it.each(GUARDED_NON_CLICK_ACTIONS)(
+    "resolves current target after guarded $kind interaction",
+    async (body) => {
+      routeState.profileCtx.listTabs.mockResolvedValueOnce([routeState.tab]).mockResolvedValue([
+        { targetId: "new-target", url: routeState.tab.url },
+      ]);
 
       const response = await runAction(body);
 
       expect(response.statusCode).toBe(200);
       expect(response.body).toMatchObject({
         ok: true,
-        targetId: nextTargetId,
-        url: "https://example.com",
+        targetId: "new-target",
+        url: routeState.tab.url,
       });
-      routeState.profileCtx.listTabs.mockReset();
-    }
-  });
+    },
+  );
 
   it("threads one request budget through coordinate actions and navigation probes", async () => {
     const handler = getActPostHandler();
