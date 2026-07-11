@@ -643,6 +643,29 @@ describe("Crabbox worker provider", () => {
     expect(message.length).toBeLessThan(600);
   });
 
+  it("preserves well-formed UTF-16 through the provider boundary when inspect stderr crosses the truncation limit", async () => {
+    // 511 ASCII code units + emoji: the emoji surrogate pair spans
+    // indices [511, 512].  The provider path (inspect → commandError →
+    // commandDetail → truncateUtf16Safe) must not leave a lone surrogate
+    // in the error message.  Current main splits the pair, leaving a
+    // lone high surrogate (U+D83D) at the boundary.
+    const prefix = "x".repeat(511);
+    const provider = providerWithRunner(async () =>
+      commandResult({ code: 2, stderr: `${prefix}😀after` }),
+    );
+
+    const error = await provider.inspect(lifecycleLease()).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    const message = error instanceof Error ? error.message : "";
+    for (const lone of ["\ud83d", "\ude00"]) {
+      expect(message).not.toContain(lone);
+    }
+    expect(message).not.toContain("�");
+    expect(message).toContain(`: ${prefix}`);
+    // must not contain the low-surrogate-only tail
+    expect(message).not.toContain("\ude00after");
+  });
+
   it("preserves well-formed UTF-16 when CLI failure detail reaches the boundary limit", () => {
     // 511 ASCII code units + emoji: the emoji surrogate pair spans
     // indices [511, 512].  raw .slice(0, 512) keeps only the high
