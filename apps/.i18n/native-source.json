@@ -475,7 +475,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 45,
+      "line": 44,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Home canvas",
       "surface": "android",
@@ -483,7 +483,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 45,
+      "line": 44,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Live page",
       "surface": "android",
@@ -491,7 +491,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 56,
+      "line": 55,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Canvas",
       "surface": "android",
@@ -499,7 +499,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 57,
+      "line": 56,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Current screen output and interactive app surface.",
       "surface": "android",
@@ -507,7 +507,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 64,
+      "line": 63,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Offline",
       "surface": "android",
@@ -515,7 +515,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 64,
+      "line": 63,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Online",
       "surface": "android",
@@ -523,7 +523,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 66,
+      "line": 65,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Ready",
       "surface": "android",
@@ -531,7 +531,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 66,
+      "line": 65,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Standby",
       "surface": "android",
@@ -539,7 +539,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 71,
+      "line": 70,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Refresh Screen",
       "surface": "android",
@@ -547,7 +547,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 71,
+      "line": 70,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Refreshing",
       "surface": "android",
@@ -555,7 +555,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 77,
+      "line": 76,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Open Screen",
       "surface": "android",
@@ -563,7 +563,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 77,
+      "line": 76,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Reconnect",
       "surface": "android",
@@ -571,7 +571,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 122,
+      "line": 114,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Connect the gateway",
       "surface": "android",
@@ -579,7 +579,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 122,
+      "line": 114,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Screen surface ready",
       "surface": "android",
@@ -587,7 +587,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 128,
+      "line": 120,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Canvas output needs an active gateway connection.",
       "surface": "android",
@@ -595,7 +595,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 128,
+      "line": 120,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CanvasSettingsScreen.kt",
       "source": "Open the current Canvas surface to inspect or interact with it.",
       "surface": "android",
