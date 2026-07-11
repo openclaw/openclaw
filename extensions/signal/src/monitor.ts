@@ -640,10 +640,10 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     daemonLifecycle.attach(daemonHandle);
   }
 
-  const onAbort = () => {
-    daemonLifecycle.stop();
-  };
-  opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
+  // Do not stop the daemon on abort here. SSE/readiness already observe the
+  // merged abort signal; finally drains accepted debounce work first, then
+  // stops the daemon so timer-backed initial flushes stay lifecycle-owned.
+  let drainAcceptedInbound: (() => Promise<void>) | undefined;
 
   try {
     if (daemonHandle) {
@@ -711,6 +711,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       shouldEmitSignalReactionNotification,
       buildSignalReactionSystemEventText,
     });
+    drainAcceptedInbound = handleEvent.drainAcceptedInbound;
 
     await runSignalSseLoop({
       baseUrl,
@@ -731,16 +732,24 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     }
   } catch (err) {
     const daemonExitError = daemonLifecycle.getExitError();
+    // Abort without a daemon crash is a clean shutdown; finally still drains
+    // accepted debounce work before stopping the daemon.
     if (opts.abortSignal?.aborted && !daemonExitError) {
       return;
     }
     throw err;
   } finally {
-    // Stop first: pending retry delays observe abort, while retries that already
-    // started remain in the task runner and drain before monitor teardown.
+    // 1) Force-flush accepted timer-backed debounce batches while the daemon
+    //    is still up (initial attempt only; retries stay abort-aware).
+    // 2) Stop the daemon so retry backoff observes abort and exits.
+    // 3) Wait for tracked tasks (including in-flight flushes/retries) to idle.
+    try {
+      await drainAcceptedInbound?.();
+    } catch (err) {
+      runtime.error?.(`signal accepted inbound drain failed: ${String(err)}`);
+    }
     daemonLifecycle.stop();
     await monitorTaskRunner.waitForIdle();
     daemonLifecycle.dispose();
-    opts.abortSignal?.removeEventListener("abort", onAbort);
   }
 }

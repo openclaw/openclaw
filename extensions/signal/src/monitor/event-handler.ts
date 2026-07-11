@@ -756,10 +756,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     },
     onFlush: async (entries) => {
-      // Events accepted before monitor abort still get one initial flush attempt.
-      // Abort only cancels reply-session conflict retry backoff / later attempts
-      // (see retrySignalInboundFlush), so shutdown does not drop already-accepted
-      // debounced batches that fire after the lifecycle signal is aborted.
+      // Accepted work always gets one initial flush. Abort only cancels
+      // reply-session conflict retry backoff / later attempts (see
+      // retrySignalInboundFlush). The monitor awaits drainAcceptedInbound()
+      // before daemon stop so timer-backed batches stay lifecycle-owned.
       try {
         await flushSignalInboundEntries(entries);
       } catch (err) {
@@ -876,7 +876,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     return true;
   }
 
-  return async (event: { event?: string; data?: string }) => {
+  const handleEvent = async (event: { event?: string; data?: string }) => {
     if (event.event !== "receive" || !event.data) {
       return;
     }
@@ -1287,4 +1287,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     };
     await debouncer.enqueue(entry);
   };
+
+  // Monitor teardown awaits this before daemon stop so accepted timer-backed
+  // batches complete one initial flush while the Signal daemon is still up.
+  const drainAcceptedInbound = async () => {
+    await debouncer.flushAll();
+  };
+
+  return Object.assign(handleEvent, { drainAcceptedInbound });
 }

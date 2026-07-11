@@ -218,6 +218,44 @@ describe("signal reply session init conflict retry", () => {
     }
   });
 
+  it("drainAcceptedInbound flushes accepted batches without waiting for the timer", async () => {
+    // Monitor teardown calls drainAcceptedInbound() before daemon stop so the
+    // accepted initial flush is lifecycle-owned, not a free-running timer race.
+    dispatchInboundMessageMock.mockResolvedValue({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    const abort = new AbortController();
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 60_000 } } },
+        abortSignal: abort.signal,
+      }),
+    );
+
+    vi.useFakeTimers();
+    try {
+      const handled = handler(
+        createSignalReceiveEvent({
+          dataMessage: { message: "drain before daemon stop", attachments: [] },
+        }),
+      );
+      await handled;
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(0);
+
+      abort.abort(new Error("monitor stopped"));
+      await handler.drainAcceptedInbound();
+
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      const payload = dispatchInboundMessageMock.mock.calls[0]?.[0] as
+        | { ctx?: { Body?: string } }
+        | undefined;
+      expect(payload?.ctx?.Body ?? "").toContain("drain before daemon stop");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a retry that crossed the timer boundary in the monitor task runner", async () => {
     let resolveRetry: (() => void) | undefined;
     const retryDispatch = new Promise<{ queuedFinal: boolean; counts: Record<string, number> }>(

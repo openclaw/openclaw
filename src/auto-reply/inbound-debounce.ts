@@ -172,6 +172,13 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     await flushBuffer(key, buffer);
   };
 
+  /** Force-flush every timer-backed buffer and await its onFlush work. */
+  const flushAll = async () => {
+    // Snapshot keys: flushBuffer removes entries while we iterate.
+    const keys = [...buffers.keys()];
+    await Promise.all(keys.map((key) => flushKey(key)));
+  };
+
   const cancelKey = (key: string): boolean => {
     const buffer = buffers.get(key);
     if (!buffer) {
@@ -286,5 +293,5 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey, cancelKey };
+  return { enqueue, flushKey, flushAll, cancelKey };
 }

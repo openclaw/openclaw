@@ -534,6 +534,32 @@ describe("createInboundDebouncer", () => {
     vi.useRealTimers();
   });
 
+  it("flushAll force-flushes every timer-backed buffer without waiting for timers", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 10_000,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await debouncer.enqueue({ key: "b", id: "2" });
+    expect(calls).toStrictEqual([]);
+
+    await debouncer.flushAll();
+
+    expect(calls).toEqual([["1"], ["2"]]);
+    // Timer advance must not re-flush drained buffers.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toEqual([["1"], ["2"]]);
+
+    vi.useRealTimers();
+  });
+
   it("flushes buffered items before non-debounced item", async () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];
