@@ -211,6 +211,8 @@ describe("browser control server", () => {
       expect(response.ok).toBe(true);
       const execArgs = mockFirstArg(pwMocks.executeActViaPlaywright, 0, "executeAct");
       expect(execArgs.browserProxyMode).toBe("explicit-browser-proxy");
+      const hoverArgs = mockFirstArg(pwMocks.hoverViaPlaywright, 0, "hover");
+      expect(hoverArgs.browserProxyMode).toBe("explicit-browser-proxy");
     },
     slowTimeoutMs,
   );
