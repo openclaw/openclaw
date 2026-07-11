@@ -860,14 +860,12 @@ function canonicalMainCommits(base, mainRef) {
     return [];
   }
   const mainCommit = gitCommit(mainRef, true);
-  if (!gitIsAncestor(base, mainCommit)) {
-    fail(`release range base ${base} must be an ancestor of canonical main ref ${mainRef}`);
-  }
+  const mainBase = git(["merge-base", base, mainCommit]);
   const output = git([
     "log",
     "--reverse",
     "--format=%H%x1f%s%x1f%an%x1f%ae%x1e",
-    `${base}..${mainCommit}`,
+    `${mainBase}..${mainCommit}`,
   ]);
   const commits = [];
   for (const record of output.split("\x1e")) {

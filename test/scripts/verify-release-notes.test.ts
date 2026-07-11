@@ -480,6 +480,69 @@ describe("release-note verification", () => {
     }
   });
 
+  it("accepts a release-only base that shares history with canonical main", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-"));
+    try {
+      git(cwd, ["init", "-q"]);
+      writeFileSync(
+        join(cwd, "CHANGELOG.md"),
+        [
+          "# Changelog",
+          "",
+          "## 2026.7.1",
+          "",
+          "### Highlights",
+          "",
+          "- One.",
+          "- Two.",
+          "- Three.",
+          "- Four.",
+          "- Five.",
+          "",
+          "### Changes",
+          "",
+          "### Fixes",
+        ].join("\n"),
+      );
+      git(cwd, ["add", "CHANGELOG.md"]);
+      git(cwd, ["commit", "-qm", "initial"]);
+      const root = git(cwd, ["rev-parse", "HEAD"]);
+
+      writeFileSync(join(cwd, "main.txt"), "main\n");
+      git(cwd, ["add", "main.txt"]);
+      git(cwd, ["commit", "-qm", "main"]);
+      git(cwd, ["branch", "main-ref"]);
+
+      git(cwd, ["checkout", "-qb", "release", root]);
+      writeFileSync(join(cwd, "release.txt"), "release\n");
+      git(cwd, ["add", "release.txt"]);
+      git(cwd, ["commit", "-qm", "release"]);
+      git(cwd, ["tag", "beta-base"]);
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          verifier,
+          "--base",
+          "beta-base",
+          "--target",
+          "HEAD",
+          "--main-ref",
+          "main-ref",
+          "--version",
+          "2026.7.1",
+          "--write-ledger",
+        ],
+        { cwd, encoding: "utf8" },
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a release base that is not an ancestor of the target", () => {
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-"));
     try {
