@@ -158,7 +158,7 @@ export function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date
 function renderChatTimestamp(timestamp: number, interactive = false) {
   const display = formatChatTimestampForDisplay(timestamp);
   const timeEl = html`
-    <time class="chat-group-timestamp" datetime=${display.dateTime}>
+    <time class="chat-group-timestamp" datetime=${display.dateTime} aria-live="off">
       ${formatChatRelativeTimestampLabel(timestamp)}
     </time>
   `;
