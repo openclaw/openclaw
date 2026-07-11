@@ -23,6 +23,11 @@ import {
   resolveSignalSender,
 } from "./identity.js";
 import { probeSignal } from "./probe.js";
+import {
+  clearSignalReplyAuthorsForTest,
+  registerSignalReplyContext,
+  resolveSignalReplyContextWithPersistence,
+} from "./reply-authors.js";
 import { clearSignalRuntime } from "./runtime.js";
 import {
   createSignalCliPathTextInput,
@@ -373,11 +378,22 @@ describe("signal outbound", () => {
         to: "+15551234567",
         text: "a".repeat(5000),
         deps: { signal: send },
+        replyToId: "1700000000004",
+        replyToIdSource: "implicit",
+        replyToMode: "first",
         onDeliveryResult,
       }),
     ).rejects.toThrow("second Signal chunk failed");
 
     expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenNthCalledWith(
+      2,
+      "+15551234567",
+      expect.any(String),
+      expect.not.objectContaining({
+        replyToId: "1700000000004",
+      }),
+    );
     expect(onDeliveryResult).toHaveBeenCalledTimes(1);
     expect(onDeliveryResult).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "signal", messageId: "signal-1" }),
@@ -929,6 +945,47 @@ describe("signal outbound", () => {
       }),
     ).resolves.toBeNull();
     clearSignalApprovalReactionTargetsForTest();
+  });
+
+  it("resolves only proven direct reply authors", async () => {
+    const replyContext = { to: "signal:+15551234567", replyToId: "1700000000001" };
+    await registerSignalReplyContext({ ...replyContext, author: "+15551234567" });
+    await registerSignalReplyContext({ ...replyContext, author: "+15550001111" });
+    await expect(resolveSignalReplyContextWithPersistence(replyContext)).resolves.toEqual({
+      ambiguous: true,
+    });
+    await clearSignalReplyAuthorsForTest();
+  });
+
+  it("hydrates durable Signal sends with stored native quote context", async () => {
+    await clearSignalReplyAuthorsForTest();
+    await registerSignalReplyContext({
+      to: "signal:+15555550123",
+      replyToId: "1700000000001",
+      author: "+15555550123",
+      body: "original message",
+    });
+    const send = vi.fn(async () => ({ messageId: "signal-text-1" }));
+
+    await signalPlugin.message?.send?.text?.({
+      cfg: {} as OpenClawConfig,
+      to: "signal:+15555550123",
+      text: "reply",
+      replyToId: "1700000000001",
+      deps: { signal: send },
+    } as Parameters<NonNullable<typeof signalPlugin.message.send.text>>[0] & {
+      deps: { signal: typeof send };
+    });
+
+    expect(send).toHaveBeenCalledWith("+15555550123", "reply", {
+      cfg: {},
+      maxBytes: undefined,
+      accountId: undefined,
+      replyToId: "1700000000001",
+      replyToAuthor: "+15555550123",
+      replyToBody: "original message",
+    });
+    await clearSignalReplyAuthorsForTest();
   });
 
   it("declares message adapter durable text and media with receipt proofs", async () => {

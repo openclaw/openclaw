@@ -68,6 +68,22 @@ describe("signalMessageActions", () => {
     expect(signalMessageActions.supportsAction?.({ action: "pin" })).toBe(false);
   });
 
+  it("preserves the Signal reply id alias for durable send delivery", async () => {
+    const prepared = await signalMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "signal",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: { replyToId: "1700000000001" },
+      },
+      to: "+15550001111",
+      payload: { text: "reply" },
+      replyToId: "1700000000001",
+    });
+
+    expect(prepared).toEqual({ text: "reply", replyToId: "1700000000001" });
+  });
+
   it("blocks reactions when the action gate is disabled", async () => {
     const cfg = {
       channels: { signal: { account: "+15550001111", actions: { reactions: false } } },
