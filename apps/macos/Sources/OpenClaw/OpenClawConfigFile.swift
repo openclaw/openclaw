@@ -10,15 +10,15 @@ enum OpenClawConfigFile {
     private nonisolated(unsafe) static var configHealthState: [String: Any] = [:]
 
     private static func withFileLock<T>(_ body: () throws -> T) rethrows -> T {
-        fileLock.lock()
+        self.fileLock.lock()
         defer { self.fileLock.unlock() }
         return try body()
     }
 
     #if DEBUG
-        static func withTestingFileLock<T>(_ body: () throws -> T) rethrows -> T {
-            try withFileLock(body)
-        }
+    static func withTestingFileLock<T>(_ body: () throws -> T) rethrows -> T {
+        try self.withFileLock(body)
+    }
     #endif
 
     static func url() -> URL {
@@ -34,7 +34,7 @@ enum OpenClawConfigFile {
     }
 
     static func loadDict() -> [String: Any] {
-        withFileLock {
+        self.withFileLock {
             let url = self.url()
             guard FileManager().fileExists(atPath: url.path) else { return [:] }
             do {
@@ -57,11 +57,10 @@ enum OpenClawConfigFile {
     static func saveDict(
         _ dict: [String: Any],
         preserveExistingKeys: Bool = false,
-        allowGatewayAuthMutation: Bool = false
-    )
+        allowGatewayAuthMutation: Bool = false)
         -> Bool
     {
-        withFileLock {
+        self.withFileLock {
             // Nix mode disables config writes in production, but tests rely on saving temp configs.
             if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests {
                 return false
@@ -82,8 +81,7 @@ enum OpenClawConfigFile {
             let preservedGatewayAuth = self.preserveGatewayAuthIfNeeded(
                 previousRoot: previousRoot,
                 output: &output,
-                allowGatewayAuthMutation: allowGatewayAuthMutation
-            )
+                allowGatewayAuthMutation: allowGatewayAuthMutation)
             self.stampMeta(&output)
 
             do {
@@ -96,8 +94,7 @@ enum OpenClawConfigFile {
                     nextBytes: nextBytes,
                     hadMetaBefore: hadMetaBefore,
                     gatewayModeBefore: gatewayModeBefore,
-                    gatewayModeAfter: gatewayModeAfter
-                )
+                    gatewayModeAfter: gatewayModeAfter)
                 if preservedGatewayAuth {
                     suspicious.append("gateway-auth-preserved")
                 }
@@ -136,8 +133,7 @@ enum OpenClawConfigFile {
                 }
                 try FileManager().createDirectory(
                     at: url.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
+                    withIntermediateDirectories: true)
                 try data.write(to: url, options: [.atomic])
                 let nextAttributes = try? FileManager().attributesOfItem(atPath: url.path)
                 if !suspicious.isEmpty {
@@ -192,12 +188,12 @@ enum OpenClawConfigFile {
     }
 
     static func loadGatewayDict() -> [String: Any] {
-        let root = loadDict()
+        let root = self.loadDict()
         return root["gateway"] as? [String: Any] ?? [:]
     }
 
     static func updateGatewayDict(_ mutate: (inout [String: Any]) -> Void) {
-        var root = loadDict()
+        var root = self.loadDict()
         var gateway = root["gateway"] as? [String: Any] ?? [:]
         mutate(&gateway)
         if gateway.isEmpty {
@@ -205,13 +201,13 @@ enum OpenClawConfigFile {
         } else {
             root["gateway"] = gateway
         }
-        saveDict(root)
+        self.saveDict(root)
     }
 
     static func gatewayUpdateChannel() -> String? {
-        let root = loadDict()
+        let root = self.loadDict()
         let update = root["update"] as? [String: Any]
-        return normalizedGatewayUpdateChannel(update?["channel"] as? String)
+        return self.normalizedGatewayUpdateChannel(update?["channel"] as? String)
     }
 
     static func normalizedGatewayUpdateChannel(_ channel: String?) -> String? {
@@ -220,7 +216,7 @@ enum OpenClawConfigFile {
     }
 
     static func browserControlEnabled(defaultValue: Bool = true) -> Bool {
-        let root = loadDict()
+        let root = self.loadDict()
         let browser = root["browser"] as? [String: Any]
         return browser?["enabled"] as? Bool ?? defaultValue
     }
@@ -241,7 +237,7 @@ extension OpenClawConfigFile {
     }
 
     static func pluginEntry(_ pluginId: String, root: [String: Any]? = nil) -> [String: Any]? {
-        let root = root ?? loadDict()
+        let root = root ?? self.loadDict()
         guard let pluginId = normalizedPluginConfigId(pluginId) else { return nil }
         guard let plugins = root["plugins"] as? [String: Any],
               let entries = plugins["entries"] as? [String: Any]
@@ -256,7 +252,7 @@ extension OpenClawConfigFile {
     }
 
     static func explicitlyEnabledPlugin(_ pluginId: String, root: [String: Any]? = nil) -> Bool {
-        let root = root ?? loadDict()
+        let root = root ?? self.loadDict()
         guard let pluginId = normalizedPluginConfigId(pluginId) else { return false }
         guard let plugins = root["plugins"] as? [String: Any],
               let entry = pluginEntry(pluginId, root: root),
@@ -266,12 +262,12 @@ extension OpenClawConfigFile {
             return false
         }
 
-        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(normalizedPluginConfigId)
+        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
         if deny.contains(pluginId) {
             return false
         }
 
-        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(normalizedPluginConfigId)
+        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
         if !allow.isEmpty, !allow.contains(pluginId) {
             return false
         }
@@ -282,9 +278,9 @@ extension OpenClawConfigFile {
     /// activate the plugin unless global policy, an entry opt-out, or deny disables it.
     static func configuredBundledPluginAllowed(
         _ pluginId: String,
-        root: [String: Any]? = nil
-    ) -> Bool {
-        let root = root ?? loadDict()
+        root: [String: Any]? = nil) -> Bool
+    {
+        let root = root ?? self.loadDict()
         guard let pluginId = normalizedPluginConfigId(pluginId),
               let plugins = root["plugins"] as? [String: Any],
               let entry = pluginEntry(pluginId, root: root)
@@ -296,12 +292,12 @@ extension OpenClawConfigFile {
             return false
         }
 
-        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(normalizedPluginConfigId)
+        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
         if deny.contains(pluginId) {
             return false
         }
 
-        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(normalizedPluginConfigId)
+        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
         return allow.isEmpty || allow.contains(pluginId)
     }
 
@@ -309,9 +305,9 @@ extension OpenClawConfigFile {
     /// An absent entry stays enabled; global policy, deny, allow, or an entry opt-out can block it.
     static func defaultEnabledBundledPluginAllowed(
         _ pluginId: String,
-        root: [String: Any]? = nil
-    ) -> Bool {
-        let root = root ?? loadDict()
+        root: [String: Any]? = nil) -> Bool
+    {
+        let root = root ?? self.loadDict()
         guard let pluginId = normalizedPluginConfigId(pluginId) else { return false }
         let plugins = root["plugins"] as? [String: Any] ?? [:]
         if let enabled = plugins["enabled"], literalBoolean(enabled) != true {
@@ -331,22 +327,22 @@ extension OpenClawConfigFile {
             }
         }
 
-        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(normalizedPluginConfigId)
+        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
         if deny.contains(pluginId) {
             return false
         }
 
-        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(normalizedPluginConfigId)
+        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
         return allow.isEmpty || allow.contains(pluginId)
     }
 
     static func explicitlyEnabledPluginConfigFlag(
         _ pluginId: String,
         path: [String],
-        root: [String: Any]? = nil
-    ) -> Bool {
-        let root = root ?? loadDict()
-        guard explicitlyEnabledPlugin(pluginId, root: root),
+        root: [String: Any]? = nil) -> Bool
+    {
+        let root = root ?? self.loadDict()
+        guard self.explicitlyEnabledPlugin(pluginId, root: root),
               let entry = pluginEntry(pluginId, root: root),
               let config = entry["config"]
         else { return false }
@@ -358,32 +354,32 @@ extension OpenClawConfigFile {
             }
             value = next
         }
-        return literalBoolean(value) == true
+        return self.literalBoolean(value) == true
     }
 
     static func setBrowserControlEnabled(_ enabled: Bool) {
-        var root = loadDict()
+        var root = self.loadDict()
         var browser = root["browser"] as? [String: Any] ?? [:]
         browser["enabled"] = enabled
         root["browser"] = browser
-        saveDict(root)
-        logger.debug("browser control updated enabled=\(enabled)")
+        self.saveDict(root)
+        self.logger.debug("browser control updated enabled=\(enabled)")
     }
 
     static func agentWorkspace() -> String? {
-        AgentWorkspaceConfig.workspace(from: loadDict())
+        AgentWorkspaceConfig.workspace(from: self.loadDict())
     }
 
     static func setAgentWorkspace(_ workspace: String?) {
-        var root = loadDict()
+        var root = self.loadDict()
         AgentWorkspaceConfig.setWorkspace(in: &root, workspace: workspace)
-        saveDict(root)
+        self.saveDict(root)
         let hasWorkspace = !(workspace?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        logger.debug("agents.defaults.workspace updated set=\(hasWorkspace)")
+        self.logger.debug("agents.defaults.workspace updated set=\(hasWorkspace)")
     }
 
     static func gatewayPassword() -> String? {
-        let root = loadDict()
+        let root = self.loadDict()
         guard let gateway = root["gateway"] as? [String: Any],
               let remote = gateway["remote"] as? [String: Any]
         else {
@@ -393,7 +389,7 @@ extension OpenClawConfigFile {
     }
 
     static func gatewayPort() -> Int? {
-        let root = loadDict()
+        let root = self.loadDict()
         guard let gateway = root["gateway"] as? [String: Any] else { return nil }
         if let port = gateway["port"] as? Int, port > 0 {
             return port
@@ -437,7 +433,7 @@ extension OpenClawConfigFile {
         guard let port, port > 0 else { return }
         let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedHost.isEmpty else { return }
-        updateGatewayDict { gateway in
+        self.updateGatewayDict { gateway in
             var remote = gateway["remote"] as? [String: Any] ?? [:]
             let existingUrl = (remote["url"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -450,7 +446,7 @@ extension OpenClawConfigFile {
     static func setRemoteGatewayUrlString(_ value: String) {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        updateGatewayDict { gateway in
+        self.updateGatewayDict { gateway in
             var remote = gateway["remote"] as? [String: Any] ?? [:]
             remote["url"] = trimmed
             gateway["remote"] = remote
@@ -460,7 +456,7 @@ extension OpenClawConfigFile {
     static func setRemoteGatewayTransport(_ value: String) {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        updateGatewayDict { gateway in
+        self.updateGatewayDict { gateway in
             var remote = gateway["remote"] as? [String: Any] ?? [:]
             remote["transport"] = trimmed
             gateway["remote"] = remote
@@ -468,7 +464,7 @@ extension OpenClawConfigFile {
     }
 
     static func clearRemoteGatewayUrl() {
-        updateGatewayDict { gateway in
+        self.updateGatewayDict { gateway in
             guard var remote = gateway["remote"] as? [String: Any] else { return }
             guard remote["url"] != nil else { return }
             remote.removeValue(forKey: "url")
@@ -481,7 +477,7 @@ extension OpenClawConfigFile {
     }
 
     private static func remoteGatewayUrl() -> URL? {
-        let root = loadDict()
+        let root = self.loadDict()
         guard let gateway = root["gateway"] as? [String: Any],
               let remote = gateway["remote"] as? [String: Any],
               let raw = remote["url"] as? String
@@ -515,7 +511,7 @@ extension OpenClawConfigFile {
             decoder.allowsJSON5 = true
         }
         if let decoded = try? decoder.decode([String: AnyCodable].self, from: data) {
-            logger.notice("config parsed with JSON5 decoder")
+            self.logger.notice("config parsed with JSON5 decoder")
             return decoded.mapValues { $0.foundationValue }
         }
         return nil
@@ -540,7 +536,7 @@ extension OpenClawConfigFile {
 
     private static func gatewayMode(_ root: [String: Any]?) -> String? {
         guard let root else { return nil }
-        return gatewayMode(root)
+        return self.gatewayMode(root)
     }
 
     private static func gatewayMode(_ root: [String: Any]) -> String? {
@@ -565,14 +561,14 @@ extension OpenClawConfigFile {
 
     private static func mergeExistingConfig(
         _ existing: [String: Any],
-        overridingWith next: [String: Any]
-    ) -> [String: Any] {
+        overridingWith next: [String: Any]) -> [String: Any]
+    {
         var merged = existing
         for (key, value) in next {
             if let nextDict = value as? [String: Any],
                let existingDict = merged[key] as? [String: Any]
             {
-                merged[key] = mergeExistingConfig(existingDict, overridingWith: nextDict)
+                merged[key] = self.mergeExistingConfig(existingDict, overridingWith: nextDict)
             } else {
                 merged[key] = value
             }
@@ -583,15 +579,15 @@ extension OpenClawConfigFile {
     private static func preserveGatewayAuthIfNeeded(
         previousRoot: [String: Any]?,
         output: inout [String: Any],
-        allowGatewayAuthMutation: Bool
-    ) -> Bool {
+        allowGatewayAuthMutation: Bool) -> Bool
+    {
         guard !allowGatewayAuthMutation,
               let previousAuth = gatewayAuth(previousRoot)
         else {
             return false
         }
         var gateway = output["gateway"] as? [String: Any] ?? [:]
-        let changed = !configDictionariesEqual(gateway["auth"] as? [String: Any], previousAuth)
+        let changed = !self.configDictionariesEqual(gateway["auth"] as? [String: Any], previousAuth)
         gateway["auth"] = previousAuth
         output["gateway"] = gateway
         return changed
@@ -603,8 +599,8 @@ extension OpenClawConfigFile {
         nextBytes: Int,
         hadMetaBefore: Bool,
         gatewayModeBefore: String?,
-        gatewayModeAfter: String?
-    ) -> [String] {
+        gatewayModeAfter: String?) -> [String]
+    {
         var reasons: [String] = []
         if !existsBefore {
             return reasons
@@ -628,9 +624,9 @@ extension OpenClawConfigFile {
     }
 
     private static func configAuditLogURL() -> URL {
-        stateDirURL()
+        self.stateDirURL()
             .appendingPathComponent("logs", isDirectory: true)
-            .appendingPathComponent(configAuditFileName, isDirectory: false)
+            .appendingPathComponent(self.configAuditFileName, isDirectory: false)
     }
 
     private static func configHealthEntry(state: [String: Any], configPath: String) -> [String: Any] {
@@ -641,8 +637,8 @@ extension OpenClawConfigFile {
     private static func setConfigHealthEntry(
         state: [String: Any],
         configPath: String,
-        entry: [String: Any]
-    ) -> [String: Any] {
+        entry: [String: Any]) -> [String: Any]
+    {
         var next = state
         var entries = next["entries"] as? [String: Any] ?? [:]
         entries[configPath] = entry
@@ -692,22 +688,22 @@ extension OpenClawConfigFile {
         data: Data,
         root: [String: Any]?,
         configURL: URL,
-        observedAt: String
-    ) -> [String: Any] {
+        observedAt: String) -> [String: Any]
+    {
         let attributes = try? FileManager().attributesOfItem(atPath: configURL.path)
         return [
             "hash": SHA256.hash(data: data).compactMap { String(format: "%02x", $0) }.joined(),
             "bytes": data.count,
-            "mtimeMs": fileTimestampMs(attributes?[.modificationDate]) ?? NSNull(),
-            "ctimeMs": fileTimestampMs(attributes?[.creationDate]) ?? NSNull(),
-            "dev": fileSystemNumber(attributes?[.systemNumber]) ?? NSNull(),
-            "ino": fileSystemNumber(attributes?[.systemFileNumber]) ?? NSNull(),
-            "mode": posixMode(attributes?[.posixPermissions]) ?? NSNull(),
-            "nlink": fileAttributeInt(attributes?[.referenceCount]) ?? NSNull(),
-            "uid": fileAttributeInt(attributes?[.ownerAccountID]) ?? NSNull(),
-            "gid": fileAttributeInt(attributes?[.groupOwnerAccountID]) ?? NSNull(),
-            "hasMeta": hasMeta(root),
-            "gatewayMode": gatewayMode(root) ?? NSNull(),
+            "mtimeMs": self.fileTimestampMs(attributes?[.modificationDate]) ?? NSNull(),
+            "ctimeMs": self.fileTimestampMs(attributes?[.creationDate]) ?? NSNull(),
+            "dev": self.fileSystemNumber(attributes?[.systemNumber]) ?? NSNull(),
+            "ino": self.fileSystemNumber(attributes?[.systemFileNumber]) ?? NSNull(),
+            "mode": self.posixMode(attributes?[.posixPermissions]) ?? NSNull(),
+            "nlink": self.fileAttributeInt(attributes?[.referenceCount]) ?? NSNull(),
+            "uid": self.fileAttributeInt(attributes?[.ownerAccountID]) ?? NSNull(),
+            "gid": self.fileAttributeInt(attributes?[.groupOwnerAccountID]) ?? NSNull(),
+            "hasMeta": self.hasMeta(root),
+            "gatewayMode": self.gatewayMode(root) ?? NSNull(),
             "observedAt": observedAt,
         ]
     }
@@ -731,8 +727,8 @@ extension OpenClawConfigFile {
     private static func observeSuspiciousReasons(
         root: [String: Any]?,
         bytes: Int,
-        lastKnownGood: [String: Any]?
-    ) -> [String] {
+        lastKnownGood: [String: Any]?) -> [String]
+    {
         guard let lastKnownGood else { return [] }
         var reasons: [String] = []
         if let previousBytes = lastKnownGood["bytes"] as? Int,
@@ -741,10 +737,10 @@ extension OpenClawConfigFile {
         {
             reasons.append("size-drop-vs-last-good:\(previousBytes)->\(bytes)")
         }
-        if (lastKnownGood["hasMeta"] as? Bool) == true, !hasMeta(root) {
+        if (lastKnownGood["hasMeta"] as? Bool) == true, !self.hasMeta(root) {
             reasons.append("missing-meta-vs-last-good")
         }
-        if (lastKnownGood["gatewayMode"] as? String) != nil, gatewayMode(root) == nil {
+        if (lastKnownGood["gatewayMode"] as? String) != nil, self.gatewayMode(root) == nil {
             reasons.append("gateway-mode-missing-vs-last-good")
         }
         if let root, (lastKnownGood["gatewayMode"] as? String) != nil, isUpdateChannelOnlyRoot(root) {
@@ -755,13 +751,12 @@ extension OpenClawConfigFile {
 
     private static func readConfigFingerprint(at url: URL) -> [String: Any]? {
         guard let data = try? Data(contentsOf: url) else { return nil }
-        let root = parseConfigData(data)
-        return configFingerprint(
+        let root = self.parseConfigData(data)
+        return self.configFingerprint(
             data: data,
             root: root,
             configURL: url,
-            observedAt: ISO8601DateFormatter().string(from: Date())
-        )
+            observedAt: ISO8601DateFormatter().string(from: Date()))
     }
 
     private static func configTimestampToken(_ timestamp: String) -> String {
@@ -771,7 +766,7 @@ extension OpenClawConfigFile {
 
     private static func persistClobberedSnapshot(data: Data, configURL: URL, observedAt: String) -> String? {
         let url = configURL.deletingLastPathComponent()
-            .appendingPathComponent("\(configURL.lastPathComponent).clobbered.\(configTimestampToken(observedAt))")
+            .appendingPathComponent("\(configURL.lastPathComponent).clobbered.\(self.configTimestampToken(observedAt))")
         guard !FileManager().fileExists(atPath: url.path) else { return url.path }
         do {
             try data.write(to: url, options: [])
@@ -784,7 +779,7 @@ extension OpenClawConfigFile {
     private static func persistRejectedConfigWrite(data: Data, configURL: URL) -> String? {
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let url = configURL.deletingLastPathComponent()
-            .appendingPathComponent("\(configURL.lastPathComponent).rejected.\(configTimestampToken(timestamp))")
+            .appendingPathComponent("\(configURL.lastPathComponent).rejected.\(self.configTimestampToken(timestamp))")
         let fileManager = FileManager()
         let privatePermissions: NSNumber = 0o600
         if fileManager.fileExists(atPath: url.path) {
@@ -794,8 +789,7 @@ extension OpenClawConfigFile {
         guard fileManager.createFile(
             atPath: url.path,
             contents: data,
-            attributes: [.posixPermissions: privatePermissions]
-        )
+            attributes: [.posixPermissions: privatePermissions])
         else {
             return nil
         }
@@ -804,15 +798,14 @@ extension OpenClawConfigFile {
 
     private static func observeConfigRead(data: Data, root: [String: Any]?, configURL: URL, valid: Bool) {
         let observedAt = ISO8601DateFormatter().string(from: Date())
-        let current = configFingerprint(data: data, root: root, configURL: configURL, observedAt: observedAt)
-        var state = configHealthState
-        let entry = configHealthEntry(state: state, configPath: configURL.path)
+        let current = self.configFingerprint(data: data, root: root, configURL: configURL, observedAt: observedAt)
+        var state = self.configHealthState
+        let entry = self.configHealthEntry(state: state, configPath: configURL.path)
         let lastKnownGood = entry["lastKnownGood"] as? [String: Any]
-        let suspicious = observeSuspiciousReasons(
+        let suspicious = self.observeSuspiciousReasons(
             root: root,
             bytes: current["bytes"] as? Int ?? 0,
-            lastKnownGood: lastKnownGood
-        )
+            lastKnownGood: lastKnownGood)
 
         if suspicious.isEmpty {
             guard valid else { return }
@@ -820,9 +813,9 @@ extension OpenClawConfigFile {
                 "lastKnownGood": current,
                 "lastObservedSuspiciousSignature": NSNull(),
             ]
-            if !sameFingerprint(lastKnownGood, current) || entry["lastObservedSuspiciousSignature"] != nil {
-                state = setConfigHealthEntry(state: state, configPath: configURL.path, entry: nextEntry)
-                configHealthState = state
+            if !self.sameFingerprint(lastKnownGood, current) || entry["lastObservedSuspiciousSignature"] != nil {
+                state = self.setConfigHealthEntry(state: state, configPath: configURL.path, entry: nextEntry)
+                self.configHealthState = state
             }
             return
         }
@@ -832,16 +825,14 @@ extension OpenClawConfigFile {
             return
         }
 
-        let backup = readConfigFingerprint(
-            at: configURL.deletingLastPathComponent().appendingPathComponent("\(configURL.lastPathComponent).bak")
-        )
-        let clobberedPath = persistClobberedSnapshot(
+        let backup = self.readConfigFingerprint(
+            at: configURL.deletingLastPathComponent().appendingPathComponent("\(configURL.lastPathComponent).bak"))
+        let clobberedPath = self.persistClobberedSnapshot(
             data: data,
             configURL: configURL,
-            observedAt: observedAt
-        )
-        logger.warning("config observe anomaly (\(suspicious.joined(separator: ", "))) at \(configURL.path)")
-        appendConfigObserveAudit([
+            observedAt: observedAt)
+        self.logger.warning("config observe anomaly (\(suspicious.joined(separator: ", "))) at \(configURL.path)")
+        self.appendConfigObserveAudit([
             "phase": "read",
             "configPath": configURL.path,
             "exists": true,
@@ -885,8 +876,8 @@ extension OpenClawConfigFile {
         ])
         var nextEntry = entry
         nextEntry["lastObservedSuspiciousSignature"] = signature
-        state = setConfigHealthEntry(state: state, configPath: configURL.path, entry: nextEntry)
-        configHealthState = state
+        state = self.setConfigHealthEntry(state: state, configPath: configURL.path, entry: nextEntry)
+        self.configHealthState = state
     }
 
     private static func appendConfigWriteAudit(_ fields: [String: Any]) {
@@ -908,12 +899,11 @@ extension OpenClawConfigFile {
         var line = Data()
         line.append(data)
         line.append(0x0A)
-        let logURL = configAuditLogURL()
+        let logURL = self.configAuditLogURL()
         do {
             try FileManager().createDirectory(
                 at: logURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
+                withIntermediateDirectories: true)
             if !FileManager().fileExists(atPath: logURL.path) {
                 FileManager().createFile(atPath: logURL.path, contents: nil)
             }
@@ -945,12 +935,11 @@ extension OpenClawConfigFile {
         var line = Data()
         line.append(data)
         line.append(0x0A)
-        let logURL = configAuditLogURL()
+        let logURL = self.configAuditLogURL()
         do {
             try FileManager().createDirectory(
                 at: logURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
+                withIntermediateDirectories: true)
             if !FileManager().fileExists(atPath: logURL.path) {
                 FileManager().createFile(atPath: logURL.path, contents: nil)
             }

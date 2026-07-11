@@ -64,7 +64,7 @@ enum MacNodeClaudeSessionCatalog {
                 "modelProvider": "anthropic",
                 "archived": false,
             ]
-            value["name"] = name ?? NSNull()
+            value["name"] = self.name ?? NSNull()
             if let cwd {
                 value["cwd"] = cwd
             }
@@ -103,33 +103,29 @@ enum MacNodeClaudeSessionCatalog {
 
     static func shouldAdvertise(
         root: [String: Any]? = nil,
-        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser
-    ) -> Bool {
+        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool
+    {
         let root = root ?? OpenClawConfigFile.loadDict()
         guard OpenClawConfigFile.defaultEnabledBundledPluginAllowed(
             MacNodeClaudeSessionCatalogContract.pluginId,
-            root: root
-        )
+            root: root)
         else { return false }
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(
             atPath: projectsURL(homeURL: homeURL).path,
-            isDirectory: &isDirectory
-        ) && isDirectory.boolValue
+            isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     static func list(paramsJSON: String?) throws -> String {
-        try list(
+        try self.list(
             paramsJSON: paramsJSON,
-            homeURL: FileManager.default.homeDirectoryForCurrentUser
-        )
+            homeURL: FileManager.default.homeDirectoryForCurrentUser)
     }
 
     static func read(paramsJSON: String?) throws -> String {
-        try read(
+        try self.read(
             paramsJSON: paramsJSON,
-            homeURL: FileManager.default.homeDirectoryForCurrentUser
-        )
+            homeURL: FileManager.default.homeDirectoryForCurrentUser)
     }
 
     static func list(paramsJSON: String?, homeURL: URL) throws -> String {
@@ -146,12 +142,12 @@ enum MacNodeClaudeSessionCatalog {
             throw CatalogError.invalidParams("catalog cursor is invalid")
         }
         let end = min(records.count, offset + params.limit)
-        let page = records[offset ..< end].map(\.wire)
+        let page = records[offset..<end].map(\.wire)
         var response: [String: Any] = ["sessions": page]
         if end < records.count {
             response["nextCursor"] = try encodeCursor(end)
         }
-        return try encode(response, maxBytes: maxTranscriptPageBytes)
+        return try encode(response, maxBytes: self.maxTranscriptPageBytes)
     }
 
     static func read(paramsJSON: String?, homeURL: URL) throws -> String {
@@ -185,14 +181,13 @@ enum MacNodeClaudeSessionCatalog {
             }
         }
         while position > 0,
-              scanned < maxTranscriptScanBytes,
+              scanned < self.maxTranscriptScanBytes,
               found.count <= params.limit
         {
             let size = min(
                 readChunkBytes,
                 Int(position),
-                maxTranscriptScanBytes - scanned
-            )
+                maxTranscriptScanBytes - scanned)
             position -= UInt64(size)
             try handle.seek(toOffset: position)
             guard let chunk = try handle.read(upToCount: size), chunk.count == size else {
@@ -203,7 +198,7 @@ enum MacNodeClaudeSessionCatalog {
             var right = bytes.count
             if !bytes.isEmpty {
                 for index in stride(from: bytes.count - 1, through: 0, by: -1) where bytes[index] == 0x0A {
-                    let segment = chunk.subdata(in: (index + 1) ..< right)
+                    let segment = chunk.subdata(in: (index + 1)..<right)
                     if !segment.isEmpty || !fragments.isEmpty {
                         appendLine(prefix: segment, start: position + UInt64(index + 1))
                         if found.count > params.limit {
@@ -216,7 +211,7 @@ enum MacNodeClaudeSessionCatalog {
             if found.count > params.limit {
                 break
             }
-            let prefix = chunk.subdata(in: 0 ..< right)
+            let prefix = chunk.subdata(in: 0..<right)
             if position == 0 {
                 if !prefix.isEmpty || !fragments.isEmpty {
                     appendLine(prefix: prefix, start: 0)
@@ -234,7 +229,7 @@ enum MacNodeClaudeSessionCatalog {
         for entry in requested {
             guard let data = try? JSONSerialization.data(withJSONObject: entry.item) else { continue }
             if !selected.isEmpty,
-               selectedBytes + data.count > maxTranscriptPageBytes - 64 * 1024
+               selectedBytes + data.count > self.maxTranscriptPageBytes - 64 * 1024
             {
                 break
             }
@@ -262,8 +257,7 @@ extension MacNodeClaudeSessionCatalog {
     private static func desktopSessionsURL(homeURL: URL) -> URL {
         homeURL.appending(
             path: "Library/Application Support/Claude/claude-code-sessions",
-            directoryHint: .isDirectory
-        )
+            directoryHint: .isDirectory)
     }
 
     private static func childDirectories(_ root: URL) -> [URL] {
@@ -271,8 +265,7 @@ extension MacNodeClaudeSessionCatalog {
         return ((try? FileManager.default.contentsOfDirectory(
             at: root,
             includingPropertiesForKeys: keys,
-            options: [.skipsHiddenFiles]
-        )) ?? []).filter { url in
+            options: [.skipsHiddenFiles])) ?? []).filter { url in
             (try? url.resourceValues(forKeys: Set(keys)).isDirectory) == true
         }
     }
@@ -308,18 +301,17 @@ extension MacNodeClaudeSessionCatalog {
         root: URL,
         resolvedRoot: URL,
         candidate: URL,
-        sessionId: String
-    ) -> URL? {
-        guard isWithin(root, candidate: candidate),
+        sessionId: String) -> URL?
+    {
+        guard self.isWithin(root, candidate: candidate),
               candidate.lastPathComponent == "\(sessionId).jsonl"
         else { return nil }
         let resolvedCandidate = candidate.resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false
-        guard isWithin(resolvedRoot, candidate: resolvedCandidate),
+        guard self.isWithin(resolvedRoot, candidate: resolvedCandidate),
               FileManager.default.fileExists(
                   atPath: resolvedCandidate.path,
-                  isDirectory: &isDirectory
-              ),
+                  isDirectory: &isDirectory),
               !isDirectory.boolValue
         else { return nil }
         return resolvedCandidate
@@ -327,17 +319,16 @@ extension MacNodeClaudeSessionCatalog {
 
     private static func desktopMetadata(homeURL: URL) -> (
         active: [String: [String: Any]],
-        archived: Set<String>
-    ) {
+        archived: Set<String>)
+    {
         var active: [String: [String: Any]] = [:]
         var archived = Set<String>()
-        for accountURL in childDirectories(desktopSessionsURL(homeURL: homeURL)) {
-            for workspaceURL in childDirectories(accountURL) {
+        for accountURL in self.childDirectories(self.desktopSessionsURL(homeURL: homeURL)) {
+            for workspaceURL in self.childDirectories(accountURL) {
                 let files = (try? FileManager.default.contentsOfDirectory(
                     at: workspaceURL,
                     includingPropertiesForKeys: nil,
-                    options: [.skipsHiddenFiles]
-                )) ?? []
+                    options: [.skipsHiddenFiles])) ?? []
                 for fileURL in files
                     where fileURL.lastPathComponent.hasPrefix("local_") &&
                     fileURL.pathExtension == "json"
@@ -361,16 +352,15 @@ extension MacNodeClaudeSessionCatalog {
         projectsURL: URL,
         resolvedProjectsURL: URL,
         records: inout [String: SessionRecord],
-        sidechainIds: inout Set<String>
-    ) {
+        sidechainIds: inout Set<String>)
+    {
         var discoveredFiles = 0
         var scannedBytes = 0
-        for projectURL in childDirectories(projectsURL) {
+        for projectURL in self.childDirectories(projectsURL) {
             let files = (try? FileManager.default.contentsOfDirectory(
                 at: projectURL,
                 includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-            )) ?? []
+                options: [.skipsHiddenFiles])) ?? []
             for candidate in files where candidate.pathExtension == "jsonl" {
                 guard discoveredFiles < self.maxCatalogDiscoveryFiles else { return }
                 discoveredFiles += 1
@@ -382,14 +372,12 @@ extension MacNodeClaudeSessionCatalog {
                           root: projectsURL,
                           resolvedRoot: resolvedProjectsURL,
                           candidate: candidate,
-                          sessionId: sessionId
-                      ),
+                          sessionId: sessionId),
                       let handle = try? FileHandle(forReadingFrom: fileURL)
                 else { continue }
                 var aiTitle: String?
                 let updatedAt = (try? fileURL.resourceValues(
-                    forKeys: [.contentModificationDateKey]
-                ).contentModificationDate)
+                    forKeys: [.contentModificationDateKey]).contentModificationDate)
                     .map { Int64($0.timeIntervalSince1970 * 1000) }
                 var stopFile = false
                 func inspectLine(_ line: Data) {
@@ -427,8 +415,7 @@ extension MacNodeClaudeSessionCatalog {
                         updatedAt: updatedAt,
                         source: "claude-cli",
                         gitBranch: self.string(row["gitBranch"], maxLength: 500),
-                        fileURL: fileURL
-                    )
+                        fileURL: fileURL)
                     stopFile = true
                 }
                 var pending = Data()
@@ -441,8 +428,7 @@ extension MacNodeClaudeSessionCatalog {
                     let size = min(
                         self.metadataReadChunkBytes,
                         self.metadataPrefixBytes - fileBytes,
-                        self.maxCatalogMetadataScanBytes - scannedBytes
-                    )
+                        self.maxCatalogMetadataScanBytes - scannedBytes)
                     guard size > 0 else { break }
                     guard let chunk = try? handle.read(upToCount: size) else {
                         pending.removeAll()
@@ -476,7 +462,7 @@ extension MacNodeClaudeSessionCatalog {
         let resolvedProjectsURL = projectsURL.resolvingSymlinksInPath()
         var records: [String: SessionRecord] = [:]
         var sidechainIds = Set<String>()
-        for projectURL in childDirectories(projectsURL) {
+        for projectURL in self.childDirectories(projectsURL) {
             guard let index = readJSON(projectURL.appending(path: "sessions-index.json")) as? [String: Any],
                   let entries = index["entries"] as? [[String: Any]]
             else { continue }
@@ -487,38 +473,35 @@ extension MacNodeClaudeSessionCatalog {
                     records.removeValue(forKey: sessionId)
                     continue
                 }
-                let indexedPath = string(entry["fullPath"])
+                let indexedPath = self.string(entry["fullPath"])
                 let candidate = indexedPath.map { URL(filePath: $0) } ??
                     projectURL.appending(path: "\(sessionId).jsonl")
                 guard let fileURL = safeSessionFile(
                     root: projectsURL,
                     resolvedRoot: resolvedProjectsURL,
                     candidate: candidate,
-                    sessionId: sessionId
-                )
+                    sessionId: sessionId)
                 else { continue }
                 records[sessionId] = SessionRecord(
                     threadId: sessionId,
-                    name: string(entry["summary"], maxLength: 500) ??
-                        string(entry["firstPrompt"], maxLength: 500),
-                    cwd: string(entry["projectPath"]),
-                    createdAt: timestampMs(entry["created"]),
-                    updatedAt: timestampMs(entry["modified"]) ?? timestampMs(entry["fileMtime"]),
+                    name: self.string(entry["summary"], maxLength: 500) ??
+                        self.string(entry["firstPrompt"], maxLength: 500),
+                    cwd: self.string(entry["projectPath"]),
+                    createdAt: self.timestampMs(entry["created"]),
+                    updatedAt: self.timestampMs(entry["modified"]) ?? self.timestampMs(entry["fileMtime"]),
                     source: "claude-cli",
-                    gitBranch: string(entry["gitBranch"], maxLength: 500),
-                    fileURL: fileURL
-                )
+                    gitBranch: self.string(entry["gitBranch"], maxLength: 500),
+                    fileURL: fileURL)
             }
         }
 
-        discoverCLIRecords(
+        self.discoverCLIRecords(
             projectsURL: projectsURL,
             resolvedProjectsURL: resolvedProjectsURL,
             records: &records,
-            sidechainIds: &sidechainIds
-        )
+            sidechainIds: &sidechainIds)
 
-        let desktop = desktopMetadata(homeURL: homeURL)
+        let desktop = self.desktopMetadata(homeURL: homeURL)
         for sessionId in desktop.archived {
             records.removeValue(forKey: sessionId)
         }
@@ -538,14 +521,13 @@ extension MacNodeClaudeSessionCatalog {
                     updatedAt: nil,
                     source: "claude-desktop",
                     gitBranch: nil,
-                    fileURL: fileURL
-                )
+                    fileURL: fileURL)
             }
             guard var record else { continue }
-            record.name = string(metadata["title"], maxLength: 500) ?? record.name
-            record.cwd = string(metadata["cwd"]) ?? string(metadata["originCwd"]) ?? record.cwd
-            record.createdAt = timestampMs(metadata["createdAt"]) ?? record.createdAt
-            record.updatedAt = timestampMs(metadata["lastActivityAt"]) ?? record.updatedAt
+            record.name = self.string(metadata["title"], maxLength: 500) ?? record.name
+            record.cwd = self.string(metadata["cwd"]) ?? self.string(metadata["originCwd"]) ?? record.cwd
+            record.createdAt = self.timestampMs(metadata["createdAt"]) ?? record.createdAt
+            record.updatedAt = self.timestampMs(metadata["lastActivityAt"]) ?? record.updatedAt
             record.source = "claude-desktop"
             records[sessionId] = record
         }
@@ -557,16 +539,16 @@ extension MacNodeClaudeSessionCatalog {
     }
 
     private static func locateSessionFile(homeURL: URL, sessionId: String) throws -> URL? {
-        let root = projectsURL(homeURL: homeURL)
+        let root = self.projectsURL(homeURL: homeURL)
         let resolvedRoot = root.resolvingSymlinksInPath()
-        for projectURL in childDirectories(root) {
+        for projectURL in self.childDirectories(root) {
             let candidate = projectURL.appending(path: "\(sessionId).jsonl")
             if let fileURL = safeSessionFile(
                 root: root,
                 resolvedRoot: resolvedRoot,
                 candidate: candidate,
-                sessionId: sessionId
-            ) {
+                sessionId: sessionId)
+            {
                 return fileURL
             }
         }
@@ -603,13 +585,12 @@ extension MacNodeClaudeSessionCatalog {
     private static func decodeListParams(_ paramsJSON: String?) throws -> ListParams {
         let value = try decodeObject(paramsJSON)
         try requireOnlyKeys(value, allowed: ["cursor", "limit", "searchTerm"])
-        let cursor = string(value["cursor"], maxLength: maxCursorLength)
-        let search = string(value["searchTerm"], maxLength: maxSearchLength)
+        let cursor = self.string(value["cursor"], maxLength: self.maxCursorLength)
+        let search = self.string(value["searchTerm"], maxLength: self.maxSearchLength)
         return try ListParams(
             cursor: cursor,
-            limit: boundedLimit(value["limit"], fallback: defaultPageLimit, max: maxPageLimit),
-            searchTerm: search
-        )
+            limit: self.boundedLimit(value["limit"], fallback: self.defaultPageLimit, max: self.maxPageLimit),
+            searchTerm: search)
     }
 
     private static func decodeReadParams(_ paramsJSON: String?) throws -> ReadParams {
@@ -620,9 +601,8 @@ extension MacNodeClaudeSessionCatalog {
         else { throw CatalogError.invalidParams("threadId is invalid") }
         return try ReadParams(
             threadId: threadId,
-            cursor: string(value["cursor"], maxLength: maxCursorLength),
-            limit: boundedLimit(value["limit"], fallback: defaultReadLimit, max: maxReadLimit)
-        )
+            cursor: self.string(value["cursor"], maxLength: self.maxCursorLength),
+            limit: self.boundedLimit(value["limit"], fallback: self.defaultReadLimit, max: self.maxReadLimit))
     }
 
     private static func encodeCursor(_ offset: Int) throws -> String {
@@ -635,7 +615,7 @@ extension MacNodeClaudeSessionCatalog {
 
     private static func decodeCursor(_ cursor: String?, label: String) throws -> Int {
         guard let cursor else { return 0 }
-        guard cursor.count <= maxCursorLength else {
+        guard cursor.count <= self.maxCursorLength else {
             throw CatalogError.invalidParams("\(label) cursor is invalid")
         }
         var base64 = cursor.replacingOccurrences(of: "-", with: "+")
@@ -683,14 +663,14 @@ extension MacNodeClaudeSessionCatalog {
         }
         if let values = value as? [Any] {
             for value in values {
-                collectText(value, into: &fragments)
+                self.collectText(value, into: &fragments)
             }
             return
         }
         guard let value = value as? [String: Any] else { return }
         for key in ["text", "thinking", "content", "input"] {
             if let child = value[key] {
-                collectText(child, into: &fragments)
+                self.collectText(child, into: &fragments)
             }
         }
     }
@@ -724,7 +704,7 @@ extension MacNodeClaudeSessionCatalog {
               content is String || content is [Any]
         else { return nil }
         var fragments: [String] = []
-        collectText(content, into: &fragments)
+        self.collectText(content, into: &fragments)
         let text = Array(NSOrderedSet(array: fragments)) as? [String] ?? fragments
         var item: [String: Any] = [
             "type": itemType(role: role, content: content),
@@ -748,7 +728,7 @@ extension MacNodeClaudeSessionCatalog {
             return item
         }
         let fullText = (item["text"] as? String) ?? ""
-        let truncated = truncateUTF8(fullText, maxBytes: maxTruncatedTranscriptTextBytes) +
+        let truncated = self.truncateUTF8(fullText, maxBytes: self.maxTruncatedTranscriptTextBytes) +
             "\n\n[oversized Claude item truncated]"
         let fallback: [String: Any] = [
             "type": item["type"] ?? "item",
