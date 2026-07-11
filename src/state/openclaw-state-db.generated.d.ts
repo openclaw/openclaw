@@ -135,6 +135,26 @@ export interface AuthProfileStores {
   updated_at: number;
 }
 
+export interface AuthorizationAgentSponsors {
+  agent_principal_id: string;
+  created_at: number;
+  domain_id: string;
+  sponsor_principal_id: string;
+}
+
+export interface AuthorizationDelegations {
+  agent_principal_id: string;
+  assignment_id: string;
+  created_at: number;
+  created_by_principal_id: string;
+  delegation_id: string;
+  domain_id: string;
+  revoked_at: number | null;
+  sponsor_principal_id: string;
+  state: string;
+  updated_at: number;
+}
+
 export interface AuthorizationDomainMemberships {
   added_by_principal_id: string;
   added_by_role: string;
@@ -170,6 +190,28 @@ export interface AuthorizationPrincipals {
   updated_at: number;
 }
 
+export interface AuthorizationResourceOperations {
+  actor_principal_id: string;
+  applied_at: number | null;
+  assignment_id: string | null;
+  created_at: number;
+  delegation_id: string | null;
+  domain_id: string;
+  idempotency_key: string;
+  namespace: string;
+  operation_id: string;
+  operation_scope: string;
+  operation_type: string;
+  owner_principal_id: string;
+  parent_namespace: string | null;
+  parent_resource_id: string | null;
+  parent_resource_type: string | null;
+  resource_id: string;
+  resource_type: string;
+  state: string;
+  updated_at: number;
+}
+
 export interface AuthorizationResources {
   created_at: number;
   domain_id: string;
@@ -181,6 +223,7 @@ export interface AuthorizationResources {
   resource_id: string;
   resource_type: string;
   retired_at: number | null;
+  retired_by_principal_id: string | null;
   updated_at: number;
 }
 
@@ -1253,10 +1296,13 @@ export interface DB {
   audit_identity_keys: AuditIdentityKeys;
   auth_profile_state: AuthProfileState;
   auth_profile_stores: AuthProfileStores;
+  authorization_agent_sponsors: AuthorizationAgentSponsors;
+  authorization_delegations: AuthorizationDelegations;
   authorization_domain_memberships: AuthorizationDomainMemberships;
   authorization_domains: AuthorizationDomains;
   authorization_grants: AuthorizationGrants;
   authorization_principals: AuthorizationPrincipals;
+  authorization_resource_operations: AuthorizationResourceOperations;
   authorization_resources: AuthorizationResources;
   backup_runs: BackupRuns;
   capture_blobs: CaptureBlobs;
