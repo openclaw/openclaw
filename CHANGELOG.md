@@ -32,7 +32,7 @@ Docs: https://docs.openclaw.ai
 - **Canvas A2UI validation:** reject malformed or unsupported JSONL at CLI, agent-tool, and final node-invoke boundaries while preserving native v0.8 dispatch. (#103713) Thanks @qingminglong.
 - **Twilio RCS inbound routing:** normalize RCS consumer addresses only after signed webhook validation so sender matching and sessions work without changing outbound RCS semantics. (#102373) Thanks @clawSean.
 - **ClickClack output sanitization:** strip internal tool and XML scaffolding at the sender boundary, suppress scaffold-only sends, and preserve optional modern delivery IDs. (#103142) Thanks @masatohoshino.
-- **CLI installer cleanup:** remove Node staging directories and pnpm workspace-rewrite temporary files on failure. (#103725) Thanks @SebTardif.
+- **Installer cleanup:** remove installer-owned temporary paths after failed CLI and primary installer operations by keeping cleanup registration in the parent shell. (#103725) Thanks @SebTardif.
 - **Agent-core truncation:** avoid empty-output crashes when head truncation receives negative line or byte ceilings. (#103425) Thanks @qingminglong.
 - **Windows Node resolution:** preserve the current executable when resolving bare case-insensitive `node.exe` entries under hostile `PATH` values. (#103907) Thanks @soldforaloss.
 - **Codex runtime switching:** accept the bundled Codex runtime for both `codex/*` and `openai/*` model routes while keeping unsupported provider/runtime pairs rejected. (#103762)
