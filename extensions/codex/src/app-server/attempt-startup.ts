@@ -61,6 +61,7 @@ import {
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrent,
+  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
   isCodexAppServerStartSelectionChangedError,
   releaseLeasedSharedCodexAppServerClient,
   retireSharedCodexAppServerClientIfCurrent,
@@ -238,6 +239,7 @@ export async function startCodexAttemptThread(params: {
                 }
               },
               abandonSignal: startupAbandonController.signal,
+              timeoutMs: params.appServer.requestTimeoutMs,
             });
             const activeStartupClient = startupClient;
             let startupClientLeaseReleased = false;
@@ -539,6 +541,16 @@ export async function startCodexAttemptThread(params: {
             }
           } catch (error) {
             startupAttemptError = error;
+            if (!startupAbandoned && !params.signal.aborted && !startupClient) {
+              const sharedClient = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
+                startupClientForAbandonedRequestCleanup,
+              );
+              if (sharedClient.found && !sharedClient.closed) {
+                // Shared acquisition already released this caller. A peer still
+                // owns the client, so outer cleanup must not retire it.
+                startupClientForAbandonedRequestCleanup = undefined;
+              }
+            }
             throw error;
           } finally {
             if (!startupAttemptSucceeded) {
@@ -578,6 +590,7 @@ export async function startCodexAttemptThread(params: {
           } catch (error) {
             const selectionChanged = isCodexAppServerStartSelectionChangedError(error);
             if (
+              startupAbandoned ||
               params.signal.aborted ||
               (!selectionChanged && !isCodexAppServerConnectionClosedError(error))
             ) {

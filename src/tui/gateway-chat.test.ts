@@ -37,7 +37,8 @@ vi.mock("../infra/gateway-lock.js", () => ({
   readActiveGatewayLockPort: readActiveGatewayLockPortMock,
 }));
 
-const { GatewayChatClient, resolveGatewayConnection } = await import("./gateway-chat.js");
+const { GatewayChatClient, resolveBoundGatewayConnection, resolveGatewayConnection } =
+  await import("./gateway-chat.js");
 const { GatewayClientRequestError } = await import("../gateway/client.js");
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -144,6 +145,45 @@ describe("resolveGatewayConnection", () => {
   afterEach(() => {
     envSnapshot.restore();
     vi.useRealTimers();
+  });
+
+  it("keeps a bound auth-free Gateway isolated from global config and env auth", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://global.example/ws", token: "global-token" },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_URL: "wss://env.example/ws",
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+      },
+      async () => {
+        const result = resolveBoundGatewayConnection({
+          config: {
+            gateway: {
+              mode: "remote",
+              remote: { url: "wss://selected.example/ws" },
+              handshakeTimeoutMs: 12_345,
+            },
+          },
+          url: "wss://selected.example/ws",
+          tlsFingerprint: "sha256:selected",
+        });
+
+        expect(result).toEqual({
+          url: "wss://selected.example/ws",
+          token: undefined,
+          password: undefined,
+          tlsFingerprint: "sha256:selected",
+          preauthHandshakeTimeoutMs: 12_345,
+          allowInsecureLocalOperatorUi: false,
+        });
+        expect(loadConfig).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it("throws when url override is missing explicit credentials", async () => {

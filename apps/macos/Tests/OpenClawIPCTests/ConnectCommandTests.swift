@@ -67,9 +67,9 @@ struct ConnectCommandTests {
         let otherRoute = try #require(URL(
             string: "wss://gateway.example.test/socket?tenant=beta&token=second-token"))
 
-        let firstOwner = explicitURLDeviceAuthOwner(first)
-        let rotatedOwner = explicitURLDeviceAuthOwner(rotated)
-        let otherOwner = explicitURLDeviceAuthOwner(otherRoute)
+        let firstOwner = gatewayURLDeviceAuthOwner(first, mode: "remote")
+        let rotatedOwner = gatewayURLDeviceAuthOwner(rotated, mode: "remote")
+        let otherOwner = gatewayURLDeviceAuthOwner(otherRoute, mode: "remote")
 
         #expect(firstOwner == rotatedOwner)
         #expect(firstOwner != otherOwner)
@@ -125,6 +125,69 @@ struct ConnectCommandTests {
             #expect(captured.sawConnect)
             #expect(!captured.sawAuth)
             #expect(!connectOptions.allowStoredDeviceAuth)
+            await channel.shutdown()
+        }
+    }
+
+    @Test func `config URL sends neither legacy nor another route stored token`() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+            var configA = GatewayConfig()
+            configA.mode = "remote"
+            configA.remoteUrl = "wss://gateway-a.example.test"
+            let opts = ConnectOptions.parse([])
+            let endpointA = try resolveGatewayEndpoint(opts: opts, config: configA)
+            let optionsA = makeGatewayConnectOptions(
+                opts: opts,
+                endpoint: endpointA,
+                displayName: "CLI Test")
+
+            var configB = configA
+            configB.remoteUrl = "wss://gateway-b.example.test"
+            let endpointB = try resolveGatewayEndpoint(opts: opts, config: configB)
+            let optionsB = makeGatewayConnectOptions(
+                opts: opts,
+                endpoint: endpointB,
+                displayName: "CLI Test")
+            let ownerA = try #require(optionsA.deviceAuthGatewayID)
+            let ownerB = try #require(optionsB.deviceAuthGatewayID)
+            #expect(ownerA != ownerB)
+            #expect(optionsB.allowStoredDeviceAuth)
+
+            let identity = DeviceIdentityStore.loadOrCreate()
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: "legacy-device-token") // pragma: allowlist secret
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: "route-a-device-token", // pragma: allowlist secret
+                gatewayID: ownerA)
+
+            let recorder = CLIConnectAuthRecorder()
+            let session = GatewayTestWebSocketSession(taskFactory: {
+                GatewayTestWebSocketTask(sendHook: { _, message, sendIndex in
+                    if sendIndex == 0 {
+                        recorder.record(message)
+                    }
+                })
+            })
+            let channel = GatewayChannelActor(
+                url: endpointB.url,
+                token: endpointB.token,
+                password: endpointB.password,
+                session: WebSocketSessionBox(session: session),
+                connectOptions: optionsB)
+
+            try await channel.connect()
+            let captured = recorder.snapshot()
+            #expect(captured.sawConnect)
+            #expect(!captured.sawAuth)
             await channel.shutdown()
         }
     }

@@ -171,13 +171,14 @@ struct GatewayEndpointStoreTests {
         localHost: String = "127.0.0.1",
         bindMode: String? = "loopback",
         transport: AppState.RemoteTransport = .ssh,
-        directURL: URL? = nil) -> GatewayEndpointStore.SourceSnapshot
+        directURL: URL? = nil,
+        deviceAuthGatewayID: String = "test-gateway-route") -> GatewayEndpointStore.SourceSnapshot
     {
         GatewayEndpointStore.SourceSnapshot(
             mode: .init(mode),
             token: token,
             password: password,
-            deviceAuthGatewayID: "test-gateway-route",
+            deviceAuthGatewayID: deviceAuthGatewayID,
             localPort: 18789,
             localHost: localHost,
             scheme: "ws",
@@ -699,6 +700,55 @@ struct GatewayEndpointStoreTests {
             #expect(remoteEndpoint.config.token == "remote-token")
             let currentEndpoint = try await store.requireEndpoint()
             #expect(currentEndpoint.config.url == remoteURL)
+        }
+    }
+
+    @Test func `same URL owner replacement publishes a new route revision`() async throws {
+        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+            let url = try #require(URL(string: "wss://gateway.example.test"))
+            let sourceA = self.source(
+                mode: .remote,
+                transport: .direct,
+                directURL: url,
+                deviceAuthGatewayID: "route-a")
+            let sourceB = self.source(
+                mode: .remote,
+                transport: .direct,
+                directURL: url,
+                deviceAuthGatewayID: "route-b")
+            let sourceGate = GatewayEndpointSourceGate(sourceA)
+            let store = GatewayEndpointStore(deps: .init(
+                token: { nil },
+                password: { nil },
+                localPort: { 18789 },
+                remoteRouteIfRunning: { nil },
+                remoteRouteIsCurrent: { _ in true },
+                canStartRemoteTunnel: { true },
+                ensureRemoteTunnel: { throw CancellationError() },
+                sourceSnapshot: { await sourceGate.snapshot() }))
+            let stream = await store.subscribe(bufferingNewest: 10)
+            var iterator = stream.makeAsyncIterator()
+            _ = await iterator.next()
+
+            let endpointA = try await store.requireEndpoint()
+            let stateA = await iterator.next()
+            await sourceGate.update(sourceB)
+            let endpointB = try await store.requireEndpoint()
+            let stateB = await iterator.next()
+
+            #expect(endpointA.config.url == endpointB.config.url)
+            #expect(endpointA.revision != endpointB.revision)
+            guard let stateA,
+                  let stateB,
+                  case let .ready(_, _, _, _, revisionA) = stateA,
+                  case let .ready(_, _, _, _, revisionB) = stateB
+            else {
+                Issue.record("expected ready route revisions")
+                return
+            }
+            #expect(revisionA == endpointA.revision)
+            #expect(revisionB == endpointB.revision)
+            #expect(revisionA != revisionB)
         }
     }
 

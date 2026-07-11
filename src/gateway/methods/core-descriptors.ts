@@ -310,6 +310,20 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.diff", scope: "operator.read" },
   // Additive protocol methods append here to preserve existing advertised indices.
   { name: "crestodian.setup.verify", scope: "operator.admin" },
+  // Cloud-worker mutations depend on the loaded provider registry and owned
+  // reconciler, so advertise them early but gate dispatch until sidecars are ready.
+  {
+    name: "environments.create",
+    scope: "operator.admin",
+    startup: true,
+    controlPlaneWrite: true,
+  },
+  {
+    name: "environments.destroy",
+    scope: "operator.admin",
+    startup: true,
+    controlPlaneWrite: true,
+  },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

@@ -47,6 +47,7 @@ final class MacNodeModeCoordinator: NSObject {
         let url: URL
         let token: String?
         let password: String?
+        let routeRevision: UInt64
     }
 
     private struct ConnectionAttempt {
@@ -313,7 +314,7 @@ final class MacNodeModeCoordinator: NSObject {
         _ state: GatewayEndpointState,
         matches config: GatewayConnection.Config) -> Bool
     {
-        guard case let .ready(_, url, token, password) = state else { return false }
+        guard case let .ready(_, url, token, password, _) = state else { return false }
         return url == config.url && token == config.token && password == config.password
     }
 
@@ -370,8 +371,13 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     private static func effectiveEndpoint(from state: GatewayEndpointState) -> EffectiveEndpoint? {
-        guard case let .ready(mode, url, token, password) = state else { return nil }
-        return EffectiveEndpoint(mode: mode, url: url, token: token, password: password)
+        guard case let .ready(mode, url, token, password, routeRevision) = state else { return nil }
+        return EffectiveEndpoint(
+            mode: mode,
+            url: url,
+            token: token,
+            password: password,
+            routeRevision: routeRevision)
     }
 
     private func invalidateRuntimeRoute() async {

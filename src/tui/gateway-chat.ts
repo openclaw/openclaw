@@ -19,6 +19,7 @@ import {
   type TaskSuggestionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayInteractiveSurfaceAuth } from "../gateway/auth-surface-resolution.js";
 import {
@@ -61,7 +62,7 @@ const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 
-type ResolvedGatewayConnection = {
+export type ResolvedGatewayConnection = {
   url: string;
   token?: string;
   password?: string;
@@ -183,6 +184,13 @@ export class GatewayChatClient implements TuiBackend {
   static async connect(opts: GatewayConnectionOptions): Promise<GatewayChatClient> {
     const connection = await resolveGatewayConnection(opts);
     return new GatewayChatClient(connection);
+  }
+
+  /** Connect to a target already selected and authenticated by a preceding Gateway probe. */
+  static connectBound(
+    opts: GatewayConnectionOptions & { config: OpenClawConfig; url: string },
+  ): GatewayChatClient {
+    return new GatewayChatClient(resolveBoundGatewayConnection(opts));
   }
 
   start() {
@@ -379,6 +387,30 @@ export class GatewayChatClient implements TuiBackend {
       { taskId },
     );
   }
+}
+
+/**
+ * Preserve a pre-probed Gateway route across an in-process handoff. This path
+ * deliberately ignores global config and Gateway env overrides, including
+ * credentials, while still applying the normal remote URL safety policy.
+ */
+export function resolveBoundGatewayConnection(
+  opts: GatewayConnectionOptions & { config: OpenClawConfig; url: string },
+): ResolvedGatewayConnection {
+  const url = buildGatewayConnectionDetails({
+    config: opts.config,
+    url: opts.url,
+    ignoreEnvUrlOverride: true,
+  }).url;
+  const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
+  return {
+    url,
+    token: explicitAuth.token,
+    password: explicitAuth.password,
+    ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
+    preauthHandshakeTimeoutMs: opts.config.gateway?.handshakeTimeoutMs,
+    allowInsecureLocalOperatorUi: false,
+  };
 }
 
 export async function resolveGatewayConnection(

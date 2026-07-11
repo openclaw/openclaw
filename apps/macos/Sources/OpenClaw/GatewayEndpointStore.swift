@@ -3,7 +3,12 @@ import Foundation
 import OSLog
 
 enum GatewayEndpointState: Equatable {
-    case ready(mode: AppState.ConnectionMode, url: URL, token: String?, password: String?)
+    case ready(
+        mode: AppState.ConnectionMode,
+        url: URL,
+        token: String?,
+        password: String?,
+        routeRevision: UInt64 = 0)
     case connecting(mode: AppState.ConnectionMode, detail: String)
     case unavailable(mode: AppState.ConnectionMode, reason: String)
 }
@@ -374,12 +379,13 @@ actor GatewayEndpointStore {
         switch initialMode {
         case .local:
             let url = URL(string: "\(scheme)://\(host):\(port)")!
+            self.endpointRevision = 1
             self.state = .ready(
                 mode: .local,
                 url: url,
                 token: token,
-                password: password)
-            self.endpointRevision = 1
+                password: password,
+                routeRevision: self.endpointRevision)
             self.resolvedEndpoint = GatewayConnection.EndpointSnapshot(
                 config: (url, token, password),
                 routeAuthority: nil,
@@ -732,7 +738,8 @@ actor GatewayEndpointStore {
                   mode: .remote,
                   url: url,
                   token: source.token,
-                  password: source.password)
+                  password: source.password,
+                  routeRevision: endpoint.revision ?? 0)
         else { return nil }
         return endpoint
     }
@@ -754,7 +761,7 @@ actor GatewayEndpointStore {
             continuation.yield(next)
         }
         switch next {
-        case let .ready(mode, url, _, _):
+        case let .ready(mode, url, _, _, _):
             let modeDesc = String(describing: mode)
             let urlDesc = url.absoluteString
             self.logger
@@ -798,7 +805,12 @@ actor GatewayEndpointStore {
             deviceAuthGatewayID: deviceAuthGatewayID,
             revision: self.endpointRevision)
         self.resolvedEndpoint = endpoint
-        self.setState(.ready(mode: mode, url: url, token: token, password: password))
+        self.setState(.ready(
+            mode: mode,
+            url: url,
+            token: token,
+            password: password,
+            routeRevision: self.endpointRevision))
         return endpoint
     }
 

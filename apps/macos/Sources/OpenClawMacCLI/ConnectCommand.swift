@@ -367,6 +367,9 @@ func makeGatewayConnectOptions(
     displayName: String) -> GatewayConnectOptions
 {
     let hasExplicitURL = opts.url?.isEmpty == false
+    let deviceAuthGatewayID = gatewayURLDeviceAuthOwner(
+        endpoint.url,
+        mode: endpoint.mode)
     return GatewayConnectOptions(
         role: opts.role,
         scopes: opts.scopes,
@@ -378,12 +381,13 @@ func makeGatewayConnectOptions(
         clientMode: opts.clientMode,
         clientDisplayName: displayName,
         allowStoredDeviceAuth: !hasExplicitURL,
-        // Explicit endpoints never consume stored auth. Keep any token issued
-        // by that endpoint out of the legacy role-global token namespace too.
-        deviceAuthGatewayID: hasExplicitURL ? explicitURLDeviceAuthOwner(endpoint.url) : nil)
+        // Explicit endpoints never consume stored auth. Every route still owns
+        // newly issued tokens so config-selected endpoints never fall back to
+        // the legacy role-global namespace either.
+        deviceAuthGatewayID: deviceAuthGatewayID)
 }
 
-func explicitURLDeviceAuthOwner(_ url: URL) -> String {
+func gatewayURLDeviceAuthOwner(_ url: URL, mode: String) -> String {
     var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
     components?.user = nil
     components?.password = nil
@@ -395,10 +399,11 @@ func explicitURLDeviceAuthOwner(_ url: URL) -> String {
         components?.query = nil
     }
     components?.fragment = nil
-    let route = components?.string ?? "\(url.scheme ?? "")://\(url.host ?? "")\(url.path)"
+    let endpoint = components?.string ?? "\(url.scheme ?? "")://\(url.host ?? "")\(url.path)"
+    let route = "\(mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())|\(endpoint)"
     let digest = SHA256.hash(data: Data(route.utf8))
     let fingerprint = digest.map { String(format: "%02x", $0) }.joined()
-    return "openclaw-mac-cli:explicit:\(fingerprint)"
+    return "openclaw-mac-cli:route:\(fingerprint)"
 }
 
 private func isSensitiveGatewayQueryItem(_ value: String) -> Bool {

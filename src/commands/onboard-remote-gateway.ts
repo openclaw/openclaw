@@ -276,10 +276,12 @@ export async function runRemoteGatewayInferenceOnboarding(
       await runTui({
         config: boundConfig,
         deliver: false,
-        url: target.gatewayUrl,
-        ...(target.token ? { token: target.token } : {}),
-        ...(target.password ? { password: target.password } : {}),
-        ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
+        boundGateway: {
+          url: target.gatewayUrl,
+          ...(target.token ? { token: target.token } : {}),
+          ...(target.password ? { password: target.password } : {}),
+          ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
+        },
       });
     },
   });

@@ -4,7 +4,9 @@
 import { describe, expect, it } from "vitest";
 import {
   CORE_GATEWAY_METHOD_SPECS,
+  createCoreGatewayMethodDescriptors,
   listCoreGatewayMethodNames,
+  STARTUP_UNAVAILABLE_GATEWAY_METHODS,
 } from "./methods/core-descriptors.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
@@ -99,6 +101,24 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("talk.session.submitToolResult");
     expect(methods).toContain("talk.session.steer");
     expect(methods).toContain("talk.session.close");
+  });
+
+  it("advertises and wires cloud worker environment mutations", () => {
+    const methods = ["environments.create", "environments.destroy"] as const;
+    const advertisedMethods = listGatewayMethods();
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+
+    for (const method of methods) {
+      expect(advertisedMethods).toContain(method);
+      expect(coreGatewayHandlers[method]).toEqual(expect.any(Function));
+      expect(STARTUP_UNAVAILABLE_GATEWAY_METHODS).toContain(method);
+      expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
+        name: method,
+        scope: "operator.admin",
+        startup: "unavailable-until-sidecars",
+        controlPlaneWrite: true,
+      });
+    }
   });
 
   it("wires a dispatchable handler for every terminal.* descriptor", () => {

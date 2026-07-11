@@ -178,9 +178,11 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
             }),
           }),
           deliver: false,
-          url: "wss://selected.example/ws",
-          ...auth,
-          tlsFingerprint: "sha256:selected",
+          boundGateway: {
+            url: "wss://selected.example/ws",
+            ...auth,
+            tlsFingerprint: "sha256:selected",
+          },
         });
         return { exitReason: "exit" as const };
       });
@@ -211,6 +213,54 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       ).not.toContain(secret);
     },
   );
+
+  it("hands an auth-free Gateway to the TUI as the exact bound route", async () => {
+    const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
+      if (options.method === "crestodian.setup.detect") {
+        return detectResult();
+      }
+      if (options.method === "crestodian.setup.activate") {
+        return {
+          ok: true,
+          modelRef: "claude-cli/opus",
+          latencyMs: 250,
+          lines: ["Default model: claude-cli/opus"],
+        };
+      }
+      if (options.method === "crestodian.setup.verify") {
+        return { ok: true, modelRef: "claude-cli/opus", latencyMs: 100 };
+      }
+      if (options.method === "crestodian.chat") {
+        return {
+          sessionId: (options.params as { sessionId: string }).sessionId,
+          reply: "Ready.",
+          action: "open-agent",
+        };
+      }
+      throw new Error(`unexpected Gateway method ${options.method}`);
+    });
+    const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
+
+    await runRemoteGatewayInferenceOnboarding(makeTarget(makeLocalConfig(), {}), makeRuntime(), {
+      callGateway: asGatewayCall(callGatewayMock),
+      createPrompter: () => createWizardPrompter(),
+      runGuidedOnboarding: exerciseGuidedAdapters(),
+      runTui,
+    });
+
+    expect(runTui).toHaveBeenCalledWith({
+      config: expect.objectContaining({
+        gateway: expect.objectContaining({
+          remote: expect.objectContaining({ url: "wss://selected.example/ws" }),
+        }),
+      }),
+      deliver: false,
+      boundGateway: {
+        url: "wss://selected.example/ws",
+        tlsFingerprint: "sha256:selected",
+      },
+    });
+  });
 
   it.each([
     {
