@@ -243,11 +243,15 @@ See [Full release validation](/reference/full-release-validation) for the
 stage matrix, exact workflow job names, profile differences, artifacts, and
 focused rerun handles.
 
-`OpenClaw Release Publish` is the manual mutating release workflow. Dispatch it
-from `release/YYYY.M.PATCH` or `main` after the release tag exists and after the
-OpenClaw npm preflight has succeeded (the preflight runs `pnpm plugins:sync:check`
-among its checks). It requires the saved `preflight_run_id` and a successful
-`full_release_validation_run_id`, dispatches `Plugin NPM Release` for all
+`OpenClaw Release Publish` is the manual mutating release workflow. Dispatch
+regular beta and stable publishes from trusted `main` after the release tag
+exists and after the OpenClaw npm preflight has succeeded (the preflight runs
+`pnpm plugins:sync:check` among its checks). The tag still selects the exact
+release commit, including a commit on `release/YYYY.M.PATCH`; Tideclaw alpha
+publishes keep using their matching alpha branch. It requires the saved
+`preflight_run_id` and a successful
+`full_release_validation_run_id` and its exact
+`full_release_validation_run_attempt`, dispatches `Plugin NPM Release` for all
 publishable plugin packages, dispatches `Plugin ClawHub Release` for the same
 release SHA, and only then dispatches `OpenClaw NPM Release`. Stable publish also
 requires an exact `windows_node_tag`; the workflow verifies the Windows source
@@ -255,13 +259,17 @@ release and compares its x64/ARM64 installers with the candidate-approved
 `windows_node_installer_digests` input before any publish child, then promotes
 and verifies those same pinned installer digests plus the exact companion asset
 and checksum contract before publishing the GitHub release draft.
+Focused plugin-only repairs use `plugin_publish_scope=selected` with a nonempty
+package list. Plugin-only `all-publishable` runs require the same immutable npm
+preflight and Full Release Validation evidence as a core publish.
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
-  --ref release/YYYY.M.PATCH \
+  --ref main \
   -f tag=vYYYY.M.PATCH-beta.N \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
   -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
+  -f full_release_validation_run_attempt=<successful-full-release-validation-run-attempt> \
   -f npm_dist_tag=beta
 ```
 
@@ -273,11 +281,13 @@ pnpm ci:full-release --sha <full-sha>
 ```
 
 GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
-helper pushes a temporary `release-ci/<sha>-...` branch at the target SHA,
-dispatches `Full Release Validation` from that pinned ref, verifies every child
-workflow `headSha` matches the target, and deletes the temporary branch when the
-run completes. The umbrella verifier also fails if any child workflow ran at a
-different SHA.
+helper pushes a temporary `release-ci/<sha>-...` branch at a trusted `main`
+workflow SHA, passes the requested target SHA through the workflow `ref` input,
+reuses strict exact-target evidence when available, verifies every child
+workflow `headSha` matches the trusted workflow SHA, and deletes the temporary
+branch when the run completes. Pass `-f reuse_evidence=false` to force fresh
+validation. The umbrella verifier also fails if any child workflow ran at a
+different workflow SHA.
 
 `release_profile` controls live/provider breadth passed into release checks. The
 manual release workflows default to `stable`; use `full` only when you

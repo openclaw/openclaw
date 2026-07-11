@@ -37,22 +37,6 @@ vi.mock("./conversation-store-state.js", () => ({
 const TOKEN = "test-graph-token";
 const CHAT_ID = "19:abc@thread.tacv2";
 const CHANNEL_TO = "team-id-1/channel-id-1";
-const NAMED_ACCOUNT_CFG = {
-  channels: {
-    msteams: {
-      appId: "default-app-id",
-      appPassword: "default-secret",
-      tenantId: "tenant-id",
-      accounts: {
-        secondary: {
-          appId: "secondary-app-id",
-          appPassword: "secondary-secret",
-          webhook: { port: 3979 },
-        },
-      },
-    },
-  },
-} as OpenClawConfig;
 
 function postGraphBodyAt(index: number): Record<string, unknown> {
   const call = mockState.postGraphJson.mock.calls[index];
@@ -72,7 +56,7 @@ describe("addParticipantMSTeams", () => {
     mockState.resolveGraphToken.mockResolvedValue(TOKEN);
   });
 
-  it("adds member to a chat with default role", async () => {
+  it("maps the default chat member role to Graph owner", async () => {
     mockState.postGraphJson.mockResolvedValue({});
 
     const result = await addParticipantMSTeams({
@@ -87,7 +71,7 @@ describe("addParticipantMSTeams", () => {
       path: `/chats/${encodeURIComponent(CHAT_ID)}/members`,
       body: {
         "@odata.type": "#microsoft.graph.aadUserConversationMember",
-        roles: ["member"],
+        roles: ["owner"],
         "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-1')",
       },
     });
@@ -179,7 +163,7 @@ describe("addParticipantMSTeams", () => {
     );
   });
 
-  it("adds member to a channel", async () => {
+  it("maps the default channel member role to an empty Graph role list", async () => {
     mockState.postGraphJson.mockResolvedValue({});
 
     const result = await addParticipantMSTeams({
@@ -194,24 +178,30 @@ describe("addParticipantMSTeams", () => {
       path: "/teams/team-id-1/channels/channel-id-1/members",
       body: {
         "@odata.type": "#microsoft.graph.aadUserConversationMember",
-        roles: ["member"],
+        roles: [],
         "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-3')",
       },
     });
   });
 
-  it("resolves Graph tokens with the named account id", async () => {
+  it("preserves the owner role for a channel", async () => {
     mockState.postGraphJson.mockResolvedValue({});
 
     await addParticipantMSTeams({
-      cfg: NAMED_ACCOUNT_CFG,
-      accountId: "secondary",
-      to: CHAT_ID,
-      userId: "user-aad-id-1",
+      cfg: {} as OpenClawConfig,
+      to: CHANNEL_TO,
+      userId: "user-aad-id-4",
+      role: "owner",
     });
 
-    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
-      accountId: "secondary",
+    expect(mockState.postGraphJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: "/teams/team-id-1/channels/channel-id-1/members",
+      body: {
+        "@odata.type": "#microsoft.graph.aadUserConversationMember",
+        roles: ["owner"],
+        "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-4')",
+      },
     });
   });
 });
@@ -320,24 +310,6 @@ describe("removeParticipantMSTeams", () => {
       path: `/chats/${encodeURIComponent(CHAT_ID)}/members/membership-9`,
     });
   });
-
-  it("resolves Graph tokens with the named account id", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({
-      value: [{ id: "membership-1", userId: "user-aad-id-1" }],
-    });
-    mockState.deleteGraphRequest.mockResolvedValue(undefined);
-
-    await removeParticipantMSTeams({
-      cfg: NAMED_ACCOUNT_CFG,
-      accountId: "secondary",
-      to: CHAT_ID,
-      userId: "user-aad-id-1",
-    });
-
-    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
-      accountId: "secondary",
-    });
-  });
 });
 
 describe("renameGroupMSTeams", () => {
@@ -377,21 +349,6 @@ describe("renameGroupMSTeams", () => {
       token: TOKEN,
       path: "/teams/team-id-1/channels/channel-id-1",
       body: { displayName: "New Channel Name" },
-    });
-  });
-
-  it("resolves Graph tokens with the named account id", async () => {
-    mockState.patchGraphJson.mockResolvedValue(undefined);
-
-    await renameGroupMSTeams({
-      cfg: NAMED_ACCOUNT_CFG,
-      accountId: "secondary",
-      to: CHAT_ID,
-      name: "New Chat Name",
-    });
-
-    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
-      accountId: "secondary",
     });
   });
 });

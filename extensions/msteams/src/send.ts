@@ -2,6 +2,7 @@
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
+  type MessageReceiptPart,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -70,8 +71,9 @@ function createMSTeamsSendReceipt(params: {
   conversationId: string;
   platformMessageIds: readonly string[];
   kind: MessageReceiptPartKind;
+  kinds?: readonly MessageReceiptPartKind[];
 }) {
-  return createMessageReceiptFromOutboundResults({
+  const receipt = createMessageReceiptFromOutboundResults({
     kind: params.kind,
     results: params.platformMessageIds.map((messageId) => ({
       channel: "msteams",
@@ -79,6 +81,30 @@ function createMSTeamsSendReceipt(params: {
       conversationId: params.conversationId,
     })),
   });
+  if (!params.kinds) {
+    return receipt;
+  }
+  const kinds = params.kinds;
+  return {
+    ...receipt,
+    parts: receipt.parts.map((part, index) => {
+      const nextPart: MessageReceiptPart = {
+        platformMessageId: part.platformMessageId,
+        kind: kinds[index] ?? params.kind,
+        index: part.index,
+      };
+      if (part.threadId) {
+        nextPart.threadId = part.threadId;
+      }
+      if (part.replyToId) {
+        nextPart.replyToId = part.replyToId;
+      }
+      if (part.raw) {
+        nextPart.raw = part.raw;
+      }
+      return nextPart;
+    }),
+  };
 }
 
 function createMSTeamsSendResult(params: {
@@ -368,6 +394,8 @@ async function sendTextWithMedia(
     mediaMaxBytes,
     replyStyle,
   } = ctx;
+  const messages =
+    text && mediaUrl ? [{ text }, { mediaUrl }] : [{ text: text || undefined, mediaUrl }];
 
   let platformMessageIds: string[];
   try {
@@ -376,7 +404,7 @@ async function sendTextWithMedia(
       app,
       appId,
       conversationRef: ref,
-      messages: [{ text: text || undefined, mediaUrl }],
+      messages,
       retry: {},
       onRetry: (event) => {
         log.debug?.("retrying send", { conversationId, ...event });
@@ -406,6 +434,7 @@ async function sendTextWithMedia(
       conversationId,
       platformMessageIds,
       kind: mediaUrl ? "media" : "text",
+      ...(text && mediaUrl ? { kinds: ["text", "media"] } : {}),
     }),
   };
 }

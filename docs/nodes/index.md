@@ -82,7 +82,7 @@ On the node machine:
 openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
 ```
 
-`node run` also accepts `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the generated node instance id).
+`node run` also accepts `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the legacy client instance ID; this does not reset pairing).
 
 ### Remote gateway via SSH tunnel (loopback bind)
 
@@ -117,7 +117,7 @@ openclaw node start
 openclaw node restart
 ```
 
-`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id`, `--runtime <node|bun>` (default: node), and `--force` to reinstall. `node status`, `node stop`, and `node uninstall` are also available.
+`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--runtime <node|bun>` (default: node), and `--force` to reinstall. `node status`, `node stop`, and `node uninstall` are also available.
 
 ### Pair + name
 
@@ -133,8 +133,22 @@ If the node retries with changed auth details, re-run `openclaw devices list` an
 
 Naming options:
 
-- `--display-name` on `openclaw node run` / `openclaw node install` (persists in `~/.openclaw/node.json` on the node, alongside the node id, token, and gateway connection info).
+- `--display-name` on `openclaw node run` / `openclaw node install` (persists in `~/.openclaw/node.json` on the node, alongside the client instance ID and Gateway connection metadata).
 - `openclaw nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
+
+### Headless identity state
+
+The headless node keeps three separate state files:
+
+- `~/.openclaw/node.json`: the legacy client instance ID (stored as `nodeId`), display name, and Gateway connection metadata.
+- `~/.openclaw/identity/device.json`: the signed device keypair and derived cryptographic device ID.
+- `~/.openclaw/identity/device-auth.json`: paired device auth tokens keyed by cryptographic device ID and role.
+
+For a signed node, the Gateway uses the cryptographic device ID for pairing and
+node routing. The client instance ID is only connection metadata. Changing
+`--node-id` or deleting only `node.json` therefore does not reset pairing. See
+[Identity and pairing state](/cli/node#identity-and-pairing-state) for the
+supported revoke-and-re-pair flow and upgrade notes.
 
 ### Allowlist the commands
 
@@ -179,18 +193,28 @@ A desktop or server node can expose chat-capable models from an Ollama server ru
 
 ### Codex session catalog
 
-The opt-in `codex-supervisor` plugin lets a headless node host or the native
-macOS node expose metadata for its local interactive Codex sessions. Enable the
-plugin independently in the node's local config and on the Gateway. The node
-setting is local consent; enabling only the Gateway cannot read another
-computer's Codex state.
+The official `codex` plugin can expose metadata for non-archived Codex sessions
+on a headless node host or native macOS node.
+Enable `plugins.entries.codex.config.supervision.enabled` independently in the
+node's local config and on the Gateway. The node setting is local consent;
+enabling only the Gateway cannot read another computer's Codex state.
 
 The node advertises the versioned read-only
 `codex.appServer.threads.list.v1` command. Approve the node pairing upgrade when
 that command first appears. The Gateway invokes it through the normal plugin
-node policy and isolates failures by host. See the [Codex Supervisor plugin
-reference](/plugins/reference/codex-supervisor) for configuration, CLI and
-Control UI use, pagination, and the metadata security boundary.
+node policy and isolates failures by host.
+
+Paired-node rows are visible in **Codex Sessions**, but remain read-only in the
+initial release. The node invoke transport is request/response only and cannot
+carry the streaming turns, live events, or approvals required to continue a
+native thread through the Codex harness. **Continue** and **Archive** are
+therefore unavailable for remote rows. On the Gateway computer, stored and idle
+rows can start a distinct model-locked Chat branch. Either can be archived only
+after the operator confirms that no other Codex client is using it; a stored
+row's live activity remains unknown. Active rows cannot branch or archive.
+
+See [Supervise Codex sessions](/plugins/codex-supervision) for setup,
+pagination, local continuation, and the metadata security boundary.
 
 ## Invoking commands
 
@@ -247,6 +271,9 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
       // with no requested scopes; does not auto-approve upgrades.
       pairing: {
         autoApproveCidrs: ["192.168.1.0/24"],
+        // SSH-verified auto-approval (default: enabled). Approves first-time
+        // node pairing on an exact device-key match read back over SSH.
+        sshVerify: true,
       },
       // Opt into dangerous/privacy-heavy node commands (camera.snap, etc.).
       allowCommands: ["camera.snap", "screen.record"],
@@ -444,7 +471,7 @@ Examples:
 
 ```bash
 openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
-openclaw nodes invoke --node <idOrNameOrIp> --command system.which --params '{"name":"git"}'
+openclaw nodes invoke --node <idOrNameOrIp> --command system.which --params '{"bins":["git"]}'
 ```
 
 Notes:
@@ -504,7 +531,7 @@ openclaw node run --host <gateway-host> --port 18789
 Notes:
 
 - Pairing is still required (the Gateway will show a device pairing prompt).
-- The node host stores its node id, token, display name, and gateway connection info in `~/.openclaw/node.json`.
+- Client instance metadata, signed device identity, and pairing auth use separate files; see [Headless identity state](#headless-identity-state).
 - Exec approvals are enforced locally via `~/.openclaw/exec-approvals.json` (see [Exec approvals](/tools/exec-approvals)).
 - On macOS, the headless node host executes `system.run` locally by default. Set `OPENCLAW_NODE_EXEC_HOST=app` to route `system.run` through the companion app exec host; add `OPENCLAW_NODE_EXEC_FALLBACK=0` to require the app host and fail closed if it is unavailable.
 - Add `--tls` / `--tls-fingerprint` when the Gateway WS uses TLS.

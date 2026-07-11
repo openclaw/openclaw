@@ -2,27 +2,10 @@ import { resolveMSTeamsAccountConfig } from "../accounts.js";
 // Msteams plugin module implements reaction handler behavior.
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
+import { resolveMSTeamsReactionEmoji } from "../reaction-types.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { resolveMSTeamsSenderAccess } from "./access.js";
-
-/** Teams reaction type names → Unicode emoji. */
-const TEAMS_REACTION_EMOJI: Record<string, string> = {
-  like: "👍",
-  heart: "❤️",
-  laugh: "😆",
-  surprised: "😮",
-  sad: "😢",
-  angry: "😡",
-};
-
-/**
- * Map a Teams reaction type string to a Unicode emoji.
- * Falls back to the raw type if not recognized.
- */
-function mapReactionEmoji(reactionType: string): string {
-  return TEAMS_REACTION_EMOJI[reactionType] ?? reactionType;
-}
 
 type ReactionDirection = "added" | "removed";
 
@@ -104,7 +87,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
 
     for (const reaction of reactions) {
       const reactionType = reaction.type ?? "unknown";
-      const emoji = mapReactionEmoji(reactionType);
+      const emoji = resolveMSTeamsReactionEmoji(reactionType);
       const label =
         direction === "added"
           ? `Teams reaction ${emoji} added by ${senderName} on message ${targetMessageId}`

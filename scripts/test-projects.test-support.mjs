@@ -605,7 +605,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [
     ".github/workflows/plugin-clawhub-new.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
   ],
   [
     ".github/workflows/plugin-clawhub-release.yml",
@@ -705,6 +708,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/clawtributors-map.json", ["test/scripts/update-clawtributors.test.ts"]],
   ["scripts/tsconfig.json", ["test/scripts/oxlint-config.test.ts"]],
+  [
+    "tsconfig.scripts.json",
+    ["test/scripts/changed-lanes.test.ts", "test/scripts/test-projects.test.ts"],
+  ],
   ["scripts/build-all.mjs", ["test/scripts/build-all.test.ts"]],
   ["scripts/build-stamp.mjs", ["src/infra/build-stamp.test.ts"]],
   ["scripts/crabbox-wrapper-providers.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
@@ -1326,6 +1333,45 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/release-check.test.ts", "test/scripts/test-install-sh-docker.test.ts"],
   ],
   ["scripts/lib/openclaw-release-clawhub-plan.ts", ["test/plugin-clawhub-release.test.ts"]],
+  [
+    "scripts/lib/actions-artifact-archive.mjs",
+    ["test/scripts/plugin-publication-artifact.test.ts"],
+  ],
+  [
+    "scripts/lib/clawhub-bootstrap-artifact.mjs",
+    [
+      "test/scripts/clawhub-bootstrap-artifact.test.ts",
+      "test/scripts/verify-clawhub-published-artifact.test.ts",
+    ],
+  ],
+  ["scripts/plugin-publication-artifact.mjs", ["test/scripts/plugin-publication-artifact.test.ts"]],
+  [
+    "scripts/materialize-clawhub-cli.sh",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
+  ],
+  [
+    ".github/release/clawhub-cli/package.json",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
+  ],
+  [
+    ".github/release/clawhub-cli/package-lock.json",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
+  ],
+  [
+    "scripts/verify-clawhub-published-artifact.mjs",
+    ["test/scripts/verify-clawhub-published-artifact.test.ts"],
+  ],
+  ["scripts/plugin-clawhub-publish.sh", ["test/plugin-clawhub-release.test.ts"]],
+  ["scripts/lib/release-beta-verifier.ts", ["test/scripts/release-beta-verifier.test.ts"]],
   [
     "scripts/lib/plugin-clawhub-release.ts",
     ["test/plugin-clawhub-release.test.ts", "test/plugin-npm-release.test.ts"],
@@ -2342,6 +2388,7 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
       "src/channels/plugins/contracts/plugins-core.resolve-config-writes.contract.test.ts",
       "src/channels/plugins/contracts/registry.contract.test.ts",
       "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+      "src/channels/plugins/contracts/thread-binding-artifact.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-d.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-h.contract.test.ts",
     ],
@@ -3711,6 +3758,12 @@ function classifyTarget(arg, cwd) {
   }
   if (isPathAtOrUnder(relative, "src/gateway")) {
     return "gateway";
+  }
+  if (
+    isPathAtOrUnder(relative, "packages/gateway-client") ||
+    isPathAtOrUnder(relative, "packages/gateway-protocol")
+  ) {
+    return "gatewayClient";
   }
   if (isPathAtOrUnder(relative, "src/hooks")) {
     return "hooks";

@@ -2,7 +2,7 @@
 
 import { ContextProvider } from "@lit/context";
 import { LitElement } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -13,6 +13,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import type { SessionCapability, SessionState } from "../lib/sessions/index.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-sidebar.ts";
 
 const PROVIDER_ELEMENT_NAME = "test-app-sidebar-context-provider";
@@ -32,16 +33,25 @@ if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
 }
 
 type SidebarLifecycleState = HTMLElement & {
+  connected: boolean;
   sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
   sessionCreatedOrder: Map<string, number>;
   sessionsAgentId: string | null;
   sessionsResult: SessionsListResult | null;
   updateComplete: Promise<boolean>;
+  updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
+  updateRunning: boolean;
+  onUpdate: () => void;
   variant: "panel" | "drawer";
 };
 
 type LobsterPetElement = HTMLElement & {
   runOutcome: "ok" | "error" | "aborted";
+};
+
+type TestSessionMenu = HTMLElement & {
+  forkDisabled: boolean;
+  readonly updateComplete: Promise<boolean>;
 };
 
 function createGatewayHarness(client: GatewayBrowserClient) {
@@ -107,6 +117,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
+  const groupsPut = vi.fn(() => Promise.resolve());
   const sessions = {
     get state() {
       return state;
@@ -120,6 +131,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     },
     subscribeCreated: () => () => undefined,
     groupsLoad: () => Promise.resolve(),
+    groupsPut,
   } as unknown as SessionCapability;
   const publish = (patch: Partial<SessionState>) => {
     state = { ...state, ...patch };
@@ -129,6 +141,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
   };
   return {
     sessions,
+    groupsPut,
     publish,
     publishList(patch: Partial<SessionState>) {
       canonicalListRevision += 1;
@@ -144,6 +157,16 @@ function createGateway(client: GatewayBrowserClient): ApplicationGateway {
 function createSessions(agentId: string, keys: string[]): SessionCapability {
   return createSessionsHarness(agentId, keys).sessions;
 }
+
+let originalLocalStorage: PropertyDescriptor | undefined;
+
+beforeEach(() => {
+  originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: createStorageMock(),
+  });
+});
 
 function createContext(
   gateway: ApplicationGateway,
@@ -183,6 +206,32 @@ async function mountSidebar(
 
 afterEach(() => {
   document.body.replaceChildren();
+  if (originalLocalStorage) {
+    Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
+  } else {
+    Reflect.deleteProperty(globalThis, "localStorage");
+  }
+});
+
+describe("AppSidebar update card wiring", () => {
+  it("renders the update card first in the footer and forwards its action", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const onUpdate = vi.fn();
+    sidebar.updateAvailable = {
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    };
+    sidebar.onUpdate = onUpdate;
+    await sidebar.updateComplete;
+
+    const footer = sidebar.querySelector(".sidebar-shell__footer");
+    const card = footer?.firstElementChild;
+    expect(card?.localName).toBe("openclaw-sidebar-update-card");
+    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(onUpdate).toHaveBeenCalledOnce();
+  });
 });
 
 describe("AppSidebar lobster outcome wiring", () => {
@@ -230,6 +279,38 @@ describe("AppSidebar lobster outcome wiring", () => {
 });
 
 describe("AppSidebar session source lifecycle", () => {
+  it("disables Fork session for model-selection-locked rows", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", ["agent:main:locked"]);
+    const lockedState = createSessionState("main", ["agent:main:locked"]);
+    const lockedRow = lockedState.result?.sessions[0];
+    if (!lockedRow) {
+      throw new Error("Expected locked session row");
+    }
+    lockedRow.modelSelectionLocked = true;
+    sessions.publishList({ result: lockedState.result, agentId: lockedState.agentId });
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    const menuButton = sidebar.querySelector<HTMLButtonElement>(
+      '[data-session-key="agent:main:locked"] [data-session-menu="true"]',
+    );
+    if (!menuButton) {
+      throw new Error("Expected sidebar session menu button");
+    }
+    menuButton.click();
+    await sidebar.updateComplete;
+
+    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    if (!menu) {
+      throw new Error("Expected sidebar session menu");
+    }
+    await menu.updateComplete;
+    expect(menu.forkDisabled).toBe(true);
+    expect(menu.querySelector<HTMLButtonElement>('[data-shortcut="f"]')?.disabled).toBe(true);
+  });
+
   it("resets cached rows and creation order when the sessions source changes", async () => {
     const client = {} as GatewayBrowserClient;
     const gateway = createGateway(client);
@@ -326,5 +407,71 @@ describe("AppSidebar session source lifecycle", () => {
     expect(sidebar.sessionsAgentId).toBeNull();
     expect(sidebar.sessionRowsByAgent).toEqual({});
     expect(sidebar.sessionCreatedOrder.size).toBe(0);
+  });
+});
+
+function createDataTransferStub() {
+  const data = new Map<string, string>();
+  return {
+    get types() {
+      return [...data.keys()];
+    },
+    setData: (type: string, value: string) => void data.set(type, value),
+    getData: (type: string) => data.get(type) ?? "",
+    effectAllowed: "none",
+    dropEffect: "none",
+  };
+}
+
+function dispatchDragEvent(
+  target: Element,
+  type: "dragstart" | "dragover" | "drop",
+  dataTransfer: ReturnType<typeof createDataTransferStub>,
+) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+  target.dispatchEvent(event);
+}
+
+describe("AppSidebar custom group reordering", () => {
+  async function mountWithGroups(groups: string[]) {
+    const client = {} as GatewayBrowserClient;
+    const gateway = createGateway(client);
+    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    harness.publish({ groups });
+    await sidebar.updateComplete;
+    return { sidebar, harness };
+  }
+
+  function groupHeader(sidebar: SidebarLifecycleState, sectionId: string) {
+    const header = sidebar.querySelector(
+      `[data-session-section="${sectionId}"] .sidebar-recent-sessions__head`,
+    );
+    if (!header) {
+      throw new Error(`expected header for section ${sectionId}`);
+    }
+    return header;
+  }
+
+  it("marks custom group headers draggable but keeps smart sections static", async () => {
+    const { sidebar } = await mountWithGroups(["Alpha", "Beta"]);
+
+    expect(groupHeader(sidebar, "category:Alpha").getAttribute("draggable")).toBe("true");
+    expect(groupHeader(sidebar, "ungrouped").getAttribute("draggable")).toBe("false");
+  });
+
+  it("persists the new catalog order when a group header drops onto another group", async () => {
+    const { sidebar, harness } = await mountWithGroups(["Alpha", "Beta", "Gamma"]);
+    const dataTransfer = createDataTransferStub();
+
+    dispatchDragEvent(groupHeader(sidebar, "category:Gamma"), "dragstart", dataTransfer);
+    const alphaSection = sidebar.querySelector('[data-session-section="category:Alpha"]');
+    if (!alphaSection) {
+      throw new Error("expected Alpha section");
+    }
+    dispatchDragEvent(alphaSection, "drop", dataTransfer);
+
+    expect(harness.groupsPut).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]);
   });
 });

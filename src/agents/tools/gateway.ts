@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
+import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
@@ -303,14 +304,37 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
   }
 }
 
-function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
+async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   method: string;
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
-}): string | undefined {
-  if (!AGENT_RUNTIME_IDENTITY_METHODS.has(params.method)) {
+  required?: boolean;
+}): Promise<string | undefined> {
+  if (!params.required && !AGENT_RUNTIME_IDENTITY_METHODS.has(params.method)) {
     return undefined;
   }
+  const identity = getGatewayToolCallerIdentity();
+  if (!identity) {
+    if (params.required) {
+      throw new Error("trusted agent runtime identity required for this gateway call");
+    }
+    return undefined;
+  }
+  const hasGatewayUrlOverride = trimToUndefined(params.opts.gatewayUrl) !== undefined;
+  const hasGatewayTokenOverride = trimToUndefined(params.opts.gatewayToken) !== undefined;
+  if (hasGatewayUrlOverride || hasGatewayTokenOverride || params.target !== "local") {
+    throw new Error("agent gateway calls require the trusted local gateway context");
+  }
+  return await mintAgentRuntimeIdentityToken(identity);
+}
+
+export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
+  opts: GatewayCallOptions;
+  target: "local" | "remote";
+  turnCapability?: string;
+  runId?: string;
+  sessionId?: string;
+}): Promise<string | undefined> {
   const identity = getGatewayToolCallerIdentity();
   if (!identity) {
     return undefined;
@@ -318,9 +342,22 @@ function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   const hasGatewayUrlOverride = trimToUndefined(params.opts.gatewayUrl) !== undefined;
   const hasGatewayTokenOverride = trimToUndefined(params.opts.gatewayToken) !== undefined;
   if (hasGatewayUrlOverride || hasGatewayTokenOverride || params.target !== "local") {
-    throw new Error("agent cron gateway calls require the trusted local gateway context");
+    return undefined;
   }
-  return mintAgentRuntimeIdentityToken(identity);
+  const messageActionContext = resolveMessageActionTurnCapability({
+    token: params.turnCapability,
+    agentId: identity.agentId,
+    runId: params.runId,
+    sessionKey: identity.sessionKey,
+    sessionId: params.sessionId,
+  });
+  if (!messageActionContext) {
+    return undefined;
+  }
+  return await mintAgentRuntimeIdentityToken({
+    ...identity,
+    messageActionContext,
+  });
 }
 
 function isStaleGatewayAgentRuntimeIdentityRejection(error: unknown): boolean {
@@ -342,7 +379,7 @@ function isStaleGatewayAgentRuntimeIdentityRejection(error: unknown): boolean {
 function staleGatewayAgentRuntimeIdentityError(cause: unknown): Error {
   return new Error(
     [
-      "The running Gateway is from an older OpenClaw build and rejected current agent cron connection metadata.",
+      "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata.",
       "Restart the Gateway with `openclaw gateway restart`, then retry.",
     ].join(" "),
     { cause },
@@ -356,7 +393,12 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCallOptions,
   params?: unknown,
-  extra?: { expectFinal?: boolean; scopes?: OperatorScope[]; signal?: AbortSignal },
+  extra?: {
+    expectFinal?: boolean;
+    scopes?: OperatorScope[];
+    requireAgentRuntimeIdentity?: boolean;
+    signal?: AbortSignal;
+  },
 ) {
   const gateway = resolveGatewayOptions(opts);
   const scopes = Array.isArray(extra?.scopes)
@@ -367,10 +409,11 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     opts,
     target: gateway.target,
   });
-  const agentRuntimeIdentityToken = resolveAgentRuntimeIdentityTokenForGatewayTool({
+  const agentRuntimeIdentityToken = await resolveAgentRuntimeIdentityTokenForGatewayTool({
     method,
     opts,
     target: gateway.target,
+    required: extra?.requireAgentRuntimeIdentity,
   });
   const deviceIdentity = resolveApprovalRequesterDeviceIdentityForGatewayTool({
     method,

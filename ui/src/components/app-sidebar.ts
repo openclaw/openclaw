@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../api/gateway.ts";
-import type { SessionsListResult } from "../api/types.ts";
+import type { SessionsListResult, UpdateAvailable } from "../api/types.ts";
 import {
   cancelRoutePreload,
   DEFAULT_SIDEBAR_PINNED_ROUTES,
@@ -23,13 +23,17 @@ import {
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import type { ThemeMode } from "../app/theme.ts";
 import "./session-menu.ts";
+import "./sidebar-build-chip.ts";
+import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
+import { editorOpenUrl } from "../lib/editor-links.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import {
   channelDisplayLabel,
@@ -72,7 +76,8 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
 import { icons, type IconName } from "./icons.ts";
 import { lobsterPetSeed, resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet.ts";
-import type { SessionMenuAction } from "./session-menu.ts";
+import { fetchSessionMenuWork } from "./session-menu-work.ts";
+import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
 
 type SidebarRecentSession = {
   key: string;
@@ -84,12 +89,14 @@ type SidebarRecentSession = {
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
+  modelSelectionLocked: boolean;
   kind?: string;
   pinned: boolean;
   category?: string;
   channel?: string;
   channelSession?: boolean;
   workSession?: boolean;
+  worktreeId?: string;
   unread: boolean;
 };
 
@@ -182,6 +189,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) lobsterPetVisits = true;
   @property({ attribute: false }) lobsterPetSounds = false;
   @property({ attribute: false }) gatewayVersion: string | null = null;
+  @property({ attribute: false }) devGitBranch: string | null = null;
+  @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
+  @property({ attribute: false }) updateRunning = false;
+  @property({ attribute: false }) onUpdate: () => void = () => undefined;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (agentId: string) => void;
@@ -198,6 +209,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private context?: ApplicationContext<RouteId>;
   @state() private customizeMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionMenu: SidebarSessionMenuState | null = null;
+  @state() private sessionMenuWork: SessionMenuWork | null = null;
   @state() private sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
   @state() private draggingSessionKey: string | null = null;
   @state() private draggingSessionGroup: string | null = null;
@@ -214,6 +226,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private readonly subscriptions = new SubscriptionsController(this);
   private customizeMenuTrigger: HTMLElement | null = null;
   private sessionMenuTrigger: HTMLElement | null = null;
+  // Guards the async work fetch: a menu reopened for another session must not
+  // adopt a stale response.
+  private sessionMenuWorkVersion = 0;
   private sessionGroupMenuTrigger: HTMLElement | null = null;
   private sessionSortMenuTrigger: HTMLElement | null = null;
   private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
@@ -450,12 +465,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         active: row.key === navigation.activeRowKey,
         visuallyActive: highlightCurrentSession && row.key === navigation.currentSessionKey,
         hasActiveRun: Boolean(row.hasActiveRun),
+        modelSelectionLocked: row.modelSelectionLocked === true,
         kind: row.kind,
         pinned: row.pinned === true,
         category: normalizeOptionalString(row.category),
         channel: channelInfo.channel,
         channelSession: channelInfo.channelSession,
         workSession: Boolean(row.worktree || row.execNode),
+        worktreeId: row.worktree?.id,
         unread: row.unread === true,
       };
     };
@@ -620,11 +637,43 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.closeSessionSortMenu();
     this.sessionMenuTrigger = trigger;
     this.sessionMenu = { session, x, y };
+    this.loadSessionMenuWork(session);
   }
 
   private closeSessionMenu() {
     this.sessionMenuTrigger = null;
     this.sessionMenu = null;
+    this.sessionMenuWorkVersion += 1;
+    this.sessionMenuWork = null;
+  }
+
+  private loadSessionMenuWork(session: SidebarRecentSession) {
+    const version = ++this.sessionMenuWorkVersion;
+    if (!session.worktreeId) {
+      this.sessionMenuWork = null;
+      return;
+    }
+    this.sessionMenuWork = { loading: true, pullRequestUrl: null, worktreePath: null };
+    const context = this.context;
+    const client = context?.gateway.snapshot.client;
+    if (!context || !client) {
+      this.sessionMenuWork = { loading: false, pullRequestUrl: null, worktreePath: null };
+      return;
+    }
+    const { selectedAgentId } = this.getSessionNavigationState();
+    void fetchSessionMenuWork({
+      client,
+      pullRequestsAvailable:
+        isGatewayMethodAdvertised(context.gateway.snapshot, "controlUi.sessionPullRequests") ===
+        true,
+      sessionKey: session.key,
+      agentId: parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
+      worktreeId: session.worktreeId,
+    }).then((work) => {
+      if (version === this.sessionMenuWorkVersion) {
+        this.sessionMenuWork = { loading: false, ...work };
+      }
+    });
   }
 
   private openSessionGroupMenu(group: string, x: number, y: number, trigger: HTMLElement | null) {
@@ -1123,16 +1172,24 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         .y=${menu.y}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${!this.connected}
-        .forkDisabled=${this.sessionsLoading}
+        .forkDisabled=${this.sessionsLoading || session.modelSelectionLocked}
         .archiveAllowed=${archiveAllowed}
         .groups=${this.knownSessionGroups()}
         .canOpenChat=${true}
+        .work=${this.sessionMenuWork}
         .workboard=${null}
         .onClose=${() => this.closeSessionMenu()}
         .onAction=${(action: SessionMenuAction) => {
           switch (action.kind) {
             case "open-chat":
               this.selectSession(session.key);
+              break;
+            case "open-pr":
+              window.open(action.url, "_blank", "noopener");
+              break;
+            case "open-in":
+              // A custom-scheme window hands off to the OS without navigating this page.
+              window.open(editorOpenUrl(action.editor, action.path));
               break;
             case "toggle-pin":
               void this.patchSession(session, { pinned: !session.pinned });
@@ -1511,6 +1568,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             : t("chat.sidebar.chats");
     // Smart channel/work sections classify rows automatically; only custom
     // groups and Chats accept manual drops (a drop means category assignment).
+    // Custom group headers drag as a whole (mirroring whole-row session drags);
+    // the dot handle inside is a pure visual affordance.
     const acceptsSessions =
       !isPinned &&
       this.sessionsGrouping === "category" &&
@@ -1518,6 +1577,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const sectionClass = [
       "sidebar-recent-sessions__group",
       collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
+      group && this.draggingSessionGroup === group
+        ? "sidebar-recent-sessions__group--dragging"
+        : "",
       this.sessionDropTarget === section.id ? "sidebar-recent-sessions__group--session-drop" : "",
       group && this.sessionGroupDropTarget?.group === group
         ? `sidebar-recent-sessions__group--group-drop-${this.sessionGroupDropTarget.position}`
@@ -1542,7 +1604,24 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         ${showHeader
           ? html`
               <div
-                class="sidebar-recent-sessions__head"
+                class="sidebar-recent-sessions__head ${group
+                  ? "sidebar-recent-sessions__head--draggable"
+                  : ""}"
+                draggable=${group ? "true" : "false"}
+                @dragstart=${group
+                  ? (event: DragEvent) => {
+                      if (event.dataTransfer) {
+                        writeSessionGroupDragData(event.dataTransfer, group);
+                        this.draggingSessionGroup = group;
+                      }
+                    }
+                  : nothing}
+                @dragend=${group
+                  ? () => {
+                      this.draggingSessionGroup = null;
+                      this.sessionGroupDropTarget = null;
+                    }
+                  : nothing}
                 @contextmenu=${group
                   ? (event: MouseEvent) => {
                       event.preventDefault();
@@ -1552,21 +1631,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               >
                 ${group
                   ? html`
-                      <span
-                        class="sidebar-session-group-drag-handle"
-                        draggable="true"
-                        aria-hidden="true"
-                        @dragstart=${(event: DragEvent) => {
-                          if (event.dataTransfer) {
-                            writeSessionGroupDragData(event.dataTransfer, group);
-                            this.draggingSessionGroup = group;
-                          }
-                        }}
-                        @dragend=${() => {
-                          this.draggingSessionGroup = null;
-                          this.sessionGroupDropTarget = null;
-                        }}
-                      ></span>
+                      <span class="sidebar-session-group-drag-handle" aria-hidden="true"></span>
                     `
                   : nothing}
                 <button
@@ -1841,6 +1906,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             ${this.renderSessions()}
           </div>
           <div class="sidebar-shell__footer">
+            <openclaw-sidebar-update-card
+              .updateAvailable=${this.updateAvailable}
+              .updateRunning=${this.updateRunning}
+              .onUpdate=${this.onUpdate}
+            ></openclaw-sidebar-update-card>
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}
               .mode=${resolveLobsterPetMode(this.connected, this.sessionsResult?.sessions)}
@@ -1849,6 +1919,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               .soundsEnabled=${this.lobsterPetSounds}
               .gatewayVersion=${this.gatewayVersion}
             ></openclaw-lobster-pet>
+            ${this.devGitBranch
+              ? html`<div class="sidebar-footer-branch" title=${this.devGitBranch}>
+                  <span class="sidebar-footer-branch__icon" aria-hidden="true"
+                    >${icons.gitBranch}</span
+                  >
+                  <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
+                </div>`
+              : nothing}
             <div class="sidebar-footer-bar">
               <openclaw-tooltip .content=${gatewayStatus}>
                 <span
@@ -1860,6 +1938,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                   aria-label=${gatewayStatus}
                 ></span>
               </openclaw-tooltip>
+              <openclaw-sidebar-build-chip
+                .basePath=${this.basePath}
+                .gatewayVersion=${this.gatewayVersion}
+                .onNavigate=${(routeId: "about") => this.onNavigate?.(routeId)}
+              ></openclaw-sidebar-build-chip>
               <span class="sidebar-footer-bar__spacer"></span>
               <openclaw-tooltip .content=${settingsTooltip}>
                 <a

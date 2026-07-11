@@ -63,9 +63,11 @@ import {
 import {
   decorateOpenClawProfile,
   ensureProfileCleanExit,
+  ensureProfileNetworkPredictionDisabled,
   isProfileDecorated,
   usesOpenClawMockKeychain,
 } from "./chrome.profile-decoration.js";
+import type { BrowserGraphicsDiagnostics } from "./client.types.js";
 import {
   getManagedBrowserMissingDisplayError,
   resolveManagedBrowserHeadlessMode,
@@ -755,6 +757,8 @@ export type RunningChrome = {
   proc: ChildProcess;
   headless?: boolean;
   headlessSource?: ManagedBrowserHeadlessSource;
+  graphicsDiagnostics?: BrowserGraphicsDiagnostics;
+  graphicsDiagnosticsPending?: Promise<BrowserGraphicsDiagnostics>;
   /**
    * @deprecated CDP managed-proxy bypasses are scoped at exact request URLs.
    * Kept so older in-memory callers can pass stale RunningChrome objects
@@ -1121,6 +1125,12 @@ export async function launchOpenClawChrome(
     } catch (err) {
       log.warn(`openclaw browser profile decoration failed: ${String(err)}`);
     }
+  }
+
+  try {
+    ensureProfileNetworkPredictionDisabled(userDataDir);
+  } catch (err) {
+    log.warn(`openclaw browser network-prediction prefs failed: ${String(err)}`);
   }
 
   try {
