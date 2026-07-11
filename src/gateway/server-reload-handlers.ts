@@ -1111,7 +1111,6 @@ export function startManagedGatewayConfigReloader(
       params.acceptTerminalConfig({
         retireRejectedRestart: retireRejectedRestartRequest(),
       });
-      params.commitTerminalConfig();
     },
     onConfigApplied: () => params.commitTerminalConfig(),
     onNoopConfigCommit: async (_plan, nextConfig) => {
