@@ -498,7 +498,7 @@ describe("scoped vitest configs", () => {
     expectForkedIsolatedRunner(defaultInfraConfig);
   });
 
-  it("keeps the process lane off the openclaw runtime setup", () => {
+  it("keeps process, runtime config, and tooling lanes off the openclaw runtime setup", () => {
     expect(normalizeConfigPaths(requireTestConfig(defaultProcessConfig).setupFiles)).toEqual([
       "test/setup.ts",
     ]);
@@ -508,6 +508,9 @@ describe("scoped vitest configs", () => {
     expect(normalizeConfigPaths(requireTestConfig(defaultPluginSdkConfig).setupFiles)).toEqual([
       "test/setup.ts",
       "test/setup-openclaw-runtime.ts",
+    ]);
+    expect(normalizeConfigPaths(requireTestConfig(defaultToolingConfig).setupFiles)).toEqual([
+      "test/setup.ts",
     ]);
   });
 
@@ -975,6 +978,7 @@ describe("scoped vitest configs", () => {
     const testConfig = requireTestConfig(defaultMediaUnderstandingConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
     expect(testConfig.include).toEqual(["media-understanding/**/*.test.ts"]);
+    expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual(["test/setup.ts"]);
   });
 
   it("keeps tooling tests in their own lane", () => {
@@ -1039,7 +1043,7 @@ describe("scoped vitest configs", () => {
     const testConfig = requireTestConfig(defaultUiConfig);
     expect(testConfig.dir).toBe(process.cwd());
     expect(testConfig.include).toEqual(["ui/src/**/*.test.ts"]);
-    expect(testConfig.exclude).toContain("ui/src/ui/app-chat.test.ts");
+    expect(testConfig.exclude).toContain("ui/src/**/*.e2e.test.ts");
   });
 
   it("normalizes utils include patterns relative to the scoped dir", () => {

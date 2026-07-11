@@ -61,6 +61,9 @@ export function installEmbeddedRunnerFastRunE2eMocks(
   options: EmbeddedRunnerFastRunMockOptions,
 ): void {
   vi.doMock("../harness/selection.js", () => ({
+    agentHarnessBuildsOpenClawTools: vi.fn(
+      (harnessId: string) => harnessId === "codex" || harnessId === "copilot",
+    ),
     selectAgentHarness: vi.fn(
       (params: {
         provider?: string;

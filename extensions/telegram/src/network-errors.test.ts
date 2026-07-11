@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   getTelegramNetworkErrorOrigin,
   isRecoverableTelegramNetworkError,
+  isRetryableTelegramApiError,
   isTelegramRateLimitError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
@@ -139,6 +140,18 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "polling" })).toBe(true);
   });
 
+  it("treats delete/react/edit/action (idempotent) contexts like polling, not send", () => {
+    const undiciSnippetErr = new Error("Undici: socket failure");
+    // delete, react, edit, and action are idempotent or non-message operations;
+    // a transient snippet-only error must be retried (allowMessageMatch defaults true),
+    // matching polling/webhook. send stays strict as the regression guard.
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "delete" })).toBe(true);
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "react" })).toBe(true);
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "edit" })).toBe(true);
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "action" })).toBe(true);
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "send" })).toBe(false);
+  });
+
   it("treats grammY failed-after envelope errors as recoverable in send context", () => {
     expect(
       isRecoverableTelegramNetworkError(
@@ -226,7 +239,7 @@ describe("isSafeToRetrySendError", () => {
     ["ECONNRESET", "read ECONNRESET", false],
     ["ETIMEDOUT", "connect ETIMEDOUT", false],
     ["EPIPE", "write EPIPE", false],
-    ["UND_ERR_CONNECT_TIMEOUT", "connect timeout", false],
+    ["UND_ERR_CONNECT_TIMEOUT", "connect timeout", true],
   ])("returns %s => %s", (code, message, expected) => {
     expect(isSafeToRetrySendError(errorWithCode(message, code))).toBe(expected);
   });
@@ -309,6 +322,19 @@ describe("isTelegramRateLimitError", () => {
       response: { parameters: { retry_after: 1 } },
     };
     expect(isTelegramRateLimitError(wrapped)).toBe(true);
+  });
+});
+
+describe("isRetryableTelegramApiError", () => {
+  it.each([
+    ["Too Many Requests", 429, true],
+    ["Internal Server Error", 500, true],
+    ["Bad Gateway", 502, true],
+    ["Conflict", 409, false],
+    ["Unauthorized", 401, false],
+    ["Not Found", 404, false],
+  ])("returns %s for error_code %s", (message, errorCode, expected) => {
+    expect(isRetryableTelegramApiError(errorWithTelegramCode(message, errorCode))).toBe(expected);
   });
 });
 

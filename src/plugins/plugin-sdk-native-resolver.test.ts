@@ -384,7 +384,27 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-core-internal-"));
     const { loaderModulePath } = writeFakeOpenClawPackage(root);
     const normalizationSource = writeNormalizationCoreSource(root);
+    const booleanCoercionSource = writeInternalCorePackageSource(
+      root,
+      "normalization-core",
+      "boolean-coercion.ts",
+    );
     const mediaCoreSource = writeInternalCorePackageSource(root, "media-core", "mime.ts");
+    const markdownCoreSource = writeInternalCorePackageSource(
+      root,
+      "markdown-core",
+      "code-spans.ts",
+    );
+    const aiRuntimeSource = writeInternalCorePackageSource(
+      root,
+      "ai",
+      path.join("internal", "runtime.ts"),
+    );
+    const aiRetryAfterSource = writeInternalCorePackageSource(
+      root,
+      "ai",
+      path.join("internal", "retry-after.ts"),
+    );
     const acpCoreSource = writeInternalCorePackageSource(
       root,
       "acp-core",
@@ -403,7 +423,11 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     });
 
     expect(installedAliases).toContain("@openclaw/normalization-core/string-coerce");
+    expect(installedAliases).toContain("@openclaw/normalization-core/boolean-coercion");
     expect(installedAliases).toContain("@openclaw/media-core/mime");
+    expect(installedAliases).toContain("@openclaw/markdown-core/code-spans");
+    expect(installedAliases).toContain("@openclaw/ai/internal/retry-after");
+    expect(installedAliases).toContain("@openclaw/ai/internal/runtime");
     expect(installedAliases).toContain("@openclaw/acp-core/runtime/types");
     expect(installedAliases).toContain("@openclaw/llm-core");
     const requireFromCoreSource = createRequire(coreSourceParent);
@@ -411,8 +435,22 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(
       fs.realpathSync(requireFromCoreSource.resolve("@openclaw/normalization-core/string-coerce")),
     ).toBe(fs.realpathSync(normalizationSource));
+    expect(
+      fs.realpathSync(
+        requireFromCoreSource.resolve("@openclaw/normalization-core/boolean-coercion"),
+      ),
+    ).toBe(fs.realpathSync(booleanCoercionSource));
     expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/media-core/mime"))).toBe(
       fs.realpathSync(mediaCoreSource),
+    );
+    expect(
+      fs.realpathSync(requireFromCoreSource.resolve("@openclaw/markdown-core/code-spans")),
+    ).toBe(fs.realpathSync(markdownCoreSource));
+    expect(
+      fs.realpathSync(requireFromCoreSource.resolve("@openclaw/ai/internal/retry-after")),
+    ).toBe(fs.realpathSync(aiRetryAfterSource));
+    expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/ai/internal/runtime"))).toBe(
+      fs.realpathSync(aiRuntimeSource),
     );
     expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/acp-core/runtime/types"))).toBe(
       fs.realpathSync(acpCoreSource),
@@ -421,7 +459,13 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       fs.realpathSync(llmCoreSource),
     );
     expect(() => requireFromPlugin.resolve("@openclaw/normalization-core/string-coerce")).toThrow();
+    expect(() =>
+      requireFromPlugin.resolve("@openclaw/normalization-core/boolean-coercion"),
+    ).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/media-core/mime")).toThrow();
+    expect(() => requireFromPlugin.resolve("@openclaw/markdown-core/code-spans")).toThrow();
+    expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/retry-after")).toThrow();
+    expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/runtime")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/acp-core/runtime/types")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/llm-core")).toThrow();
   });

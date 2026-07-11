@@ -480,6 +480,7 @@ function normalizeAgentModelRefsAtPathForWrite(config: unknown, path: string[]):
   for (const key of AGENT_MODEL_CONFIG_KEYS) {
     next = normalizeModelConfigPathForWrite(next, [...path, key]);
   }
+  next = normalizeModelStringPathForWrite(next, [...path, "utilityModel"]);
   next = normalizeModelStringPathForWrite(next, [...path, "heartbeat", "model"]);
   next = normalizeModelConfigPathForWrite(next, [...path, "subagents", "model"]);
   next = normalizeModelStringPathForWrite(next, [...path, "compaction", "model"]);
@@ -853,7 +854,7 @@ function mergeMissingExplicitValues(
   return { changed, value: changed ? next : currentValue };
 }
 
-export function injectExplicitlySetPaths(params: {
+function injectExplicitlySetPaths(params: {
   valueSource: unknown;
   persistedCandidate: unknown;
   explicitSetPaths?: readonly (readonly string[])[];

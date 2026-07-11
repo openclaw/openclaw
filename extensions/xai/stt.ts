@@ -8,13 +8,12 @@ import {
   assertOkOrThrowHttpError,
   buildAudioTranscriptionFormData,
   postTranscriptionRequest,
-  resolveProviderHttpRequestConfig,
+  readProviderJsonResponse,
   requireTranscriptionText,
+  resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
-
-export const XAI_DEFAULT_STT_MODEL = "grok-stt";
 
 type XaiSttResponse = {
   text?: string;
@@ -43,14 +42,12 @@ export async function transcribeXaiAudio(
       transport: "media-understanding",
     });
 
-  const model = normalizeOptionalString(params.model);
   const language = normalizeOptionalString(params.language);
   const form = buildAudioTranscriptionFormData({
     buffer: params.buffer,
     fileName: params.fileName,
     mime: params.mime,
     fields: {
-      model,
       language,
     },
   });
@@ -68,10 +65,9 @@ export async function transcribeXaiAudio(
 
   try {
     await assertOkOrThrowHttpError(response, "xAI audio transcription failed");
-    const payload = (await response.json()) as XaiSttResponse;
+    const payload = await readProviderJsonResponse<XaiSttResponse>(response, "xai.stt");
     return {
       text: requireTranscriptionText(payload.text, "xAI transcription response missing text"),
-      ...(model ? { model } : {}),
     };
   } finally {
     await release();
@@ -85,7 +81,6 @@ export function buildXaiMediaUnderstandingProvider(): MediaUnderstandingProvider
   return {
     id: "xai",
     capabilities: ["audio"],
-    defaultModels: { audio: XAI_DEFAULT_STT_MODEL },
     autoPriority: { audio: 25 },
     transcribeAudio: transcribeXaiAudio,
   };

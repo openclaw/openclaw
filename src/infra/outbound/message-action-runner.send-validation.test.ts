@@ -143,6 +143,27 @@ describe("runMessageAction send validation", () => {
     expect(JSON.stringify(result.toolResult?.content)).not.toContain("hello from codex");
   });
 
+  it.each(["agent:voice:agent:channel:room", "agent:main:telegram::group:room"])(
+    "keeps malformed session route %s on the internal source sink",
+    async (sessionKey) => {
+      const result = await runMessageAction({
+        cfg: emptyConfig,
+        action: "send",
+        params: { message: "private reply" },
+        toolContext: { currentChannelProvider: "webchat" },
+        sessionKey,
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
+
+      expect(result).toMatchObject({
+        kind: "send",
+        channel: "webchat",
+        to: "current-run",
+        handledBy: "internal-source",
+      });
+    },
+  );
+
   it("uses non-webchat current source context as the message-tool-only send sink", async () => {
     const result = await runMessageAction({
       cfg: emptyConfig,
@@ -229,6 +250,21 @@ describe("runMessageAction send validation", () => {
         },
         sessionKey: "agent:main",
         sourceReplyDeliveryMode: "automatic",
+      }),
+    ).rejects.toThrow(/requires a target/i);
+  });
+
+  it("does not treat broadcast targets as a send target", async () => {
+    await expect(
+      runMessageAction({
+        cfg: emptyConfig,
+        action: "send",
+        params: {
+          action: "send",
+          idempotencyKey: "run:message:1",
+          targets: ["user:123456789"],
+          message: "hello from codex",
+        },
       }),
     ).rejects.toThrow(/requires a target/i);
   });

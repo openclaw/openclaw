@@ -104,7 +104,11 @@ struct ConfigSchemaForm: View {
             }
             return AnyView(
                 Toggle(isOn: self.boolBinding(path, defaultValue: schema.explicitDefault as? Bool)) {
-                    if let label { Text(label) } else { Text("Enabled") }
+                    if let label {
+                        Text(label)
+                    } else {
+                        Text("Enabled")
+                    }
                 }
                 .help(help ?? ""))
         case "number", "integer":

@@ -39,6 +39,7 @@ scenario:
         reason: image_generate is an OpenClaw integration tool whose happy path yields for async completion, so standard direct call/result parity would compare different lifecycle phases.
       promptSnippet: "target=image_generate"
       failurePromptSnippet: "failure target=image_generate"
+      happyPathOutputRequired: false
 
 flow:
   steps:

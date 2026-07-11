@@ -999,7 +999,7 @@ describe("searchVector sqlite-vec KNN", () => {
     }
   });
 
-  it("fills the requested limit after model filters prune nearest KNN candidates", async () => {
+  it("falls back when filters hide matches beyond sqlite-vec's KNN cap", async () => {
     const db = new DatabaseSync(":memory:", { allowExtension: true });
     try {
       const loaded = await loadSqliteVecExtension({ db });
@@ -1022,11 +1022,16 @@ describe("searchVector sqlite-vec KNN", () => {
       const insertVector = db.prepare(
         "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
       );
-      const addChunk = (params: { id: string; model: string; vector: [number, number] }) => {
+      const addChunk = (params: {
+        id: string;
+        model: string;
+        source: "memory" | "sessions";
+        vector: [number, number];
+      }) => {
         insertChunk.run(
           params.id,
           `memory/${params.id}.md`,
-          "memory",
+          params.source,
           1,
           1,
           params.id,
@@ -1039,13 +1044,27 @@ describe("searchVector sqlite-vec KNN", () => {
       };
 
       for (let i = 0; i < 20; i += 1) {
-        addChunk({ id: `other-${i}`, model: "other-model", vector: [1, i / 1000] });
+        addChunk({
+          id: `other-${i}`,
+          model: "other-model",
+          source: "memory",
+          vector: [1, 0],
+        });
       }
-      addChunk({ id: "target-1", model: "target-model", vector: [0.5, 0.5] });
-      addChunk({ id: "target-2", model: "target-model", vector: [0.4, 0.6] });
-      addChunk({ id: "alias-1", model: "alias-model", vector: [0.45, 0.55] });
+      addChunk({
+        id: "target",
+        model: "target-model",
+        source: "memory",
+        vector: [0.5, 0.5],
+      });
+      addChunk({
+        id: "alias",
+        model: "alias-model",
+        source: "memory",
+        vector: [0.4, 0.6],
+      });
 
-      const results = await searchVector({
+      const belowCapResults = await searchVector({
         db,
         vectorTable: "memory_index_chunks_vec",
         providerModel: "target-model",
@@ -1057,8 +1076,46 @@ describe("searchVector sqlite-vec KNN", () => {
         sourceFilterVec: { sql: "", params: [] },
         sourceFilterChunks: { sql: "", params: [] },
       });
+      expect(belowCapResults.map((row) => row.id)).toEqual(["target", "alias"]);
 
-      expect(results.map((row) => row.id)).toEqual(["target-1", "alias-1"]);
+      db.exec("BEGIN");
+      for (let i = 20; i < 4097; i += 1) {
+        addChunk({
+          id: `other-${i}`,
+          model: "other-model",
+          source: "memory",
+          vector: [1, 0],
+        });
+      }
+      addChunk({
+        id: "wrong-source",
+        model: "target-model",
+        source: "sessions",
+        vector: [0.6, 0.4],
+      });
+      db.exec("COMMIT");
+
+      const overLimitQuery = db.prepare(
+        "SELECT id FROM memory_index_chunks_vec WHERE embedding MATCH ? AND k = ?",
+      );
+      expect(() => overLimitQuery.all(vectorToBlob([1, 0]), 4097)).toThrow(
+        "k value in knn query too large, provided 4097 and the limit is 4096",
+      );
+
+      const results = await searchVector({
+        db,
+        vectorTable: "memory_index_chunks_vec",
+        providerModel: "target-model",
+        providerModelAliases: ["alias-model"],
+        queryVec: [1, 0],
+        limit: 2,
+        snippetMaxChars: 200,
+        ensureVectorReady: async () => true,
+        sourceFilterVec: { sql: " AND c.source IN (?)", params: ["memory"] },
+        sourceFilterChunks: { sql: " AND source IN (?)", params: ["memory"] },
+      });
+
+      expect(results.map((row) => row.id)).toEqual(["target", "alias"]);
     } finally {
       db.close();
     }

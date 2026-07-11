@@ -43,7 +43,7 @@ type EmbeddedRunAttemptBase = Omit<
   | "sessionFile"
 >;
 
-export type EmbeddedRunContextWindowInfo = {
+type EmbeddedRunContextWindowInfo = {
   tokens: number;
   referenceTokens?: number;
   source: "model" | "modelsConfig" | "agentContextTokens" | "default";
@@ -114,6 +114,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 
 export type EmbeddedRunAttemptResult = {
   aborted: boolean;
+  /** True when the runtime made the authoritative final-assistant transcript decision. */
+  assistantTranscriptOwned?: boolean;
   /** True when the abort originated from the caller-provided abortSignal. */
   externalAbort: boolean;
   timedOut: boolean;
@@ -123,6 +125,7 @@ export type EmbeddedRunAttemptResult = {
   timedOutDuringCompaction: boolean;
   /** Optional because this type is re-exported as `AgentHarnessAttemptResult`. */
   timedOutDuringToolExecution?: boolean;
+  timedOutByRunBudget?: boolean;
   promptError: unknown;
   /**
    * Identifies which phase produced the promptError.
@@ -139,12 +142,18 @@ export type EmbeddedRunAttemptResult = {
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
         source?: "mid-turn";
+        estimatedPromptTokens?: number;
+        promptBudgetBeforeReserve?: number;
+        overflowTokens?: number;
         handled: true;
         truncatedCount?: number;
       }
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
         source?: "mid-turn";
+        estimatedPromptTokens?: number;
+        promptBudgetBeforeReserve?: number;
+        overflowTokens?: number;
         handled?: false;
       };
   sessionIdUsed: string;
@@ -162,7 +171,7 @@ export type EmbeddedRunAttemptResult = {
   codexAppServerFailure?: {
     kind: "client_closed_before_turn_completed" | "turn_completion_idle_timeout";
     turnWatchTimeoutKind?: "progress" | "completion" | "terminal";
-    transport: "stdio" | "websocket";
+    transport: "stdio" | "unix" | "websocket";
     threadId?: string;
     turnId?: string;
     replaySafe: boolean;
@@ -200,6 +209,7 @@ export type EmbeddedRunAttemptResult = {
     toolName: string;
     meta?: string;
     replaySafe?: boolean;
+    isError?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -238,6 +248,11 @@ export type EmbeddedRunAttemptResult = {
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
   replayMetadata: EmbeddedRunReplayMetadata;
+  /**
+   * Replay metadata for this attempt before prior session state is accumulated.
+   * Older harnesses may omit it and retain conservative cumulative retry gating.
+   */
+  currentAttemptReplayMetadata?: EmbeddedRunReplayMetadata;
   itemLifecycle: {
     startedCount: number;
     completedCount: number;

@@ -3,6 +3,8 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import type { Client } from "../internal/discord.js";
@@ -60,16 +62,11 @@ type PrestartedTypingFeedbackEntry = {
   feedback: DiscordReplyTypingFeedback;
 };
 
-let messagePreflightRuntimePromise:
-  | Promise<typeof import("./message-handler.preflight.js")>
-  | undefined;
+const loadMessagePreflightRuntime = createLazyRuntimeModule(
+  () => import("./message-handler.preflight.js"),
+);
 
-async function loadMessagePreflightRuntime() {
-  messagePreflightRuntimePromise ??= import("./message-handler.preflight.js");
-  return await messagePreflightRuntimePromise;
-}
-
-export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
+type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
 };
 
@@ -102,6 +99,9 @@ function startAcceptedTypingFeedback(params: {
       accountId: ctx.accountId,
       channelId: ctx.messageChannelId,
       log: logVerbose,
+      keepaliveIntervalMs: finiteSecondsToTimerSafeMilliseconds(
+        ctx.cfg.agents?.defaults?.typingIntervalSeconds ?? ctx.cfg.session?.typingIntervalSeconds,
+      ),
     });
   const cleanup = replyTypingFeedback.onCleanup;
   replyTypingFeedback.onCleanup = () => {

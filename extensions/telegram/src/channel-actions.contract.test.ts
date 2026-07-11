@@ -43,6 +43,36 @@ describe("telegram actions contract", () => {
     expect(capabilities?.includes("richText")).toBe(expected);
   });
 
+  it("advertises inline buttons when legacy Telegram capabilities are empty", () => {
+    const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:telegram-test-token",
+            capabilities: [],
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(capabilities).toContain("inlineButtons");
+  });
+
+  it("does not advertise inline buttons for non-empty legacy Telegram capabilities without inlineButtons", () => {
+    const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:telegram-test-token",
+            capabilities: ["vision"],
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(capabilities).not.toContain("inlineButtons");
+  });
+
   it("uses the selected Telegram account's rich text setting", () => {
     const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
       cfg: {
@@ -122,6 +152,67 @@ describe("telegram actions contract", () => {
         name: "Build Updates",
         message: "hello",
       },
+    });
+  });
+
+  it("preserves quote text when presentations use durable core delivery", async () => {
+    const presentation = {
+      blocks: [{ type: "text" as const, text: "Quoted chart" }],
+    };
+    const prepareSendPayload = telegramPlugin.actions?.prepareSendPayload;
+
+    expect(
+      await prepareSendPayload?.({
+        ctx: {
+          channel: "telegram",
+          action: "send",
+          cfg: {} as OpenClawConfig,
+          params: { quoteText: "  original message  " },
+        },
+        to: "123456",
+        payload: {
+          text: "Chart",
+          presentation,
+          channelData: { telegram: { parseMode: "MarkdownV2" } },
+        },
+      }),
+    ).toEqual({
+      text: "Chart",
+      presentation,
+      channelData: {
+        telegram: {
+          parseMode: "MarkdownV2",
+          quoteText: "original message",
+        },
+      },
+    });
+    expect(
+      await prepareSendPayload?.({
+        ctx: {
+          channel: "telegram",
+          action: "send",
+          cfg: {} as OpenClawConfig,
+          params: { quoteText: "original message" },
+        },
+        to: "123456",
+        payload: { text: "legacy send" },
+      }),
+    ).toBeNull();
+    expect(
+      await prepareSendPayload?.({
+        ctx: {
+          channel: "telegram",
+          action: "send",
+          cfg: {} as OpenClawConfig,
+          params: { quote_text: "  snake case quote  " },
+        },
+        to: "123456",
+        payload: { text: "Chart", presentation },
+      }),
+    ).toEqual({
+      text: "Chart",
+      presentation,
+      channelData: { telegram: { quoteText: "snake case quote" } },
     });
   });
 });

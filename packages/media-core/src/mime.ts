@@ -72,7 +72,9 @@ const MIME_BY_EXT: Record<string, string> = {
   ...buildMimeByExt(),
   // Canonical extension mappings for common MIME aliases
   ".jpg": "image/jpeg",
+  ".m2a": "audio/mpeg",
   ".mp3": "audio/mpeg",
+  ".oga": "audio/ogg",
   ".wav": "audio/wav",
   ".webm": "video/webm",
   // Additional extension aliases
@@ -83,18 +85,6 @@ const MIME_BY_EXT: Record<string, string> = {
   ".xml": "text/xml",
   ".yml": "application/yaml",
 };
-
-const AUDIO_FILE_EXTENSIONS = new Set([
-  ".aac",
-  ".caf",
-  ".flac",
-  ".m4a",
-  ".mp3",
-  ".oga",
-  ".ogg",
-  ".opus",
-  ".wav",
-]);
 
 const fileTypeModuleLoader = createLazyImportLoader(() => import("file-type"));
 
@@ -154,7 +144,15 @@ export function getFileExtension(filePath?: string | null): string | undefined {
   try {
     if (/^https?:\/\//i.test(filePath)) {
       const url = new URL(filePath);
-      return path.extname(url.pathname).toLowerCase() || undefined;
+      let filename = url.pathname.slice(url.pathname.lastIndexOf("/") + 1);
+      try {
+        // Decode only the URL filename while keeping encoded separators literal.
+        const decodable = filename.replace(/%2f/gi, "%252F").replace(/%5c/gi, "%255C");
+        filename = decodeURIComponent(decodable);
+      } catch {
+        // Preserve the raw filename when its own percent encoding is malformed.
+      }
+      return path.posix.extname(filename).toLowerCase() || undefined;
     }
   } catch {
     // fall back to plain path parsing
@@ -174,11 +172,7 @@ export function mimeTypeFromFilePath(filePath?: string | null): string | undefin
 
 /** Returns true when a filename extension is a supported audio container. */
 export function isAudioFileName(fileName?: string | null): boolean {
-  const ext = getFileExtension(fileName);
-  if (!ext) {
-    return false;
-  }
-  return AUDIO_FILE_EXTENSIONS.has(ext);
+  return mediaKindFromMime(mimeTypeFromFilePath(fileName)) === "audio";
 }
 
 /** Detects the best MIME type from bytes, file path, and header metadata. */
@@ -252,7 +246,7 @@ export function isGifMedia(opts: {
   contentType?: string | null;
   fileName?: string | null;
 }): boolean {
-  if (opts.contentType?.toLowerCase() === "image/gif") {
+  if (normalizeMimeType(opts.contentType) === "image/gif") {
     return true;
   }
   const ext = getFileExtension(opts.fileName);

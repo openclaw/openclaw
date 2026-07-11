@@ -1,5 +1,7 @@
 // Markdown Core module implements ir behavior.
 import MarkdownIt from "markdown-it";
+import markdownItCjkFriendly from "markdown-it-cjk-friendly";
+import { visibleWidth } from "../../terminal-core/src/ansi.js";
 import { chunkText } from "./chunk-text.js";
 import type { MarkdownTableMode } from "./types.js";
 
@@ -78,9 +80,12 @@ function createStyleSpan(params: MarkdownStyleSpan): MarkdownStyleSpan {
   return span;
 }
 
+type MarkdownTableAlignment = "left" | "center" | "right";
+
 export type MarkdownTableData = {
   headers: string[];
   rows: string[][];
+  aligns?: (MarkdownTableAlignment | undefined)[];
 };
 
 export type MarkdownTableCell = {
@@ -113,6 +118,7 @@ type TableCell = MarkdownTableCell;
 type TableState = {
   headers: TableCell[];
   rows: TableCell[][];
+  aligns: (MarkdownTableAlignment | undefined)[];
   currentRow: TableCell[];
   currentCell: RenderTarget | null;
   inHeader: boolean;
@@ -146,6 +152,7 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
     breaks: false,
     typographer: false,
   });
+  md.use(markdownItCjkFriendly);
   md.enable("strikethrough");
   if (options.tableMode && options.tableMode !== "off") {
     md.enable("table");
@@ -170,6 +177,20 @@ function getAttr(token: MarkdownToken, name: string): string | null {
     }
   }
   return null;
+}
+
+function markdownTableAlignmentFromToken(token: MarkdownToken): MarkdownTableAlignment | undefined {
+  const value = getAttr(token, "style") ?? "";
+  if (/text-align\s*:\s*left/i.test(value)) {
+    return "left";
+  }
+  if (/text-align\s*:\s*center/i.test(value)) {
+    return "center";
+  }
+  if (/text-align\s*:\s*right/i.test(value)) {
+    return "right";
+  }
+  return undefined;
 }
 
 function createTextToken(base: MarkdownToken, content: string): MarkdownToken {
@@ -432,6 +453,7 @@ function initTableState(): TableState {
   return {
     headers: [],
     rows: [],
+    aligns: [],
     currentRow: [],
     currentCell: null,
     inHeader: false,
@@ -517,13 +539,15 @@ function collectTableBlock(state: RenderState) {
   }
   const headerCells = state.table.headers.map(trimCell);
   const rowCells = state.table.rows.map((row) => row.map(trimCell));
-  state.collectedTables.push({
+  const table = {
     headers: headerCells.map((cell) => cell.text),
     rows: rowCells.map((row) => row.map((cell) => cell.text)),
     headerCells,
     rowCells,
     placeholderOffset: state.text.length,
-  });
+    ...(state.table.aligns.some(Boolean) ? { aligns: [...state.table.aligns] } : {}),
+  };
+  state.collectedTables.push(table);
 }
 
 function appendTableBulletValue(
@@ -627,7 +651,7 @@ function renderTableAsCode(state: RenderState) {
   const updateWidths = (cells: TableCell[]) => {
     for (let i = 0; i < columnCount; i += 1) {
       const cell = cells[i];
-      const width = cell?.text.length ?? 0;
+      const width = visibleWidth(cell?.text ?? "");
       if (widths[i] < width) {
         widths[i] = width;
       }
@@ -649,7 +673,7 @@ function renderTableAsCode(state: RenderState) {
         // Use text-only append to avoid overlapping styles with code_block
         appendCellTextOnly(state, cell);
       }
-      const pad = widths[i] - (cell?.text.length ?? 0);
+      const pad = widths[i] - visibleWidth(cell?.text ?? "");
       if (pad > 0) {
         state.text += " ".repeat(pad);
       }
@@ -874,6 +898,10 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "td_open":
         if (state.table) {
           state.table.currentCell = initRenderTarget();
+          if (token.type === "th_open" && state.table.inHeader) {
+            state.table.aligns[state.table.currentRow.length] =
+              markdownTableAlignmentFromToken(token);
+          }
         }
         break;
       case "th_close":

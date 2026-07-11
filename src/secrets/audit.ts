@@ -221,6 +221,13 @@ function collectConfigSecrets(params: {
     ) {
       continue;
     }
+    if (
+      target.entry.id === "models.providers.*.apiKey" &&
+      typeof target.value === "string" &&
+      isNonSecretApiKeyMarker(target.value)
+    ) {
+      continue;
+    }
     if (!hasPlaintext) {
       continue;
     }

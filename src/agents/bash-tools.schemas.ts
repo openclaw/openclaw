@@ -12,7 +12,12 @@ const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
 /** Parameters accepted by the exec tool. */
 export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
-  workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
+  workdir: Type.Optional(
+    Type.String({
+      description:
+        "Working directory. Blank/whitespace values are invalid; omit to use the default cwd.",
+    }),
+  ),
   env: Type.Optional(Type.Record(Type.String(), Type.String())),
   yieldMs: Type.Optional(
     Type.Number({
@@ -56,6 +61,18 @@ export const execSchema = Type.Object({
       description: "Node id/name for host=node.",
     }),
   ),
+});
+
+/** Parameters exposed by node-only exec surfaces. */
+export const nodeExecSchema = Type.Object({
+  command: execSchema.properties.command,
+  workdir: execSchema.properties.workdir,
+  env: execSchema.properties.env,
+  timeout: execSchema.properties.timeout,
+  host: optionalStringEnum(["node"] as const, {
+    description: "Exec target. Only node is available on this tool surface.",
+  }),
+  node: execSchema.properties.node,
 });
 
 /** Parameters accepted by the process-control tool. */

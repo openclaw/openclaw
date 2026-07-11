@@ -34,6 +34,7 @@ function resolveParentSessionKeyCandidate(params: {
 
 /** Resolves the persisted model override visible to the current session. */
 export function resolveStoredModelOverride(params: {
+  loadSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -56,10 +57,10 @@ export function resolveStoredModelOverride(params: {
     sessionKey: params.sessionKey,
     parentSessionKey: params.parentSessionKey,
   });
-  if (!parentKey || !params.sessionStore) {
+  if (!parentKey) {
     return null;
   }
-  const parentEntry = params.sessionStore[parentKey];
+  const parentEntry = params.loadSessionEntry?.(parentKey) ?? params.sessionStore?.[parentKey];
   const normalizedParentOverride = normalizeStoredOverrideModel({
     providerOverride: parentEntry?.providerOverride,
     modelOverride: parentEntry?.modelOverride,

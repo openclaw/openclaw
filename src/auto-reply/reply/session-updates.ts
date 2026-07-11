@@ -4,7 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import { resolveCompactionSessionFile, type SessionEntry } from "../../config/sessions.js";
-import { patchSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -13,6 +13,7 @@ import {
 import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
 import { logVerbose } from "../../globals.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
@@ -27,27 +28,32 @@ async function persistSessionEntryUpdate(params: {
   sessionKey?: string;
   storePath?: string;
   nextEntry: SessionEntry;
-}) {
-  if (params.sessionEntryHandle) {
-    params.sessionEntryHandle.replaceCurrent(params.nextEntry);
-  } else if (params.sessionStore && params.sessionKey) {
-    params.sessionStore[params.sessionKey] = {
-      ...params.sessionStore[params.sessionKey],
-      ...params.nextEntry,
-    };
-  } else {
-    return;
+  updates: Partial<SessionEntry>;
+}): Promise<SessionEntry> {
+  if (!params.sessionEntryHandle && (!params.sessionStore || !params.sessionKey)) {
+    return params.nextEntry;
   }
+  let persistedEntry = params.nextEntry;
   if (!params.storePath || !params.sessionKey) {
-    return;
+    if (params.sessionEntryHandle) {
+      params.sessionEntryHandle.replaceCurrent(persistedEntry);
+    } else if (params.sessionStore && params.sessionKey) {
+      params.sessionStore[params.sessionKey] = persistedEntry;
+    }
+    return persistedEntry;
   }
-  await upsertSessionEntry(
-    {
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-    },
-    params.nextEntry,
-  );
+  persistedEntry =
+    (await patchSessionEntry(
+      { storePath: params.storePath, sessionKey: params.sessionKey },
+      () => params.updates,
+      { fallbackEntry: params.nextEntry },
+    )) ?? persistedEntry;
+  if (params.sessionEntryHandle) {
+    params.sessionEntryHandle.replaceCurrent(persistedEntry);
+  } else if (params.sessionStore) {
+    params.sessionStore[params.sessionKey] = persistedEntry;
+  }
+  return persistedEntry;
 }
 
 function emitCompactionSessionLifecycleHooks(params: {
@@ -91,7 +97,9 @@ function emitCompactionSessionLifecycleHooks(params: {
       transcriptArchived: transcript.transcriptArchived,
       nextSessionId: params.nextEntry.sessionId,
     });
-    void hookRunner.runSessionEnd(payload.event, payload.context).catch((err: unknown) => {
+    void runWithGatewayIndependentRootWorkContinuation(async () => {
+      await hookRunner.runSessionEnd(payload.event, payload.context);
+    }).catch((err: unknown) => {
       logVerbose(`session_end hook failed: ${String(err)}`);
     });
   }
@@ -103,7 +111,9 @@ function emitCompactionSessionLifecycleHooks(params: {
       cfg: params.cfg,
       resumedFrom: params.previousEntry.sessionId,
     });
-    void hookRunner.runSessionStart(payload.event, payload.context).catch((err: unknown) => {
+    void runWithGatewayIndependentRootWorkContinuation(async () => {
+      await hookRunner.runSessionStart(payload.event, payload.context);
+    }).catch((err: unknown) => {
       logVerbose(`session_start hook failed: ${String(err)}`);
     });
   }
@@ -198,12 +208,18 @@ export async function ensureSkillSnapshot(params: {
       systemSent: true,
       skillsSnapshot: skillSnapshot,
     };
-    await persistSessionEntryUpdate({
+    nextEntry = await persistSessionEntryUpdate({
       sessionEntryHandle,
       sessionStore,
       sessionKey,
       storePath,
       nextEntry,
+      updates: {
+        sessionId: nextEntry.sessionId,
+        updatedAt: nextEntry.updatedAt,
+        systemSent: nextEntry.systemSent,
+        skillsSnapshot: nextEntry.skillsSnapshot,
+      },
     });
     systemSent = true;
   }
@@ -234,12 +250,17 @@ export async function ensureSkillSnapshot(params: {
       updatedAt: Date.now(),
       skillsSnapshot,
     };
-    await persistSessionEntryUpdate({
+    nextEntry = await persistSessionEntryUpdate({
       sessionEntryHandle,
       sessionStore,
       sessionKey,
       storePath,
       nextEntry,
+      updates: {
+        sessionId: nextEntry.sessionId,
+        updatedAt: nextEntry.updatedAt,
+        skillsSnapshot: nextEntry.skillsSnapshot,
+      },
     });
   }
 

@@ -2,6 +2,8 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { messageAction, postbackAction, uriAction } from "./actions.js";
 import {
   createActionCard,
   createImageCard,
@@ -62,22 +64,17 @@ function parseActions(actionsStr: string | undefined): CardAction[] {
     if (actionData.startsWith("http://") || actionData.startsWith("https://")) {
       results.push({
         label,
-        action: { type: "uri", label: label.slice(0, 20), uri: actionData },
+        action: uriAction(label, actionData),
       });
     } else if (actionData.includes("=")) {
       results.push({
         label,
-        action: {
-          type: "postback",
-          label: label.slice(0, 20),
-          data: actionData.slice(0, 300),
-          displayText: label,
-        },
+        action: postbackAction(label, actionData, label),
       });
     } else {
       results.push({
         label,
-        action: { type: "message", label: label.slice(0, 20), text: actionData },
+        action: messageAction(label, actionData),
       });
     }
   }
@@ -191,7 +188,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const bubble = createInfoCard(title, body, footer);
             return buildLineReply({
               flexMessage: {
-                altText: `${title}: ${body}`.slice(0, 400),
+                altText: truncateUtf16Safe(`${title}: ${body}`, 400),
                 contents: bubble,
               },
             });
@@ -206,7 +203,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const bubble = createImageCard(imageUrl, title, caption);
             return buildLineReply({
               flexMessage: {
-                altText: `${title}: ${caption}`.slice(0, 400),
+                altText: truncateUtf16Safe(`${title}: ${caption}`, 400),
                 contents: bubble,
               },
             });
@@ -223,7 +220,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             });
             return buildLineReply({
               flexMessage: {
-                altText: `${title}: ${body}`.slice(0, 400),
+                altText: truncateUtf16Safe(`${title}: ${body}`, 400),
                 contents: bubble,
               },
             });
@@ -240,7 +237,10 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const bubble = createListCard(title, items);
             return buildLineReply({
               flexMessage: {
-                altText: `${title}: ${items.map((i) => i.title).join(", ")}`.slice(0, 400),
+                altText: truncateUtf16Safe(
+                  `${title}: ${items.map((i) => i.title).join(", ")}`,
+                  400,
+                ),
                 contents: bubble,
               },
             });
@@ -261,8 +261,8 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const bubble = createReceiptCard({ title, items, total, footer });
             return buildLineReply({
               flexMessage: {
-                altText: `${title}: ${items.map((i) => `${i.name} ${i.value}`).join(", ")}`.slice(
-                  0,
+                altText: truncateUtf16Safe(
+                  `${title}: ${items.map((i) => `${i.name} ${i.value}`).join(", ")}`,
                   400,
                 ),
                 contents: bubble,

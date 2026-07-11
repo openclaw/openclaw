@@ -11,6 +11,7 @@ import type { InteractiveReply, MessagePresentationAction } from "../../interact
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
 import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../../plugins/types.js";
 import type { ReplyPayload } from "../types.js";
+import { rejectNonOwnerCommand } from "./command-gates.js";
 import {
   buildCurrentOpenClawCliCommand,
   buildCurrentOpenClawCliExecEnv,
@@ -19,6 +20,7 @@ import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
+  resolveCommandExecApprovalRoute,
   resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
@@ -95,6 +97,10 @@ async function handleDiagnosticsCommandWithDeps(
     );
     return { shouldContinue: false };
   }
+  const nonOwner = rejectNonOwnerCommand(params, DIAGNOSTICS_COMMAND);
+  if (nonOwner) {
+    return nonOwner;
+  }
   if (isCodexDiagnosticsConfirmationAction(args)) {
     const codexResult = await executeCodexDiagnosticsAddon(params, args);
     const reply = codexResult
@@ -110,14 +116,7 @@ async function handleDiagnosticsCommandWithDeps(
   }
 
   if (params.isGroup) {
-    const targets = await deps.resolvePrivateDiagnosticsTargets(params);
-    if (targets.length === 0) {
-      return {
-        shouldContinue: false,
-        reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
-      };
-    }
-    const privateTarget = targets[0];
+    const privateTarget = (await deps.resolvePrivateDiagnosticsTargets(params))[0];
     if (!privateTarget) {
       return {
         shouldContinue: false,
@@ -134,17 +133,7 @@ async function handleDiagnosticsCommandWithDeps(
         reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_ACK },
       };
     }
-    const delivered = await deps.deliverPrivateDiagnosticsReply({
-      commandParams: params,
-      targets: [privateTarget],
-      reply: privateReply,
-    });
-    return {
-      shouldContinue: false,
-      reply: {
-        text: delivered ? DIAGNOSTICS_PRIVATE_ROUTE_ACK : DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE,
-      },
-    };
+    return await deliverGroupDiagnosticsReplyPrivately(deps, params, privateReply, privateTarget);
   }
 
   const reply = await buildDiagnosticsReply(deps, params, args);
@@ -177,16 +166,10 @@ async function deliverGroupDiagnosticsReplyPrivately(
   deps: DiagnosticsCommandDeps,
   params: HandleCommandsParams,
   reply: ReplyPayload,
+  privateTarget?: PrivateCommandRouteTarget,
 ) {
-  const targets = await deps.resolvePrivateDiagnosticsTargets(params);
-  if (targets.length === 0) {
-    return {
-      shouldContinue: false,
-      reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
-    };
-  }
-  const privateTarget = targets[0];
-  if (!privateTarget) {
+  const target = privateTarget ?? (await deps.resolvePrivateDiagnosticsTargets(params))[0];
+  if (!target) {
     return {
       shouldContinue: false,
       reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
@@ -194,7 +177,7 @@ async function deliverGroupDiagnosticsReplyPrivately(
   }
   const delivered = await deps.deliverPrivateDiagnosticsReply({
     commandParams: params,
-    targets: [privateTarget],
+    targets: [target],
     reply,
   });
   return {
@@ -292,7 +275,6 @@ async function requestGatewayDiagnosticsExportApproval(
       sessionKey: params.sessionKey,
       config: params.cfg,
     });
-  const messageThreadId = readCommandMessageThreadId(params);
   const command = buildGatewayDiagnosticsExportJsonCommand();
   try {
     const execTool = deps.createExecTool({
@@ -311,16 +293,10 @@ async function requestGatewayDiagnosticsExportApproval(
       sessionKey: params.sessionKey,
       mainKey: params.cfg.session?.mainKey,
       sessionScope: params.cfg.session?.scope,
-      messageProvider: options.privateApprovalTarget?.channel ?? params.command.channel,
-      currentChannelId: options.privateApprovalTarget?.to ?? readCommandDeliveryTarget(params),
-      currentThreadTs: options.privateApprovalTarget
-        ? options.privateApprovalTarget.threadId == null
-          ? undefined
-          : String(options.privateApprovalTarget.threadId)
-        : messageThreadId,
-      accountId: options.privateApprovalTarget
-        ? (options.privateApprovalTarget.accountId ?? undefined)
-        : (params.ctx.AccountId ?? undefined),
+      ...resolveCommandExecApprovalRoute({
+        commandParams: params,
+        privateApprovalTarget: options.privateApprovalTarget,
+      }),
       notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
       notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });

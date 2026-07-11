@@ -32,7 +32,7 @@ import {
   toSessionDisplayRows,
 } from "./sessions-table.js";
 
-const ACTION_PAD = 16;
+const ACTION_PAD = "repair-session-file".length;
 
 type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
   action: ReturnType<typeof resolveSessionCleanupAction>;
@@ -56,8 +56,14 @@ function formatCleanupActionCell(
   if (action === "keep") {
     return theme.muted(label);
   }
+  if (action === "repair-session-file") {
+    return theme.accentBright(label);
+  }
   if (action === "prune-missing") {
     return theme.error(label);
+  }
+  if (action === "prune-model-run") {
+    return theme.warn(label);
   }
   if (action === "prune-stale") {
     return theme.warn(label);
@@ -73,7 +79,9 @@ function formatCleanupActionCell(
 
 function buildActionRows(params: {
   beforeStore: Parameters<typeof toSessionDisplayRows>[0];
+  repairedKeys?: Set<string>;
   missingKeys: Set<string>;
+  modelRunPrunedKeys: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
@@ -86,7 +94,9 @@ function buildActionRows(params: {
       label: params.beforeStore[row.key]?.label,
       action: resolveSessionCleanupAction({
         key: row.key,
+        repairedKeys: params.repairedKeys ?? new Set<string>(),
         missingKeys: params.missingKeys,
+        modelRunPrunedKeys: params.modelRunPrunedKeys,
         staleKeys: params.staleKeys,
         cappedKeys: params.cappedKeys,
         budgetEvictedKeys: params.budgetEvictedKeys,
@@ -106,7 +116,7 @@ function buildLabelSummaries(actionRows: SessionCleanupActionRow[]): SessionClea
       summary = { label, kept: 0, pruned: 0 };
       summaryByLabel.set(label, summary);
     }
-    if (actionRow.action === "keep") {
+    if (actionRow.action === "keep" || actionRow.action === "repair-session-file") {
       summary.kept += 1;
     } else {
       summary.pruned += 1;
@@ -152,8 +162,10 @@ function renderStoreDryRunPlan(params: {
   params.runtime.log(
     `Entries: ${params.summary.beforeCount} -> ${params.summary.afterCount} (remove ${params.summary.beforeCount - params.summary.afterCount})`,
   );
+  params.runtime.log(`Would repair sessionFile metadata: ${params.summary.repaired}`);
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
   params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
+  params.runtime.log(`Would prune stale model-run probes: ${params.summary.modelRunPruned}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
   if (params.summary.unreferencedArtifacts?.scannedFiles) {

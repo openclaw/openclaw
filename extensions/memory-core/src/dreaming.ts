@@ -27,6 +27,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
+import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import type { NarrativePhaseData } from "./dreaming-narrative.js";
 import {
   formatErrorMessage,
@@ -570,8 +571,8 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
     import("./short-term-promotion.js"),
   ]);
   for (const workspaceDir of workspaces) {
+    const sweepNowMs = Date.now();
     try {
-      const sweepNowMs = Date.now();
       await runDreamingSweepPhases({
         workspaceDir,
         pluginConfig,
@@ -581,7 +582,15 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         detachNarratives,
         nowMs: sweepNowMs,
       });
+    } catch (err) {
+      failedWorkspaces += 1;
+      params.logger.error(
+        `memory-core: dreaming sweep failed for workspace ${workspaceDir}: ${formatErrorMessage(err)}`,
+      );
+      continue;
+    }
 
+    try {
       const reportLines: string[] = [];
       const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
       if (repair.changed) {
@@ -608,7 +617,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             ? candidates
                 .map(
                   (candidate) =>
-                    `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} queries=${candidate.uniqueQueries} components={freq=${candidate.components.frequency.toFixed(3)},rel=${candidate.components.relevance.toFixed(3)},div=${candidate.components.diversity.toFixed(3)},rec=${candidate.components.recency.toFixed(3)},cons=${candidate.components.consolidation.toFixed(3)},concept=${candidate.components.conceptual.toFixed(3)}}`,
+                    `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} queries=${candidate.uniqueQueries} components={freq=${candidate.components.frequency.toFixed(3)},rel=${candidate.components.relevance.toFixed(3)},div=${candidate.components.diversity.toFixed(3)},rec=${candidate.components.recency.toFixed(3)},cons=${candidate.components.consolidation.toFixed(3)},concept=${candidate.components.conceptual.toFixed(3)}}`,
                 )
                 .join(" | ")
             : "none";
@@ -636,7 +645,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             ? applied.appliedCandidates
                 .map(
                   (candidate) =>
-                    `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount}`,
+                    `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount}`,
                 )
                 .join(" | ")
             : "none";
@@ -691,9 +700,18 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
       }
     } catch (err) {
       failedWorkspaces += 1;
+      const error = formatErrorMessage(err);
       params.logger.error(
-        `memory-core: dreaming promotion failed for workspace ${workspaceDir}: ${formatErrorMessage(err)}`,
+        `memory-core: dreaming promotion failed for workspace ${workspaceDir}: ${error}`,
       );
+      await appendFailedDreamingEvent({
+        workspaceDir,
+        phase: "deep",
+        error,
+        storageMode: params.config.storage?.mode ?? "separate",
+        nowMs: sweepNowMs,
+        logger: params.logger,
+      });
     }
   }
   params.logger.info(

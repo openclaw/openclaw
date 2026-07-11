@@ -9,12 +9,22 @@ import {
   type ThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
+import {
+  collectProviderApiKeysForExecution,
+  executeWithApiKeyRotation,
+} from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  createProviderHttpError,
+  providerOperationRetryConfig,
+  resolveProviderRequestHeaders,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
@@ -151,11 +161,11 @@ function requiresToolCallId(modelId: string): boolean {
 }
 
 function requiresToolCallThoughtSignature(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-3");
+  return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
-  const match = normalizeLowercaseStringOrEmpty(modelId).match(/^gemini(?:-live)?-(\d+)/);
+  const match = normalizeLowercaseStringOrEmpty(modelId).match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
   if (!match) {
     return true;
   }
@@ -478,7 +488,7 @@ function resolveGoogleThinkingConfig(
     }
     return normalizeGoogleThinkingConfig(model.id, config);
   }
-  if (!options?.reasoning) {
+  if (!options?.reasoning || options.reasoning === "off") {
     return getDisabledThinkingConfig(model.id);
   }
   if (isAdaptiveReasoningLevel(options.reasoning)) {
@@ -647,24 +657,17 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
     }
 
     if (msg.role === "toolResult") {
-      const textResult = msg.content
-        .filter(
-          (item): item is Extract<(typeof msg.content)[number], { type: "text" }> =>
-            item.type === "text",
-        )
-        .map((item) => item.text)
-        .join("\n");
+      const textResult = extractToolResultText(msg.content);
       const imageContent = model.input.includes("image")
         ? msg.content.filter(
             (item): item is Extract<(typeof msg.content)[number], { type: "image" }> =>
               item.type === "image",
           )
         : [];
+      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const responseValue = textResult
         ? sanitizeTransportPayloadText(textResult)
-        : imageContent.length > 0
-          ? "(see attached image)"
-          : "";
+        : (mediaPlaceholder ?? "");
       const imageParts = imageContent.map((imageBlock) => ({
         inlineData: {
           mimeType: imageBlock.mimeType,
@@ -777,19 +780,61 @@ function buildGoogleHeaders(
 ): Record<string, string> {
   const authHeaders = apiKey ? parseGeminiAuth(apiKey).headers : undefined;
   return (
-    mergeTransportHeaders(
-      {
-        "Content-Type": "application/json",
-        accept: "text/event-stream",
-      },
-      authHeaders,
-      model.headers,
-      optionHeaders,
-    ) ?? {
+    resolveProviderRequestHeaders({
+      provider: model.provider,
+      api: normalizeGoogleTransportRouteApi(model.api),
+      baseUrl: model.baseUrl,
+      capability: "llm",
+      transport: "stream",
+      defaultHeaders: mergeTransportHeaders(
+        {
+          "Content-Type": "application/json",
+          accept: "text/event-stream",
+        },
+        authHeaders,
+        model.headers,
+      ),
+      callerHeaders: optionHeaders,
+      precedence: "caller-wins",
+    }) ?? {
       "Content-Type": "application/json",
       accept: "text/event-stream",
     }
   );
+}
+
+function isGoogleOauthApiKey(apiKey: string | undefined): boolean {
+  return Boolean(
+    apiKey?.trimStart().startsWith("{") && parseGeminiAuth(apiKey).headers.Authorization,
+  );
+}
+
+function hasGoogleAuthHeader(headers: Record<string, string> | undefined): boolean {
+  return Object.keys(headers ?? {}).some((name) => {
+    const normalized = name.trim().toLowerCase();
+    return normalized === "authorization" || normalized === "x-goog-api-key";
+  });
+}
+
+function collectGoogleTransportApiKeys(params: {
+  kind: CanonicalGoogleTransportApi;
+  model: GoogleTransportModel;
+  options: GoogleTransportOptions | undefined;
+  primaryApiKey: string | undefined;
+}): string[] {
+  if (
+    params.kind !== "google-generative-ai" ||
+    !isOfficialGoogleGenerativeAiBaseUrl(params.model.baseUrl) ||
+    isGoogleOauthApiKey(params.primaryApiKey) ||
+    hasGoogleAuthHeader(params.model.headers) ||
+    hasGoogleAuthHeader(params.options?.headers)
+  ) {
+    return [];
+  }
+  return collectProviderApiKeysForExecution({
+    provider: params.model.provider,
+    primaryApiKey: params.primaryApiKey,
+  });
 }
 
 async function buildGoogleVertexHeaders(
@@ -832,7 +877,8 @@ function isOfficialGoogleGenerativeAiBaseUrl(baseUrl: string | undefined): boole
     return true;
   }
   try {
-    return new URL(baseUrl).hostname === "generativelanguage.googleapis.com";
+    const url = new URL(baseUrl);
+    return url.protocol === "https:" && url.hostname === "generativelanguage.googleapis.com";
   } catch {
     return false;
   }
@@ -1248,22 +1294,40 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           params = nextParams as GoogleGenerateContentRequest;
         }
         const requestUrl = buildGoogleTransportRequestUrl(kind, model, options);
-        const requestHeaders = await buildGoogleTransportHeaders({
-          kind,
-          model,
-          apiKey,
-          optionHeaders: options?.headers,
-          fetchImpl: (options as { fetch?: typeof fetch } | undefined)?.fetch,
-        });
-        const sse = await openGoogleSseChunks({
+        const fetchImpl = (options as { fetch?: typeof fetch } | undefined)?.fetch;
+        const openSse = async (apiKeyForRequest: string | undefined) => {
+          const requestHeaders = await buildGoogleTransportHeaders({
+            kind,
+            model,
+            apiKey: apiKeyForRequest,
+            optionHeaders: options?.headers,
+            fetchImpl,
+          });
+          return await openGoogleSseChunks({
+            kind,
+            model,
+            options,
+            guardedFetch,
+            url: requestUrl,
+            headers: requestHeaders,
+            request: params,
+          });
+        };
+        const apiKeys = collectGoogleTransportApiKeys({
           kind,
           model,
           options,
-          guardedFetch,
-          url: requestUrl,
-          headers: requestHeaders,
-          request: params,
+          primaryApiKey: apiKey,
         });
+        const sse =
+          apiKeys.length > 0
+            ? await executeWithApiKeyRotation({
+                provider: model.provider,
+                apiKeys,
+                transientRetry: providerOperationRetryConfig("read"),
+                execute: openSse,
+              })
+            : await openSse(apiKey);
         stream.push({ type: "start", partial: output as never });
         let currentBlockIndex = -1;
         const toolCallBlocksById = new Map<
@@ -1404,7 +1468,12 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           }
           if (typeof candidate?.finishReason === "string") {
             output.stopReason = mapStopReasonString(candidate.finishReason);
-            if (output.content.some((block) => block.type === "toolCall")) {
+            // MAX_TOKENS can leave a complete-looking partial call. Only a normal
+            // Google stop may promote parsed calls into an executable tool-use turn.
+            if (
+              output.stopReason === "stop" &&
+              output.content.some((block) => block.type === "toolCall")
+            ) {
               output.stopReason = "toolUse";
             }
           }

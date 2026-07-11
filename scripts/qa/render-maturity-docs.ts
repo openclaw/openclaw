@@ -299,6 +299,7 @@ function scoreSummary(
   title: string,
   value: QaMaturityScoreObject | undefined,
   description: string,
+  details: readonly string[] = [],
 ): string[] {
   const score = scorePercent(value);
   const displayScore = score === undefined ? "-" : `${score}%`;
@@ -313,6 +314,7 @@ function scoreSummary(
     '  <div className="maturity-summary-meta">',
     `    ${maturityLabelPill(value?.label ?? "Unscored")}`,
     `    <span>${markdownEscape(description)}</span>`,
+    ...details.map((detail) => `    <span>${markdownEscape(detail)}</span>`),
     "  </div>",
     "</div>",
   ];
@@ -546,11 +548,10 @@ function renderScoreBands(): string[] {
     "## Score bands",
     "",
     '<div className="maturity-band-list">',
-    ...QA_MATURITY_SCORE_LABEL_BANDS.toReversed()
-      .map(
-        ([label, low, high]) =>
-          `  <div className="maturity-band ${maturityBandClass(label)}"><span className="maturity-band-title">${maturityLabelPill(label)}</span><span>${low}-${high}%</span></div>`,
-      ),
+    ...QA_MATURITY_SCORE_LABEL_BANDS.toReversed().map(
+      ([label, low, high]) =>
+        `  <div className="maturity-band ${maturityBandClass(label)}"><span className="maturity-band-title">${maturityLabelPill(label)}</span><span>${low}-${high}%</span></div>`,
+    ),
     "</div>",
     "",
   ];
@@ -645,6 +646,12 @@ function checkSetTitle(profile: string): string {
 
 function resultCountsText(statuses: StatusCounts): string {
   const parts = [`${statuses.pass} passed`];
+  if (statuses.fail > 0) {
+    parts.push(`${statuses.fail} failed`);
+  }
+  if (statuses.blocked > 0) {
+    parts.push(`${statuses.blocked} blocked`);
+  }
   if (statuses.skipped > 0) {
     parts.push(`${statuses.skipped} skipped`);
   }
@@ -747,7 +754,7 @@ function deriveCoverageScores(
   for (const report of coverageSummary.scorecard?.categoryReports ?? []) {
     categories.set(
       qaMaturityCoverageCategoryKey(report.surfaceId, report.name),
-      qaMaturityScoreObjectForScore(Math.round(report.features.fulfillmentPercent)),
+      qaMaturityScoreObjectForScore(Math.round(report.coverageIds.fulfillmentPercent)),
     );
   }
 
@@ -882,7 +889,7 @@ function renderEvidenceSection(
       `    <span className="maturity-evidence-title">${markdownEscape(checkSetTitle(item.profile))}</span>`,
       `    <span>${markdownEscape(item.generatedAt)}</span>`,
       `    <span>${item.entryCount} checks - ${markdownEscape(resultCountsText(item.statuses))}</span>`,
-      `    <span>${markdownEscape(countText(scorecard?.categories))} areas - ${markdownEscape(countText(scorecard?.features))} capabilities</span>`,
+      `    <span>${markdownEscape(countText(scorecard?.categories))} areas - ${markdownEscape(countText(scorecard?.features))} features - ${markdownEscape(countText(scorecard?.coverageIds))} coverage IDs</span>`,
       "  </div>",
     );
   }
@@ -907,14 +914,11 @@ function renderEvidenceSection(
     );
     for (const [surfaceId, rows] of grouped) {
       const surfaceName = surfaceNames.get(surfaceId) ?? familyTitle(surfaceId);
-      const statusCounts = rows.reduce<Record<string, number>>(
-        (counts, row) => {
-          counts[readinessStatusText(row.category.status)] =
-            (counts[readinessStatusText(row.category.status)] ?? 0) + 1;
-          return counts;
-        },
-        {},
-      );
+      const statusCounts = rows.reduce<Record<string, number>>((counts, row) => {
+        counts[readinessStatusText(row.category.status)] =
+          (counts[readinessStatusText(row.category.status)] ?? 0) + 1;
+        return counts;
+      }, {});
       const summary = Object.entries(statusCounts)
         .map(([status, count]) => `${count} ${status.toLowerCase()}`)
         .join(" / ");
@@ -922,7 +926,7 @@ function renderEvidenceSection(
         `  <Accordion title="${markdownEscape(surfaceName)} - ${rows.length} areas">`,
         `    <p className="maturity-readiness-summary">${markdownEscape(summary)}</p>`,
         '    <div className="maturity-readiness-list">',
-        '      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>',
+        '      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>',
       );
       for (const { item, category } of rows) {
         const status = readinessStatusText(category.status);
@@ -932,7 +936,7 @@ function renderEvidenceSection(
           `          <span className="maturity-readiness-title">${markdownEscape(category.name)}</span>`,
           `          <span className="maturity-readiness-status maturity-readiness-status-${markdownSlug(status)}">${markdownEscape(status)} - ${markdownEscape(checkSetTitle(item.profile))}</span>`,
           "        </div>",
-          `        <span>${markdownEscape(countText(category.features))}</span>`,
+          `        <span>${markdownEscape(countText(category.features))} / ${markdownEscape(countText(category.coverageIds))}</span>`,
           `        <span>${markdownEscape(followUpText(category.missingCoverageIds))}</span>`,
           "      </div>",
         );
@@ -962,6 +966,7 @@ function renderMaturityScorecard({
   const surfaceAverage = coverage.rollups.surface_average;
   const qualityAverage = scores.rollups.surface_average.quality;
   const completenessAverage = scores.rollups.surface_average.completeness;
+  const maturityAverage = averageScores([qualityAverage, completenessAverage]);
   const lines = [
     ...frontmatter(
       "Maturity scorecard",
@@ -983,18 +988,17 @@ function renderMaturityScorecard({
     "## At a glance",
     "",
     '<div className="maturity-summary-grid">',
-    ...indentMarkdown(scoreSummary("Coverage", surfaceAverage, "QA profile evidence"), 2),
     ...indentMarkdown(
-      scoreSummary("Quality", qualityAverage, "Reliability and operator confidence"),
-      2,
-    ),
-    ...indentMarkdown(
-      scoreSummary("Completeness", completenessAverage, "Expected workflow coverage"),
+      scoreSummary("Maturity score", maturityAverage, "Quality + completeness", [
+        `Coverage ${scoreLabel(surfaceAverage)}`,
+        `Quality ${scoreLabel(qualityAverage)}`,
+        `Completeness ${scoreLabel(completenessAverage)}`,
+      ]),
       2,
     ),
     "</div>",
     "",
-    'Coverage is deliberately evidence-led: an area does not become "ready" just because the implementation exists.',
+    'Coverage is deliberately evidence-led: an area does not become "ready" just because the implementation exists. It is not an input to the maturity score, but OpenClaw aims to keep end-to-end coverage above 90% for mature Stable-or-better features over time.',
     "",
     ...renderScoreBands(),
   ];

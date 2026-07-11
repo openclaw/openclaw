@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
+import { parseSessionFileEntriesWithWarnings } from "../agents/sessions/session-file-parser.js";
 import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/session-manager.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -72,56 +73,6 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function isSessionFileEntry(value: unknown): value is FileEntry {
-  if (!isRecord(value) || typeof value.type !== "string") {
-    return false;
-  }
-  if (value.type !== "message") {
-    return true;
-  }
-  const message = value.message;
-  return isRecord(message) && typeof message.role === "string";
-}
-
-function parseSessionEntries(content: string): {
-  entries: FileEntry[];
-  warnings: JsonlParseWarning[];
-  rowByEntry: Map<FileEntry, number>;
-} {
-  const entries: FileEntry[] = [];
-  const warnings: JsonlParseWarning[] = [];
-  const rowByEntry = new Map<FileEntry, number>();
-  const rows = content.split(/\r?\n/u);
-  for (const [index, rawLine] of rows.entries()) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      if (!isSessionFileEntry(parsed)) {
-        warnings.push({
-          source: "session",
-          code: "invalid-session-row",
-          row: index + 1,
-          message: "Skipped a session JSONL row that is not a session entry object.",
-        });
-        continue;
-      }
-      entries.push(parsed);
-      rowByEntry.set(parsed, index + 1);
-    } catch {
-      warnings.push({
-        source: "session",
-        code: "invalid-session-json",
-        row: index + 1,
-        message: "Skipped a session JSONL row that is not valid JSON.",
-      });
-    }
-  }
-  return { entries, warnings, rowByEntry };
-}
-
 function migrateLegacySessionEntries(entries: FileEntry[]): void {
   const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
   const version = header?.version ?? 1;
@@ -175,9 +126,18 @@ async function readSessionBranch(filePath: string): Promise<{
 }> {
   const {
     entries: fileEntries,
-    warnings,
+    warnings: parseWarnings,
     rowByEntry,
-  } = parseSessionEntries(await fsp.readFile(filePath, "utf8"));
+  } = parseSessionFileEntriesWithWarnings(await fsp.readFile(filePath, "utf8"));
+  const warnings: JsonlParseWarning[] = parseWarnings.map((warning) => ({
+    source: "session",
+    code: warning.code,
+    row: warning.row,
+    message:
+      warning.code === "invalid-session-json"
+        ? "Skipped a session JSONL row that is not valid JSON."
+        : "Skipped a session JSONL row that is not a session entry object.",
+  }));
   migrateLegacySessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
@@ -185,9 +145,7 @@ async function readSessionBranch(filePath: string): Promise<{
     (entry): entry is SessionEntry =>
       entry.type !== "session" &&
       isCanonicalSessionTranscriptEntry(entry) &&
-      typeof (entry as { id?: unknown }).id === "string" &&
-      (typeof (entry as { timestamp?: unknown }).timestamp === "string" ||
-        typeof (entry as { timestamp?: unknown }).timestamp === "number"),
+      typeof (entry as { id?: unknown }).id === "string",
   );
   const tree = scanSessionTranscriptTree(fileEntries);
   if (!tree.hasLeafUpdate) {
@@ -864,6 +822,7 @@ function buildArtifactsCapture(params: {
       runtimeArtifacts?.timedOutDuringCompaction ?? runtimeEnd?.timedOutDuringCompaction,
     timedOutDuringToolExecution:
       runtimeArtifacts?.timedOutDuringToolExecution ?? runtimeEnd?.timedOutDuringToolExecution,
+    timedOutByRunBudget: runtimeArtifacts?.timedOutByRunBudget ?? runtimeEnd?.timedOutByRunBudget,
     promptError:
       runtimeArtifacts?.promptError ?? runtimeEnd?.promptError ?? runtimeCompletion?.promptError,
     promptErrorSource: runtimeArtifacts?.promptErrorSource ?? runtimeCompletion?.promptErrorSource,

@@ -57,11 +57,10 @@ jobs:
           BASE_IMAGE="openclaw-sandbox-smoke-base:bookworm-slim" \
             TARGET_IMAGE="openclaw-sandbox-common-smoke:bookworm-slim" \
             PACKAGES="ca-certificates" \
-            INSTALL_PNPM=0 \
             INSTALL_BUN=0 \
             INSTALL_BREW=0 \
             FINAL_USER=sandbox \
             scripts/sandbox-common-setup.sh
 
-          u="$(timeout --kill-after=30s 2m docker run --rm openclaw-sandbox-common-smoke:bookworm-slim sh -lc 'id -un')"
-          test "$u" = "sandbox"
+          timeout --kill-after=30s 2m docker run --rm openclaw-sandbox-common-smoke:bookworm-slim sh -lc \
+            'set -e; test "$(id -un)" = sandbox; node --version; pnpm --version'

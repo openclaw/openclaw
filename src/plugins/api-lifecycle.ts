@@ -25,7 +25,7 @@ const PLUGIN_API_METHOD_POLICIES: Partial<Record<PluginApiMethodName, PluginApiL
 };
 
 /** Returns lifecycle policy for one plugin API method name. */
-export function getPluginApiMethodLifecyclePolicy(
+function getPluginApiMethodLifecyclePolicy(
   methodName: string,
 ): PluginApiLifecyclePolicy | undefined {
   return PLUGIN_API_METHOD_POLICIES[methodName as PluginApiMethodName];

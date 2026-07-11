@@ -11,7 +11,7 @@ Generated locale trees and live translation memory now live in the publish repo:
 
 - English docs are authored in `openclaw/openclaw`.
 - The source docs tree lives under `docs/`.
-- The source repo no longer keeps committed generated locale trees such as `docs/zh-CN/**`, `docs/zh-TW/**`, `docs/ja-JP/**`, `docs/es/**`, `docs/pt-BR/**`, `docs/ko/**`, `docs/de/**`, `docs/fr/**`, `docs/ar/**`, `docs/it/**`, `docs/vi/**`, `docs/nl/**`, `docs/fa/**`, `docs/tr/**`, `docs/uk/**`, `docs/id/**`, `docs/pl/**`, or `docs/th/**`.
+- The source repo no longer keeps committed generated locale trees such as `docs/zh-CN/**`, `docs/zh-TW/**`, `docs/ja-JP/**`, `docs/es/**`, `docs/pt-BR/**`, `docs/ko/**`, `docs/de/**`, `docs/fr/**`, `docs/hi/**`, `docs/ar/**`, `docs/it/**`, `docs/vi/**`, `docs/nl/**`, `docs/fa/**`, `docs/ru/**`, `docs/tr/**`, `docs/uk/**`, `docs/id/**`, `docs/pl/**`, or `docs/th/**`.
 
 ## End-to-end flow
 
@@ -32,10 +32,10 @@ Generated locale trees and live translation memory now live in the publish repo:
 
 ## Locale visibility
 
-- Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `ar`, `it`, `tr`, `uk`, `id`, `pl`, `th`, `vi`, `nl`, and `fa`.
+- Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `hi`, `ar`, `it`, `vi`, `nl`, `fa`, `ru`, `tr`, `uk`, `id`, `pl`, and `th`.
 - Docs translation workflows generate the same non-English locale set in `openclaw/docs`.
-- The Mintlify docs language picker can expose only the locales accepted by Mintlify `navigation.languages`; today that includes Vietnamese (`vi`) and Dutch (`nl`), but not Thai (`th`) or Persian (`fa`).
-- Do not treat missing `th` or `fa` entries in generated `docs/docs.json` as a pipeline failure. Verify their generated folders in `openclaw/docs` instead.
+- The Mintlify docs language picker can expose only the locales accepted by Mintlify `navigation.languages`; Russian (`ru`) and Hindi (`hi`) are now included in the publish configuration.
+- Do not treat locale visibility in generated `docs/docs.json` as proof that translation artifacts exist. Verify each generated locale folder and its translation memory in `openclaw/docs`.
 
 ## Files in this folder
 

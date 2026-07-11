@@ -416,13 +416,6 @@ function projectSessionExtensionValueForSlot(params: {
   return copyJsonValue(projected);
 }
 
-export async function projectPluginSessionExtensions(params: {
-  sessionKey: string;
-  entry: SessionEntry;
-}): Promise<PluginSessionExtensionProjection[]> {
-  return collectPluginSessionExtensionProjections(params);
-}
-
 function collectPluginSessionExtensionProjections(params: {
   sessionKey: string;
   entry: SessionEntry;

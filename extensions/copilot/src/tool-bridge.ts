@@ -57,9 +57,9 @@ export interface CopilotSessionHolder {
  * fixtures may omit this field entirely and fall back to the flat
  * fields below for minimal-config wiring.
  */
-export type CopilotToolAttemptParams = Partial<EmbeddedRunAttemptParams>;
+type CopilotToolAttemptParams = Partial<EmbeddedRunAttemptParams>;
 
-export type CopilotToolCompletion = {
+type CopilotToolCompletion = {
   toolName: string;
   toolCallId: string;
   args: Record<string, unknown>;
@@ -69,6 +69,13 @@ export type CopilotToolCompletion = {
 };
 
 export interface CopilotToolBridgeInput {
+  allowModelTools?: boolean;
+  /** Invalidates screenshot-bound computer actions after context compaction. */
+  computerContextEpoch?: {
+    value: number;
+    frameToolCallId?: string;
+    frameImageIdentity?: string;
+  };
   modelProvider: string;
   modelId: string;
   agentId: string;
@@ -134,13 +141,13 @@ export interface CopilotToolBridgeInput {
   }) => void | Promise<void>;
 }
 
-export interface CopilotToolBridge {
+interface CopilotToolBridge {
   cleanup?: () => void;
   sdkTools: SdkTool[];
   sourceTools: AnyAgentTool[];
 }
 
-export const SUPPORTED_TOOL_PROVIDERS: ReadonlySet<string> = new Set(["github-copilot"]);
+const SUPPORTED_TOOL_PROVIDERS: ReadonlySet<string> = new Set(["github-copilot"]);
 const BASE_COPILOT_CODING_TOOL_NAMES = new Set(["edit", "read", "write"]);
 const SHELL_COPILOT_CODING_TOOL_NAMES = new Set(["apply_patch", "exec", "process"]);
 
@@ -151,7 +158,7 @@ export function supportsModelTools(modelProvider: string): boolean {
 export async function createCopilotToolBridge(
   input: CopilotToolBridgeInput,
 ): Promise<CopilotToolBridge> {
-  if (!supportsModelTools(input.modelProvider)) {
+  if (!input.allowModelTools && !supportsModelTools(input.modelProvider)) {
     return { sdkTools: [], sourceTools: [] };
   }
 
@@ -192,6 +199,8 @@ export async function createCopilotToolBridge(
     executeTool: (toolParams) => executeCatalogTool(input, toolParams),
     forceMessageTool: shouldForceCopilotMessageTool(attemptParams),
     isRawModelRun: isCopilotRawModelRun(attemptParams),
+    modelId: input.modelId,
+    modelProvider: input.modelProvider,
     modelToolsEnabled: true,
     prompt: attemptParams.prompt,
     runId: attemptParams.runId,
@@ -230,7 +239,9 @@ export async function createCopilotToolBridge(
     sourceTools as AnyAgentTool[],
     toolSurfaceRuntime.runtimeToolAllowlist,
   );
-  const compactedTools = toolSurfaceRuntime.compactTools(allowedSourceTools);
+  const compactedTools = toolSurfaceRuntime.compactTools(allowedSourceTools, {
+    localModelLeanApplied: true,
+  });
   const plannedTools = filterCopilotToolsForConstructionPlan(
     compactedTools.tools,
     effectiveToolPlan.codingToolConstructionPlan,
@@ -350,9 +361,12 @@ function buildOpenClawCodingToolsOptions(
       elevated: a.bashElevated,
     },
     messageProvider: a.messageProvider ?? a.messageChannel,
+    chatType: a.chatType,
     agentAccountId: a.agentAccountId,
     messageTo: a.messageTo,
     messageThreadId: a.messageThreadId,
+    nativeChannelId: a.chatId,
+    messageActionTurnCapability: a.messageActionTurnCapability,
     groupId: a.groupId,
     groupChannel: a.groupChannel,
     groupSpace: a.groupSpace,
@@ -408,6 +422,7 @@ function buildOpenClawCodingToolsOptions(
     enableHeartbeatTool: a.enableHeartbeatTool,
     forceHeartbeatTool: a.forceHeartbeatTool,
     authProfileStore: a.toolAuthProfileStore ?? a.authProfileStore,
+    computerContextEpoch: input.computerContextEpoch,
     // recordToolPrepStage intentionally omitted: copilot does not
     // surface attempt-stage telemetry yet. Codex omits this too.
     onToolOutcome: a.onToolOutcome,

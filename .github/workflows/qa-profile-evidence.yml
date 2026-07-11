@@ -18,7 +18,7 @@ on:
       qa_profile:
         description: Taxonomy QA profile id to run (for example release or all)
         required: true
-        default: release
+        default: all
         type: string
   workflow_call:
     inputs:

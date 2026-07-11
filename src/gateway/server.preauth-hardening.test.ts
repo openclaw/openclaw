@@ -10,6 +10,8 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { tryBeginGatewaySuspendAdmission } from "../process/gateway-work-admission.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
@@ -39,15 +41,9 @@ afterEach(async () => {
 });
 
 function setEnvForTest(name: string, value: string) {
-  const previous = process.env[name];
-  process.env[name] = value;
-  cleanupEnv.push(() => {
-    if (previous === undefined) {
-      delete process.env[name];
-      return;
-    }
-    process.env[name] = previous;
-  });
+  const envSnapshot = captureEnv([name]);
+  setTestEnvValue(name, value);
+  cleanupEnv.push(() => envSnapshot.restore());
 }
 
 function setGatewayAuthNoneForTest() {
@@ -146,6 +142,22 @@ describe("gateway pre-auth hardening", () => {
       await new Promise<void>((resolve, reject) => {
         httpServer.close((err) => (err ? reject(err) : resolve()));
       });
+    }
+  });
+
+  it("rejects core websocket upgrades while suspension admission is closed", async () => {
+    const harness = await createGatewaySuiteHarness();
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+
+    try {
+      await expect(requestUpgradeRejection(harness.port)).resolves.toEqual({
+        status: 503,
+        body: "Gateway websocket admission closed",
+      });
+    } finally {
+      suspension?.release();
+      await harness.close();
     }
   });
 

@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 /**
  * Shared Browser control-server test harness with mocked Chrome, CDP,
  * Playwright, Chrome MCP, config, and media dependencies.
@@ -15,6 +16,7 @@ type HarnessState = {
   reachable: boolean;
   cfgAttachOnly: boolean;
   cfgEvaluateEnabled: boolean;
+  cfgExtraArgs: string[];
   cfgSsrfPolicy: SsrFPolicy | undefined;
   cfgDefaultProfile: string;
   cfgProfiles: Record<
@@ -39,6 +41,7 @@ const state: HarnessState = {
   reachable: false,
   cfgAttachOnly: false,
   cfgEvaluateEnabled: true,
+  cfgExtraArgs: [],
   cfgSsrfPolicy: undefined,
   cfgDefaultProfile: "openclaw",
   cfgProfiles: {},
@@ -69,6 +72,11 @@ function restoreGatewayPortEnv(prevGatewayPort: string | undefined): void {
 /** Sets the mocked browser.evaluateEnabled config flag. */
 export function setBrowserControlServerEvaluateEnabled(enabled: boolean): void {
   state.cfgEvaluateEnabled = enabled;
+}
+
+/** Sets mocked Chrome launch arguments. */
+export function setBrowserControlServerExtraArgs(extraArgs: string[]): void {
+  state.cfgExtraArgs = extraArgs;
 }
 
 /** Sets the mocked Browser SSRF policy. */
@@ -128,6 +136,7 @@ type ExecuteActMockOptions = {
   action: ExecuteActMockAction;
   targetId?: string;
   ssrfPolicy?: unknown;
+  browserProxyMode?: unknown;
   evaluateEnabled?: boolean;
   signal?: AbortSignal;
 };
@@ -156,6 +165,7 @@ function buildActPayload(params: {
   action: ExecuteActMockAction;
   fields: readonly string[];
   ssrfPolicy?: unknown;
+  browserProxyMode?: unknown;
   signal?: AbortSignal;
   includeSsrf?: boolean;
   includeSignal?: boolean;
@@ -164,7 +174,9 @@ function buildActPayload(params: {
     cdpUrl: params.cdpUrl,
     targetId: params.targetId,
     ...pickActionFields(params.action, params.fields),
-    ...(params.includeSsrf ? { ssrfPolicy: params.ssrfPolicy } : {}),
+    ...(params.includeSsrf
+      ? { ssrfPolicy: params.ssrfPolicy, browserProxyMode: params.browserProxyMode }
+      : {}),
     ...(params.includeSignal ? { signal: params.signal } : {}),
   };
 }
@@ -254,14 +266,17 @@ const passThroughActDispatch: Record<string, PassThroughActDispatch> = {
   hover: {
     mock: pwMocks.hoverViaPlaywright,
     fields: ["ref", "selector", "timeoutMs"],
+    includeSsrf: true,
   },
   scrollIntoView: {
     mock: pwMocks.scrollIntoViewViaPlaywright,
     fields: ["ref", "selector", "timeoutMs"],
+    includeSsrf: true,
   },
   drag: {
     mock: pwMocks.dragViaPlaywright,
     fields: ["startRef", "startSelector", "endRef", "endSelector", "timeoutMs"],
+    includeSsrf: true,
   },
   select: {
     mock: pwMocks.selectOptionViaPlaywright,
@@ -293,7 +308,8 @@ pwMocks.executeActViaPlaywright.mockImplementation(
     if (!opts) {
       return {};
     }
-    const { cdpUrl, action, targetId, ssrfPolicy, evaluateEnabled, signal } = opts;
+    const { cdpUrl, action, targetId, ssrfPolicy, browserProxyMode, evaluateEnabled, signal } =
+      opts;
     const spec = passThroughActDispatch[action.kind];
     if (spec) {
       await spec.mock(
@@ -303,6 +319,7 @@ pwMocks.executeActViaPlaywright.mockImplementation(
           action,
           fields: spec.fields,
           ssrfPolicy,
+          browserProxyMode,
           signal,
           includeSsrf: spec.includeSsrf,
           includeSignal: spec.includeSignal,
@@ -320,6 +337,7 @@ pwMocks.executeActViaPlaywright.mockImplementation(
           cdpUrl,
           targetId,
           ssrfPolicy,
+          browserProxyMode,
           fn: action.fn,
           ref: action.ref,
           timeoutMs: action.timeoutMs,
@@ -335,6 +353,7 @@ pwMocks.executeActViaPlaywright.mockImplementation(
           stopOnError: action.stopOnError,
           evaluateEnabled,
           ssrfPolicy,
+          browserProxyMode,
           signal,
         });
         return { results: result.results };
@@ -428,6 +447,7 @@ vi.mock("../config/config.js", async () => {
       browser: {
         enabled: true,
         evaluateEnabled: state.cfgEvaluateEnabled,
+        extraArgs: state.cfgExtraArgs,
         color: "#FF4500",
         attachOnly: state.cfgAttachOnly,
         ssrfPolicy: state.cfgSsrfPolicy ?? { dangerouslyAllowPrivateNetwork: true },
@@ -534,12 +554,7 @@ vi.mock("./screenshot.js", () => ({
   })),
 }));
 
-let browserServerModulePromise: Promise<typeof import("../server.js")> | undefined;
-
-async function loadBrowserServerModule() {
-  browserServerModulePromise ??= import("../server.js");
-  return await browserServerModulePromise;
-}
+const loadBrowserServerModule = createLazyRuntimeModule(() => import("../server.js"));
 
 /** Starts the Browser control server from the mocked config module. */
 export async function startBrowserControlServerFromConfig() {
@@ -555,15 +570,12 @@ export function makeResponse(
   body: unknown,
   init?: { ok?: boolean; status?: number; text?: string },
 ): Response {
-  const ok = init?.ok ?? true;
-  const status = init?.status ?? 200;
-  const text = init?.text ?? "";
-  return {
-    ok,
+  const status = init?.status ?? (init?.ok === false ? 500 : 200);
+  const responseBody = init?.text ?? JSON.stringify(body);
+  return new Response(responseBody, {
     status,
-    json: async () => body,
-    text: async () => text,
-  } as unknown as Response;
+    headers: { "content-type": "application/json" },
+  });
 }
 
 function mockClearAll(obj: Record<string, { mockClear: () => unknown }>) {
@@ -577,6 +589,7 @@ export async function resetBrowserControlServerTestContext(): Promise<void> {
   state.reachable = false;
   state.cfgAttachOnly = false;
   state.cfgEvaluateEnabled = true;
+  state.cfgExtraArgs = [];
   state.cfgSsrfPolicy = undefined;
   state.cfgDefaultProfile = "openclaw";
   state.cfgProfiles = defaultProfilesForState(state.testPort);
