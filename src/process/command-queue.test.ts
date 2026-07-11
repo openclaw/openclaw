@@ -900,6 +900,63 @@ describe("command queue", () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
+  it("tracks a timer-started debounce callback through restart drain settlement", async () => {
+    vi.useFakeTimers();
+    const flushStarted = createDeferred();
+    const allowCommandEnqueue = createDeferred();
+    const delivered: string[] = [];
+    const onError = vi.fn();
+    const debouncer = createInboundDebouncer<{ key: string; value: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      onError,
+      onFlush: async (items) => {
+        flushStarted.resolve();
+        await allowCommandEnqueue.promise;
+        const value = await enqueueCommandInLane(
+          CommandLane.Main,
+          async () => items[0]?.value ?? "",
+        );
+        delivered.push(value);
+      },
+    });
+
+    const inboundRoot = tryBeginGatewayRootWorkAdmission();
+    expect(inboundRoot).not.toBeNull();
+    await inboundRoot?.run(
+      async () => await debouncer.enqueue({ key: "timer-boundary", value: "delivered" }),
+    );
+    inboundRoot?.release();
+    markGatewayDraining();
+
+    // Let the normal timer remove the buffer and enter onFlush before the
+    // global restart sweep snapshots pending debounce work.
+    vi.advanceTimersByTime(10);
+    await flushStarted.promise;
+
+    const restartDrain = runWithGatewayRestartDrainContinuation(
+      async () => await flushAllInboundDebouncers(1_000),
+    );
+    let drainSettled = false;
+    void restartDrain.then(
+      () => {
+        drainSettled = true;
+      },
+      () => {
+        drainSettled = true;
+      },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(drainSettled).toBe(false);
+
+    allowCommandEnqueue.resolve();
+
+    await expect(restartDrain).resolves.toEqual({ drained: true, flushed: 0, remaining: 0 });
+    expect(delivered).toEqual(["delivered"]);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("does not affect already-active tasks after markGatewayDraining", async () => {
     const { task, release } = enqueueBlockedMainTask(async () => "ok");
     markGatewayDraining();

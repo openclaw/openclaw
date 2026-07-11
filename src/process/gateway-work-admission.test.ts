@@ -139,6 +139,28 @@ it("runs an admitted continuation when restart drain wins the handoff race", asy
   expect(getActiveGatewayRootWorkCount()).toBe(0);
 });
 
+it("preserves required ownership for a parentless continuation admitted before restart", async () => {
+  let releaseContinuation = () => {};
+  const continuationGate = new Promise<void>((resolve) => {
+    releaseContinuation = resolve;
+  });
+  let subordinateAdmissionClosed: boolean | undefined;
+  const continuation = runWithGatewayIndependentRootWorkContinuation(async () => {
+    await continuationGate;
+    subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+  });
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+  markGatewayRestartDraining();
+  await runWithGatewayRestartDrainContinuation(async () => {
+    releaseContinuation();
+    await continuation;
+  });
+
+  expect(subordinateAdmissionClosed).toBe(false);
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
 it("does not admit an unrelated continuation through restart drain", async () => {
   markGatewayRestartDraining();
   const ran = vi.fn();

@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { InboundDebounceByProvider } from "../config/types.messages.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 const INBOUND_DEBOUNCER_FLUSH = Symbol.for("openclaw.inboundDebouncerFlush");
@@ -118,9 +119,6 @@ export async function flushAllInboundDebouncers(
 
     const flushPasses = live.map((debouncer) => debouncer[INBOUND_DEBOUNCER_FLUSH](runInContext));
     const flushedThisPass = flushPasses.reduce((count, result) => count + result.flushed, 0);
-    if (flushedThisPass === 0) {
-      return { drained: true, flushed, remaining: 0 };
-    }
     flushed += flushedThisPass;
     const completed = await waitForFlushPass(
       Promise.all(flushPasses.map((result) => result.completion)).then(() => undefined),
@@ -202,6 +200,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   cancelKey: (key: string) => boolean;
 } {
   const buffers = new Map<string, DebounceBuffer<T>>();
+  const inFlightBuffers = new Set<DebounceBuffer<T>>();
   const keyChains = new Map<string, Promise<void>>();
   const defaultDebounceMs = resolveNonNegativeIntegerOption(params.debounceMs, 0);
   const maxTrackedKeys = Math.max(1, Math.trunc(params.maxTrackedKeys ?? DEFAULT_MAX_TRACKED_KEYS));
@@ -267,11 +266,22 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     const ready = new Promise<void>((resolve) => {
       releaseReady = resolve;
     });
+    const previous = keyChains.get(key) ?? Promise.resolve();
+    const next = runWithGatewayIndependentRootWorkContinuation(async () => {
+      await previous.catch(() => undefined);
+      await ready;
+      await task();
+    });
+    const settled = next.catch(() => undefined);
+    keyChains.set(key, settled);
+    const cleanup = () => {
+      if (keyChains.get(key) === settled) {
+        keyChains.delete(key);
+      }
+    };
+    settled.then(cleanup, cleanup);
     return {
-      task: enqueueKeyTask(key, async () => {
-        await ready;
-        await task();
-      }),
+      task: next,
       release: () => {
         if (readyReleased) {
           return;
@@ -295,20 +305,25 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     buffer: DebounceBuffer<T>,
     runInContext?: AsyncContextRunner,
   ) => {
-    if (buffers.get(key) === buffer) {
-      buffers.delete(key);
+    inFlightBuffers.add(buffer);
+    try {
+      if (buffers.get(key) === buffer) {
+        buffers.delete(key);
+      }
+      if (buffer.timeout) {
+        clearTimeout(buffer.timeout);
+        buffer.timeout = null;
+      }
+      // Reserve each key's execution slot as soon as the first buffered item
+      // arrives, so later same-key work cannot overtake a timer-backed flush.
+      if (runInContext) {
+        buffer.runInFlushContext = runInContext;
+      }
+      releaseBuffer(buffer);
+      await buffer.task;
+    } finally {
+      inFlightBuffers.delete(buffer);
     }
-    if (buffer.timeout) {
-      clearTimeout(buffer.timeout);
-      buffer.timeout = null;
-    }
-    // Reserve each key's execution slot as soon as the first buffered item
-    // arrives, so later same-key work cannot overtake a timer-backed flush.
-    if (runInContext) {
-      buffer.runInFlushContext = runInContext;
-    }
-    releaseBuffer(buffer);
-    await buffer.task;
   };
 
   const flushKey = async (key: string) => {
@@ -321,11 +336,16 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
   const flushAll = (runInContext: AsyncContextRunner): InboundDebouncerFlushPass => {
     const pending = [...buffers.entries()];
+    const inFlight = [...inFlightBuffers];
+    for (const buffer of inFlight) {
+      buffer.runInFlushContext ??= runInContext;
+    }
     return {
       flushed: pending.length,
-      completion: Promise.all(
-        pending.map(async ([key, buffer]) => await flushBuffer(key, buffer, runInContext)),
-      ).then(() => undefined),
+      completion: Promise.all([
+        ...pending.map(async ([key, buffer]) => await flushBuffer(key, buffer, runInContext)),
+        ...inFlight.map(async (buffer) => await buffer.task),
+      ]).then(() => undefined),
     };
   };
 
@@ -455,7 +475,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     flushKey,
     cancelKey,
     [INBOUND_DEBOUNCER_FLUSH]: flushAll,
-    [INBOUND_DEBOUNCER_PENDING]: () => buffers.size,
+    [INBOUND_DEBOUNCER_PENDING]: () => buffers.size + inFlightBuffers.size,
   };
   registerInboundDebouncer(debouncer);
   return debouncer;

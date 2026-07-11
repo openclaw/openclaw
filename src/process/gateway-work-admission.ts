@@ -276,18 +276,40 @@ export async function runWithGatewayIndependentRootWorkAdmission<T>(
   }
 }
 
+async function runWithGatewayRequiredRootWorkAdmission<T>(run: () => Promise<T>): Promise<T> {
+  while (true) {
+    if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
+      throw new Error("gateway is draining for restart");
+    }
+    if (
+      !GATEWAY_WORK_ADMISSION_STATE.restartSignalPending &&
+      GATEWAY_WORK_ADMISSION_STATE.suspendPhase === "accepting"
+    ) {
+      const admission = createGatewayRootWorkAdmission({ requiredContinuation: true });
+      try {
+        return await admission.run(run);
+      } finally {
+        admission.release();
+      }
+    }
+    await new Promise<void>((resolve) => {
+      GATEWAY_WORK_ADMISSION_STATE.suspendOpenWaiters.add(resolve);
+    });
+  }
+}
+
 /**
  * Detaches required follow-up from the current admitted transaction.
  * A live parent synchronously reserves a tracked root even after restart or
  * suspension closes admission; callers without a live parent use the normal
- * independent-root fence.
+ * independent-root fence while preserving required-continuation ownership.
  */
 export function runWithGatewayIndependentRootWorkContinuation<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   const parent = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
   if (!parent || parent.released) {
-    return runWithGatewayIndependentRootWorkAdmission(run);
+    return runWithGatewayRequiredRootWorkAdmission(run);
   }
   const allowSubordinateRestartWork =
     parent.allowSubordinateRestartWork ||
