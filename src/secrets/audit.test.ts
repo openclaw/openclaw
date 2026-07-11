@@ -801,4 +801,53 @@ describe("secrets audit", () => {
       ),
     ).toBe(true);
   });
+
+  it("scans .env in legacy .clawdbot state directory", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-audit-legacy-"));
+    const legacyStateDir = path.join(rootDir, ".clawdbot");
+    const configPath = path.join(legacyStateDir, "openclaw.json");
+    const envPath = path.join(legacyStateDir, ".env");
+    const agentDir = path.join(legacyStateDir, "agents", "main", "agent");
+
+    await fs.mkdir(agentDir, { recursive: true });
+
+    const env = {
+      OPENCLAW_STATE_DIR: legacyStateDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENAI_API_KEY: "env-openai-key", // pragma: allowlist secret
+      PATH: resolveRuntimePathEnv(),
+    };
+
+    await writeJsonFile(configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    await fs.writeFile(
+      envPath,
+      "OPENAI_API_KEY=sk-legacy-plaintext\n", // pragma: allowlist secret
+      "utf8",
+    );
+
+    try {
+      const report = await runSecretsAudit({ env });
+      // Config-based key is ref'd from env, so no plaintext finding for config;
+      // but the .env file should be scanned and reported.
+      expect(report.status).toBe("findings");
+      expect(report.findings.some((f) => f.code === "PLAINTEXT_FOUND" && f.file === envPath)).toBe(
+        true,
+      );
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
 });
