@@ -425,14 +425,14 @@ test("sessions.compaction.branch rejects model-selection-locked session identiti
     reason: "manual",
     summary: "locked checkpoint",
   });
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(fixture.sessionId, {
-        sessionFile: fixture.sessionFile,
-        compactionCheckpoints: [checkpointEntry],
-        modelSelectionLocked: true,
-      }),
-    },
+  await seedSessionEntry({
+    entry: sessionStoreEntry(fixture.sessionId, {
+      sessionFile: fixture.sessionFile,
+      compactionCheckpoints: [checkpointEntry],
+      modelSelectionLocked: true,
+    }),
+    sessionKey: "agent:main:main",
+    storePath,
   });
   const { ws } = await openClient();
   try {

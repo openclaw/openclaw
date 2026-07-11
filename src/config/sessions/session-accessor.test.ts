@@ -709,7 +709,7 @@ describe("session accessor seam", () => {
     expect(listSessionEntries({ storePath })).toEqual([]);
   });
 
-  it("does not save the session store when entry preparation is rejected", async () => {
+  it("does not write the session database when entry preparation is rejected", async () => {
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -720,8 +720,9 @@ describe("session accessor seam", () => {
       updatedAt: 10,
       initializationPending: true,
     });
+    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
     const fixedTime = new Date("2020-01-01T00:00:00.000Z");
-    fs.utimesSync(storePath, fixedTime, fixedTime);
+    fs.utimesSync(databasePath, fixedTime, fixedTime);
 
     const rejected = await createSessionEntryWithTranscript(scope, () => ({
       ok: false,
@@ -733,7 +734,7 @@ describe("session accessor seam", () => {
       error: "still initializing",
       phase: "entry",
     });
-    expect(fs.statSync(storePath).mtimeMs).toBe(fixedTime.getTime());
+    expect(fs.statSync(databasePath).mtimeMs).toBe(fixedTime.getTime());
     expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
       sessionId: "pending-session",
       initializationPending: true,

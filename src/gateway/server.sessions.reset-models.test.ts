@@ -211,7 +211,7 @@ test("sessions.reset rejects a model-locked session without replacing native sta
       }),
     },
   });
-  const before = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+  const before = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
 
   const reset = await directSessionReq("sessions.reset", { key: "main" });
 
@@ -219,7 +219,7 @@ test("sessions.reset rejects a model-locked session without replacing native sta
     ok: false,
     error: { message: MODEL_SELECTION_LOCKED_RESET_MESSAGE },
   });
-  const after = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+  const after = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(after).toEqual(before);
 });
 
