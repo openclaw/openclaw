@@ -1,4 +1,5 @@
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { googleChatApprovalAuth } from "./approval-auth.js";
 import {
   claimGoogleChatApprovalCardBinding,
@@ -83,6 +84,11 @@ export async function maybeHandleGoogleChatApprovalCardClick(params: {
       clientDisplayName: `Google Chat approval (${actor?.trim() || "unknown"})`,
     });
   } catch (error) {
+    if (isApprovalNotFoundError(error)) {
+      completeGoogleChatApprovalCardBinding(token);
+      logIgnored(params.target, `expired approval id=${consumed.approvalId}`);
+      return true;
+    }
     releaseGoogleChatApprovalCardBinding(token);
     throw error;
   }

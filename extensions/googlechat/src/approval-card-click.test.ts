@@ -9,9 +9,14 @@ import type { WebhookTarget } from "./monitor-types.js";
 import type { GoogleChatEvent } from "./types.js";
 
 const resolveApprovalOverGateway = vi.hoisted(() => vi.fn());
+const isApprovalNotFoundError = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway,
+}));
+
+vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
+  isApprovalNotFoundError,
 }));
 
 function createTarget(): WebhookTarget {
@@ -55,6 +60,8 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
   beforeEach(() => {
     clearGoogleChatApprovalCardBindingsForTest();
     resolveApprovalOverGateway.mockReset();
+    isApprovalNotFoundError.mockReset();
+    isApprovalNotFoundError.mockReturnValue(false);
   });
 
   it("authorizes the Chat actor and resolves the bound approval over the gateway", async () => {
@@ -275,5 +282,46 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
     ).resolves.toBe(true);
 
     expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("consumes stale approval card tokens when gateway reports approval not found", async () => {
+    registerGoogleChatApprovalCardBinding({
+      token: "token-stale",
+      accountId: "default",
+      approvalId: "approval-stale",
+      approvalKind: "exec",
+      decision: "allow-once",
+      allowedDecisions: ["allow-once", "deny"],
+      spaceName: "spaces/AAA",
+      messageName: "spaces/AAA/messages/msg-1",
+      expiresAtMs: Date.now() + 60_000,
+    });
+    resolveApprovalOverGateway.mockRejectedValueOnce(
+      Object.assign(new Error("approval not found"), { gatewayCode: "APPROVAL_NOT_FOUND" }),
+    );
+    isApprovalNotFoundError.mockReturnValueOnce(true);
+    const target = createTarget();
+
+    await expect(
+      maybeHandleGoogleChatApprovalCardClick({
+        event: createCardClickEvent("token-stale"),
+        target,
+      }),
+    ).resolves.toBe(true);
+
+    await expect(
+      maybeHandleGoogleChatApprovalCardClick({
+        event: createCardClickEvent("token-stale"),
+        target,
+      }),
+    ).resolves.toBe(true);
+
+    expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
+    expect(target.runtime.log).toHaveBeenCalledWith(
+      "[default] googlechat approval ignored: expired approval id=approval-stale",
+    );
+    expect(target.runtime.log).toHaveBeenCalledWith(
+      "[default] googlechat approval ignored: unknown or expired card token",
+    );
   });
 });
