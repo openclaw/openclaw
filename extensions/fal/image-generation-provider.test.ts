@@ -150,7 +150,7 @@ describe("fal image-generation provider", () => {
 
   it("applies configured Fal request headers to image generation requests", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      ["api" + "Key"]: "fal-unit-test-value",
+      apiKey: "fal-unit-test-value",
       source: "env",
       mode: "api-key",
     } as Awaited<ReturnType<typeof providerAuth.resolveApiKeyForProvider>>);
@@ -185,6 +185,8 @@ describe("fal image-generation provider", () => {
         models: {
           providers: {
             fal: {
+              baseUrl: "https://fal.run",
+              models: [],
               request: {
                 headers: {
                   "X-Fal-Trace": "trace-1",
