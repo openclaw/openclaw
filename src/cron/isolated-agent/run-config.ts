@@ -26,6 +26,7 @@ function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentCon
   const {
     model: overrideModel,
     sandbox: _agentSandboxOverride,
+    memorySearch: _agentMemorySearchOverride,
     ...agentOverrideRest
   } = agentConfigOverride ?? {};
   return {
@@ -59,10 +60,9 @@ export function buildCronAgentDefaultsConfig(params: {
   const { overrideModel, definedOverrides } = extractCronAgentDefaultsOverride(
     params.agentConfigOverride,
   );
-  // Keep sandbox overrides out of `agents.defaults` here. Sandbox resolution
-  // already merges global defaults with per-agent overrides using `agentId`;
-  // copying the agent sandbox into defaults clobbers global defaults and can
-  // double-apply nested agent overrides during isolated cron runs.
+  // Sandbox and memory-search resolution already merge global defaults with per-agent
+  // overrides. Copying either partial object into defaults clobbers nested values and
+  // then double-applies the agent override in isolated cron runs.
   return mergeCronAgentModelOverride({
     defaults: Object.assign({}, params.defaults, definedOverrides),
     overrideModel,
