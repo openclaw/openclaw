@@ -256,7 +256,7 @@ export const zh_TW: TranslationMap = {
     goalNote: "目標備註",
     thinking: "思考",
     thinkingTooltip:
-      "Maps to provider reasoning_effort. Only effective when the model supports it (compat.supportsReasoningEffort).",
+      "Per-session thinking level override. Each provider profile maps it to that provider's own thinking or reasoning controls; models without thinking support ignore it.",
     fast: "快速",
     verbose: "詳細",
     reasoning: "推理",

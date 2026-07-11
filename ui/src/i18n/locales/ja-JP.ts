@@ -263,7 +263,7 @@ export const ja_JP: TranslationMap = {
     goalNote: "目標メモ",
     thinking: "Thinking",
     thinkingTooltip:
-      "Maps to provider reasoning_effort. Only effective when the model supports it (compat.supportsReasoningEffort).",
+      "Per-session thinking level override. Each provider profile maps it to that provider's own thinking or reasoning controls; models without thinking support ignore it.",
     fast: "高速",
     verbose: "詳細",
     reasoning: "推論",

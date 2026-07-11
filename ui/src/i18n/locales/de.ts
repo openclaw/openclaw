@@ -261,7 +261,7 @@ export const de: TranslationMap = {
     goalNote: "Zielnotiz",
     thinking: "Denken",
     thinkingTooltip:
-      "Maps to provider reasoning_effort. Only effective when the model supports it (compat.supportsReasoningEffort).",
+      "Per-session thinking level override. Each provider profile maps it to that provider's own thinking or reasoning controls; models without thinking support ignore it.",
     fast: "Schnell",
     verbose: "Ausführlich",
     reasoning: "Reasoning",
