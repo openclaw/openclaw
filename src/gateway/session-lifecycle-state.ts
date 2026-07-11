@@ -194,10 +194,18 @@ export function derivePersistedSessionLifecyclePatch(params: {
     ...snapshot,
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
   };
-  // A genuinely successful run means the session is no longer wedged: clear the
-  // cross-boot restart-recovery budget and any quarantine so a future, unrelated
-  // interruption gets a fresh attempt allowance. See #95750.
-  if (snapshot.status === "done") {
+  // Fresh progress means the session is no longer wedged: clear the cross-boot
+  // restart-recovery budget and any quarantine so a future, unrelated
+  // interruption gets a fresh attempt allowance. This must fire on BOTH a
+  // genuinely successful run (`done`) AND a fresh non-recovery `start` — a
+  // quarantined row that accepts a new user turn otherwise retains its
+  // over-budget count, so the next unrelated interruption is quarantined
+  // immediately. Restart-recovery start events are excluded above via
+  // isRestartRecoveryLifecycleEvent, so a `start` reaching here is a genuine
+  // new turn, not a recovery resume. See #95750.
+  const clearsRecoveryBudget =
+    snapshot.status === "done" || resolveLifecyclePhase(params.event) === "start";
+  if (clearsRecoveryBudget) {
     if (normalizeRecoveryAttempts(params.entry?.restartRecoveryAttempts) > 0) {
       patch.restartRecoveryAttempts = undefined;
     }
