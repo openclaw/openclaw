@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
-import { renderChatAvatar } from "./chat-avatar.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { refreshChatAvatar, renderChatAvatar } from "./chat-avatar.ts";
 
 vi.unmock("../../lib/agents/display.ts");
 
@@ -53,5 +53,64 @@ describe("renderChatAvatar", () => {
     const textAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "AB" }]);
     expect(textAvatar?.tagName).toBe("DIV");
     expect(textAvatar?.textContent?.trim()).toBe("AB");
+  });
+});
+
+describe("refreshChatAvatar error handling", () => {
+  function createMockHost(overrides?: Partial<ChatAvatarHost>): ChatAvatarHost {
+    return {
+      connected: true,
+      basePath: "",
+      sessionKey: "agent:main:web:g1",
+      hello: null,
+      chatAvatarUrl: null,
+      chatAvatarSource: null,
+      chatAvatarStatus: null,
+      chatAvatarReason: null,
+      password: "test-pw",
+      ...overrides,
+    };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("clears avatar state on fetch error (catch block handles AbortError)", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValue(new DOMException("The operation was aborted", "AbortError"));
+    const host = createMockHost();
+    host.chatAvatarSource = "previous";
+    host.chatAvatarStatus = "remote";
+
+    await refreshChatAvatar(host);
+
+    expect(host.chatAvatarUrl).toBeNull();
+    expect(host.chatAvatarSource).toBeNull();
+    expect(host.chatAvatarStatus).toBeNull();
+  });
+
+  it("clears avatar state on generic fetch failure", async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("network failure"));
+    const host = createMockHost();
+    host.chatAvatarUrl = "http://stale";
+    host.chatAvatarSource = "previous";
+
+    await refreshChatAvatar(host);
+
+    expect(host.chatAvatarUrl).toBeNull();
+    expect(host.chatAvatarSource).toBeNull();
+  });
+
+  it("skips fetch when disconnected", async () => {
+    globalThis.fetch = vi.fn();
+    const host = createMockHost({ connected: false });
+
+    await refreshChatAvatar(host);
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(host.chatAvatarUrl).toBeNull();
+    expect(host.chatAvatarSource).toBeNull();
   });
 });
