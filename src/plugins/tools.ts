@@ -1256,8 +1256,13 @@ export function resolvePluginTools(params: {
       explicitlyConfiguredPluginIds.add(plugin.id);
     }
   }
+  // A caller-supplied registry is the result of an explicit request-local load, not
+  // ambient active/channel state. Preserve its selected tools without treating it as
+  // evidence that any global registry is compatible with this request.
+  const retainedPluginIds = new Set(params.runtimeRegistry?.tools.map((entry) => entry.pluginId));
   const eligiblePluginIds = runtimePluginIds.filter(
-    (id) => loadedPluginIds.has(id) || explicitlyConfiguredPluginIds.has(id),
+    (id) =>
+      loadedPluginIds.has(id) || explicitlyConfiguredPluginIds.has(id) || retainedPluginIds.has(id),
   );
   if (eligiblePluginIds.length === 0) {
     return tools;

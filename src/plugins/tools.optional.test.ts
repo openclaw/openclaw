@@ -3428,6 +3428,51 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("preserves tools from a caller-supplied request registry", () => {
+    const baseContext = createContext();
+    const config = {
+      ...baseContext.config,
+      plugins: {
+        ...baseContext.config.plugins,
+        allow: undefined,
+        load: { paths: [] },
+      },
+    };
+    installToolManifestSnapshot({
+      config,
+      plugin: {
+        id: "request-plugin",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["request_tool"] },
+      },
+    });
+    const factory = vi.fn(() => makeTool("request_tool"));
+    const runtimeRegistry = createToolRegistry([
+      {
+        pluginId: "request-plugin",
+        optional: false,
+        source: "/tmp/request-plugin.js",
+        names: ["request_tool"],
+        factory,
+      },
+    ]);
+
+    const tools = resolvePluginTools({
+      ...createResolveToolsParams({
+        context: { ...baseContext, config } as never,
+        toolAllowlist: ["group:plugins"],
+      }),
+      runtimeRegistry: runtimeRegistry as never,
+    });
+
+    expectResolvedToolNames(tools, ["request_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
   it("cold-loads config-origin tools with the complete eligible plugin set", () => {
     const baseContext = createContext();
     const config = {
