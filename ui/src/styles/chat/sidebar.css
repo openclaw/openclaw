@@ -48,32 +48,42 @@
   grid-template-columns: minmax(0, 1fr) minmax(230px, 280px) minmax(230px, 280px);
 }
 
-/* Floating opener shown in single-pane mode while the rail is collapsed
-   (split panes host the same toggle in their header row instead). */
-.chat-workspace-open {
+/* Floating openers shown in single-pane mode while a rail is collapsed
+   (split panes host the same toggles in their header row instead). One
+   horizontal row inside the thread's titlebar band (see .chat-thread top
+   padding) so the buttons never cover the first message and the band stays
+   free as a window-drag surface in the native macOS app. */
+.chat-floating-toggles {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  /* 8px top + 2px row padding keeps the 28px buttons on the shared 24px
+     chrome centerline (sidebar brand row, pane-header actions). */
+  top: 8px;
+  right: 8px;
   z-index: 12;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  box-shadow: var(--shadow-sm);
+  display: flex;
+  /* Same tight spacing as .chat-pane__actions so both rows read identical. */
+  gap: 2px;
+  /* Ghost buttons carry no chrome of their own, but scrolled thread content
+     passes under this row; a frosted wash keeps the icons legible without
+     reading as boxed buttons. Invisible over the empty titlebar band. */
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
 }
 
-/* Floating background-tasks opener stacks under the workspace one so both
-   stay reachable regardless of which rail is open. */
-.chat-tasks-open {
-  position: absolute;
-  top: 48px;
-  right: 10px;
-  z-index: 12;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+/* Compact icon button shared by the split-pane header actions and the
+   floating toggles above: one borderless 28px design so both surfaces match.
+   Sizing only — chrome stays ghost; .btn--icon's 36px min-width/height would
+   win otherwise. The floating row sits in the thread's reserved titlebar band
+   (never over content), so it needs no backdrop of its own. */
+.chat-icon-btn {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 5px;
 }
 
 /* The workspace rail adapts to the pane width (side column on wide panes,
@@ -82,16 +92,15 @@
    side-dock only, so its toggles still hide on narrow viewports until it
    grows a narrow presentation. */
 @media (max-width: 1120px) {
-  .chat-tasks-open,
-  .chat-pane__actions .chat-tasks-toggle {
+  .chat-tasks-toggle {
     display: none;
   }
 }
 
-/* Positioning context for the badge; the floating variant already gets one
-   from its own position: absolute, so scope this to the pane-header variant. */
-.chat-pane__actions .chat-workspace-toggle,
-.chat-pane__actions .chat-tasks-toggle {
+/* Positioning context for the badge on both the pane-header and floating
+   variants (the floating buttons are static children of the toggle row). */
+.chat-workspace-toggle,
+.chat-tasks-toggle {
   position: relative;
 }
 
@@ -416,7 +425,9 @@
   flex-shrink: 0;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 0 12px 8px;
+  /* Top padding keeps the count pills clear of the path row's divider line
+     (and of the header divider when no workspace root renders a path). */
+  padding: 8px 12px;
 }
 
 .chat-workspace-rail__summary span {
@@ -1035,7 +1046,7 @@
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  box-shadow: 0 12px 28px color-mix(in srgb, black 24%, transparent);
+  box-shadow: var(--shadow-md);
 }
 
 .sidebar-file-view__editor-item {
@@ -1734,4 +1745,142 @@
     width: 100%;
     min-width: 0;
   }
+}
+
+/* ── Session diff panel (sessions.diff sidebar content) ── */
+
+/* The floating diff opener sits in the .chat-floating-toggles row and shares
+   the .chat-icon-btn sizing/chrome rules near the top of this file. */
+
+.session-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.session-diff__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 2px;
+}
+
+.session-diff__branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-weight: 600;
+  font-size: var(--control-ui-text-sm);
+}
+
+.session-diff__branch svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.session-diff__branch-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+
+.session-diff__refresh {
+  margin-left: auto;
+}
+
+.session-diff__file {
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.session-diff__file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-diff__chevron {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 120ms ease;
+}
+
+.session-diff__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-diff__chevron--open {
+  transform: rotate(90deg);
+}
+
+.session-diff__status {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.session-diff__status--added {
+  background: var(--ok, #22c55e);
+}
+
+.session-diff__status--deleted {
+  background: var(--destructive, #ef4444);
+}
+
+.session-diff__status--renamed {
+  background: var(--accent, #a855f7);
+}
+
+.session-diff__status--modified {
+  background: var(--warning, #eab308);
+}
+
+.session-diff__path {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+}
+
+.session-diff__old-path {
+  color: var(--muted);
+}
+
+.session-diff__badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  color: var(--muted);
+  font-size: calc(var(--control-ui-text-sm) - 2px);
+}
+
+.session-diff__file .chat-diff {
+  margin-top: 0;
+  border-radius: 0;
+  max-height: none;
+}
+
+.session-diff__note {
+  padding: 2px 2px 4px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
 }
