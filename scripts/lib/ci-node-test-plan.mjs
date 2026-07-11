@@ -2,6 +2,8 @@
 import { relative } from "node:path";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
+import { getUnitFastTestFilesForIncludePatterns } from "../../test/vitest/vitest.unit-fast-paths.mjs";
+import { boundaryTestFiles } from "../../test/vitest/vitest.unit-paths.mjs";
 import { listTrackedTestFiles } from "./list-test-files.mjs";
 
 const EXCLUDED_FULL_SUITE_SHARDS = new Set([
@@ -24,8 +26,13 @@ const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 const COMPACT_NODE_TEST_JOB_WEIGHT = 192;
 const COMPACT_NODE_TEST_JOB_GROUPS = 8;
+const COMPACT_TOOLING_NODE_TEST_GROUPS = 3;
 const COMPACT_WHOLE_NODE_TEST_JOB_GROUPS = 6;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
+const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const TOOLING_DOCKER_TEST_FILE = "test/scripts/docker-build-helper.test.ts";
+const TOOLING_ISOLATED_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
+const TOOLING_ISOLATED_TEST_FILE = "test/scripts/openclaw-e2e-instance.test.ts";
 // Commands and cron run non-isolated, so keep their split shards as separate
 // processes. Combining their include lists can retain test state across groups.
 const BUNDLEABLE_NODE_TEST_CONFIGS = new Set(["test/vitest/vitest.infra.config.ts"]);
@@ -1004,6 +1011,61 @@ function bundleNameForConfigs(configs) {
     .replace(/[^a-z0-9-]+/giu, "-");
 }
 
+function createStripedBatches(values, batchCount) {
+  const batches = Array.from({ length: batchCount }, () => []);
+  for (const [index, value] of values.entries()) {
+    batches[index % batchCount].push(value);
+  }
+  return batches;
+}
+
+function listCompactToolingTestFiles() {
+  const unitFastFiles = getUnitFastTestFilesForIncludePatterns([
+    "test/**/*.test.ts",
+    "src/scripts/**/*.test.ts",
+  ]);
+  const excludedFiles = new Set([
+    ...boundaryTestFiles,
+    ...unitFastFiles,
+    TOOLING_DOCKER_TEST_FILE,
+    TOOLING_ISOLATED_TEST_FILE,
+  ]);
+  return [...listTestFiles("test"), ...listTestFiles("src/scripts")].filter(
+    (file) =>
+      !file.startsWith("test/fixtures/") &&
+      !file.endsWith(".e2e.test.ts") &&
+      !file.endsWith(".live.test.ts") &&
+      !excludedFiles.has(file),
+  );
+}
+
+function expandCompactNodeTestGroup(group) {
+  if (group.shard_name !== "core-tooling") {
+    return [group];
+  }
+
+  // Tooling is hundreds of serial files. Split only the compact PR plan so
+  // one runner cannot dominate admission while release/main topology stays stable.
+  const toolingGroups = createStripedBatches(
+    listCompactToolingTestFiles(),
+    COMPACT_TOOLING_NODE_TEST_GROUPS,
+  ).map((includePatterns, index) =>
+    Object.assign({}, group, {
+      configs: [TOOLING_CONFIG],
+      includePatterns,
+      shard_name: `core-tooling-${index + 1}`,
+    }),
+  );
+  return [
+    ...toolingGroups,
+    {
+      ...group,
+      configs: [TOOLING_ISOLATED_CONFIG],
+      shard_name: "core-tooling-isolated",
+    },
+  ];
+}
+
 /**
  * Collapse split include-pattern shards into bounded jobs for normal CI.
  * The base plan remains unchanged for release and coverage consumers.
@@ -1091,14 +1153,15 @@ function createCompactNodeTestShardBundles(options = {}) {
     const runner = resolveCiNodeTestRunner(shard);
     const key = JSON.stringify([runner, shard.requiresDist]);
     const groups = groupsByRunner.get(key) ?? [];
-    groups.push({
+    const group = {
       configs: shard.configs,
       ...(shard.env ? { env: shard.env } : {}),
       ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
       requiresDist: shard.requiresDist,
       runner,
       shard_name: shard.shardName,
-    });
+    };
+    groups.push(...expandCompactNodeTestGroup(group));
     groupsByRunner.set(key, groups);
   }
 
@@ -1127,10 +1190,7 @@ function createCompactNodeTestShardBundles(options = {}) {
 
     const wholeGroups = sortedGroups.filter((candidate) => !candidate.includePatterns);
     const wholeJobCount = Math.ceil(wholeGroups.length / COMPACT_WHOLE_NODE_TEST_JOB_GROUPS);
-    const wholeGroupBatches = Array.from({ length: wholeJobCount }, () => []);
-    for (const [index, group] of wholeGroups.entries()) {
-      wholeGroupBatches[index % wholeJobCount].push(group);
-    }
+    const wholeGroupBatches = createStripedBatches(wholeGroups, wholeJobCount);
     for (const [index, groupBatch] of wholeGroupBatches.entries()) {
       const runnerClass = groupBatch[0].runner.includes("-8vcpu-") ? "large" : "small";
       const distSuffix = groupBatch[0].requiresDist ? "-dist" : "";
