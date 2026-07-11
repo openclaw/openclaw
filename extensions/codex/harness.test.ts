@@ -58,6 +58,18 @@ describe("Codex agent harness supports()", () => {
     const result = narrowHarness.supports({ provider: "openai", requestedRuntime: "codex" });
     expect(result.supported).toBe(false);
   });
+
+  it("exposes the fail-closed exact runtime artifact validator", async () => {
+    if (!harness.runtimeArtifact) {
+      throw new Error("expected Codex runtime artifact capability");
+    }
+    await expect(
+      harness.runtimeArtifact.validate({
+        id: "codex-app-server:v1:malformed",
+        fingerprint: "0".repeat(64),
+      }),
+    ).resolves.toBe(false);
+  });
 });
 
 describe("Codex agent harness reset()", () => {

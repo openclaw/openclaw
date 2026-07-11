@@ -113,6 +113,7 @@ type SidebarSessionGroupMenuState = {
 };
 
 type SidebarSessionSortMode = "created" | "updated";
+type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 type SidebarSessionGroupDropTarget = {
   group: string;
   position: "before" | "after";
@@ -228,7 +229,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
-  @state() private codexSidebarReady = false;
+  @state() private nativeSessionSidebarReady = false;
+  @state() private sessionsScrollState: SidebarSessionsScrollState = "none";
 
   private readonly subscriptions = new SubscriptionsController(this);
   private customizeMenuTrigger: HTMLElement | null = null;
@@ -244,7 +246,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private reconnectListRevision: number | null = null;
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
-  private codexSidebarLoadStarted = false;
+  private nativeSessionSidebarLoadStarted = false;
+  private sessionsScrollElement: HTMLElement | null = null;
+  private sessionsScrollResizeObserver: ResizeObserver | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -285,20 +289,59 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       globalThis.clearTimeout(timer);
     }
     this.routePreloadTimers.clear();
+    this.sessionsScrollResizeObserver?.disconnect();
+    this.sessionsScrollResizeObserver = null;
+    this.sessionsScrollElement = null;
     super.disconnectedCallback();
   }
 
   override updated() {
+    this.syncSessionsScrollObserver();
     const advertised = this.pluginTabs().some(
-      (tab) => tab.pluginId === "codex" && tab.id === "sessions",
+      (tab) => tab.id === "sessions" && (tab.pluginId === "codex" || tab.pluginId === "anthropic"),
     );
-    if (!advertised || this.codexSidebarReady || this.codexSidebarLoadStarted) {
+    if (!advertised || this.nativeSessionSidebarReady || this.nativeSessionSidebarLoadStarted) {
       return;
     }
-    this.codexSidebarLoadStarted = true;
+    this.nativeSessionSidebarLoadStarted = true;
     void import("../pages/plugin/codex-sidebar.ts").then(() => {
-      this.codexSidebarReady = true;
+      this.nativeSessionSidebarReady = true;
     });
+  }
+
+  private syncSessionsScrollObserver() {
+    const element = this.querySelector<HTMLElement>(".sidebar-recent-sessions");
+    if (element !== this.sessionsScrollElement) {
+      this.sessionsScrollResizeObserver?.disconnect();
+      this.sessionsScrollElement = element;
+      this.sessionsScrollResizeObserver = null;
+      if (element && typeof ResizeObserver === "function") {
+        this.sessionsScrollResizeObserver = new ResizeObserver(() =>
+          this.updateSessionsScrollState(element),
+        );
+        this.sessionsScrollResizeObserver.observe(element);
+      }
+    }
+    if (element) {
+      this.updateSessionsScrollState(element);
+    }
+  }
+
+  private updateSessionsScrollState(element: HTMLElement) {
+    const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+    let nextState: SidebarSessionsScrollState = "none";
+    if (maxScrollTop > 1) {
+      if (element.scrollTop <= 1) {
+        nextState = "top";
+      } else if (element.scrollTop >= maxScrollTop - 1) {
+        nextState = "bottom";
+      } else {
+        nextState = "middle";
+      }
+    }
+    if (nextState !== this.sessionsScrollState) {
+      this.sessionsScrollState = nextState;
+    }
   }
 
   // The shell calls this before CSS hides the panel or drawer. Mounted menus
@@ -1323,13 +1366,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               aria-checked=${String(pinned)}
               @click=${() => this.togglePinnedRoute(routeId)}
             >
-              <span class="sidebar-customize-menu__check" aria-hidden="true">
-                ${pinned ? icons.check : nothing}
-              </span>
               <span class="nav-item__icon" aria-hidden="true"
                 >${icons[navigationIconForRoute(routeId)]}</span
               >
               <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
+              <span class="sidebar-customize-menu__check" aria-hidden="true">
+                ${pinned ? icons.check : nothing}
+              </span>
             </button>
           `;
         })}
@@ -1344,7 +1387,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             this.closeCustomizeMenu({ restoreFocus: true });
           }}
         >
-          <span class="sidebar-customize-menu__check" aria-hidden="true"></span>
           <span class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
           <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
         </button>
@@ -2009,7 +2051,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const expandedAgentId = this.expandedAgentId();
     return html`
       <section class="sidebar-sessions">
-        <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
+        <div
+          class="sidebar-recent-sessions sidebar-recent-sessions--scroll-${this
+            .sessionsScrollState}"
+          aria-label=${titleForRoute("sessions")}
+          @scroll=${(event: Event) =>
+            this.updateSessionsScrollState(event.currentTarget as HTMLElement)}
+        >
           <div class="sidebar-recent-sessions__head sidebar-recent-sessions__head--root">
             <span class="sidebar-recent-sessions__label-text">${t("sessionsView.title")}</span>
             <button
@@ -2045,38 +2093,44 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               })}
         </div>
       </section>
-      ${this.renderCodexSidebar()}
+      ${this.renderNativeSessionSidebars()}
     `;
   }
 
-  private renderCodexSidebar() {
-    if (!this.codexSidebarReady) {
+  private renderNativeSessionSidebars() {
+    if (!this.nativeSessionSidebarReady) {
       return nothing;
     }
-    const tab = this.pluginTabs().find(
-      (candidate) => candidate.pluginId === "codex" && candidate.id === "sessions",
+    const tabs = this.pluginTabs().filter(
+      (candidate) =>
+        candidate.id === "sessions" &&
+        (candidate.pluginId === "codex" || candidate.pluginId === "anthropic"),
     );
-    if (!tab) {
+    if (tabs.length === 0) {
       return nothing;
     }
-    const open = (hostId?: string, threadId?: string) => {
+    const open = (pluginId: string, hostId?: string, threadId?: string) => {
       this.onNavigate?.("plugin", {
         search: pluginTabSearch({
-          pluginId: "codex",
+          pluginId,
           id: "sessions",
           ...(hostId && threadId ? { hostId, threadId } : {}),
         }),
       });
     };
-    return html`<openclaw-codex-sidebar
-      .client=${this.context?.gateway.snapshot.client ?? null}
-      .connected=${this.connected}
-      .basePath=${this.basePath}
-      .selectedHostId=${this.activePluginHostId}
-      .selectedThreadId=${this.activePluginThreadId}
-      .onOpenSession=${(hostId: string, threadId: string) => open(hostId, threadId)}
-      .onViewAll=${() => open()}
-    ></openclaw-codex-sidebar>`;
+    return tabs.map((tab) => {
+      const active = this.activePluginTabId === pluginTabKey(tab);
+      return html`<openclaw-codex-sidebar
+        .catalogKind=${tab.pluginId === "anthropic" ? "claude" : "codex"}
+        .client=${this.context?.gateway.snapshot.client ?? null}
+        .connected=${this.connected}
+        .basePath=${this.basePath}
+        .selectedHostId=${active ? this.activePluginHostId : ""}
+        .selectedThreadId=${active ? this.activePluginThreadId : ""}
+        .onOpenSession=${(hostId: string, threadId: string) => open(tab.pluginId, hostId, threadId)}
+        .onViewAll=${() => open(tab.pluginId)}
+      ></openclaw-codex-sidebar>`;
+    });
   }
 
   private renderMoreSection() {
@@ -2090,7 +2144,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           aria-expanded=${String(expanded)}
         >
           <span class="nav-section__label-text">${t("nav.more")}</span>
-          <span class="nav-section__chevron"> ${icons.chevronDown} </span>
+          <span class="nav-section__chevron">${icons.chevronDown}</span>
         </button>
         <div class="nav-section__items">
           ${moreRoutes.map((routeId) => this.renderRoute(routeId))}
@@ -2127,7 +2181,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           this.onNavigate?.("chat");
         }}
       >
-        <span class="sidebar-recent-session__body">
+        <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name">${t("nav.chat")}</span>
         </span>
       </a>

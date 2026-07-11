@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  CORE_GATEWAY_METHOD_SPECS,
   createCoreGatewayMethodDescriptors,
   listCoreGatewayMethodNames,
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
@@ -23,6 +24,14 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
   });
 
+  it("advertises node plugin tool catalog updates", () => {
+    expect(listGatewayMethods()).toContain("node.pluginTools.update");
+  });
+
+  it("advertises node skill catalog updates", () => {
+    expect(listGatewayMethods()).toContain("node.skills.update");
+  });
+
   it("advertises ClawHub skill trust methods", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("skills.securityVerdicts");
@@ -31,6 +40,27 @@ describe("listGatewayMethods", () => {
 
   it("advertises Control UI GitHub previews", () => {
     expect(listGatewayMethods()).toContain("controlUi.githubPreview");
+  });
+
+  it("advertises Crestodian setup methods with their dispatch policy", () => {
+    const methods = listGatewayMethods();
+    expect(methods).toContain("crestodian.setup.verify");
+    expect(coreGatewayHandlers["crestodian.setup.verify"]).toEqual(expect.any(Function));
+    expect(
+      CORE_GATEWAY_METHOD_SPECS.find((spec) => spec.name === "crestodian.setup.verify")
+        ?.controlPlaneWrite,
+    ).toBeUndefined();
+    // Candidate activation is an admin-only probe that persists only on
+    // success. The generic three-write budget would strand the automatic
+    // fallback ladder before its fourth candidate or a manual retry.
+    expect(
+      CORE_GATEWAY_METHOD_SPECS.find((spec) => spec.name === "crestodian.setup.activate")
+        ?.controlPlaneWrite,
+    ).toBeUndefined();
+    expect(methods.indexOf("crestodian.setup.verify")).toBeGreaterThan(
+      methods.indexOf("tts.speak"),
+    );
+    expect(methods.indexOf("wizard.start")).toBe(methods.indexOf("crestodian.setup.activate") + 1);
   });
 
   it("advertises Control UI session pull request detection", () => {

@@ -163,6 +163,8 @@ import {
   CrestodianSetupActivateResultSchema,
   CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResultSchema,
 } from "./crestodian.js";
 import {
   CronAddParamsSchema,
@@ -204,6 +206,7 @@ import {
   EnvironmentStatusSchema,
   WorkerEnvironmentMetadataSchema,
   WorkerEnvironmentStateSchema,
+  WorkerTunnelStatusSchema,
 } from "./environments.js";
 import {
   ExecApprovalsGetParamsSchema,
@@ -279,6 +282,10 @@ import {
   NodePairListParamsSchema,
   NodePairRemoveParamsSchema,
   NodePairRejectParamsSchema,
+  NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParamsSchema,
+  NodeSkillDescriptorSchema,
+  NodeSkillsUpdateParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
 import {
@@ -419,6 +426,7 @@ import {
   WizardStatusResultSchema,
   WizardStepSchema,
 } from "./wizard.js";
+import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 import {
   WorktreeRecordSchema,
   WorktreesCreateParamsSchema,
@@ -438,6 +446,7 @@ import {
 export const ProtocolSchemas = {
   // Handshake, transport frames, state snapshots, and shared error envelopes.
   ConnectParams: ConnectParamsSchema,
+  WorkerAdmissionHandshake: WorkerAdmissionHandshakeSchema,
   HelloOk: HelloOkSchema,
   RequestFrame: RequestFrameSchema,
   ResponseFrame: ResponseFrameSchema,
@@ -463,6 +472,7 @@ export const ProtocolSchemas = {
   // Environment and agent-facing control RPC payloads.
   EnvironmentStatus: EnvironmentStatusSchema,
   WorkerEnvironmentState: WorkerEnvironmentStateSchema,
+  WorkerTunnelStatus: WorkerTunnelStatusSchema,
   WorkerEnvironmentMetadata: WorkerEnvironmentMetadataSchema,
   EnvironmentSummary: EnvironmentSummarySchema,
   EnvironmentsCreateParams: EnvironmentsCreateParamsSchema,
@@ -507,6 +517,10 @@ export const ProtocolSchemas = {
   NodePairRemoveParams: NodePairRemoveParamsSchema,
   NodeRenameParams: NodeRenameParamsSchema,
   NodeListParams: NodeListParamsSchema,
+  NodePluginToolDescriptor: NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParams: NodePluginToolsUpdateParamsSchema,
+  NodeSkillDescriptor: NodeSkillDescriptorSchema,
+  NodeSkillsUpdateParams: NodeSkillsUpdateParamsSchema,
   NodePendingAckParams: NodePendingAckParamsSchema,
   NodeDescribeParams: NodeDescribeParamsSchema,
   NodeInvokeParams: NodeInvokeParamsSchema,
@@ -614,6 +628,8 @@ export const ProtocolSchemas = {
   CrestodianChatResult: CrestodianChatResultSchema,
   CrestodianSetupDetectParams: CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResult: CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParams: CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResult: CrestodianSetupVerifyResultSchema,
   CrestodianSetupActivateParams: CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResult: CrestodianSetupActivateResultSchema,
   WizardStartParams: WizardStartParamsSchema,

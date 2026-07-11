@@ -9,20 +9,28 @@ import {
 } from "../../state/openclaw-state-db.js";
 import {
   createWorkerEnvironmentStore,
+  type WorkerEnvironmentBootstrapReceipt,
   type WorkerEnvironmentProfileSnapshot,
   type WorkerEnvironmentSshEndpoint,
   type WorkerEnvironmentStore,
 } from "./store.js";
 
+const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
 const SSH_ENDPOINT: WorkerEnvironmentSshEndpoint = {
   host: "worker.example.test",
   port: 22,
   user: "openclaw",
+  hostKey: HOST_KEY,
   keyRef: {
     source: "file",
     provider: "worker-keys",
     id: "/static-development-key",
   },
+};
+const BOOTSTRAP_RECEIPT: WorkerEnvironmentBootstrapReceipt = {
+  bundleHash: "a".repeat(64),
+  openclawVersion: "2026.7.1",
+  protocolFeatures: ["workspace-sync-v1", "model-proxy-v1"],
 };
 
 describe("worker environment store", () => {
@@ -59,6 +67,17 @@ describe("worker environment store", () => {
     });
   }
 
+  function seedBootstrapping(environmentId: string, leaseId: string) {
+    createIntent(environmentId);
+    store.transition({ environmentId, from: "requested", to: "provisioning" });
+    return store.transition({
+      environmentId,
+      from: "provisioning",
+      to: "bootstrapping",
+      patch: { leaseId, sshEndpoint: SSH_ENDPOINT },
+    });
+  }
+
   it("persists immutable intent before provisioning and survives reopen", () => {
     const snapshot = { settings: { region: "original" }, lifetime: { idleMinutes: 10 } };
     expect(createIntent("worker-crash", snapshot)).toMatchObject({
@@ -69,6 +88,8 @@ describe("worker environment store", () => {
       provisionOperationId: "provision:worker-crash",
       leaseId: null,
       sshEndpoint: null,
+      bootstrapReceipt: null,
+      teardownTerminalState: null,
       state: "requested",
       attachedSessionIds: [],
       createdAtMs: 1_000,
@@ -99,6 +120,7 @@ describe("worker environment store", () => {
       state: "requested",
       leaseId: null,
       destroyRequestedAtMs: 1_050,
+      teardownTerminalState: "destroyed",
       updatedAtMs: 1_050,
     });
 
@@ -120,7 +142,22 @@ describe("worker environment store", () => {
       patch: { leaseId: "lease-1", sshEndpoint: SSH_ENDPOINT },
     });
     nowMs = 1_030;
-    store.transition({ environmentId: "worker-1", from: "bootstrapping", to: "ready" });
+    store.transition({
+      environmentId: "worker-1",
+      from: "bootstrapping",
+      to: "ready",
+      patch: { bootstrapReceipt: BOOTSTRAP_RECEIPT },
+    });
+    closeOpenClawStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    expect(store.get("worker-1")).toMatchObject({
+      sshEndpoint: SSH_ENDPOINT,
+      bootstrapReceipt: {
+        ...BOOTSTRAP_RECEIPT,
+        protocolFeatures: ["model-proxy-v1", "workspace-sync-v1"],
+      },
+    });
     nowMs = 1_040;
     expect(
       store.transition({
@@ -207,9 +244,145 @@ describe("worker environment store", () => {
         environmentId: "worker-1",
         from: "bootstrapping",
         to: "ready",
+      }),
+    ).toThrow("requires a bootstrap receipt");
+    expect(() =>
+      store.transition({
+        environmentId: "worker-1",
+        from: "bootstrapping",
+        to: "ready",
         patch: { leaseId: "different-lease" },
       }),
     ).toThrow("lease id is immutable");
+  });
+
+  it("invalidates stale receipts for rebootstrap and replaces them on readiness", () => {
+    seedBootstrapping("worker-rebootstrap", "lease-rebootstrap");
+    store.transition({
+      environmentId: "worker-rebootstrap",
+      from: "bootstrapping",
+      to: "ready",
+      patch: { bootstrapReceipt: BOOTSTRAP_RECEIPT },
+    });
+    // Existing ready rows may predate bootstrap receipt persistence.
+    database.db.exec(`
+      UPDATE worker_environments
+      SET
+        bootstrap_bundle_hash = NULL,
+        bootstrap_openclaw_version = NULL,
+        bootstrap_protocol_features_json = NULL
+      WHERE environment_id = 'worker-rebootstrap';
+    `);
+    expect(store.get("worker-rebootstrap")).toMatchObject({
+      state: "ready",
+      bootstrapReceipt: null,
+    });
+    const idle = store.transition({
+      environmentId: "worker-rebootstrap",
+      from: "ready",
+      to: "idle",
+    });
+
+    const bootstrapping = store.transition({
+      environmentId: "worker-rebootstrap",
+      from: idle.state,
+      to: "bootstrapping",
+    });
+    expect(bootstrapping).toMatchObject({
+      state: "bootstrapping",
+      bootstrapReceipt: null,
+      leaseId: "lease-rebootstrap",
+    });
+
+    const nextReceipt = { ...BOOTSTRAP_RECEIPT, bundleHash: "b".repeat(64) };
+    expect(
+      store.transition({
+        environmentId: "worker-rebootstrap",
+        from: "bootstrapping",
+        to: "ready",
+        patch: { bootstrapReceipt: nextReceipt },
+      }),
+    ).toMatchObject({
+      state: "ready",
+      bootstrapReceipt: {
+        ...nextReceipt,
+        protocolFeatures: ["model-proxy-v1", "workspace-sync-v1"],
+      },
+    });
+  });
+
+  it("requires provider teardown proof before terminal bootstrap failure", () => {
+    seedBootstrapping("worker-bootstrap-failed", "lease-bootstrap-failed");
+
+    expect(() =>
+      store.transition({
+        environmentId: "worker-bootstrap-failed",
+        from: "bootstrapping",
+        to: "failed",
+        patch: { lastError: "node runtime missing" },
+      }),
+    ).toThrow("Illegal worker environment transition");
+
+    const unrequested = seedBootstrapping(
+      "worker-bootstrap-unrequested",
+      "lease-bootstrap-unrequested",
+    );
+    const unrequestedDraining = store.transition({
+      environmentId: unrequested.environmentId,
+      from: unrequested.state,
+      to: "draining",
+    });
+    const unrequestedDestroying = store.transition({
+      environmentId: unrequested.environmentId,
+      from: unrequestedDraining.state,
+      to: "destroying",
+    });
+    expect(() =>
+      store.transition({
+        environmentId: unrequested.environmentId,
+        from: unrequestedDestroying.state,
+        to: "failed",
+        patch: {
+          leaseId: null,
+          sshEndpoint: null,
+          lastError: "node runtime missing",
+        },
+      }),
+    ).toThrow("requires durable provider teardown intent");
+
+    const pending = seedBootstrapping("worker-bootstrap-cleanup", "lease-bootstrap-cleanup");
+    const requested = store.requestDestroy({
+      environmentId: pending.environmentId,
+      state: pending.state,
+      terminalState: "failed",
+    });
+    const draining = store.transition({
+      environmentId: pending.environmentId,
+      from: requested.state,
+      to: "draining",
+    });
+    const destroying = store.transition({
+      environmentId: pending.environmentId,
+      from: draining.state,
+      to: "destroying",
+    });
+    expect(destroying.teardownTerminalState).toBe("failed");
+    expect(
+      store.transition({
+        environmentId: pending.environmentId,
+        from: destroying.state,
+        to: "failed",
+        patch: {
+          leaseId: null,
+          sshEndpoint: null,
+          lastError: "node runtime missing; provider teardown completed",
+        },
+      }),
+    ).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      teardownTerminalState: "failed",
+    });
   });
 
   it("persists retryable errors without a self-transition", () => {
@@ -255,5 +428,24 @@ describe("worker environment store", () => {
         }),
       ).toThrow("SSH key must be a canonical SecretRef");
     }
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["multiple lines", `${HOST_KEY}\n${HOST_KEY}`],
+    ["extra fields", [HOST_KEY, "comment"].join(" ")],
+  ])("rejects %s persisted SSH host-key material", (_label, hostKey) => {
+    createIntent();
+    store.transition({ environmentId: "worker-1", from: "requested", to: "provisioning" });
+    const sshEndpoint = { ...SSH_ENDPOINT, hostKey } as unknown as WorkerEnvironmentSshEndpoint;
+
+    expect(() =>
+      store.transition({
+        environmentId: "worker-1",
+        from: "provisioning",
+        to: "bootstrapping",
+        patch: { leaseId: "lease-1", sshEndpoint },
+      }),
+    ).toThrow("SSH host key");
   });
 });

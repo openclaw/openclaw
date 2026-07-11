@@ -111,7 +111,7 @@ methods:
 
 Worker providers must also declare their id in `contracts.workerProviders`.
 Core persists durable intent before `provision(profile, operationId)`. Providers validate settings before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats.
-Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material.
+Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
 Providers with renewable leases can also implement `renew(leaseId)`.
 `inspect` must throw on transient or indeterminate failures; return `unknown` only for authoritative absence. Core marks an active local record orphaned, or treats the absence as teardown completion after a persisted destroy request.
 
@@ -139,10 +139,11 @@ Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
 with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
 or fully dynamic tool registration.
 
-| Method                          | What it registers                             |
-| ------------------------------- | --------------------------------------------- |
-| `api.registerTool(tool, opts?)` | Agent tool (required or `{ optional: true }`) |
-| `api.registerCommand(def)`      | Custom command (bypasses the LLM)             |
+| Method                                 | What it registers                                                                                                                        |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerTool(tool, opts?)`        | Agent tool (required or `{ optional: true }`)                                                                                            |
+| `api.registerCommand(def)`             | Custom command (bypasses the LLM)                                                                                                        |
+| `api.registerNodeHostCommand(command)` | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
 
 Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
@@ -168,6 +169,19 @@ Native Codex app-server developer instructions are stricter than other prompt
 surfaces: only guidance explicitly scoped to `codex_app_server` is promoted into
 that higher-priority lane. Legacy string guidance and unscoped structured
 guidance remain available to non-Codex prompt surfaces for compatibility.
+
+Node-host commands run on the connected node host, not inside the Gateway
+process. If `agentTool` is present, the node publishes a descriptor after a
+successful Gateway connect; the Gateway exposes it to agent runs only while that
+node is connected and only if the descriptor's `command` is in the node's
+approved command surface. Set `agentTool.defaultPlatforms` to opt a
+non-dangerous command into the default node command allowlist; otherwise require
+explicit `gateway.nodes.allowCommands` or a node-invoke policy. `agentTool.name`
+must be provider-safe: start with a letter, use only letters, digits,
+underscores, or hyphens, and stay within 64 characters. MCP-backed node tools
+can set `agentTool.mcp` metadata so catalog and tool-search surfaces can show
+the remote MCP server/tool identity, but execution still goes through the
+advertised node command.
 
 ### Infrastructure
 
@@ -437,6 +451,11 @@ AI CLI backend such as `claude-cli` or `my-cli`.
   backend-native isolation flags for ephemeral `/btw` calls. If those flags
   reliably disable native tools for an otherwise always-on CLI, declare
   `sideQuestionToolMode: "disabled"` too.
+- Backends that can disable all native tools for a specific run may declare
+  `nativeToolMode: "selectable"`. Restricted calls pass an empty
+  `ctx.toolAvailability.native` tuple plus an exact host-isolated MCP allowlist;
+  `resolveExecutionArgs` must enforce both on the final fresh or resume argv.
+  OpenClaw fails closed if the backend cannot do so.
 
 For an end-to-end authoring guide, see
 [CLI backend plugins](/plugins/cli-backend-plugins).

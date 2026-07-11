@@ -2,6 +2,7 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { migrateMemoryIndexSourcesIdentity } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -42,6 +43,9 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
+// v4 = session/transcript flip (branch lineage). Main's v2 memory-identity
+// change is folded in structure-gated (migrateMemoryIndexSourcesIdentity), so
+// v2 main DBs and pre-merge v4 flip DBs both converge on this schema.
 export const OPENCLAW_AGENT_SCHEMA_VERSION = 4;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
@@ -483,38 +487,46 @@ function assertExistingSchemaOwner(
 }
 
 function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string): void {
-  assertSupportedAgentSchemaVersion(db, pathname);
-  assertExistingSchemaOwner(readExistingSchemaMeta(db), agentId, pathname);
-  const previousVersion = readSqliteUserVersion(db);
-  migrateOpenClawAgentSchema(db);
-  db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-  backfillOpenClawAgentSchema(db, previousVersion);
-  const kysely = getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db);
-  db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
-  const now = Date.now();
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .insertInto("schema_meta")
-      .values({
-        meta_key: "primary",
-        role: "agent",
-        schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-        agent_id: agentId,
-        app_version: null,
-        created_at: now,
-        updated_at: now,
-      })
-      .onConflict((conflict) =>
-        conflict.column("meta_key").doUpdateSet({
+  runSqliteImmediateTransactionSync(db, () => {
+    // Ownership and version checks must share the write transaction with the
+    // schema update; concurrent openers must not overwrite another agent.
+    assertSupportedAgentSchemaVersion(db, pathname);
+    assertExistingSchemaOwner(readExistingSchemaMeta(db), agentId, pathname);
+    const previousVersion = readSqliteUserVersion(db);
+    // Structure-gated, idempotent: canonicalizes legacy memory-source identity
+    // in place on every lineage (pre-flip v1/v2 and pre-merge flip v4) before
+    // the flip migration, so no lineage loses its memory index.
+    migrateMemoryIndexSourcesIdentity(db);
+    migrateOpenClawAgentSchema(db);
+    db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+    backfillOpenClawAgentSchema(db, previousVersion);
+    const kysely = getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db);
+    db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
+    const now = Date.now();
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .insertInto("schema_meta")
+        .values({
+          meta_key: "primary",
           role: "agent",
           schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
           agent_id: agentId,
           app_version: null,
+          created_at: now,
           updated_at: now,
-        }),
-      ),
-  );
+        })
+        .onConflict((conflict) =>
+          conflict.column("meta_key").doUpdateSet({
+            role: "agent",
+            schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+            agent_id: agentId,
+            app_version: null,
+            updated_at: now,
+          }),
+        ),
+    );
+  });
 }
 
 /** Initialize agent schema/ownership metadata on an independently managed connection. */
@@ -566,6 +578,26 @@ function registerAgentDatabase(params: {
               size_bytes: sizeBytes,
             }),
           ),
+      );
+    },
+    { env: params.env },
+  );
+}
+
+function unregisterAgentDatabase(params: {
+  agentId: string;
+  path: string;
+  env?: NodeJS.ProcessEnv;
+}): void {
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .deleteFrom("agent_databases")
+          .where("agent_id", "=", params.agentId)
+          .where("path", "=", params.path),
       );
     },
     { env: params.env },
@@ -783,16 +815,64 @@ export function runOpenClawAgentWriteTransaction<T>(
 
 let unregisterExitClose: (() => void) | null = null;
 
+function closeCachedOpenClawAgentDatabase(database: OpenClawAgentDatabase): void {
+  database.walMaintenance.close();
+  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  if (database.db.isOpen) {
+    database.db.close();
+  }
+}
+
+/** Close one cached agent database identified by its exact resolved pathname. */
+export function closeOpenClawAgentDatabaseByPath(pathname: string): boolean {
+  // Cache keys are lexical resolved paths. Do not realpath aliases here: a
+  // symlink swap must never redirect cleanup onto a different cached database.
+  const resolvedPath = path.resolve(pathname);
+  const database = cachedDatabases.get(resolvedPath);
+  if (!database) {
+    return false;
+  }
+  closeCachedOpenClawAgentDatabase(database);
+  cachedDatabases.delete(resolvedPath);
+  if (cachedDatabases.size === 0) {
+    unregisterExitClose?.();
+    unregisterExitClose = null;
+  }
+  return true;
+}
+
+/** Close and unregister one transient agent database by exact cached pathname. */
+export function disposeOpenClawAgentDatabaseByPath(
+  pathname: string,
+  options: { env?: NodeJS.ProcessEnv } = {},
+): boolean {
+  // Require the cache's exact lexical owner. Following a symlink or accepting
+  // an uncached path could unregister a database another process now owns.
+  const resolvedPath = path.resolve(pathname);
+  const database = cachedDatabases.get(resolvedPath);
+  if (!database || database.path !== resolvedPath) {
+    return false;
+  }
+  try {
+    unregisterAgentDatabase({
+      agentId: database.agentId,
+      path: resolvedPath,
+      ...(options.env ? { env: options.env } : {}),
+    });
+  } finally {
+    // Secret-bearing transient DBs must close even when registry maintenance
+    // fails; Windows otherwise cannot remove the file during caller cleanup.
+    closeOpenClawAgentDatabaseByPath(resolvedPath);
+  }
+  return true;
+}
+
 /** Close all cached agent database handles. */
 export function closeOpenClawAgentDatabases(): void {
   unregisterExitClose?.();
   unregisterExitClose = null;
   for (const database of cachedDatabases.values()) {
-    database.walMaintenance.close();
-    clearNodeSqliteKyselyCacheForDatabase(database.db);
-    if (database.db.isOpen) {
-      database.db.close();
-    }
+    closeCachedOpenClawAgentDatabase(database);
   }
   cachedDatabases.clear();
   registeredDatabasePaths.clear();

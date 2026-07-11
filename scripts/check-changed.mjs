@@ -296,6 +296,14 @@ export function createChangedCheckPlan(result, options = {}) {
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
   add("dependency pin guard", ["deps:pins:check"]);
+  if (result.paths.length > 0) {
+    add("format changed files", [
+      "format:check",
+      "--no-error-on-unmatched-pattern",
+      "--",
+      ...result.paths,
+    ]);
+  }
   const shrinkwrapGuardCommand = createShrinkwrapGuardCommand(result.paths);
   if (shrinkwrapGuardCommand) {
     addCommand(
@@ -397,6 +405,9 @@ export function createChangedCheckPlan(result, options = {}) {
   if (lanes.coreTests) {
     addTypecheck("typecheck core tests", ["tsgo:core:test"]);
   }
+  if (lanes.ui) {
+    addTypecheck("typecheck UI", ["tsgo:ui"]);
+  }
   if (lanes.extensions) {
     addTypecheck("typecheck extensions", ["tsgo:extensions"]);
   }
@@ -406,11 +417,14 @@ export function createChangedCheckPlan(result, options = {}) {
   if (lanes.scripts) {
     addTypecheck("typecheck scripts", ["tsgo:scripts"]);
   }
+  if (lanes.strictRatchet) {
+    addTypecheck("typecheck strict ratchet", ["tsgo:strict-ratchet"]);
+  }
   if (lanes.testRoot) {
     addTypecheck("typecheck test root", ["tsgo:test:root"]);
   }
 
-  if (lanes.core || lanes.coreTests) {
+  if (lanes.core || lanes.coreTests || lanes.ui) {
     const coreLintCommand = createTargetedCoreLintCommand(result.paths, baseEnv);
     if (coreLintCommand) {
       addCommand(

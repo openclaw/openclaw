@@ -17,6 +17,7 @@ import {
   formatErrorMessage,
   getAgentHarnessHookRunner,
   getBeforeToolCallPolicyDiagnosticState,
+  isHostScopedAgentToolActive,
   isActiveHarnessContextEngine,
   loadCodexBundleMcpThreadConfig,
   resolveAgentHarnessBeforePromptBuildResult,
@@ -34,6 +35,7 @@ import {
   setActiveEmbeddedRun,
   supportsModelTools,
   runAgentCleanupStep,
+  type AgentHarnessRuntimeArtifactBinding,
   type FastModeAutoProgressState,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
@@ -99,7 +101,10 @@ import {
   isInvalidCodexImagePayloadError,
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
-import { startCodexAttemptThread } from "./attempt-startup.js";
+import {
+  isCodexContextRestartSelectionChangedError,
+  startCodexAttemptThread,
+} from "./attempt-startup.js";
 import { createCodexSteeringQueue, type CodexSteeringQueueOptions } from "./attempt-steering.js";
 import {
   resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
@@ -113,6 +118,7 @@ import {
   createCodexAttemptTurnWatchController,
   type CodexAttemptTurnWatchTimeoutKind,
 } from "./attempt-turn-watches.js";
+import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import {
   resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerFallbackApiKeyCacheKey,
@@ -178,6 +184,7 @@ import {
 } from "./dynamic-tool-execution.js";
 import {
   filterCodexDynamicTools,
+  isCrestodianOnlyCodexDynamicToolAllowlist,
   resolveCodexDynamicToolsLoadingForModel,
   resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
@@ -501,6 +508,12 @@ export async function runCodexAppServerAttempt(
     enabled: profilerEnabled,
   });
   const attemptClientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
+  const runtimeArtifactRequest =
+    params.captureRuntimeArtifact || params.expectedRuntimeArtifact
+      ? params.expectedRuntimeArtifact
+        ? { expected: params.expectedRuntimeArtifact }
+        : {}
+      : undefined;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   const { sessionAgentId } = resolveSessionAgentIds({
@@ -759,6 +772,16 @@ export async function runCodexAppServerAttempt(
     configuredEvents: options.nativeHookRelay?.events,
     appServer,
   });
+  const preparedAuthBinding =
+    !usesSupervisionConnection && appServer.start.homeScope !== "user" && startupAuthProfileId
+      ? await prepareCodexAppServerAuthBinding({
+          authProfileId: startupAuthProfileId,
+          authProfileStore: params.authProfileStore,
+          agentDir,
+          config: params.config,
+        })
+      : undefined;
+  const attemptAuthProfileStore = preparedAuthBinding?.authProfileStore ?? params.authProfileStore;
   const effectiveContextWindowInfo = usesSupervisionConnection
     ? undefined
     : params.contextWindowInfo;
@@ -810,6 +833,7 @@ export async function runCodexAppServerAttempt(
       }
     : {
         ...params,
+        authProfileStore: attemptAuthProfileStore,
         sessionKey: contextSessionKey,
         ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
       };
@@ -824,7 +848,7 @@ export async function runCodexAppServerAttempt(
     ? undefined
     : await resolveCodexAppServerAuthAccountCacheKey({
         authProfileId: startupAuthProfileId,
-        authProfileStore: params.authProfileStore,
+        authProfileStore: attemptAuthProfileStore,
         agentDir,
         config: params.config,
       });
@@ -874,7 +898,7 @@ export async function runCodexAppServerAttempt(
                 model: params.modelId,
                 binding: startupBinding,
                 authProfileId: startupAuthProfileId,
-                authProfileStore: params.authProfileStore,
+                authProfileStore: attemptAuthProfileStore,
                 agentDir,
                 config: params.config,
               }).modelProvider,
@@ -1016,7 +1040,10 @@ export async function runCodexAppServerAttempt(
     loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
       connectionClass: appServer.connectionClass,
     }),
-    directToolNames: resolveCodexDynamicToolDirectNames(params),
+    directToolNames: resolveCodexDynamicToolDirectNames(
+      params,
+      isHostScopedAgentToolActive("crestodian"),
+    ),
     hookContext: {
       agentId: sessionAgentId,
       config: params.config,
@@ -1575,6 +1602,7 @@ export async function runCodexAppServerAttempt(
   });
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadLifecycleBinding;
+  let runtimeArtifact: AgentHarnessRuntimeArtifactBinding | undefined;
   let turnRouter: CodexAppServerTurnRouter;
   let turnRoute: CodexThreadRouteReservation | undefined;
   let routeActivated = false;
@@ -1742,6 +1770,8 @@ export async function runCodexAppServerAttempt(
       pluginConfig,
       computerUseConfig,
       startupAuthProfileId: startupClientAuthProfileId,
+      startupAuthBindingFingerprint: preparedAuthBinding?.fingerprint,
+      ...(runtimeArtifactRequest ? { runtimeArtifactRequest } : {}),
       startupAuthAccountCacheKey,
       startupEnvApiKeyCacheKey,
       agentDir,
@@ -1770,6 +1800,7 @@ export async function runCodexAppServerAttempt(
     });
     client = startupResult.client;
     thread = startupResult.thread;
+    runtimeArtifact = startupResult.runtimeArtifact;
     turnRouter = startupResult.turnRouter;
     turnRoute = startupResult.turnRoute;
     pluginAppServer = startupResult.pluginAppServer;
@@ -3198,6 +3229,22 @@ export async function runCodexAppServerAttempt(
           }),
         };
       }
+      if (isCodexContextRestartSelectionChangedError(turnStartError)) {
+        return {
+          ...buildCodexTurnStartFailureResult({
+            params,
+            message: turnStartErrorMessage,
+            messagesSnapshot: turnStartFailureMessages,
+            systemPromptReport,
+          }),
+          codexAppServerFailure: {
+            kind: "client_closed_before_turn_completed",
+            transport: appServer.start.transport,
+            threadId: thread.threadId,
+            replaySafe: true,
+          },
+        };
+      }
       throw turnStartError;
     }
   }
@@ -3751,6 +3798,10 @@ export async function runCodexAppServerAttempt(
       ...(codexAppServerFailure ? { codexAppServerFailure } : {}),
       ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
       ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
+      ...(runtimeArtifact ? { runtimeArtifact } : {}),
+      ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
+        ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
+        : {}),
       systemPromptReport,
     };
   } finally {
@@ -4062,15 +4113,16 @@ function handleApprovalRequest(params: {
   });
 }
 
-function resolveCodexDynamicToolDirectNames(params: EmbeddedRunAttemptParams): string[] {
+function resolveCodexDynamicToolDirectNames(
+  params: EmbeddedRunAttemptParams,
+  hostCrestodianActive = false,
+): string[] {
   // Tools with catalogMode=direct-only use the model-only namespace. This list
   // remains for control tools that intentionally live at the dynamic-tool root.
   const names: string[] = [];
-  // The ring-zero crestodian tool is the run's entire tool surface; register it
-  // directly instead of deferring it behind Codex tool_search discovery. This is
-  // structural: per-run configs cannot flip codexDynamicToolsLoading because the
-  // harness resolves plugin config from the live global config, not params.config.
-  if (params.crestodianTool) {
+  // Crestodian is the run's only tool and must stay callable when Codex tool
+  // search is unavailable. Exact toolsAllow is the public harness contract.
+  if (hostCrestodianActive && isCrestodianOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
     names.push("crestodian");
   }
   if (params.sourceReplyDeliveryMode === "message_tool_only") {

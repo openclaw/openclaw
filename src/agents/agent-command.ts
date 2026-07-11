@@ -96,6 +96,7 @@ import {
   resolveAutoFallbackPrimaryProbe,
   resolveAgentDir,
   resolveAgentConfig,
+  resolveAgentEffectiveModelPrimary,
   resolveDefaultAgentId,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
@@ -136,6 +137,7 @@ import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
 import { runWithModelFallback } from "./model-fallback.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import type { ModelManifestNormalizationContext } from "./model-selection-normalize.js";
 import {
@@ -1389,8 +1391,14 @@ async function agentCommandInternal(
       const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
       const [
         { getRemoteSkillEligibility, resolveReusableWorkspaceSkillSnapshot },
-        { canExecRequestNode },
+        { resolveNodeExecEligibility },
       ] = await Promise.all([loadSkillsRuntime(), loadExecDefaultsRuntime()]);
+      const nodeSkillsEligibility = resolveNodeExecEligibility({
+        cfg,
+        sessionEntry,
+        sessionKey,
+        agentId: sessionAgentId,
+      });
       const skillSnapshotState = resolveReusableWorkspaceSkillSnapshot({
         workspaceDir,
         config: cfg,
@@ -1398,13 +1406,9 @@ async function agentCommandInternal(
         existingSnapshot: isNewSession ? undefined : currentSkillsSnapshot,
         skillFilter,
         eligibility: {
+          nodeSkills: nodeSkillsEligibility,
           remote: getRemoteSkillEligibility({
-            advertiseExecNode: canExecRequestNode({
-              cfg,
-              sessionEntry,
-              sessionKey,
-              agentId: sessionAgentId,
-            }),
+            advertiseExecNode: nodeSkillsEligibility.canExec,
           }),
         },
         watch: false,
@@ -1481,6 +1485,9 @@ async function agentCommandInternal(
         allowPluginNormalization: pluginsEnabled,
         ...modelManifestContext,
       });
+      const configuredDefaultAuthProfileId = splitTrailingAuthProfile(
+        resolveAgentEffectiveModelPrimary(cfg, sessionAgentId) ?? "",
+      ).profile;
       const runContext = resolveAgentRunContext(opts);
       const { provider: defaultProvider, model: defaultModel } =
         normalizeAgentCommandDefaultModelRef(
@@ -2254,6 +2261,10 @@ async function agentCommandInternal(
                 sessionEntry,
               });
               const fastMode = opts.fastMode ?? fastModeState.mode;
+              const configuredAuthProfileId =
+                providerOverride === defaultProvider && modelOverride === defaultModel
+                  ? configuredDefaultAuthProfileId
+                  : undefined;
               const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
                 provider: providerOverride,
                 entry: attemptSessionEntry,
@@ -2292,6 +2303,7 @@ async function agentCommandInternal(
               return attemptExecutionRuntime.runAgentAttempt({
                 providerOverride,
                 modelOverride,
+                configuredAuthProfileId,
                 modelFallbacksOverride: effectiveFallbacksOverride,
                 originalProvider: provider,
                 cfg,

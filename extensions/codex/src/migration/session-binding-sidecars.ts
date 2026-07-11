@@ -197,6 +197,13 @@ async function readLegacySessionIndex(
     if (!isRecord(value)) {
       return { failure: `session index ${storePath} has invalid entries` };
     }
+    // Metadata-only rows have no transcript identity and therefore cannot own
+    // a binding sidecar. This legacy reader parses the raw file directly:
+    // post-flip listSessionEntries reads SQLite, so main's normalized
+    // cross-check would consult the wrong store for import inputs.
+    if (value.sessionId === undefined) {
+      continue;
+    }
     const sessionId = typeof value.sessionId === "string" ? value.sessionId.trim() : "";
     const sessionFile = value.sessionFile;
     const lifecycleRevision = value.lifecycleRevision;

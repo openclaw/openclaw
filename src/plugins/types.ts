@@ -1272,7 +1272,21 @@ export type WorkerSshEndpoint = {
   host: string;
   port: number;
   user: string;
+  /** OpenSSH public host-key line obtained from trusted provisioning output. */
+  hostKey: string;
   /** Secret reference only; providers must never return plaintext key material. */
+  keyRef: SecretRef;
+};
+
+/** Resolved SSH client identity. Providers may return a local path or ephemeral material. */
+export type WorkerSshIdentity =
+  | { kind: "path"; path: string }
+  | { kind: "material"; contents: string };
+
+/** Durable context supplied when a worker provider resolves the identity it minted. */
+export type WorkerSshIdentityRequest = {
+  leaseId: string;
+  profile: WorkerProfile;
   keyRef: SecretRef;
 };
 
@@ -1308,6 +1322,11 @@ export type WorkerProvider = {
   provision: (profile: WorkerProfile, operationId: string) => Promise<WorkerLease>;
   /** Throws on transient/indeterminate failures; `unknown` means authoritative absence. */
   inspect: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<WorkerLeaseStatus>;
+  /**
+   * Resolves provider-owned dynamic identities. When absent, the gateway uses its generic
+   * SecretRef resolver; when present, failures are authoritative and never fall back.
+   */
+  resolveSshIdentity?: (request: WorkerSshIdentityRequest) => Promise<WorkerSshIdentity>;
   renew?: (leaseId: string) => Promise<void>;
   /** Idempotent; resolves only after the provider can prove teardown. */
   destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
@@ -2302,6 +2321,20 @@ export type OpenClawPluginNodeHostCommand = {
   dangerous?: boolean;
   /** Return false to omit this command and capability from the node declaration. */
   isAvailable?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => boolean;
+  agentTool?: {
+    name: string;
+    description: string;
+    parameters?: Record<string, unknown>;
+    /**
+     * Platforms where this node-hosted agent tool should be allowlisted by
+     * default. Omit to require explicit `gateway.nodes.allowCommands`.
+     */
+    defaultPlatforms?: Array<"ios" | "android" | "macos" | "windows" | "linux" | "unknown">;
+    mcp?: {
+      server: string;
+      tool: string;
+    };
+  };
   handle: (paramsJSON?: string | null) => Promise<string>;
 };
 

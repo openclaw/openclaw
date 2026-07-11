@@ -519,6 +519,16 @@ export interface ExecApprovalsConfig {
   updated_at_ms: number;
 }
 
+export interface FleetCells {
+  container_name: string;
+  created_at_ms: number;
+  data_dir: string;
+  host_port: number;
+  image: string;
+  runtime: string;
+  tenant_id: string;
+}
+
 export interface FlowRuns {
   blocked_summary: string | null;
   blocked_task_id: string | null;
@@ -1003,6 +1013,9 @@ export interface WebPushVapidKeys {
 
 export interface WorkerEnvironments {
   attached_session_ids_json: Generated<string>;
+  bootstrap_bundle_hash: string | null;
+  bootstrap_openclaw_version: string | null;
+  bootstrap_protocol_features_json: string | null;
   created_at_ms: number;
   destroy_requested_at_ms: number | null;
   environment_id: string;
@@ -1014,11 +1027,13 @@ export interface WorkerEnvironments {
   provider_id: string;
   provision_operation_id: string;
   ssh_host: string | null;
+  ssh_host_key: string | null;
   ssh_key_ref_json: string | null;
   ssh_port: number | null;
   ssh_user: string | null;
   state: string;
   state_changed_at_ms: number;
+  teardown_terminal_state: string | null;
   updated_at_ms: number;
 }
 
@@ -1081,6 +1096,7 @@ export interface DB {
   diagnostic_events: DiagnosticEvents;
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
+  fleet_cells: FleetCells;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;
   gateway_restart_handoff: GatewayRestartHandoff;

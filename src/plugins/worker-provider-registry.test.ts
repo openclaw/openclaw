@@ -104,6 +104,23 @@ describe("worker provider registry", () => {
     );
   });
 
+  it("rejects a non-function optional SSH identity resolver", () => {
+    const pluginRegistry = createTestRegistry();
+    const provider = {
+      ...createWorkerProvider("static-ssh"),
+      resolveSshIdentity: "later",
+    } as unknown as WorkerProvider;
+
+    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+
+    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        message: "worker provider registration resolveSshIdentity must be a function",
+      }),
+    );
+  });
+
   it("rejects invalid provider ids", () => {
     const pluginRegistry = createTestRegistry();
 

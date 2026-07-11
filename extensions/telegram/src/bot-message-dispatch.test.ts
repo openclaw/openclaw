@@ -723,6 +723,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(renderText?.("# Heading")).toEqual({
       text: "Heading",
       parseMode: "HTML",
+      markdownSource: {
+        text: "# Heading",
+        tableMode: "preserve",
+      },
     });
   });
 

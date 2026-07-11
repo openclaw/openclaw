@@ -956,6 +956,15 @@ function ensureAdditiveStateColumns(db: DatabaseSync, pathname: string): void {
     },
   );
   ensureColumn(db, "subagent_runs", "task_name TEXT");
+  ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
+  ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
+  ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");
+  ensureColumn(db, "worker_environments", "ssh_host_key TEXT");
+  ensureColumn(
+    db,
+    "worker_environments",
+    "teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed'))",
+  );
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {
