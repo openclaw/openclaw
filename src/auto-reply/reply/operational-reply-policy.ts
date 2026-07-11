@@ -4,7 +4,7 @@ import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import { loadSessionEntry, patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -16,21 +16,20 @@ import {
   type ReplyPayload,
 } from "../reply-payload.js";
 
-const OPERATIONAL_REPLY_ONCE_CACHE_LIMIT = 1024;
 const deliveredOperationalReplyOnceKeys = new Set<string>();
 
 export type OperationalReplyPolicy = "always" | "once" | "redirect" | "silent";
 
 export type OperationalReplyPolicyResult =
-  | { markDelivered?: () => Promise<void> | void; shouldDeliver: true }
+  | { markDelivered?: (delivered: boolean) => Promise<void> | void; shouldDeliver: true }
   | { intentionalSilence: true; redirected?: boolean; shouldDeliver: false };
 
 export async function markOperationalReplyPolicyDelivered(
   result: OperationalReplyPolicyResult,
   delivered: boolean,
 ): Promise<void> {
-  if (delivered && result.shouldDeliver) {
-    await result.markDelivered?.();
+  if (result.shouldDeliver) {
+    await result.markDelivered?.(delivered);
   }
 }
 
@@ -138,13 +137,11 @@ function rememberOperationalReplyOnceKey(key: string): boolean {
     return false;
   }
   deliveredOperationalReplyOnceKeys.add(key);
-  if (deliveredOperationalReplyOnceKeys.size > OPERATIONAL_REPLY_ONCE_CACHE_LIMIT) {
-    const oldest = deliveredOperationalReplyOnceKeys.values().next().value;
-    if (oldest) {
-      deliveredOperationalReplyOnceKeys.delete(oldest);
-    }
-  }
   return true;
+}
+
+function forgetOperationalReplyOnceKey(key: string): void {
+  deliveredOperationalReplyOnceKeys.delete(key);
 }
 
 function hasOperationalReplyOnceKey(key: string): boolean {
@@ -157,9 +154,7 @@ function normalizeOperationalReplyOnceKeys(
   if (!Array.isArray(value)) {
     return [];
   }
-  return value
-    .filter((key): key is string => typeof key === "string" && key.trim().length > 0)
-    .slice(-OPERATIONAL_REPLY_ONCE_CACHE_LIMIT);
+  return value.filter((key): key is string => typeof key === "string" && key.trim().length > 0);
 }
 
 function resolveOperationalReplySourceScope(params: {
@@ -190,54 +185,87 @@ function resolveOperationalReplySourceScope(params: {
   }
 }
 
-function hasDurableOperationalReplyOnceKey(params: {
-  cfg: OpenClawConfig;
+type OperationalReplyOnceReservation = {
+  durableReserved: boolean;
   key: string;
-  sourceSessionKey?: string;
-  sourceStorePath?: string;
-}): boolean {
-  const scope = resolveOperationalReplySourceScope(params);
-  if (!scope) {
-    return false;
-  }
-  try {
-    const entry = loadSessionEntry(scope);
-    return normalizeOperationalReplyOnceKeys(entry?.operationalReplyOnceKeys).includes(params.key);
-  } catch (error) {
-    logVerbose(`operational-reply-policy: once read skipped: ${formatErrorMessage(error)}`);
-    return false;
-  }
-}
+  scope?: { sessionKey: string; storePath: string };
+};
 
-async function rememberDurableOperationalReplyOnceKey(params: {
+async function reserveOperationalReplyOnceKey(params: {
   cfg: OpenClawConfig;
   key: string;
   sourceSessionKey?: string;
   sourceStorePath?: string;
-}): Promise<void> {
-  rememberOperationalReplyOnceKey(params.key);
+}): Promise<OperationalReplyOnceReservation | null> {
+  if (hasOperationalReplyOnceKey(params.key)) {
+    return null;
+  }
   const scope = resolveOperationalReplySourceScope(params);
   if (!scope) {
-    return;
+    return rememberOperationalReplyOnceKey(params.key)
+      ? { durableReserved: false, key: params.key }
+      : null;
   }
   try {
-    await patchSessionEntry(
+    let reserved = false;
+    let alreadySeen = false;
+    const entry = await patchSessionEntry(
       scope,
       (entry) => {
         const keys = normalizeOperationalReplyOnceKeys(entry.operationalReplyOnceKeys);
         if (keys.includes(params.key)) {
+          alreadySeen = true;
           return null;
         }
+        reserved = true;
+        return { operationalReplyOnceKeys: [...keys, params.key] };
+      },
+      { preserveActivity: true },
+    );
+    if (alreadySeen) {
+      return null;
+    }
+    if (reserved && entry) {
+      rememberOperationalReplyOnceKey(params.key);
+      return { durableReserved: true, key: params.key, scope };
+    }
+    return rememberOperationalReplyOnceKey(params.key)
+      ? { durableReserved: false, key: params.key }
+      : null;
+  } catch (error) {
+    logVerbose(`operational-reply-policy: once persistence skipped: ${formatErrorMessage(error)}`);
+    return rememberOperationalReplyOnceKey(params.key)
+      ? { durableReserved: false, key: params.key }
+      : null;
+  }
+}
+
+async function releaseOperationalReplyOnceReservation(
+  reservation: OperationalReplyOnceReservation,
+): Promise<void> {
+  forgetOperationalReplyOnceKey(reservation.key);
+  if (!reservation.durableReserved || !reservation.scope) {
+    return;
+  }
+  try {
+    await patchSessionEntry(
+      reservation.scope,
+      (entry) => {
+        const keys = normalizeOperationalReplyOnceKeys(entry.operationalReplyOnceKeys);
+        if (!keys.includes(reservation.key)) {
+          return null;
+        }
+        const nextKeys = keys.filter((key) => key !== reservation.key);
         return {
-          operationalReplyOnceKeys: [...keys, params.key].slice(
-            -OPERATIONAL_REPLY_ONCE_CACHE_LIMIT,
-          ),
+          operationalReplyOnceKeys: nextKeys.length > 0 ? nextKeys : undefined,
         };
       },
       { preserveActivity: true },
     );
   } catch (error) {
-    logVerbose(`operational-reply-policy: once persistence skipped: ${formatErrorMessage(error)}`);
+    logVerbose(
+      `operational-reply-policy: once reservation release skipped: ${formatErrorMessage(error)}`,
+    );
   }
 }
 
@@ -384,15 +412,13 @@ export async function applyOperationalReplyPolicy(params: {
       payload: params.payload,
       sessionKey: params.sourceSessionKey,
     });
-    if (
-      hasOperationalReplyOnceKey(onceKey) ||
-      hasDurableOperationalReplyOnceKey({
-        cfg: params.cfg,
-        key: onceKey,
-        sourceSessionKey: params.sourceSessionKey,
-        sourceStorePath: params.sourceStorePath,
-      })
-    ) {
+    const reservation = await reserveOperationalReplyOnceKey({
+      cfg: params.cfg,
+      key: onceKey,
+      sourceSessionKey: params.sourceSessionKey,
+      sourceStorePath: params.sourceStorePath,
+    });
+    if (!reservation) {
       logOperationalReplyPolicySuppression({
         ...params,
         reason: "suppressed by messages.operationalReplies once policy",
@@ -401,13 +427,11 @@ export async function applyOperationalReplyPolicy(params: {
     }
     return {
       shouldDeliver: true,
-      markDelivered: () =>
-        rememberDurableOperationalReplyOnceKey({
-          cfg: params.cfg,
-          key: onceKey,
-          sourceSessionKey: params.sourceSessionKey,
-          sourceStorePath: params.sourceStorePath,
-        }),
+      markDelivered: async (delivered) => {
+        if (!delivered) {
+          await releaseOperationalReplyOnceReservation(reservation);
+        }
+      },
     };
   }
   if (operationalReplyPolicy.policy === "redirect") {
