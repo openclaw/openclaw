@@ -511,8 +511,8 @@ export type GatewayConfig = {
    * - auto: Loopback (127.0.0.1) if available, else 0.0.0.0 (fallback to all interfaces)
    * - lan: 0.0.0.0 (all interfaces, no fallback, current BYOH path is IPv4-only)
    * - loopback: 127.0.0.1 (local-only)
-   * - tailnet: Tailnet IPv4 if available (100.64.0.0/10), else loopback
-   * - custom: User-specified IPv4 address, fallback to 0.0.0.0 if unavailable (requires customBindHost)
+   * - tailnet: Tailnet IPv4 plus 127.0.0.1 if available, else loopback only
+   * - custom: User-specified IPv4 address (requires customBindHost); specific IPv4s also bind 127.0.0.1
    * IPv6-only BYOH is not natively supported on this path today. Use an IPv4 sidecar or proxy.
    * Default: loopback (127.0.0.1).
    */
