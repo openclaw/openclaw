@@ -993,10 +993,7 @@ async function activateSetupInferenceUnredacted(
             // Probe the policy that will actually persist. Codex rejects deny and
             // allowlist exec modes during initialization; masking that here would
             // pass onboarding and fail the user's first normal run.
-            config: applyMergePatch(
-              enableCodexSupervisionForGuidedSetup(stagedCodexConfig, codexSourceConfig),
-              { tools: { exec: { mode: "full" } } },
-            ) as OpenClawConfig,
+            config: enableCodexSupervisionForGuidedSetup(stagedCodexConfig, codexSourceConfig),
             agentId: resolveDefaultAgentId(stagedCodexConfig),
           };
         }

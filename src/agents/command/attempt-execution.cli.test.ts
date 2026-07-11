@@ -1018,7 +1018,6 @@ describe("CLI attempt execution", () => {
         },
       } as OpenClawConfig,
       sessionEntry,
-      agentHarnessRuntimeOverride: "codex",
       sessionId: sessionEntry.sessionId,
       sessionKey,
       sessionAgentId: "main",
@@ -3024,6 +3023,7 @@ describe("embedded attempt harness pinning", () => {
         },
       } as OpenClawConfig,
       sessionEntry,
+      agentHarnessRuntimeOverride: "codex",
       sessionId: sessionEntry.sessionId,
       sessionKey: "agent:main:main",
       sessionAgentId: "main",
@@ -3354,7 +3354,7 @@ describe("embedded attempt harness pinning", () => {
     expectMockArgFields(runEmbeddedAgentMock, { agentHarnessId: undefined });
   });
 
-  it("keeps OpenAI sessions pinned to their persisted OpenClaw harness", async () => {
+  it("honors a resolved persisted OpenClaw harness", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "stale-agent-session",
       updatedAt: Date.now(),
@@ -3370,6 +3370,7 @@ describe("embedded attempt harness pinning", () => {
       modelOverride: "gpt-5.4",
       cfg: {} as OpenClawConfig,
       sessionEntry,
+      agentHarnessRuntimeOverride: "openclaw",
       sessionId: sessionEntry.sessionId,
       sessionKey: "agent:main:main",
       sessionAgentId: "main",
