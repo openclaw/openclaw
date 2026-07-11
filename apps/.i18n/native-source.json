@@ -18747,6 +18747,22 @@
     },
     {
       "kind": "conditional-branch",
+      "line": 934,
+      "path": "apps/macos/Sources/OpenClaw/NodeMode/MacNodeRuntime.swift",
+      "source": "approvalSource requires matching systemRunPlan",
+      "surface": "apple",
+      "id": "native.apple.386595fa18585dbb"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 934,
+      "path": "apps/macos/Sources/OpenClaw/NodeMode/MacNodeRuntime.swift",
+      "source": "explicit approval requires matching systemRunPlan",
+      "surface": "apple",
+      "id": "native.apple.014ff905cecd753b"
+    },
+    {
+      "kind": "conditional-branch",
       "line": 426,
       "path": "apps/macos/Sources/OpenClaw/NodePairingApprovalPrompter.swift",
       "source": "Node pairing approved",

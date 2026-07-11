@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import OpenClawIPC
 import OpenClawKit
@@ -748,6 +749,7 @@ extension MacNodeRuntime {
         let validatedCommand: ExecHostValidatedRequest
         let evaluation: ExecApprovalEvaluation
         let security: ExecSecurity
+        let delayedPolicySnapshot: ExecApprovalPolicySnapshot?
         let sessionKey: String
         let runId: String
     }
@@ -859,7 +861,8 @@ extension MacNodeRuntime {
             effectiveSecurity: security,
             approvalSource: approvalSource,
             explicitlyApproved: approvedByAsk,
-            persistAllowlist: persistAllowlist)
+            persistAllowlist: persistAllowlist,
+            delayedPolicySnapshot: prepared.delayedPolicySnapshot)
         let timeoutSec = params.timeoutMs.flatMap { Double($0) / 1000.0 }
         let cwd = params.cwd
         let executionEnv = evaluation.env
@@ -906,6 +909,10 @@ extension MacNodeRuntime {
                     code: .invalidRequest,
                     message: "INVALID_REQUEST: approvalSource cannot be combined with explicit approval"))
         }
+        let explicitDecision = ExecApprovalHelpers.parseDecision(params.approvalDecision)
+        let explicitApproval = params.approved == true ||
+            explicitDecision == .allowOnce ||
+            explicitDecision == .allowAlways
         let validatedCommand: ExecHostValidatedRequest
         switch ExecHostRequestEvaluator.validateCommand(
             command: params.command,
@@ -918,6 +925,42 @@ extension MacNodeRuntime {
                 ? error.message
                 : "INVALID_REQUEST: \(error.message)"
             return .response(Self.errorResponse(req, code: .invalidRequest, message: message))
+        }
+        if approvalSource != nil || explicitApproval {
+            guard let plan = params.systemRunPlan,
+                  Self.systemRunPlan(plan, matches: params, validatedCommand: validatedCommand)
+            else {
+                let message = approvalSource != nil
+                    ? "approvalSource requires matching systemRunPlan"
+                    : "explicit approval requires matching systemRunPlan"
+                return .response(Self.errorResponse(req, code: .invalidRequest, message: message))
+            }
+        }
+        let carriesDelayedAuthority = approvalSource == .autoReview || explicitApproval
+        let delayedPolicySnapshot: ExecApprovalPolicySnapshot?
+        if carriesDelayedAuthority {
+            if let operand = params.systemRunPlan?.mutableFileOperand,
+               !Self.revalidateMutableFileOperand(
+                   operand,
+                   command: validatedCommand.command,
+                   cwd: params.cwd)
+            {
+                return .response(
+                    Self.errorResponse(
+                        req,
+                        code: .unavailable,
+                        message: "SYSTEM_RUN_DENIED: approval script operand changed before execution"))
+            }
+            guard let policySnapshot = params.systemRunPlan?.policySnapshot else {
+                return .response(
+                    Self.errorResponse(
+                        req,
+                        code: .invalidRequest,
+                        message: "INVALID_REQUEST: delayed approval requires a prepared policy snapshot"))
+            }
+            delayedPolicySnapshot = ExecApprovalPolicySnapshot(portable: policySnapshot)
+        } else {
+            delayedPolicySnapshot = nil
         }
         let sessionKey = (params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
             ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -991,8 +1034,81 @@ extension MacNodeRuntime {
             validatedCommand: validatedCommand,
             evaluation: evaluation,
             security: security,
+            delayedPolicySnapshot: delayedPolicySnapshot,
             sessionKey: sessionKey,
             runId: runId))
+    }
+
+    private static func systemRunPlan(
+        _ plan: OpenClawSystemRunApprovalPlan,
+        matches params: OpenClawSystemRunParams,
+        validatedCommand: ExecHostValidatedRequest) -> Bool
+    {
+        // Delayed authority is signed for one normalized request. Match the
+        // same fields as the Node host before trusting its policy snapshot.
+        plan.argv == validatedCommand.command &&
+            plan.commandText == validatedCommand.displayCommand &&
+            self.normalizedSystemRunPlanString(plan.cwd) == self.normalizedSystemRunPlanString(params.cwd) &&
+            self.normalizedSystemRunPlanString(plan.agentId) == self.normalizedSystemRunPlanString(params.agentId) &&
+            self.normalizedSystemRunPlanString(plan.sessionKey) ==
+            self.normalizedSystemRunPlanString(params.sessionKey)
+    }
+
+    private static func normalizedSystemRunPlanString(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let scalars = value.unicodeScalars
+        var start = scalars.startIndex
+        while start != scalars.endIndex, self.isECMAScriptTrimScalar(scalars[start]) {
+            start = scalars.index(after: start)
+        }
+        var end = scalars.endIndex
+        while end != start {
+            let previous = scalars.index(before: end)
+            guard self.isECMAScriptTrimScalar(scalars[previous]) else { break }
+            end = previous
+        }
+        let trimmed = String(scalars[start..<end])
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func revalidateMutableFileOperand(
+        _ operand: OpenClawSystemRunApprovalFileOperand,
+        command: [String],
+        cwd: String?) -> Bool
+    {
+        guard operand.argvIndex >= 0,
+              operand.argvIndex < command.count,
+              let rawPath = self.normalizedSystemRunPlanString(command[operand.argvIndex])
+        else { return false }
+
+        let basePath = self.normalizedSystemRunPlanString(cwd) ?? FileManager.default.currentDirectoryPath
+        let resolvedURL = URL(fileURLWithPath: rawPath, relativeTo: URL(fileURLWithPath: basePath, isDirectory: true))
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        guard resolvedURL.path == operand.path,
+              let data = try? Data(contentsOf: resolvedURL, options: .mappedIfSafe)
+        else { return false }
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        return digest == operand.sha256
+    }
+
+    private static func isECMAScriptTrimScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x0009...0x000D,
+             0x0020,
+             0x00A0,
+             0x1680,
+             0x2000...0x200A,
+             0x2028,
+             0x2029,
+             0x202F,
+             0x205F,
+             0x3000,
+             0xFEFF:
+            true
+        default:
+            false
+        }
     }
 
     private func handleSystemWhich(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
