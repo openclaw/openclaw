@@ -7,7 +7,7 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { chunkTextForOutbound, convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
