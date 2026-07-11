@@ -1,6 +1,7 @@
 // Coverage for incomplete-turn safety, retry instructions, and liveness states.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasOutboundDeliveryEvidence,
@@ -9,11 +10,15 @@ import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
   mockedBuildEmbeddedRunPayloads,
+  MockedFailoverError,
+  mockedClassifyAssistantFailoverReason,
   mockedClassifyFailoverReason,
+  mockedFormatAssistantErrorText,
   mockedGlobalHookRunner,
   mockedIsFailoverAssistantError,
   mockedIsRateLimitAssistantError,
   mockedLog,
+  mockedMarkAuthProfileFailure,
   mockedRunEmbeddedAttempt,
   mockedResolveModelAsync,
   mockedSleepWithAbort,
@@ -83,6 +88,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       throw new Error(`Expected run embedded attempt call ${index}`);
     }
     return call[0] as { prompt?: string };
+  }
+
+  function hasStructuredRateLimitStatus(assistant: unknown): boolean {
+    return Boolean(
+      assistant &&
+      typeof assistant === "object" &&
+      (assistant as { httpStatus?: unknown }).httpStatus === 429,
+    );
   }
 
   it("counts failed tool results in trace tool summaries", async () => {
@@ -668,6 +681,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(mockedSleepWithAbort).toHaveBeenCalledWith(30_000, undefined);
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.meta.executionTrace?.fallbackUsed).toBe(false);
     expect(result.meta.executionTrace?.attempts).toMatchObject([
@@ -685,6 +699,127 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         stage: "assistant",
       },
     ]);
+  });
+
+  it("honors structured Retry-After metadata in the embedded same-model rate-limit retry", async () => {
+    const rateLimitAssistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-haiku-4-5-20251001",
+      errorMessage: "Anthropic Messages request failed",
+      httpStatus: 429,
+      retryAfter: { kind: "seconds", seconds: 30 },
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyAssistantFailoverReason.mockImplementation((assistant) =>
+      hasStructuredRateLimitStatus(assistant) ? "rate_limit" : null,
+    );
+    mockedIsFailoverAssistantError.mockImplementation(hasStructuredRateLimitStatus);
+    mockedIsRateLimitAssistantError.mockImplementation(hasStructuredRateLimitStatus);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: rateLimitAssistant,
+        currentAttemptAssistant: rateLimitAssistant,
+      }),
+    );
+    const recoveredAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "anthropic",
+      model: "claude-haiku-4-5-20251001",
+      content: [{ type: "text", text: "Recovered after structured Retry-After." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Recovered after structured Retry-After."],
+        lastAssistant: recoveredAssistant,
+        currentAttemptAssistant: recoveredAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-haiku-4-5-20251001",
+      runId: "run-structured-retry-after-same-model",
+    });
+
+    expect(mockedSleepWithAbort).toHaveBeenCalledWith(30_000, undefined);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.meta.executionTrace?.fallbackUsed).toBe(false);
+    expect(result.meta.executionTrace?.attempts).toMatchObject([
+      {
+        provider: "anthropic",
+        model: "claude-haiku-4-5-20251001",
+        result: "same_model_rate_limit",
+        reason: "rate_limit",
+        stage: "assistant",
+      },
+      {
+        provider: "anthropic",
+        model: "claude-haiku-4-5-20251001",
+        result: "success",
+        stage: "assistant",
+      },
+    ]);
+  });
+
+  it("does not sleep in-turn when structured Retry-After exceeds the short-window ceiling", async () => {
+    const rateLimitAssistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-haiku-4-5-20251001",
+      errorMessage: "Anthropic Messages request failed",
+      httpStatus: 429,
+      retryAfter: { kind: "seconds", seconds: 120 },
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyAssistantFailoverReason.mockImplementation((assistant) =>
+      hasStructuredRateLimitStatus(assistant) ? "rate_limit" : null,
+    );
+    mockedIsFailoverAssistantError.mockImplementation(hasStructuredRateLimitStatus);
+    mockedIsRateLimitAssistantError.mockImplementation(hasStructuredRateLimitStatus);
+    mockedFormatAssistantErrorText.mockReturnValue("Anthropic rate limit");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: rateLimitAssistant,
+        currentAttemptAssistant: rateLimitAssistant,
+      }),
+    );
+
+    const promise = runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-haiku-4-5-20251001",
+      runId: "run-structured-retry-after-over-limit",
+      config: makeModelFallbackCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-haiku-4-5-20251001",
+              fallbacks: ["openai/gpt-5.4"],
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow("Anthropic rate limit");
+    expect(mockedSleepWithAbort).not.toHaveBeenCalled();
+    expect(mockedMarkAuthProfileFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "test-profile",
+        reason: "rate_limit",
+        modelId: "claude-haiku-4-5-20251001",
+        retryAfter: { kind: "seconds", seconds: 120 },
+      }),
+    );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
   it("retries reasoning-only GPT turns with a visible-answer continuation instruction", async () => {

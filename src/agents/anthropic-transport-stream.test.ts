@@ -12,7 +12,8 @@ const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   guardedFetchMock: vi.fn(),
 }));
 
-vi.mock("./provider-transport-fetch.js", () => ({
+vi.mock("./provider-transport-fetch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./provider-transport-fetch.js")>()),
   buildGuardedModelFetch: buildGuardedModelFetchMock,
 }));
 
@@ -910,6 +911,48 @@ describe("anthropic transport stream", () => {
     expect(result.errorMessage).toBe(`${"x".repeat(400)}…`);
     expect(pullCount).toBeGreaterThanOrEqual(2);
     expect(cancelCount).toBe(1);
+  });
+
+  it("surfaces HTTP status and Retry-After from a 429 error response", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          type: "error",
+          error: { type: "rate_limit_error", message: "slow down" },
+        }),
+        { status: 429, headers: { "retry-after": "30" } },
+      ),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.httpStatus).toBe(429);
+    expect(result.retryAfter).toEqual({ kind: "seconds", seconds: 30 });
+  });
+
+  it("surfaces an over-limit Retry-After as Infinity from an overflowed retry-after-ms header", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ type: "error", error: { message: "rate limited" } }), {
+        status: 429,
+        headers: { "retry-after-ms": "9007199254740993" },
+      }),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    // The over-limit signal must survive to the AssistantMessage so the retry
+    // resolver rejects it instead of falling back to the short exponential delay.
+    expect(result.stopReason).toBe("error");
+    expect(result.retryAfter).toEqual({ kind: "unbounded" });
   });
 
   it("aborts stalled streamed Anthropic error responses", async () => {

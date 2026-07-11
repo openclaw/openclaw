@@ -1349,7 +1349,7 @@ function buildAssistantFailoverSignal(
   opts?: { provider?: string },
 ): FailoverSignal {
   return {
-    status: extractLeadingHttpStatus(msg.errorMessage?.trim() ?? "")?.code,
+    status: msg.httpStatus ?? extractLeadingHttpStatus(msg.errorMessage?.trim() ?? "")?.code,
     code: msg.errorCode,
     errorType: msg.errorType,
     message: msg.errorMessage?.trim() || undefined,
@@ -1640,7 +1640,7 @@ export function isRateLimitAssistantError(msg: AssistantMessage | undefined): bo
   if (!msg || msg.stopReason !== "error") {
     return false;
   }
-  return isRateLimitErrorMessage(msg.errorMessage ?? "");
+  return classifyAssistantFailoverReason(msg) === "rate_limit";
 }
 
 const TOOL_CALL_INPUT_MISSING_RE =

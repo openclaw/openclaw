@@ -4,6 +4,7 @@
  * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
  */
 import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
+import type { ServerRetryAfter } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { truncateErrorDetail } from "./provider-http-errors.js";
@@ -30,6 +31,8 @@ type TransportOutputShape = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  httpStatus?: number;
+  retryAfter?: ServerRetryAfter;
 };
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -149,6 +152,8 @@ type TransportErrorDetails = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  httpStatus?: number;
+  retryAfter?: ServerRetryAfter;
 };
 
 function readStringLikeProperty(value: unknown, key: string): string | undefined {
@@ -162,6 +167,47 @@ function readStringLikeProperty(value: unknown, key: string): string | undefined
   }
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return String(raw);
+  }
+  return undefined;
+}
+
+/** Reads a finite, non-negative number property (integers coerced from numeric strings). */
+function readFiniteNonNegativeNumberProperty(value: unknown, key: string): number | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = (value as Record<string, unknown>)[key];
+  const numeric =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && raw.trim()
+        ? Number(raw)
+        : Number.NaN;
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : undefined;
+}
+
+/**
+ * Reads a {@link ServerRetryAfter} union off an error property, validating the
+ * closed shape. The over-limit (`unbounded`) variant survives extraction as a
+ * discriminated case, so no finite-only downstream can silently drop it.
+ */
+function readServerRetryAfterProperty(value: unknown, key: string): ServerRetryAfter | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = (value as Record<string, unknown>)[key];
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const kind = (raw as { kind?: unknown }).kind;
+  if (kind === "unbounded") {
+    return { kind: "unbounded" };
+  }
+  if (kind === "seconds") {
+    const seconds = (raw as { seconds?: unknown }).seconds;
+    if (typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0) {
+      return { kind: "seconds", seconds };
+    }
   }
   return undefined;
 }
@@ -229,11 +275,18 @@ function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
     normalizeTransportErrorBody(readStringLikeProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(readObjectProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(nestedError);
+  const httpStatus =
+    readFiniteNonNegativeNumberProperty(errorObject, "httpStatus") ??
+    readFiniteNonNegativeNumberProperty(errorObject, "status") ??
+    readFiniteNonNegativeNumberProperty(errorObject, "statusCode");
+  const retryAfter = readServerRetryAfterProperty(errorObject, "retryAfter");
 
   return {
     ...(errorCode ? { errorCode } : {}),
     ...(errorType ? { errorType } : {}),
     ...(errorBody ? { errorBody } : {}),
+    ...(httpStatus !== undefined ? { httpStatus } : {}),
+    ...(retryAfter !== undefined ? { retryAfter } : {}),
   };
 }
 

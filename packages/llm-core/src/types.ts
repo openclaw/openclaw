@@ -303,6 +303,18 @@ export interface UserMessage {
   runtimeContextCarrier?: boolean;
 }
 
+/**
+ * A server-provided Retry-After cooldown, as a closed result so every consumer
+ * must handle the over-limit case explicitly instead of silently dropping a
+ * non-finite sentinel. `undefined` means no usable Retry-After was present.
+ *  - `{ kind: "seconds"; seconds }` — a finite server cooldown (seconds >= 0).
+ *  - `{ kind: "unbounded" }` — an overflowed / unparseably-large header; the
+ *    real cooldown is unknown and must be treated as beyond any local bound.
+ */
+export type ServerRetryAfter =
+  | { readonly kind: "seconds"; readonly seconds: number }
+  | { readonly kind: "unbounded" };
+
 /** Assistant turn, including provider identity and final stop state. */
 export interface AssistantMessage {
   role: "assistant";
@@ -319,6 +331,8 @@ export interface AssistantMessage {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  httpStatus?: number; // HTTP status from a transport error response (e.g. 429), when available
+  retryAfter?: ServerRetryAfter; // Server-specified cooldown (Retry-After) for retry/failover decisions
   timestamp: number; // Unix timestamp in milliseconds
 }
 

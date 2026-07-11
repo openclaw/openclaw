@@ -37,6 +37,7 @@ import {
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import type { ServerRetryAfter } from "../../llm/types.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -1827,6 +1828,7 @@ async function runEmbeddedAgentInternal(
         config?: RunEmbeddedAgentParams["config"];
         agentDir?: RunEmbeddedAgentParams["agentDir"];
         modelId?: string;
+        retryAfter?: ServerRetryAfter;
       }) => {
         const { profileId, reason } = failure;
         if (!profileId || !reason) {
@@ -1845,6 +1847,7 @@ async function runEmbeddedAgentInternal(
           agentDir,
           runId: params.runId,
           modelId: failure.modelId,
+          retryAfter: failure.retryAfter,
         });
       };
       const markAuthProfileSuccessAfterRun = () => {
@@ -3531,7 +3534,7 @@ async function runEmbeddedAgentInternal(
               providerStarted: assistantProviderStarted,
               transientRateLimit:
                 assistantProfileFailoverReason === "rate_limit" &&
-                isShortWindowRateLimitMessage(attemptAssistant?.errorMessage),
+                isShortWindowRateLimitMessage(attemptAssistant),
             },
           );
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;

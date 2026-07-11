@@ -4,7 +4,27 @@ import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { buildGuardedModelFetch, parseRetryAfterSeconds } from "./provider-transport-fetch.js";
+
+describe("parseRetryAfterSeconds", () => {
+  it("parses delta-seconds, retry-after-ms, and HTTP-date forms", () => {
+    expect(parseRetryAfterSeconds(new Headers({ "retry-after": "30" }))).toBe(30);
+    expect(parseRetryAfterSeconds(new Headers({ "retry-after-ms": "1500" }))).toBe(1.5);
+    expect(parseRetryAfterSeconds(new Headers())).toBeUndefined();
+
+    const future = new Date(Date.now() + 45_000).toUTCString();
+    const seconds = parseRetryAfterSeconds(new Headers({ "retry-after": future }));
+    expect(seconds).toBeGreaterThan(40);
+    expect(seconds).toBeLessThanOrEqual(45);
+  });
+
+  it("returns Infinity for overflowed numeric headers so callers can reject them", () => {
+    // An unsafe retry-after-ms must not silently collapse to a short delay.
+    expect(parseRetryAfterSeconds(new Headers({ "retry-after-ms": "9007199254740993" }))).toBe(
+      Number.POSITIVE_INFINITY,
+    );
+  });
+});
 
 type ProviderRequestPolicyConfigMockResult = {
   allowPrivateNetwork: boolean;

@@ -1,6 +1,8 @@
 // Transport stream shared tests cover payload sanitization, header merging, and
 // final/error stream termination helpers used by provider transports.
 import { describe, expect, it, vi } from "vitest";
+import type { ServerRetryAfter } from "../llm/types.js";
+import { resolveAutoRetryDelayMs } from "../llm/utils/retry.js";
 import {
   assignTransportErrorDetails,
   failTransportStream,
@@ -11,6 +13,60 @@ import {
 } from "./transport-stream-shared.js";
 
 describe("transport stream shared helpers", () => {
+  it("propagates httpStatus and retryAfter from an augmented transport error", () => {
+    const output: {
+      stopReason: string;
+      errorMessage?: string;
+      httpStatus?: number;
+      retryAfter?: ServerRetryAfter;
+    } = { stopReason: "stop" };
+    const error = Object.assign(new Error("rate limited"), {
+      status: 429,
+      retryAfter: { kind: "seconds", seconds: 30 },
+    });
+
+    assignTransportErrorDetails(output as never, error);
+
+    expect(output.stopReason).toBe("error");
+    expect(output.httpStatus).toBe(429);
+    expect(output.retryAfter).toEqual({ kind: "seconds", seconds: 30 });
+  });
+
+  it("omits status/retry-after fields when the error carries none", () => {
+    const output: { stopReason: string; httpStatus?: number; retryAfter?: ServerRetryAfter } = {
+      stopReason: "stop",
+    };
+
+    assignTransportErrorDetails(output as never, new Error("boom"));
+
+    expect(output.httpStatus).toBeUndefined();
+    expect(output.retryAfter).toBeUndefined();
+  });
+
+  it("preserves an over-limit (unbounded) retryAfter through extraction so it can be rejected", () => {
+    // parseRetryAfterSeconds yields Infinity for an overflowed numeric header;
+    // that over-limit signal becomes { kind: "unbounded" } so it must survive so
+    // the resolver rejects it instead of falling back to the short exponential delay.
+    const output: { stopReason: string; retryAfter?: ServerRetryAfter } = { stopReason: "stop" };
+    const error = Object.assign(new Error("rate limited"), {
+      status: 429,
+      retryAfter: { kind: "unbounded" },
+    });
+
+    assignTransportErrorDetails(output as never, error);
+
+    expect(output.retryAfter).toEqual({ kind: "unbounded" });
+    // End of chain: the resolver rejects an over-limit cooldown (stop retrying).
+    expect(
+      resolveAutoRetryDelayMs({
+        attempt: 1,
+        baseDelayMs: 2000,
+        maxRetryDelayMs: 60_000,
+        retryAfter: output.retryAfter,
+      }),
+    ).toBeNull();
+  });
+
   it("sanitizes unpaired surrogate code units", () => {
     const high = String.fromCharCode(0xd83d);
     const low = String.fromCharCode(0xdc00);

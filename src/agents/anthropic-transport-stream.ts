@@ -58,9 +58,11 @@ import type {
   AssistantMessageDiagnostic,
   Context,
   Model,
+  ServerRetryAfter,
   SimpleStreamOptions,
   ThinkingLevel,
 } from "../llm/types.js";
+import { toServerRetryAfter } from "../llm/utils/retry.js";
 import "../llm/ai-transport-host.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
@@ -72,7 +74,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dyn
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { unwrapModelHeaderSentinelsForProviderEgress } from "./provider-secret-egress.js";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { buildGuardedModelFetch, parseRetryAfterSeconds } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
@@ -809,6 +811,32 @@ async function* parseAnthropicSseBody(
   }
 }
 
+/**
+ * Build the error thrown for a non-OK Anthropic Messages response, preserving
+ * the HTTP status and any server-specified `Retry-After` cooldown so managed
+ * retry/failover paths can distinguish short-window rate limits from terminal
+ * quota failures. The bespoke fetch client below is not a Stainless-style SDK,
+ * so this metadata would otherwise be discarded here.
+ */
+function createAnthropicMessagesHttpError(
+  response: Response,
+  detail: string,
+): Error & { status: number; httpStatus: number; retryAfter?: ServerRetryAfter } {
+  const message = detail || `Anthropic Messages request failed with HTTP ${response.status}`;
+  const error = new Error(message) as Error & {
+    status: number;
+    httpStatus: number;
+    retryAfter?: ServerRetryAfter;
+  };
+  error.status = response.status;
+  error.httpStatus = response.status;
+  const retryAfter = toServerRetryAfter(parseRetryAfterSeconds(response.headers));
+  if (retryAfter !== undefined) {
+    error.retryAfter = retryAfter;
+  }
+  return error;
+}
+
 function createAnthropicMessagesClient(params: {
   apiKey?: string | null;
   authToken?: string;
@@ -837,9 +865,7 @@ function createAnthropicMessagesClient(params: {
         });
         if (!response.ok) {
           const detail = await readAnthropicMessagesErrorBodySnippet(response);
-          throw new Error(
-            detail || `Anthropic Messages request failed with HTTP ${response.status}`,
-          );
+          throw createAnthropicMessagesHttpError(response, detail);
         }
         if (!response.body) {
           return;

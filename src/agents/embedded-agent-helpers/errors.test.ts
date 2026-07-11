@@ -4,7 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { formatAssistantErrorText, isLikelyContextOverflowError } from "./errors.js";
+import {
+  classifyAssistantFailoverReason,
+  formatAssistantErrorText,
+  isLikelyContextOverflowError,
+  isRateLimitAssistantError,
+} from "./errors.js";
 
 const { toolPolicyAuditInfo } = vi.hoisted(() => ({
   toolPolicyAuditInfo: vi.fn(),
@@ -105,5 +110,17 @@ describe("isLikelyContextOverflowError", () => {
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
       ),
     ).toBe(true);
+  });
+});
+
+describe("structured assistant HTTP status classification", () => {
+  it("classifies structured 429 transport errors as rate limits", () => {
+    const msg = makeAssistantMessageFixture({
+      errorMessage: "Anthropic Messages request failed",
+      httpStatus: 429,
+    });
+
+    expect(classifyAssistantFailoverReason(msg)).toBe("rate_limit");
+    expect(isRateLimitAssistantError(msg)).toBe(true);
   });
 });

@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 /**
  * Usage-state and failure cooldown tests for auth profiles.
  * Covers unusable-window helpers, provider bypasses, WHAM probes, and store
@@ -5,6 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ServerRetryAfter } from "../../llm/types.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
@@ -1349,6 +1351,7 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
     store: ReturnType<typeof makeStoreWithCopilot>;
     now: number;
     modelId?: string;
+    retryAfter?: ServerRetryAfter;
   }): Promise<void> {
     vi.useFakeTimers();
     vi.setSystemTime(params.now);
@@ -1359,6 +1362,7 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
         profileId: "github-copilot:github",
         reason: "rate_limit",
         modelId: params.modelId,
+        retryAfter: params.retryAfter,
       });
     } finally {
       vi.useRealTimers();
@@ -1372,6 +1376,40 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
     const stats = store.usageStats?.["github-copilot:github"];
     expect(stats?.cooldownReason).toBe("rate_limit");
     expect(stats?.cooldownModel).toBe("claude-sonnet-4.6");
+  });
+
+  it("uses server Retry-After when it exceeds the first rate_limit cooldown", async () => {
+    const now = 1_000_000;
+    const store = makeStoreWithCopilot({});
+    await markFailure({
+      store,
+      now,
+      modelId: "claude-sonnet-4.6",
+      retryAfter: { kind: "seconds", seconds: 120 },
+    });
+    const stats = store.usageStats?.["github-copilot:github"];
+    expect(stats?.cooldownUntil).toBe(now + 120_000);
+    expect(stats?.cooldownReason).toBe("rate_limit");
+    expect(stats?.cooldownModel).toBe("claude-sonnet-4.6");
+  });
+
+  it("holds the profile for the max timer-safe window on an over-limit (unbounded) Retry-After", async () => {
+    // An overflowed / unparseably-large Retry-After header arrives as the closed
+    // `{ kind: "unbounded" }` variant. The provider's real cooldown is unknown,
+    // so the profile must be held for the maximum timer-safe window rather than
+    // collapsing to the ordinary first-failure backoff (which would let the same
+    // profile be retried while it is still rate-limited).
+    const now = 1_000_000;
+    const store = makeStoreWithCopilot({});
+    await markFailure({
+      store,
+      now,
+      modelId: "claude-sonnet-4.6",
+      retryAfter: { kind: "unbounded" },
+    });
+    const stats = store.usageStats?.["github-copilot:github"];
+    expect(stats?.cooldownUntil).toBe(now + MAX_TIMER_TIMEOUT_MS);
+    expect(stats?.cooldownReason).toBe("rate_limit");
   });
 
   it("widens cooldownModel to undefined when a different model fails during active cooldown", async () => {

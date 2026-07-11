@@ -6,12 +6,15 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,
+  finiteSecondsToTimerSafeMilliseconds,
   isFutureDateTimestampMs,
+  MAX_TIMER_TIMEOUT_MS,
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationMs,
   resolveExpiresAtMsFromEpochSeconds,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ServerRetryAfter } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
@@ -613,12 +616,32 @@ function keepActiveWindowOrRecompute(params: {
   return hasActiveWindow ? existingUntil : recomputedUntil;
 }
 
+function resolveRateLimitRetryAfterCooldownUntil(params: {
+  reason: AuthProfileFailureReason;
+  retryAfter?: ServerRetryAfter;
+  now: number;
+}): number | undefined {
+  if (params.reason !== "rate_limit" || !params.retryAfter) {
+    return undefined;
+  }
+  // An over-limit (unbounded) server cooldown means the real provider window is
+  // unknown; hold the profile for the maximum timer-safe window rather than
+  // collapsing to the ordinary first-failure backoff, so it cannot become
+  // eligible again while the provider is still rate-limiting it.
+  const retryAfterMs =
+    params.retryAfter.kind === "unbounded"
+      ? MAX_TIMER_TIMEOUT_MS
+      : finiteSecondsToTimerSafeMilliseconds(params.retryAfter.seconds);
+  return retryAfterMs === undefined ? undefined : resolveUsageWindowUntil(params.now, retryAfterMs);
+}
+
 function computeNextProfileUsageStats(params: {
   existing: ProfileUsageStats;
   now: number;
   reason: AuthProfileFailureReason;
   cfgResolved: ResolvedAuthCooldownConfig;
   modelId?: string;
+  retryAfter?: ServerRetryAfter;
 }): ProfileUsageStats {
   const windowMs = params.cfgResolved.failureWindowMs;
   const windowExpired =
@@ -668,13 +691,22 @@ function computeNextProfileUsageStats(params: {
     updatedStats.disabledReason = disabledFailureReason;
   } else {
     const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+    const retryAfterUntil = resolveRateLimitRetryAfterCooldownUntil({
+      reason: params.reason,
+      retryAfter: params.retryAfter,
+      now: params.now,
+    });
     // Keep active cooldown windows immutable so retries within the window
-    // cannot push recovery further out.
+    // cannot push recovery further out. Provider Retry-After is an explicit
+    // server window, so preserve it when it is longer than the local backoff.
     updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
       existingUntil: params.existing.cooldownUntil,
       now: params.now,
       recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
     });
+    if (retryAfterUntil !== undefined) {
+      updatedStats.cooldownUntil = Math.max(updatedStats.cooldownUntil, retryAfterUntil);
+    }
     // Update cooldown metadata based on whether the window is still active
     // and whether the same or a different model is failing.
     const existingCooldownActive =
@@ -733,8 +765,9 @@ export async function markAuthProfileFailure(params: {
   agentDir?: string;
   runId?: string;
   modelId?: string;
+  retryAfter?: ServerRetryAfter;
 }): Promise<void> {
-  const { store, profileId, reason, agentDir, cfg, runId, modelId } = params;
+  const { store, profileId, reason, agentDir, cfg, runId, modelId, retryAfter } = params;
   const profile = store.profiles[profileId];
   if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
     return;
@@ -785,6 +818,7 @@ export async function markAuthProfileFailure(params: {
         reason,
         cfgResolved,
         modelId,
+        retryAfter,
       });
       nextStats = currentWhamResult
         ? applyWhamCooldownResult({

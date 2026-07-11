@@ -33,7 +33,7 @@ import type {
   Model,
   TextContent,
 } from "../../llm/types.js";
-import { isRetryableAssistantError } from "../../llm/utils/retry.js";
+import { isRetryableAssistantError, resolveAutoRetryDelayMs } from "../../llm/utils/retry.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import type {
   PersistedUserTurnMessage,
@@ -2672,7 +2672,21 @@ export class AgentSession {
       return false;
     }
 
-    const delayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
+    const delayMs = resolveAutoRetryDelayMs({
+      attempt: this.retryCount,
+      baseDelayMs: settings.baseDelayMs,
+      maxRetryDelayMs: this.settingsManager.getProviderRetrySettings().maxRetryDelayMs,
+      retryAfter: message.retryAfter,
+    });
+
+    if (delayMs === null) {
+      // The server asked to wait longer than retry.provider.maxRetryDelayMs.
+      // Do not hold the turn asleep for that long; stop retrying in-turn so
+      // provider fallback / operator recovery can proceed. Preserve the attempt
+      // count so post-run handling can emit the final failure.
+      this.retryCount--;
+      return false;
+    }
 
     this.emit({
       type: "auto_retry_start",
