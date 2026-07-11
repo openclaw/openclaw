@@ -1436,6 +1436,21 @@ describe("buildFailoverRemediationHint", () => {
     expect(buildProviderReauthCommand("custom\nprovider")).toBeUndefined();
   });
 
+  it("refuses C1 control characters (U+0080-U+009F) in provider ids", () => {
+    // U+009B is the CSI introducer, an alternative ANSI escape prefix (ESC [).
+    // Without the C1 range, buildProviderReauthCommand would emit a
+    // remediation command with the raw C1 byte embedded in the shell literal.
+    const CSI = String.fromCharCode(0x9b);
+    expect(buildProviderReauthCommand(`anthropic${CSI}[2J`)).toBeUndefined();
+    for (let code = 0x80; code <= 0x9f; code += 1) {
+      expect(buildProviderReauthCommand(`anthropic${String.fromCharCode(code)}`)).toBeUndefined();
+    }
+    // A clean provider id is still accepted.
+    expect(buildProviderReauthCommand("anthropic")).toBe(
+      "openclaw models auth login --provider 'anthropic' --force",
+    );
+  });
+
   it("wraps rendered provider commands in the standard CLI formatter", () => {
     expect(buildProviderReauthCommand("anthropic", { OPENCLAW_PROFILE: "work" })).toBe(
       "openclaw --profile work models auth login --provider 'anthropic' --force",
