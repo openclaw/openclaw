@@ -25,6 +25,7 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
@@ -620,8 +621,40 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       if (pendingKey) {
         const pending = context.pendingMediaQueues.get(pendingKey);
         if (pending && pending.length > 0) {
-          allMedia.push(...pending);
-          pendingMediaKeyToClear = pendingKey;
+          // A queued media path can go stale between being downloaded and
+          // being flushed here: the gateway's independent media.ttlHours
+          // cleanup sweep doesn't know about this queue and can delete the
+          // underlying file first. Verify each queued entry still exists on
+          // disk before surfacing it into context, and silently drop (never
+          // throw on) any entry whose file is already gone so the flush of
+          // the remaining valid entries still proceeds. See PR #103761
+          // review: stale media path after media.ttlHours cleanup,
+          // extensions/line/src/bot-handlers.ts:578-583.
+          const validPending: MediaRef[] = [];
+          for (const media of pending) {
+            if (await pathExists(media.path)) {
+              validPending.push(media);
+            } else {
+              logVerbose(
+                `line: dropping stale pending media path (file no longer exists): ${media.path}`,
+              );
+            }
+          }
+          if (validPending.length !== pending.length) {
+            // Prune stale entries from the queue immediately so they are not
+            // re-surfaced (or indefinitely retried) on a later flush attempt,
+            // even if this turn's processMessage subsequently fails and the
+            // remaining valid entries are preserved for retry.
+            if (validPending.length > 0) {
+              context.pendingMediaQueues.set(pendingKey, validPending);
+            } else {
+              context.pendingMediaQueues.delete(pendingKey);
+            }
+          }
+          if (validPending.length > 0) {
+            allMedia.push(...validPending);
+            pendingMediaKeyToClear = pendingKey;
+          }
         }
       }
     }

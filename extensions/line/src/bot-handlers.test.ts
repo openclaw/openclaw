@@ -126,6 +126,7 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   upsertPairingRequestMock: vi.fn(async (_args: unknown) => ({ code: "CODE", created: true })),
 }));
 const downloadLineMediaMock = vi.hoisted(() => vi.fn());
+const pathExistsMock = vi.hoisted(() => vi.fn(async (_path: string) => true));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   resolvePairingIdLabel: () => "lineUserId",
@@ -135,6 +136,10 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
 
 vi.mock("./download.js", () => ({
   downloadLineMedia: downloadLineMediaMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
+  pathExists: pathExistsMock,
 }));
 
 vi.mock("./send.js", () => ({
@@ -353,6 +358,7 @@ describe("handleLineWebhookEvents", () => {
     vi.doUnmock("./download.js");
     vi.doUnmock("./send.js");
     vi.doUnmock("./bot-message-context.js");
+    vi.doUnmock("openclaw/plugin-sdk/security-runtime");
     vi.resetModules();
   });
 
@@ -375,6 +381,8 @@ describe("handleLineWebhookEvents", () => {
     downloadLineMediaMock.mockImplementation(async () => {
       throw new Error("downloadLineMedia should not be called from bot-handlers tests");
     });
+    pathExistsMock.mockReset();
+    pathExistsMock.mockImplementation(async () => true);
   });
   it("blocks group messages when groupPolicy is disabled", async () => {
     const processMessage = vi.fn();
@@ -1229,6 +1237,118 @@ describe("handleLineWebhookEvents", () => {
       }),
     );
     expect(pendingMediaQueues.has("group-flush")).toBe(false);
+  });
+
+  it("drops a queued pending media entry whose file no longer exists (media.ttlHours cleanup raced the flush) instead of surfacing a stale path, and still flushes remaining valid entries (PR #103761 review, confidence 0.94)", async () => {
+    const processMessage = vi.fn();
+    let counter = 0;
+    downloadLineMediaMock.mockImplementation(async () => {
+      counter += 1;
+      return { path: `/media/stale-check-${counter}.jpg`, contentType: "image/jpeg" };
+    });
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaQueues,
+    });
+
+    // Queue two media entries from two earlier unmentioned messages.
+    for (let i = 1; i <= 2; i += 1) {
+      const skippedEvent = createTestMessageEvent({
+        message: {
+          id: `m-stale-img-${i}`,
+          type: "image",
+          contentProvider: { type: "line" },
+          quoteToken: `q-stale-img-${i}`,
+        },
+        source: { type: "group", groupId: "group-stale", userId: "user-stale" },
+        webhookEventId: `evt-stale-img-${i}`,
+      });
+      await handleLineWebhookEvents([skippedEvent], context);
+    }
+    expect(pendingMediaQueues.get("group-stale")).toHaveLength(2);
+
+    // Simulate the gateway's independent media.ttlHours cleanup sweep having
+    // deleted the first queued file from disk before the mention arrives:
+    // the existence check must report false only for that stale path.
+    pathExistsMock.mockImplementation(async (path: string) => path !== "/media/stale-check-1.jpg");
+
+    const mentionedEvent = createTestMessageEvent({
+      message: {
+        id: "m-stale-text",
+        type: "text",
+        text: "@bot check this out",
+        mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+      } as unknown as MessageEvent["message"],
+      source: { type: "group", groupId: "group-stale", userId: "user-stale" },
+      webhookEventId: "evt-stale-text",
+    });
+    await handleLineWebhookEvents([mentionedEvent], context);
+
+    // The flush must proceed without throwing, silently dropping the stale
+    // entry and surfacing only the still-existing one.
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allMedia: [{ path: "/media/stale-check-2.jpg", contentType: "image/jpeg" }],
+      }),
+    );
+    // The dangling entry must not be retried indefinitely: the queue is fully
+    // cleared after a successful flush of the remaining valid entry.
+    expect(pendingMediaQueues.has("group-stale")).toBe(false);
+  });
+
+  it("drops all queued pending media entries when every underlying file has been cleaned up, without surfacing any stale path or throwing", async () => {
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockImplementation(async () => ({
+      path: "/media/all-stale-1.jpg",
+      contentType: "image/jpeg",
+    }));
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaQueues,
+    });
+
+    const skippedEvent = createTestMessageEvent({
+      message: {
+        id: "m-all-stale-img",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-all-stale-img",
+      },
+      source: { type: "group", groupId: "group-all-stale", userId: "user-all-stale" },
+      webhookEventId: "evt-all-stale-img",
+    });
+    await handleLineWebhookEvents([skippedEvent], context);
+    expect(pendingMediaQueues.get("group-all-stale")).toHaveLength(1);
+
+    // The only queued file has since been deleted by media.ttlHours cleanup.
+    pathExistsMock.mockImplementation(async () => false);
+
+    const mentionedEvent = createTestMessageEvent({
+      message: {
+        id: "m-all-stale-text",
+        type: "text",
+        text: "@bot check this out",
+        mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+      } as unknown as MessageEvent["message"],
+      source: { type: "group", groupId: "group-all-stale", userId: "user-all-stale" },
+      webhookEventId: "evt-all-stale-text",
+    });
+    await handleLineWebhookEvents([mentionedEvent], context);
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allMedia: [] }),
+    );
+    expect(pendingMediaQueues.has("group-all-stale")).toBe(false);
   });
 
   it("does not flush queued pending media into a control-command that only bypassed requireMention (no real mention)", async () => {
