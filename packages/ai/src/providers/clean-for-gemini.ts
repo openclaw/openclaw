@@ -317,6 +317,31 @@ function cleanSchemaForGeminiWithDefs(
     }
   }
 
+  // Gemini's Function Calling only accepts STRING values in `enum` (see
+  // https://ai.google.dev/gemini-api/docs/function-calling). Numeric, boolean,
+  // and bigint enum values must be coerced to strings, otherwise the API
+  // rejects the whole request with:
+  //   Invalid value at 'tools[X].function_declarations[Y].parameters...enum[N]'
+  //   (TYPE_STRING), 1
+  // This applies to both `enum` arrays and single-valued `const` (which is
+  // rewritten to `enum: [value]` below).
+  const coerceEnumValue = (v: unknown): string | undefined => {
+    if (typeof v === "string") return v;
+    if (typeof v === "number" && Number.isFinite(v)) return String(v);
+    if (typeof v === "boolean") return v ? "true" : "false";
+    if (typeof v === "bigint") return v.toString();
+    return undefined;
+  };
+  const coerceEnumArray = (arr: unknown): string[] | undefined => {
+    if (!Array.isArray(arr)) return undefined;
+    const out: string[] = [];
+    for (const entry of arr) {
+      const coerced = coerceEnumValue(entry);
+      if (coerced !== undefined && !out.includes(coerced)) out.push(coerced);
+    }
+    return out;
+  };
+
   const cleaned: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(obj)) {
@@ -325,7 +350,21 @@ function cleanSchemaForGeminiWithDefs(
     }
 
     if (key === "const") {
-      cleaned.enum = [value];
+      const coerced = coerceEnumValue(value);
+      if (coerced !== undefined) {
+        cleaned.enum = [coerced];
+        if (cleaned.type !== "string") cleaned.type = "string";
+      }
+      continue;
+    }
+
+    if (key === "enum") {
+      const coerced = coerceEnumArray(value);
+      if (coerced && coerced.length > 0) {
+        cleaned.enum = coerced;
+        // Gemini's schema validator only accepts `enum` on string-typed schemas.
+        if (obj.type !== "string") cleaned.type = "string";
+      }
       continue;
     }
 
