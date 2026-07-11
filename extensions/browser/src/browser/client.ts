@@ -11,6 +11,7 @@ import {
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import type {
+  BrowserGraphicsDiagnostics,
   BrowserStatus,
   BrowserTab,
   BrowserTransport,
@@ -20,7 +21,12 @@ import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDoctorReport } from "./doctor.js";
 import type { AnnotationItem } from "./screenshot-annotate.js";
 
-export type { BrowserStatus, BrowserTab, BrowserTransport } from "./client.types.js";
+export type {
+  BrowserGraphicsDiagnostics,
+  BrowserStatus,
+  BrowserTab,
+  BrowserTransport,
+} from "./client.types.js";
 export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
 
 const BROWSER_STATUS_REQUEST_TIMEOUT_MS = 7_500;
