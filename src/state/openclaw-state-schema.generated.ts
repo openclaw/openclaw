@@ -1335,7 +1335,6 @@ CREATE TABLE IF NOT EXISTS session_groups (
   created_at INTEGER NOT NULL
 );
 
-<<<<<<< HEAD
 -- Gateway-owned durable cloud worker lifecycle. Provider-specific execution
 -- stays in plugins; this table records only core reconciliation facts.
 CREATE TABLE IF NOT EXISTS worker_environments (
@@ -1380,8 +1379,8 @@ CREATE TABLE IF NOT EXISTS worker_environments (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
   ON worker_environments(provider_id, lease_id)
-  WHERE lease_id IS NOT NULL;\n`;
-=======
+  WHERE lease_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS fleet_cells (
   tenant_id TEXT NOT NULL PRIMARY KEY,
   created_at_ms INTEGER NOT NULL,
@@ -1391,4 +1390,3 @@ CREATE TABLE IF NOT EXISTS fleet_cells (
   container_name TEXT NOT NULL,
   data_dir TEXT NOT NULL
 );\n`;
->>>>>>> a9c1863c6981 (feat(fleet): add openclaw fleet cell supervisor for multi-tenant hosting)
