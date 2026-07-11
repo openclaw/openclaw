@@ -62,6 +62,11 @@ type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "tools";
 type UnknownToolErrorOptions = {
   exactIdOnly?: boolean;
   recoverySurface?: UnknownToolRecoverySurface;
+  /** Skill command context for better error messages when a skill command fails to find its tool. */
+  skillCommandContext?: {
+    skillName: string;
+    commandName: string;
+  };
 };
 
 type ReusableCatalogSnapshot = {
@@ -112,6 +117,8 @@ export type ToolSearchToolContext = {
   catalogRef?: ToolSearchCatalogRef;
   abortSignal?: AbortSignal;
   executeTool?: ToolSearchCatalogToolExecutor;
+  /** Skill command context for better error messages when a skill command fails to find its tool. */
+  beforeToolCallHookContext?: HookContext;
 };
 
 /** Catalog entry retained behind compacted Tool Search control tools. */
@@ -1631,10 +1638,16 @@ function formatUnknownToolIdError(
       : options.recoverySurface === "tools"
         ? "Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name."
         : "Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.";
+  // When a skill command fails to find its configured tool, provide skill-specific guidance.
+  const skillContextPrefix = options.skillCommandContext
+    ? `Skill "/${options.skillCommandContext.commandName}" (from ${options.skillCommandContext.skillName}) `
+    : "";
   if (suggestions.length === 0) {
-    return `Unknown tool id: ${needle}. ${recoveryText}`;
+    return `${skillContextPrefix}Unknown tool id: ${needle}. ${recoveryText}`;
   }
-  return `Unknown tool id: ${needle}. Did you mean: ${suggestions.join(", ")}? ${recoveryText}`;
+  return `${skillContextPrefix}Unknown tool id: ${needle}. Did you mean: ${suggestions.join(
+    ", ",
+  )}? ${recoveryText}`;
 }
 
 function findEntry(
@@ -1789,10 +1802,20 @@ export class ToolSearchRuntime {
       signal?: AbortSignal;
       onUpdate?: AgentToolUpdateCallback;
       recoverySurface?: UnknownToolRecoverySurface;
-    },
+    } & UnknownToolErrorOptions,
   ) => {
     const catalog = resolveCatalog(this.ctx);
-    const entry = findEntry(catalog, id, undefined, options);
+    const skillCommandContext = this.ctx.beforeToolCallHookContext?.skillCommand
+      ? {
+          skillName: this.ctx.beforeToolCallHookContext.skillCommand.skillName,
+          commandName: this.ctx.beforeToolCallHookContext.skillCommand.commandName,
+        }
+      : undefined;
+    const errorOptions: UnknownToolErrorOptions = {
+      ...options,
+      ...(skillCommandContext ? { skillCommandContext } : {}),
+    };
+    const entry = findEntry(catalog, id, undefined, errorOptions);
     return await this.callEntry(catalog, entry, input, options);
   };
 
@@ -1804,10 +1827,20 @@ export class ToolSearchRuntime {
       signal?: AbortSignal;
       onUpdate?: AgentToolUpdateCallback;
       recoverySurface?: UnknownToolRecoverySurface;
-    },
+    } & UnknownToolErrorOptions,
   ) => {
     const catalog = resolveCatalog(this.ctx);
-    const entry = findEntryByExactId(catalog, id, options);
+    const skillCommandContext = this.ctx.beforeToolCallHookContext?.skillCommand
+      ? {
+          skillName: this.ctx.beforeToolCallHookContext.skillCommand.skillName,
+          commandName: this.ctx.beforeToolCallHookContext.skillCommand.commandName,
+        }
+      : undefined;
+    const errorOptions: UnknownToolErrorOptions = {
+      ...options,
+      ...(skillCommandContext ? { skillCommandContext } : {}),
+    };
+    const entry = findEntryByExactId(catalog, id, errorOptions);
     return await this.callEntry(catalog, entry, input, options);
   };
 
