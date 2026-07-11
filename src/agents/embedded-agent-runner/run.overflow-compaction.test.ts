@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+  rollbackAgentHarnessSessionEntryLifecycle,
+} from "../../config/sessions/session-accessor.js";
 import {
   claimAgentRunContext,
   getAgentEventLifecycleGeneration,
@@ -1053,18 +1057,13 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "native-session";
     const sessionKey = "agent:main:harness:codex:supervision:native-thread";
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          agentHarnessId: "codex",
-          modelSelectionLocked: true,
-          sessionId,
-          updatedAt: Date.now(),
-        },
-      }),
-      "utf8",
-    );
+    const initialEntry = {
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      sessionId,
+      updatedAt: Date.now(),
+    };
+    await replaceSessionEntry({ sessionKey, storePath }, initialEntry);
 
     let enqueueCount = 0;
     let runQueuedTask: (() => void) | undefined;
@@ -1082,6 +1081,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         runId: "queued-harness-admission",
         sessionId,
         sessionKey,
+        sessionTarget: { agentId: "main", sessionId, sessionKey, storePath },
         enqueue: async (task) => {
           enqueueCount += 1;
           if (enqueueCount === 1) {
@@ -1096,7 +1096,13 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       });
       await vi.waitFor(() => expect(runQueuedTask).toBeTypeOf("function"));
 
-      await fs.writeFile(storePath, "{}", "utf8");
+      await rollbackAgentHarnessSessionEntryLifecycle({
+        agentId: "main",
+        archiveTranscript: false,
+        expectedEntry: initialEntry,
+        storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      });
       runQueuedTask?.();
 
       await expect(runPromise).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
