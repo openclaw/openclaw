@@ -7,6 +7,7 @@ import {
   type CrabboxCommandRunner,
   resolveCrabboxBinary,
   resolveOpenClawRoot,
+  testing,
 } from "./crabbox-worker-provider.js";
 
 const LEASE_ID = "cbx_012345abcdef";
@@ -640,6 +641,24 @@ describe("Crabbox worker provider", () => {
     const message = error instanceof Error ? error.message : "";
     expect(message).not.toContain(secret);
     expect(message.length).toBeLessThan(600);
+  });
+
+  it("preserves well-formed UTF-16 when CLI failure detail reaches the boundary limit", () => {
+    // 511 ASCII code units + emoji: the emoji surrogate pair spans
+    // indices [511, 512].  raw .slice(0, 512) keeps only the high
+    // surrogate (U+D83D) — current main produces a malformed string.
+    // truncateUtf16Safe detects the split pair and backs up to 511
+    // so the result is well-formed with no lone surrogates.
+    const prefix = "x".repeat(511);
+    const detail = testing.commandDetail(commandResult({ stderr: `${prefix}😀after` }));
+    // must not contain a lone high surrogate without its pair
+    for (const lone of ["\ud83d", "\ude00"]) {
+      expect(detail).not.toContain(lone);
+    }
+    expect(detail).not.toContain("�");
+    // truncateUtf16Safe backs up: ": " + 511 ASCII chars = 513 code units
+    expect(detail).toBe(`: ${prefix}`);
+    expect(detail.length).toBe(513);
   });
 
   it("destroys absent and already-stopped leases idempotently", async () => {
