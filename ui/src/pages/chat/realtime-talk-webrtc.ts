@@ -37,6 +37,25 @@ type ToolBuffer = {
 };
 
 const cancelledSetup = Symbol("cancelledSetup");
+export const REALTIME_WEBRTC_OFFER_TIMEOUT_MS = 30_000;
+
+function createRealtimeWebRtcOfferTimeout(): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const timer = globalThis.setTimeout(() => {
+    controller.abort(
+      new Error(
+        `Realtime WebRTC offer request timed out after ${REALTIME_WEBRTC_OFFER_TIMEOUT_MS}ms`,
+      ),
+    );
+  }, REALTIME_WEBRTC_OFFER_TIMEOUT_MS);
+  return {
+    signal: controller.signal,
+    cleanup: () => globalThis.clearTimeout(timer),
+  };
+}
 
 export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private peer: RTCPeerConnection | null = null;
@@ -126,28 +145,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     if (!this.isCurrentPeer(peer)) {
       return;
     }
-    const sdp = await this.awaitSetupStep(
-      peer,
-      fetch(this.session.offerUrl ?? "https://api.openai.com/v1/realtime/calls", {
-        method: "POST",
-        body: offer.sdp,
-        headers: {
-          ...this.session.offerHeaders,
-          Authorization: `Bearer ${this.session.clientSecret}`,
-          "Content-Type": "application/sdp",
-        },
-      }),
-    );
-    if (sdp === cancelledSetup) {
-      return;
-    }
-    if (!this.isCurrentPeer(peer)) {
-      return;
-    }
-    if (!sdp.ok) {
-      throw new Error(`Realtime WebRTC setup failed (${sdp.status})`);
-    }
-    const answerSdp = await this.awaitSetupStep(peer, sdp.text());
+    const answerSdp = await this.readOfferAnswer(peer, offer);
     if (answerSdp === cancelledSetup) {
       return;
     }
@@ -161,6 +159,47 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         sdp: answerSdp,
       }),
     );
+  }
+
+  private async readOfferAnswer(
+    peer: RTCPeerConnection,
+    offer: RTCSessionDescriptionInit,
+  ): Promise<string | typeof cancelledSetup> {
+    const offerTimeout = createRealtimeWebRtcOfferTimeout();
+    try {
+      const sdp = await this.awaitSetupStep(
+        peer,
+        fetch(this.session.offerUrl ?? "https://api.openai.com/v1/realtime/calls", {
+          method: "POST",
+          body: offer.sdp,
+          headers: {
+            ...this.session.offerHeaders,
+            Authorization: `Bearer ${this.session.clientSecret}`,
+            "Content-Type": "application/sdp",
+          },
+          signal: offerTimeout.signal,
+        }),
+      );
+      if (sdp === cancelledSetup) {
+        return cancelledSetup;
+      }
+      if (!this.isCurrentPeer(peer)) {
+        return cancelledSetup;
+      }
+      if (!sdp.ok) {
+        throw new Error(`Realtime WebRTC setup failed (${sdp.status})`);
+      }
+      const answerSdp = await this.awaitSetupStep(peer, sdp.text());
+      if (answerSdp === cancelledSetup) {
+        return cancelledSetup;
+      }
+      if (!this.isCurrentPeer(peer)) {
+        return cancelledSetup;
+      }
+      return answerSdp;
+    } finally {
+      offerTimeout.cleanup();
+    }
   }
 
   private isCurrentPeer(peer: RTCPeerConnection): boolean {
