@@ -3067,7 +3067,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   flex-wrap: wrap;
   flex-shrink: 0;
   margin-top: 4px;
-  padding-block-start: 6px;
+  padding-block-start: 10px;
   padding-inline-start: 10px;
   margin-bottom: 8px;
 }

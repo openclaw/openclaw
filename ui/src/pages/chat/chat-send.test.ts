@@ -2456,9 +2456,6 @@ describe("handleSendChat", () => {
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
   });
 
-<<<<<<< HEAD
-  it("does not cross-gate case-distinct opaque Matrix sessions", async () => {
-=======
   it("sends pasted plain text attachments as file payloads", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
@@ -2502,8 +2499,7 @@ describe("handleSendChat", () => {
     ]);
   });
 
-  it("does not wait on model picker updates from another session", async () => {
->>>>>>> c2375ae6a8 (fix(ui): compact large pasted text in composer)
+  it("does not cross-gate case-distinct opaque Matrix sessions", async () => {
     const otherSessionSwitch = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
