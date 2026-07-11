@@ -244,6 +244,43 @@ describe("AppSidebar update card wiring", () => {
   });
 });
 
+describe("AppSidebar session scroll fade", () => {
+  it("shows fades only toward additional session content", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const scroller = sidebar.querySelector<HTMLElement>(".sidebar-recent-sessions");
+    if (!scroller) {
+      throw new Error("Expected sidebar session scroller");
+    }
+
+    let scrollHeight = 100;
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+    });
+
+    scroller.dispatchEvent(new Event("scroll"));
+    await sidebar.updateComplete;
+    expect(scroller.classList.contains("sidebar-recent-sessions--scroll-none")).toBe(true);
+
+    scrollHeight = 300;
+    scroller.scrollTop = 0;
+    scroller.dispatchEvent(new Event("scroll"));
+    await sidebar.updateComplete;
+    expect(scroller.classList.contains("sidebar-recent-sessions--scroll-top")).toBe(true);
+
+    scroller.scrollTop = 80;
+    scroller.dispatchEvent(new Event("scroll"));
+    await sidebar.updateComplete;
+    expect(scroller.classList.contains("sidebar-recent-sessions--scroll-middle")).toBe(true);
+
+    scroller.scrollTop = 200;
+    scroller.dispatchEvent(new Event("scroll"));
+    await sidebar.updateComplete;
+    expect(scroller.classList.contains("sidebar-recent-sessions--scroll-bottom")).toBe(true);
+  });
+});
+
 describe("AppSidebar lobster outcome wiring", () => {
   it.each([
     ["panel", "failed", "error"],

@@ -113,6 +113,7 @@ type SidebarSessionGroupMenuState = {
 };
 
 type SidebarSessionSortMode = "created" | "updated";
+type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 type SidebarSessionGroupDropTarget = {
   group: string;
   position: "before" | "after";
@@ -229,6 +230,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
   @state() private nativeSessionSidebarReady = false;
+  @state() private sessionsScrollState: SidebarSessionsScrollState = "none";
 
   private readonly subscriptions = new SubscriptionsController(this);
   private customizeMenuTrigger: HTMLElement | null = null;
@@ -245,6 +247,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
   private nativeSessionSidebarLoadStarted = false;
+  private sessionsScrollElement: HTMLElement | null = null;
+  private sessionsScrollResizeObserver: ResizeObserver | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -285,10 +289,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       globalThis.clearTimeout(timer);
     }
     this.routePreloadTimers.clear();
+    this.sessionsScrollResizeObserver?.disconnect();
+    this.sessionsScrollResizeObserver = null;
+    this.sessionsScrollElement = null;
     super.disconnectedCallback();
   }
 
   override updated() {
+    this.syncSessionsScrollObserver();
     const advertised = this.pluginTabs().some(
       (tab) => tab.id === "sessions" && (tab.pluginId === "codex" || tab.pluginId === "anthropic"),
     );
@@ -299,6 +307,39 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     void import("../pages/plugin/codex-sidebar.ts").then(() => {
       this.nativeSessionSidebarReady = true;
     });
+  }
+
+  private syncSessionsScrollObserver() {
+    const element = this.querySelector<HTMLElement>(".sidebar-recent-sessions");
+    if (element !== this.sessionsScrollElement) {
+      this.sessionsScrollResizeObserver?.disconnect();
+      this.sessionsScrollElement = element;
+      this.sessionsScrollResizeObserver =
+        element && typeof ResizeObserver === "function"
+          ? new ResizeObserver(() => this.updateSessionsScrollState(element))
+          : null;
+      this.sessionsScrollResizeObserver?.observe(element);
+    }
+    if (element) {
+      this.updateSessionsScrollState(element);
+    }
+  }
+
+  private updateSessionsScrollState(element: HTMLElement) {
+    const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+    let nextState: SidebarSessionsScrollState = "none";
+    if (maxScrollTop > 1) {
+      if (element.scrollTop <= 1) {
+        nextState = "top";
+      } else if (element.scrollTop >= maxScrollTop - 1) {
+        nextState = "bottom";
+      } else {
+        nextState = "middle";
+      }
+    }
+    if (nextState !== this.sessionsScrollState) {
+      this.sessionsScrollState = nextState;
+    }
   }
 
   // The shell calls this before CSS hides the panel or drawer. Mounted menus
@@ -2009,7 +2050,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const expandedAgentId = this.expandedAgentId();
     return html`
       <section class="sidebar-sessions">
-        <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
+        <div
+          class="sidebar-recent-sessions sidebar-recent-sessions--scroll-${this
+            .sessionsScrollState}"
+          aria-label=${titleForRoute("sessions")}
+          @scroll=${(event: Event) =>
+            this.updateSessionsScrollState(event.currentTarget as HTMLElement)}
+        >
           <div class="sidebar-recent-sessions__head sidebar-recent-sessions__head--root">
             <span class="sidebar-recent-sessions__label-text">${t("sessionsView.title")}</span>
             <button
