@@ -38,11 +38,11 @@ vi.mock("./pw-session.js", () => {
     withPageNavigationRequestGuard: vi.fn(
       async ({
         action,
-        page,
+        page: guardedPage,
       }: {
         action: (url: string) => Promise<unknown>;
         page: { url: () => string };
-      }) => await action(page.url()),
+      }) => await action(guardedPage.url()),
     ),
   };
 });
