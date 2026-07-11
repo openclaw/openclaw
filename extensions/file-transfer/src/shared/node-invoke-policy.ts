@@ -272,6 +272,14 @@ function readResultPayload(result: { payload?: unknown }): Record<string, unknow
     : null;
 }
 
+function readAuditSizeBytes(
+  command: FileTransferCommand,
+  payload: Record<string, unknown> | null,
+): number | undefined {
+  const value = command === "dir.fetch" ? payload?.tarBytes : payload?.size;
+  return typeof value === "number" ? value : undefined;
+}
+
 function joinRemotePolicyPath(root: string, relPath: string): string {
   const rel = relPath.replace(/\\/gu, "/").replace(/^\.\//u, "");
   if (!rel || rel === ".") {
@@ -944,7 +952,7 @@ async function handleFileTransferInvoke(
     requestedPath,
     canonicalPath,
     decision: "allowed",
-    sizeBytes: typeof payload?.size === "number" ? payload.size : undefined,
+    sizeBytes: readAuditSizeBytes(command, payload),
     sha256: typeof payload?.sha256 === "string" ? payload.sha256 : undefined,
     durationMs: Date.now() - startedAt,
   });
