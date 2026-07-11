@@ -237,6 +237,7 @@ describe("openclaw state database", () => {
       ALTER TABLE worker_environments DROP COLUMN bootstrap_openclaw_version;
       ALTER TABLE worker_environments DROP COLUMN bootstrap_protocol_features_json;
       ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
+      ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
     `);
     legacyDb.close();
 
@@ -253,6 +254,7 @@ describe("openclaw state database", () => {
         "bootstrap_openclaw_version",
         "bootstrap_protocol_features_json",
         "teardown_terminal_state",
+        "ssh_host_key",
       ]),
     );
   });
