@@ -776,8 +776,12 @@ esac
   });
 
   it("installs local workspace packages beside the OCM root tarball", () => {
+    const workflow = readWorkflow();
     const configure = findStep("Configure OCM local workspace dependencies");
 
+    expect(workflow.jobs?.kova?.env?.OPENCLAW_OCM_RUNTIME_BUILD_PROFILE).toBe(
+      "${{ (inputs.profile || 'diagnostic') == 'diagnostic' && 'sourcePerformance' || '' }}",
+    );
     expect(configure.run).toContain(
       'npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mjs"',
     );
