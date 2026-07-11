@@ -83,10 +83,10 @@ describe("agent harness session store invariant", () => {
 
   it("allows an ordinary legacy model lock to adopt a transcript id", async () => {
     const sessionKey = "agent:main:legacy-model-lock";
-    const entry: SessionEntry = {
+    const entry = {
       modelSelectionLocked: true,
       updatedAt: 1,
-    };
+    } as SessionEntry;
     await saveSessionStore(storePath, { [sessionKey]: entry }, { skipMaintenance: true });
 
     await updateSessionStore(
