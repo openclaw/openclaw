@@ -748,7 +748,11 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 
 Cloud workers are opt-in. If `cloudWorkers` is absent, or `profiles` is empty, OpenClaw accepts no new worker creation. Durable records created earlier still reconcile and remain visible; the existing gateway/node projection is unchanged.
 
-Every worker provider must return an SSH `hostKey` from trusted provisioning output. Bootstrap writes that key to an isolated `known_hosts` file, uses `StrictHostKeyChecking=yes`, and fails before opening a connection when the provider omits it. There is no trust-on-first-use fallback.
+Every worker provider must return an SSH `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Bootstrap writes that key to an isolated `known_hosts` file, uses `StrictHostKeyChecking=yes`, and fails before opening a connection when the provider omits it. There is no trust-on-first-use fallback.
+
+Tunnel setup is on demand rather than part of provisioning. When started, the gateway reverse-forwards a worker-local Unix socket to its loopback WebSocket endpoint. The socket lives in a randomly allocated, owner-only remote directory; unlike a loopback TCP port, it is not reachable by other accounts on a multi-user worker and cannot collide with another environment's port. SSH keepalives and capped reconnect backoff run only while the tunnel owner remains current. Stopping the tunnel fences reconnects before closing the SSH process.
+
+Control traffic and workspace transfer use separate SSH connections. Both reuse the same resolved identity and isolated pinned `known_hosts` file, but workspace transfer does not share SSH connection multiplexing with the long-lived tunnel, so rsync cannot block control traffic.
 
 ### Crabbox profile
 
@@ -787,7 +791,7 @@ The bundled `crabbox` provider provisions an SSH-capable lease through the local
 Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop`.
 
 <Warning>
-  Worker bootstrap requires a provider-supplied pinned SSH host key and never uses trust on first use. Crabbox `inspect` exposes a dynamic private-key path that the generic `SecretRef` resolver cannot resolve, but it does not expose host-key material. Crabbox profiles therefore fail closed before bootstrap until cloud-worker PR 4 adds host-key exposure and Crabbox-owned key-path resolution.
+  OpenClaw resolves Crabbox's lease-local `sshKey` path through the provider-owned secret resolver. Current `crabbox inspect --json` output does not expose a provisioned `sshHostKey`, so Crabbox-backed workers still fail closed before bootstrap or tunnel setup. Crabbox must provision an authoritative per-lease host key and return `sshHostKey` as exactly `algorithm base64`, without a hostname or comment. Its current lease-local `known_hosts` cache is not provisioning trust material.
 </Warning>
 
 ### Static SSH development profile
@@ -829,7 +833,7 @@ Unknown settings are rejected. Crabbox credentials and backend-specific account 
 
 A supported Node runtime (22.19+, 23.11+, or 24+) must already be installed on the worker. The opt-in `"npm"` method also requires `npm` and outbound HTTPS access to the public npm registry. Networked toolchain setup is provider policy; bootstrap reports an actionable error instead of installing toolchains itself.
 
-This foundation installs and verifies the gateway build only. The SSH tunnel and the self-contained worker entry/loop land in the following cloud-worker milestones; bootstrap does not launch the general OpenClaw CLI.
+This foundation installs and verifies the gateway build and provides tunnel start/stop lifecycle, but it does not launch the general OpenClaw CLI. The self-contained worker entry and loop land in the next cloud-worker milestone.
 
 Each durable environment record retains its validated provider settings, resolved install method, and lifetime policy in a creation-time profile snapshot. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with that snapshot, provided the owning plugin remains available.
 
