@@ -10,6 +10,7 @@ import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard.ts";
 import "../components/login-gate.ts";
+import "../components/browser/browser-panel.ts";
 import "../components/resizable-divider.ts";
 import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
@@ -39,6 +40,7 @@ import {
   type ApplicationContext,
   type ApplicationNavigationOptions,
 } from "./context.ts";
+import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
@@ -118,6 +120,16 @@ function isTerminalAvailable(
   return (
     hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
     isGatewayMethodAdvertised(snapshot, "terminal.open") === true
+  );
+}
+
+function isBrowserPanelAvailable(snapshot: ApplicationContext["gateway"]["snapshot"]): boolean {
+  if (!snapshot.connected) {
+    return false;
+  }
+  return (
+    hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+    isGatewayMethodAdvertised(snapshot, "browser.request") === true
   );
 }
 
@@ -631,13 +643,13 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.exitSettings();
       return;
     }
-    if (
-      event.altKey ||
-      event.shiftKey ||
-      !event.metaKey ||
-      event.ctrlKey ||
-      event.key.toLowerCase() !== "b"
-    ) {
+    const commandKey = event.metaKey && !event.ctrlKey && !event.altKey;
+    if (commandKey && event.shiftKey && event.code === "Comma") {
+      event.preventDefault();
+      this.navigate("config");
+      return;
+    }
+    if (!commandKey || event.shiftKey || event.key.toLowerCase() !== "b") {
       return;
     }
     event.preventDefault();
@@ -734,6 +746,14 @@ class OpenClawShell extends OpenClawLightDomElement {
       : ROUTE_IDS_WITHOUT_WORKBOARD;
   }
 
+  /** Sidebar draft-row hint while the new-session page is open, keyed off its ?agent param. */
+  private draftSessionAgentId(): string {
+    if (this.routeState.routeId !== "new-session") {
+      return "";
+    }
+    return new URLSearchParams(this.routeState.location?.search ?? "").get("agent")?.trim() ?? "";
+  }
+
   private ensureAgentsList(
     snapshot: { client: GatewayBrowserClient | null; connected: boolean },
     agents = this.context?.agents,
@@ -803,6 +823,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       gatewaySnapshot,
       context.config.current.terminalEnabled ?? false,
     );
+    const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
     const activeRoute = this.routeState.routeId ?? "chat";
     // Plugin tabs share one route; the search picks the active item.
     const activePluginTabId =
@@ -876,6 +897,9 @@ class OpenClawShell extends OpenClawLightDomElement {
                   context.config.current.serverVersion ??
                   gatewaySnapshot.hello?.server?.version ??
                   "",
+                updateAvailable: overlaySnapshot.updateAvailable,
+                updateRunning: overlaySnapshot.updateRunning,
+                onUpdate: () => void context.overlays.runUpdate(),
                 searchQuery: this.settingsSearchQuery,
                 onExit: () => this.exitSettings(),
                 onNavigate: (routeId) => this.navigate(routeId),
@@ -902,8 +926,18 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .gatewayVersion=${context.config.current.serverVersion ??
                 gatewaySnapshot.hello?.server?.version ??
                 null}
+                .devGitBranch=${context.config.current.devGitBranch}
+                .updateAvailable=${overlaySnapshot.updateAvailable}
+                .updateRunning=${overlaySnapshot.updateRunning}
+                .onUpdate=${() => void context.overlays.runUpdate()}
                 .onOpenPalette=${this.openPalette}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
+                .onOpenNewSession=${(agentId: string) => {
+                  this.navigate("new-session", {
+                    search: agentId ? `?agent=${encodeURIComponent(agentId)}` : "",
+                  });
+                }}
+                .draftSessionAgentId=${this.draftSessionAgentId()}
                 .onToggleMore=${() =>
                   context.navigation.update({
                     sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,
@@ -949,11 +983,6 @@ class OpenClawShell extends OpenClawLightDomElement {
           <openclaw-update-banner
             .props=${{
               statusBanner: overlaySnapshot.updateStatusBanner,
-              updateAvailable: overlaySnapshot.updateAvailable,
-              updateRunning: overlaySnapshot.updateRunning,
-              connected: gatewaySnapshot.connected,
-              onUpdate: () => context.overlays.runUpdate(),
-              onDismiss: () => context.overlays.dismissUpdate(),
             }}
           ></openclaw-update-banner>
           <openclaw-router-outlet
@@ -967,6 +996,16 @@ class OpenClawShell extends OpenClawLightDomElement {
           .available=${terminalAvailable}
           .themeMode=${resolveTerminalThemeMode()}
         ></openclaw-terminal-panel>
+        <openclaw-browser-panel
+          .client=${gatewaySnapshot.connected ? gatewaySnapshot.client : null}
+          .available=${browserPanelAvailable}
+          .basePath=${context.basePath}
+          .authToken=${resolveControlUiAuthToken({
+            hello: gatewaySnapshot.hello,
+            settings: { token: context.gateway.connection.token },
+            password: context.gateway.connection.password,
+          })}
+        ></openclaw-browser-panel>
         <openclaw-exec-approval
           .props=${{
             queue: overlaySnapshot.approvalQueue,

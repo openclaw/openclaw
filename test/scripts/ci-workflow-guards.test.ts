@@ -34,6 +34,7 @@ const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action
 const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
 const MATURITY_SCORECARD_WORKFLOW_REF =
   "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
+const OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS = new Set<string>();
 const MATURITY_GENERATED_PR_PATHS = [
   "qa/maturity-scores.yaml",
   "docs/maturity/scorecard.md",
@@ -192,7 +193,12 @@ function findUnpinnedExternalActions(): string[] {
   ]) {
     for (const [index, line] of readFileSync(workflowPath, "utf8").split("\n").entries()) {
       const uses = line.match(/^\s*(?:-\s*)?uses:\s*([^#\s]+)/u)?.[1];
-      if (!uses || uses.startsWith("./") || uses.startsWith("docker://")) {
+      if (
+        !uses ||
+        uses.startsWith("./") ||
+        uses.startsWith("docker://") ||
+        OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS.has(uses)
+      ) {
         continue;
       }
       const at = uses.lastIndexOf("@");
@@ -463,6 +469,10 @@ describe("ci workflow guards", () => {
 
   it("pins every external GitHub Action reference to a full commit SHA", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
+  });
+
+  it("forbids moving reusable workflow references", () => {
+    expect([...OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS]).toEqual([]);
   });
 
   it("keeps locale refresh matrices alive and publishes each aggregate through a PR", () => {
@@ -1330,10 +1340,32 @@ describe("ci workflow guards", () => {
 
   it("resets SwiftPM state between macOS release build retries", () => {
     const workflow = readCiWorkflow();
+    const macosInstallStep = workflow.jobs["macos-swift"].steps.find(
+      (step) => step.name === "Install XcodeGen / SwiftLint / SwiftFormat",
+    );
+    const iosInstallStep = workflow.jobs["ios-build"].steps.find(
+      (step) => step.name === "Install iOS Swift tooling",
+    );
+    const macosLintStep = workflow.jobs["macos-swift"].steps.find(
+      (step) => step.name === "Swift lint",
+    );
+    const iosLintStep = workflow.jobs["ios-build"].steps.find((step) => step.name === "Swift lint");
     const buildStep = workflow.jobs["macos-swift"].steps.find(
       (step) => step.name === "Swift build (release)",
     );
 
+    for (const installStep of [macosInstallStep, iosInstallStep]) {
+      expect(installStep.run).toContain("if [[ -x ./scripts/install-swift-tools.sh ]]; then");
+      expect(installStep.run).toContain("brew install xcodegen swiftlint swiftformat");
+    }
+    for (const lintStep of [macosLintStep, iosLintStep]) {
+      expect(lintStep.run).toContain(
+        "if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then",
+      );
+    }
+    expect(macosLintStep.run).toContain("swiftlint lint --config config/swiftlint.yml");
+    expect(macosLintStep.run).toContain("swiftformat --lint apps/macos/Sources");
+    expect(iosLintStep.run).toContain("skipping iOS lint for this frozen target");
     expect(buildStep.run).toContain("for attempt in 1 2 3");
     expect(buildStep.run).toContain('if [[ "$attempt" -eq 3 ]]; then');
     expect(buildStep.run).toContain("swift package --package-path apps/macos reset");
@@ -2134,6 +2166,7 @@ describe("ci workflow guards", () => {
     expect(smokeBuildStep.run).toContain("pnpm ui:build");
     expect(smokeBuildStep.env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
     expect(smokeBuildStep.run).toContain("--skip-build");
+    expect(smokeBuildStep.run).toContain("--allow-unreleased-changelog");
     expect(workflow.jobs["qa-smoke-ci-artifacts"]).toBeUndefined();
     expect(workflow.jobs["qa-smoke-ci"]).toBeUndefined();
     expect(smokeProfileJob.needs).toEqual(["preflight"]);
@@ -2144,6 +2177,8 @@ describe("ci workflow guards", () => {
     ]);
     expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
+    expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
+    expect(smokeRunStep.run).toContain("No QA smoke runs assigned");
     expect(smokeRunStep.run).toContain("node openclaw.mjs qa run");
     expect(smokeRunStep.run).not.toContain("pnpm openclaw qa run");
     expect(smokeRunStep.run).toContain("--qa-profile smoke-ci");
@@ -2192,6 +2227,10 @@ describe("ci workflow guards", () => {
       ".github/codeql/codeql-network-runtime-boundary-critical-quality.yml",
       "utf8",
     );
+    const rawSocketQuery = readFileSync(
+      ".github/codeql/openclaw-boundary/queries/raw-socket-callsite-classification.ql",
+      "utf8",
+    );
     const networkSelector = workflow.slice(
       workflow.indexOf(".github/codeql/codeql-network-runtime-boundary-critical-quality.yml"),
       workflow.indexOf("network-runtime-boundary:"),
@@ -2219,6 +2258,28 @@ describe("ci workflow guards", () => {
       '| select(.filename | test("(^|/)[^/]+\\\\.(?:e2e\\\\.)?test\\\\.tsx?$") | not)',
     );
     expect(workflow).toContain("Network runtime boundary-sensitive added lines");
-    expect(workflow).toContain("if: ${{ github.event_name != 'pull_request' }}");
+    expect(workflow).toContain(
+      'codex_transport="extensions/codex/src/app-server/transport-websocket.ts"',
+    );
+    expect(workflow).toContain(
+      '| select(.filename != "extensions/codex/src/app-server/transport-websocket.ts")',
+    );
+    expect(workflow).not.toContain('grep -Fv "$codex_transport: " "$added_lines"');
+    // Raw-socket exclusions are filename-structural. A monitored package line may
+    // contain the transport path as data without disappearing from the scan.
+    expect(workflow).toContain("packages/net-policy/src/");
+    expect(workflow).toContain(
+      "grep -En 'HTTP_PROXY|HTTPS_PROXY|NO_PROXY|GLOBAL_AGENT_|OPENCLAW_PROXY_' \"$added_lines\"",
+    );
+    expect(workflow).toContain('echo "full_codeql=true" >> "$GITHUB_OUTPUT"');
+    expect(workflow).toContain(
+      "if: ${{ github.event_name != 'pull_request' || steps.network-diff-scan.outputs.full_codeql == 'true' }}",
+    );
+    expect(rawSocketQuery).toContain(
+      'allowedOwnerScope(call, "extensions/codex/src/app-server/transport-websocket.ts", "connectCodexAppServerUnixSocket")',
+    );
+    expect(rawSocketQuery).not.toContain(
+      'call.getFile().getRelativePath() = "extensions/codex/src/app-server/transport-websocket.ts"',
+    );
   });
 });

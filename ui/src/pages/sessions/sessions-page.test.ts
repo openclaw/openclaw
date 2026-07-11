@@ -52,6 +52,11 @@ type MutableGateway = {
   setSessionKey: ReturnType<typeof vi.fn>;
 };
 
+type TestSessionMenu = HTMLElement & {
+  forkDisabled: boolean;
+  readonly updateComplete: Promise<boolean>;
+};
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -113,7 +118,7 @@ function createSessions(overrides: Partial<SessionCapability> = {}): SessionCapa
     },
     list: vi.fn(async () => null),
     listCheckpoints: vi.fn(async () => []),
-    deleteMany: vi.fn(async () => ({ deleted: [], errors: [] })),
+    deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
     patch: vi.fn(async () => null),
     create: vi.fn(async () => null),
     branchCheckpoint: vi.fn(async () => ({ key: "branch" })),
@@ -156,12 +161,53 @@ async function createPage(context: ApplicationContext): Promise<TestSessionsPage
   return page;
 }
 
+async function createRenderedPage(
+  context: ApplicationContext,
+  result: SessionsListResult,
+): Promise<TestSessionsPage> {
+  const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
+  page.context = context;
+  page.routeData = {
+    gateway: context.gateway,
+    gatewaySnapshot: context.gateway.snapshot,
+    result,
+    error: null,
+    expandedSessionKey: null,
+    showArchived: false,
+  };
+  document.body.append(page);
+  await page.updateComplete;
+  return page;
+}
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
 
 describe("sessions page lifecycle", () => {
+  it("disables Fork session for model-selection-locked rows", async () => {
+    const row = {
+      key: "agent:main:locked",
+      kind: "direct",
+      modelSelectionLocked: true,
+    } as GatewaySessionRow;
+    const result = { count: 1, sessions: [row] } as SessionsListResult;
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createRenderedPage(createContext(gateway, createSessions()), result);
+
+    page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+    await page.updateComplete;
+
+    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
+    if (!menu) {
+      throw new Error("Expected sessions page menu");
+    }
+    await menu.updateComplete;
+    expect(menu.forkDisabled).toBe(true);
+    expect(menu.querySelector<HTMLButtonElement>('[data-shortcut="f"]')?.disabled).toBe(true);
+  });
+
   it("rejects preloaded data after a same-client reconnect and loads the current epoch", async () => {
     const client = {} as GatewayBrowserClient;
     const mutableGateway = createGateway(client);
@@ -265,7 +311,7 @@ describe("sessions page lifecycle", () => {
   it("retargets the Gateway after deleting the current session", async () => {
     const key = "agent:writer:work";
     const sessions = createSessions({
-      deleteMany: vi.fn(async () => ({ deleted: [key], errors: [] })),
+      deleteMany: vi.fn(async () => ({ deleted: [key], errors: [], preservedWorktrees: [] })),
     });
     const mutableGateway = createGateway({} as GatewayBrowserClient);
     mutableGateway.emit({ sessionKey: key });
@@ -285,7 +331,7 @@ describe("sessions page lifecycle", () => {
   it("routes a confirmed row-menu deletion through the scoped bulk owner", async () => {
     const key = "agent:main:work";
     const sessions = createSessions({
-      deleteMany: vi.fn(async () => ({ deleted: [key], errors: [] })),
+      deleteMany: vi.fn(async () => ({ deleted: [key], errors: [], preservedWorktrees: [] })),
     });
     const { gateway } = createGateway({} as GatewayBrowserClient);
     const page = await createPage(createContext(gateway, sessions));
@@ -301,7 +347,11 @@ describe("sessions page lifecycle", () => {
   });
 
   it("drops stale mutation state, errors, and navigation after disconnect", async () => {
-    const deleted = deferred<{ deleted: string[]; errors: string[] }>();
+    const deleted = deferred<{
+      deleted: string[];
+      errors: string[];
+      preservedWorktrees: Array<{ id: string; branch: string; path: string }>;
+    }>();
     const patched = deferred<unknown>();
     const forked = deferred<string | null>();
     const branched = deferred<{ key: string }>();
@@ -345,7 +395,7 @@ describe("sessions page lifecycle", () => {
     );
 
     mutableGateway.emit({ connected: false, client });
-    deleted.resolve({ deleted: ["main"], errors: ["stale delete error"] });
+    deleted.resolve({ deleted: ["main"], errors: ["stale delete error"], preservedWorktrees: [] });
     patched.resolve({ ok: true });
     forked.resolve("forked");
     branched.resolve({ key: "branched" });
