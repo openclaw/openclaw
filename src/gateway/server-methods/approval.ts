@@ -5,6 +5,7 @@ import {
   errorShape,
   isWellFormedApprovalId,
   type ApprovalDecision,
+  type ApprovalResolveParams,
   type ApprovalSnapshot,
   validateApprovalGetParams,
   validateApprovalResolveParams,
@@ -501,14 +502,14 @@ export function createApprovalHandlers(
       const resolver = resolveApprovalResolver(client);
       const localResolvedBy = resolveLegacyApprovalLabel(client);
       const validParams = validateApprovalResolveParams(rawParams);
-      const requestedDecision = validParams
-        ? (rawParams as { decision: ApprovalDecision }).decision
-        : null;
+      const resolveParams = validParams ? (rawParams as ApprovalResolveParams) : null;
+      const requestedDecision = resolveParams?.decision ?? null;
       const decisionAllowed =
         requestedDecision === "deny" ||
         (requestedDecision !== null &&
           record.presentation.allowedDecisions.includes(requestedDecision));
-      const forceMalformedDeny = !validParams || !decisionAllowed;
+      const kindMatches = resolveParams?.kind === record.presentation.kind;
+      const forceMalformedDeny = !validParams || !kindMatches || !decisionAllowed;
       let resolution:
         | ApplyApprovalDecisionResult<ExecApprovalRequestPayload>
         | ApplyApprovalDecisionResult<PluginApprovalRequestPayload>;

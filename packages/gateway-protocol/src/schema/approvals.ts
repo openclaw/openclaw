@@ -211,6 +211,7 @@ export const ApprovalGetResultSchema = Type.Object(
 export const ApprovalResolveParamsSchema = Type.Object(
   {
     id: ApprovalRecordCommonFields.id,
+    kind: ApprovalKindSchema,
     decision: ApprovalDecisionSchema,
   },
   { additionalProperties: false },
