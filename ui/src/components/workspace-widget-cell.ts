@@ -10,6 +10,7 @@ import { t } from "../i18n/index.ts";
 import { gridPlacementStyle } from "../lib/workspace/grid.ts";
 import { workspaceAgentProvenance, type WorkspaceBindingResult } from "../lib/workspace/index.ts";
 import type {
+  WorkspaceCreatedBy,
   WorkspaceWidget,
   WorkspaceWidgetStatus,
   WidgetManifestView,
@@ -42,6 +43,8 @@ export type WorkspaceWidgetCellCallbacks = {
  */
 export type WorkspaceCustomWidgetContext = {
   status: WorkspaceWidgetStatus | null;
+  /** Provenance of the scaffolded code being approved, not its layout instance. */
+  createdBy?: WorkspaceCreatedBy;
   manifest: WidgetManifestView | null;
   host: CustomWidgetHostContext;
   onApprove: (widget: WorkspaceWidget) => void;
@@ -190,7 +193,7 @@ export function renderCustomWidget(
     });
   }
   if (custom.status === "pending") {
-    const author = workspaceAgentProvenance(widget.createdBy);
+    const author = workspaceAgentProvenance(custom.createdBy);
     return html`
       <div
         class="workspace-widget__approval"

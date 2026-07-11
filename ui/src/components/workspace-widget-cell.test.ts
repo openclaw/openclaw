@@ -213,6 +213,7 @@ function customContext(
 ): WorkspaceCustomWidgetContext {
   return {
     status: "approved",
+    createdBy: "user",
     manifest: customManifest(),
     host: { client: null, basePath: "", sessionKey: "main" },
     onApprove: vi.fn(),
@@ -243,13 +244,21 @@ describe("renderCustomWidget (L5 dispatch)", () => {
     const onReject = vi.fn();
     const container = renderToContainer(
       renderCustomWidget(
-        widget({ kind: "custom:chart", createdBy: "agent:main" }),
-        customContext({ status: "pending", manifest: null, onApprove, onReject }),
+        widget({ kind: "custom:chart", createdBy: "agent:layout" }),
+        customContext({
+          status: "pending",
+          createdBy: "agent:scaffold",
+          manifest: null,
+          onApprove,
+          onReject,
+        }),
       ),
     );
     expect(container.querySelector("iframe")).toBeNull();
     const pending = container.querySelector('[data-test-id="workspace-custom-pending"]');
     expect(pending).not.toBeNull();
+    expect(pending?.textContent).toContain("scaffold");
+    expect(pending?.textContent).not.toContain("layout");
     container
       .querySelector<HTMLButtonElement>('[data-test-id="workspace-custom-approve"]')
       ?.click();

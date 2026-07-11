@@ -537,8 +537,10 @@ function buildCustomContext(
     basePath: props.basePath ?? "",
     sessionKey: props.sessionKey ?? "main",
   };
+  const createdBy = workspace.widgetsRegistry[name]?.createdBy;
   return {
     status: customWidgetStatus(workspace, widget.kind),
+    ...(createdBy ? { createdBy } : {}),
     manifest: viewState.manifestCache.get(name) ?? null,
     host,
     onApprove: () => void approveWidget(state, props.client, { name, decision: "approved" }),
