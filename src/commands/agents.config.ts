@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Agent config mutation and summary builders used by `openclaw agents` commands.
 import {
   normalizeOptionalString,
@@ -127,9 +128,11 @@ export function applyAgentConfig(
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, agentId);
   const base = index >= 0 ? list[index] : { id: agentId };
-  const mergedIdentity = params.identity ? { ...base.identity, ...params.identity } : undefined;
+  const mergedIdentity = params.identity
+    ? { ...expectDefined(base, "agents.config base").identity, ...params.identity }
+    : undefined;
   const nextEntry: AgentEntry = {
-    ...base,
+    ...expectDefined(base, "agents.config base"),
     ...(name ? { name } : {}),
     ...(params.workspace ? { workspace: params.workspace } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),

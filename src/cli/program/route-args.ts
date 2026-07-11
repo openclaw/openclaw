@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Route-first argv parsers for commands that can skip full Commander startup.
 import { isValueToken } from "../../infra/cli-root-options.js";
 import {
@@ -31,7 +32,7 @@ function parseRepeatedFlagValues(argv: string[], name: string): string[] | null 
       break;
     }
     if (arg === name) {
-      const next = args[i + 1];
+      const next = expectDefined(args[i + 1], "args entry at i + 1");
       if (!isValueToken(next)) {
         // Invalid fast-path shapes fall back to Commander so its normal errors and help text win.
         return null;

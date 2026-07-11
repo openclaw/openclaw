@@ -1,6 +1,7 @@
 // Shared status scan overview used by compact status, status --json, and status --all.
 // It collects config, update, gateway, channel, and local agent state before specialized callers add details.
 
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../config/types.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
@@ -236,12 +237,20 @@ export async function collectStatusScanOverview(params: {
     skipUpdateCheck: params.skipUpdateCheck,
     fetchGitUpdate: params.fetchGitUpdate,
     includeRegistryUpdate: params.includeRegistryUpdate,
-    includeLocalStatusRpcFallback: params.includeLocalStatusRpcFallback,
-    gatewayProbeTimeoutMs,
-    getTailnetHostname: async (runner) =>
-      await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
+    includeLocalStatusRpcFallback: expectDefined(
+      params.includeLocalStatusRpcFallback,
+      "local status RPC fallback setting",
+    ),
+    gatewayProbeTimeoutMs: expectDefined(gatewayProbeTimeoutMs, "gateway probe timeout"),
+    getTailnetHostname: async (runner) => {
+      const hostname = await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
         getTailnetHostname(runner),
-      ),
+      );
+      if (hostname === undefined) {
+        throw new Error("Tailnet hostname resolver returned undefined");
+      }
+      return hostname;
+    },
     getUpdateCheckResult: async (updateParams) =>
       await loadStatusUpdateModule().then(({ getUpdateCheckResult }) =>
         getUpdateCheckResult(updateParams),

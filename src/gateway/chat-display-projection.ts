@@ -1,6 +1,7 @@
 // Gateway chat display projection.
 // Converts raw transcript messages into bounded Control UI/history display records.
 import { createHash } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   asFiniteNumber,
   asPositiveSafeInteger,
@@ -1407,13 +1408,16 @@ function mergeTtsSupplementMessages(
     if (marker && isAssistantTtsSupplementMessage(message)) {
       let targetIndex = -1;
       for (let i = merged.length - 1; i >= 0; i--) {
-        if (ttsSupplementMatchesAssistant(marker, merged[i])) {
+        if (ttsSupplementMatchesAssistant(marker, expectDefined(merged[i], "merged entry at i"))) {
           targetIndex = i;
           break;
         }
       }
       if (targetIndex >= 0) {
-        merged[targetIndex] = mergeTtsSupplementContent(merged[targetIndex], message);
+        merged[targetIndex] = mergeTtsSupplementContent(
+          expectDefined(merged[targetIndex], "merged entry at target index"),
+          message,
+        );
         changed = true;
         continue;
       }
@@ -1639,7 +1643,7 @@ function filterVisibleProjectedHistoryMessages(
       continue;
     }
     const currentRoleContent = asRoleContentMessage(current);
-    const next = messages[i + 1];
+    const next = expectDefined(messages[i + 1], "messages entry at i + 1");
     const nextRoleContent = next ? asRoleContentMessage(next) : null;
     if (
       currentRoleContent &&
