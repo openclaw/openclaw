@@ -175,6 +175,19 @@ describe("crestodian tool", () => {
     );
   });
 
+  it("rejects terminal controls before registering a plugin proposal", async () => {
+    const proposalRef: CrestodianToolProposalRef = {};
+    const tool = createCrestodianTool({ surface: "cli", proposalRef });
+
+    await expect(
+      tool.execute("plugin-control-sequence", {
+        action: "plugin_install",
+        spec: "clawhub:demo\u001b[2J",
+      }),
+    ).rejects.toThrow("unsupported terminal control characters");
+    expect(proposalRef.current).toBeUndefined();
+  });
+
   it("binds setup approval to the exact ordered inference routes", async () => {
     const proposalRef: CrestodianToolProposalRef = {};
     const args = {

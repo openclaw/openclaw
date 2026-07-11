@@ -9,6 +9,7 @@ import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";
 import {
   describeCrestodianPersistentOperation,
   executeCrestodianOperation,
+  formatCrestodianPersistentPlan,
   isPersistentCrestodianOperation,
   parseCrestodianOperation,
 } from "./operations.js";
@@ -759,6 +760,18 @@ describe("parseCrestodianOperation", () => {
     expect(installCall[2]).toEqual({
       acknowledgeNonClawHubInstall: true,
     });
+  });
+
+  it("sanitizes model-supplied fields in host-owned approval plans", () => {
+    const plan = formatCrestodianPersistentPlan({
+      kind: "create-agent",
+      agentId: "demo\u001b[2J",
+      workspace: "/tmp/work\nspoofed approval",
+    });
+
+    expect(plan).not.toContain("\u001b");
+    expect(plan).toContain("create agent demo with workspace");
+    expect(plan).toContain("/tmp/work\\nspoofed approval");
   });
 
   it("does not require source acknowledgement for an official catalog plugin", async () => {

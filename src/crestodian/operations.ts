@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 // Crestodian operations parse, approve, execute, and audit setup-helper commands.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import { looksLikeLocalInstallSpec } from "../cli/install-spec.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
@@ -521,13 +522,16 @@ function normalizePluginInstallSpec(spec: string, source: string | undefined): s
   return trimmed;
 }
 
-function validateCrestodianPluginInstallSpec(spec: string): string | null {
+export function validateCrestodianPluginInstallSpec(spec: string): string | null {
   const trimmed = spec.trim();
   if (!trimmed) {
     return "Plugin install spec is required.";
   }
   if (/\s/.test(trimmed)) {
     return "Crestodian plugin install accepts one npm or ClawHub package spec.";
+  }
+  if (sanitizeTerminalText(trimmed) !== trimmed) {
+    return "Crestodian plugin install spec contains unsupported terminal control characters.";
   }
   const lower = trimmed.toLowerCase();
   if (lower.startsWith("clawhub:")) {
@@ -587,8 +591,7 @@ export function isPersistentCrestodianOperation(operation: CrestodianOperation):
   );
 }
 
-/** Format a user-facing description for an operation requiring approval. */
-export function describeCrestodianPersistentOperation(operation: CrestodianOperation): string {
+function describeCrestodianPersistentOperationUnsafe(operation: CrestodianOperation): string {
   switch (operation.kind) {
     case "set-default-model":
       return `set agents.defaults.model.primary to ${operation.model}`;
@@ -617,6 +620,11 @@ export function describeCrestodianPersistentOperation(operation: CrestodianOpera
     default:
       return "apply this action";
   }
+}
+
+/** Format a terminal-safe user-facing description for an operation requiring approval. */
+export function describeCrestodianPersistentOperation(operation: CrestodianOperation): string {
+  return sanitizeTerminalText(describeCrestodianPersistentOperationUnsafe(operation));
 }
 
 /** Format the standard approval plan text for a persistent operation. */

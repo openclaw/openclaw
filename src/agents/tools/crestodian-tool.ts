@@ -12,6 +12,7 @@ import {
   formatCrestodianPersistentPlan,
   isPersistentCrestodianOperation,
   requiresNonClawHubPluginInstallAcknowledgement,
+  validateCrestodianPluginInstallSpec,
   validateCrestodianSetupInferenceSelection,
   type CrestodianOperation,
   type CrestodianSetupInferenceRoute,
@@ -378,8 +379,14 @@ function operationForAction(params: Record<string, unknown>): CrestodianOperatio
       return { kind: "gateway-restart" };
     case "plugin_search":
       return { kind: "plugin-search", query: requireParam(params, "query") };
-    case "plugin_install":
-      return { kind: "plugin-install", spec: requireParam(params, "spec") };
+    case "plugin_install": {
+      const spec = requireParam(params, "spec");
+      const validationError = validateCrestodianPluginInstallSpec(spec);
+      if (validationError) {
+        throw new ToolInputError(`crestodian: ${validationError}`);
+      }
+      return { kind: "plugin-install", spec };
+    }
     case "plugin_uninstall":
       return { kind: "plugin-uninstall", pluginId: requireParam(params, "pluginId") };
     case "setup": {
