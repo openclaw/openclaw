@@ -1,6 +1,7 @@
 // LM Studio embedding provider tests cover preload context-length precedence.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { lmstudioMemoryEmbeddingProviderAdapter } from "../memory-embedding-adapter.js";
 import { createLmstudioEmbeddingProvider } from "./embedding-provider.js";
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() =>
@@ -14,6 +15,25 @@ const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
 const resolveLmstudioRuntimeApiKeyMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => undefined),
 );
+const ensureProviderLocalServiceMock = vi.hoisted(() => vi.fn(async () => undefined));
+const createRemoteEmbeddingProviderMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    id: "lmstudio",
+    model: "text-embedding-nomic-embed-text-v1.5",
+    embedQuery: vi.fn(async () => [1, 0]),
+    embedBatch: vi.fn(async (texts: string[]) => texts.map(() => [1, 0])),
+  })),
+);
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")>();
+  return {
+    ...actual,
+    createRemoteEmbeddingProvider: createRemoteEmbeddingProviderMock,
+    ensureProviderLocalService: ensureProviderLocalServiceMock,
+  };
+});
 
 vi.mock("./models.fetch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./models.fetch.js")>();
@@ -66,6 +86,9 @@ async function readRequestedContextLength(config: OpenClawConfig): Promise<unkno
 describe("createLmstudioEmbeddingProvider preload context length", () => {
   beforeEach(() => {
     ensureLmstudioModelLoadedMock.mockClear();
+    createRemoteEmbeddingProviderMock.mockClear();
+    ensureProviderLocalServiceMock.mockReset();
+    ensureProviderLocalServiceMock.mockResolvedValue(undefined);
   });
 
   it.each([
@@ -111,5 +134,81 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
     await expect(readRequestedContextLength(buildConfig({ model, provider }))).resolves.toBe(
       expected,
     );
+  });
+
+  it("leases the exact configured alias for preload and embedding requests", async () => {
+    const release = vi.fn();
+    ensureProviderLocalServiceMock.mockResolvedValue({ release });
+    const service = {
+      command: "/usr/bin/lms-spark",
+      args: ["server", "start"],
+      idleStopMs: 10,
+    };
+    const options = {
+      config: {
+        models: {
+          providers: {
+            "lmstudio-spark": {
+              baseUrl: "http://spark.local:1234/v1",
+              localService: service,
+              models: [{ id: EMBEDDING_MODEL }],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      provider: "lmstudio-spark",
+      model: `lmstudio-spark/${EMBEDDING_MODEL}`,
+      fallback: "none",
+    };
+
+    const { provider } = await createLmstudioEmbeddingProvider(options);
+    await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
+
+    expect(ensureProviderLocalServiceMock).toHaveBeenCalledTimes(2);
+    expect(ensureProviderLocalServiceMock).toHaveBeenNthCalledWith(
+      1,
+      {
+        providerId: "lmstudio-spark",
+        baseUrl: "http://spark.local:1234/v1",
+        headers: { "Content-Type": "application/json" },
+        service,
+      },
+      undefined,
+    );
+    expect(ensureProviderLocalServiceMock).toHaveBeenNthCalledWith(
+      2,
+      {
+        providerId: "lmstudio-spark",
+        baseUrl: "http://spark.local:1234/v1",
+        headers: { "Content-Type": "application/json" },
+        service,
+      },
+      undefined,
+    );
+    expect(release).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves configured provider aliases in the memory adapter", async () => {
+    const result = await lmstudioMemoryEmbeddingProviderAdapter.create({
+      config: {
+        models: {
+          providers: {
+            "lmstudio-spark": {
+              baseUrl: "http://spark.local:1234/v1",
+              models: [{ id: EMBEDDING_MODEL }],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      provider: "lmstudio-spark",
+      model: `lmstudio-spark/${EMBEDDING_MODEL}`,
+      fallback: "none",
+    });
+
+    expect(result.runtime?.cacheKeyData).toMatchObject({
+      provider: "lmstudio-spark",
+      baseUrl: "http://spark.local:1234/v1",
+      model: EMBEDDING_MODEL,
+    });
   });
 });

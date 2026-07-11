@@ -3,11 +3,13 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   buildRemoteBaseUrlPolicy,
   createRemoteEmbeddingProvider,
+  ensureProviderLocalService,
   normalizeEmbeddingModelWithPrefixes,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
@@ -33,11 +35,11 @@ type LmstudioEmbeddingClient = {
 export const DEFAULT_LMSTUDIO_EMBEDDING_MODEL = LMSTUDIO_DEFAULT_EMBEDDING_MODEL;
 
 /** Normalizes LM Studio embedding model refs and accepts `lmstudio/` prefix. */
-function normalizeLmstudioModel(model: string): string {
+function normalizeLmstudioModel(model: string, providerId?: string): string {
   return normalizeEmbeddingModelWithPrefixes({
     model,
     defaultModel: DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
-    prefixes: ["lmstudio/"],
+    prefixes: [`${providerId?.trim() || LMSTUDIO_PROVIDER_ID}/`, `${LMSTUDIO_PROVIDER_ID}/`],
   });
 }
 
@@ -94,11 +96,32 @@ function resolveEmbeddingPreloadContextLength(params: {
   );
 }
 
+function resolveConfiguredLmstudioProvider(options: MemoryEmbeddingProviderCreateOptions) {
+  const providers = options.config.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const providerId = options.provider?.trim() || LMSTUDIO_PROVIDER_ID;
+  const direct = providers[providerId];
+  if (direct) {
+    return { providerId, config: direct };
+  }
+  const normalized = normalizeProviderId(providerId);
+  for (const [candidateId, candidate] of Object.entries(providers)) {
+    if (normalizeProviderId(candidateId) === normalized) {
+      return { providerId: candidateId, config: candidate };
+    }
+  }
+  const fallback = providers[LMSTUDIO_PROVIDER_ID];
+  return fallback ? { providerId: LMSTUDIO_PROVIDER_ID, config: fallback } : undefined;
+}
+
 /** Creates the LM Studio embedding provider client and preloads the target model before return. */
 export async function createLmstudioEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: LmstudioEmbeddingClient }> {
-  const providerConfig = options.config.models?.providers?.lmstudio;
+  const resolvedProvider = resolveConfiguredLmstudioProvider(options);
+  const providerConfig = resolvedProvider?.config;
   const providerBaseUrl = providerConfig?.baseUrl?.trim();
   const isFallbackActivation = options.fallback === "lmstudio" && options.provider !== "lmstudio";
   const remoteBaseUrl = options.remote?.baseUrl?.trim();
@@ -119,7 +142,7 @@ export async function createLmstudioEmbeddingProvider(
         ? providerBaseUrl
         : undefined;
   const baseUrl = resolveLmstudioInferenceBase(configuredBaseUrl);
-  const model = normalizeLmstudioModel(options.model);
+  const model = normalizeLmstudioModel(options.model, resolvedProvider?.providerId);
   const providerHeaders = await resolveLmstudioProviderHeaders({
     config: options.config,
     env: process.env,
@@ -154,31 +177,77 @@ export async function createLmstudioEmbeddingProvider(
     providerContextTokens: providerConfig?.contextTokens,
     providerContextWindow: providerConfig?.contextWindow,
   });
+  const localServiceTarget = providerConfig?.localService
+    ? {
+        providerId: resolvedProvider?.providerId ?? LMSTUDIO_PROVIDER_ID,
+        baseUrl,
+        headers,
+        service: providerConfig.localService,
+      }
+    : undefined;
+  const withLocalServiceLease = async <T>(
+    signal: AbortSignal | undefined,
+    action: () => Promise<T>,
+  ): Promise<T> => {
+    const lease = localServiceTarget
+      ? await ensureProviderLocalService(localServiceTarget, signal)
+      : undefined;
+    try {
+      return await action();
+    } finally {
+      lease?.release();
+    }
+  };
 
-  try {
-    await ensureLmstudioModelLoaded({
-      baseUrl,
-      apiKey,
-      headers: headerOverrides,
-      ssrfPolicy,
-      modelKey: model,
-      requestedContextLength,
-      timeoutMs: 120_000,
-    });
-  } catch (error) {
-    log.warn("lmstudio embeddings warmup failed; continuing without preload", {
-      baseUrl,
-      model,
-      error: formatErrorMessage(error),
-    });
-  }
+  await withLocalServiceLease(undefined, async () => {
+    try {
+      await ensureLmstudioModelLoaded({
+        baseUrl,
+        apiKey,
+        headers: headerOverrides,
+        ssrfPolicy,
+        modelKey: model,
+        requestedContextLength,
+        timeoutMs: 120_000,
+      });
+    } catch (error) {
+      log.warn("lmstudio embeddings warmup failed; continuing without preload", {
+        baseUrl,
+        model,
+        error: formatErrorMessage(error),
+      });
+    }
+  });
 
+  const remoteProvider = createRemoteEmbeddingProvider({
+    id: LMSTUDIO_PROVIDER_ID,
+    client,
+    errorPrefix: "lmstudio embeddings failed",
+  });
+  const provider: MemoryEmbeddingProvider = {
+    ...remoteProvider,
+    embedQuery: async (text, callOptions) =>
+      await withLocalServiceLease(callOptions?.signal, async () => {
+        return await remoteProvider.embedQuery(text, callOptions);
+      }),
+    embedBatch: async (texts, callOptions) =>
+      await withLocalServiceLease(callOptions?.signal, async () => {
+        return await remoteProvider.embedBatch(texts, callOptions);
+      }),
+    ...(remoteProvider.embedBatchInputs
+      ? {
+          embedBatchInputs: async (
+            inputs: Parameters<NonNullable<MemoryEmbeddingProvider["embedBatchInputs"]>>[0],
+            callOptions?: Parameters<NonNullable<MemoryEmbeddingProvider["embedBatchInputs"]>>[1],
+          ) =>
+            await withLocalServiceLease(callOptions?.signal, async () => {
+              return await remoteProvider.embedBatchInputs!(inputs, callOptions);
+            }),
+        }
+      : {}),
+  };
   return {
-    provider: createRemoteEmbeddingProvider({
-      id: LMSTUDIO_PROVIDER_ID,
-      client,
-      errorPrefix: "lmstudio embeddings failed",
-    }),
+    provider,
     client,
   };
 }
