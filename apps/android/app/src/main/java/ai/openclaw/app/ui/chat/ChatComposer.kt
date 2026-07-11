@@ -19,13 +19,13 @@ internal fun mergeChatDraft(
   }
 }
 
-/** Prepends a system share without destroying text already owned by the active composer. */
+/** Appends system shares so existing drafts stay first and queued shares remain FIFO. */
 internal fun mergeSharedChatText(
   sharedText: String?,
   currentInput: String,
 ): String {
   val shared = sharedText?.trim()?.takeIf { it.isNotEmpty() } ?: return currentInput
-  return if (currentInput.isEmpty()) shared else listOf(shared, currentInput).joinToString(separator = "\n\n")
+  return if (currentInput.isEmpty()) shared else listOf(currentInput, shared).joinToString(separator = "\n\n")
 }
 
 internal data class StagedChatShare(

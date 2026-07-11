@@ -36,9 +36,16 @@ class ChatComposerDraftTest {
   @Test
   fun sharedTextPreservesExistingComposerText() {
     assertEquals(
-      "shared link\n\nexisting draft",
+      "existing draft\n\nshared link",
       mergeSharedChatText(sharedText = "shared link", currentInput = "existing draft"),
     )
+  }
+
+  @Test
+  fun queuedSharedTextPreservesArrivalOrder() {
+    val first = mergeSharedChatText(sharedText = "first", currentInput = "")
+
+    assertEquals("first\n\nsecond", mergeSharedChatText(sharedText = "second", currentInput = first))
   }
 
   @Test
@@ -68,7 +75,7 @@ class ChatComposerDraftTest {
         currentAttachments = listOf(existing),
       )
 
-    assertEquals("shared link\n\nexisting draft", merged.input)
+    assertEquals("existing draft\n\nshared link", merged.input)
     assertEquals(listOf(existing, shared), merged.attachments)
     assertEquals(0, merged.failedImageCount)
     assertEquals(2, merged.droppedImageCount)
