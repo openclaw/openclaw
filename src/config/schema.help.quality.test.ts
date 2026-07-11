@@ -692,6 +692,12 @@ describe("config help copy quality", () => {
     );
   });
 
+  it("conditions Talk idle timeout recovery on Voice Wake being enabled", () => {
+    const help = requireHelp("talk.idleTimeoutS");
+    expect(help).toMatch(/if Voice Wake is enabled/i);
+    expect(help).not.toMatch(/deactivates and returns to wake-word waiting/i);
+  });
+
   it("covers tools/hooks help keys with non-trivial operational guidance", () => {
     expectOperationalGuidance(
       TOOLS_HOOKS_TARGET_KEYS,
