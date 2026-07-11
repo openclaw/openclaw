@@ -7,6 +7,7 @@ import {
   SkillsProposalInspectResultSchema,
   SkillsProposalRequestRevisionResultSchema,
   ToolsEffectiveResultSchema,
+  ToolsInvokeParamsSchema,
 } from "./agents-models-skills.js";
 
 /**
@@ -49,6 +50,7 @@ describe("AgentsListResultSchema", () => {
         {
           id: "investment-master",
           name: "Investment Master",
+          workspaceGit: true,
           model: { primary: "deepseek/deepseek-v4-flash" },
           thinkingLevels: [
             { id: "off", label: "off" },
@@ -95,6 +97,23 @@ describe("ToolsEffectiveResultSchema", () => {
     };
 
     expect(Value.Check(ToolsEffectiveResultSchema, result)).toBe(false);
+  });
+});
+
+describe("ToolsInvokeParamsSchema", () => {
+  it("accepts only the operation-local direct-operator marker", () => {
+    expect(
+      Value.Check(ToolsInvokeParamsSchema, {
+        name: "message",
+        conversationReadOrigin: "direct-operator",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(ToolsInvokeParamsSchema, {
+        name: "message",
+        conversationReadOrigin: "delegated",
+      }),
+    ).toBe(false);
   });
 });
 

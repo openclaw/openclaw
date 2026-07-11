@@ -285,6 +285,16 @@ describe("sessions.files RPC handlers", () => {
       }),
     );
     expect(preview.file.content).toBe("# Nested read me\n");
+    expect(preview.file.workspacePath).toBe("packages/app/src/readme.md");
+
+    const workspaceRootPreview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: path.join(workspaceRoot, "src/readme.md"),
+      }),
+    );
+    expect(workspaceRootPreview.file.content).toBe("# Read me\n");
+    expect(workspaceRootPreview.file.workspacePath).toBe("src/readme.md");
 
     const browserPreview = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.get", {
@@ -374,7 +384,7 @@ describe("sessions.files RPC handlers", () => {
     ]);
   });
 
-  it("browses and searches workspace files without previewing browser-only files", async () => {
+  it("browses, searches, and previews files not referenced by the session", async () => {
     const folderPayload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.list", {
         sessionKey: "agent:main:main",
@@ -406,16 +416,18 @@ describe("sessions.files RPC handlers", () => {
       searchPayload.browser.entries.map((entry: Record<string, unknown>) => entry.path),
     ).toEqual(["ui/vite.config.ts"]);
 
-    const error = expectError(
+    const preview = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.get", {
         sessionKey: "agent:main:main",
         path: "ui/vite.config.ts",
       }),
     );
 
-    expect(error.details).toMatchObject({
+    expect(preview.file).toMatchObject({
+      content: "export default {};\n",
+      kind: "read",
+      missing: false,
       path: "ui/vite.config.ts",
-      type: "session_file_not_found",
     });
   });
 
@@ -439,7 +451,7 @@ describe("sessions.files RPC handlers", () => {
     expect(payload.browser.entries).toEqual([]);
   });
 
-  it("does not read absolute paths outside the configured workspace", async () => {
+  it("does not read absolute or parent-relative paths outside the configured workspace", async () => {
     const outsidePath = path.join(os.tmpdir(), `openclaw-outside-${Date.now()}.txt`);
     fs.writeFileSync(outsidePath, "outside\n", "utf8");
     hoisted.loadSessionEntry.mockReturnValue({
@@ -457,17 +469,19 @@ describe("sessions.files RPC handlers", () => {
     });
 
     try {
-      const error = expectError(
-        await invokeSessionFilesHandler("sessions.files.get", {
-          sessionKey: "agent:main:main",
-          path: outsidePath,
-        }),
-      );
+      for (const requestedPath of [outsidePath, "../outside.txt"]) {
+        const error = expectError(
+          await invokeSessionFilesHandler("sessions.files.get", {
+            sessionKey: "agent:main:main",
+            path: requestedPath,
+          }),
+        );
 
-      expect(error.details).toMatchObject({
-        path: outsidePath,
-        type: "session_file_not_found",
-      });
+        expect(error.details).toMatchObject({
+          path: requestedPath,
+          type: "session_file_not_found",
+        });
+      }
     } finally {
       fs.rmSync(outsidePath, { force: true });
     }

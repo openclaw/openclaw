@@ -1041,7 +1041,13 @@ describe("memory-core dreaming phases", () => {
     setDreamingTestEnv(path.join(workspaceDir, ".state"));
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     await fs.mkdir(sessionsDir, { recursive: true });
-    const transcriptPath = path.join(sessionsDir, "dreaming-main.jsonl");
+    const transcriptName = `dreaming-${"x".repeat(48)}.jsonl`;
+    const transcriptPath = path.join(sessionsDir, transcriptName);
+    const snippetTranscriptName = "snippet-boundary.jsonl";
+    const snippetTranscriptPath = path.join(sessionsDir, snippetTranscriptName);
+    const renderedSource = `[main/sessions/main/${transcriptName}#L4] `;
+    const renderedPadding = "r".repeat(343 - renderedSource.length - "User: ".length);
+    const snippetPadding = "s".repeat(273);
     await fs.writeFile(
       transcriptPath,
       [
@@ -1066,7 +1072,27 @@ describe("memory-core dreaming phases", () => {
             content: [{ type: "text", text: "Set retention to 365 days." }],
           },
         }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-05T18:03:00.000Z",
+            content: [{ type: "text", text: `${renderedPadding}🎉 omitted tail` }],
+          },
+        }),
       ].join("\n") + "\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      snippetTranscriptPath,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          timestamp: "2026-04-05T18:04:00.000Z",
+          content: [{ type: "text", text: `${snippetPadding}🌍 omitted tail` }],
+        },
+      }) + "\n",
       "utf-8",
     );
 
@@ -1118,10 +1144,23 @@ describe("memory-core dreaming phases", () => {
     expect(transcriptReadCount).toBeLessThanOrEqual(1);
 
     const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
-    expect(Object.keys(sessionIngestion.files)).toContain("main:sessions/main/dreaming-main.jsonl");
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
-    ).resolves.toBeUndefined();
+    expect(Object.keys(sessionIngestion.files)).toContain(`main:sessions/main/${transcriptName}`);
+    const corpusPath = path.join(
+      workspaceDir,
+      "memory",
+      ".dreams",
+      "session-corpus",
+      "2026-04-05.txt",
+    );
+    const corpus = await fs.readFile(corpusPath, "utf-8");
+    expect(corpus).toContain("Move backups to S3 Glacier.");
+    expect(corpus).toContain("Set retention to 365 days.");
+    expect(corpus).toContain(`${renderedSource}User: ${renderedPadding}\n`);
+    expect(corpus).toContain(
+      `[main/sessions/main/${snippetTranscriptName}#L1] User: ${snippetPadding}\n`,
+    );
+    expect(corpus).not.toContain("🎉");
+    expect(corpus).not.toContain("🌍");
 
     const ranked = await rankShortTermPromotionCandidates({
       workspaceDir,
@@ -1130,12 +1169,12 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T19:00:00.000Z"),
     });
-    expect(ranked.map((candidate) => candidate.path)).toContain(
+    expect(ranked.map((candidate) => candidate.path)).not.toContain(
       "memory/.dreams/session-corpus/2026-04-05.txt",
     );
     const snippets = ranked.map((candidate) => candidate.snippet);
-    expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
-    expectIncludesSubstring(snippets, "Set retention to 365 days.");
+    expectNotIncludesSubstring(snippets, "Move backups to S3 Glacier.");
+    expectNotIncludesSubstring(snippets, "Set retention to 365 days.");
   });
 
   it("keeps primary session transcripts out of configured subagent workspaces", async () => {
@@ -2042,18 +2081,6 @@ describe("memory-core dreaming phases", () => {
       restoreDreamingTestEnv();
     }
 
-    const ranked = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-06T02:00:00.000Z"),
-    });
-    const oldCandidate = ranked.find((candidate) => candidate.snippet.includes(oldMessage));
-    const newCandidate = ranked.find((candidate) => candidate.snippet.includes("retention at 365"));
-    expect(oldCandidate?.dailyCount).toBe(1);
-    expect(newCandidate?.dailyCount).toBe(1);
-
     const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
     const corpusFiles = (await fs.readdir(sessionCorpusDir)).filter((name) =>
       name.endsWith(".txt"),
@@ -2380,16 +2407,16 @@ describe("memory-core dreaming phases", () => {
       restoreDreamingTestEnv();
     }
 
-    const ranked = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-06T02:00:00.000Z"),
-    });
-    const snippets = ranked.map((candidate) => candidate.snippet);
-    expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
-    expectIncludesSubstring(snippets, "Retention policy stays at 365 days.");
+    const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    const corpusFiles = (await fs.readdir(sessionCorpusDir)).filter((name) =>
+      name.endsWith(".txt"),
+    );
+    let combinedCorpus = "";
+    for (const fileName of corpusFiles) {
+      combinedCorpus += `${await fs.readFile(path.join(sessionCorpusDir, fileName), "utf-8")}\n`;
+    }
+    expect(combinedCorpus).toContain("Move backups to S3 Glacier.");
+    expect(combinedCorpus).toContain("Retention policy stays at 365 days.");
   });
 
   it("ingests sessions when dreaming is enabled even if memorySearch is disabled", async () => {
@@ -2455,17 +2482,11 @@ describe("memory-core dreaming phases", () => {
       restoreDreamingTestEnv();
     }
 
-    const ranked = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-05T19:00:00.000Z"),
-    });
-    expectIncludesSubstring(
-      ranked.map((candidate) => candidate.snippet),
-      "Glacier archive migration is now complete.",
+    const corpus = await fs.readFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
+      "utf-8",
     );
+    expect(corpus).toContain("Glacier archive migration is now complete.");
   });
 
   it("keeps section context when chunking durable daily notes", async () => {
@@ -2524,6 +2545,41 @@ describe("memory-core dreaming phases", () => {
     expect(after[0]?.snippet).toContain("Emma Rees:");
     expect(after[0]?.snippet).toContain("She asked for more space");
     expect(after[0]?.snippet).toContain("messages short and low-pressure");
+  });
+
+  it("keeps daily ingestion snippets valid at surrogate-pair boundaries", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const memoryDir = path.join(workspaceDir, "memory");
+    const headingPrefix = "h".repeat(279);
+    const itemPrefix = "i".repeat(279);
+    const chunkPrefix = "c".repeat(272);
+    await Promise.all([
+      fs.writeFile(
+        path.join(memoryDir, "2026-04-05-heading.md"),
+        [`# ${headingPrefix}🎉`, "", "- Durable heading context item."].join("\n"),
+        "utf-8",
+      ),
+      fs.writeFile(
+        path.join(memoryDir, "2026-04-05-item.md"),
+        ["# 2026-04-05", "", `- ${itemPrefix}🎉`].join("\n"),
+        "utf-8",
+      ),
+      fs.writeFile(
+        path.join(memoryDir, "2026-04-05-chunk.md"),
+        ["# 2026-04-05", "", "## Topic", `- ${chunkPrefix}🎉`].join("\n"),
+        "utf-8",
+      ),
+    ]);
+
+    const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const snippets = await readCandidateSnippets(workspaceDir, "2026-04-05T10:05:00.000Z");
+    expect(snippets).toEqual(
+      expect.arrayContaining([`${headingPrefix}:`, itemPrefix, `Topic: ${chunkPrefix}`]),
+    );
   });
 
   it("drops generic day headings but keeps meaningful section labels", async () => {
@@ -2801,7 +2857,7 @@ describe("memory-core dreaming phases", () => {
           startLine: 2,
           endLine: 2,
           score: 0.88,
-          snippet: "Assistant: Documented Ollama provider setup.",
+          snippet: "Documented Ollama provider setup.",
           source: "memory",
         },
       ],

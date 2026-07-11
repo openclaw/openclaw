@@ -17,6 +17,7 @@ import {
   redactForDevToolLog,
   redactHomePath,
 } from "../lib/dev-tooling-safety.ts";
+import { sleep } from "../lib/sleep.mjs";
 
 function writeStdoutLine(message: string): void {
   process.stdout.write(`${message}\n`);
@@ -155,12 +156,6 @@ const VALUE_OPTIONS = new Set([
 
 class CliArgumentError extends Error {
   override name = "CliArgumentError";
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function remainingTimeoutMs(deadlineMs: number, nowMs = Date.now()): number {

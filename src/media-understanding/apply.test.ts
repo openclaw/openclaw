@@ -31,7 +31,6 @@ const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
 const convertHeicToJpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
-const extractDocumentContentMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
@@ -117,6 +116,14 @@ function getRunExecCall(index = 0) {
   const call = mockedRunExec.mock.calls[index];
   if (!call) {
     throw new Error(`expected runExec call ${index}`);
+  }
+  return call;
+}
+
+function getRunExecCallForCommand(command: string) {
+  const call = mockedRunExec.mock.calls.find(([calledCommand]) => calledCommand === command);
+  if (!call) {
+    throw new Error(`expected runExec call for ${command}`);
   }
   return call;
 }
@@ -226,7 +233,7 @@ async function createAudioCtx(params?: {
   } satisfies MsgContext;
 }
 
-async function setupAudioAutoDetectCase(stdout: string): Promise<{
+async function setupAudioAutoDetectCase(stdout?: string): Promise<{
   ctx: MsgContext;
   cfg: OpenClawConfig;
 }> {
@@ -236,11 +243,28 @@ async function setupAudioAutoDetectCase(stdout: string): Promise<{
     content: createSafeAudioFixtureBuffer(2048),
   });
   const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
-  mockedRunExec.mockResolvedValueOnce({
-    stdout,
-    stderr: "",
-  });
+  if (stdout !== undefined) {
+    mockedRunExec.mockResolvedValueOnce({
+      stdout,
+      stderr: "",
+    });
+  }
   return { ctx, cfg };
+}
+
+function mockWhisperCliTranscript(transcript: string) {
+  mockedRunExec.mockImplementation(async (command, args) => {
+    if (command === "readelf" || command === "otool") {
+      return { stdout: "", stderr: "" };
+    }
+    const outputBaseIndex = args.indexOf("-of");
+    const outputBase = outputBaseIndex >= 0 ? args[outputBaseIndex + 1] : undefined;
+    if (typeof outputBase !== "string") {
+      throw new Error("missing whisper-cli output base");
+    }
+    await fs.writeFile(`${outputBase}.txt`, transcript);
+    return { stdout: "Transcribing with Whisper...\n", stderr: "" };
+  });
 }
 
 async function applyWithDisabledMedia(params: {
@@ -303,9 +327,6 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
     }));
-    vi.doMock("../media/document-extractors.runtime.js", () => ({
-      extractDocumentContent: extractDocumentContentMock,
-    }));
     vi.doMock("./provider-registry.js", async () => {
       const actual =
         await vi.importActual<typeof import("./provider-registry.js")>("./provider-registry.js");
@@ -357,8 +378,6 @@ describe("applyMediaUnderstanding", () => {
     mockedConvertHeicToJpeg.mockReset();
     mockedConvertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
     mockedRunExec.mockReset();
-    extractDocumentContentMock.mockReset();
-    extractDocumentContentMock.mockResolvedValue(null);
     mockedReadRemoteMediaBuffer.mockResolvedValue({
       buffer: createSafeAudioFixtureBuffer(2048),
       contentType: "audio/ogg",
@@ -846,7 +865,8 @@ describe("applyMediaUnderstanding", () => {
     const modelPath = path.join(modelDir, "tiny.bin");
     await fs.writeFile(modelPath, "model");
 
-    const { ctx, cfg } = await setupAudioAutoDetectCase("whisper cpp ok\n");
+    const { ctx, cfg } = await setupAudioAutoDetectCase();
+    mockWhisperCliTranscript("whisper cpp ok\n");
 
     await withMediaAutoDetectEnv(
       {
@@ -860,7 +880,7 @@ describe("applyMediaUnderstanding", () => {
     );
 
     expect(ctx.Transcript).toBe("whisper cpp ok");
-    const [command, args, options] = getRunExecCall();
+    const [command, args, options] = getRunExecCallForCommand("whisper-cli");
     expect(command).toBe("whisper-cli");
     if (!Array.isArray(args)) {
       throw new Error("expected whisper-cli args");
@@ -868,7 +888,17 @@ describe("applyMediaUnderstanding", () => {
     expect(args.slice(0, 4)).toEqual(["-m", modelPath, "-otxt", "-of"]);
     expect(typeof args[4]).toBe("string");
     expect(String(args[4]).endsWith("sample")).toBe(true);
-    expect(args.slice(5)).toEqual(["-np", "-nt", await fs.realpath(ctx.MediaPath ?? "")]);
+    expect(args.slice(5)).toEqual(["-nt", await fs.realpath(ctx.MediaPath ?? "")]);
+    if (process.platform === "linux") {
+      expect(mockedRunExec.mock.calls).toContainEqual([
+        "readelf",
+        ["-d", expect.stringContaining("whisper-cli")],
+        expect.objectContaining({ timeoutMs: 1500 }),
+      ]);
+      expect(mockedRunExec.mock.calls.some(([calledCommand]) => calledCommand === "ldd")).toBe(
+        false,
+      );
+    }
     expectCliRunOptions(options);
   });
 
@@ -895,10 +925,7 @@ describe("applyMediaUnderstanding", () => {
       await fs.writeFile(wavPath, Buffer.from("RIFF"));
       return "";
     });
-    mockedRunExec.mockResolvedValueOnce({
-      stdout: "whisper cpp ogg ok\n",
-      stderr: "",
-    });
+    mockWhisperCliTranscript("whisper cpp ogg ok\n");
 
     await withMediaAutoDetectEnv(
       {
@@ -929,14 +956,14 @@ describe("applyMediaUnderstanding", () => {
     expect(String(ffmpegArgs[11])).toContain("telegram-voice.wav");
     expect(String(ffmpegArgs[11]).endsWith(".part")).toBe(true);
 
-    const [command, args, options] = getRunExecCall();
+    const [command, args, options] = getRunExecCallForCommand("whisper-cli");
     expect(command).toBe("whisper-cli");
     if (!Array.isArray(args)) {
       throw new Error("expected whisper-cli transcode args");
     }
     expect(args.slice(0, 4)).toEqual(["-m", modelPath, "-otxt", "-of"]);
-    expect(args.slice(5, 7)).toEqual(["-np", "-nt"]);
-    expect(String(args[7]).endsWith("telegram-voice.wav")).toBe(true);
+    expect(args[5]).toBe("-nt");
+    expect(String(args[6]).endsWith("telegram-voice.wav")).toBe(true);
     expectCliRunOptions(options);
   });
 
@@ -1761,90 +1788,6 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expectFileNotApplied({ ctx, result, body: "<media:file>" });
-  });
-
-  it("extracts PDF attachments above the legacy 5MB input-file cap (#90098)", async () => {
-    const pdfBuffer = Buffer.concat([
-      Buffer.from("%PDF-1.7\n", "utf8"),
-      Buffer.alloc(6 * 1024 * 1024, 0x61),
-    ]);
-    const filePath = await createTempMediaFile({
-      fileName: "big-report.pdf",
-      content: pdfBuffer,
-    });
-    extractDocumentContentMock.mockResolvedValue({
-      text: "big pdf text body",
-      images: [],
-      extractor: "pdf",
-    });
-
-    const { ctx, result } = await applyWithDisabledMedia({
-      body: "<media:file>",
-      mediaPath: filePath,
-      mediaType: "application/pdf",
-    });
-
-    expect(result.appliedFile).toBe(true);
-    expect(ctx.Body).toContain("big pdf text body");
-    // The inbound page cap follows the agents.defaults.pdfMaxPages default,
-    // not the OpenResponses 4-page default.
-    expect(extractDocumentContentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ maxPages: 20 }),
-    );
-  });
-
-  it("skips PDF attachments above the configured inbound media cap", async () => {
-    const pdfBuffer = Buffer.concat([
-      Buffer.from("%PDF-1.7\n", "utf8"),
-      Buffer.alloc(Math.floor(1.5 * 1024 * 1024), 0x61),
-    ]);
-    const filePath = await createTempMediaFile({
-      fileName: "over-cap-report.pdf",
-      content: pdfBuffer,
-    });
-    const cfg: OpenClawConfig = {
-      ...createMediaDisabledConfig(),
-      agents: { defaults: { mediaMaxMb: 1 } },
-    };
-
-    const { ctx, result } = await applyWithDisabledMedia({
-      body: "<media:file>",
-      mediaPath: filePath,
-      mediaType: "application/pdf",
-      cfg,
-    });
-
-    expectFileNotApplied({ ctx, result, body: "<media:file>" });
-    expect(extractDocumentContentMock).not.toHaveBeenCalled();
-  });
-
-  it("routes agents.defaults.pdfMaxPages to inbound PDF extraction", async () => {
-    const filePath = await createTempMediaFile({
-      fileName: "paged-report.pdf",
-      content: Buffer.from("%PDF-1.7\nsmall", "utf8"),
-    });
-    extractDocumentContentMock.mockResolvedValue({
-      text: "paged pdf text",
-      images: [],
-      extractor: "pdf",
-    });
-    const cfg: OpenClawConfig = {
-      ...createMediaDisabledConfig(),
-      agents: { defaults: { pdfMaxPages: 8 } },
-    };
-
-    const { ctx, result } = await applyWithDisabledMedia({
-      body: "<media:file>",
-      mediaPath: filePath,
-      mediaType: "application/pdf",
-      cfg,
-    });
-
-    expect(result.appliedFile).toBe(true);
-    expect(ctx.Body).toContain("paged pdf text");
-    expect(extractDocumentContentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ maxPages: 8 }),
-    );
   });
 
   it("respects configured allowedMimes for text-like attachments", async () => {

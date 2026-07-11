@@ -112,7 +112,7 @@ describe("channelsHandlers channels.start", () => {
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
       config: {},
     });
-    expect(startChannel).toHaveBeenCalledWith("whatsapp", "default-account");
+    expect(startChannel).toHaveBeenCalledWith("whatsapp", "default-account", { manual: true });
     expect(respond).toHaveBeenCalledWith(
       true,
       {
@@ -127,7 +127,7 @@ describe("channelsHandlers channels.start", () => {
   it("reports started=false when the channel runtime remains stopped", async () => {
     const { respond, startChannel } = await runChannelsStart(false);
 
-    expect(startChannel).toHaveBeenCalledWith("whatsapp", "default-account");
+    expect(startChannel).toHaveBeenCalledWith("whatsapp", "default-account", { manual: true });
     expect(respond).toHaveBeenCalledWith(
       true,
       {

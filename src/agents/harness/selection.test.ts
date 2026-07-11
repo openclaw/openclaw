@@ -4,14 +4,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
+import { mintSecretSentinel } from "../../secrets/sentinel.js";
+import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
+import type { CrestodianToolOptions } from "../tools/crestodian-tool.js";
 import { maybeCompactAgentHarnessSession } from "./compaction.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
+  agentHarnessBuildsOpenClawTools,
+  agentHarnessExposesOpenClawTools,
   resolveAgentHarnessPolicy,
   resolveAvailableAgentHarnessPolicy,
   resolvePluginHarnessPolicyToolsAllow,
@@ -35,6 +41,17 @@ const providerOwnerMocks = vi.hoisted(() => ({
   resolveProviderRefOwnership: vi.fn(),
 }));
 
+it("identifies harnesses that expose OpenClaw tools", () => {
+  expect(agentHarnessBuildsOpenClawTools("openclaw")).toBe(false);
+  expect(agentHarnessBuildsOpenClawTools("codex")).toBe(true);
+  expect(agentHarnessBuildsOpenClawTools("copilot")).toBe(true);
+  expect(agentHarnessBuildsOpenClawTools("custom")).toBe(false);
+  expect(agentHarnessExposesOpenClawTools("openclaw")).toBe(true);
+  expect(agentHarnessExposesOpenClawTools("codex")).toBe(true);
+  expect(agentHarnessExposesOpenClawTools("copilot")).toBe(true);
+  expect(agentHarnessExposesOpenClawTools("custom")).toBe(false);
+});
+
 vi.mock("./builtin-openclaw.js", () => ({
   createOpenClawAgentHarness: (): AgentHarness => ({
     id: "openclaw",
@@ -45,6 +62,7 @@ vi.mock("./builtin-openclaw.js", () => ({
   }),
 }));
 vi.mock("../model-auth.js", () => ({
+  applySecretRefHeaderSentinels: (model: unknown) => model,
   getApiKeyForModel: compactAuthMocks.getApiKeyForModel,
 }));
 vi.mock("../embedded-agent-runner/model.js", () => ({
@@ -277,6 +295,211 @@ function agentModelRuntimeConfig(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it.each(["codex", "copilot"] as const)(
+    "binds the host Crestodian tool to the %s SDK construction path without leaking authority",
+    async (harnessId) => {
+      let receivedPrivateAuthority = true;
+      let hostScopeActive = false;
+      let toolNames: string[] = [];
+      const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attemptParams) => {
+        receivedPrivateAuthority = "crestodianTool" in attemptParams;
+        await Promise.resolve();
+        hostScopeActive = isHostScopedAgentToolActive("crestodian");
+        toolNames = createOpenClawCodingTools({
+          config: { tools: { allow: ["read"], deny: ["crestodian"], toolSearch: true } },
+          runtimeToolAllowlist: ["crestodian"],
+          toolConstructionPlan: {
+            includeBaseCodingTools: false,
+            includeShellTools: false,
+            includeChannelTools: false,
+            includeOpenClawTools: true,
+            includePluginTools: false,
+          },
+        }).map((tool) => tool.name);
+        return createAttemptResult(harnessId);
+      });
+      registerAgentHarness(
+        {
+          id: harnessId,
+          label: harnessId,
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt: pluginRunAttempt,
+        },
+        { ownerPluginId: harnessId },
+      );
+      const params = createAttemptParams(
+        providerRuntimeConfig("codex", harnessId),
+      ) as EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions };
+      params.toolsAllow = ["crestodian"];
+      params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+
+      await runAgentHarnessAttempt(params);
+
+      expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+      expect(receivedPrivateAuthority).toBe(false);
+      expect(hostScopeActive).toBe(true);
+      expect(toolNames).toEqual(["crestodian"]);
+      expect(createOpenClawCodingTools().some((tool) => tool.name === "crestodian")).toBe(false);
+      expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+    },
+  );
+
+  it.each([
+    { name: "missing", toolsAllow: undefined },
+    { name: "broad", toolsAllow: ["crestodian", "read"] },
+  ])("rejects $name allowlists for private Crestodian authority", async ({ toolsAllow }) => {
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      createAttemptResult("codex"),
+    );
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: pluginRunAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+    const params = createAttemptParams(
+      providerRuntimeConfig("codex", "codex"),
+    ) as EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions };
+    params.toolsAllow = toolsAllow;
+    params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+
+    await expect(runAgentHarnessAttempt(params)).rejects.toThrow(
+      'Crestodian host authority requires toolsAllow: ["crestodian"]',
+    );
+    expect(pluginRunAttempt).not.toHaveBeenCalled();
+    expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+  });
+
+  it("keeps the host Crestodian allowlist across global, agent, and sandbox deny-all policy", async () => {
+    const received: Array<{
+      toolsAllow: string[] | undefined;
+      extraSystemPrompt: string | undefined;
+      hostScopeActive: boolean;
+    }> = [];
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attemptParams) => {
+      received.push({
+        toolsAllow: attemptParams.toolsAllow,
+        extraSystemPrompt: attemptParams.extraSystemPrompt,
+        hostScopeActive: isHostScopedAgentToolActive("crestodian"),
+      });
+      return createAttemptResult("codex");
+    });
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: pluginRunAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+    const cases: Array<{
+      config: OpenClawConfig;
+      agentId?: string;
+      sessionKey?: string;
+    }> = [
+      { config: { tools: { deny: ["*"] } } as OpenClawConfig },
+      {
+        config: {
+          agents: { list: [{ id: "worker", tools: { deny: ["*"] } }] },
+        } as OpenClawConfig,
+        agentId: "worker",
+      },
+      {
+        config: {
+          agents: { defaults: { sandbox: { mode: "all" } } },
+          tools: { sandbox: { tools: { deny: ["*"] } } },
+        } as OpenClawConfig,
+        sessionKey: "agent:main:session-1",
+      },
+    ];
+
+    for (const [index, testCase] of cases.entries()) {
+      const params = createAttemptParams(testCase.config) as EmbeddedRunAttemptParams & {
+        crestodianTool?: CrestodianToolOptions;
+      };
+      params.sessionId = `session-${index}`;
+      params.agentHarnessRuntimeOverride = "codex";
+      params.agentId = testCase.agentId;
+      params.sessionKey = testCase.sessionKey;
+      params.toolsAllow = ["crestodian"];
+      params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+      await runAgentHarnessAttempt(params);
+    }
+
+    expect(received).toEqual([
+      { toolsAllow: ["crestodian"], extraSystemPrompt: undefined, hostScopeActive: true },
+      { toolsAllow: ["crestodian"], extraSystemPrompt: undefined, hostScopeActive: true },
+      { toolsAllow: ["crestodian"], extraSystemPrompt: undefined, hostScopeActive: true },
+    ]);
+    expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+  });
+
+  it("binds the same host Crestodian scope to the built-in OpenClaw harness", async () => {
+    let toolNames: string[] = [];
+    agentRunAttempt.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      toolNames = createOpenClawCodingTools({
+        config: { tools: { allow: ["read"], deny: ["crestodian"], toolSearch: true } },
+        runtimeToolAllowlist: ["crestodian"],
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      }).map((tool) => tool.name);
+      return createAttemptResult("openclaw");
+    });
+    const params = createAttemptParams(
+      providerRuntimeConfig("codex", "openclaw"),
+    ) as EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions };
+    params.toolsAllow = ["crestodian"];
+    params.crestodianTool = { surface: "gateway", proposalRef: {}, directiveRef: {} };
+
+    const result = await runAgentHarnessAttempt(params);
+
+    expect(result.sessionIdUsed).toBe("openclaw");
+    expect(toolNames).toEqual(["crestodian"]);
+    expect(createOpenClawCodingTools().some((tool) => tool.name === "crestodian")).toBe(false);
+    expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+  });
+
+  it("unwraps sentinels only at the plugin harness handoff", async () => {
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      createAttemptResult("codex"),
+    );
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: pluginRunAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+    const secret = "plugin-provider-secret";
+    const sentinel = mintSecretSentinel(secret, { label: "model-auth:codex" });
+    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    params.resolvedApiKey = sentinel;
+    params.model = {
+      ...params.model,
+      headers: { Authorization: `Bearer ${sentinel}`, "X-Optional": null } as never,
+    };
+
+    await runAgentHarnessAttempt(params);
+
+    const handedOff = pluginRunAttempt.mock.calls[0]?.[0];
+    expect(handedOff?.resolvedApiKey).toBe(secret);
+    expect(handedOff?.model.headers?.Authorization).toBe(`Bearer ${secret}`);
+    expect(handedOff?.model.headers?.["X-Optional"]).toBeNull();
+    expect(params.resolvedApiKey).toBe(sentinel);
+  });
+
   it("fails when a forced plugin harness is unavailable and fallback is omitted", async () => {
     process.env.OPENCLAW_AGENT_RUNTIME = "codex";
 
@@ -343,6 +566,32 @@ describe("runAgentHarnessAttempt", () => {
     await expect(runAgentHarnessAttempt(params)).rejects.toThrow(
       /Requested agent harness "codex" does not support 9router\/cc\/claude-opus-4-6/,
     );
+    expect(agentRunAttempt).not.toHaveBeenCalled();
+  });
+
+  it("keeps a session-pinned Codex harness across outer provider overrides", async () => {
+    registerSuccessfulCodexHarness();
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentHarnessId: "codex",
+    });
+
+    expect(result.sessionIdUsed).toBe("codex");
+    expect(agentRunAttempt).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a session-pinned Codex harness is unavailable", async () => {
+    await expect(
+      runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+        agentHarnessId: "codex",
+      }),
+    ).rejects.toThrow('Requested agent harness "codex" is not registered');
     expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
@@ -525,6 +774,42 @@ describe("runAgentHarnessAttempt", () => {
     expect(resolvePluginHarnessPolicyToolsAllow(createAttemptParams(config))).toBeUndefined();
   });
 
+  it("leaves owner WebChat unrestricted by wildcard sender policy for plugin harnesses", () => {
+    const config = {
+      tools: {
+        toolsBySender: {
+          "*": { deny: ["*"] },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolvePluginHarnessPolicyToolsAllow({
+        ...createAttemptParams(config),
+        messageProvider: "webchat",
+        senderIsOwner: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps non-owner WebChat restricted by wildcard sender policy for plugin harnesses", () => {
+    const config = {
+      tools: {
+        toolsBySender: {
+          "*": { deny: ["*"] },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolvePluginHarnessPolicyToolsAllow({
+        ...createAttemptParams(config),
+        messageProvider: "webchat",
+        senderIsOwner: false,
+      }),
+    ).toEqual([]);
+  });
+
   it("leaves OpenClaw harness params unchanged for channel group sender deny-all policy", async () => {
     await runAgentHarnessAttempt({
       ...createAttemptParams(groupSenderDenyAllConfig()),
@@ -629,7 +914,7 @@ describe("selectAgentHarness", () => {
     expect(unsupportedSupports).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores session-level OpenClaw pins when selecting a harness", () => {
+  it("honors session-level OpenClaw pins when selecting a harness", () => {
     const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
     registerAgentHarness({
       id: "codex",
@@ -644,8 +929,8 @@ describe("selectAgentHarness", () => {
       agentHarnessId: "openclaw",
     });
 
-    expect(harness.id).toBe("codex");
-    expect(supports).toHaveBeenCalledTimes(1);
+    expect(harness.id).toBe("openclaw");
+    expect(supports).not.toHaveBeenCalled();
   });
 
   it("passes manifest provider owners into plugin support checks", () => {
@@ -883,7 +1168,7 @@ describe("selectAgentHarness", () => {
     expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
-  it("ignores existing session OpenClaw pins when provider policy forces a plugin harness", () => {
+  it("keeps an existing session OpenClaw pin when provider policy forces a plugin harness", () => {
     registerFailingCodexHarness();
 
     expect(
@@ -893,7 +1178,7 @@ describe("selectAgentHarness", () => {
         agentHarnessId: "openclaw",
         config: providerRuntimeConfig("codex", "codex"),
       }).id,
-    ).toBe("codex");
+    ).toBe("openclaw");
   });
 
   it("ignores env-forced OpenClaw for OpenAI default runtime selection", () => {
@@ -937,8 +1222,22 @@ describe("selectAgentHarness", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("ignores stale plugin pins during compaction when the provider no longer matches", async () => {
-    registerFailingCodexHarness();
+  it("keeps pinned plugin compaction when the outer provider no longer matches", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
 
     await expect(
       maybeCompactAgentHarnessSession({
@@ -950,7 +1249,22 @@ describe("selectAgentHarness", () => {
         model: "llama3.3",
         agentHarnessId: "codex",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ ok: true, compacted: false });
+    expect(compact).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when a pinned compaction harness is unavailable", async () => {
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        agentHarnessId: "codex",
+      }),
+    ).rejects.toThrow('Requested agent harness "codex" is not registered');
   });
 
   it("honors selected plugin harness pins during compaction preflight", async () => {

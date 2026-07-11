@@ -11,6 +11,7 @@ import {
   buildAgentHookContextChannelFields,
   detectAndLoadAgentHarnessPromptImages,
   getModelProviderRequestTransport,
+  isHostScopedAgentToolActive,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveAttemptFsWorkspaceOnly,
   resolveAttemptSpawnWorkspaceDir,
@@ -156,15 +157,16 @@ type ModelRefInputObject = {
   maxTokens?: number;
 };
 
-export type { AttemptParamsLike as CopilotPoolAcquireInput, ModelRef };
 export { SUPPORTED_PROVIDERS };
 
-export type ResolveSandboxContextFn = typeof defaultResolveSandboxContext;
+type ResolveSandboxContextFn = typeof defaultResolveSandboxContext;
 
-export interface CopilotAttemptDeps {
+interface CopilotAttemptDeps {
   pool: CopilotClientPool;
   now?: () => number;
   createToolBridge?: typeof createCopilotToolBridge;
+  /** Host fact resolver; injectable only for focused plugin contract tests. */
+  isHostScopedToolActive?: (toolName: string) => boolean;
   /**
    * Optional override for sandbox-context resolution. The default delegates to
    * `openclaw/plugin-sdk/agent-harness-runtime#resolveSandboxContext`, which is
@@ -369,6 +371,10 @@ export async function runCopilotAttempt(
   const attemptStartedAt = now();
   const input = params as AttemptParamsLike;
   const createToolBridge = deps.createToolBridge ?? createCopilotToolBridge;
+  const hostCrestodianActive =
+    deps.isHostScopedToolActive?.("crestodian") ?? isHostScopedAgentToolActive("crestodian");
+  const ringZeroCrestodianRun =
+    hostCrestodianActive && isCrestodianOnlyToolAllowlist(input.toolsAllow);
   const messages = getMessagesSnapshotInput(input);
   const modelRef = resolveModelRef(input);
   const resolvedWorkspaceForSandbox =
@@ -618,6 +624,11 @@ export async function runCopilotAttempt(
   // safe way to defer the binding without creating a circular dep.
   // See tool-bridge.ts CopilotSessionHolder.
   const sessionRef: { current: SessionLike | undefined } = { current: undefined };
+  const computerContextEpoch: {
+    value: number;
+    frameToolCallId?: string;
+    frameImageIdentity?: string;
+  } = { value: 0 };
 
   try {
     let sdkTools: SdkTool[];
@@ -644,6 +655,7 @@ export async function runCopilotAttempt(
         // channel/routing, model context, run hooks). See
         // tool-bridge.ts buildOpenClawCodingToolsOptions().
         attemptParams: input,
+        computerContextEpoch,
         sessionRef,
         onYieldDetected: () => {
           yieldDetected = true;
@@ -716,6 +728,7 @@ export async function runCopilotAttempt(
           developerInstructions: originalDeveloperInstructions,
           messages,
           ctx: hookContext,
+          bootstrapContextRunKind: input.bootstrapContextRunKind,
           ...("beforeAgentStartResult" in input
             ? { beforeAgentStartResult: input.beforeAgentStartResult }
             : {}),
@@ -759,12 +772,15 @@ export async function runCopilotAttempt(
       effectiveWorkspaceDir,
       effectiveCwd,
       userInputBridge.onUserInputRequest,
-      hasNativePromptHook
-        ? {
-            onUserPromptSubmitted: ({ additionalContext, prompt }) =>
-              emitLlmInput(prompt, additionalContext),
-          }
-        : undefined,
+      {
+        hooksBridgeOptions: hasNativePromptHook
+          ? {
+              onUserPromptSubmitted: ({ additionalContext, prompt }) =>
+                emitLlmInput(prompt, additionalContext),
+            }
+          : undefined,
+        includeAskUser: !ringZeroCrestodianRun,
+      },
     );
     const compactionSessionConfig = byokProxy
       ? createSessionConfig(
@@ -777,12 +793,15 @@ export async function runCopilotAttempt(
           effectiveWorkspaceDir,
           effectiveCwd,
           userInputBridge.onUserInputRequest,
-          hasNativePromptHook
-            ? {
-                onUserPromptSubmitted: ({ additionalContext, prompt }) =>
-                  emitLlmInput(prompt, additionalContext),
-              }
-            : undefined,
+          {
+            hooksBridgeOptions: hasNativePromptHook
+              ? {
+                  onUserPromptSubmitted: ({ additionalContext, prompt }) =>
+                    emitLlmInput(prompt, additionalContext),
+                }
+              : undefined,
+            includeAskUser: !ringZeroCrestodianRun,
+          },
         )
       : sessionConfig;
     const replayDecision = decideReplayAction({
@@ -845,6 +864,11 @@ export async function runCopilotAttempt(
       onAssistantDelta: input.onAssistantDelta,
       onAgentEvent: input.onAgentEvent,
       onNativeSubagentEvent: (event) => nativeSubagentTaskMirror?.handleEvent(event),
+      onContextCompacted: () => {
+        computerContextEpoch.value += 1;
+        delete computerContextEpoch.frameToolCallId;
+        delete computerContextEpoch.frameImageIdentity;
+      },
       onCompactionStart: async () => {
         const sessionFile = readString(input.sessionFile);
         if (!sessionFile) {
@@ -1070,10 +1094,25 @@ export async function runCopilotAttempt(
   // the user message.
   const syntheticUserText = readString(input.transcriptPrompt) ?? readString(input.prompt);
   const tailUserText = readTailUserText(messages);
+  const tailUserIndex = messages.findLastIndex((message) => message.role === "user");
+  const currentTurnMessages = messages.map((message, index) => {
+    if (syntheticUserText !== tailUserText || index !== tailUserIndex) {
+      return message;
+    }
+    return attachCopilotMirrorIdentity(
+      { ...message, idempotencyKey: `${input.runId}:user` } as unknown as AgentMessage,
+      `${input.runId}:prompt`,
+    );
+  });
   const syntheticUser: AgentMessage | undefined =
     syntheticUserText && syntheticUserText !== tailUserText
       ? attachCopilotMirrorIdentity(
-          { role: "user", content: syntheticUserText, timestamp: now() } as AgentMessage,
+          {
+            role: "user",
+            content: syntheticUserText,
+            timestamp: now(),
+            idempotencyKey: `${input.runId}:user`,
+          } as unknown as AgentMessage,
           `${input.runId}:prompt`,
         )
       : undefined;
@@ -1081,7 +1120,7 @@ export async function runCopilotAttempt(
     ? attachCopilotMirrorIdentity(lastAssistant, `${input.runId}:assistant:final`)
     : undefined;
   const messagesSnapshot: AgentMessage[] = [
-    ...messages,
+    ...currentTurnMessages,
     ...(syntheticUser ? [syntheticUser] : []),
     ...(taggedLastAssistant ? [taggedLastAssistant] : []),
   ];
@@ -1219,7 +1258,7 @@ function createResult(
     sessionIdUsed?: string;
     timedOut?: boolean;
     timedOutDuringCompaction?: boolean;
-    toolMetas?: Array<{ meta?: string; toolName: string }>;
+    toolMetas?: AgentHarnessAttemptResult["toolMetas"];
     usage?: AssistantUsageSnapshot;
     yieldDetected?: boolean;
   },
@@ -1286,10 +1325,13 @@ function createSessionConfig(
   effectiveWorkspaceDir: string | undefined,
   effectiveCwd: string | undefined,
   onUserInputRequest: NonNullable<SessionConfig["onUserInputRequest"]>,
-  hooksBridgeOptions?: Parameters<typeof createHooksBridge>[1],
+  options: {
+    hooksBridgeOptions?: Parameters<typeof createHooksBridge>[1];
+    includeAskUser: boolean;
+  },
 ): CopilotSessionConfig {
   const permissionPolicy = params.permissionPolicy ?? rejectAllPolicy;
-  const hooks = createHooksBridge(params.hooksConfig, hooksBridgeOptions);
+  const hooks = createHooksBridge(params.hooksConfig, options.hooksBridgeOptions);
   const infiniteSessions = createInfiniteSessionConfig(params.infiniteSessionConfig);
   return {
     model: sdkModelId,
@@ -1338,8 +1380,8 @@ function createSessionConfig(
     reasoningEffort: params.reasoningEffort,
     tools: sdkTools,
     // Restrict the SDK's tool catalog to the bridged tool names returned
-    // by `createCopilotToolBridge` plus the built-in `ask_user` tool owned
-    // by `onUserInputRequest`. Without this, the SDK
+    // by `createCopilotToolBridge`, plus the built-in `ask_user` tool for
+    // normal runs. Ring-zero Crestodian runs expose only Crestodian. Without this, the SDK
     // would still expose its native read/write/shell/url/mcp/memory/
     // hook tools to the model alongside our overrides, which would
     // bypass OpenClaw's wrapped-tool enforcement under any permissive
@@ -1354,7 +1396,7 @@ function createSessionConfig(
     // `@github/copilot-sdk/dist/types.d.ts:1198` (it picks
     // `availableTools`, so the spread into `resumeSession` covers
     // the resume path too).
-    availableTools: buildCopilotAvailableTools(sdkTools),
+    availableTools: buildCopilotAvailableTools(sdkTools, options.includeAskUser),
     workingDirectory:
       effectiveCwd ?? effectiveWorkspaceDir ?? readResolvedAttemptPath(params.workspaceDir),
     // When a task runs from a sub-cwd, keep SDK-native project docs
@@ -1400,8 +1442,16 @@ function createSessionConfig(
   };
 }
 
-function buildCopilotAvailableTools(sdkTools: SdkTool[]): string[] {
-  return [...new Set([...sdkTools.map((tool) => tool.name), ...COPILOT_ASK_USER_AVAILABLE_TOOLS])];
+function buildCopilotAvailableTools(sdkTools: SdkTool[], includeAskUser: boolean): string[] {
+  const availableTools = sdkTools.map((tool) => tool.name);
+  if (includeAskUser) {
+    availableTools.push(...COPILOT_ASK_USER_AVAILABLE_TOOLS);
+  }
+  return [...new Set(availableTools)];
+}
+
+function isCrestodianOnlyToolAllowlist(toolsAllow: readonly string[] | undefined): boolean {
+  return toolsAllow?.length === 1 && toolsAllow[0]?.trim().toLowerCase() === "crestodian";
 }
 
 async function createMessageOptions(
@@ -1515,7 +1565,7 @@ function createSystemMessageContent(
   const extraSystemPrompt = readString(params.extraSystemPrompt)?.trim();
   if (extraSystemPrompt && !isRawCopilotModelRun(params)) {
     const contextHeader =
-      params.promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+      params.promptMode === "minimal" ? "## Subagent Context" : "## Conversation Context";
     sections.push(`${contextHeader}\n${extraSystemPrompt}`);
   }
   return sections.length > 0 ? sections.join("\n\n") : undefined;
@@ -1596,7 +1646,7 @@ function readResolvedAttemptPath(value: unknown): string | undefined {
   return resolveUserPath(raw);
 }
 
-export function resolveModelRef(params: AttemptParamsLike): ModelRef {
+function resolveModelRef(params: AttemptParamsLike): ModelRef {
   const rawModel = (params as { runtimeModel?: unknown }).runtimeModel ?? params.model;
   if (rawModel && typeof rawModel === "object") {
     const model = rawModel as ModelRefInputObject;
@@ -1613,9 +1663,7 @@ export function resolveModelRef(params: AttemptParamsLike): ModelRef {
         readString((params as { provider?: unknown }).provider) ??
         "unknown-provider",
       baseUrl: readString(model.baseUrl),
-      azureApiVersion: readString(
-        model.azureApiVersion ?? model.params?.azureApiVersion,
-      ),
+      azureApiVersion: readString(model.azureApiVersion ?? model.params?.azureApiVersion),
       headers: model.headers,
       authHeader: model.authHeader,
       requestAuthMode: readString(requestTransport?.auth?.mode ?? rawRequest?.auth?.mode),
@@ -1734,7 +1782,7 @@ export function toError(error: unknown): Error {
  * version bump that changes the wording will safely fall through to
  * the generic prompt-error path.
  */
-export function isSdkSendAndWaitTimeoutError(error: unknown): boolean {
+function isSdkSendAndWaitTimeoutError(error: unknown): boolean {
   if (error === null || typeof error !== "object") {
     return false;
   }

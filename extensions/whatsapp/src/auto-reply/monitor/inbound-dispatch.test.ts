@@ -350,6 +350,7 @@ describe("whatsapp inbound dispatch", () => {
       msg: makeMsg({
         admission: groupAdmission("123@g.us"),
         event: { timestamp: 1737158400000 },
+        groupMention: { wasMentioned: false, requireMention: false },
         platform: {
           senderName: "Alice",
           senderJid: "alice@s.whatsapp.net",
@@ -378,6 +379,8 @@ describe("whatsapp inbound dispatch", () => {
       SenderE164: "+15550002222",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "123@g.us",
+      WasMentioned: false,
+      GroupRequireMention: false,
     });
   });
 

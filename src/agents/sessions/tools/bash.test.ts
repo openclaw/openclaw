@@ -2,7 +2,7 @@
 // timer-safe millisecond values.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import { resolveBashTimeoutMs } from "./bash.js";
+import { createBashTool, resolveBashTimeoutMs, type BashOperations } from "./bash.js";
 
 describe("bash tool timeout helpers", () => {
   it("converts positive timeout seconds to timer-safe milliseconds", () => {
@@ -21,5 +21,25 @@ describe("bash tool timeout helpers", () => {
     expect(resolveBashTimeoutMs(Number.NaN)).toBeUndefined();
     expect(resolveBashTimeoutMs(0)).toBeUndefined();
     expect(resolveBashTimeoutMs(-1)).toBeUndefined();
+  });
+});
+
+describe("bash tool output lifecycle", () => {
+  it("ignores output callbacks after execution settles", async () => {
+    const operations: BashOperations = {
+      exec: async (_command, _cwd, { onData }) => {
+        onData(Buffer.from("before\n"));
+        setTimeout(() => onData(Buffer.from("late\n")), 0);
+        return { exitCode: 0 };
+      },
+    };
+    const tool = createBashTool(process.cwd(), { operations });
+
+    const result = await tool.execute("call-late-output", { command: "ignored" });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+
+    expect(result.content[0]).toEqual({ type: "text", text: "before\n" });
   });
 });

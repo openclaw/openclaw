@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -11,7 +11,11 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { buildGatewaySessionInfo, listSessionsFromStore } from "./session-utils.js";
+import {
+  buildGatewaySessionInfo,
+  filterAndSortSessionEntries,
+  listSessionsFromStore,
+} from "./session-utils.js";
 
 const MAIN_SESSION_KEY = "agent:main:main";
 const MAIN_SESSION_ID = "sess-main";
@@ -79,6 +83,17 @@ function createLegacyRuntimeStore(model: string): Record<string, SessionEntry> {
       model,
     } as SessionEntry,
   };
+}
+
+function buildLegacyRuntimeRow(cfg: OpenClawConfig, model: string) {
+  const store = createLegacyRuntimeStore(model);
+  return buildGatewaySessionInfo({
+    cfg,
+    storePath: "/tmp/sessions.json",
+    store,
+    key: MAIN_SESSION_KEY,
+    entry: store[MAIN_SESSION_KEY],
+  });
 }
 
 function createOpenAiPricingConfig(params: {
@@ -325,6 +340,36 @@ function childTranscriptEntry(sessionId: string, now: number): SessionEntry {
 }
 
 describe("listSessionsFromStore search", () => {
+  beforeAll(() => {
+    listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-sonnet-4-6" }),
+      store: {
+        "agent:main:warm-runtime": {
+          sessionId: "sess-warm-runtime",
+          updatedAt: Date.now(),
+        } as SessionEntry,
+      },
+      storePath: "/tmp/openclaw-session-search-warm.json",
+      opts: { search: "anthropic" },
+    });
+  });
+
+  beforeAll(() => {
+    listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: 1,
+          modelProvider: "openai",
+          model: "gpt-5.4",
+        },
+      },
+      opts: { search: "openai" },
+    });
+  });
+
   afterEach(() => {
     resetSubagentRegistryForTests();
     resetAgentRunContextForTest();
@@ -444,14 +489,14 @@ describe("listSessionsFromStore search", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const result = listSearchSessions({
+      const entries = filterAndSortSessionEntries({
         cfg,
         store,
         opts: { search: testCase.search },
+        now,
       });
 
-      expect(result.sessions.map((session) => session.key)).toEqual([testCase.expectedKey]);
-      expect(result.totalCount).toBe(1);
+      expect(entries.map(([key]) => key)).toEqual([testCase.expectedKey]);
     }
   });
 
@@ -523,14 +568,10 @@ describe("listSessionsFromStore search", () => {
       expectedProvider: "vercel-ai-gateway",
     },
   ])("$name", ({ cfg, runtimeModel, expectedProvider }) => {
-    const result = listSearchSessions({
-      cfg,
-      store: createLegacyRuntimeStore(runtimeModel),
-      opts: {},
-    });
+    const row = buildLegacyRuntimeRow(cfg, runtimeModel);
 
-    expect(result.sessions[0]?.modelProvider).toBe(expectedProvider);
-    expect(result.sessions[0]?.model).toBe(runtimeModel);
+    expect(row.modelProvider).toBe(expectedProvider);
+    expect(row.model).toBe(runtimeModel);
   });
 
   test("exposes unknown totals when freshness is stale or missing", () => {
@@ -662,10 +703,26 @@ describe("listSessionsFromStore search", () => {
     });
   });
 
-  test("chat history session metadata keeps model-derived contextTokens without transcript usage", () => {
+  test("chat history session metadata keeps model context and projects a catalog-pinned harness", () => {
     withAnthropicTranscriptFixture({
       prefix: "openclaw-session-info-context-",
       run: ({ storePath, now }) => {
+        const entry: SessionEntry = {
+          sessionId: MAIN_SESSION_ID,
+          updatedAt: now,
+          modelProvider: "local-test",
+          model: "test-model",
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+          pluginExtensions: {
+            codex: {
+              supervision: {
+                sourceThreadId: "019f-codex-thread",
+                modelLocked: true,
+              },
+            },
+          },
+        };
         const row = buildGatewaySessionInfo({
           cfg: {
             models: {
@@ -678,20 +735,16 @@ describe("listSessionsFromStore search", () => {
           } as unknown as OpenClawConfig,
           storePath,
           key: MAIN_SESSION_KEY,
-          store: {
-            [MAIN_SESSION_KEY]: {
-              sessionId: MAIN_SESSION_ID,
-              updatedAt: now,
-              modelProvider: "local-test",
-              model: "test-model",
-            } as SessionEntry,
-          },
+          entry,
+          store: { [MAIN_SESSION_KEY]: entry },
         });
 
         expect(row.totalTokens).toBeUndefined();
         expect(row.totalTokensFresh).toBe(false);
         expect(row.estimatedCostUsd).toBeUndefined();
         expect(row.contextTokens).toBe(123_456);
+        expect(row.modelSelectionLocked).toBe(true);
+        expect(row.agentRuntime).toEqual({ id: "codex", source: "session" });
       },
     });
   });

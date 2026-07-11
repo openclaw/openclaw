@@ -32,7 +32,7 @@ export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database
 }
 
 /** Execute a compiled Kysely query synchronously against node:sqlite. */
-export function executeCompiledSqliteQuerySync<Row>(
+function executeCompiledSqliteQuerySync<Row>(
   db: DatabaseSync,
   compiledQuery: CompiledQuery<Row>,
 ): QueryResult<Row> {

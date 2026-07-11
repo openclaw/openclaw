@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { ConfigSchemaResponse } from "./schema.js";
 import { schemaHasChildren } from "./schema.shared.js";
 
@@ -91,8 +92,6 @@ const DEFAULT_CHANNEL_OUTPUT = "docs/.generated/config-baseline.channel.json";
 const DEFAULT_PLUGIN_OUTPUT = "docs/.generated/config-baseline.plugin.json";
 const DEFAULT_HASH_OUTPUT = "docs/.generated/config-baseline.sha256";
 let cachedConfigDocBaselinePromise: Promise<ConfigDocBaseline> | null = null;
-let cachedDocBaselineRuntimePromise: Promise<typeof import("./doc-baseline.runtime.js")> | null =
-  null;
 const uiHintIndexCache = new WeakMap<
   ConfigSchemaResponse["uiHints"],
   Map<
@@ -123,10 +122,7 @@ function resolveRepoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 }
 
-async function loadDocBaselineRuntime() {
-  cachedDocBaselineRuntimePromise ??= import("./doc-baseline.runtime.js");
-  return await cachedDocBaselineRuntimePromise;
-}
+const loadDocBaselineRuntime = createLazyRuntimeModule(() => import("./doc-baseline.runtime.js"));
 
 function normalizeBaselinePath(rawPath: string): string {
   return rawPath

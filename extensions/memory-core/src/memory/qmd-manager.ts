@@ -17,6 +17,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
   resolveStateDir,
+  truncateUtf16Safe,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -1719,7 +1720,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (!doc) {
         continue;
       }
-      const snippet = entry.snippet?.slice(0, this.qmd.limits.maxSnippetChars) ?? "";
+      const snippet = truncateUtf16Safe(entry.snippet ?? "", this.qmd.limits.maxSnippetChars);
       const lines = this.resolveSnippetLines(entry, snippet);
       const score = typeof entry.score === "number" ? entry.score : 0;
       const minScore = opts?.minScore ?? 0;
@@ -2638,6 +2639,13 @@ export class QmdMemoryManager implements MemorySearchManager {
           // its own reranking pipeline and does not accept a minScore parameter.
           searches: this.buildV2Searches(params.query, params.searchCommand),
           limit: params.limit,
+          // "search"/"vsearch" are lexical/vector-only modes (see buildV2Searches):
+          // they must not trigger the LLM reranker. QMD's "query" tool defaults
+          // rerank:true, so disable it explicitly for those modes; full "query"
+          // mode keeps reranking.
+          ...(params.searchCommand === "search" || params.searchCommand === "vsearch"
+            ? { rerank: false }
+            : {}),
         }
       : {
           // QMD 1.x tools accept a flat query string.
@@ -2712,7 +2720,21 @@ export class QmdMemoryManager implements MemorySearchManager {
       throw err;
     }
 
-    const parsedUnknown: unknown = JSON.parse(result.stdout);
+    let parsedUnknown: unknown;
+    try {
+      parsedUnknown = JSON.parse(result.stdout);
+    } catch {
+      // mcporter (subprocess) can emit non-JSON stdout when output is truncated
+      // by maxOutputChars, a daemon warning bleeds onto stdout, or the CLI is
+      // killed early. Wrap the failure so callers get a typed domain error.
+      // The thrown Error and its cause both carry generic messages on purpose:
+      // errors.ts formatErrorMessage walks the .cause chain into the user-visible
+      // path, so the JSON.parse SyntaxError (whose message embeds a raw stdout
+      // snippet) must not sit on .cause, or that snippet leaks to the user.
+      throw new Error("qmd mcporter returned non-JSON stdout", {
+        cause: new Error("mcporter stdout was not valid JSON"),
+      });
+    }
     const parsedRecord = asRecord(parsedUnknown);
     const structuredContent = parsedRecord ? asRecord(parsedRecord.structuredContent) : null;
     const structured: unknown = structuredContent ?? parsedUnknown;
@@ -3505,7 +3527,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         clamped.push(entry);
         remaining -= snippet.length;
       } else {
-        const trimmed = snippet.slice(0, Math.max(0, remaining));
+        const trimmed = truncateUtf16Safe(snippet, remaining);
         clamped.push(copyQmdSessionArtifactHit(entry, { ...entry, snippet: trimmed }));
         break;
       }

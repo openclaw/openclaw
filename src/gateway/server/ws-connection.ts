@@ -3,10 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { Socket } from "node:net";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { RawData, WebSocket, WebSocketServer } from "ws";
-import {
-  GATEWAY_STARTUP_CLOSE_CODE,
-  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
-} from "../../../packages/gateway-protocol/src/startup-unavailable.js";
+import { GATEWAY_STARTUP_PENDING_CLOSE_CAUSE } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import { upsertPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
@@ -44,7 +41,7 @@ import type {
   WsOriginCheckMetrics,
 } from "./ws-connection/message-handler.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
-import type { GatewayWsClient } from "./ws-types.js";
+import { WS_HANDSHAKE_PHASES, type GatewayWsClient, type WsHandshakePhase } from "./ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -273,6 +270,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const requestUserAgent = headerValue(upgradeReq.headers["user-agent"]);
     const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
     const realIp = headerValue(upgradeReq.headers["x-real-ip"]);
+    const openedDuringStartup = isStartupPending?.() === true;
 
     const pluginNodeCapabilities = getPluginNodeCapabilities?.() ?? [];
     const pluginSurfaceBaseUrl =
@@ -289,12 +287,24 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     logWs("in", "open", { connId, remoteAddr, remotePort, localAddr, localPort, endpoint });
     let handshakeState: "pending" | "connected" | "failed" = "pending";
+    let lastHandshakePhase: WsHandshakePhase = "tcp_accepted";
     let holdsPreauthBudget = true;
     let closeCause: string | undefined;
     let closeMeta: Record<string, unknown> = {};
     let lastFrameType: string | undefined;
     let lastFrameMethod: string | undefined;
     let lastFrameId: string | undefined;
+    let hasReceivedPreauthFrame = false;
+
+    socket.once("message", () => {
+      hasReceivedPreauthFrame = true;
+    });
+
+    const advanceHandshakePhase = (next: WsHandshakePhase) => {
+      if (WS_HANDSHAKE_PHASES.indexOf(next) > WS_HANDSHAKE_PHASES.indexOf(lastHandshakePhase)) {
+        lastHandshakePhase = next;
+      }
+    };
 
     const setCloseCause = (cause: string, meta?: Record<string, unknown>) => {
       if (!closeCause) {
@@ -322,6 +332,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     };
 
     let pingTimer: ReturnType<typeof setInterval> | undefined;
+    let awaitingPong = false;
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
       configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
     });
@@ -331,9 +342,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         setCloseCause("handshake-timeout", {
           handshakeMs: Date.now() - openedAt,
           endpoint,
+          phase: lastHandshakePhase,
         });
         logWsControl.warn(
-          `handshake timeout conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"}`,
+          `handshake timeout conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} phase=${lastHandshakePhase}`,
         );
         close();
       }
@@ -390,6 +402,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       event: "connect.challenge",
       payload: { nonce: connectNonce, ts: Date.now() },
     });
+    advanceHandshakePhase("ws_upgrade_started");
 
     socket.once("error", (err) => {
       if (isWsPayloadLimitError(err)) {
@@ -403,9 +416,22 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       close();
     });
 
+    socket.on("pong", () => {
+      awaitingPong = false;
+    });
+
     const isNoisySwiftPmHelperClose = (userAgent: string | undefined, remote: string | undefined) =>
       normalizeLowercaseStringOrEmpty(userAgent).includes("swiftpm-testing-helper") &&
       isLoopbackAddress(remote);
+
+    const isExpectedLocalAppStartupAbort = (code: number) =>
+      openedDuringStartup &&
+      code === 1006 &&
+      lastHandshakePhase === "ws_upgrade_started" &&
+      !hasReceivedPreauthFrame &&
+      lastFrameType === undefined &&
+      normalizeLowercaseStringOrEmpty(requestUserAgent).startsWith("openclaw/") &&
+      isLoopbackAddress(remoteAddr);
 
     socket.once("close", (code, reason) => {
       const durationMs = Date.now() - openedAt;
@@ -414,9 +440,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       const logHost = sanitizeLogValue(requestHost);
       const logUserAgent = sanitizeLogValue(requestUserAgent);
       const logReason = sanitizeLogValue(reason?.toString());
+      const handshakeIncomplete = lastHandshakePhase !== "ready";
       const closeContext = {
         cause: closeCause,
         handshake: handshakeState,
+        ...(handshakeIncomplete ? { phase: lastHandshakePhase } : {}),
         durationMs,
         lastFrameType,
         lastFrameMethod,
@@ -433,10 +461,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         ...closeMeta,
       };
       if (!client) {
-        const isExpectedStartupRetryClose =
-          closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE && code === GATEWAY_STARTUP_CLOSE_CODE;
+        const isExpectedStartupRetryClose = closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE;
         const logFn =
-          isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) || isExpectedStartupRetryClose
+          isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) ||
+          isExpectedStartupRetryClose ||
+          isExpectedLocalAppStartupAbort(code)
             ? logWsControl.debug
             : logWsControl.warn;
         const authReason = stringMetaValue(closeMeta, "authReason");
@@ -467,7 +496,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
               ? ` suppressed=${closeLogDecision.suppressedSinceLastLog}`
               : "";
           logFn(
-            `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}${suppressedText}`,
+            `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"} phase=${lastHandshakePhase}${suppressedText}`,
             closeContext,
           );
         }
@@ -479,6 +508,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       const context = buildRequestContext();
       context.unsubscribeAllSessionEvents(connId);
+      // Detach (or, with a zero grace period, kill) any PTY shells this
+      // connection owned; detached sessions stay reattachable via
+      // terminal.attach until their reaper fires.
+      context.terminalSessions?.handleDisconnect(connId);
       let currentDisconnectedNodeId: string | null = null;
       if (client?.connect?.role === "node") {
         currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
@@ -502,6 +535,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         durationMs,
         cause: closeCause,
         handshake: handshakeState,
+        ...(handshakeIncomplete ? { phase: lastHandshakePhase } : {}),
         lastFrameType,
         lastFrameMethod,
         lastFrameId,
@@ -552,6 +586,18 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         client = next;
         clients.add(next);
         pingTimer = setInterval(() => {
+          // A half-open TCP connection can remain OPEN indefinitely. Terminate
+          // after one missed pong so the normal close handler releases node state.
+          if (awaitingPong) {
+            setCloseCause("heartbeat-timeout");
+            try {
+              socket.terminate();
+            } catch {
+              close();
+            }
+            return;
+          }
+          awaitingPong = true;
           try {
             socket.ping();
           } catch {
@@ -563,6 +609,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       setHandshakeState: (next) => {
         handshakeState = next;
       },
+      advanceHandshakePhase,
       setCloseCause,
       setLastFrameMeta,
       originCheckMetrics,

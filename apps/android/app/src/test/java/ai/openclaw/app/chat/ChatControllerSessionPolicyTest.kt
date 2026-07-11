@@ -151,4 +151,32 @@ class ChatControllerSessionPolicyTest {
     assertEquals(100_000L, merged.contextTokens)
     assertTrue(merged.hasContextUsageMetadata)
   }
+
+  @Test
+  fun sessionMergePreservesMissingSessionListMetadata() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        displayName = "Phone",
+        label = "Daily",
+        category = "Work",
+        pinned = true,
+        archived = false,
+        unread = true,
+        lastReadAt = 10L,
+        lastActivityAt = 20L,
+      )
+    val next = ChatSessionEntry(key = "agent:main:phone", updatedAtMs = 2L)
+
+    val merged = mergeChatSessionEntry(existing, next)
+
+    assertEquals("Daily", merged.label)
+    assertEquals("Work", merged.category)
+    assertEquals(true, merged.pinned)
+    assertEquals(false, merged.archived)
+    assertEquals(true, merged.unread)
+    assertEquals(10L, merged.lastReadAt)
+    assertEquals(20L, merged.lastActivityAt)
+  }
 }

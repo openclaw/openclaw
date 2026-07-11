@@ -32,7 +32,7 @@ type PackageJson = {
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 };
 
-export type ParsedReleaseVersion = {
+type ParsedReleaseVersion = {
   version: string;
   baseVersion: string;
   channel: "stable" | "alpha" | "beta";
@@ -44,7 +44,7 @@ export type ParsedReleaseVersion = {
   correctionNumber?: number;
 };
 
-export type ParsedReleaseTag = {
+type ParsedReleaseTag = {
   version: string;
   packageVersion: string;
   baseVersion: string;
@@ -52,13 +52,13 @@ export type ParsedReleaseTag = {
   correctionNumber?: number;
 };
 
-export type NpmPublishPlan = {
+type NpmPublishPlan = {
   channel: "stable" | "alpha" | "beta";
   publishTag: "latest" | "alpha" | "beta";
   mirrorDistTags: ("latest" | "alpha" | "beta")[];
 };
 
-export type NpmDistTagMirrorAuth = {
+type NpmDistTagMirrorAuth = {
   hasAuth: boolean;
   source: "node-auth-token" | "npm-token" | "none";
 };
@@ -328,7 +328,7 @@ export function runNpmReleaseCheckCommand(
   },
 ): string {
   const env = options.env ?? process.env;
-  const output = execFileSync(invocation.command, invocation.args, {
+  const execOptions = {
     cwd: options.cwd,
     encoding: options.encoding,
     env,
@@ -337,7 +337,11 @@ export function runNpmReleaseCheckCommand(
     stdio: options.stdio,
     timeout: options.timeoutMs ?? resolveNpmReleaseCheckCommandTimeoutMs(env),
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  }) as Buffer | string | null;
+  } as Parameters<typeof execFileSync>[2] & { windowsVerbatimArguments?: boolean };
+  const output = execFileSync(invocation.command, invocation.args, execOptions) as
+    | Buffer
+    | string
+    | null;
   if (output == null) {
     return "";
   }

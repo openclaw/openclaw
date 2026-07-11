@@ -7,7 +7,10 @@ import {
   resolvePositiveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -31,6 +34,7 @@ const MINIMAX_OAUTH_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:user_code";
 const MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD = 1_000_000_000;
 const MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD = 1_000_000_000_000;
 const MINIMAX_OAUTH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const MINIMAX_OAUTH_FETCH_TIMEOUT_MS = 30_000;
 
 function getOAuthEndpoints(region: MiniMaxRegion) {
   const config = MINIMAX_OAUTH_CONFIG[region];
@@ -112,6 +116,7 @@ async function requestOAuthCode(params: {
         state: params.state,
       }),
     },
+    timeoutMs: MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
     policy: { allowedHostnames: [endpoints.hostname] },
     auditContext: "minimax.oauth.code",
   });
@@ -121,7 +126,10 @@ async function requestOAuthCode(params: {
       throw new Error(`MiniMax OAuth authorization failed: ${text || response.statusText}`);
     }
 
-    const payload = (await response.json()) as MiniMaxOAuthAuthorization & { error?: string };
+    const payload = (await readProviderJsonResponse(
+      response,
+      "minimax.oauth-code",
+    )) as MiniMaxOAuthAuthorization & { error?: string };
     if (!payload.user_code || !payload.verification_uri) {
       throw new Error(
         payload.error ??
@@ -162,6 +170,7 @@ async function pollOAuthToken(params: {
         code_verifier: params.verifier,
       }),
     },
+    timeoutMs: MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
     policy: { allowedHostnames: [endpoints.hostname] },
     auditContext: "minimax.oauth.token",
   });

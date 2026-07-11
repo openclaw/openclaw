@@ -8,13 +8,17 @@ import {
   parseOAuthCallbackInput,
   waitForLocalOAuthCallback,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
+import { buildOAuthRequestSignal } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
-const CHUTES_TOKEN_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const CHUTES_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 
 type OAuthPrompt = {
   message: string;
@@ -118,11 +122,12 @@ async function fetchChutesUserInfo(params: {
   const fetchFn = params.fetchFn ?? fetch;
   const response = await fetchFn(CHUTES_USERINFO_ENDPOINT, {
     headers: { Authorization: `Bearer ${params.accessToken}` },
+    signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
   if (!response.ok) {
     return null;
   }
-  const data = (await response.json()) as unknown;
+  const data = await readProviderJsonResponse<unknown>(response, "Chutes userinfo");
   return data && typeof data === "object" ? (data as ChutesUserInfo) : null;
 }
 
@@ -152,20 +157,15 @@ async function exchangeChutesCodeForTokens(params: {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
+    signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
-  if (!response.ok) {
-    const detail = await readResponseTextLimited(
-      response,
-      CHUTES_TOKEN_ERROR_BODY_LIMIT_BYTES,
-    ).catch(() => "");
-    throw new Error(`Chutes token exchange failed: ${detail}`);
-  }
+  await assertOkOrThrowProviderError(response, "Chutes token exchange failed");
 
-  const data = (await response.json()) as {
+  const data = await readProviderJsonResponse<{
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
-  };
+  }>(response, "Chutes token exchange");
   const access = normalizeOptionalString(data.access_token);
   const refresh = normalizeOptionalString(data.refresh_token);
   const expires = resolveChutesExpiresAt(data.expires_in, now);
@@ -179,7 +179,13 @@ async function exchangeChutesCodeForTokens(params: {
     throw new Error("Chutes token exchange returned invalid expires_in");
   }
 
-  const info = await fetchChutesUserInfo({ accessToken: access, fetchFn });
+  let info: ChutesUserInfo | null = null;
+  try {
+    info = await fetchChutesUserInfo({ accessToken: access, fetchFn });
+  } catch {
+    // Token exchange completes authentication; optional profile enrichment must
+    // not discard issued credentials when userinfo is unavailable or times out.
+  }
   return {
     access,
     refresh,

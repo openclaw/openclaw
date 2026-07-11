@@ -26,12 +26,11 @@ vi.mock("../media/store.js", async (importOriginal) => {
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  DEFAULT_CHAT_ATTACHMENT_MAX_MB,
-  resolveChatAttachmentMaxBytes,
-} from "../media/configured-max-bytes.js";
-import {
   type ChatAttachment,
+  DEFAULT_CHAT_ATTACHMENT_MAX_MB,
   parseMessageWithAttachments,
+  persistInboundImagesForTranscript,
+  resolveChatAttachmentMaxBytes,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
 
@@ -136,6 +135,48 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("persistInboundImagesForTranscript", () => {
+  it("preserves mixed image order and appends non-image offloads", async () => {
+    saveMediaBufferMock.mockResolvedValueOnce({
+      id: "inline",
+      path: "/media/inbound/inline.jpg",
+      size: 5,
+      contentType: "image/jpeg",
+    });
+
+    const saved = await persistInboundImagesForTranscript({
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" }],
+      imageOrder: ["offloaded", "inline"],
+      offloadedRefs: [
+        {
+          mediaRef: "media://inbound/offloaded",
+          id: "offloaded",
+          path: "/media/inbound/offloaded.png",
+          mimeType: "image/png",
+          label: "offloaded.png",
+          sizeBytes: 2_100_000,
+        },
+        {
+          mediaRef: "media://inbound/report",
+          id: "report",
+          path: "/media/inbound/report.pdf",
+          mimeType: "application/pdf",
+          label: "report.pdf",
+          sizeBytes: 100,
+        },
+      ],
+      log: { warn: vi.fn() },
+      logContext: "test",
+    });
+
+    expect(saved.map((entry) => entry.path)).toEqual([
+      "/media/inbound/offloaded.png",
+      "/media/inbound/inline.jpg",
+      "/media/inbound/report.pdf",
+    ]);
+  });
+});
+
 describe("parseMessageWithAttachments", () => {
   it("strips data URL prefix", async () => {
     const parsed = await parseMessageWithAttachments(
@@ -147,10 +188,8 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
   });
 
-  it("strips large data URL prefixes without full-string regex capture", async () => {
-    // Pins index-based parsing; the replaced full-string regex capture could
-    // exhaust the regex stack on multi-megabyte payloads.
-    const content = "A".repeat(64 * 1024);
+  it("strips multi-megabyte data URL prefixes without a full-payload regex", async () => {
+    const content = "A".repeat(12 * 1024 * 1024);
     const { parsed } = await parseWithWarnings("read this", [
       pdfAttachment({ content: `data:application/pdf;base64,${content}` }),
     ]);
@@ -159,24 +198,29 @@ describe("parseMessageWithAttachments", () => {
     expect(saveMediaBufferMock.mock.calls[0]?.[0]).toHaveLength((content.length / 4) * 3);
   });
 
-  it("rejects large invalid base64 payloads without full-string regex matching", async () => {
-    const content = `${"A".repeat(64 * 1024 - 1)}!`;
-
-    await expect(
-      parseMessageWithAttachments(
-        "read this",
-        [pdfAttachment({ content: `data:application/pdf;base64,${content}` })],
+  it("parses large clipboard data URL images without full base64 decoding", async () => {
+    const png = Buffer.concat([Buffer.from(PNG_1x1, "base64"), Buffer.alloc(1_900_000)]);
+    const base64 = png.toString("base64");
+    const fromSpy = vi.spyOn(Buffer, "from");
+    try {
+      const parsed = await parseMessageWithAttachments(
+        "see screenshot",
+        [pngAttachment({ content: `data:image/png;base64,${base64}`, fileName: "screenshot.png" })],
         { log: { warn: () => {} } },
-      ),
-    ).rejects.toThrow(/invalid base64 content/);
-  });
+      );
 
-  it("rejects base64 with characters after padding", async () => {
-    await expect(
-      parseMessageWithAttachments("read this", [pdfAttachment({ content: "QUJD=A==" })], {
-        log: { warn: () => {} },
-      }),
-    ).rejects.toThrow(/invalid base64 content/);
+      expectSingleInlinePng(parsed);
+      expect(parsed.images[0]?.data).toBe(base64);
+      expect(
+        fromSpy.mock.calls.some((call) => {
+          const [value, encoding] = call as unknown[];
+          return value === base64 && encoding === "base64";
+        }),
+      ).toBe(false);
+      expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    } finally {
+      fromSpy.mockRestore();
+    }
   });
 
   it("sniffs mime when missing", async () => {
