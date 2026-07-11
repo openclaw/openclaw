@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import process from "node:process";
 import WebSocket from "ws";
 
@@ -8,6 +10,8 @@ const DEFAULT_GATEWAY_URL =
   process.env.OPENCLAW_GATEWAY_WS_URL || `ws://127.0.0.1:${DEFAULT_GATEWAY_PORT}`;
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_WAIT_AFTER_SEND_MS = 30_000;
+const REQUEST_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 function usage() {
   return `Usage: node scripts/durable-runtime-live-smoke.mjs [options]
@@ -23,10 +27,37 @@ Options:
   --originating-account-id <id> Originating account id (default: durable-live-smoke)
   --originating-to <target>    Originating target (default: durable-live-smoke)
   --origin <url>               Optional WebSocket Origin header
+  --token <token>              Gateway shared token (default: OPENCLAW_GATEWAY_TOKEN)
+  --token-file <path>          Read Gateway shared token from a file
+  --password <password>        Gateway shared password (default: OPENCLAW_GATEWAY_PASSWORD)
+  --password-file <path>       Read Gateway shared password from a file
   --timeout-ms <ms>            Request timeout (default: ${DEFAULT_TIMEOUT_MS})
   --wait-after-send-ms <ms>    Event collection window after chat.send (default: ${DEFAULT_WAIT_AFTER_SEND_MS})
   --help                       Show this help
 `;
+}
+
+function readSecretFile(pathname, label) {
+  const value = readFileSync(pathname, "utf8").trim();
+  if (!value) {
+    throw new Error(`${label} file is empty: ${pathname}`);
+  }
+  return value;
+}
+
+function trimSecret(value) {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function readRequiredArgValue(arg, value) {
+  if (typeof value !== "string" || value.startsWith("--")) {
+    throw new Error(`${arg} requires a value`);
+  }
+  return value;
 }
 
 function parsePositiveInteger(value, fallback) {
@@ -41,6 +72,8 @@ function parseArgs(argv) {
     originatingChannel: "durable-live-smoke",
     originatingAccountId: "durable-live-smoke",
     originatingTo: "durable-live-smoke",
+    token: trimSecret(process.env.OPENCLAW_GATEWAY_TOKEN),
+    password: trimSecret(process.env.OPENCLAW_GATEWAY_PASSWORD),
     timeoutMs: DEFAULT_TIMEOUT_MS,
     waitAfterSendMs: DEFAULT_WAIT_AFTER_SEND_MS,
   };
@@ -53,43 +86,65 @@ function parseArgs(argv) {
     const next = argv[index + 1];
     switch (arg) {
       case "--gateway":
-        options.gateway = next;
+        options.gateway = readRequiredArgValue(arg, next);
         index += 1;
         break;
       case "--session-key":
-        options.sessionKey = next;
+        options.sessionKey = readRequiredArgValue(arg, next);
         index += 1;
         break;
       case "--message":
-        options.message = next;
+        options.message = readRequiredArgValue(arg, next);
         index += 1;
         break;
       case "--idempotency-key":
-        options.idempotencyKey = next;
+        options.idempotencyKey = readRequiredArgValue(arg, next);
         index += 1;
         break;
       case "--originating-channel":
-        options.originatingChannel = next;
+        options.originatingChannel = readRequiredArgValue(arg, next);
         index += 1;
         break;
       case "--originating-account-id":
-        options.originatingAccountId = next;
+        options.originatingAccountId = readRequiredArgValue(arg, next);
         index += 1;
         break;
       case "--originating-to":
-        options.originatingTo = next;
+        options.originatingTo = readRequiredArgValue(arg, next);
         index += 1;
         break;
       case "--origin":
-        options.origin = next;
+        options.origin = readRequiredArgValue(arg, next);
+        index += 1;
+        break;
+      case "--token":
+        options.token = trimSecret(readRequiredArgValue(arg, next));
+        index += 1;
+        break;
+      case "--token-file":
+        options.token = readSecretFile(readRequiredArgValue(arg, next), "--token-file");
+        index += 1;
+        break;
+      case "--password":
+        options.password = trimSecret(readRequiredArgValue(arg, next));
+        index += 1;
+        break;
+      case "--password-file":
+        options.password = readSecretFile(readRequiredArgValue(arg, next), "--password-file");
         index += 1;
         break;
       case "--timeout-ms":
-        options.timeoutMs = parsePositiveInteger(next, DEFAULT_TIMEOUT_MS);
+        options.timeoutMs = parsePositiveInteger(
+          readRequiredArgValue(arg, next),
+          DEFAULT_TIMEOUT_MS,
+        );
         index += 1;
         break;
       case "--wait-after-send-ms":
-        options.waitAfterSendMs = parsePositiveInteger(next, DEFAULT_WAIT_AFTER_SEND_MS);
+        options.waitAfterSendMs = parsePositiveInteger(
+          readRequiredArgValue(arg, next),
+          DEFAULT_WAIT_AFTER_SEND_MS,
+        );
         index += 1;
         break;
       default:
@@ -97,6 +152,20 @@ function parseArgs(argv) {
     }
   }
   return options;
+}
+
+function connectAuth(options) {
+  return {
+    ...(options.token ? { token: options.token } : {}),
+    ...(options.password ? { password: options.password } : {}),
+  };
+}
+
+function authEvidence(options) {
+  return {
+    token: Boolean(options.token),
+    password: Boolean(options.password),
+  };
 }
 
 function compactPayload(payload) {
@@ -109,6 +178,29 @@ function compactPayload(payload) {
     length: text.length,
     preview: text.slice(0, 1200),
   };
+}
+
+function decodeWebSocketData(data) {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(data).toString("utf8");
+  }
+  throw new Error("unsupported websocket message data type");
+}
+
+function responseRequestId(frame) {
+  if (!frame || typeof frame !== "object" || typeof frame.id !== "string") {
+    return undefined;
+  }
+  return REQUEST_ID_PATTERN.test(frame.id) ? frame.id : undefined;
 }
 
 function createClient(url, timeoutMs, origin) {
@@ -128,11 +220,12 @@ function createClient(url, timeoutMs, origin) {
   });
 
   ws.on("message", (data) => {
-    const frame = JSON.parse(data.toString());
+    const frame = JSON.parse(decodeWebSocketData(data));
     if (frame.type === "res") {
-      const resolver = pending.get(frame.id);
+      const responseId = responseRequestId(frame);
+      const resolver = responseId ? pending.get(responseId) : undefined;
       if (resolver) {
-        pending.delete(frame.id);
+        pending.delete(responseId);
         resolver(frame);
       }
       return;
@@ -179,7 +272,7 @@ function createClient(url, timeoutMs, origin) {
       };
       const onError = (err) => {
         cleanup();
-        reject(err);
+        reject(err instanceof Error ? err : new Error(String(err)));
       };
       function cleanup() {
         clearTimeout(timer);
@@ -240,6 +333,7 @@ async function main() {
 
   const origin = options.origin;
   const client = createClient(options.gateway, options.timeoutMs, origin);
+  const auth = connectAuth(options);
   await client.waitOpen();
   const connectResponse = await client.request("connect", {
     minProtocol: 1,
@@ -254,7 +348,7 @@ async function main() {
     role: "operator",
     scopes: ["operator.read", "operator.write", "operator.admin"],
     caps: [],
-    auth: { token: "" },
+    auth,
   });
   if (!connectResponse.ok) {
     client.close();
@@ -264,6 +358,7 @@ async function main() {
           ok: false,
           gateway: options.gateway,
           origin,
+          auth: authEvidence(options),
           sessionKey: options.sessionKey,
           idempotencyKey: options.idempotencyKey,
           connect: {
@@ -300,6 +395,7 @@ async function main() {
         ok: Boolean(connectResponse.ok && chatResponse.ok),
         gateway: options.gateway,
         origin,
+        auth: authEvidence(options),
         sessionKey: options.sessionKey,
         idempotencyKey: options.idempotencyKey,
         connect: {
@@ -319,7 +415,9 @@ async function main() {
   );
 }
 
-main().catch((err) => {
+try {
+  await main();
+} catch (err) {
   process.stderr.write(`${err instanceof Error ? err.stack || err.message : String(err)}\n`);
   process.exitCode = 1;
-});
+}
