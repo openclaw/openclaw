@@ -295,9 +295,16 @@ describe("Codex Computer Use shared plugin cache", () => {
       "2.0.0",
     );
     const manifestPath = path.join(cachePath, ".codex-plugin", "plugin.json");
+    const olderCachePath = path.join(path.dirname(cachePath), "1.0.0");
+    const olderManifestPath = path.join(olderCachePath, ".codex-plugin", "plugin.json");
     await writeBundledComputerUsePlugin(bundledMarketplacePath, "2.0.0");
     await fs.mkdir(path.dirname(manifestPath), { recursive: true });
     await fs.writeFile(manifestPath, JSON.stringify({ name: "computer-use", version: "old" }));
+    await fs.mkdir(path.dirname(olderManifestPath), { recursive: true });
+    await fs.writeFile(
+      olderManifestPath,
+      JSON.stringify({ name: "computer-use", version: "1.0.0" }),
+    );
     vi.spyOn(fs, "cp").mockRejectedValueOnce(new Error("copy failed"));
 
     await expect(
@@ -308,6 +315,7 @@ describe("Codex Computer Use shared plugin cache", () => {
       }),
     ).rejects.toThrow("copy failed");
     await expect(fs.readFile(manifestPath, "utf8")).resolves.toContain('"version":"old"');
+    await expect(fs.readFile(olderManifestPath, "utf8")).resolves.toContain('"version":"1.0.0"');
   });
 });
 

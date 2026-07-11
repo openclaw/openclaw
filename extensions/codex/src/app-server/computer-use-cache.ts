@@ -75,8 +75,8 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
     params.config.pluginName,
   );
   const cachePath = path.join(cacheRoot, version);
-  const removedStaleVersions = await removeStalePluginCacheVersions(cacheRoot, version);
   const changed = await ensureRealDirectoryCopy(cachePath, sourcePluginRoot, version);
+  const removedStaleVersions = await removeStalePluginCacheVersions(cacheRoot, version);
   return {
     status: "shared",
     changed: changed || removedStaleVersions.length > 0,
