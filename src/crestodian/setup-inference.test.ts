@@ -23,6 +23,7 @@ import {
 const mocks = vi.hoisted(() => ({
   appendAudit: vi.fn(),
   ensureSelectedAgentHarnessPlugin: vi.fn(),
+  refreshPluginRegistryAfterConfigMutation: vi.fn(),
 }));
 
 vi.mock("./audit.js", () => ({
@@ -31,6 +32,10 @@ vi.mock("./audit.js", () => ({
 
 vi.mock("../agents/harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: mocks.ensureSelectedAgentHarnessPlugin,
+}));
+
+vi.mock("../plugins/registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistryAfterConfigMutation,
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -262,6 +267,7 @@ describe("activateSetupInference", () => {
   beforeEach(() => {
     mocks.appendAudit.mockReset();
     mocks.ensureSelectedAgentHarnessPlugin.mockReset().mockResolvedValue(undefined);
+    mocks.refreshPluginRegistryAfterConfigMutation.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -1463,6 +1469,9 @@ describe("activateSetupInference", () => {
       events.push("live-test");
       return { meta: { finalAssistantVisibleText: "OK" } };
     });
+    const refreshPluginRegistryAfterConfigMutation = vi.fn(async () => {
+      events.push("refresh-plugin-registry");
+    });
     let persistedConfig: OpenClawConfig = {
       ...initialConfig,
       gateway: { port: 19000 },
@@ -1494,6 +1503,7 @@ describe("activateSetupInference", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         applySetup: applySetup as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
+        refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutation as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         createTempDir: makeTempDir,
       },
@@ -1542,6 +1552,7 @@ describe("activateSetupInference", () => {
     expect(events).toEqual([
       "install-plugin",
       "persist-plugin-install",
+      "refresh-plugin-registry",
       "live-test",
       "persist-setup",
     ]);
@@ -1640,7 +1651,13 @@ describe("activateSetupInference", () => {
       status: "installed" as const,
     }));
     const ensureSelectedAgentHarnessPlugin = vi.fn(async () => {});
+    const refreshPluginRegistryAfterConfigMutation = vi.fn(
+      async (params: { logger?: { warn?: (message: string) => void } }) => {
+        params.logger?.warn?.("best-effort refresh warning");
+      },
+    );
     const runEmbeddedAgent = vi.fn(async () => {
+      expect(refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledOnce();
       expect(ensureSelectedAgentHarnessPlugin).toHaveBeenCalledOnce();
       return { meta: { finalAssistantVisibleText: "OK" } };
     });
@@ -1669,6 +1686,7 @@ describe("activateSetupInference", () => {
         })) as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
         ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPlugin as never,
+        refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutation as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         applySetup: applySetup as never,
@@ -1683,6 +1701,14 @@ describe("activateSetupInference", () => {
         provider: "openai",
         modelId: "gpt-5.4",
         agentHarnessRuntimeOverride: "codex",
+      }),
+    );
+    expect(refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "source-changed",
+        policyPluginIds: ["codex"],
+        traceCommand: "crestodian-setup-probe",
+        workspaceDir: "/tmp/work",
       }),
     );
     expect(runEmbeddedAgent).toHaveBeenCalledWith(

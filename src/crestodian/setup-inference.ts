@@ -135,6 +135,7 @@ export type ActivateSetupInferenceDeps = {
   applySetup?: typeof applyCrestodianSetup;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   ensureSelectedAgentHarnessPlugin?: typeof import("../agents/harness/runtime-plugin.js").ensureSelectedAgentHarnessPlugin;
+  refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   resolvePluginProviders?: typeof resolvePluginProviders;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
@@ -885,8 +886,21 @@ async function activateSetupInferenceUnredacted(
         agentId: resolveDefaultAgentId(stagedCodexConfig),
       };
 
-      // The Gateway's startup registry predates this just-installed runtime. Load Codex before
-      // the embedded runner snapshots provider auth, or the probe can fall through to OpenAI.
+      // The Gateway's startup registry predates this just-installed runtime. Refresh discovery,
+      // then load Codex before the embedded runner snapshots provider auth; otherwise the probe
+      // can fall through to the generic OpenAI transport before background pre-warming catches up.
+      const refreshPluginRegistry =
+        deps.refreshPluginRegistryAfterConfigMutation ??
+        (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
+      let registryRefreshWarning: string | undefined;
+      await refreshPluginRegistry({
+        config: testPlan.config,
+        reason: "source-changed",
+        workspaceDir: workspace,
+        policyPluginIds: ["codex"],
+        traceCommand: "crestodian-setup-probe",
+        logger: { warn: (message) => (registryRefreshWarning = message) },
+      });
       const ensureHarnessPlugin =
         deps.ensureSelectedAgentHarnessPlugin ??
         (await import("../agents/harness/runtime-plugin.js")).ensureSelectedAgentHarnessPlugin;
@@ -900,10 +914,11 @@ async function activateSetupInferenceUnredacted(
           workspaceDir: tempDir,
         });
       } catch (error) {
+        const loadError = `Could not load the Codex runtime plugin: ${formatErrorMessage(error)}`;
         return {
           ok: false,
           status: "unavailable",
-          error: `Could not load the Codex runtime plugin: ${formatErrorMessage(error)}`,
+          error: registryRefreshWarning ? `${registryRefreshWarning} ${loadError}` : loadError,
         };
       }
     }
