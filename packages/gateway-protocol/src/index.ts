@@ -14,6 +14,20 @@ export { formatValidationErrors, type ValidationError } from "./validation-error
 import {
   type AgentEvent,
   AgentEventSchema,
+  type AuditActivityAgentRunV1,
+  AuditActivityAgentRunV1Schema,
+  type AuditActivityEventV1,
+  AuditActivityEventV1Schema,
+  type AuditActivityInboundMessageV1,
+  AuditActivityInboundMessageV1Schema,
+  type AuditActivityListParams,
+  AuditActivityListParamsSchema,
+  type AuditActivityListResult,
+  AuditActivityListResultSchema,
+  type AuditActivityOutboundMessageV1,
+  AuditActivityOutboundMessageV1Schema,
+  type AuditActivityToolActionV1,
+  AuditActivityToolActionV1Schema,
   type AuditEvent,
   AuditEventSchema,
   type AuditListParams,
@@ -330,6 +344,38 @@ import {
   WorkerEnvironmentMetadataSchema,
   type WorkerEnvironmentState,
   WorkerEnvironmentStateSchema,
+  type WorkerTunnelStatus,
+  WorkerTunnelStatusSchema,
+  type WorkerAdmissionHandshake,
+  WorkerAdmissionHandshakeSchema,
+  type WorkerAdmissionResponseFrame,
+  WorkerAdmissionResponseFrameSchema,
+  type WorkerAdmissionFailureReason,
+  WorkerAdmissionFailureReasonSchema,
+  type WorkerConnectParams,
+  type WorkerConnectRequestFrame,
+  WorkerConnectRequestFrameSchema,
+  type WorkerErrorShape,
+  type WorkerHeartbeatParams,
+  WorkerHeartbeatParamsSchema,
+  type WorkerHeartbeatRequestFrame,
+  WorkerHeartbeatRequestFrameSchema,
+  type WorkerHeartbeatResult,
+  type WorkerHeartbeatResponseFrame,
+  WorkerHeartbeatResponseFrameSchema,
+  type WorkerHelloOk,
+  type WorkerProtocolCloseReason,
+  WorkerProtocolCloseReasonSchema,
+  WORKER_HEARTBEAT_INTERVAL_MS,
+  WORKER_PROTOCOL_FEATURES,
+  WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
+  WORKER_PROTOCOL_MAX_FEATURES,
+  WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
+  WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
+  WORKER_PROTOCOL_MAX_METHOD_LENGTH,
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  WORKER_PROTOCOL_METHODS,
+  WORKER_RPC_SET_VERSION,
   type SystemInfoParams,
   SystemInfoParamsSchema,
   type SystemInfoResult,
@@ -414,6 +460,14 @@ import {
   NodePairRejectParamsSchema,
   type NodePairRemoveParams,
   NodePairRemoveParamsSchema,
+  type NodePluginToolDescriptor,
+  NodePluginToolDescriptorSchema,
+  type NodePluginToolsUpdateParams,
+  NodePluginToolsUpdateParamsSchema,
+  type NodeSkillDescriptor,
+  NodeSkillDescriptorSchema,
+  type NodeSkillsUpdateParams,
+  NodeSkillsUpdateParamsSchema,
   type NodeRenameParams,
   NodeRenameParamsSchema,
   type PollParams,
@@ -664,10 +718,18 @@ import {
   CrestodianSetupDetectParamsSchema,
   type CrestodianSetupDetectResult,
   CrestodianSetupDetectResultSchema,
+  type CrestodianSetupVerifyParams,
+  CrestodianSetupVerifyParamsSchema,
+  type CrestodianSetupVerifyResult,
+  CrestodianSetupVerifyResultSchema,
   type CrestodianSetupActivateParams,
   CrestodianSetupActivateParamsSchema,
   type CrestodianSetupActivateResult,
   CrestodianSetupActivateResultSchema,
+  type CrestodianSetupAuthStartParams,
+  CrestodianSetupAuthStartParamsSchema,
+  type CrestodianSetupAuthStartResult,
+  CrestodianSetupAuthStartResultSchema,
   type WizardCancelParams,
   WizardCancelParamsSchema,
   type WizardNextParams,
@@ -766,6 +828,15 @@ function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
 // constants so call sites can pair validation with the wire contract directly.
 export const validateCommandsListParams = lazyCompile<CommandsListParams>(CommandsListParamsSchema);
 export const validateConnectParams = lazyCompile<ConnectParams>(ConnectParamsSchema);
+export const validateWorkerAdmissionHandshake = lazyCompile<WorkerAdmissionHandshake>(
+  WorkerAdmissionHandshakeSchema,
+);
+export const validateWorkerConnectRequestFrame = lazyCompile<WorkerConnectRequestFrame>(
+  WorkerConnectRequestFrameSchema,
+);
+export const validateWorkerHeartbeatParams = lazyCompile<WorkerHeartbeatParams>(
+  WorkerHeartbeatParamsSchema,
+);
 export const validateGatewaySuspendPrepareParams = lazyCompile<GatewaySuspendPrepareParams>(
   GatewaySuspendPrepareParamsSchema,
 );
@@ -792,6 +863,9 @@ export const validateMessageActionParams =
 export const validateSendParams = lazyCompile(SendParamsSchema);
 export const validatePollParams = lazyCompile<PollParams>(PollParamsSchema);
 export const validateAgentParams = lazyCompile(AgentParamsSchema);
+export const validateAuditActivityListParams = lazyCompile<AuditActivityListParams>(
+  AuditActivityListParamsSchema,
+);
 export const validateAuditListParams = lazyCompile<AuditListParams>(AuditListParamsSchema);
 export const validateAgentIdentityParams =
   lazyCompile<AgentIdentityParams>(AgentIdentityParamsSchema);
@@ -850,6 +924,12 @@ export const validateNodePairRemoveParams = lazyCompile<NodePairRemoveParams>(
 );
 export const validateNodeRenameParams = lazyCompile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = lazyCompile<NodeListParams>(NodeListParamsSchema);
+export const validateNodePluginToolsUpdateParams = lazyCompile<NodePluginToolsUpdateParams>(
+  NodePluginToolsUpdateParamsSchema,
+);
+export const validateNodeSkillsUpdateParams = lazyCompile<NodeSkillsUpdateParams>(
+  NodeSkillsUpdateParamsSchema,
+);
 export const validateEnvironmentsCreateParams = lazyCompile<EnvironmentsCreateParams>(
   EnvironmentsCreateParamsSchema,
 );
@@ -1002,8 +1082,14 @@ export const validateCrestodianChatParams = lazyCompile<CrestodianChatParams>(
 export const validateCrestodianSetupDetectParams = lazyCompile<CrestodianSetupDetectParams>(
   CrestodianSetupDetectParamsSchema,
 );
+export const validateCrestodianSetupVerifyParams = lazyCompile<CrestodianSetupVerifyParams>(
+  CrestodianSetupVerifyParamsSchema,
+);
 export const validateCrestodianSetupActivateParams = lazyCompile<CrestodianSetupActivateParams>(
   CrestodianSetupActivateParamsSchema,
+);
+export const validateCrestodianSetupAuthStartParams = lazyCompile<CrestodianSetupAuthStartParams>(
+  CrestodianSetupAuthStartParamsSchema,
 );
 export const validateWizardStartParams = lazyCompile<WizardStartParams>(WizardStartParamsSchema);
 export const validateWizardNextParams = lazyCompile<WizardNextParams>(WizardNextParamsSchema);
@@ -1291,8 +1377,27 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
+  WorkerAdmissionFailureReasonSchema,
+  WorkerAdmissionHandshakeSchema,
+  WorkerAdmissionResponseFrameSchema,
+  WorkerConnectRequestFrameSchema,
+  WorkerHeartbeatParamsSchema,
+  WorkerHeartbeatRequestFrameSchema,
+  WorkerHeartbeatResponseFrameSchema,
+  WorkerProtocolCloseReasonSchema,
+  WORKER_HEARTBEAT_INTERVAL_MS,
+  WORKER_PROTOCOL_FEATURES,
+  WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
+  WORKER_PROTOCOL_MAX_FEATURES,
+  WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
+  WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
+  WORKER_PROTOCOL_MAX_METHOD_LENGTH,
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  WORKER_PROTOCOL_METHODS,
+  WORKER_RPC_SET_VERSION,
   EnvironmentStatusSchema,
   WorkerEnvironmentStateSchema,
+  WorkerTunnelStatusSchema,
   WorkerEnvironmentMetadataSchema,
   EnvironmentSummarySchema,
   EnvironmentsCreateParamsSchema,
@@ -1326,6 +1431,10 @@ export {
   NodePairRejectParamsSchema,
   NodePairRemoveParamsSchema,
   NodeListParamsSchema,
+  NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParamsSchema,
+  NodeSkillDescriptorSchema,
+  NodeSkillsUpdateParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
   NodeEventResultSchema,
@@ -1379,6 +1488,13 @@ export {
   ArtifactsListParamsSchema,
   ArtifactsGetParamsSchema,
   ArtifactsDownloadParamsSchema,
+  AuditActivityAgentRunV1Schema,
+  AuditActivityEventV1Schema,
+  AuditActivityInboundMessageV1Schema,
+  AuditActivityListParamsSchema,
+  AuditActivityListResultSchema,
+  AuditActivityOutboundMessageV1Schema,
+  AuditActivityToolActionV1Schema,
   AuditEventSchema,
   AuditListParamsSchema,
   AuditListResultSchema,
@@ -1413,8 +1529,12 @@ export {
   CrestodianChatResultSchema,
   CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResultSchema,
   CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResultSchema,
+  CrestodianSetupAuthStartParamsSchema,
+  CrestodianSetupAuthStartResultSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
@@ -1604,6 +1724,18 @@ export {
 export type {
   GatewayFrame,
   ConnectParams,
+  WorkerAdmissionFailureReason,
+  WorkerAdmissionHandshake,
+  WorkerAdmissionResponseFrame,
+  WorkerConnectParams,
+  WorkerConnectRequestFrame,
+  WorkerErrorShape,
+  WorkerHeartbeatParams,
+  WorkerHeartbeatRequestFrame,
+  WorkerHeartbeatResult,
+  WorkerHeartbeatResponseFrame,
+  WorkerHelloOk,
+  WorkerProtocolCloseReason,
   GatewaySuspendTaskBlocker,
   GatewaySuspendBlocker,
   GatewaySuspendPrepareParams,
@@ -1646,8 +1778,12 @@ export type {
   CrestodianChatResult,
   CrestodianSetupDetectParams,
   CrestodianSetupDetectResult,
+  CrestodianSetupVerifyParams,
+  CrestodianSetupVerifyResult,
   CrestodianSetupActivateParams,
   CrestodianSetupActivateResult,
+  CrestodianSetupAuthStartParams,
+  CrestodianSetupAuthStartResult,
   WizardStartParams,
   WizardNextParams,
   WizardCancelParams,
@@ -1792,6 +1928,7 @@ export type {
   SkillsUpdateParams,
   EnvironmentStatus,
   WorkerEnvironmentState,
+  WorkerTunnelStatus,
   WorkerEnvironmentMetadata,
   EnvironmentSummary,
   EnvironmentsCreateParams,
@@ -1807,6 +1944,10 @@ export type {
   NodePairRejectParams,
   NodePairRemoveParams,
   NodeListParams,
+  NodePluginToolDescriptor,
+  NodePluginToolsUpdateParams,
+  NodeSkillDescriptor,
+  NodeSkillsUpdateParams,
   NodeInvokeParams,
   NodeInvokeResultParams,
   NodeEventParams,
@@ -1831,6 +1972,13 @@ export type {
   SessionsDeleteParams,
   SessionsCompactParams,
   SessionsUsageParams,
+  AuditActivityAgentRunV1,
+  AuditActivityEventV1,
+  AuditActivityInboundMessageV1,
+  AuditActivityListParams,
+  AuditActivityListResult,
+  AuditActivityOutboundMessageV1,
+  AuditActivityToolActionV1,
   AuditEvent,
   AuditListParams,
   AuditListResult,

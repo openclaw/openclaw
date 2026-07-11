@@ -171,16 +171,6 @@ export const uk: TranslationMap = {
       node: "Вузол",
     },
   },
-  instances: {
-    title: "Підключені інстанси",
-    subtitle: "Маячки присутності від Gateway і клієнтів.",
-    showHosts: "Показати хости й IP-адреси",
-    hideHosts: "Сховати хости й IP-адреси",
-    toggleHostVisibility: "Перемкнути видимість хостів",
-    noInstances: "Ще немає повідомлень про інстанси.",
-    lastInput: "Останнє введення {time}",
-    reason: "Причина {reason}",
-  },
   worktrees: {
     newWorktree: "Новий worktree",
     owner: "Власник",
@@ -390,6 +380,7 @@ export const uk: TranslationMap = {
       skills: "Навички",
       channels: "Канали",
       cronJobs: "Завдання Cron",
+      memory: "Пам'ять",
     },
     context: {
       title: "Agent Context",
@@ -622,7 +613,6 @@ export const uk: TranslationMap = {
     workboard: "Робоча дошка",
     worktrees: "Worktrees",
     channels: "Канали",
-    instances: "Екземпляри",
     sessions: "Сеанси",
     usage: "Використання",
     cron: "Завдання Cron",
@@ -644,7 +634,6 @@ export const uk: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Налагодження",
     logs: "Журнали",
-    dreams: "Сни",
     plugin: "Плагін",
   },
   subtitles: {
@@ -654,7 +643,6 @@ export const uk: TranslationMap = {
     workboard: "Черга завдань агента та передавання сеансів.",
     worktrees: "Ізольовані копії для завдань агентів і знімки для відновлення.",
     channels: "Канали та налаштування.",
-    instances: "Підключені клієнти та вузли.",
     sessions: "Активні сеанси та типові значення.",
     usage: "Використання API та витрати.",
     cron: "Пробудження та повторювані запуски.",
@@ -677,8 +665,10 @@ export const uk: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Знімки, події, RPC.",
     logs: "Журнали шлюзу в реальному часі.",
-    dreams: "Консолідація пам’яті під час сну.",
     plugin: "Панель, надана плагіном.",
+  },
+  mcpPage: {
+    manageServersLink: "Керуйте серверами на сторінці Плагінів.",
   },
   pluginsPage: {
     searchLabel: "Пошук плагінів",
@@ -1030,6 +1020,63 @@ export const uk: TranslationMap = {
       loadMore: "Завантажити старіші елементи транскрипту",
     },
   },
+  claudeSessions: {
+    eyebrow: "Флот Claude",
+    title: "Сеанси Claude на ваших комп’ютерах",
+    subtitle:
+      "Переглядайте неархівовані сеанси Claude CLI та Claude Desktop і читайте їхні посторінкові локальні транскрипти.",
+    summaryLabel: "Зведення сеансу Claude",
+    summary: {
+      sessions: "сеанси",
+      onlineHosts: "у мережі",
+      hosts: "хости",
+    },
+    searchLabel: "Пошук сеансів Claude",
+    searchPlaceholder: "Пошук за назвами сеансів",
+    refresh: "Оновити",
+    disconnected: "Повторно підключіться до gateway, щоб оновити сеанси Claude.",
+    partial: "Недоступних хостів: {count}. Решта хостів доступні.",
+    loading: "Завантаження сеансів Claude…",
+    loadMore: "Завантажити ще",
+    loadingMore: "Завантаження…",
+    untitled: "Сеанс Claude без назви",
+    sessionId: "Сесія",
+    stored: "Збережений",
+    read: "Прочитано",
+    readLabel: "Прочитати транскрипт для {title}",
+    host: {
+      gateway: "Gateway",
+      node: "Вузол",
+      connected: "Підключено",
+      offline: "Поза мережею",
+      unavailable: "Каталог сеансів недоступний",
+      sessionCount: "Показано: {count}",
+    },
+    empty: {
+      title: "Сеансів Claude не знайдено",
+      subtitle:
+        "Установіть і використовуйте Claude CLI або Claude Desktop, а потім оновіть це подання.",
+      search: "Жоден сеанс на цьому хості не відповідає пошуку.",
+      nonArchived: "На цьому хості немає неархівованих сеансів.",
+    },
+    sidebar: {
+      title: "Сеанси Claude",
+      viewAll: "Переглянути всі сеанси Claude",
+      truncated: "Більше сеансів доступно в повному каталозі.",
+    },
+    transcript: {
+      eyebrow: "Транскрипт Claude",
+      back: "Усі сеанси Claude",
+      you: "Ви",
+      reasoning: "Міркування",
+      toolCall: "Виклик інструмента",
+      toolResult: "Результат інструмента",
+      item: "Елемент Claude",
+      details: "Повні відомості",
+      loading: "Завантаження транскрипту…",
+      loadMore: "Завантажити старіші елементи транскрипту",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1052,7 +1099,7 @@ export const uk: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1538,10 +1585,6 @@ export const uk: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Агент",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Сцена",
       diary: "Щоденник",
@@ -2135,9 +2178,9 @@ export const uk: TranslationMap = {
       workSessions: "Робота",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Нещодавні чати",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

@@ -171,16 +171,6 @@ export const fa: TranslationMap = {
       node: "گره",
     },
   },
-  instances: {
-    title: "نمونه‌های متصل",
-    subtitle: "چراغ‌های حضور از Gateway و کلاینت‌ها.",
-    showHosts: "نمایش میزبان‌ها و IPها",
-    hideHosts: "پنهان کردن میزبان‌ها و IPها",
-    toggleHostVisibility: "تغییر نمایش میزبان",
-    noInstances: "هنوز هیچ نمونه‌ای گزارش نشده است.",
-    lastInput: "آخرین ورودی {time}",
-    reason: "دلیل {reason}",
-  },
   worktrees: {
     newWorktree: "worktree جدید",
     owner: "مالک",
@@ -390,6 +380,7 @@ export const fa: TranslationMap = {
       skills: "Skills",
       channels: "کانال‌ها",
       cronJobs: "Cron Jobs",
+      memory: "حافظه",
     },
     context: {
       title: "زمینه عامل",
@@ -622,7 +613,6 @@ export const fa: TranslationMap = {
     workboard: "تابلوی کار",
     worktrees: "Worktreeها",
     channels: "کانال‌ها",
-    instances: "نمونه‌ها",
     sessions: "نشست‌ها",
     usage: "مصرف",
     cron: "کارهای Cron",
@@ -644,7 +634,6 @@ export const fa: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "اشکال‌زدایی",
     logs: "گزارش‌ها",
-    dreams: "رؤیاپردازی",
     plugin: "افزونه",
   },
   subtitles: {
@@ -654,7 +643,6 @@ export const fa: TranslationMap = {
     workboard: "صف کار عامل و واگذاری جلسه.",
     worktrees: "checkoutهای ایزولهٔ وظایف عامل و snapshotهای بازیابی.",
     channels: "کانال‌ها و تنظیمات.",
-    instances: "کلاینت‌ها و گره‌های متصل.",
     sessions: "نشست‌های فعال و پیش‌فرض‌ها.",
     usage: "مصرف و هزینه‌های API.",
     cron: "بیدارباش‌ها و اجراهای تکرارشونده.",
@@ -676,8 +664,10 @@ export const fa: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "نماهای لحظه‌ای، رویدادها، RPC.",
     logs: "گزارش‌های زنده Gateway.",
-    dreams: "رؤیاپردازی حافظه، یکپارچه‌سازی و بازتاب.",
     plugin: "پنل ارائه‌شده توسط افزونه.",
+  },
+  mcpPage: {
+    manageServersLink: "مدیریت سرورها در صفحه Plugins.",
   },
   pluginsPage: {
     searchLabel: "جستجوی افزونه‌ها",
@@ -1028,6 +1018,63 @@ export const fa: TranslationMap = {
       loadMore: "بارگیری موارد قدیمی‌تر رونوشت",
     },
   },
+  claudeSessions: {
+    eyebrow: "ناوگان Claude",
+    title: "جلسه‌های Claude در رایانه‌های شما",
+    subtitle:
+      "جلسه‌های بایگانی‌نشدهٔ Claude CLI و Claude Desktop را مرور کنید و رونوشت‌های محلی صفحه‌بندی‌شدهٔ آن‌ها را بخوانید.",
+    summaryLabel: "خلاصهٔ جلسهٔ Claude",
+    summary: {
+      sessions: "نشست‌ها",
+      onlineHosts: "آنلاین",
+      hosts: "میزبان‌ها",
+    },
+    searchLabel: "جستجوی جلسه‌های Claude",
+    searchPlaceholder: "جست‌وجوی عنوان نشست‌ها",
+    refresh: "تازه‌سازی",
+    disconnected: "برای به‌روزرسانی جلسه‌های Claude دوباره به Gateway متصل شوید.",
+    partial: "میزبان‌های غیرقابل‌دسترسی: {count}. سایر میزبان‌ها همچنان در دسترس‌اند.",
+    loading: "در حال بارگذاری جلسه‌های Claude…",
+    loadMore: "بارگیری بیشتر",
+    loadingMore: "در حال بارگیری…",
+    untitled: "جلسهٔ بدون عنوان Claude",
+    sessionId: "جلسه",
+    stored: "ذخیره‌شده",
+    read: "خوانده‌شده",
+    readLabel: "خواندن رونوشت برای {title}",
+    host: {
+      gateway: "Gateway",
+      node: "گره",
+      connected: "متصل",
+      offline: "آفلاین",
+      unavailable: "فهرست نشست‌ها در دسترس نیست",
+      sessionCount: "{count} نمایش داده شده",
+    },
+    empty: {
+      title: "هیچ جلسهٔ Claude یافت نشد",
+      subtitle:
+        "Claude CLI یا Claude Desktop را نصب و استفاده کنید، سپس این نما را به‌روزرسانی کنید.",
+      search: "هیچ نشستی روی این میزبان با جست‌وجوی شما مطابقت ندارد.",
+      nonArchived: "هیچ جلسهٔ بایگانی‌نشده‌ای روی این میزبان وجود ندارد.",
+    },
+    sidebar: {
+      title: "جلسه‌های Claude",
+      viewAll: "مشاهدهٔ همهٔ جلسه‌های Claude",
+      truncated: "جلسه‌های بیشتری در فهرست کامل موجود است.",
+    },
+    transcript: {
+      eyebrow: "رونوشت Claude",
+      back: "همهٔ جلسه‌های Claude",
+      you: "شما",
+      reasoning: "استدلال",
+      toolCall: "فراخوانی ابزار",
+      toolResult: "نتیجهٔ ابزار",
+      item: "مورد Claude",
+      details: "جزئیات کامل",
+      loading: "در حال بارگذاری رونوشت…",
+      loadMore: "بارگذاری موارد قدیمی‌تر رونوشت",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1050,7 +1097,7 @@ export const fa: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1534,10 +1581,6 @@ export const fa: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "عامل",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "صحنه",
       diary: "دفترچه",
@@ -2131,9 +2174,9 @@ export const fa: TranslationMap = {
       workSessions: "کار",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "گفتگوهای اخیر",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

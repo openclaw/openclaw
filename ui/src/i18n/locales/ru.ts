@@ -172,16 +172,6 @@ export const ru: TranslationMap = {
       node: "Узел",
     },
   },
-  instances: {
-    title: "Подключенные экземпляры",
-    subtitle: "Сигналы присутствия от шлюза и клиентов.",
-    showHosts: "Показать хосты и IP-адреса",
-    hideHosts: "Скрыть хосты и IP-адреса",
-    toggleHostVisibility: "Переключить видимость хостов",
-    noInstances: "Экземпляры пока не передавались.",
-    lastInput: "Последний ввод {time}",
-    reason: "Причина {reason}",
-  },
   worktrees: {
     newWorktree: "Новое рабочее дерево",
     owner: "Владелец",
@@ -393,6 +383,7 @@ export const ru: TranslationMap = {
       skills: "Навыки",
       channels: "Каналы",
       cronJobs: "Cron Jobs",
+      memory: "Память",
     },
     context: {
       title: "Контекст агента",
@@ -626,7 +617,6 @@ export const ru: TranslationMap = {
     workboard: "Рабочая доска",
     worktrees: "Рабочие деревья",
     channels: "Каналы",
-    instances: "Экземпляры",
     sessions: "Сеансы",
     usage: "Использование",
     cron: "Задания Cron",
@@ -648,7 +638,6 @@ export const ru: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Отладка",
     logs: "Журналы",
-    dreams: "Сновидения",
     plugin: "Плагин",
   },
   subtitles: {
@@ -658,7 +647,6 @@ export const ru: TranslationMap = {
     workboard: "Очередь задач агента и передача сеанса.",
     worktrees: "Изолированные копии для задач агентов и снимки восстановления.",
     channels: "Каналы и настройки.",
-    instances: "Подключенные клиенты и узлы.",
     sessions: "Активные сеансы и значения по умолчанию.",
     usage: "Использование API и расходы.",
     cron: "Пробуждения и повторяющиеся запуски.",
@@ -681,8 +669,10 @@ export const ru: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Снимки, события, RPC.",
     logs: "Живые журналы шлюза.",
-    dreams: "Сновидения памяти, консолидация и рефлексия.",
     plugin: "Панель, предоставленная плагином.",
+  },
+  mcpPage: {
+    manageServersLink: "Управляйте серверами на странице плагинов.",
   },
   pluginsPage: {
     searchLabel: "Поиск плагинов",
@@ -1036,6 +1026,63 @@ export const ru: TranslationMap = {
       loadMore: "Загрузить более старые элементы расшифровки",
     },
   },
+  claudeSessions: {
+    eyebrow: "Парк Claude",
+    title: "Сеансы Claude на ваших компьютерах",
+    subtitle:
+      "Просматривайте неархивированные сеансы Claude CLI и Claude Desktop и читайте их постраничные локальные транскрипты.",
+    summaryLabel: "Сводка сеанса Claude",
+    summary: {
+      sessions: "сеансы",
+      onlineHosts: "в сети",
+      hosts: "хосты",
+    },
+    searchLabel: "Поиск сеансов Claude",
+    searchPlaceholder: "Поиск по названиям сеансов",
+    refresh: "Обновить",
+    disconnected: "Повторно подключитесь к Gateway, чтобы обновить сеансы Claude.",
+    partial: "Недоступные хосты: {count}. Остальные хосты по-прежнему доступны.",
+    loading: "Загрузка сеансов Claude…",
+    loadMore: "Загрузить ещё",
+    loadingMore: "Загрузка…",
+    untitled: "Сеанс Claude без названия",
+    sessionId: "Сеанс",
+    stored: "Сохранён",
+    read: "Прочитано",
+    readLabel: "Прочитать расшифровку для {title}",
+    host: {
+      gateway: "Gateway",
+      node: "Узел",
+      connected: "Подключено",
+      offline: "Не в сети",
+      unavailable: "Каталог сеансов недоступен",
+      sessionCount: "{count} показано",
+    },
+    empty: {
+      title: "Сеансы Claude не найдены",
+      subtitle:
+        "Установите и используйте Claude CLI или Claude Desktop, затем обновите это представление.",
+      search: "Ни один сеанс на этом хосте не соответствует поиску.",
+      nonArchived: "На этом хосте нет неархивированных сеансов.",
+    },
+    sidebar: {
+      title: "Сеансы Claude",
+      viewAll: "Показать все сеансы Claude",
+      truncated: "Больше сеансов доступно в полном каталоге.",
+    },
+    transcript: {
+      eyebrow: "Транскрипт Claude",
+      back: "Все сеансы Claude",
+      you: "Вы",
+      reasoning: "Рассуждение",
+      toolCall: "Вызов инструмента",
+      toolResult: "Результат инструмента",
+      item: "Элемент Claude",
+      details: "Полные сведения",
+      loading: "Загрузка расшифровки…",
+      loadMore: "Загрузить более старые элементы расшифровки",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1058,7 +1105,7 @@ export const ru: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1544,10 +1591,6 @@ export const ru: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Агент",
-      ariaLabel: "Агент Dreaming",
-    },
     tabs: {
       scene: "Сцена",
       diary: "Дневник",
@@ -2149,9 +2192,9 @@ export const ru: TranslationMap = {
       workSessions: "Работа",
     },
     welcome: {
-      ready: "Готово к чату",
       hintBeforeShortcut: "Введите сообщение ниже ·",
       hintAfterShortcut: "для команд",
+      recentSessions: "Недавние чаты",
       suggestions: {
         whatCanYouDo: "Что вы умеете?",
         summarizeRecentSessions: "Суммируйте мои недавние сеансы",

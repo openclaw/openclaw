@@ -92,7 +92,7 @@ export type ChatProps = {
   error: string | null;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
-  sessionHost?: Pick<UiSessionDefaultsHost, "agentsList" | "hello"> | null;
+  sessionHost?: UiSessionDefaultsHost | null;
   providerUsage?: ProviderUsageDisplayProps;
   focusMode?: boolean;
   onLoadSidebarFullMessage?: (
@@ -120,7 +120,7 @@ export type ChatProps = {
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onAssistantAttachmentLoaded?: () => void;
   showNewMessages?: boolean;
-  onScrollToBottom?: () => void;
+  onScrollToBottom?: (options?: { smooth?: boolean }) => void;
   onRefresh: () => void;
   onToggleFocusMode?: () => void;
   getDraft?: () => string;
@@ -199,6 +199,8 @@ export function renderChat(props: ChatProps) {
     props.sessionWorkspace &&
     (props.sessionWorkspace.dock === "bottom" || props.sessionWorkspace.narrowLayout),
   );
+  const tasksOpen = props.backgroundTasks?.collapsed === false;
+  const tasksDockBottom = tasksOpen && props.backgroundTasks?.narrowLayout === true;
   const canCompose = props.canSend;
   let chatSection: HTMLElement | null = null;
 
@@ -245,6 +247,7 @@ export function renderChat(props: ChatProps) {
     // Archived/non-composable sessions must not offer selection actions:
     // withholding the callback keeps the popup from rendering at all.
     onSideQuestion: props.canSend ? props.onSideQuestion : undefined,
+    onOpenSession: props.onSessionSelect,
     onFocusComposer: () =>
       chatSection
         ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
@@ -274,7 +277,6 @@ export function renderChat(props: ChatProps) {
     assistantName: props.assistantName,
     sendShortcut: props.sendShortcut,
     attachments: props.attachments,
-    showNewMessages: props.showNewMessages,
     replyTarget: props.replyTarget,
     realtimeTalkActive: props.realtimeTalkActive,
     realtimeTalkStatus: props.realtimeTalkStatus,
@@ -299,9 +301,23 @@ export function renderChat(props: ChatProps) {
     onDismissSideResult: props.onDismissSideResult,
     onNewSession: props.onNewSession,
     onClearReply: props.onClearReply,
-    onScrollToBottom: props.onScrollToBottom,
     onAttachmentsChange: props.onAttachmentsChange,
   });
+  const scrollToBottomButton =
+    props.showNewMessages && props.onScrollToBottom
+      ? html`
+          <div class="chat-scroll-to-bottom-wrap">
+            <button
+              class="chat-scroll-to-bottom"
+              type="button"
+              @click=${() => props.onScrollToBottom?.({ smooth: true })}
+              aria-label="Scroll to latest"
+            >
+              ${icons.arrowDown}
+            </button>
+          </div>
+        `
+      : nothing;
 
   return html`
     <section
@@ -310,7 +326,12 @@ export function renderChat(props: ChatProps) {
       })}
       class="card chat"
       style=${styleMap(
-        props.chatMessageMaxWidth ? { "--chat-message-max-width": props.chatMessageMaxWidth } : {},
+        props.chatMessageMaxWidth
+          ? {
+              "--chat-thread-max-width": props.chatMessageMaxWidth,
+              "--chat-message-max-width": "100%",
+            }
+          : {},
       )}
       @drop=${(event: DragEvent) => {
         event.preventDefault();
@@ -391,10 +412,10 @@ export function renderChat(props: ChatProps) {
       <div
         class="chat-workbench ${props.sessionWorkspace?.collapsed
           ? "chat-workbench--workspace-collapsed"
-          : ""} ${workspaceDockBottom ? "chat-workbench--dock-bottom" : ""} ${props.backgroundTasks
-          ?.collapsed === false
+          : ""} ${workspaceDockBottom ? "chat-workbench--dock-bottom" : ""} ${tasksOpen &&
+        !tasksDockBottom
           ? "chat-workbench--tasks-open"
-          : ""}"
+          : ""} ${tasksDockBottom ? "chat-workbench--tasks-dock-bottom" : ""}"
       >
         ${renderSessionWorkspaceRail(props.sessionWorkspace)}
         ${renderBackgroundTasksRail(props.backgroundTasks)}
@@ -434,7 +455,7 @@ export function renderChat(props: ChatProps) {
                     ? html`
                         <openclaw-tooltip .content=${t("chat.splitView.open")}>
                           <button
-                            class="btn btn--sm btn--icon chat-open-split-view"
+                            class="btn btn--ghost btn--icon chat-icon-btn chat-open-split-view"
                             type="button"
                             aria-label=${t("chat.splitView.open")}
                             @click=${props.onOpenSplitView}
@@ -445,13 +466,13 @@ export function renderChat(props: ChatProps) {
                       `
                     : nothing}
                   ${props.sessionWorkspace?.collapsed
-                    ? renderSessionDiffToggle(props.sessionWorkspace, "floating")
+                    ? renderSessionDiffToggle(props.sessionWorkspace)
                     : nothing}
                   ${props.backgroundTasks?.collapsed
-                    ? renderBackgroundTasksToggle(props.backgroundTasks, "floating")
+                    ? renderBackgroundTasksToggle(props.backgroundTasks)
                     : nothing}
                   ${props.sessionWorkspace?.collapsed
-                    ? renderSessionWorkspaceToggle(props.sessionWorkspace, "floating")
+                    ? renderSessionWorkspaceToggle(props.sessionWorkspace)
                     : nothing}
                 </div>
               `
@@ -481,7 +502,7 @@ export function renderChat(props: ChatProps) {
                 onExpand: () => props.onExpandPullRequests?.(),
                 onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
               })}
-              ${chatColumnFooter}
+              ${scrollToBottomButton} ${chatColumnFooter}
             </div>
 
             ${sidebarOpen

@@ -170,16 +170,6 @@ export const vi: TranslationMap = {
       node: "Nút",
     },
   },
-  instances: {
-    title: "Phiên bản đã kết nối",
-    subtitle: "Beacon hiện diện từ gateway và các máy khách.",
-    showHosts: "Hiển thị máy chủ và IP",
-    hideHosts: "Ẩn máy chủ và IP",
-    toggleHostVisibility: "Bật/tắt hiển thị máy chủ",
-    noInstances: "Chưa có phiên bản nào được báo cáo.",
-    lastInput: "Đầu vào gần nhất {time}",
-    reason: "Lý do {reason}",
-  },
   worktrees: {
     newWorktree: "Worktree mới",
     owner: "Chủ sở hữu",
@@ -389,6 +379,7 @@ export const vi: TranslationMap = {
       skills: "Skills",
       channels: "Kênh",
       cronJobs: "Cron Jobs",
+      memory: "Bộ nhớ",
     },
     context: {
       title: "Ngữ cảnh agent",
@@ -622,7 +613,6 @@ export const vi: TranslationMap = {
     workboard: "Bảng công việc",
     worktrees: "Worktree",
     channels: "Kênh",
-    instances: "Phiên bản",
     sessions: "Phiên",
     usage: "Mức sử dụng",
     cron: "Tác vụ Cron",
@@ -644,7 +634,6 @@ export const vi: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Gỡ lỗi",
     logs: "Nhật ký",
-    dreams: "Đang mơ",
     plugin: "Plugin",
   },
   subtitles: {
@@ -654,7 +643,6 @@ export const vi: TranslationMap = {
     workboard: "Hàng đợi công việc của tác nhân và bàn giao phiên.",
     worktrees: "Các bản checkout tác vụ agent được cô lập và snapshot khôi phục.",
     channels: "Kênh và cài đặt.",
-    instances: "Máy khách và nút đã kết nối.",
     sessions: "Phiên đang hoạt động và mặc định.",
     usage: "Mức sử dụng API và chi phí.",
     cron: "Đánh thức và chạy định kỳ.",
@@ -677,8 +665,10 @@ export const vi: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Ảnh chụp, sự kiện, RPC.",
     logs: "Nhật ký gateway trực tiếp.",
-    dreams: "Mơ bộ nhớ, hợp nhất và phản chiếu.",
     plugin: "Bảng điều khiển do plugin cung cấp.",
+  },
+  mcpPage: {
+    manageServersLink: "Quản lý máy chủ trên trang Plugins.",
   },
   pluginsPage: {
     searchLabel: "Tìm kiếm plugin",
@@ -1030,6 +1020,62 @@ export const vi: TranslationMap = {
       loadMore: "Tải các mục bản ghi cũ hơn",
     },
   },
+  claudeSessions: {
+    eyebrow: "Đội Claude",
+    title: "Phiên Claude trên các máy tính của bạn",
+    subtitle:
+      "Duyệt các phiên Claude CLI và Claude Desktop chưa lưu trữ, đồng thời đọc bản ghi cục bộ được phân trang của chúng.",
+    summaryLabel: "Tóm tắt phiên Claude",
+    summary: {
+      sessions: "phiên",
+      onlineHosts: "trực tuyến",
+      hosts: "máy",
+    },
+    searchLabel: "Tìm kiếm phiên Claude",
+    searchPlaceholder: "Tìm theo tiêu đề phiên",
+    refresh: "Làm mới",
+    disconnected: "Kết nối lại với gateway để làm mới các phiên Claude.",
+    partial: "{count} máy không khả dụng. Các máy khác vẫn khả dụng.",
+    loading: "Đang tải phiên Claude…",
+    loadMore: "Tải thêm",
+    loadingMore: "Đang tải…",
+    untitled: "Phiên Claude không có tiêu đề",
+    sessionId: "Phiên",
+    stored: "Đã lưu",
+    read: "Đã đọc",
+    readLabel: "Đọc bản ghi cho {title}",
+    host: {
+      gateway: "Gateway",
+      node: "Nút",
+      connected: "Đã kết nối",
+      offline: "Ngoại tuyến",
+      unavailable: "Danh mục phiên không khả dụng",
+      sessionCount: "{count} hiển thị",
+    },
+    empty: {
+      title: "Không tìm thấy phiên Claude nào",
+      subtitle: "Cài đặt và sử dụng Claude CLI hoặc Claude Desktop, sau đó làm mới chế độ xem này.",
+      search: "Không có phiên nào trên máy này khớp với từ khóa tìm kiếm.",
+      nonArchived: "Không có phiên chưa lưu trữ nào trên máy chủ này.",
+    },
+    sidebar: {
+      title: "Phiên Claude",
+      viewAll: "Xem tất cả phiên Claude",
+      truncated: "Có thêm phiên trong danh mục đầy đủ.",
+    },
+    transcript: {
+      eyebrow: "Bản ghi Claude",
+      back: "Tất cả phiên Claude",
+      you: "Bạn",
+      reasoning: "Lập luận",
+      toolCall: "Lệnh gọi công cụ",
+      toolResult: "Kết quả công cụ",
+      item: "Mục Claude",
+      details: "Chi tiết đầy đủ",
+      loading: "Đang tải bản ghi…",
+      loadMore: "Tải các mục bản ghi cũ hơn",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1052,7 +1098,7 @@ export const vi: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1533,10 +1579,6 @@ export const vi: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agent",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Cảnh",
       diary: "Nhật ký",
@@ -2124,9 +2166,9 @@ export const vi: TranslationMap = {
       workSessions: "Công việc",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Cuộc trò chuyện gần đây",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

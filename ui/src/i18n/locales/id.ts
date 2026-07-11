@@ -170,16 +170,6 @@ export const id: TranslationMap = {
       node: "Node",
     },
   },
-  instances: {
-    title: "Instance Terhubung",
-    subtitle: "Beacon kehadiran dari gateway dan klien.",
-    showHosts: "Tampilkan host dan IP",
-    hideHosts: "Sembunyikan host dan IP",
-    toggleHostVisibility: "Alihkan visibilitas host",
-    noInstances: "Belum ada instance yang dilaporkan.",
-    lastInput: "Input terakhir {time}",
-    reason: "Alasan {reason}",
-  },
   worktrees: {
     newWorktree: "Worktree baru",
     owner: "Pemilik",
@@ -390,6 +380,7 @@ export const id: TranslationMap = {
       skills: "Skills",
       channels: "Saluran",
       cronJobs: "Tugas Cron",
+      memory: "Memori",
     },
     context: {
       title: "Agent Context",
@@ -623,7 +614,6 @@ export const id: TranslationMap = {
     workboard: "Workboard",
     worktrees: "Worktree",
     channels: "Saluran",
-    instances: "Instans",
     sessions: "Sesi",
     usage: "Penggunaan",
     cron: "Tugas Cron",
@@ -645,7 +635,6 @@ export const id: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Debug",
     logs: "Log",
-    dreams: "Mimpi",
     plugin: "Plugin",
   },
   subtitles: {
@@ -655,7 +644,6 @@ export const id: TranslationMap = {
     workboard: "Antrean kerja agen dan serah terima sesi.",
     worktrees: "Checkout tugas agen terisolasi dan snapshot pemulihan.",
     channels: "Saluran dan pengaturan.",
-    instances: "Klien dan node yang terhubung.",
     sessions: "Sesi aktif dan default.",
     usage: "Penggunaan API dan biaya.",
     cron: "Bangun dan proses berulang.",
@@ -677,8 +665,10 @@ export const id: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Snapshot, peristiwa, RPC.",
     logs: "Log Gateway langsung.",
-    dreams: "Konsolidasi memori saat tidur.",
     plugin: "Panel yang disediakan plugin.",
+  },
+  mcpPage: {
+    manageServersLink: "Kelola server di halaman Plugins.",
   },
   pluginsPage: {
     searchLabel: "Cari plugin",
@@ -1032,6 +1022,62 @@ export const id: TranslationMap = {
       loadMore: "Muat item transkrip yang lebih lama",
     },
   },
+  claudeSessions: {
+    eyebrow: "Armada Claude",
+    title: "Sesi Claude di seluruh komputer Anda",
+    subtitle:
+      "Jelajahi sesi Claude CLI dan Claude Desktop yang tidak diarsipkan serta baca transkrip lokalnya yang dipaginasi.",
+    summaryLabel: "Ringkasan sesi Claude",
+    summary: {
+      sessions: "sesi",
+      onlineHosts: "online",
+      hosts: "host",
+    },
+    searchLabel: "Cari sesi Claude",
+    searchPlaceholder: "Cari judul sesi",
+    refresh: "Muat ulang",
+    disconnected: "Hubungkan kembali ke gateway untuk memuat ulang sesi Claude.",
+    partial: "{count} host tidak tersedia. Host lainnya tetap tersedia.",
+    loading: "Memuat sesi Claude…",
+    loadMore: "Muat lebih banyak",
+    loadingMore: "Memuat…",
+    untitled: "Sesi Claude tanpa judul",
+    sessionId: "Sesi",
+    stored: "Tersimpan",
+    read: "Dibaca",
+    readLabel: "Baca transkrip untuk {title}",
+    host: {
+      gateway: "Gateway",
+      node: "Node",
+      connected: "Terhubung",
+      offline: "Offline",
+      unavailable: "Katalog sesi tidak tersedia",
+      sessionCount: "{count} ditampilkan",
+    },
+    empty: {
+      title: "Tidak ada sesi Claude ditemukan",
+      subtitle: "Instal dan gunakan Claude CLI atau Claude Desktop, lalu muat ulang tampilan ini.",
+      search: "Tidak ada sesi di host ini yang cocok dengan pencarian Anda.",
+      nonArchived: "Tidak ada sesi yang tidak diarsipkan di host ini.",
+    },
+    sidebar: {
+      title: "Sesi Claude",
+      viewAll: "Lihat semua sesi Claude",
+      truncated: "Sesi lainnya tersedia di katalog lengkap.",
+    },
+    transcript: {
+      eyebrow: "Transkrip Claude",
+      back: "Semua sesi Claude",
+      you: "Anda",
+      reasoning: "Penalaran",
+      toolCall: "Panggilan alat",
+      toolResult: "Hasil alat",
+      item: "Item Claude",
+      details: "Detail lengkap",
+      loading: "Memuat transkrip…",
+      loadMore: "Muat item transkrip yang lebih lama",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1054,7 +1100,7 @@ export const id: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1538,10 +1584,6 @@ export const id: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agen",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scene",
       diary: "Diary",
@@ -2136,9 +2178,9 @@ export const id: TranslationMap = {
       workSessions: "Pekerjaan",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Chat terbaru",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

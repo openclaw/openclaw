@@ -686,6 +686,19 @@ describe("chat compaction divider", () => {
   });
 });
 
+describe("chat conversation width", () => {
+  it("applies a configured width once to the centered transcript frame", () => {
+    const container = renderChatView({
+      chatMessageMaxWidth: "82%",
+      messages: [{ role: "assistant", content: "hello", timestamp: 1 }],
+    });
+    const chat = container.querySelector<HTMLElement>(".chat");
+
+    expect(chat?.style.getPropertyValue("--chat-thread-max-width")).toBe("82%");
+    expect(chat?.style.getPropertyValue("--chat-message-max-width")).toBe("100%");
+  });
+});
+
 describe("direct thread avatar mode", () => {
   function sessionsListWithKind(sessionKey: string, kind: "direct" | "group" | "global") {
     return {
@@ -1277,6 +1290,48 @@ describe("chat goal status", () => {
   });
 });
 
+describe("chat scroll-to-bottom affordance", () => {
+  it("renders a centered icon button above the composer when the transcript is away from latest", () => {
+    const onScrollToBottom = vi.fn();
+    const container = renderChatView({ showNewMessages: true, onScrollToBottom });
+
+    const button = container.querySelector<HTMLButtonElement>(".chat-scroll-to-bottom");
+    const wrapper = button?.closest(".chat-scroll-to-bottom-wrap");
+    expect(button?.getAttribute("aria-label")).toBe("Scroll to latest");
+    expect(wrapper?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+    expect(wrapper?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(
+      true,
+    );
+    expect(button?.textContent?.trim()).toBe("");
+    expect(container.querySelector(".chat-new-messages")).toBeNull();
+
+    button?.click();
+
+    expect(onScrollToBottom).toHaveBeenCalledWith({ smooth: true });
+  });
+
+  it("keeps the button above a variable-height footer stack", () => {
+    const container = renderChatView({
+      showNewMessages: true,
+      queue: [
+        { id: "queued-1", text: "first queued message", createdAt: 1 },
+        { id: "queued-2", text: "second queued message", createdAt: 2 },
+      ],
+    });
+
+    const wrapper = container.querySelector(".chat-scroll-to-bottom-wrap");
+    const queue = container.querySelector(".chat-queue");
+    expect(wrapper?.nextElementSibling).toBe(queue);
+    expect(queue?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+  });
+
+  it("hides the scroll-to-bottom button when the transcript is already latest", () => {
+    const container = renderChatView({ showNewMessages: false });
+
+    expect(container.querySelector(".chat-scroll-to-bottom")).toBeNull();
+  });
+});
+
 describe("chat composer workbench", () => {
   it("queues ordinary input offline while keeping live commands disabled", () => {
     const onSend = vi.fn();
@@ -1463,7 +1518,7 @@ describe("chat composer workbench", () => {
 
     // A collapsed rail renders nothing — no icon strip in the layout.
     expect(container.querySelector(".chat-workspace-rail")).toBeNull();
-    const toggle = container.querySelector<HTMLButtonElement>(".chat-workspace-open");
+    const toggle = container.querySelector<HTMLButtonElement>(".chat-workspace-toggle");
     expect(toggle?.getAttribute("aria-label")).toBe("Show session files");
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(toggle?.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+B");
@@ -1523,7 +1578,7 @@ describe("chat composer workbench", () => {
       },
     });
 
-    expect(container.querySelector(".chat-workspace-open")).toBeNull();
+    expect(container.querySelector(".chat-workspace-toggle")).toBeNull();
     expect(container.querySelector(".chat-workspace-rail")).toBeNull();
   });
 
@@ -1576,6 +1631,37 @@ describe("chat composer workbench", () => {
     expect(container.querySelector(".chat-workspace-rail")).not.toBeNull();
     expect(container.querySelector(".chat-workspace-rail__dock")).toBeNull();
     expect(container.querySelector(".chat-workspace-rail__grip")).toBeNull();
+  });
+
+  it("moves the background-tasks rail to a bottom strip on narrow panes", () => {
+    const backgroundTasks = {
+      agentId: "main",
+      collapsed: false,
+      narrowLayout: false,
+      connected: true,
+      canCancel: false,
+      loading: false,
+      error: null,
+      tasks: [],
+      cancellingTaskIds: new Set<string>(),
+      finishedCollapsed: false,
+      onToggleCollapsed: () => undefined,
+      onToggleFinished: () => undefined,
+      onRefresh: () => undefined,
+      onCancel: () => undefined,
+      onOpenSession: () => undefined,
+    };
+
+    const wide = renderChatView({ backgroundTasks });
+    const wideWorkbench = wide.querySelector(".chat-workbench");
+    expect(wideWorkbench?.classList.contains("chat-workbench--tasks-open")).toBe(true);
+    expect(wideWorkbench?.classList.contains("chat-workbench--tasks-dock-bottom")).toBe(false);
+
+    const narrow = renderChatView({ backgroundTasks: { ...backgroundTasks, narrowLayout: true } });
+    const narrowWorkbench = narrow.querySelector(".chat-workbench");
+    expect(narrowWorkbench?.classList.contains("chat-workbench--tasks-open")).toBe(false);
+    expect(narrowWorkbench?.classList.contains("chat-workbench--tasks-dock-bottom")).toBe(true);
+    expect(narrow.querySelector(".chat-tasks-rail")).not.toBeNull();
   });
 
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {
@@ -3592,6 +3678,10 @@ describe("chat welcome", () => {
   function renderWelcome(params: {
     assistantAvatar: string | null;
     assistantAvatarUrl?: string | null;
+    sessions?: SessionsListResult | null;
+    sessionKey?: string;
+    sessionHost?: { assistantAgentId?: string | null } | null;
+    onOpenSession?: (sessionKey: string) => void;
   }) {
     const container = document.createElement("div");
     render(
@@ -3599,6 +3689,10 @@ describe("chat welcome", () => {
         assistantName: "Val",
         assistantAvatar: params.assistantAvatar,
         assistantAvatarUrl: params.assistantAvatarUrl,
+        sessions: params.sessions,
+        sessionKey: params.sessionKey,
+        sessionHost: params.sessionHost,
+        onOpenSession: params.onOpenSession,
         onDraftChange: () => undefined,
         onSend: () => undefined,
       }),
@@ -3607,7 +3701,7 @@ describe("chat welcome", () => {
     return container;
   }
 
-  it("renders configured assistant avatars and fallback in the welcome state", () => {
+  it("renders configured assistant avatars and the animated Clawd fallback", () => {
     let container = renderWelcome({ assistantAvatar: "VC", assistantAvatarUrl: null });
 
     const avatar = container.querySelector<HTMLElement>(".agent-chat__avatar");
@@ -3626,23 +3720,97 @@ describe("chat welcome", () => {
 
     container = renderWelcome({ assistantAvatar: null, assistantAvatarUrl: null });
 
-    const fallbackAvatar = container.querySelector<HTMLImageElement>(
-      ".agent-chat__avatar--logo img",
-    );
-    expect(fallbackAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
-    expect(fallbackAvatar?.getAttribute("alt")).toBe("Val");
+    const clawd = container.querySelector(".agent-chat__welcome-clawd");
+    expect(clawd).not.toBeNull();
+    expect(clawd?.querySelector(".lobster-pet__svg")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__badge")).toBeNull();
   });
 
   it("renders welcome text from the active locale", async () => {
     await i18n.setLocale("zh-CN");
     const container = renderWelcome({ assistantAvatar: "VC", assistantAvatarUrl: null });
 
-    expect(container.querySelector(".agent-chat__badge")?.textContent?.trim()).toBe(
-      t("chat.welcome.ready"),
-    );
     expect(container.querySelector(".agent-chat__suggestion")?.textContent?.trim()).toBe(
       t("chat.welcome.suggestions.whatCanYouDo"),
     );
+  });
+
+  it("lists recent user chats instead of suggestions when any exist", () => {
+    const opened: string[] = [];
+    const container = renderWelcome({
+      assistantAvatar: null,
+      assistantAvatarUrl: null,
+      sessionKey: "agent:main:dashboard:current",
+      sessions: createSessionsResultFromRows([
+        {
+          key: "agent:main:dashboard:current",
+          kind: "direct",
+          updatedAt: 50,
+          label: "Current chat",
+        },
+        {
+          key: "agent:main:dashboard:older",
+          kind: "direct",
+          updatedAt: 10,
+          label: "Older chat",
+          pinned: true,
+          pinnedAt: 5,
+        },
+        {
+          key: "agent:main:discord:group:g-1456",
+          kind: "group",
+          channel: "discord",
+          updatedAt: 90,
+        },
+        { key: "agent:main:dashboard:newer", kind: "direct", updatedAt: 40, label: "Newer chat" },
+      ]),
+      onOpenSession: (key) => opened.push(key),
+    });
+
+    expect(container.querySelector(".agent-chat__suggestion")).toBeNull();
+    const rows = [...container.querySelectorAll<HTMLButtonElement>(".agent-chat__recent")];
+    expect(
+      rows.map((row) => row.querySelector(".agent-chat__recent-name")?.textContent?.trim()),
+    ).toEqual(["Newer chat", "Older chat"]);
+
+    rows[0].click();
+    expect(opened).toEqual(["agent:main:dashboard:newer"]);
+  });
+
+  it("keeps suggestions when only channel-bound sessions exist", () => {
+    const container = renderWelcome({
+      assistantAvatar: null,
+      assistantAvatarUrl: null,
+      sessionKey: "agent:main:dashboard:current",
+      sessions: createSessionsResultFromRows([
+        {
+          key: "agent:main:discord:group:g-1456",
+          kind: "group",
+          channel: "discord",
+          updatedAt: 90,
+        },
+        { key: "agent:main:telegram:direct:42", kind: "direct", channel: "telegram", updatedAt: 5 },
+      ]),
+    });
+
+    expect(container.querySelector(".agent-chat__recent")).toBeNull();
+    expect(container.querySelectorAll(".agent-chat__suggestion").length).toBeGreaterThan(0);
+  });
+
+  it("scopes recents to the selected agent for bare global session keys", () => {
+    const container = renderWelcome({
+      assistantAvatar: null,
+      assistantAvatarUrl: null,
+      sessionKey: "global",
+      sessionHost: { assistantAgentId: "beta" },
+      sessions: createSessionsResultFromRows([
+        { key: "agent:beta:dashboard:one", kind: "direct", updatedAt: 20, label: "Beta chat" },
+        { key: "agent:main:dashboard:two", kind: "direct", updatedAt: 30, label: "Main chat" },
+      ]),
+    });
+
+    const rows = [...container.querySelectorAll(".agent-chat__recent-name")];
+    expect(rows.map((row) => row.textContent?.trim())).toEqual(["Beta chat"]);
   });
 });
 

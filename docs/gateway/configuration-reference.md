@@ -310,7 +310,7 @@ conversation bindings, or any non-Codex harness.
   currently accessible app connected to the authenticated Codex account in
   each new native Codex thread. Default: `false`.
 - `plugins.entries.codex.config.codexPlugins.allow_destructive_actions`:
-  default destructive-action policy for migrated plugin app elicitations.
+  default destructive-action policy for configured plugin app elicitations.
   Use `true` to accept safe Codex approval schemas without prompting, `false`
   to decline them, `"auto"` to route Codex-required approvals through OpenClaw
   plugin approvals, or `"ask"` to prompt for every plugin write/destructive
@@ -319,12 +319,17 @@ conversation bindings, or any non-Codex harness.
   approvals reviewer for that app before the Codex thread starts.
   Default: `true`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.enabled`: enables a
-  migrated plugin entry when global `codexPlugins.enabled` is also true.
+  configured plugin entry when global `codexPlugins.enabled` is also true.
   Default: `true` for explicit entries.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.marketplaceName`:
-  stable marketplace identity. V1 only supports `"openai-curated"`.
+  stable marketplace identity, required with `pluginName` for every resolved
+  entry. Supports `"openai-curated"` and `"workspace-directory"`. Entries
+  missing either identity field are ignored.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.pluginName`: stable
-  Codex plugin identity from migration, for example `"google-calendar"`.
+  Codex plugin identity, required with `marketplaceName`. A
+  `workspace-directory` entry must use the exact marketplace-qualified
+  `summary.id` returned by `plugin/list`, for example
+  `"example-plugin@workspace-directory"`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
   per-plugin destructive-action override. When omitted, the global
   `allow_destructive_actions` value is used. The per-plugin value accepts the
@@ -335,10 +340,17 @@ to the human reviewer. Other apps and non-app thread approvals keep their
 configured reviewer, so mixed plugin policies do not inherit `"ask"` behavior.
 
 `codexPlugins.enabled` is the global enablement directive. Explicit plugin
-entries written by migration are the durable install and repair eligibility set.
-`plugins["*"]` is not supported, there is no `install` switch, and local
-`marketplacePath` values are intentionally not config fields because they are
-host-specific.
+entries written by migration are the durable curated install and repair
+eligibility set. Manually configured `workspace-directory` entries must already
+be installed and enabled, and their owned apps must be accessible; OpenClaw
+does not install or authenticate them. If Codex rejects the explicit workspace
+catalog request, enabled workspace entries fail closed with
+`marketplace_missing` while curated entries from the default catalog remain
+available. `plugins["*"]` is not supported, there is no `install` switch, and
+local `marketplacePath` values are intentionally not config fields because they
+are host-specific. See
+[Native Codex plugins](/plugins/codex-native-plugins) for app-server version and
+readiness requirements.
 
 `app/list` readiness checks are cached for one hour and refreshed
 asynchronously when stale. Codex thread app config is computed at Codex harness
@@ -541,7 +553,7 @@ See [Inferred commitments](/concepts/commitments).
       // toolTitles: false, // opt-in AI purpose titles for tool calls (spends utility-model tokens)
       // embedSandbox: "scripts", // strict | scripts | trusted
       // allowExternalEmbedUrls: false, // dangerous: allow absolute external http(s) embed URLs
-      // chatMessageMaxWidth: "min(1280px, 82%)", // optional grouped chat message max-width
+      // chatMessageMaxWidth: "min(1280px, 82%)", // optional centered chat transcript max-width
       // allowedOrigins: ["https://control.example.com"], // required for non-loopback Control UI
       // dangerouslyAllowHostHeaderOriginFallback: false, // dangerous Host-header origin fallback mode
       // allowInsecureAuth: false,
@@ -623,7 +635,7 @@ See [Inferred commitments](/concepts/commitments).
   Default `false`.
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required for public non-loopback browser origins. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
 - `controlUi.toolTitles`: opt in to AI-generated purpose titles for tool calls in Control UI chat. Default: `false` (tool rendering stays fully deterministic with no background model calls). When enabled, the `chat.toolTitles` method labels complex calls through standard utility-model routing — the agent's `utilityModel` (an operator decision that may send bounded tool arguments to the chosen provider, like every utility task), or the session provider's declared small-model default (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`) — and caches results in the per-agent state database so repeat views never re-bill. `utilityModel: \"\"` disables titles like every other utility task; titles never fall back to the primary model.
-- `controlUi.chatMessageMaxWidth`: optional max-width for grouped Control UI chat messages. Accepts constrained CSS width values such as `960px`, `82%`, `min(1280px, 82%)`, and `calc(100% - 2rem)`.
+- `controlUi.chatMessageMaxWidth`: optional max-width for the centered Control UI chat transcript. Accepts constrained CSS width values such as `960px`, `82%`, `min(1280px, 82%)`, and `calc(100% - 2rem)`.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
 - `terminal.enabled`: opt in to the admin-scoped operator terminal. Default: `false`. The terminal starts a host PTY in the selected agent workspace, inherits the Gateway process environment, and is refused for agents with `sandbox.mode: "all"`. Enable it only for trusted operator deployments; changing it restarts the Gateway and updates the Control UI content security policy.
 - `terminal.shell`: optional shell executable. When unset, OpenClaw uses `$SHELL` on Unix and `%ComSpec%` on Windows.
@@ -736,6 +748,12 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 
 Cloud workers are opt-in. If `cloudWorkers` is absent, or `profiles` is empty, OpenClaw accepts no new worker creation. Durable records created earlier still reconcile and remain visible; the existing gateway/node projection is unchanged.
 
+Every worker provider must return an SSH `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Bootstrap writes that key to an isolated `known_hosts` file, uses `StrictHostKeyChecking=yes`, and fails before opening a connection when the provider omits it. There is no trust-on-first-use fallback.
+
+Tunnel setup is on demand rather than part of provisioning. When started, the gateway reverse-forwards a worker-local Unix socket to its loopback WebSocket endpoint. The socket lives in a randomly allocated, owner-only remote directory; unlike a loopback TCP port, it is not reachable by other accounts on a multi-user worker and cannot collide with another environment's port. SSH keepalives and capped reconnect backoff run only while the tunnel owner remains current. Stopping the tunnel fences reconnects before closing the SSH process.
+
+Control traffic and workspace transfer use separate SSH connections. Both reuse the same resolved identity and isolated pinned `known_hosts` file, but workspace transfer does not share SSH connection multiplexing with the long-lived tunnel, so rsync cannot block control traffic.
+
 ### Crabbox profile
 
 The bundled `crabbox` provider provisions an SSH-capable lease through the local Crabbox CLI. The inner `settings.provider` selects the Crabbox backend; it is separate from the outer OpenClaw provider id.
@@ -746,6 +764,7 @@ The bundled `crabbox` provider provisions an SSH-capable lease through the local
     profiles: {
       production: {
         provider: "crabbox",
+        install: "bundle", // Default; use "npm" only for a released gateway version.
         settings: {
           provider: "aws",
           class: "standard",
@@ -772,7 +791,7 @@ The bundled `crabbox` provider provisions an SSH-capable lease through the local
 Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop`.
 
 <Warning>
-  This milestone surfaces the SSH endpoint and a file `SecretRef`, but the current generic file-secret contract does not resolve Crabbox's dynamic key path, and Crabbox `inspect` does not expose host-key material. The later tunnel milestone must define direct-file key resolution and host-key pinning before connecting; this profile alone is not yet a complete SSH trust boundary.
+  OpenClaw resolves Crabbox's lease-local `sshKey` path through the provider-owned secret resolver. Current `crabbox inspect --json` output does not expose a provisioned `sshHostKey`, so Crabbox-backed workers still fail closed before bootstrap or tunnel setup. Crabbox must provision an authoritative per-lease host key and return `sshHostKey` as exactly `algorithm base64`, without a hostname or comment. Its current lease-local `known_hosts` cache is not provisioning trust material.
 </Warning>
 
 ### Static SSH development profile
@@ -787,6 +806,7 @@ Unknown settings are rejected. Crabbox credentials and backend-specific account 
           host: "worker.example.test",
           port: 22,
           user: "openclaw",
+          hostKey: "ssh-ed25519 <base64-public-host-key>",
           keyRef: {
             source: "env",
             provider: "default",
@@ -805,17 +825,23 @@ Unknown settings are rejected. Crabbox credentials and backend-specific account 
 
 - `profiles`: named worker profiles with non-empty, whitespace-trimmed ids. Each profile selects a provider registered by a plugin.
 - `provider`: non-empty worker provider id. The examples use the bundled `crabbox` provider and the QA Lab `static-ssh` provider.
+- `install`: worker installation method. `"bundle"` (default) transfers a content-hashed bundle of the gateway's installed build and supports released, development, and unreleased versions. `"npm"` is an opt-in optimization for an unmodified packaged release; it installs `openclaw@<exact gateway version>` from the public npm registry and never installs `latest`.
 - Bundled provider plugins are selected automatically when configured, but explicit disables and `plugins.allow` still apply. Include the provider id (for example, `crabbox`) when an allowlist is configured. External provider plugins must also be installed and explicitly enabled.
-- `settings`: provider-owned bounded JSON. The selected plugin defines and validates its keys; use [SecretRef objects](/gateway/secrets) for secret-bearing values. The static SSH provider requires `host`, `user`, and `keyRef`; `port` defaults to `22`.
+- `settings`: provider-owned bounded JSON. The selected plugin defines and validates its keys; use [SecretRef objects](/gateway/secrets) for secret-bearing values. The static SSH provider requires `host`, `user`, `hostKey`, and `keyRef`; `port` defaults to `22`. `hostKey` must be one OpenSSH public host-key line (`algorithm base64`) obtained from the known host or another trusted channel, with no options prefix.
 - `lifetime.idleTimeoutMinutes`: positive integer minutes stored for later idle-reclamation policy.
 - `lifetime.maxLifetimeMinutes`: positive integer minutes stored for later lifecycle policy.
 
-Each durable environment record retains its validated provider settings snapshot for later inspection and destruction. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with their creation-time settings, provided the owning plugin remains available.
+A supported Node runtime (22.19+, 23.11+, or 24+) must already be installed on the worker. The opt-in `"npm"` method also requires `npm` and outbound HTTPS access to the public npm registry. Networked toolchain setup is provider policy; bootstrap reports an actionable error instead of installing toolchains itself.
+
+This foundation installs and verifies the gateway build and provides tunnel start/stop lifecycle, but it does not launch the general OpenClaw CLI. The self-contained worker entry and loop land in the next cloud-worker milestone.
+
+Each durable environment record retains its validated provider settings, resolved install method, and lifetime policy in a creation-time profile snapshot. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with that snapshot, provided the owning plugin remains available.
 
 Lifetime values are data only in the first cloud-worker release; automatic enforcement lands with later lifecycle work. Profile changes require a gateway restart.
 
 <Warning>
   The `static-ssh` provider is a source-tree QA Lab development harness and is excluded from packaged distributions. A worker running on its shared host can read unrelated host data, so do not use this provider as a production isolation boundary.
+  Its operator must supply the expected `hostKey`; OpenClaw will not learn or accept a key from the first connection.
   Destroying its lease only releases OpenClaw's logical record; it does not stop or clean the host.
 </Warning>
 
@@ -1177,22 +1203,43 @@ Notes:
 {
   audit: {
     enabled: true,
+    messages: "off", // off | direct | all
   },
 }
 ```
 
 The Gateway records **metadata-only** audit events for agent runs and tool
-actions into the shared state database: identity, timing, tool names, and
-terminal outcomes — never prompts, messages, tool arguments, results, or raw
-error text. Records expire after 30 days and the ledger is capped at 100,000
-rows. Query them with [`openclaw audit`](/cli/audit) or the
-[`audit.list`](/gateway/protocol#audit-ledger-rpc) Gateway RPC.
+actions into the shared state database. Message lifecycle metadata is a
+separate opt-in. The ledger stores identity, timing, tool names, and normalized
+outcomes, but never prompts, message bodies, tool arguments, results, or raw
+error text. Message rows do not store raw platform account, conversation,
+message, and target ids. Run/tool session keys remain available for correlation
+and can themselves contain platform account or peer ids. Records
+expire after 30 days and the ledger is capped at 100,000 rows. Query them with
+[`openclaw audit`](/cli/audit) or the
+[`audit.activity.list`](/gateway/protocol#audit-ledger-rpc) Gateway RPC. See
+[Audit history](/gateway/audit) for the full data model, privacy semantics,
+and coverage limits.
 
 - `enabled`: record new audit events (default: `true`). The ledger is on by
   default because an audit trail enabled only after an incident cannot explain
-  the incident. Setting `false` stops new writes immediately; existing records
-  stay readable until they expire. Turning it back on resumes recording from
-  that point — the gap is not backfilled.
+  the incident. Setting `false` stops new event inserts after the Gateway restarts;
+  existing records stay readable until they expire. Turning it back on resumes
+  recording from that point — the gap is not backfilled.
+- `messages`: message metadata scope (default: `"off"`). `"direct"` records
+  known direct conversations only. `"all"` also records group, channel, and
+  unknown conversation kinds. Both modes remain content-free and replace raw
+  identifiers with installation-local keyed pseudonyms where correlation is
+  available. These are correlation aids rather than anonymization; the state
+  database stores the derivation key, but RPC and CLI exports do not.
+
+The running Gateway captures `audit.enabled` and `audit.messages` at startup;
+restart it after changing either setting. Message coverage currently includes
+accepted inbound messages that reach core dispatch and one terminal row per
+original logical outbound reply payload that reaches shared durable delivery.
+Plugin-local and direct-send paths that bypass those shared boundaries are not
+yet covered. The bounded background
+writer is best-effort, not a lossless compliance archive.
 
 ---
 
@@ -1457,7 +1504,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 }
 ```
 
-- `sessionRetention`: how long to keep completed isolated cron run sessions before pruning from `sessions.json`. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
+- `sessionRetention`: how long to keep completed isolated cron run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
 - `runLog.maxBytes`: accepted for compatibility with older file-backed cron run logs. Default: `2_000_000` bytes.
 - `runLog.keepLines`: newest SQLite run-history rows retained per job. Default: `2000`.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.

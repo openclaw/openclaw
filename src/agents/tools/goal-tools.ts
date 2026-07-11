@@ -31,6 +31,7 @@ type GoalToolOptions = {
 
 type GoalSessionScope = {
   sessionKey: string;
+  agentId: string;
   storePath: string;
 };
 
@@ -66,6 +67,7 @@ function resolveGoalSessionScope(options: GoalToolOptions): GoalSessionScope {
   );
   return {
     sessionKey,
+    agentId,
     storePath: resolveStorePath(options.config?.session?.store, {
       agentId,
     }),
@@ -105,8 +107,10 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
       const tokenBudget = readPositiveIntegerParam(params, "token_budget", {
         message: "token_budget must be a positive integer",
       });
+      const scope = resolveGoalSessionScope(options);
       const goal = await createSessionGoal({
-        ...resolveGoalSessionScope(options),
+        ...scope,
+        actor: { type: "agent", id: scope.sessionKey },
         objective,
         ...(tokenBudget !== undefined ? { tokenBudget } : {}),
       });
@@ -137,8 +141,10 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
         );
       }
       const note = readStringParam(params, "note");
+      const scope = resolveGoalSessionScope(options);
       const goal = await updateSessionGoalStatus({
-        ...resolveGoalSessionScope(options),
+        ...scope,
+        actor: { type: "agent", id: scope.sessionKey },
         status: status as (typeof MODEL_UPDATABLE_SESSION_GOAL_STATUSES)[number],
         ...(note ? { note } : {}),
       });

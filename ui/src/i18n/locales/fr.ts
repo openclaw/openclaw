@@ -173,16 +173,6 @@ export const fr: TranslationMap = {
       node: "Nœud",
     },
   },
-  instances: {
-    title: "Instances connectées",
-    subtitle: "Balises de présence du gateway et des clients.",
-    showHosts: "Afficher les hôtes et les IP",
-    hideHosts: "Masquer les hôtes et les IP",
-    toggleHostVisibility: "Basculer la visibilité des hôtes",
-    noInstances: "Aucune instance signalée pour le moment.",
-    lastInput: "Dernière entrée {time}",
-    reason: "Raison {reason}",
-  },
   worktrees: {
     newWorktree: "Nouveau worktree",
     owner: "Propriétaire",
@@ -396,6 +386,7 @@ export const fr: TranslationMap = {
       skills: "Skills",
       channels: "Canaux",
       cronJobs: "Tâches cron",
+      memory: "Mémoire",
     },
     context: {
       title: "Agent Context",
@@ -629,7 +620,6 @@ export const fr: TranslationMap = {
     workboard: "Tableau de travail",
     worktrees: "Worktrees",
     channels: "Canaux",
-    instances: "Instances",
     sessions: "Sessions",
     usage: "Utilisation",
     cron: "Tâches cron",
@@ -651,7 +641,6 @@ export const fr: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Débogage",
     logs: "Journaux",
-    dreams: "Rêves",
     plugin: "Plugin",
   },
   subtitles: {
@@ -661,7 +650,6 @@ export const fr: TranslationMap = {
     workboard: "File de travail de l’agent et transfert de session.",
     worktrees: "Checkouts de tâches d’agent isolés et instantanés de récupération.",
     channels: "Canaux et paramètres.",
-    instances: "Clients et nœuds connectés.",
     sessions: "Sessions actives et valeurs par défaut.",
     usage: "Utilisation de l’API et coûts.",
     cron: "Réveils et exécutions récurrentes.",
@@ -684,8 +672,10 @@ export const fr: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Captures, événements, RPC.",
     logs: "Journaux Gateway en direct.",
-    dreams: "Consolidation de la mémoire pendant le sommeil.",
     plugin: "Panneau fourni par le plugin.",
+  },
+  mcpPage: {
+    manageServersLink: "Gérez les serveurs sur la page Plugins.",
   },
   pluginsPage: {
     searchLabel: "Rechercher des plugins",
@@ -1048,6 +1038,62 @@ export const fr: TranslationMap = {
       loadMore: "Charger les éléments de transcription plus anciens",
     },
   },
+  claudeSessions: {
+    eyebrow: "Flotte Claude",
+    title: "Sessions Claude sur vos ordinateurs",
+    subtitle:
+      "Parcourez les sessions Claude CLI et Claude Desktop non archivées et lisez leurs transcriptions locales paginées.",
+    summaryLabel: "Résumé de la session Claude",
+    summary: {
+      sessions: "sessions",
+      onlineHosts: "en ligne",
+      hosts: "hôtes",
+    },
+    searchLabel: "Rechercher des sessions Claude",
+    searchPlaceholder: "Rechercher dans les titres de session",
+    refresh: "Actualiser",
+    disconnected: "Reconnectez-vous au gateway pour actualiser les sessions Claude.",
+    partial: "Hôtes indisponibles : {count}. Les autres hôtes restent disponibles.",
+    loading: "Chargement des sessions Claude…",
+    loadMore: "Charger davantage",
+    loadingMore: "Chargement…",
+    untitled: "Session Claude sans titre",
+    sessionId: "Session",
+    stored: "Stockée",
+    read: "Lu",
+    readLabel: "Lire la transcription de {title}",
+    host: {
+      gateway: "Gateway",
+      node: "Nœud",
+      connected: "Connecté",
+      offline: "Hors ligne",
+      unavailable: "Catalogue de sessions indisponible",
+      sessionCount: "{count} affichés",
+    },
+    empty: {
+      title: "Aucune session Claude trouvée",
+      subtitle: "Installez et utilisez Claude CLI ou Claude Desktop, puis actualisez cette vue.",
+      search: "Aucune session de cet hôte ne correspond à votre recherche.",
+      nonArchived: "Aucune session non archivée sur cet hôte.",
+    },
+    sidebar: {
+      title: "Sessions Claude",
+      viewAll: "Afficher toutes les sessions Claude",
+      truncated: "D’autres sessions sont disponibles dans le catalogue complet.",
+    },
+    transcript: {
+      eyebrow: "Transcription Claude",
+      back: "Toutes les sessions Claude",
+      you: "Vous",
+      reasoning: "Raisonnement",
+      toolCall: "Appel d’outil",
+      toolResult: "Résultat de l’outil",
+      item: "Élément Claude",
+      details: "Détails complets",
+      loading: "Chargement de la transcription…",
+      loadMore: "Charger les éléments de transcription plus anciens",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1070,7 +1116,7 @@ export const fr: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1557,10 +1603,6 @@ export const fr: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agent",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scène",
       diary: "Journal",
@@ -2166,9 +2208,9 @@ export const fr: TranslationMap = {
       workSessions: "Travail",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Discussions récentes",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

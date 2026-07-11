@@ -114,7 +114,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         splitViewController.splitView.autosaveName = DashboardWindowLayout.linkBrowserSplitAutosaveName
 
         let dashboardViewController = NSViewController()
-        dashboardViewController.view = self.webView
+        dashboardViewController.view = BrowserProfileImportBannerView.makeDashboardPane(webView: self.webView)
         let dashboardItem = NSSplitViewItem(viewController: dashboardViewController)
         dashboardItem.minimumThickness = DashboardWindowLayout.mainBrowserMinWidth
 
@@ -496,9 +496,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
         let stack = NSStackView(views: [sidebar, back, forward])
         stack.orientation = .horizontal
-        stack.spacing = 6
+        stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 0)
-        stack.setFrameSize(NSSize(width: 104, height: 28))
+        // Fixed accessory frame: 12 leading inset + three ~27pt buttons + two
+        // 12pt gaps. Keep in sync with `spacing`/`edgeInsets` above.
+        stack.setFrameSize(NSSize(width: 116, height: 28))
 
         let accessory = NSTitlebarAccessoryViewController()
         accessory.view = stack
@@ -666,8 +668,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             style.id = "openclaw-native-macos-chrome";
             style.textContent = \(Self.jsStringLiteral(css));
             // openclaw-native-nav advertises the titlebar sidebar toggle so a
-            // matching Control UI hides its floating expand button; older web
-            // bundles ignore the class and keep their own fallback control.
+            // matching Control UI hides its in-page expand/collapse buttons;
+            // older web bundles ignore the class and keep their own controls.
             document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-nav");
             document.head.appendChild(style);
           } catch {}

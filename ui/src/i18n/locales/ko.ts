@@ -169,16 +169,6 @@ export const ko: TranslationMap = {
       node: "노드",
     },
   },
-  instances: {
-    title: "연결된 인스턴스",
-    subtitle: "Gateway와 클라이언트의 프레즌스 비콘입니다.",
-    showHosts: "호스트 및 IP 표시",
-    hideHosts: "호스트 및 IP 숨기기",
-    toggleHostVisibility: "호스트 표시 전환",
-    noInstances: "아직 보고된 인스턴스가 없습니다.",
-    lastInput: "마지막 입력 {time}",
-    reason: "사유 {reason}",
-  },
   worktrees: {
     newWorktree: "새 worktree",
     owner: "소유자",
@@ -388,6 +378,7 @@ export const ko: TranslationMap = {
       skills: "Skills",
       channels: "채널",
       cronJobs: "Cron 작업",
+      memory: "메모리",
     },
     context: {
       title: "Agent Context",
@@ -620,7 +611,6 @@ export const ko: TranslationMap = {
     workboard: "워크보드",
     worktrees: "Worktree",
     channels: "채널",
-    instances: "인스턴스",
     sessions: "세션",
     usage: "사용량",
     cron: "Cron 작업",
@@ -642,7 +632,6 @@ export const ko: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "디버그",
     logs: "로그",
-    dreams: "드리밍",
     plugin: "플러그인",
   },
   subtitles: {
@@ -652,7 +641,6 @@ export const ko: TranslationMap = {
     workboard: "에이전트 작업 대기열 및 세션 인계.",
     worktrees: "격리된 에이전트 작업 체크아웃 및 복구 스냅샷입니다.",
     channels: "채널 및 설정.",
-    instances: "연결된 클라이언트와 노드.",
     sessions: "활성 세션 및 기본값.",
     usage: "API 사용량 및 비용.",
     cron: "웨이크업 및 반복 실행.",
@@ -674,8 +662,10 @@ export const ko: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "스냅샷, 이벤트, RPC.",
     logs: "실시간 Gateway 로그.",
-    dreams: "수면 중 메모리 통합.",
     plugin: "플러그인이 제공하는 패널입니다.",
+  },
+  mcpPage: {
+    manageServersLink: "플러그인 페이지에서 서버를 관리하세요.",
   },
   pluginsPage: {
     searchLabel: "플러그인 검색",
@@ -1030,6 +1020,62 @@ export const ko: TranslationMap = {
       loadMore: "이전 전사 항목 불러오기",
     },
   },
+  claudeSessions: {
+    eyebrow: "Claude 플릿",
+    title: "컴퓨터 전반의 Claude 세션",
+    subtitle:
+      "보관되지 않은 Claude CLI 및 Claude Desktop 세션을 탐색하고 페이지로 나뉜 로컬 트랜스크립트를 읽어보세요.",
+    summaryLabel: "Claude 세션 요약",
+    summary: {
+      sessions: "세션",
+      onlineHosts: "온라인",
+      hosts: "호스트",
+    },
+    searchLabel: "Claude 세션 검색",
+    searchPlaceholder: "세션 제목 검색",
+    refresh: "새로고침",
+    disconnected: "Claude 세션을 새로 고치려면 gateway에 다시 연결하세요.",
+    partial: "사용할 수 없는 호스트: {count}개. 다른 호스트는 계속 사용할 수 있습니다.",
+    loading: "Claude 세션을 불러오는 중…",
+    loadMore: "더 보기",
+    loadingMore: "불러오는 중…",
+    untitled: "제목 없는 Claude 세션",
+    sessionId: "세션",
+    stored: "저장됨",
+    read: "읽음",
+    readLabel: "{title}의 전사 내용 읽기",
+    host: {
+      gateway: "Gateway",
+      node: "노드",
+      connected: "연결됨",
+      offline: "오프라인",
+      unavailable: "세션 목록을 불러올 수 없음",
+      sessionCount: "{count}개 표시됨",
+    },
+    empty: {
+      title: "Claude 세션을 찾을 수 없음",
+      subtitle: "Claude CLI 또는 Claude Desktop을 설치하고 사용한 다음 이 보기를 새로 고치세요.",
+      search: "이 호스트에 검색어와 일치하는 세션이 없습니다.",
+      nonArchived: "이 호스트에 보관되지 않은 세션이 없습니다.",
+    },
+    sidebar: {
+      title: "Claude 세션",
+      viewAll: "모든 Claude 세션 보기",
+      truncated: "전체 카탈로그에서 더 많은 세션을 사용할 수 있습니다.",
+    },
+    transcript: {
+      eyebrow: "Claude 트랜스크립트",
+      back: "모든 Claude 세션",
+      you: "나",
+      reasoning: "추론",
+      toolCall: "도구 호출",
+      toolResult: "도구 결과",
+      item: "Claude 항목",
+      details: "전체 세부 정보",
+      loading: "전사 내용을 불러오는 중…",
+      loadMore: "이전 전사 항목 불러오기",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1052,7 +1098,7 @@ export const ko: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1535,10 +1581,6 @@ export const ko: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "에이전트",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "장면",
       diary: "일지",
@@ -2125,9 +2167,9 @@ export const ko: TranslationMap = {
       workSessions: "작업",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "최근 채팅",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

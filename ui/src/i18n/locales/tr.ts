@@ -172,16 +172,6 @@ export const tr: TranslationMap = {
       node: "Düğüm",
     },
   },
-  instances: {
-    title: "Bağlı Örnekler",
-    subtitle: "Gateway ve istemcilerden gelen varlık işaretçileri.",
-    showHosts: "Ana bilgisayarları ve IP'leri göster",
-    hideHosts: "Ana bilgisayarları ve IP'leri gizle",
-    toggleHostVisibility: "Ana bilgisayar görünürlüğünü değiştir",
-    noInstances: "Henüz bildirilmiş örnek yok.",
-    lastInput: "Son giriş {time}",
-    reason: "Neden {reason}",
-  },
   worktrees: {
     newWorktree: "Yeni worktree",
     owner: "Sahip",
@@ -393,6 +383,7 @@ export const tr: TranslationMap = {
       skills: "Skills",
       channels: "Kanallar",
       cronJobs: "Cron İşleri",
+      memory: "Bellek",
     },
     context: {
       title: "Agent Context",
@@ -625,7 +616,6 @@ export const tr: TranslationMap = {
     workboard: "Çalışma panosu",
     worktrees: "Worktree'ler",
     channels: "Kanallar",
-    instances: "Örnekler",
     sessions: "Oturumlar",
     usage: "Kullanım",
     cron: "Cron İşleri",
@@ -647,7 +637,6 @@ export const tr: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Hata Ayıklama",
     logs: "Günlükler",
-    dreams: "Düşler",
     plugin: "Eklenti",
   },
   subtitles: {
@@ -657,7 +646,6 @@ export const tr: TranslationMap = {
     workboard: "Ajan iş kuyruğu ve oturum devri.",
     worktrees: "Yalıtılmış aracı görev checkout'ları ve kurtarma anlık görüntüleri.",
     channels: "Kanallar ve ayarlar.",
-    instances: "Bağlı istemciler ve düğümler.",
     sessions: "Etkin oturumlar ve varsayılanlar.",
     usage: "API kullanımı ve maliyetler.",
     cron: "Uyandırmalar ve yinelenen çalıştırmalar.",
@@ -680,8 +668,10 @@ export const tr: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Anlık görüntüler, olaylar, RPC.",
     logs: "Canlı Gateway günlükleri.",
-    dreams: "Uyku sırasında bellek birleştirme.",
     plugin: "Eklenti tarafından sağlanan panel.",
+  },
+  mcpPage: {
+    manageServersLink: "Eklentiler sayfasında sunucuları yönetin.",
   },
   pluginsPage: {
     searchLabel: "Eklentileri ara",
@@ -1041,6 +1031,64 @@ export const tr: TranslationMap = {
       loadMore: "Daha eski döküm öğelerini yükle",
     },
   },
+  claudeSessions: {
+    eyebrow: "Claude filosu",
+    title: "Bilgisayarlarınızdaki Claude oturumları",
+    subtitle:
+      "Arşivlenmemiş Claude CLI ve Claude Desktop oturumlarına göz atın ve sayfalandırılmış yerel dökümlerini okuyun.",
+    summaryLabel: "Claude oturum özeti",
+    summary: {
+      sessions: "oturum",
+      onlineHosts: "çevrimiçi",
+      hosts: "ana makine",
+    },
+    searchLabel: "Claude oturumlarında ara",
+    searchPlaceholder: "Oturum başlıklarında ara",
+    refresh: "Yenile",
+    disconnected: "Claude oturumlarını yenilemek için Gateway'e yeniden bağlanın.",
+    partial:
+      "Kullanılamayan ana makine sayısı: {count}. Diğer ana makineler kullanılabilir durumda.",
+    loading: "Claude oturumları yükleniyor…",
+    loadMore: "Daha fazla yükle",
+    loadingMore: "Yükleniyor…",
+    untitled: "Başlıksız Claude oturumu",
+    sessionId: "Oturum",
+    stored: "Depolanmış",
+    read: "Okundu",
+    readLabel: "{title} için dökümü oku",
+    host: {
+      gateway: "Gateway",
+      node: "Düğüm",
+      connected: "Bağlı",
+      offline: "Çevrimdışı",
+      unavailable: "Oturum kataloğu kullanılamıyor",
+      sessionCount: "{count} gösteriliyor",
+    },
+    empty: {
+      title: "Claude oturumu bulunamadı",
+      subtitle:
+        "Claude CLI veya Claude Desktop'ı yükleyip kullanın, ardından bu görünümü yenileyin.",
+      search: "Bu ana makinedeki hiçbir oturum aramanızla eşleşmiyor.",
+      nonArchived: "Bu ana makinede arşivlenmemiş oturum yok.",
+    },
+    sidebar: {
+      title: "Claude oturumları",
+      viewAll: "Tüm Claude oturumlarını görüntüle",
+      truncated: "Tam katalogda daha fazla oturum mevcut.",
+    },
+    transcript: {
+      eyebrow: "Claude dökümü",
+      back: "Tüm Claude oturumları",
+      you: "Siz",
+      reasoning: "Akıl yürütme",
+      toolCall: "Araç çağrısı",
+      toolResult: "Araç sonucu",
+      item: "Claude öğesi",
+      details: "Tüm ayrıntılar",
+      loading: "Transkript yükleniyor…",
+      loadMore: "Daha eski transkript öğelerini yükle",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1063,7 +1111,7 @@ export const tr: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1549,10 +1597,6 @@ export const tr: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Aracı",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Sahne",
       diary: "Günlük",
@@ -2147,9 +2191,9 @@ export const tr: TranslationMap = {
       workSessions: "Çalışma",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Son sohbetler",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

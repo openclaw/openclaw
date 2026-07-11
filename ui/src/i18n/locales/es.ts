@@ -171,16 +171,6 @@ export const es: TranslationMap = {
       node: "Nodo",
     },
   },
-  instances: {
-    title: "Instancias conectadas",
-    subtitle: "Balizas de presencia del Gateway y los clientes.",
-    showHosts: "Mostrar hosts e IP",
-    hideHosts: "Ocultar hosts e IP",
-    toggleHostVisibility: "Alternar visibilidad de hosts",
-    noInstances: "Aún no se informó ninguna instancia.",
-    lastInput: "Última entrada {time}",
-    reason: "Motivo {reason}",
-  },
   worktrees: {
     newWorktree: "Nuevo worktree",
     owner: "Propietario",
@@ -390,6 +380,7 @@ export const es: TranslationMap = {
       skills: "Skills",
       channels: "Channels",
       cronJobs: "Cron Jobs",
+      memory: "Memoria",
     },
     context: {
       title: "Agent Context",
@@ -623,7 +614,6 @@ export const es: TranslationMap = {
     workboard: "Panel de trabajo",
     worktrees: "Worktrees",
     channels: "Canales",
-    instances: "Instancias",
     sessions: "Sesiones",
     usage: "Uso",
     cron: "Tareas Cron",
@@ -645,7 +635,6 @@ export const es: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Depuración",
     logs: "Registros",
-    dreams: "Sueños",
     plugin: "Plugin",
   },
   subtitles: {
@@ -655,7 +644,6 @@ export const es: TranslationMap = {
     workboard: "Cola de trabajo del agente y traspaso de sesión.",
     worktrees: "Checkouts aislados de tareas de agentes y snapshots de recuperación.",
     channels: "Gestionar canales y ajustes.",
-    instances: "Balizas de presencia de clientes y nodos conectados.",
     sessions: "Inspeccionar sesiones activas y ajustar valores predeterminados por sesión.",
     usage: "Monitorear uso de API y costes.",
     cron: "Programar despertares y ejecuciones recurrentes de agentes.",
@@ -678,8 +666,10 @@ export const es: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Instantáneas de la puerta de enlace, eventos y llamadas RPC manuales.",
     logs: "Seguimiento en vivo de los registros de la puerta de enlace.",
-    dreams: "Consolidación de la memoria durante el sueño.",
     plugin: "Panel proporcionado por el plugin.",
+  },
+  mcpPage: {
+    manageServersLink: "Gestionar servidores en la página de Plugins.",
   },
   pluginsPage: {
     searchLabel: "Buscar plugins",
@@ -1035,6 +1025,62 @@ export const es: TranslationMap = {
       loadMore: "Cargar elementos anteriores de la transcripción",
     },
   },
+  claudeSessions: {
+    eyebrow: "Flota de Claude",
+    title: "Sesiones de Claude en tus computadoras",
+    subtitle:
+      "Explora sesiones no archivadas de Claude CLI y Claude Desktop, y lee sus transcripciones locales paginadas.",
+    summaryLabel: "Resumen de la sesión de Claude",
+    summary: {
+      sessions: "sesiones",
+      onlineHosts: "en línea",
+      hosts: "hosts",
+    },
+    searchLabel: "Buscar sesiones de Claude",
+    searchPlaceholder: "Buscar títulos de sesiones",
+    refresh: "Actualizar",
+    disconnected: "Vuelve a conectarte al Gateway para actualizar las sesiones de Claude.",
+    partial: "Hosts no disponibles: {count}. Los demás hosts siguen disponibles.",
+    loading: "Cargando sesiones de Claude…",
+    loadMore: "Cargar más",
+    loadingMore: "Cargando…",
+    untitled: "Sesión de Claude sin título",
+    sessionId: "Sesión",
+    stored: "Almacenada",
+    read: "Leídos",
+    readLabel: "Leer transcripción de {title}",
+    host: {
+      gateway: "Gateway",
+      node: "Nodo",
+      connected: "Conectado",
+      offline: "Sin conexión",
+      unavailable: "Catálogo de sesiones no disponible",
+      sessionCount: "{count} mostrados",
+    },
+    empty: {
+      title: "No se encontraron sesiones de Claude",
+      subtitle: "Instala y usa Claude CLI o Claude Desktop, y luego actualiza esta vista.",
+      search: "Ninguna sesión de este host coincide con tu búsqueda.",
+      nonArchived: "No hay sesiones no archivadas en este host.",
+    },
+    sidebar: {
+      title: "Sesiones de Claude",
+      viewAll: "Ver todas las sesiones de Claude",
+      truncated: "Hay más sesiones disponibles en el catálogo completo.",
+    },
+    transcript: {
+      eyebrow: "Transcripción de Claude",
+      back: "Todas las sesiones de Claude",
+      you: "Tú",
+      reasoning: "Razonamiento",
+      toolCall: "Llamada a herramienta",
+      toolResult: "Resultado de la herramienta",
+      item: "Elemento de Claude",
+      details: "Detalles completos",
+      loading: "Cargando transcripción…",
+      loadMore: "Cargar elementos anteriores de la transcripción",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1057,7 +1103,7 @@ export const es: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1542,10 +1588,6 @@ export const es: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Agente",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Escena",
       diary: "Diario",
@@ -2147,9 +2189,9 @@ export const es: TranslationMap = {
       workSessions: "Trabajo",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "Chats recientes",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

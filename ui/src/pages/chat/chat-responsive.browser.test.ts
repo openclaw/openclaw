@@ -46,6 +46,7 @@ type ControlRect = {
 
 type ChatFixtureOptions = {
   composerAttachment?: boolean;
+  direct?: boolean;
   sideResultBody?: string;
   singleAgent?: boolean;
   slashMenu?: boolean;
@@ -259,8 +260,8 @@ function chatHtml(opts: ChatFixtureOptions = {}) {
       <main class="content content--chat">
         <section class="card chat">
           <div class="chat-split-container">
-            <div class="chat-main">
-              <div class="chat-thread" role="log">
+            <div class="chat-main" style="flex: 1 1 100%">
+              <div class="chat-thread${opts.direct ? " chat-thread--direct" : ""}" role="log">
                 <div class="chat-thread-inner">
                   <div class="chat-group user">
                     <div class="chat-avatar user">V</div>
@@ -289,25 +290,23 @@ function chatHtml(opts: ChatFixtureOptions = {}) {
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
-          ${
-            opts.sideResultBody !== undefined
-              ? `<section class="chat-side-result" role="status" aria-live="polite">
-                  <div class="chat-side-result__header">
-                    <div class="chat-side-result__label-row"><span class="chat-side-result__label">BTW</span><span class="chat-side-result__meta">Not saved to chat history</span></div>
-                    <button class="btn chat-side-result__dismiss">${iconSvg()}</button>
-                  </div>
-                  <div class="chat-side-result__question">What should I check next?</div>
-                  <div class="chat-side-result__body">${opts.sideResultBody}</div>
-                </section>`
-              : ""
-          }
-          <div class="agent-chat__composer-shell">
-            <div class="agent-chat__input">
               ${
-                opts.slashMenu
-                  ? `<div class="slash-menu" role="listbox" aria-label="Command suggestions">
+                opts.sideResultBody !== undefined
+                  ? `<section class="chat-side-result" role="status" aria-live="polite">
+                      <div class="chat-side-result__header">
+                        <div class="chat-side-result__label-row"><span class="chat-side-result__label">BTW</span><span class="chat-side-result__meta">Not saved to chat history</span></div>
+                        <button class="btn chat-side-result__dismiss">${iconSvg()}</button>
+                      </div>
+                      <div class="chat-side-result__question">What should I check next?</div>
+                      <div class="chat-side-result__body">${opts.sideResultBody}</div>
+                    </section>`
+                  : ""
+              }
+              <div class="agent-chat__composer-shell">
+                <div class="agent-chat__input">
+                  ${
+                    opts.slashMenu
+                      ? `<div class="slash-menu" role="listbox" aria-label="Command suggestions">
                       <div class="slash-menu-group">
                         <div class="slash-menu-group__label">Commands</div>
                         <div class="slash-menu-item slash-menu-item--active" role="option" aria-selected="true">
@@ -327,11 +326,11 @@ function chatHtml(opts: ChatFixtureOptions = {}) {
                         </div>
                       </div>
                     </div>`
-                  : ""
-              }
-              ${
-                opts.composerAttachment
-                  ? `<div class="chat-attachments-preview">
+                      : ""
+                  }
+                  ${
+                    opts.composerAttachment
+                      ? `<div class="chat-attachments-preview">
                       <div class="chat-attachment-thumb chat-attachment-thumb--file">
                         <div class="chat-attachment-file">
                           <span class="chat-attachment-file__icon">${iconSvg()}</span>
@@ -340,61 +339,63 @@ function chatHtml(opts: ChatFixtureOptions = {}) {
                         <button class="chat-attachment-remove" type="button" aria-label="Remove attachment">&times;</button>
                       </div>
                     </div>`
-                  : ""
-              }
-              <div class="agent-chat__composer-status-stack"> </div>
-              <div class="agent-chat__composer-input-row">
-                <details class="agent-chat__attach-menu">
-                  <summary class="agent-chat__input-btn agent-chat__input-btn--attach" aria-label="Add attachment">${iconSvg()}</summary>
-                  <div class="agent-chat__attach-menu-popover" role="menu">
-                    <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>Camera</span></button>
-                    <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>Photo</span></button>
-                    <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>File</span></button>
-                  </div>
-                </details>
-                <div class="agent-chat__composer-combobox">
-                  <textarea rows="1">Queued follow-up for the active operator session</textarea>
-                </div>
-                <div class="agent-chat__composer-actions">
-                  <button class="chat-send-btn chat-send-btn--voice" aria-label="Start voice input">${iconSvg()}</button>
-                </div>
-              </div>
-              <div class="agent-chat__composer-footer">
-                ${composerControlsHtml()}
-                <div class="agent-chat__composer-meta">
-                  <div class="context-usage">
-                    <details>
-                      <summary class="context-ring" role="status" aria-label="Session context usage: 46k/200k (23%)">
-                        <svg class="context-ring__dial" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-                          <circle class="context-ring__track" cx="8" cy="8" r="6.5"></circle>
-                          <circle class="context-ring__fill" cx="8" cy="8" r="6.5"></circle>
-                        </svg>
-                      </summary>
-                      <section class="context-usage__popover">
-                        <div class="context-usage__section-label context-usage__plan-header">
-                          <span>Plan usage</span>
-                          <a class="context-usage__plan-link" href="/usage" data-chat-provider-usage="true">
-                            <span class="context-usage__plan-badge">Max (20x)</span>${iconSvg()}
-                          </a>
-                        </div>
-                        <div class="context-usage__limits">
-                          <div class="context-usage__limit">
-                            <div class="context-usage__limit-head">
-                              <span class="context-usage__limit-label">Weekly · all models</span>
-                              <span class="context-usage__limit-meta"><strong>72%</strong></span>
-                            </div>
-                            <div class="context-usage__limit-bar"><span style="width: 72%"></span></div>
-                          </div>
-                        </div>
-                      </section>
+                      : ""
+                  }
+                  <div class="agent-chat__composer-status-stack"> </div>
+                  <div class="agent-chat__composer-input-row">
+                    <details class="agent-chat__attach-menu">
+                      <summary class="agent-chat__input-btn agent-chat__input-btn--attach" aria-label="Add attachment">${iconSvg()}</summary>
+                      <div class="agent-chat__attach-menu-popover" role="menu">
+                        <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>Camera</span></button>
+                        <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>Photo</span></button>
+                        <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>File</span></button>
+                      </div>
                     </details>
+                    <div class="agent-chat__composer-combobox">
+                      <textarea rows="1">Queued follow-up for the active operator session</textarea>
+                    </div>
+                    <div class="agent-chat__composer-actions">
+                      <button class="chat-send-btn chat-send-btn--voice" aria-label="Start voice input">${iconSvg()}</button>
+                    </div>
                   </div>
-                  <div class="agent-chat__composer-progress">
-                    <span class="agent-chat__run-status agent-chat__run-status--in-progress">
-                      ${iconSvg()}<span class="agent-chat__run-status-label">In progress</span>
-                    </span>
+                  <div class="agent-chat__composer-footer">
+                    ${composerControlsHtml()}
+                    <div class="agent-chat__composer-meta">
+                      <div class="context-usage">
+                        <details>
+                          <summary class="context-ring" role="status" aria-label="Session context usage: 46k/200k (23%)">
+                            <svg class="context-ring__dial" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                              <circle class="context-ring__track" cx="8" cy="8" r="6.5"></circle>
+                              <circle class="context-ring__fill" cx="8" cy="8" r="6.5"></circle>
+                            </svg>
+                          </summary>
+                          <section class="context-usage__popover">
+                            <div class="context-usage__section-label context-usage__plan-header">
+                              <span>Plan usage</span>
+                              <a class="context-usage__plan-link" href="/usage" data-chat-provider-usage="true">
+                                <span class="context-usage__plan-badge">Max (20x)</span>${iconSvg()}
+                              </a>
+                            </div>
+                            <div class="context-usage__limits">
+                              <div class="context-usage__limit">
+                                <div class="context-usage__limit-head">
+                                  <span class="context-usage__limit-label">Weekly · all models</span>
+                                  <span class="context-usage__limit-meta"><strong>72%</strong></span>
+                                </div>
+                                <div class="context-usage__limit-bar"><span style="width: 72%"></span></div>
+                              </div>
+                            </div>
+                          </section>
+                        </details>
+                      </div>
+                      <div class="agent-chat__composer-progress">
+                        <span class="agent-chat__run-status agent-chat__run-status--in-progress">
+                          ${iconSvg()}<span class="agent-chat__run-status-label">In progress</span>
+                        </span>
+                      </div>
+                      <span class="agent-chat__token-count">8</span>
+                    </div>
                   </div>
-                  <span class="agent-chat__token-count">8</span>
                 </div>
               </div>
             </div>
@@ -614,6 +615,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
       expect(await context.isVisible()).toBe(false);
 
+      // Travel like a real pointer: the footer overlay is pointer-gated until
+      // the group is hovered, so enter through the message body first.
+      await page.locator(".chat-text").first().hover();
       await page.locator(".msg-meta__summary").hover();
       expect(await context.isVisible()).toBe(true);
       const hoverLayout = await page.evaluate(() => {
@@ -635,6 +639,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.mouse.move(0, 0);
       expect(await context.isVisible()).toBe(false);
 
+      await page.locator(".chat-text").first().hover();
       await page.locator(".msg-meta__summary").click();
       await page.mouse.move(0, 0);
       expect(await details.getAttribute("open")).toBe("");
@@ -723,6 +728,57 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(userLane.x).toBeGreaterThan(assistantLane.x);
         expect(userBubble.width).toBeLessThan(userLane.width);
         expect(assistantBubble.width).toBeLessThan(assistantLane.width);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
+  it.each([
+    [1366, 900],
+    [1920, 1080],
+  ] as const)(
+    "centers overflowing direct messages on the composer axis at %sx%s",
+    async (width, height) => {
+      const page = await openFixture(width, height, { direct: true });
+      try {
+        await page.evaluate(() => {
+          const thread = document.querySelector<HTMLElement>(".chat-thread");
+          const inner = document.querySelector<HTMLElement>(".chat-thread-inner");
+          if (!thread || !inner) {
+            throw new Error("Missing chat overflow fixture");
+          }
+          inner.style.minHeight = `${thread.clientHeight + 1}px`;
+        });
+        await expectNoHorizontalOverflow(page);
+        const [assistantLane, composer, thread, userLane, overflow] = await Promise.all([
+          getRect(page, ".chat-group.assistant .chat-group-messages"),
+          getRect(page, ".agent-chat__composer-shell"),
+          getRect(page, ".chat-thread-inner"),
+          getRect(page, ".chat-group.user .chat-group-messages"),
+          page.evaluate(() => {
+            const node = document.querySelector<HTMLElement>(".chat-thread");
+            if (!node) {
+              return null;
+            }
+            return {
+              clientHeight: node.clientHeight,
+              gutter: getComputedStyle(node).scrollbarGutter,
+              scrollHeight: node.scrollHeight,
+            };
+          }),
+        ]);
+
+        expect(overflow).not.toBeNull();
+        expect(overflow?.scrollHeight).toBeGreaterThan(overflow?.clientHeight ?? 0);
+        expect(overflow?.gutter).toBe("stable both-edges");
+        const threadCenter = thread.left + thread.width / 2;
+        const composerCenter = composer.left + composer.width / 2;
+        expect(Math.abs(threadCenter - composerCenter)).toBeLessThanOrEqual(1);
+        expect(Math.abs(thread.width - composer.width)).toBeLessThanOrEqual(1);
+        expect(thread.width).toBeCloseTo(768, 0);
+        expect(Math.abs(assistantLane.left - thread.left)).toBeLessThanOrEqual(1);
+        expect(Math.abs(userLane.right - thread.right)).toBeLessThanOrEqual(1);
       } finally {
         await closeBrowserPage(page);
       }
@@ -1408,17 +1464,23 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("releases the hidden tasks-rail grid track on narrow viewports", async () => {
-    const page = await openBrowserPage(1000, 700);
+  it("docks the tasks rail as a full-width bottom strip in a narrow pane", async () => {
+    const page = await openBrowserPage(1200, 700);
     try {
-      // Below 1120px the background-tasks rail is display:none; its tasks-open
-      // grid templates must collapse so no empty column strip stays reserved.
+      // chat-pane sets --tasks-dock-bottom instead of --tasks-open when the
+      // pane is too narrow for a side column; the strip spans the pane and
+      // sits below the thread, composing with a bottom-docked workspace rail.
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div style="width: 980px; height: 600px; display: flex;">
-            <div class="chat-workbench chat-workbench--tasks-open">
-              <aside class="chat-workspace-rail">workspace</aside>
-              <aside class="chat-tasks-rail">tasks</aside>
+          <div style="width: 640px; height: 640px; display: flex;">
+            <div class="chat-workbench chat-workbench--dock-bottom chat-workbench--tasks-dock-bottom">
+              <aside class="chat-workspace-rail">workspace strip</aside>
+              <aside class="chat-tasks-rail">
+                <div class="chat-tasks-rail__scroll">
+                  <section class="chat-tasks-rail__section">Running</section>
+                  <section class="chat-tasks-rail__section">Finished</section>
+                </div>
+              </aside>
               <div class="chat-workbench__main">thread</div>
             </div>
           </div>
@@ -1429,25 +1491,37 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const rectFor = (selector: string) => {
           const node = document.querySelector<HTMLElement>(selector);
           const rect = node?.getBoundingClientRect();
-          return rect ? { left: rect.left, right: rect.right, width: rect.width } : null;
+          return rect
+            ? {
+                left: rect.left,
+                right: rect.right,
+                top: rect.top,
+                bottom: rect.bottom,
+                width: rect.width,
+                height: rect.height,
+              }
+            : null;
         };
         return {
           workbench: rectFor(".chat-workbench"),
-          rail: rectFor(".chat-workspace-rail"),
-          tasksVisible:
-            getComputedStyle(document.querySelector<HTMLElement>(".chat-tasks-rail")!).display !==
-            "none",
+          main: rectFor(".chat-workbench__main"),
+          workspace: rectFor(".chat-workspace-rail"),
+          tasks: rectFor(".chat-tasks-rail"),
         };
       });
 
-      expect(layout.tasksVisible).toBe(false);
-      expect(layout.workbench).not.toBeNull();
-      expect(layout.rail).not.toBeNull();
-      // The workspace rail sits flush at the workbench edge — no empty strip
-      // reserved for the hidden tasks rail.
-      expect(
-        Math.abs((layout.rail?.right ?? 0) - (layout.workbench?.right ?? 0)),
-      ).toBeLessThanOrEqual(1);
+      const workbench = layout.workbench;
+      const tasks = layout.tasks;
+      const workspace = layout.workspace;
+      expect(workbench).not.toBeNull();
+      expect(tasks).not.toBeNull();
+      expect(workspace).not.toBeNull();
+      // Full pane width, below both the thread and the workspace strip.
+      expect(Math.abs((tasks?.width ?? 0) - (workbench?.width ?? 0))).toBeLessThanOrEqual(1);
+      expect(tasks?.top ?? 0).toBeGreaterThanOrEqual((workspace?.bottom ?? 0) - 1);
+      expect(tasks?.top ?? 0).toBeGreaterThanOrEqual((layout.main?.bottom ?? 0) - 1);
+      expect(tasks?.height ?? 0).toBeGreaterThanOrEqual(160);
+      expect(tasks?.height ?? 0).toBeLessThanOrEqual(237);
     } finally {
       await closeBrowserPage(page);
     }

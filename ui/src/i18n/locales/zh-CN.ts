@@ -168,16 +168,6 @@ export const zh_CN: TranslationMap = {
       node: "节点",
     },
   },
-  instances: {
-    title: "已连接的实例",
-    subtitle: "来自 Gateway 和客户端的在线信标。",
-    showHosts: "显示主机和 IP",
-    hideHosts: "隐藏主机和 IP",
-    toggleHostVisibility: "切换主机可见性",
-    noInstances: "尚未报告任何实例。",
-    lastInput: "上次输入 {time}",
-    reason: "原因 {reason}",
-  },
   worktrees: {
     newWorktree: "新建 worktree",
     owner: "所有者",
@@ -387,6 +377,7 @@ export const zh_CN: TranslationMap = {
       skills: "技能",
       channels: "频道",
       cronJobs: "Cron Jobs",
+      memory: "记忆",
     },
     context: {
       title: "代理上下文",
@@ -617,7 +608,6 @@ export const zh_CN: TranslationMap = {
     workboard: "工作板",
     worktrees: "Worktrees",
     channels: "频道",
-    instances: "实例",
     sessions: "会话",
     usage: "使用情况",
     cron: "定时任务",
@@ -639,7 +629,6 @@ export const zh_CN: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "调试",
     logs: "日志",
-    dreams: "梦境",
     plugin: "插件",
   },
   subtitles: {
@@ -649,7 +638,6 @@ export const zh_CN: TranslationMap = {
     workboard: "智能体工作队列和会话交接。",
     worktrees: "隔离的代理任务检出和恢复快照。",
     channels: "频道和设置。",
-    instances: "已连接客户端和节点。",
     sessions: "活动会话和默认设置。",
     usage: "API 使用情况和成本。",
     cron: "唤醒和重复运行。",
@@ -671,8 +659,10 @@ export const zh_CN: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "快照、事件、RPC。",
     logs: "实时网关日志。",
-    dreams: "睡眠时进行记忆巩固。",
     plugin: "插件提供的面板。",
+  },
+  mcpPage: {
+    manageServersLink: "在插件页面管理服务器。",
   },
   pluginsPage: {
     searchLabel: "搜索插件",
@@ -1017,6 +1007,61 @@ export const zh_CN: TranslationMap = {
       loadMore: "加载更早的转录项目",
     },
   },
+  claudeSessions: {
+    eyebrow: "Claude 队列",
+    title: "你各台电脑上的 Claude 会话",
+    subtitle: "浏览未归档的 Claude CLI 和 Claude Desktop 会话，并阅读其分页的本地转录内容。",
+    summaryLabel: "Claude 会话摘要",
+    summary: {
+      sessions: "会话",
+      onlineHosts: "在线",
+      hosts: "主机",
+    },
+    searchLabel: "搜索 Claude 会话",
+    searchPlaceholder: "搜索会话标题",
+    refresh: "刷新",
+    disconnected: "重新连接到 Gateway 以刷新 Claude 会话。",
+    partial: "有 {count} 台主机不可用。其他主机仍可用。",
+    loading: "正在加载 Claude 会话…",
+    loadMore: "加载更多",
+    loadingMore: "正在加载…",
+    untitled: "未命名的 Claude 会话",
+    sessionId: "会话",
+    stored: "已存储",
+    read: "已读取",
+    readLabel: "阅读 {title} 的转录",
+    host: {
+      gateway: "Gateway",
+      node: "节点",
+      connected: "已连接",
+      offline: "离线",
+      unavailable: "会话目录不可用",
+      sessionCount: "已显示 {count} 个",
+    },
+    empty: {
+      title: "未找到 Claude 会话",
+      subtitle: "安装并使用 Claude CLI 或 Claude Desktop，然后刷新此视图。",
+      search: "此主机上没有符合搜索条件的会话。",
+      nonArchived: "此主机上没有未归档的会话。",
+    },
+    sidebar: {
+      title: "Claude 会话",
+      viewAll: "查看所有 Claude 会话",
+      truncated: "完整目录中还有更多会话可用。",
+    },
+    transcript: {
+      eyebrow: "Claude 转录",
+      back: "所有 Claude 会话",
+      you: "你",
+      reasoning: "推理",
+      toolCall: "工具调用",
+      toolResult: "工具结果",
+      item: "Claude 项目",
+      details: "完整详情",
+      loading: "正在加载转录…",
+      loadMore: "加载更早的转录项目",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1039,7 +1084,7 @@ export const zh_CN: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1516,10 +1561,6 @@ export const zh_CN: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "代理",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "场景",
       diary: "日记",
@@ -2085,9 +2126,9 @@ export const zh_CN: TranslationMap = {
       workSessions: "工作",
     },
     welcome: {
-      ready: "准备好聊天",
       hintBeforeShortcut: "在下方输入消息 · 输入",
       hintAfterShortcut: "查看命令",
+      recentSessions: "最近聊天",
       suggestions: {
         whatCanYouDo: "你能做什么？",
         summarizeRecentSessions: "总结我最近的会话",

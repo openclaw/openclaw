@@ -43,6 +43,7 @@ describe("OpenClawSchema cloudWorkers config", () => {
       profiles: {
         development: {
           provider: "static-ssh",
+          install: "bundle",
           settings: {
             host: "worker.example.test",
             port: 22,
@@ -62,8 +63,29 @@ describe("OpenClawSchema cloudWorkers config", () => {
     });
   });
 
+  it("accepts npm as an explicit install method", () => {
+    expect(
+      parseCloudWorkers({
+        profiles: {
+          released: {
+            provider: "qa-lab",
+            install: "npm",
+          },
+        },
+      }),
+    ).toStrictEqual({
+      profiles: {
+        released: {
+          provider: "qa-lab",
+          install: "npm",
+        },
+      },
+    });
+  });
+
   it.each([
     { profiles: { development: { provider: "" } } },
+    { profiles: { development: { provider: "qa-lab", install: "git" } } },
     { profiles: { " development ": { provider: "qa-lab" } } },
     { profiles: { development: { provider: "qa-lab", settings: { timeout: Infinity } } } },
     { profiles: { development: { provider: "qa-lab", settings: { region: undefined } } } },

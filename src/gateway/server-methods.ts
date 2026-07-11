@@ -522,7 +522,13 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadWizardHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["crestodian.chat", "crestodian.setup.detect", "crestodian.setup.activate"],
+    methods: [
+      "crestodian.chat",
+      "crestodian.setup.detect",
+      "crestodian.setup.verify",
+      "crestodian.setup.activate",
+      "crestodian.setup.auth.start",
+    ],
     loadHandlers: loadCrestodianHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -548,7 +554,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTalkHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["audit.list"],
+    methods: ["audit.list", "audit.activity.list"],
     loadHandlers: loadAuditHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -676,6 +682,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "node.list",
       "node.describe",
       "node.pluginSurface.refresh",
+      "node.pluginTools.update",
+      "node.skills.update",
       "node.pending.pull",
       "node.pending.ack",
       "node.invoke",

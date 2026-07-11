@@ -168,16 +168,6 @@ export const zh_TW: TranslationMap = {
       node: "節點",
     },
   },
-  instances: {
-    title: "已連線的實例",
-    subtitle: "來自 Gateway 和用戶端的存在信標。",
-    showHosts: "顯示主機和 IP",
-    hideHosts: "隱藏主機和 IP",
-    toggleHostVisibility: "切換主機可見性",
-    noInstances: "尚未回報任何實例。",
-    lastInput: "上次輸入 {time}",
-    reason: "原因 {reason}",
-  },
   worktrees: {
     newWorktree: "新增 worktree",
     owner: "擁有者",
@@ -387,6 +377,7 @@ export const zh_TW: TranslationMap = {
       skills: "Skills",
       channels: "Channels",
       cronJobs: "Cron Jobs",
+      memory: "記憶體",
     },
     context: {
       title: "Agent Context",
@@ -618,7 +609,6 @@ export const zh_TW: TranslationMap = {
     workboard: "工作板",
     worktrees: "Worktrees",
     channels: "頻道",
-    instances: "實例",
     sessions: "工作階段",
     usage: "使用情況",
     cron: "定時任務",
@@ -640,7 +630,6 @@ export const zh_TW: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "調試",
     logs: "日誌",
-    dreams: "夢境",
     plugin: "外掛程式",
   },
   subtitles: {
@@ -650,7 +639,6 @@ export const zh_TW: TranslationMap = {
     workboard: "代理工作佇列與工作階段交接。",
     worktrees: "隔離的代理程式任務簽出與復原快照。",
     channels: "頻道和設置。",
-    instances: "已連接客戶端和節點。",
     sessions: "活動會話和默認設置。",
     usage: "API 使用情況和成本。",
     cron: "喚醒和重複運行。",
@@ -672,8 +660,10 @@ export const zh_TW: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "快照、事件、RPC。",
     logs: "實時網關日誌。",
-    dreams: "睡眠期間的記憶整合。",
     plugin: "外掛程式提供的面板。",
+  },
+  mcpPage: {
+    manageServersLink: "在插件頁面管理伺服器。",
   },
   pluginsPage: {
     searchLabel: "搜尋外掛程式",
@@ -1018,6 +1008,61 @@ export const zh_TW: TranslationMap = {
       loadMore: "載入較舊的文字記錄項目",
     },
   },
+  claudeSessions: {
+    eyebrow: "Claude 機群",
+    title: "您電腦上的 Claude 工作階段",
+    subtitle: "瀏覽未封存的 Claude CLI 和 Claude Desktop 工作階段，並閱讀其分頁的本機轉錄內容。",
+    summaryLabel: "Claude 工作階段摘要",
+    summary: {
+      sessions: "工作階段",
+      onlineHosts: "在線",
+      hosts: "主機",
+    },
+    searchLabel: "搜尋 Claude 工作階段",
+    searchPlaceholder: "搜尋工作階段標題",
+    refresh: "重新整理",
+    disconnected: "重新連線至 Gateway 以重新整理 Claude 工作階段。",
+    partial: "有 {count} 台主機無法使用。其他主機仍可使用。",
+    loading: "正在載入 Claude 工作階段…",
+    loadMore: "載入更多",
+    loadingMore: "正在載入…",
+    untitled: "未命名的 Claude 工作階段",
+    sessionId: "工作階段",
+    stored: "已儲存",
+    read: "已讀取",
+    readLabel: "閱讀 {title} 的文字記錄",
+    host: {
+      gateway: "Gateway",
+      node: "節點",
+      connected: "已連線",
+      offline: "離線",
+      unavailable: "工作階段目錄無法使用",
+      sessionCount: "已顯示 {count} 個",
+    },
+    empty: {
+      title: "找不到 Claude 工作階段",
+      subtitle: "安裝並使用 Claude CLI 或 Claude Desktop，然後重新整理此檢視。",
+      search: "此主機上沒有符合搜尋條件的工作階段。",
+      nonArchived: "此主機上沒有未封存的工作階段。",
+    },
+    sidebar: {
+      title: "Claude 工作階段",
+      viewAll: "檢視所有 Claude 工作階段",
+      truncated: "完整目錄中有更多工作階段可用。",
+    },
+    transcript: {
+      eyebrow: "Claude 轉錄內容",
+      back: "所有 Claude 工作階段",
+      you: "你",
+      reasoning: "推理",
+      toolCall: "工具呼叫",
+      toolResult: "工具結果",
+      item: "Claude 項目",
+      details: "完整詳細資料",
+      loading: "正在載入文字記錄…",
+      loadMore: "載入較舊的文字記錄項目",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1040,7 +1085,7 @@ export const zh_TW: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1517,10 +1562,6 @@ export const zh_TW: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "代理",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "場景",
       diary: "日誌",
@@ -2088,9 +2129,9 @@ export const zh_TW: TranslationMap = {
       workSessions: "工作",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "最近的聊天",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

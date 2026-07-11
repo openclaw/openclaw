@@ -170,16 +170,6 @@ export const hi: TranslationMap = {
       node: "नोड",
     },
   },
-  instances: {
-    title: "कनेक्टेड इंस्टेंस",
-    subtitle: "गेटवे और क्लाइंट्स से उपस्थिति बीकन।",
-    showHosts: "होस्ट और IP दिखाएँ",
-    hideHosts: "होस्ट और IP छिपाएँ",
-    toggleHostVisibility: "होस्ट दृश्यता टॉगल करें",
-    noInstances: "अभी तक कोई इंस्टेंस रिपोर्ट नहीं किया गया है।",
-    lastInput: "अंतिम इनपुट {time}",
-    reason: "कारण {reason}",
-  },
   worktrees: {
     newWorktree: "नया worktree",
     owner: "स्वामी",
@@ -389,6 +379,7 @@ export const hi: TranslationMap = {
       skills: "स्किल्स",
       channels: "चैनल",
       cronJobs: "Cron Jobs",
+      memory: "मेमोरी",
     },
     context: {
       title: "एजेंट संदर्भ",
@@ -620,7 +611,6 @@ export const hi: TranslationMap = {
     workboard: "वर्कबोर्ड",
     worktrees: "Worktrees",
     channels: "चैनल",
-    instances: "इंस्टेंस",
     sessions: "सत्र",
     usage: "उपयोग",
     cron: "Cron Jobs",
@@ -642,7 +632,6 @@ export const hi: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "डीबग",
     logs: "लॉग्स",
-    dreams: "ड्रीमिंग",
     plugin: "प्लगइन",
   },
   subtitles: {
@@ -652,7 +641,6 @@ export const hi: TranslationMap = {
     workboard: "एजेंट कार्य कतार और सेशन हैंडऑफ़।",
     worktrees: "पृथक agent task checkouts और recovery snapshots.",
     channels: "चैनल और सेटिंग्स।",
-    instances: "कनेक्टेड क्लाइंट्स और नोड्स।",
     sessions: "सक्रिय सेशन और डिफ़ॉल्ट्स।",
     usage: "API उपयोग और लागतें।",
     cron: "वेकअप्स और आवर्ती रन।",
@@ -674,8 +662,10 @@ export const hi: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "स्नैपशॉट, इवेंट, RPC।",
     logs: "लाइव gateway लॉग।",
-    dreams: "मेमोरी ड्रीमिंग, कंसॉलिडेशन, और रिफ्लेक्शन।",
     plugin: "प्लगइन द्वारा उपलब्ध कराया गया पैनल।",
+  },
+  mcpPage: {
+    manageServersLink: "Plugins पेज पर सर्वर प्रबंधित करें।",
   },
   pluginsPage: {
     searchLabel: "प्लगइन खोजें",
@@ -1022,6 +1012,62 @@ export const hi: TranslationMap = {
       loadMore: "पुराने ट्रांसक्रिप्ट आइटम लोड करें",
     },
   },
+  claudeSessions: {
+    eyebrow: "Claude फ़्लीट",
+    title: "आपके कंप्यूटरों पर Claude सत्र",
+    subtitle:
+      "गैर-संग्रहीत Claude CLI और Claude Desktop सत्र ब्राउज़ करें और उनकी पृष्ठांकित स्थानीय ट्रांसक्रिप्ट पढ़ें।",
+    summaryLabel: "Claude सत्र सारांश",
+    summary: {
+      sessions: "सेशन",
+      onlineHosts: "ऑनलाइन",
+      hosts: "होस्ट",
+    },
+    searchLabel: "Claude सत्र खोजें",
+    searchPlaceholder: "सेशन के शीर्षक खोजें",
+    refresh: "रिफ्रेश करें",
+    disconnected: "Claude सत्रों को रीफ़्रेश करने के लिए gateway से फिर से कनेक्ट करें।",
+    partial: "अनुपलब्ध होस्ट: {count}। अन्य होस्ट उपलब्ध हैं।",
+    loading: "Claude सत्र लोड हो रहे हैं…",
+    loadMore: "और लोड करें",
+    loadingMore: "लोड हो रहा है…",
+    untitled: "शीर्षकहीन Claude सत्र",
+    sessionId: "सत्र",
+    stored: "संग्रहीत",
+    read: "पढ़ा गया",
+    readLabel: "{title} के लिए ट्रांसक्रिप्ट पढ़ें",
+    host: {
+      gateway: "Gateway",
+      node: "नोड",
+      connected: "कनेक्टेड",
+      offline: "ऑफ़लाइन",
+      unavailable: "सेशन कैटलॉग उपलब्ध नहीं है",
+      sessionCount: "{count} दिखाए गए",
+    },
+    empty: {
+      title: "कोई Claude सत्र नहीं मिला",
+      subtitle: "Claude CLI या Claude Desktop इंस्टॉल और उपयोग करें, फिर इस दृश्य को रीफ़्रेश करें।",
+      search: "इस होस्ट पर कोई सेशन आपकी खोज से मेल नहीं खाता।",
+      nonArchived: "इस होस्ट पर कोई गैर-संग्रहीत सत्र नहीं है।",
+    },
+    sidebar: {
+      title: "Claude सत्र",
+      viewAll: "सभी Claude सत्र देखें",
+      truncated: "पूरी सूची में और सत्र उपलब्ध हैं।",
+    },
+    transcript: {
+      eyebrow: "Claude ट्रांसक्रिप्ट",
+      back: "सभी Claude सत्र",
+      you: "आप",
+      reasoning: "तर्क",
+      toolCall: "टूल कॉल",
+      toolResult: "टूल परिणाम",
+      item: "Claude आइटम",
+      details: "पूर्ण विवरण",
+      loading: "ट्रांसक्रिप्ट लोड हो रहा है…",
+      loadMore: "पुराने ट्रांसक्रिप्ट आइटम लोड करें",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1044,7 +1090,7 @@ export const hi: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1526,10 +1572,6 @@ export const hi: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "एजेंट",
-      ariaLabel: "ड्रीमिंग एजेंट",
-    },
     tabs: {
       scene: "दृश्य",
       diary: "डायरी",
@@ -2111,9 +2153,9 @@ export const hi: TranslationMap = {
       workSessions: "कार्य",
     },
     welcome: {
-      ready: "चैट के लिए तैयार",
       hintBeforeShortcut: "नीचे संदेश टाइप करें ·",
       hintAfterShortcut: "कमांड के लिए",
+      recentSessions: "हाल की चैट्स",
       suggestions: {
         whatCanYouDo: "आप क्या कर सकते हैं?",
         summarizeRecentSessions: "मेरे हाल के सेशन का सारांश दें",

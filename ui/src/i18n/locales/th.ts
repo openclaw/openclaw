@@ -168,16 +168,6 @@ export const th: TranslationMap = {
       node: "โหนด",
     },
   },
-  instances: {
-    title: "อินสแตนซ์ที่เชื่อมต่อ",
-    subtitle: "สัญญาณแสดงสถานะจากเกตเวย์และไคลเอนต์",
-    showHosts: "แสดงโฮสต์และ IP",
-    hideHosts: "ซ่อนโฮสต์และ IP",
-    toggleHostVisibility: "สลับการแสดงโฮสต์",
-    noInstances: "ยังไม่มีการรายงานอินสแตนซ์",
-    lastInput: "อินพุตล่าสุด {time}",
-    reason: "เหตุผล {reason}",
-  },
   worktrees: {
     newWorktree: "Worktree ใหม่",
     owner: "เจ้าของ",
@@ -387,6 +377,7 @@ export const th: TranslationMap = {
       skills: "ทักษะ",
       channels: "ช่องทาง",
       cronJobs: "งาน Cron",
+      memory: "หน่วยความจำ",
     },
     context: {
       title: "Agent Context",
@@ -618,7 +609,6 @@ export const th: TranslationMap = {
     workboard: "กระดานงาน",
     worktrees: "Worktrees",
     channels: "ช่องทาง",
-    instances: "อินสแตนซ์",
     sessions: "เซสชัน",
     usage: "การใช้งาน",
     cron: "งาน Cron",
@@ -640,7 +630,6 @@ export const th: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "ดีบัก",
     logs: "บันทึก",
-    dreams: "การฝัน",
     plugin: "ปลั๊กอิน",
   },
   subtitles: {
@@ -650,7 +639,6 @@ export const th: TranslationMap = {
     workboard: "คิวงานของ Agent และการส่งต่อเซสชัน",
     worktrees: "การ checkout งานของเอเจนต์แบบแยก และสแนปช็อตสำหรับการกู้คืน",
     channels: "ช่องทางและการตั้งค่า",
-    instances: "ไคลเอนต์และโหนดที่เชื่อมต่อ",
     sessions: "เซสชันที่ใช้งานอยู่และค่าเริ่มต้น",
     usage: "การใช้งาน API และค่าใช้จ่าย",
     cron: "การปลุกและการทำงานตามรอบ",
@@ -672,8 +660,10 @@ export const th: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "สแนปช็อต เหตุการณ์ และ RPC",
     logs: "บันทึกเกตเวย์แบบสด",
-    dreams: "การฝันของหน่วยความจำ การรวมข้อมูล และการสะท้อนคิด",
     plugin: "แผงที่ปลั๊กอินจัดเตรียมไว้",
+  },
+  mcpPage: {
+    manageServersLink: "จัดการเซิร์ฟเวอร์ในหน้า Plugins",
   },
   pluginsPage: {
     searchLabel: "ค้นหาปลั๊กอิน",
@@ -1018,6 +1008,62 @@ export const th: TranslationMap = {
       loadMore: "โหลดรายการบันทึกการสนทนาที่เก่ากว่า",
     },
   },
+  claudeSessions: {
+    eyebrow: "กลุ่ม Claude",
+    title: "เซสชัน Claude บนคอมพิวเตอร์ของคุณ",
+    subtitle:
+      "เรียกดูเซสชัน Claude CLI และ Claude Desktop ที่ไม่ได้เก็บถาวร และอ่านทรานสคริปต์ภายในเครื่องแบบแบ่งหน้า",
+    summaryLabel: "สรุปเซสชัน Claude",
+    summary: {
+      sessions: "เซสชัน",
+      onlineHosts: "ออนไลน์",
+      hosts: "โฮสต์",
+    },
+    searchLabel: "ค้นหาเซสชัน Claude",
+    searchPlaceholder: "ค้นหาชื่อเซสชัน",
+    refresh: "รีเฟรช",
+    disconnected: "เชื่อมต่อกับ Gateway อีกครั้งเพื่อรีเฟรชเซสชัน Claude",
+    partial: "มีโฮสต์ที่ไม่พร้อมใช้งาน {count} โฮสต์ ส่วนโฮสต์อื่นยังคงพร้อมใช้งาน",
+    loading: "กำลังโหลดเซสชัน Claude…",
+    loadMore: "โหลดเพิ่มเติม",
+    loadingMore: "กำลังโหลด…",
+    untitled: "เซสชัน Claude ไม่มีชื่อ",
+    sessionId: "เซสชัน",
+    stored: "จัดเก็บแล้ว",
+    read: "อ่านแล้ว",
+    readLabel: "อ่านทรานสคริปต์สำหรับ {title}",
+    host: {
+      gateway: "Gateway",
+      node: "โหนด",
+      connected: "เชื่อมต่อแล้ว",
+      offline: "ออฟไลน์",
+      unavailable: "แค็ตตาล็อกเซสชันไม่พร้อมใช้งาน",
+      sessionCount: "แสดง {count}",
+    },
+    empty: {
+      title: "ไม่พบเซสชัน Claude",
+      subtitle: "ติดตั้งและใช้ Claude CLI หรือ Claude Desktop แล้วรีเฟรชมุมมองนี้",
+      search: "ไม่มีเซสชันบนโฮสต์นี้ตรงกับการค้นหาของคุณ",
+      nonArchived: "ไม่มีเซสชันที่ไม่ได้เก็บถาวรบนโฮสต์นี้",
+    },
+    sidebar: {
+      title: "เซสชัน Claude",
+      viewAll: "ดูเซสชัน Claude ทั้งหมด",
+      truncated: "มีเซสชันเพิ่มเติมในแค็ตตาล็อกฉบับเต็ม",
+    },
+    transcript: {
+      eyebrow: "ทรานสคริปต์ Claude",
+      back: "เซสชัน Claude ทั้งหมด",
+      you: "คุณ",
+      reasoning: "การให้เหตุผล",
+      toolCall: "การเรียกใช้เครื่องมือ",
+      toolResult: "ผลลัพธ์ของเครื่องมือ",
+      item: "รายการ Claude",
+      details: "รายละเอียดทั้งหมด",
+      loading: "กำลังโหลดบทสนทนา…",
+      loadMore: "โหลดรายการบทสนทนาที่เก่ากว่า",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1040,7 +1086,7 @@ export const th: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1517,10 +1563,6 @@ export const th: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "เอเจนต์",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "ฉาก",
       diary: "ไดอารี",
@@ -2091,9 +2133,9 @@ export const th: TranslationMap = {
       workSessions: "งาน",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "แชทล่าสุด",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

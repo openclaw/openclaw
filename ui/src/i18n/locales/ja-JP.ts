@@ -174,16 +174,6 @@ export const ja_JP: TranslationMap = {
       node: "ノード",
     },
   },
-  instances: {
-    title: "接続済みインスタンス",
-    subtitle: "Gateway とクライアントからのプレゼンスビーコン。",
-    showHosts: "ホストと IP を表示",
-    hideHosts: "ホストと IP を非表示",
-    toggleHostVisibility: "ホスト表示を切り替え",
-    noInstances: "まだインスタンスは報告されていません。",
-    lastInput: "最後の入力 {time}",
-    reason: "理由 {reason}",
-  },
   worktrees: {
     newWorktree: "新しいワークツリー",
     owner: "所有者",
@@ -395,6 +385,7 @@ export const ja_JP: TranslationMap = {
       skills: "Skills",
       channels: "チャンネル",
       cronJobs: "Cron ジョブ",
+      memory: "メモリ",
     },
     context: {
       title: "Agent Context",
@@ -628,7 +619,6 @@ export const ja_JP: TranslationMap = {
     workboard: "ワークボード",
     worktrees: "ワークツリー",
     channels: "チャンネル",
-    instances: "インスタンス",
     sessions: "セッション",
     usage: "使用状況",
     cron: "Cron ジョブ",
@@ -650,7 +640,6 @@ export const ja_JP: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "デバッグ",
     logs: "ログ",
-    dreams: "Dreaming",
     plugin: "プラグイン",
   },
   subtitles: {
@@ -660,7 +649,6 @@ export const ja_JP: TranslationMap = {
     workboard: "エージェントの作業キューとセッションの引き継ぎ。",
     worktrees: "分離されたエージェントタスクのチェックアウトと復旧スナップショット。",
     channels: "チャンネルと設定。",
-    instances: "接続されたクライアントとノード。",
     sessions: "アクティブなセッションとデフォルト。",
     usage: "API 使用量とコスト。",
     cron: "ウェイクアップと定期実行。",
@@ -682,8 +670,10 @@ export const ja_JP: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "スナップショット、イベント、RPC。",
     logs: "ライブ Gateway ログ。",
-    dreams: "スリープ中のメモリ統合。",
     plugin: "プラグインが提供するパネル。",
+  },
+  mcpPage: {
+    manageServersLink: "プラグインページでサーバーを管理します。",
   },
   pluginsPage: {
     searchLabel: "プラグインを検索",
@@ -1037,6 +1027,63 @@ export const ja_JP: TranslationMap = {
       loadMore: "古いトランスクリプト項目を読み込む",
     },
   },
+  claudeSessions: {
+    eyebrow: "Claude フリート",
+    title: "コンピューター全体の Claude セッション",
+    subtitle:
+      "アーカイブされていない Claude CLI および Claude Desktop のセッションを参照し、ページ分割されたローカルトランスクリプトを閲覧できます。",
+    summaryLabel: "Claude セッションの概要",
+    summary: {
+      sessions: "セッション",
+      onlineHosts: "オンライン",
+      hosts: "ホスト",
+    },
+    searchLabel: "Claude セッションを検索",
+    searchPlaceholder: "セッションタイトルを検索",
+    refresh: "更新",
+    disconnected: "Claude セッションを更新するには、Gateway に再接続してください。",
+    partial: "利用できないホストが {count} 台あります。他のホストは引き続き利用できます。",
+    loading: "Claude セッションを読み込み中…",
+    loadMore: "さらに読み込む",
+    loadingMore: "読み込み中…",
+    untitled: "無題の Claude セッション",
+    sessionId: "セッション",
+    stored: "保存済み",
+    read: "読み取り",
+    readLabel: "{title} のトランスクリプトを読む",
+    host: {
+      gateway: "Gateway",
+      node: "ノード",
+      connected: "接続済み",
+      offline: "オフライン",
+      unavailable: "セッションカタログを利用できません",
+      sessionCount: "{count} 件表示",
+    },
+    empty: {
+      title: "Claude セッションが見つかりません",
+      subtitle:
+        "Claude CLI または Claude Desktop をインストールして使用し、このビューを更新してください。",
+      search: "このホストに検索条件と一致するセッションはありません。",
+      nonArchived: "このホストにはアーカイブされていないセッションがありません。",
+    },
+    sidebar: {
+      title: "Claude セッション",
+      viewAll: "すべての Claude セッションを表示",
+      truncated: "完全なカタログには、さらに多くのセッションがあります。",
+    },
+    transcript: {
+      eyebrow: "Claude トランスクリプト",
+      back: "すべての Claude セッション",
+      you: "あなた",
+      reasoning: "推論",
+      toolCall: "ツール呼び出し",
+      toolResult: "ツールの結果",
+      item: "Claude項目",
+      details: "詳細をすべて表示",
+      loading: "トランスクリプトを読み込み中…",
+      loadMore: "古いトランスクリプト項目を読み込む",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1059,7 +1106,7 @@ export const ja_JP: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1545,10 +1592,6 @@ export const ja_JP: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "エージェント",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Scene",
       diary: "Diary",
@@ -2142,9 +2185,9 @@ export const ja_JP: TranslationMap = {
       workSessions: "作業",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "最近のチャット",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",

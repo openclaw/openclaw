@@ -169,16 +169,6 @@ export const ar: TranslationMap = {
       node: "العقدة",
     },
   },
-  instances: {
-    title: "المثيلات المتصلة",
-    subtitle: "إشارات الحضور من Gateway والعملاء.",
-    showHosts: "إظهار المضيفين وعناوين IP",
-    hideHosts: "إخفاء المضيفين وعناوين IP",
-    toggleHostVisibility: "تبديل إظهار المضيف",
-    noInstances: "لم يتم الإبلاغ عن أي مثيلات بعد.",
-    lastInput: "آخر إدخال {time}",
-    reason: "السبب {reason}",
-  },
   worktrees: {
     newWorktree: "شجرة عمل جديدة",
     owner: "المالك",
@@ -388,6 +378,7 @@ export const ar: TranslationMap = {
       skills: "Skills",
       channels: "القنوات",
       cronJobs: "مهام Cron",
+      memory: "الذاكرة",
     },
     context: {
       title: "سياق الوكيل",
@@ -620,7 +611,6 @@ export const ar: TranslationMap = {
     workboard: "لوحة العمل",
     worktrees: "مساحات العمل",
     channels: "القنوات",
-    instances: "المثيلات",
     sessions: "الجلسات",
     usage: "الاستخدام",
     cron: "مهام Cron",
@@ -642,7 +632,6 @@ export const ar: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "تصحيح الأخطاء",
     logs: "السجلات",
-    dreams: "الحلم",
     plugin: "المكوّن الإضافي",
   },
   subtitles: {
@@ -652,7 +641,6 @@ export const ar: TranslationMap = {
     workboard: "قائمة عمل الوكيل وتسليم الجلسات.",
     worktrees: "نسخ معزولة لمهام الوكلاء ولقطات استرداد.",
     channels: "القنوات والإعدادات.",
-    instances: "العملاء والعقد المتصلة.",
     sessions: "الجلسات النشطة والافتراضيات.",
     usage: "استخدام API والتكاليف.",
     cron: "الإيقاظات والتشغيلات المتكررة.",
@@ -674,8 +662,10 @@ export const ar: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "اللقطات، والأحداث، وRPC.",
     logs: "سجلات Gateway المباشرة.",
-    dreams: "حلم الذاكرة، والدمج، والتأمل.",
     plugin: "لوحة مقدمة من المكوّن الإضافي.",
+  },
+  mcpPage: {
+    manageServersLink: "إدارة الخوادم من صفحة الإضافات.",
   },
   pluginsPage: {
     searchLabel: "البحث في المكوّنات الإضافية",
@@ -1023,6 +1013,62 @@ export const ar: TranslationMap = {
       loadMore: "تحميل عناصر أقدم من النص الكامل",
     },
   },
+  claudeSessions: {
+    eyebrow: "أسطول Claude",
+    title: "جلسات Claude عبر أجهزة الكمبيوتر لديك",
+    subtitle:
+      "تصفح جلسات Claude CLI وClaude Desktop غير المؤرشفة واقرأ نصوصها المحلية المقسّمة إلى صفحات.",
+    summaryLabel: "ملخص جلسة Claude",
+    summary: {
+      sessions: "الجلسات",
+      onlineHosts: "متصل",
+      hosts: "المضيفون",
+    },
+    searchLabel: "البحث في جلسات Claude",
+    searchPlaceholder: "البحث في عناوين الجلسات",
+    refresh: "تحديث",
+    disconnected: "أعد الاتصال بـ gateway لتحديث جلسات Claude.",
+    partial: "عدد المضيفين غير المتاحين: {count}. لا يزال بقية المضيفين متاحين.",
+    loading: "جارٍ تحميل جلسات Claude…",
+    loadMore: "تحميل المزيد",
+    loadingMore: "جارٍ التحميل…",
+    untitled: "جلسة Claude بلا عنوان",
+    sessionId: "الجلسة",
+    stored: "مخزّن",
+    read: "تمت القراءة",
+    readLabel: "قراءة نص الجلسة لـ {title}",
+    host: {
+      gateway: "Gateway",
+      node: "عقدة",
+      connected: "متصل",
+      offline: "غير متصل",
+      unavailable: "فهرس الجلسات غير متاح",
+      sessionCount: "{count} معروضة",
+    },
+    empty: {
+      title: "لم يتم العثور على جلسات Claude",
+      subtitle: "ثبّت Claude CLI أو Claude Desktop واستخدمه، ثم حدّث هذا العرض.",
+      search: "لا توجد جلسات على هذا المضيف تطابق بحثك.",
+      nonArchived: "لا توجد جلسات غير مؤرشفة على هذا المضيف.",
+    },
+    sidebar: {
+      title: "جلسات Claude",
+      viewAll: "عرض كل جلسات Claude",
+      truncated: "تتوفر جلسات إضافية في الفهرس الكامل.",
+    },
+    transcript: {
+      eyebrow: "نص جلسة Claude",
+      back: "كل جلسات Claude",
+      you: "أنت",
+      reasoning: "الاستدلال",
+      toolCall: "استدعاء الأداة",
+      toolResult: "نتيجة الأداة",
+      item: "عنصر Claude",
+      details: "التفاصيل الكاملة",
+      loading: "جارٍ تحميل النص…",
+      loadMore: "تحميل عناصر أقدم من النص",
+    },
+  },
   logbook: {
     duration: {
       minutes: "{minutes}m",
@@ -1045,7 +1091,7 @@ export const ar: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -1523,10 +1569,6 @@ export const ar: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "الوكيل",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "المشهد",
       diary: "اليوميات",
@@ -2110,9 +2152,9 @@ export const ar: TranslationMap = {
       workSessions: "العمل",
     },
     welcome: {
-      ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
       hintAfterShortcut: "for commands",
+      recentSessions: "الدردشات الأخيرة",
       suggestions: {
         whatCanYouDo: "What can you do?",
         summarizeRecentSessions: "Summarize my recent sessions",
