@@ -1433,6 +1433,61 @@ describe("chrome.ts internal", () => {
       expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
     });
 
+    it("does not split a surrogate pair at the stderr hint char-cap boundary", async () => {
+      // The byte-bounded tail keeps the string intact; the separate
+      // CHROME_STDERR_HINT_MAX_CHARS char cap is a second slice that can still
+      // bisect a surrogate pair straddling the `length - cap` boundary.
+      const executablePath = path.join(tmpDir, "chrome");
+      await fsp.writeFile(executablePath, "");
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s === executablePath || s.endsWith("Local State") || s.endsWith("Preferences")) {
+          return true;
+        }
+        return false;
+      });
+      const fakeProc = makeFakeProc();
+      // Position 🦞 (2 UTF-16 code units) so its low half lands exactly on the
+      // char-cap cut index (`length - CHROME_STDERR_HINT_MAX_CHARS`): keep the
+      // emoji followed by exactly `cap - 1` trailing chars. The 64 KiB byte
+      // tail keeps the whole string intact, isolating the char-cap slice.
+      const newestMarker = "newest-stderr-marker";
+      const tail = `${newestMarker}${"y".repeat(CHROME_STDERR_HINT_MAX_CHARS - 1 - newestMarker.length)}`;
+      const stderrText = `${"x".repeat(50)}🦞${tail}`;
+      spawnMock.mockImplementation(() => {
+        void Promise.resolve().then(() => {
+          fakeProc.stderr.emit("data", Buffer.from(stderrText));
+        });
+        return fakeProc;
+      });
+      let now = 1_000_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          now += 10_000;
+          throw new Error("ECONNREFUSED");
+        }),
+      );
+
+      const profile = { ...makeProfile(55559), executablePath } as ResolvedBrowserProfile;
+      let message = "";
+      try {
+        await launchOpenClawChrome(makeResolved({ localLaunchTimeoutMs: 1 }), profile);
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+
+      expect(message).toContain("Chrome stderr:");
+      const stderrHint = message.split("Chrome stderr:\n")[1] ?? "";
+      expect(stderrHint).not.toContain("�");
+      expect(stderrHint).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+      );
+      expect(stderrHint).toContain(newestMarker);
+      expect(stderrHint.length).toBeLessThanOrEqual(CHROME_STDERR_HINT_MAX_CHARS);
+    });
+
     it("keeps early missing-display diagnostics for launch hints after the stderr tail rolls", async () => {
       const originalPlatform = process.platform;
       Object.defineProperty(process, "platform", { value: "linux" });
