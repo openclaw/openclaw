@@ -1,13 +1,14 @@
 /**
  * Splits streamed embedded-agent replies into Markdown-safe message chunks.
  */
+
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { FenceSpan } from "../../packages/markdown-core/src/fences.js";
 import {
   findFenceSpanAt,
   isSafeFenceBreak,
   parseFenceSpans,
 } from "../../packages/markdown-core/src/fences.js";
-import { sliceUtf16Safe } from "../utils.js";
 
 export type BlockReplyChunking = {
   minChars: number;
