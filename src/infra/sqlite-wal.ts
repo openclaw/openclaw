@@ -53,6 +53,15 @@ export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
   synchronous?: "NORMAL";
 };
 
+// auto_vacuum only takes effect when set before the first page is written.
+// Existing databases require an offline VACUUM owned by doctor/maintenance.
+export function enableIncrementalAutoVacuumForFreshDatabase(db: DatabaseSync): void {
+  const row = db.prepare("PRAGMA page_count").get() as { page_count?: unknown } | undefined;
+  if (row?.page_count === 0) {
+    db.exec("PRAGMA auto_vacuum = INCREMENTAL;");
+  }
+}
+
 function normalizeNonNegativeInteger(value: number, label: string): number {
   if (!Number.isInteger(value) || value < 0) {
     throw new Error(`${label} must be a non-negative integer`);

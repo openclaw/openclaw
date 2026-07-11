@@ -20,6 +20,7 @@ import {
 } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
+  enableIncrementalAutoVacuumForFreshDatabase,
   registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
@@ -46,10 +47,11 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
-// v5 = transcript mutation watermark. The v4 session/transcript flip and main's v2 memory-identity
+// v6 = session/transcript hot-path indexes. v5 added transcript mutation watermarks.
+// The v4 session/transcript flip and main's v2 memory-identity
 // change is folded in structure-gated (migrateMemoryIndexSourcesIdentity), so
 // v2 main DBs and pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 5;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 6;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
@@ -181,6 +183,9 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   const userVersion = readSqliteUserVersion(db);
   if (userVersion >= OPENCLAW_AGENT_SCHEMA_VERSION) {
     return;
+  }
+  if (userVersion < 6) {
+    db.exec("DROP INDEX IF EXISTS idx_agent_session_entries_session_id;");
   }
   if (userVersion < 3) {
     db.exec("DROP INDEX IF EXISTS idx_agent_transcript_events_session;");
@@ -575,18 +580,6 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
     });
   } finally {
     db.exec("PRAGMA foreign_keys = ON;");
-  }
-}
-
-// auto_vacuum only takes effect when set before the first page is written;
-// existing databases keep their mode until a doctor-owned full VACUUM.
-// INCREMENTAL lets maintenance release freed pages in bounded steps so
-// per-agent DBs shrink after retention deletes rows instead of pinning
-// their high-water mark forever.
-function enableIncrementalAutoVacuumForFreshDatabase(db: DatabaseSync): void {
-  const row = db.prepare("PRAGMA page_count").get() as { page_count?: unknown } | undefined;
-  if (row?.page_count === 0) {
-    db.exec("PRAGMA auto_vacuum = INCREMENTAL;");
   }
 }
 
