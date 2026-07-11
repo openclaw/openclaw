@@ -26,6 +26,12 @@ dynamic tools routed through the app-server `item/tool/call` bridge. An
 active OpenClaw sandbox or restricted tool policy disables native code mode
 entirely unless you opt into the experimental sandbox exec-server path.
 
+With the default `tools.exec.host: "auto"` and no active OpenClaw sandbox,
+Codex also receives `node_exec` and `node_process` tools for commands on paired
+nodes. Native shell remains on the Codex app-server host and workspace
+(Gateway-local for the default stdio deployment); `node_exec` selects a node by
+name or id and keeps OpenClaw's node approval policy in force.
+
 This Codex-native feature is separate from
 [OpenClaw code mode](/reference/code-mode), an opt-in QuickJS-WASI runtime
 for generic OpenClaw runs with a different `exec` input shape. For the
