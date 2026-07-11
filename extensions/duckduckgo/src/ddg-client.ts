@@ -160,6 +160,7 @@ export async function runDuckDuckGoSearch(params: {
   safeSearch?: DdgSafeSearch;
   timeoutSeconds?: number;
   cacheTtlMinutes?: number;
+  signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   const count = resolveSearchCount(params.count, DEFAULT_SEARCH_COUNT);
   const region = params.region ?? resolveDdgRegion(params.config);
@@ -197,6 +198,7 @@ export async function runDuckDuckGoSearch(params: {
     {
       url: url.toString(),
       timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "GET",
         headers: {

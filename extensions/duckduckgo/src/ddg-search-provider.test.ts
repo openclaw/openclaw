@@ -105,6 +105,28 @@ describe("duckduckgo web search provider", () => {
     expect(runDuckDuckGoSearch).not.toHaveBeenCalled();
   });
 
+  it("forwards the execution abort signal to the DuckDuckGo client", async () => {
+    const provider = createDuckDuckGoWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+
+    await tool.execute({ query: "openclaw docs" }, { signal: controller.signal });
+
+    expect(runDuckDuckGoSearch).toHaveBeenCalledWith({
+      config: { test: true },
+      query: "openclaw docs",
+      count: undefined,
+      region: undefined,
+      safeSearch: undefined,
+      signal: controller.signal,
+    });
+  });
+
   it("bounds successful DuckDuckGo HTML bodies without using response.text()", async () => {
     const streamed = createStreamingResponse({
       chunkCount: 32,
