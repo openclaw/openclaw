@@ -5,7 +5,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
-import { captureEnv, withEnvAsync } from "../../test-utils/env.js";
+import {
+  captureEnv,
+  deleteTestEnvValue,
+  setTestEnvValue,
+  withEnvAsync,
+} from "../../test-utils/env.js";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
@@ -80,8 +85,26 @@ const writeDiagnosticStabilityBundleForFailureSync = vi.fn((_reason: string, _er
   message: "wrote stability bundle: /tmp/openclaw-stability.json",
   path: "/tmp/openclaw-stability.json",
 }));
-const controlUiState = vi.hoisted(() => ({
-  root: "/tmp/openclaw-control-ui" as string | null,
+const bootLifecycle = vi.hoisted(() => ({
+  decisions: [] as Array<{
+    tripped: boolean;
+    uncleanBoots: number;
+    windowMs: number;
+    shouldWriteStabilityBundle: boolean;
+    recovered: boolean;
+  }>,
+  inspect: vi.fn(
+    (_env?: NodeJS.ProcessEnv, _nowMs?: number) =>
+      bootLifecycle.decisions.shift() ?? {
+        tripped: false,
+        uncleanBoots: 0,
+        windowMs: 300_000,
+        shouldWriteStabilityBundle: false,
+        recovered: false,
+      },
+  ),
+  record: vi.fn((_env?: NodeJS.ProcessEnv, _nowMs?: number, _reason?: string) => "boot-id"),
+  complete: vi.fn(),
 }));
 const netState = vi.hoisted(() => ({
   autoBindHost: "127.0.0.1",
@@ -96,10 +119,15 @@ const withoutGatewayAuthEnv = {
 };
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+// gateway run exports --token/--password into process.env as a side effect
+// (see runGatewayCli auth wiring); snapshot and clear them so shared vitest
+// workers do not leak credentials into later files' gateway connects.
 const serviceEnvSnapshot = captureEnv([
   "OPENCLAW_SERVICE_MARKER",
   "OPENCLAW_SERVICE_KIND",
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
+  "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_GATEWAY_PASSWORD",
 ]);
 
 vi.mock("../../config/config.js", () => ({
@@ -208,10 +236,6 @@ vi.mock("../../gateway/server.js", () => ({
   startGatewayServer: (port: number, opts?: unknown) => startGatewayServer(port, opts),
 }));
 
-vi.mock("../../infra/control-ui-assets.js", () => ({
-  resolveControlUiRootSync: () => controlUiState.root,
-}));
-
 vi.mock("../../gateway/ws-logging.js", () => ({
   setGatewayWsLogStyle: (style: string) => setGatewayWsLogStyle(style),
 }));
@@ -247,8 +271,20 @@ vi.mock("../../logging/diagnostic-stability-bundle.js", () => ({
     writeDiagnosticStabilityBundleForFailureSync(reason, error),
 }));
 
+vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
+  GATEWAY_CRASH_LOOP_BREAKER_REASON: "gateway.crash_loop_breaker",
+  GATEWAY_CRASH_LOOP_RECOVERED_REASON: "gateway.crash_loop_recovered",
+  inspectGatewayCrashLoopBreaker: (env?: NodeJS.ProcessEnv, nowMs?: number) =>
+    bootLifecycle.inspect(env, nowMs),
+  recordGatewayBootStart: (env?: NodeJS.ProcessEnv, nowMs?: number, reason?: string) =>
+    bootLifecycle.record(env, nowMs, reason),
+  completeGatewayBootLifecycle: (bootId: string | undefined, completion: unknown) =>
+    bootLifecycle.complete(bootId, completion),
+}));
+
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
+    debug: () => undefined,
     info: (message: string) => {
       gatewayLogMessages.push(message);
     },
@@ -299,7 +335,9 @@ describe("gateway run option collisions", () => {
   beforeEach(() => {
     delete process.env.OPENCLAW_SERVICE_MARKER;
     delete process.env.OPENCLAW_SERVICE_KIND;
-    delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    deleteTestEnvValue(GATEWAY_SERVICE_RUNTIME_PID_ENV);
     resetRuntimeCapture();
     configState.cfg = {};
     configState.snapshot = { config: {}, exists: false, sourceConfig: {}, valid: true };
@@ -307,9 +345,12 @@ describe("gateway run option collisions", () => {
     netState.container = false;
     readBestEffortConfig.mockClear();
     readConfigFileSnapshotWithPluginMetadata.mockClear();
-    controlUiState.root = "/tmp/openclaw-control-ui";
     gatewayLogMessages.length = 0;
     writeDiagnosticStabilityBundleForFailureSync.mockClear();
+    bootLifecycle.decisions.length = 0;
+    bootLifecycle.inspect.mockClear();
+    bootLifecycle.record.mockClear();
+    bootLifecycle.complete.mockClear();
     startGatewayServer.mockClear();
     setGatewayWsLogStyle.mockClear();
     setVerbose.mockClear();
@@ -358,6 +399,7 @@ describe("gateway run option collisions", () => {
     return callArg(startGatewayServer, index, 1) as {
       auth?: { mode?: string; token?: string; password?: string };
       bind?: string;
+      channelAutostartSuppression?: { reason?: string };
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;
     };
@@ -1035,7 +1077,9 @@ describe("gateway run option collisions", () => {
         loadGlobalRuntimeDotEnvFiles.mockImplementation(() => {
           process.env.OPENCLAW_GATEWAY_TOKEN ??= "trusted-token";
           process.env.OPENCLAW_PROFILE ??= "dev";
-          process.env.OPENCLAW_WORKSPACE_DIR ??= "/tmp/openclaw-reset-workspace";
+          if (process.env.OPENCLAW_WORKSPACE_DIR === undefined) {
+            setTestEnvValue("OPENCLAW_WORKSPACE_DIR", "/tmp/openclaw-reset-workspace");
+          }
         });
 
         await prepareGatewayReset();
@@ -1059,7 +1103,7 @@ describe("gateway run option collisions", () => {
       };
       await prepareGatewayReset();
       loadGlobalRuntimeDotEnvFiles.mockImplementation(() => {
-        process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-reset-retargeted";
+        setTestEnvValue("OPENCLAW_STATE_DIR", "/tmp/openclaw-reset-retargeted");
         return {
           gatewayEnvAppliedKeys: [],
           stateEnvAppliedKeys: ["OPENCLAW_STATE_DIR"],
@@ -1091,7 +1135,7 @@ describe("gateway run option collisions", () => {
   ])("blocks trusted dotenv selector drift for %s after startup mutations", async (selector) => {
     await withEnvAsync({ [selector]: "/tmp/openclaw-reset-value" }, async () => {
       loadGlobalRuntimeDotEnvFiles.mockImplementation(() => {
-        process.env[selector] = "/tmp/openclaw-reset-retargeted";
+        setTestEnvValue(selector, "/tmp/openclaw-reset-retargeted");
       });
       const { reloadTrustedGatewayRunEnvironment } = await import("./pre-bootstrap.js");
 
@@ -1341,14 +1385,52 @@ describe("gateway run option collisions", () => {
     expect(secondOptions.startupStartedAt).toBe(2000);
   });
 
-  it("logs when first startup will build missing Control UI assets", async () => {
-    controlUiState.root = null;
+  it("re-inspects crash-loop breaker state for each boot iteration", async () => {
+    runGatewayLoop.mockImplementationOnce(
+      async ({
+        beginBoot,
+        start,
+      }: {
+        beginBoot?: (startedAtMs: number) => Promise<void> | void;
+        start: GatewayLoopStart;
+      }) => {
+        await beginBoot?.(1000);
+        await start({ startupStartedAt: 1000 });
+        await beginBoot?.(2000);
+        await start({ startupStartedAt: 2000 });
+      },
+    );
+    bootLifecycle.decisions.push(
+      {
+        tripped: true,
+        uncleanBoots: 3,
+        windowMs: 300_000,
+        shouldWriteStabilityBundle: true,
+        recovered: false,
+      },
+      {
+        tripped: false,
+        uncleanBoots: 0,
+        windowMs: 300_000,
+        shouldWriteStabilityBundle: false,
+        recovered: true,
+      },
+    );
 
     await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
 
-    expect(gatewayLogMessages).toContain(
-      "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. `pnpm gateway:watch` does not rebuild Control UI assets, so rerun `pnpm ui:build` after UI changes or use `pnpm ui:dev` while developing the Control UI. For a full local dist, run `pnpm build && pnpm ui:build`.",
-    );
+    expect(bootLifecycle.inspect).toHaveBeenCalledTimes(2);
+    expect(bootLifecycle.inspect.mock.calls.map((call) => call[1])).toEqual([1000, 2000]);
+    expect(bootLifecycle.record.mock.calls.map((call) => call[2])).toEqual([
+      "gateway.crash_loop_breaker",
+      "gateway.crash_loop_recovered",
+    ]);
+    expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledTimes(1);
+    expect(gatewayStartOptions(0).channelAutostartSuppression).toMatchObject({
+      reason: "crash-loop-breaker",
+    });
+    expect(gatewayStartOptions(1).channelAutostartSuppression).toBeUndefined();
+    expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
   });
 
   it("does not write startup failure bundles for expected gateway lock conflicts", async () => {

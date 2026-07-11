@@ -18,6 +18,7 @@ import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shar
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { detectWindowsSpawnCommandInlineArgs } from "../../../plugin-sdk/windows-spawn.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { isValidAgentHarnessSessionStoreEntry } from "../../../sessions/agent-harness-session-key.js";
 
 type CodexRouteHit = {
   path: string;
@@ -2716,6 +2717,49 @@ function collectCodexAppServerCommandWarnings(cfg: OpenClawConfig): string[] {
   ];
 }
 
+function collectCodexComputerUseWarnings(cfg: OpenClawConfig): string[] {
+  const plugins = asMutableRecord(cfg.plugins);
+  const entries = asMutableRecord(plugins?.entries);
+  const codex = asMutableRecord(entries?.codex);
+  const config = asMutableRecord(codex?.config);
+  const computerUse = asMutableRecord(config?.computerUse);
+  if (!computerUse) {
+    return [];
+  }
+  const enabled =
+    computerUse.enabled === true ||
+    computerUse.autoInstall === true ||
+    typeof computerUse.marketplaceSource === "string" ||
+    typeof computerUse.marketplacePath === "string" ||
+    typeof computerUse.marketplaceName === "string";
+  if (!enabled) {
+    return [];
+  }
+  const cadence =
+    computerUse.healthCheckIntervalMinutes === 30 ||
+    computerUse.healthCheckIntervalMinutes === 60 ||
+    computerUse.healthCheckIntervalMinutes === 120 ||
+    computerUse.healthCheckIntervalMinutes === 240
+      ? computerUse.healthCheckIntervalMinutes
+      : 60;
+  const healthCheckLine =
+    computerUse.healthCheckEnabled === true
+      ? `- Periodic Computer Use health checks are enabled with a ${cadence}-minute cadence.`
+      : "- Periodic Computer Use health checks are disabled by default; set `computerUse.healthCheckEnabled` to true to enable them.";
+  const repairLine =
+    computerUse.autoRepair === true
+      ? "- Stale Computer Use MCP child repair is enabled and limited to SkyComputerUseClient children."
+      : "- Stale Computer Use MCP child repair is disabled by default; set `computerUse.autoRepair` to true to repair before retrying a failed probe.";
+  return [
+    [
+      "- Codex Computer Use is enabled.",
+      "- Doctor config review found Computer Use enabled; run `/codex computer-use status` to inspect installation, exposure, and the live `list_apps` probe.",
+      healthCheckLine,
+      repairLine,
+    ].join("\n"),
+  ];
+}
+
 /** Collect doctor warnings for legacy Codex model refs, runtime pins, and compaction overrides. */
 export function collectCodexRouteWarnings(params: {
   cfg: OpenClawConfig;
@@ -2748,6 +2792,7 @@ export function collectCodexRouteWarnings(params: {
     });
   const warnings: string[] = [];
   warnings.push(...collectCodexAppServerCommandWarnings(params.cfg));
+  warnings.push(...collectCodexComputerUseWarnings(params.cfg));
   if (hits.length > 0) {
     warnings.push(
       [
@@ -2969,7 +3014,7 @@ export function repairCodexSessionStoreRoutes(params: {
   const now = params.now ?? Date.now();
   const sessionKeys: string[] = [];
   for (const [sessionKey, entry] of Object.entries(params.store)) {
-    if (!entry) {
+    if (!entry || isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
       continue;
     }
     const changedRuntimeModelRoute = rewriteSessionModelPair({
@@ -3002,7 +3047,7 @@ export function repairCodexSessionStoreRoutes(params: {
 
 function scanCodexSessionStoreRoutes(store: Record<string, SessionEntry>): string[] {
   return Object.entries(store).flatMap(([sessionKey, entry]) => {
-    if (!entry) {
+    if (!entry || isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
       return [];
     }
     const hasLegacyRoute =

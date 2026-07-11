@@ -2,7 +2,10 @@ import type { Dirent } from "node:fs";
 // Matrix API module exposes the plugin public contract.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  legacyStateFileExists,
+  type PluginDoctorStateMigration,
+} from "openclaw/plugin-sdk/runtime-doctor";
 import {
   hasMatrixSyncCacheStateInStore,
   openMatrixSyncCacheStoreOptions,
@@ -35,6 +38,16 @@ import {
   type MatrixIdbSnapshotRecord,
   type MatrixLegacyCryptoMigrationState,
 } from "./src/matrix/crypto-state-store.js";
+import {
+  collectMatrixInboundDedupeSources,
+  importNewestInboundDedupeMarkers,
+  MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME,
+  readLegacyInboundDedupeJsonSource,
+  readLegacyInboundDedupeSqliteSource,
+  retireLegacyInboundDedupeSqliteRows,
+  type LegacyInboundDedupeMarker,
+  type MatrixInboundDedupeMigrationIo,
+} from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import { readLegacyMatrixIdbSnapshotState } from "./src/matrix/sdk/idb-persistence.js";
 import type { MatrixStoredRecoveryKey } from "./src/matrix/sdk/types.js";
 
@@ -42,15 +55,6 @@ export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-co
 
 const MATRIX_SYNC_CACHE_FILENAME = "bot-storage.json";
 const MATRIX_STORAGE_META_FILENAME = "storage-meta.json";
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
 
 async function collectLegacyMatrixStateRoots(
   stateDir: string,
@@ -105,7 +109,7 @@ async function archiveLegacySyncCache(params: {
 }): Promise<void> {
   const sourcePath = path.join(params.storageRootDir, MATRIX_SYNC_CACHE_FILENAME);
   const archivedPath = `${sourcePath}.migrated`;
-  if (await fileExists(archivedPath)) {
+  if (await legacyStateFileExists(archivedPath)) {
     params.warnings.push(
       `Left migrated Matrix sync cache in place because ${archivedPath} already exists`,
     );
@@ -128,7 +132,7 @@ async function archiveLegacyMatrixStateFile(params: {
 }): Promise<void> {
   const sourcePath = path.join(params.storageRootDir, params.filename);
   const archivedPath = `${sourcePath}.migrated`;
-  if (await fileExists(archivedPath)) {
+  if (await legacyStateFileExists(archivedPath)) {
     params.warnings.push(
       `Left migrated ${params.label} in place because ${archivedPath} already exists`,
     );
@@ -143,6 +147,118 @@ async function archiveLegacyMatrixStateFile(params: {
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
+  {
+    id: "matrix-inbound-dedupe-to-claimable-dedupe",
+    label: "Matrix inbound dedupe markers",
+    async detectLegacyState(params) {
+      const io: MatrixInboundDedupeMigrationIo = { context: params.context, env: params.env };
+      const preview: string[] = [];
+      const sources = await collectMatrixInboundDedupeSources(params.stateDir);
+      for (const storageRootDir of sources.sqliteRoots) {
+        try {
+          if (
+            (await readLegacyInboundDedupeSqliteSource(io, storageRootDir)).legacyRowCount === 0
+          ) {
+            continue;
+          }
+        } catch {
+          continue;
+        }
+        preview.push(
+          `Matrix inbound dedupe rows can migrate to the claimable dedupe store: ${storageRootDir}`,
+        );
+      }
+      for (const storageRootDir of sources.jsonRoots) {
+        preview.push(
+          `Matrix inbound dedupe JSON can migrate to the claimable dedupe store: ${path.join(storageRootDir, MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME)}`,
+        );
+      }
+      return preview.length > 0 ? { preview } : null;
+    },
+    async migrateLegacyState(params) {
+      const io: MatrixInboundDedupeMigrationIo = { context: params.context, env: params.env };
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      const sources = await collectMatrixInboundDedupeSources(params.stateDir);
+
+      // Gather every marker first so the capacity-aware import keeps the
+      // globally newest ones instead of whichever storage root imports last.
+      const gathered: LegacyInboundDedupeMarker[] = [];
+      const sqliteRootsToRetire: string[] = [];
+      for (const storageRootDir of sources.sqliteRoots) {
+        try {
+          const source = await readLegacyInboundDedupeSqliteSource(io, storageRootDir);
+          if (source.legacyRowCount === 0) {
+            continue;
+          }
+          gathered.push(...source.markers);
+          sqliteRootsToRetire.push(storageRootDir);
+        } catch (err) {
+          warnings.push(
+            `Failed reading Matrix inbound dedupe rows for ${storageRootDir}: ${String(err)}; left legacy rows in place`,
+          );
+        }
+      }
+      const jsonRootsToRetire: string[] = [];
+      for (const storageRootDir of sources.jsonRoots) {
+        try {
+          const markers = await readLegacyInboundDedupeJsonSource(storageRootDir);
+          if (markers === null) {
+            // Nothing recoverable, but archiving (rename, not delete) resolves
+            // the pending detection while preserving the bytes for inspection.
+            warnings.push(
+              `Matrix inbound dedupe JSON for ${storageRootDir} is malformed; archived without import`,
+            );
+          } else {
+            gathered.push(...markers);
+          }
+          jsonRootsToRetire.push(storageRootDir);
+        } catch (err) {
+          warnings.push(
+            `Failed reading Matrix inbound dedupe JSON for ${storageRootDir}: ${String(err)}; left legacy file in place`,
+          );
+        }
+      }
+      if (sqliteRootsToRetire.length + jsonRootsToRetire.length === 0) {
+        return { changes, warnings };
+      }
+
+      try {
+        const result = await importNewestInboundDedupeMarkers({ io, markers: gathered });
+        changes.push(
+          `Migrated Matrix inbound dedupe markers to the claimable dedupe store (${result.imported} of ${result.total} entries)`,
+        );
+      } catch (err) {
+        warnings.push(
+          `Failed importing Matrix inbound dedupe markers: ${String(err)}; left legacy sources in place`,
+        );
+        return { changes, warnings };
+      }
+
+      // Retire the legacy sources only after the import succeeded so a failed
+      // run keeps them for the next doctor attempt.
+      for (const storageRootDir of sqliteRootsToRetire) {
+        try {
+          await retireLegacyInboundDedupeSqliteRows(io, storageRootDir);
+          changes.push(`Retired Matrix inbound dedupe rows for ${storageRootDir}`);
+        } catch (err) {
+          warnings.push(
+            `Failed retiring Matrix inbound dedupe rows for ${storageRootDir}: ${String(err)}`,
+          );
+        }
+      }
+      for (const storageRootDir of jsonRootsToRetire) {
+        await archiveLegacyMatrixStateFile({
+          storageRootDir,
+          filename: MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME,
+          label: "Matrix inbound dedupe",
+          changes,
+          warnings,
+        });
+      }
+      return { changes, warnings };
+    },
+  },
   {
     id: "matrix-storage-meta-json-to-plugin-state",
     label: "Matrix storage metadata",

@@ -11,14 +11,17 @@ import {
   overflowBaseRunParams as baseParams,
   loadRunOverflowCompactionHarness,
   mockedCompactDirect,
+  mockedContextEngine,
   mockedIsCompactionFailureError,
   mockedIsLikelyContextOverflowError,
   mockedLog,
+  mockedMarkAuthProfileSuccess,
   mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -64,6 +67,7 @@ function expectRetryContinuesFromTranscript() {
 describe("overflow compaction in run loop", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {
@@ -110,6 +114,24 @@ describe("overflow compaction in run loop", () => {
     expectLogIncludes(mockedLog.info, "auto-compaction succeeded");
     // Should not be an error result
     expect(result.meta.error).toBeUndefined();
+  });
+
+  it("keeps a whole code point at the context-overflow diagnostic boundary", async () => {
+    const marker = "request_too_large: ";
+    const prefix = `${marker}${"a".repeat(199 - marker.length)}`;
+    mockOverflowRetrySuccess({
+      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+      compactDirect: mockedCompactDirect,
+      overflowMessage: `${prefix}😀tail`,
+    });
+
+    await runEmbeddedAgent(baseParams);
+
+    const diagnostic = mockedLog.warn.mock.calls
+      .map(([entry]) => String(entry))
+      .find((entry) => entry.startsWith("[context-overflow-diag]"));
+    expect(diagnostic).toBeDefined();
+    expect(diagnostic?.endsWith(`error=${prefix}`)).toBe(true);
   });
 
   it("keeps fallback unsafe when an overflow retry follows a mutating attempt", async () => {
@@ -185,6 +207,22 @@ describe("overflow compaction in run loop", () => {
     });
 
     expect(requireMockCallArg(mockedRunEmbeddedAttempt, 0).thinkLevel).toBe("adaptive");
+  });
+
+  it("does not wait for post-run auth-profile success bookkeeping before returning", async () => {
+    let resolveSuccess!: () => void;
+    const successPromise = new Promise<void>((resolve) => {
+      resolveSuccess = resolve;
+    });
+    mockedMarkAuthProfileSuccess.mockReturnValueOnce(successPromise);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
+
+    const result = await runEmbeddedAgent(baseParams);
+
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedMarkAuthProfileSuccess).toHaveBeenCalledTimes(1);
+    resolveSuccess();
+    await successPromise;
   });
 
   it("continues from transcript after compaction when the current inbound message was persisted", async () => {
@@ -825,5 +863,49 @@ describe("overflow compaction in run loop", () => {
 
     expect(result.meta.agentMeta?.usage?.input).toBe(4_000);
     expect(result.meta.agentMeta?.promptTokens).toBe(2_000);
+  });
+
+  it("recovers from real model overflow when ownsCompaction context engine skips precheck", async () => {
+    mockedContextEngine.info.ownsCompaction = true;
+    mockOverflowRetrySuccess({
+      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+      compactDirect: mockedCompactDirect,
+    });
+
+    const result = await runEmbeddedAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("still handles precheck overflow when ownsCompaction engine uses preassembly_may_overflow", async () => {
+    mockedContextEngine.info.ownsCompaction = true;
+
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: makeOverflowError(
+            "Context overflow: prompt too large for the model (precheck).",
+          ),
+          promptErrorSource: "precheck",
+          preflightRecovery: { route: "compact_only" },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted via preassembly overflow guard",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    const result = await runEmbeddedAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.meta.error).toBeUndefined();
   });
 });

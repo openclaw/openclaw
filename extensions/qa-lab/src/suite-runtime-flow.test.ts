@@ -176,8 +176,15 @@ describe("qa suite runtime flow", () => {
         createGatewayConfig: vi.fn(),
         buildAgentDelivery: vi.fn(),
         requiredPluginIds: [],
+        supportedActions: [],
         handleAction: vi.fn(),
         createReportNotes: vi.fn(),
+        reset: vi.fn(),
+        sendInbound: vi.fn(),
+        sendNativeCommand: vi.fn(),
+        waitForNoOutbound: vi.fn(),
+        waitForOutbound: vi.fn(),
+        waitForOutboundSequence: vi.fn(),
         state: {
           reset: vi.fn(),
           getSnapshot: vi.fn(),
@@ -187,23 +194,12 @@ describe("qa suite runtime flow", () => {
           searchMessages: vi.fn(),
           waitFor: vi.fn(),
         },
-        capabilities: {
-          waitForOutboundMessage: vi.fn(),
-          waitForCondition: vi.fn(),
-          getNormalizedMessageState: vi.fn(),
-          resetNormalizedMessageState: vi.fn(),
-          sendInboundMessage: vi.fn(),
-          injectOutboundMessage: vi.fn(),
-          readNormalizedMessage: vi.fn(),
-          executeGenericAction: vi.fn(),
-          waitForReady: vi.fn(),
-          assertNoFailureReplies: vi.fn(),
-        },
+        waitForCondition: vi.fn(),
       },
       repoRoot: "/repo",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5-mini",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna-mini",
       mock: null,
       cfg: {} as QaSuiteRuntimeEnv["cfg"],
     } satisfies Parameters<typeof createQaSuiteScenarioFlowApi>[0]["env"];
@@ -303,7 +299,7 @@ describe("qa suite runtime flow", () => {
     });
 
     await call.deps.webOpenPage({ url: "https://openclaw.ai" });
-    expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai" });
+    expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai", repoRoot: "/repo" });
     expect(env.webSessionIds.has("page-1")).toBe(true);
   });
 });

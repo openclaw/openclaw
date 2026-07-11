@@ -47,6 +47,7 @@ type SkillDispatchMessageContext = {
   senderE164?: string;
   originatingTo?: string;
   to?: string;
+  nativeChannelId?: string;
   messageThreadId?: string | number;
   memberRoleIds?: string[];
 };
@@ -68,7 +69,7 @@ export function resolveSkillDispatchTools(params: {
   model: string;
   senderId?: string;
   currentChannelId?: string;
-  skillCommand?: Pick<SkillCommandSpec, "name" | "skillName" | "skillSource"> & {
+  skillCommand?: Pick<SkillCommandSpec, "name" | "skillFile" | "skillName" | "skillSource"> & {
     toolName?: string;
   };
   groupId?: string;
@@ -171,6 +172,7 @@ export function resolveSkillDispatchTools(params: {
           : {}),
         skillCommand: {
           commandName: params.skillCommand.name,
+          ...(params.skillCommand.skillFile ? { skillFile: params.skillCommand.skillFile } : {}),
           skillName: params.skillCommand.skillName,
           skillSource: params.skillCommand.skillSource ?? "unknown",
           ...(params.skillCommand.toolName ? { toolName: params.skillCommand.toolName } : {}),
@@ -183,6 +185,7 @@ export function resolveSkillDispatchTools(params: {
     agentAccountId: params.message.accountId,
     agentTo: params.message.originatingTo ?? params.message.to,
     agentThreadId: params.message.messageThreadId ?? undefined,
+    nativeChannelId: params.message.nativeChannelId,
     agentGroupId: groupId,
     agentGroupChannel: params.sessionEntry?.groupChannel,
     agentGroupSpace: params.sessionEntry?.space,

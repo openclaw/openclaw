@@ -1,5 +1,7 @@
 /** SQLite-backed ACP session metadata storage keyed through session-store entries. */
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Insertable, Selectable } from "kysely";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -29,7 +31,6 @@ import {
   type OpenClawStateDatabaseOptions,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { isRecord } from "../../utils.js";
 
 /** ACP metadata joined with its legacy session-store row and config context. */
 export type AcpSessionStoreEntry = {
@@ -89,21 +90,11 @@ function getAcpSessionKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AcpSessionMetaDatabase>(db);
 }
 
-function parseOptionalJsonRecord(raw: string | null): Record<string, unknown> | undefined {
-  if (raw == null || raw === "") {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
-  const identity = parseOptionalJsonRecord(row.identity_json) as SessionAcpIdentity | undefined;
-  const runtimeOptions = parseOptionalJsonRecord(row.runtime_options_json) as
+  const identity = asOptionalRecord(safeParseJson(row.identity_json ?? "")) as
+    | SessionAcpIdentity
+    | undefined;
+  const runtimeOptions = asOptionalRecord(safeParseJson(row.runtime_options_json ?? "")) as
     | AcpSessionRuntimeOptions
     | undefined;
   return {

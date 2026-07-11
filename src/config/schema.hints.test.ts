@@ -158,6 +158,26 @@ describe("mapSensitivePaths", () => {
     expect(result["env.*"]?.sensitive).toBe(undefined);
   });
 
+  it("returns a new hints map without mutating caller-owned entries", () => {
+    const schema = z.object({
+      apiKey: z.string().register(sensitive),
+    });
+    const hints = {
+      group: { label: "Group" },
+    };
+
+    const result = mapSensitivePaths(schema, "", hints);
+
+    expect(result).not.toBe(hints);
+    expect(hints).toEqual({
+      group: { label: "Group" },
+    });
+    expect(result).toEqual({
+      group: { label: "Group" },
+      apiKey: { sensitive: true },
+    });
+  });
+
   it("main schema yields correct hints (samples)", () => {
     const schema = OpenClawSchema.toJSONSchema({
       target: "draft-07",

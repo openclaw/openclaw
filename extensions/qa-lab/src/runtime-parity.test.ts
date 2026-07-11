@@ -2,7 +2,9 @@
 import { describe, expect, it } from "vitest";
 import {
   __testing,
+  captureRuntimeParityCell,
   isRuntimeParityResultPass,
+  resolveRuntimeParityUsagePolicy,
   runRuntimeParityScenario,
   type RuntimeId,
   type RuntimeParityCell,
@@ -29,6 +31,38 @@ function makeRuntimeParityCell(
 }
 
 describe("runtime parity", () => {
+  it("keeps a retry pass diagnostic from failing the captured cell", async () => {
+    const cell = await captureRuntimeParityCell({
+      runtime: "openclaw",
+      gateway: {
+        tempRoot: `/tmp/openclaw-qa-runtime-parity-missing-${process.pid}`,
+      },
+      scenarioResult: {
+        status: "pass",
+        details: "ok | passed on retry; first attempt: timed out after 20000ms",
+      },
+      wallClockMs: 10,
+    });
+
+    expect(cell.runtimeErrorClass).toBeUndefined();
+  });
+
+  it("still classifies terminal scenario failure diagnostics", async () => {
+    const cell = await captureRuntimeParityCell({
+      runtime: "openclaw",
+      gateway: {
+        tempRoot: `/tmp/openclaw-qa-runtime-parity-missing-${process.pid}`,
+      },
+      scenarioResult: {
+        status: "fail",
+        details: "timed out after 20000ms",
+      },
+      wallClockMs: 10,
+    });
+
+    expect(cell.runtimeErrorClass).toBe("timeout");
+  });
+
   it("marks planned mock tool calls without outputs as missing tool results", () => {
     const toolCalls = __testing.resolveToolCallOrderFromMockRequests([
       {
@@ -67,6 +101,37 @@ describe("runtime parity", () => {
     });
 
     expect(result.drift).toBe("none");
+    expect(result.runtimeParityUsage).toEqual({
+      expectation: "assistant-message-required",
+    });
+  });
+
+  it("preserves explicit usage-not-applicable metadata on parity results", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "local-fixture",
+      runtimeParityUsage: {
+        expectation: "not-applicable",
+        reason: " Local fixture only; no assistant turn runs. ",
+      },
+      runCell: async (runtime) => ({
+        scenarioStatus: "pass",
+        cell: makeRuntimeParityCell(runtime, []),
+      }),
+    });
+
+    expect(result.runtimeParityUsage).toEqual({
+      expectation: "not-applicable",
+      reason: "Local fixture only; no assistant turn runs.",
+    });
+  });
+
+  it("defaults malformed usage metadata to assistant-message-required", () => {
+    expect(resolveRuntimeParityUsagePolicy({ expectation: "not-applicable" })).toEqual({
+      expectation: "assistant-message-required",
+    });
+    expect(
+      resolveRuntimeParityUsagePolicy({ expectation: "not-applicable", reason: "   " }),
+    ).toEqual({ expectation: "assistant-message-required" });
   });
 
   it("classifies planned-only matching tool calls as failure-mode", async () => {
@@ -168,7 +233,20 @@ describe("runtime parity", () => {
     const scoped = __testing.filterMockRequestsForParentPrompt(
       [
         {
+          prompt: "Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
+          allInputText:
+            "Delegate one bounded QA task to a subagent. Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
+          plannedToolName: "read",
+        },
+        {
+          prompt: "Delegate one bounded QA task to a subagent.",
           allInputText: "Delegate one bounded QA task to a subagent.",
+          plannedToolName: "sessions_spawn",
+        },
+        {
+          prompt: "Continue the bounded QA task with the retained child result.",
+          allInputText:
+            "Delegate one bounded QA task to a subagent. Continue the bounded QA task with the retained child result.",
           plannedToolName: "sessions_spawn",
         },
         {
@@ -176,15 +254,21 @@ describe("runtime parity", () => {
           plannedToolName: "read",
         },
         {
+          prompt: "Delegate one bounded QA task to a subagent.",
           allInputText: "Delegate one bounded QA task to a subagent. Tool result: child accepted.",
           toolOutput: "child accepted",
         },
       ],
       "Delegate one bounded QA task to a subagent.",
+      [
+        "Delegate one bounded QA task to a subagent.",
+        "Continue the bounded QA task with the retained child result.",
+      ],
     );
 
-    expect(scoped).toHaveLength(2);
+    expect(scoped).toHaveLength(3);
     expect(scoped.map((request) => request.plannedToolName ?? "result")).toEqual([
+      "sessions_spawn",
       "sessions_spawn",
       "result",
     ]);

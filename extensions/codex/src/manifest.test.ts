@@ -10,6 +10,9 @@ type CodexPackageManifest = {
     install?: {
       requiredPlatformPackages?: string[];
     };
+    release?: {
+      requireLatestDependencies?: string[];
+    };
   };
 };
 
@@ -23,6 +26,7 @@ describe("codex package manifest", () => {
     expect(packageJson.dependencies?.["@openai/codex"]).toBe(
       MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION,
     );
+    expect(packageJson.openclaw?.release?.requireLatestDependencies).toEqual(["@openai/codex"]);
     expect(packageJson.openclaw?.install?.requiredPlatformPackages).toEqual([
       "@openai/codex-linux-x64",
       "@openai/codex-linux-arm64",

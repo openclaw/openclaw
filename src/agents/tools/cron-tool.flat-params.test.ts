@@ -6,9 +6,13 @@ const { callGatewayToolMock } = vi.hoisted(() => ({
   callGatewayToolMock: vi.fn(),
 }));
 
-vi.mock("../agent-scope.js", () => ({
-  resolveSessionAgentId: () => "agent-123",
-}));
+vi.mock("../agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
+  return {
+    ...actual,
+    resolveSessionAgentId: actual.resolveSessionAgentId,
+  };
+});
 
 import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createCronTool } from "./cron-tool.js";
@@ -113,6 +117,64 @@ describe("cron tool flat-params", () => {
       kind: "agentTurn",
       message: "send report",
     });
+  });
+
+  it("rejects flat on-exit schedule shorthand for add", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-flat-onexit-add", {
+        action: "add",
+        name: "rebuild on exit",
+        kind: "on-exit",
+        command: "pnpm build",
+        cwd: "/repo",
+        message: "rebuilt",
+      }),
+    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects flat command schedule shorthand for add", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-flat-onexit-infer", {
+        action: "add",
+        name: "watch build",
+        command: "make",
+        message: "done",
+      }),
+    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects flat on-exit schedule shorthand for update", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-flat-onexit-update", {
+        action: "update",
+        jobId: "job-onexit",
+        kind: "on-exit",
+        command: "pnpm build",
+        cwd: "/repo",
+      }),
+    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects flat command schedule shorthand for update", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-flat-onexit-update-infer", {
+        action: "update",
+        jobId: "job-infer",
+        command: "make",
+      }),
+    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
   it("passes local cron wall-clock expression and timezone through add", async () => {

@@ -101,7 +101,8 @@ vi.mock("../commands/models/shared.js", () => ({
   }),
 }));
 
-vi.mock("../config/model-input.js", () => ({
+vi.mock("../config/model-input.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/model-input.js")>()),
   resolveAgentModelPrimaryValue: (model?: string | { primary?: string }) =>
     typeof model === "string" ? model : model?.primary,
 }));
@@ -205,6 +206,57 @@ describe("Crestodian rescue message", () => {
       "cannot open the local TUI",
     );
     expect(deps.runTui).not.toHaveBeenCalled();
+  });
+
+  it("rejects natural language instead of guessing an operation", async () => {
+    const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+    const deps = {
+      runGatewayStop: vi.fn(async () => {}),
+      runGatewayRestart: vi.fn(async () => {}),
+    };
+
+    // Questions must never become mutation plans (previously "why did my
+    // gateway stop" keyword-matched into a gateway-stop proposal).
+    await expect(
+      runRescue("/crestodian why did my gateway stop", cfg, commandContext(), deps),
+    ).resolves.toContain("I can run doctor/status/health");
+    await expect(
+      runRescue("/crestodian explain how restart gateway works", cfg, commandContext(), deps),
+    ).resolves.toContain("I can run doctor/status/health");
+    expect(deps.runGatewayStop).not.toHaveBeenCalled();
+    expect(deps.runGatewayRestart).not.toHaveBeenCalled();
+  });
+
+  it("refuses channel setup from remote rescue with a local pointer", async () => {
+    const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+    await expect(runRescue("/crestodian connect telegram", cfg)).resolves.toContain(
+      "cannot host the interactive channel setup",
+    );
+  });
+
+  it("refuses model provider setup from remote rescue with a local pointer", async () => {
+    const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+    await expect(runRescue("/crestodian configure model provider", cfg)).resolves.toContain(
+      "cannot host model-provider credential setup",
+    );
+  });
+
+  it("drops a pending rescue change on decline", async () => {
+    await withRescueStateDir("decline-", async () => {
+      const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+      const deps = { runGatewayRestart: vi.fn(async () => {}) };
+
+      await expect(
+        runRescue("/crestodian restart gateway", cfg, commandContext(), deps),
+      ).resolves.toContain("Reply /crestodian yes to apply");
+      await expect(runRescue("/crestodian no", cfg, commandContext(), deps)).resolves.toContain(
+        "Dropped the pending Crestodian rescue change",
+      );
+      await expect(runRescue("/crestodian yes", cfg, commandContext(), deps)).resolves.toBe(
+        "No pending Crestodian rescue change is waiting for approval.",
+      );
+      expect(deps.runGatewayRestart).not.toHaveBeenCalled();
+    });
   });
 
   it("refuses plugin install from remote rescue", async () => {

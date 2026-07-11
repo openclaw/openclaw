@@ -10,6 +10,7 @@ import type {
   GatewayAuthChoice,
   GatewayBind,
   NodeManagerChoice,
+  OnboardOptions,
   ResetScope,
   SecretInputMode,
   TailscaleMode,
@@ -90,30 +91,8 @@ function pickOnboardProviderAuthOptionValues(
   );
 }
 
-export function registerOnboardCommand(program: Command): void {
-  const command = program
-    .command("onboard")
-    .description("Guided setup for auth, models, Gateway, workspace, channels, and skills")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.openclaw.ai/cli/onboard")}\n`,
-    )
-    .option("--workspace <dir>", "Agent workspace directory (default: ~/.openclaw/workspace)")
-    .option(
-      "--reset",
-      "Reset config + credentials + sessions before running onboard (workspace only with --reset-scope full)",
-    )
-    .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
-    .option("--non-interactive", "Run without prompts", false)
-    .option("--modern", "Use the conversational setup/repair assistant", false)
-    .option(
-      "--accept-risk",
-      "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
-      false,
-    )
-    .option("--flow <flow>", "Onboard flow: quickstart|advanced|manual|import")
-    .option("--mode <mode>", "Onboard mode: local|remote")
+export function registerOnboardAuthOptions(command: Command): Command {
+  command
     .option("--auth-choice <choice>", `Auth: ${AUTH_CHOICE_HELP}`)
     .option(
       "--token-provider <id>",
@@ -136,7 +115,7 @@ export function registerOnboardCommand(program: Command): void {
     command.option(providerFlag.cliOption, providerFlag.description);
   }
 
-  command
+  return command
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
@@ -146,7 +125,65 @@ export function registerOnboardCommand(program: Command): void {
       "Custom provider API compatibility: openai|openai-responses|anthropic (default: openai)",
     )
     .option("--custom-image-input", "Mark the custom provider model as image-capable")
-    .option("--custom-text-input", "Mark the custom provider model as text-only")
+    .option("--custom-text-input", "Mark the custom provider model as text-only");
+}
+
+export function pickOnboardAuthOptionValues(
+  opts: Record<string, unknown>,
+): Partial<OnboardOptions> {
+  const customTextInput = opts.customTextInput === true;
+  return {
+    authChoice: opts.authChoice as AuthChoice | undefined,
+    tokenProvider: opts.tokenProvider as string | undefined,
+    token: opts.token as string | undefined,
+    tokenProfileId: opts.tokenProfileId as string | undefined,
+    tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
+    secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
+    ...pickOnboardProviderAuthOptionValues(opts),
+    cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
+    cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
+    customBaseUrl: opts.customBaseUrl as string | undefined,
+    customApiKey: opts.customApiKey as string | undefined,
+    customModelId: opts.customModelId as string | undefined,
+    customProviderId: opts.customProviderId as string | undefined,
+    customCompatibility: opts.customCompatibility as
+      | "openai"
+      | "openai-responses"
+      | "anthropic"
+      | undefined,
+    customImageInput: customTextInput ? false : opts.customImageInput === true ? true : undefined,
+  };
+}
+
+export function registerOnboardCommand(program: Command): void {
+  const command = program
+    .command("onboard")
+    .description("Guided setup for auth, models, Gateway, workspace, channels, and skills")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.openclaw.ai/cli/onboard")}\n`,
+    )
+    .option("--workspace <dir>", "Agent workspace directory (default: ~/.openclaw/workspace)")
+    .option(
+      "--reset",
+      "Reset config + credentials + sessions before running onboard (workspace only with --reset-scope full)",
+    )
+    .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
+    .option("--non-interactive", "Run without prompts", false)
+    .option("--modern", "Open the Crestodian setup chat (kept for compatibility)", false)
+    .option("--classic", "Use the classic multi-step setup wizard", false)
+    .option(
+      "--accept-risk",
+      "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
+      false,
+    )
+    .option("--flow <flow>", "Onboard flow: quickstart|advanced|manual|import")
+    .option("--mode <mode>", "Onboard mode: local|remote");
+
+  registerOnboardAuthOptions(command);
+
+  command
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
@@ -182,6 +219,8 @@ export function registerOnboardCommand(program: Command): void {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       if (opts.modern) {
+        // Deprecated alias for `openclaw crestodian`: skip bootstrap prompts and
+        // open the conversation directly (same as the pre-Commander fast path).
         const { runCrestodian } = await import("../../crestodian/crestodian.js");
         await runCrestodian({
           message: opts.nonInteractive ? "overview" : undefined,
@@ -195,41 +234,16 @@ export function registerOnboardCommand(program: Command): void {
         installDaemon: Boolean(opts.installDaemon),
       });
       const gatewayPort = parsePort(opts.gatewayPort);
-      const providerAuthOptionValues = pickOnboardProviderAuthOptionValues(
-        opts as Record<string, unknown>,
-      );
       const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(
         {
           workspace: opts.workspace as string | undefined,
           nonInteractive: Boolean(opts.nonInteractive),
           acceptRisk: Boolean(opts.acceptRisk),
+          classic: Boolean(opts.classic),
           flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
           mode: opts.mode as "local" | "remote" | undefined,
-          authChoice: opts.authChoice as AuthChoice | undefined,
-          tokenProvider: opts.tokenProvider as string | undefined,
-          token: opts.token as string | undefined,
-          tokenProfileId: opts.tokenProfileId as string | undefined,
-          tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
-          secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
-          ...providerAuthOptionValues,
-          cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
-          cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
-          customBaseUrl: opts.customBaseUrl as string | undefined,
-          customApiKey: opts.customApiKey as string | undefined,
-          customModelId: opts.customModelId as string | undefined,
-          customProviderId: opts.customProviderId as string | undefined,
-          customCompatibility: opts.customCompatibility as
-            | "openai"
-            | "openai-responses"
-            | "anthropic"
-            | undefined,
-          customImageInput:
-            opts.customTextInput === true
-              ? false
-              : opts.customImageInput === true
-                ? true
-                : undefined,
+          ...pickOnboardAuthOptionValues(opts as Record<string, unknown>),
           gatewayPort: gatewayPort ?? undefined,
           gatewayBind: opts.gatewayBind as GatewayBind | undefined,
           gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,

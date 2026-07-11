@@ -4,11 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SkillUsagePath } from "../skills/types.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
-const syncSkillsToWorkspaceMock = vi.hoisted(() => vi.fn(async () => undefined));
+const syncSkillsToWorkspaceMock = vi.hoisted(() =>
+  vi.fn<() => Promise<SkillUsagePath[]>>(async () => []),
+);
 const ensureSandboxBrowserMock = vi.hoisted(() => vi.fn(async () => null));
 const browserControlAuthMock = vi.hoisted(() => ({
   ensureBrowserControlAuth: vi.fn(async () => ({ auth: { token: "test-browser-token" } })),
@@ -315,6 +318,15 @@ describe("resolveSandboxContext", () => {
     syncSkillsToWorkspaceMock.mockClear();
     const bundledDir = await createSandboxFixtureDir("bundled");
     const workspaceDir = await createSandboxFixtureDir("workspace");
+    const skillUsagePaths = [
+      {
+        readPath: path.join(bundledDir, "sandboxes", "skills", "demo", "SKILL.md"),
+        skillFile: path.join(workspaceDir, "skills", "demo", "SKILL.md"),
+        skillName: "demo",
+        skillSource: "workspace" as const,
+      },
+    ];
+    syncSkillsToWorkspaceMock.mockResolvedValueOnce(skillUsagePaths);
 
     const cfg: OpenClawConfig = {
       agents: {
@@ -356,6 +368,7 @@ describe("resolveSandboxContext", () => {
     expect(syncOptions?.config).toBe(cfg);
     expect(syncOptions?.agentId).toBe("main");
     expect(syncOptions?.eligibility).toEqual({ remote: { note: "test-remote" } });
+    expect(result.skillUsagePaths).toEqual(skillUsagePaths);
   }, 15_000);
 
   it("materializes skills into a hidden read-only workspace for writable sandboxes", async () => {

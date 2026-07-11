@@ -42,10 +42,7 @@ export function configureAcpErrorRedactor(redactor: ((value: string) => string) 
 
 /** Redacts common provider, GitHub, HTTP, payment, bot, and private-key secrets from error text. */
 export function redactSensitiveText(value: string): string {
-  if (configuredRedactor) {
-    return configuredRedactor(value);
-  }
-  let redacted = value;
+  let redacted = configuredRedactor ? configuredRedactor(value) : value;
   for (const pattern of SECRET_PATTERNS) {
     redacted = redacted.replace(pattern, (match, ...args: string[]) => {
       if (match.includes("PRIVATE KEY-----")) {
@@ -75,7 +72,9 @@ export function stringifyNonErrorCause(value: unknown): string {
     return String(value);
   }
   try {
-    return JSON.stringify(value);
+    // JSON.stringify returns undefined (not a string) for functions/symbols/undefined; fall back to
+    // a tag string so this `string`-typed helper never leaks undefined (matches src/infra/errors.ts).
+    return JSON.stringify(value) ?? Object.prototype.toString.call(value);
   } catch {
     return Object.prototype.toString.call(value);
   }

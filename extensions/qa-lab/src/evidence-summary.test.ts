@@ -1,4 +1,5 @@
 // Qa Lab tests cover QA evidence summary behavior.
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   QA_EVIDENCE_SUMMARY_KIND,
@@ -39,7 +40,7 @@ describe("evidence summary", () => {
         OPENCLAW_QA_REF: "abc123",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:00:00.000Z",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
     });
@@ -86,8 +87,8 @@ describe("evidence summary", () => {
           id: "openai",
           live: false,
           model: {
-            name: "gpt-5.5",
-            ref: "mock-openai/gpt-5.5",
+            name: "gpt-5.6-luna",
+            ref: "mock-openai/gpt-5.6-luna",
           },
           fixture: "mock-openai",
         },
@@ -123,6 +124,29 @@ describe("evidence summary", () => {
     });
   });
 
+  it("prefers the checked-out ref over an inherited GitHub event SHA", () => {
+    const repoRoot = process.cwd();
+    const checkedOutRef = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    }).trim();
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: [],
+      channelId: "qa-channel",
+      env: {
+        GITHUB_SHA: "bd479958c04a1eadbda8b6105e0722588d71e9ad",
+      } as NodeJS.ProcessEnv,
+      generatedAt: "2026-06-24T12:00:00.000Z",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      providerMode: "mock-openai",
+      repoRoot,
+      scenarioDefinitions: [{ id: "ref-probe", title: "Ref probe" }],
+      scenarioResults: [{ name: "Ref probe", status: "pass" }],
+    });
+
+    expect(evidence.entries[0]?.execution?.environment.ref).toBe(checkedOutRef);
+  });
+
   it("builds Telegram live transport evidence entries", () => {
     const evidence = buildLiveTransportEvidenceSummary({
       artifactPaths: [
@@ -133,7 +157,7 @@ describe("evidence summary", () => {
         OPENCLAW_QA_RUNNER: "crabbox",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:05:00.000Z",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       providerMode: "live-frontier",
       checks: [
         {
@@ -142,6 +166,7 @@ describe("evidence summary", () => {
           title: "Telegram canary",
           status: "fail",
           details: "timed out waiting for SUT reply",
+          posture: "user-path",
           rttMs: 4321,
         },
       ],
@@ -167,14 +192,15 @@ describe("evidence summary", () => {
             role: "live-transport-coverage",
           },
         ],
+        posture: "user-path",
         execution: expect.objectContaining({
           runner: "crabbox",
           provider: {
             id: "openai",
             live: true,
             model: {
-              name: "gpt-5.5",
-              ref: "openai/gpt-5.5",
+              name: "gpt-5.6-luna",
+              ref: "openai/gpt-5.6-luna",
             },
             auth: "live-frontier",
           },
@@ -213,7 +239,7 @@ describe("evidence summary", () => {
     const evidence = buildLiveTransportEvidenceSummary({
       artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_FILENAME }],
       generatedAt: "2026-06-07T12:05:00.000Z",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       providerMode: "live-frontier",
       checks: [
         {
@@ -257,7 +283,7 @@ describe("evidence summary", () => {
         OPENCLAW_QA_REF: "abc123",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:06:00.000Z",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       targets: [
         {
@@ -339,7 +365,7 @@ describe("evidence summary", () => {
         GITHUB_SHA: "def456",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:07:00.000Z",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       targets: [
         {
@@ -433,7 +459,7 @@ describe("evidence summary", () => {
         OPENCLAW_QA_PROFILE: "experimental-profile",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:09:00.000Z",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
     });
@@ -462,7 +488,7 @@ describe("evidence summary", () => {
         ],
         channelId: "qa-channel",
         generatedAt: "2026-06-07T12:09:00.000Z",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
         providerMode: "mock-openai",
         scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
       });
@@ -521,7 +547,7 @@ describe("evidence summary", () => {
         spec: "/tmp/openclaw.tgz",
         sha: "abc123",
       },
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       providerMode: "live-frontier",
       checks: [
         {
@@ -551,7 +577,7 @@ describe("evidence summary", () => {
         OPENCLAW_QA_PACKAGE_SOURCE_SHA: "def456",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:15:00.000Z",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       providerMode: "live-frontier",
       checks: [
         {
@@ -579,7 +605,7 @@ describe("evidence summary", () => {
         OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE: "openclaw@beta",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:16:00.000Z",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       providerMode: "live-frontier",
       checks: [
         {
@@ -607,7 +633,7 @@ describe("evidence summary", () => {
         { kind: "report", path: "discord-qa-report.md" },
       ],
       generatedAt: "2026-06-07T12:20:00.000Z",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       providerMode: "live-frontier",
       checks: [
         {

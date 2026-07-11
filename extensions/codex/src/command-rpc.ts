@@ -5,7 +5,10 @@ import {
   describeControlFailure,
   type CodexControlMethod,
 } from "./app-server/capabilities.js";
-import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
+import {
+  resolveCodexAppServerRuntimeOptions,
+  type CodexAppServerStartOptions,
+} from "./app-server/config.js";
 import { listCodexAppServerModels } from "./app-server/models.js";
 import type {
   CodexAppServerRequestMethod,
@@ -23,11 +26,13 @@ type AuthProfileOrderConfig = Parameters<
 
 export type CodexControlRequestOptions = {
   config?: AuthProfileOrderConfig;
-  authProfileId?: string;
+  authProfileId?: string | null;
   agentDir?: string;
   sessionKey?: string;
   sessionId?: string;
   isolated?: boolean;
+  startOptions?: CodexAppServerStartOptions;
+  timeoutMs?: number;
 };
 
 export function requestOptions(
@@ -63,13 +68,13 @@ export async function codexControlRequest(
   method: CodexControlMethod,
   requestParams?: unknown,
   options: CodexControlRequestOptions = {},
-) {
+): Promise<unknown> {
   const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   return await requestCodexAppServerJson({
     method,
     requestParams,
-    timeoutMs: runtime.requestTimeoutMs,
-    startOptions: runtime.start,
+    timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
+    startOptions: options.startOptions ?? runtime.start,
     config: options.config,
     sessionKey: options.sessionKey,
     sessionId: options.sessionId,
@@ -96,7 +101,7 @@ export async function safeCodexControlRequest(
   method: CodexControlMethod,
   requestParams?: unknown,
   options: CodexControlRequestOptions = {},
-) {
+): Promise<SafeValue<unknown>> {
   return await safeValue(
     async () =>
       await codexControlRequest(pluginConfig, method, requestParams as JsonValue, options),

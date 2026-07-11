@@ -109,6 +109,17 @@ const representativeConfigSteps = [
 
 const scenarioConfigSteps = new Map([
   [
+    "acpx-openclaw-tools-bridge",
+    [
+      configSetJsonFile(
+        "plugins-acpx-openclaw-tools-bridge",
+        "acpx-openclaw-tools-bridge",
+        "plugins",
+        "plugins-acpx-openclaw-tools-bridge.json",
+      ),
+    ],
+  ],
+  [
     "feishu-channel",
     [
       configSetJsonFile("plugins-feishu", "plugins", "plugins", "plugins-feishu.json"),
@@ -174,6 +185,15 @@ function selectedScenario() {
 }
 
 function adaptStepForBaseline(step, baselineVersion, summary) {
+  if (
+    step.intent === "acpx-openclaw-tools-bridge" &&
+    isReleaseBefore(baselineVersion, "2026.4.22")
+  ) {
+    if (!summary.skippedIntents.includes("acpx-openclaw-tools-bridge")) {
+      summary.skippedIntents.push("acpx-openclaw-tools-bridge");
+    }
+    return null;
+  }
   if (!isReleaseBefore(baselineVersion, "2026.4.0")) {
     return step;
   }

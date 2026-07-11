@@ -4,7 +4,20 @@
 export type AgentHarnessSupportContext = {
   provider: string;
   modelId?: string;
+  modelProvider?: {
+    api?: string;
+    baseUrl?: string;
+    azureApiVersion?: string;
+    request?: {
+      auth?: { mode?: unknown };
+      proxy?: unknown;
+      tls?: unknown;
+      allowPrivateNetwork?: unknown;
+    };
+  };
   requestedRuntime: import("../agent-runtime-id.js").EmbeddedAgentRuntime;
+  providerOwnerStatus?: "unowned" | "owned" | "ambiguous";
+  providerOwnerPluginIds?: readonly string[];
 };
 
 export type AgentHarnessSupport =
@@ -39,9 +52,12 @@ export type AgentHarnessSideQuestionParams = {
   workspaceDir?: string;
   messageChannel?: string;
   messageProvider?: string;
+  chatType?: import("../../channels/chat-type.js").ChatType;
   agentAccountId?: string;
   messageTo?: string;
   messageThreadId?: string | number;
+  chatId?: string;
+  messageActionTurnCapability?: string;
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
@@ -65,6 +81,7 @@ export type AgentHarnessCompactParams =
 export type AgentHarnessCompactResult =
   import("../embedded-agent-runner/types.js").EmbeddedAgentCompactResult;
 export type AgentHarnessResetParams = {
+  agentId?: string;
   sessionId?: string;
   sessionKey?: string;
   sessionFile?: string;
@@ -88,6 +105,11 @@ type AgentHarnessRunCapability = {
   label: string;
   pluginId?: string;
   /**
+   * Plugin ids this harness owner permits to execute its locked sessions.
+   * Delegates receive work admission and execution only; session mutation stays owner-only.
+   */
+  delegatedExecutionPluginIds?: readonly string[];
+  /**
    * Context-engine host capabilities provided by this harness during agent
    * runs. Harnesses that omit this are unsupported for engines that declare
    * host requirements.
@@ -95,6 +117,8 @@ type AgentHarnessRunCapability = {
   contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
+  /** Lets this harness resolve forwarded profiles or its own native credentials. */
+  authBootstrap?: "harness";
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
 };
 

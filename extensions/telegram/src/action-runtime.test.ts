@@ -342,6 +342,24 @@ describe("handleTelegramAction", () => {
     await expectReactionAdded("minimal");
   });
 
+  it("routes omitted-account action tokens through the configured defaultAccount (#61012)", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          reactionLevel: "minimal",
+          defaultAccount: "kitt",
+          accounts: {
+            kitt: { botToken: "tok-kitt" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await handleTelegramAction(defaultReactionAction, cfg);
+    const call = mockCall(reactMessageTelegram, 0, "reaction add");
+    const options = requireRecord(call[3], "reaction add options");
+    expect(options.token).toBe("tok-kitt");
+  });
+
   it("surfaces non-fatal reaction warnings", async () => {
     reactMessageTelegram.mockResolvedValueOnce({
       ok: false,
@@ -1404,6 +1422,70 @@ describe("handleTelegramAction", () => {
     expect(requireRecord(call[2], "presentation text options").token).toBe("tok");
   });
 
+  it("appends chart data when explicit message content is present", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        message: "Quarterly results",
+        presentation: {
+          title: "FY25 outlook",
+          blocks: [
+            { type: "text", text: "Do not duplicate this block" },
+            {
+              type: "chart",
+              chartType: "bar",
+              title: "Revenue",
+              categories: ["Q1", "Q2"],
+              series: [{ name: "USD", values: [12, 18] }],
+            },
+          ],
+        },
+      },
+      telegramConfig(),
+    );
+
+    const call = mockCall(sendMessageTelegram, 0, "mixed message and chart");
+    expect(call[0]).toBe("123456");
+    expect(call[1]).toBe(
+      "Quarterly results\n\nFY25 outlook\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18",
+    );
+    expect(requireRecord(call[2], "mixed message and chart options").token).toBe("tok");
+  });
+
+  it("appends complete table data when explicit message content is present", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        message: "Quarterly pipeline",
+        presentation: {
+          title: "FY25 outlook",
+          blocks: [
+            { type: "text", text: "Do not duplicate this block" },
+            {
+              type: "table",
+              caption: "Pipeline",
+              headers: ["Account", "Stage", "ARR"],
+              rows: [
+                ["Acme", "Won", 125000],
+                ["Globex", "Review", 82000],
+              ],
+            },
+          ],
+        },
+      },
+      telegramConfig(),
+    );
+
+    const call = mockCall(sendMessageTelegram, 0, "mixed message and table");
+    expect(call[0]).toBe("123456");
+    expect(call[1]).toBe(
+      "Quarterly pipeline\n\nFY25 outlook\n\nPipeline (table)\n- Account: Acme; Stage: Won; ARR: 125000\n- Account: Globex; Stage: Review; ARR: 82000",
+    );
+    expect(requireRecord(call[2], "mixed message and table options").token).toBe("tok");
+  });
+
   it("uses presentation fallback text for button-only sends", async () => {
     await handleTelegramAction(
       {
@@ -1701,6 +1783,25 @@ describe("handleTelegramAction", () => {
       cfg,
     );
     expect(sendMessageTelegram).toHaveBeenCalled();
+  });
+
+  it("allows inline buttons when legacy capabilities are empty", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Choose",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Ok", value: "cmd:ok" }] }],
+        },
+      },
+      telegramConfig({ capabilities: [] }),
+    );
+    const call = mockCall(sendMessageTelegram, 0, "empty legacy capabilities");
+    expect(call[0]).toBe("@testchannel");
+    expect(requireRecord(call[2], "empty legacy capabilities options").buttons).toEqual([
+      [{ text: "Ok", callback_data: "cmd:ok" }],
+    ]);
   });
 
   it("uses interactive button labels as fallback text when message text is omitted", async () => {

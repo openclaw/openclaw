@@ -302,6 +302,81 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("forwards attested current-conversation context to Discord reads", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "read",
+      params: {
+        channelId: "channel:123",
+      },
+      cfg,
+      accountId: "ops",
+      requesterAccountId: "ops",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "channel:123",
+      },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "readMessages",
+        accountId: "ops",
+        channelId: "123",
+        limit: undefined,
+        before: undefined,
+        after: undefined,
+        around: undefined,
+      },
+      cfg,
+      options: {
+        ...defaultActionOptions(),
+        conversationReadOrigin: "delegated",
+        readContext: {
+          requesterAccountId: "ops",
+          currentChannelProvider: "discord",
+          currentChannelId: "channel:123",
+        },
+      },
+    });
+  });
+
+  it("forwards attested current-conversation context to Discord channel info", async () => {
+    const cfg = discordConfig({ channelInfo: true });
+    await handleDiscordMessageAction({
+      action: "channel-info",
+      params: {
+        channelId: "123",
+      },
+      cfg,
+      accountId: "ops",
+      requesterAccountId: "ops",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "channel:123",
+      },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "channelInfo",
+        accountId: "ops",
+        channelId: "123",
+      },
+      cfg,
+      options: {
+        conversationReadOrigin: "delegated",
+        readContext: {
+          requesterAccountId: "ops",
+          currentChannelProvider: "discord",
+          currentChannelId: "channel:123",
+        },
+      },
+    });
+  });
+
   it("forwards threadName on sends", async () => {
     const cfg = discordConfig();
     await handleDiscordMessageAction({
@@ -561,6 +636,87 @@ describe("handleDiscordMessageAction", () => {
       cfg,
       options: defaultActionOptions(),
     });
+  });
+
+  it("downgrades chart-only presentations to Discord component text", async () => {
+    const cfg = discordConfig();
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        to: "channel:123",
+        presentation: {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "bar",
+              title: "Revenue",
+              categories: ["Q1", "Q2"],
+              series: [{ name: "USD", values: [12, 18] }],
+            },
+          ],
+        },
+      },
+      cfg,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "sendMessage",
+        accountId: undefined,
+        to: "channel:123",
+        content: "",
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
+        components: {
+          blocks: [
+            {
+              type: "text",
+              text: "-# Revenue (bar chart)\n- USD: Q1: 12; Q2: 18",
+            },
+          ],
+        },
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
+  });
+
+  it("downgrades oversized table presentations to complete text", async () => {
+    const cfg = discordConfig();
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        to: "channel:123",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Large pipeline",
+              headers: ["Account", "Stage"],
+              rows: Array.from({ length: 900 }, (_entry, index) => [
+                `account-${String(index)}-${"x".repeat(80)}`,
+                "Review",
+              ]),
+            },
+          ],
+        },
+      },
+      cfg,
+    });
+
+    const [call] = handleDiscordActionMock.mock.calls;
+    const payload = call?.[0] as Record<string, unknown> | undefined;
+    expect(payload?.components).toBeUndefined();
+    expect(payload?.content).toEqual(expect.stringContaining("account-0-"));
+    expect(payload?.content).toEqual(expect.stringContaining("account-899-"));
   });
 
   it("does not use another provider's current target for Discord sends", async () => {

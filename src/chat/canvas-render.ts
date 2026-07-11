@@ -1,4 +1,5 @@
 // Renders chat canvas payloads into text and metadata for transcript output.
+import { safeParseJson } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
@@ -6,6 +7,7 @@ import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 // Extracts assistant-message canvas previews from tool JSON or markdown embed
 // shortcodes. The returned text strips consumed shortcodes for channel delivery.
 type CanvasSurface = "assistant_message";
+type CanvasSandbox = "strict" | "scripts";
 
 type CanvasPreview = {
   kind: "canvas";
@@ -17,19 +19,8 @@ type CanvasPreview = {
   viewId?: string;
   className?: string;
   style?: string;
+  sandbox?: CanvasSandbox;
 };
-
-function tryParseJsonRecord(value: string | undefined): Record<string, unknown> | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(value);
-    return asOptionalRecord(parsed);
-  } catch {
-    return undefined;
-  }
-}
 
 function getRecordStringField(
   record: Record<string, unknown> | undefined,
@@ -57,6 +48,10 @@ function getNestedRecord(
 
 function normalizeSurface(value: string | undefined): CanvasSurface | undefined {
   return value === "assistant_message" ? value : undefined;
+}
+
+function normalizeSandbox(value: string | undefined): CanvasSandbox | undefined {
+  return value === "strict" || value === "scripts" ? value : undefined;
 }
 
 function normalizePreferredHeight(value: number | undefined): number | undefined {
@@ -95,6 +90,7 @@ function coerceCanvasPreview(
     getRecordStringField(presentation, "class_name") ??
     getRecordStringField(presentation, "className");
   const style = getRecordStringField(presentation, "style");
+  const sandbox = normalizeSandbox(getRecordStringField(presentation, "sandbox"));
   const viewUrl = getRecordStringField(view, "url") ?? getRecordStringField(view, "entryUrl");
   const viewId = getRecordStringField(view, "id") ?? getRecordStringField(view, "docId");
   if (viewUrl) {
@@ -108,6 +104,7 @@ function coerceCanvasPreview(
       ...(preferredHeight ? { preferredHeight } : {}),
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
+      ...(sandbox ? { sandbox } : {}),
     };
   }
   const sourceType = getRecordStringField(source, "type")?.trim().toLowerCase();
@@ -125,6 +122,7 @@ function coerceCanvasPreview(
       ...(preferredHeight ? { preferredHeight } : {}),
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
+      ...(sandbox ? { sandbox } : {}),
     };
   }
   return undefined;
@@ -184,7 +182,7 @@ export function extractCanvasFromText(
   outputText: string | undefined,
   _toolName?: string,
 ): CanvasPreview | undefined {
-  const parsed = tryParseJsonRecord(outputText);
+  const parsed = outputText ? asOptionalRecord(safeParseJson(outputText)) : undefined;
   return coerceCanvasPreview(parsed);
 }
 
@@ -203,7 +201,10 @@ export function extractCanvasShortcodes(text: string | undefined): {
     attrs: Record<string, string>;
     body?: string;
   }> = [];
-  const blockRe = /\[embed\s+([^\]]*?)\]([\s\S]*?)\[\/embed\]/gi;
+  // Exclude a self-closing open tag ("[embed ... /]") from starting a block
+  // match by requiring the attrs group not to end with a slash; otherwise the
+  // block regex greedily swallows visible text up to a later stray [/embed].
+  const blockRe = /\[embed\s+([^\]]*?[^\]/]|)\]([\s\S]*?)\[\/embed\]/gi;
   const selfClosingRe = /\[embed\s+([^\]]*?)\/\]/gi;
   for (const re of [blockRe, selfClosingRe]) {
     let match: RegExpExecArray | null;

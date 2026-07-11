@@ -9,12 +9,14 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
+  isValidAgentHarnessSessionStoreEntry,
   loadSessionStore,
   resolveSessionFilePath,
   resolveStorePath,
   updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const FEISHU_STATE_DIR = "feishu";
 const BACKUP_PREFIX = "feishu-state-repair";
@@ -63,14 +65,14 @@ type FeishuDoctorSessionEntry = {
   entry: FeishuSessionEntry;
 };
 
-export type FeishuDoctorInspection = {
+type FeishuDoctorInspection = {
   stateDir: string;
   feishuStateDir: string;
   findings: FeishuDoctorFinding[];
   sessionEntries: FeishuDoctorSessionEntry[];
 };
 
-export type FeishuDoctorRepairReport = {
+type FeishuDoctorRepairReport = {
   backupDir: string;
   stateDirRepairAttempted: boolean;
   rebuiltStateDir: boolean;
@@ -82,10 +84,6 @@ export type FeishuDoctorRepairReport = {
 
 function timestampForPath(now = new Date()): string {
   return now.toISOString().replaceAll(":", "-");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function toFeishuSessionEntry(value: unknown): FeishuSessionEntry {
@@ -547,7 +545,7 @@ function collectRepairSessionEntries(
   );
 }
 
-export function inspectFeishuDoctorState(params: {
+function inspectFeishuDoctorState(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): FeishuDoctorInspection {
@@ -562,6 +560,11 @@ export function inspectFeishuDoctorState(params: {
     for (const [key, entry] of Object.entries(store).toSorted(([left], [right]) =>
       left.localeCompare(right),
     )) {
+      // Harness ownership supersedes channel-derived route metadata. Feishu
+      // doctor must not diagnose or clean up another runtime's locked row.
+      if (isRecord(entry) && isValidAgentHarnessSessionStoreEntry(key, entry)) {
+        continue;
+      }
       if (!isFeishuSessionEntry(key, entry)) {
         continue;
       }
@@ -741,12 +744,19 @@ async function repairFeishuDoctorState(params: {
         (store) => {
           const removed: typeof group.entries = [];
           for (const key of keys) {
-            if (Object.hasOwn(store, key)) {
-              delete store[key];
-              const entry = group.entries.find((candidate) => candidate.key === key);
-              if (entry) {
-                removed.push(entry);
-              }
+            const currentEntry = store[key];
+            // Recheck under the store update lock because a harness can claim
+            // a previously flagged row after inspection but before repair.
+            if (
+              !Object.hasOwn(store, key) ||
+              (currentEntry && isValidAgentHarnessSessionStoreEntry(key, currentEntry))
+            ) {
+              continue;
+            }
+            delete store[key];
+            const entry = group.entries.find((candidate) => candidate.key === key);
+            if (entry) {
+              removed.push(entry);
             }
           }
           return removed;

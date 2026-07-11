@@ -277,15 +277,13 @@ export function mergeRuntimeOptions(params: {
   patch?: Partial<AcpSessionRuntimeOptions>;
 }): AcpSessionRuntimeOptions {
   const current = normalizeRuntimeOptions(params.current);
-  const patch = normalizeRuntimeOptions(validateRuntimeOptionPatch(params.patch));
-  const mergedExtras = {
-    ...current.backendExtras,
-    ...patch.backendExtras,
-  };
+  const patch = validateRuntimeOptionPatch(params.patch);
   return normalizeRuntimeOptions({
     ...current,
     ...patch,
-    ...(Object.keys(mergedExtras).length > 0 ? { backendExtras: mergedExtras } : {}),
+    ...(patch.backendExtras
+      ? { backendExtras: { ...current.backendExtras, ...patch.backendExtras } }
+      : {}),
   });
 }
 

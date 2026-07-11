@@ -13,12 +13,16 @@ export * from "./sessions/reset.js";
 export {
   canonicalizeSessionEntryAliases,
   deleteSessionEntryLifecycle,
+  patchSessionEntryWithKey,
   resetSessionEntryLifecycle,
+  resolveSessionEntryCandidateTarget,
   type CanonicalizeSessionEntryAliasesResult,
   type DeleteSessionEntryLifecycleParams,
   type DeleteSessionEntryLifecycleResult,
+  type ResolvedSessionEntryCandidateTarget,
   type ResetSessionEntryLifecycleParams,
   type ResetSessionEntryLifecycleResult,
+  type SessionEntryCandidateAccessScope,
   type SessionLifecycleArchivedTranscript,
   type SessionLifecycleStoreTarget,
 } from "./sessions/session-accessor.js";

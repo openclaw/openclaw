@@ -37,9 +37,9 @@ const historyWindowFiles = [
   "extensions/qqbot/src/bridge/sdk-adapter.ts",
   "extensions/signal/src/monitor/event-handler.ts",
   "extensions/slack/src/monitor/message-handler/prepare.ts",
-  "extensions/telegram/src/bot-message-context.body.ts",
   "extensions/telegram/src/bot-message-context.session.ts",
   "extensions/telegram/src/bot-message-dispatch.ts",
+  "extensions/telegram/src/group-history-window.ts",
   "extensions/whatsapp/src/auto-reply/monitor/group-gating.ts",
   "extensions/zalouser/src/monitor.ts",
 ];

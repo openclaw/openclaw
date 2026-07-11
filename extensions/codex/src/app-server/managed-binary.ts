@@ -12,6 +12,11 @@ import { MANAGED_CODEX_APP_SERVER_PACKAGE } from "./version.js";
 
 const CODEX_APP_SERVER_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_PLUGIN_ROOT = resolveDefaultCodexPluginRoot(CODEX_APP_SERVER_MODULE_DIR);
+// ChatGPT.app is the current desktop owner; keep Codex.app as the legacy fallback.
+const MACOS_DESKTOP_CODEX_APP_SERVER_COMMANDS = [
+  "/Applications/ChatGPT.app/Contents/Resources/codex",
+  "/Applications/Codex.app/Contents/Resources/codex",
+] as const;
 
 type ManagedCodexAppServerPaths = {
   commandPath: string;
@@ -39,16 +44,19 @@ export async function resolveManagedCodexAppServerStartOptions(
     pluginRoot: options.pluginRoot,
   });
   const pathExists = options.pathExists ?? commandPathExists;
-  const commandPath = await findManagedCodexAppServerCommandPath({
+  const commandPaths = await findManagedCodexAppServerCommandPaths({
     candidateCommandPaths: paths.candidateCommandPaths,
     pathExists,
     platform,
   });
+  const commandPath = commandPaths[0];
+  const managedFallbackCommandPaths = commandPaths.slice(1);
 
   return {
     ...startOptions,
     command: commandPath,
     commandSource: "resolved-managed",
+    ...(managedFallbackCommandPaths.length > 0 ? { managedFallbackCommandPaths } : {}),
   };
 }
 
@@ -77,10 +85,15 @@ function resolveManagedCodexAppServerCommandCandidates(
   const roots = resolveManagedCodexAppServerCandidateRoots(pluginRoot, platform);
   return [
     ...new Set([
+      ...resolveDesktopCodexAppServerCommandCandidates(platform),
       ...roots.map((root) => pathApi.join(root, "node_modules", ".bin", commandName)),
       ...resolveManagedCodexPackageBinCandidates(roots, platform),
     ]),
   ];
+}
+
+function resolveDesktopCodexAppServerCommandCandidates(platform: NodeJS.Platform): string[] {
+  return platform === "darwin" ? [...MACOS_DESKTOP_CODEX_APP_SERVER_COMMANDS] : [];
 }
 
 function resolveDefaultCodexPluginRoot(moduleDir: string): string {
@@ -195,15 +208,19 @@ function pathForPlatform(platform: NodeJS.Platform): typeof path {
   return platform === "win32" ? path.win32 : path.posix;
 }
 
-async function findManagedCodexAppServerCommandPath(params: {
+async function findManagedCodexAppServerCommandPaths(params: {
   candidateCommandPaths: readonly string[];
   pathExists: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
   platform: NodeJS.Platform;
-}): Promise<string> {
+}): Promise<string[]> {
+  const commandPaths: string[] = [];
   for (const commandPath of params.candidateCommandPaths) {
     if (await params.pathExists(commandPath, params.platform)) {
-      return commandPath;
+      commandPaths.push(commandPath);
     }
+  }
+  if (commandPaths.length > 0) {
+    return commandPaths;
   }
 
   throw new Error(

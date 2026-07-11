@@ -68,5 +68,8 @@ export type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendExecSpec,
+  SandboxBackendPreparedWorkdirDiscarder,
+  SandboxBackendWorkdirValidation,
+  SandboxBackendWorkdirValidator,
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";

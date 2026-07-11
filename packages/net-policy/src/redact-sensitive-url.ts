@@ -41,6 +41,14 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
 // category Lo, so \p{C}\p{Z} alone would let them splice sensitive key names.
 const URL_QUERY_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
 
+// Telegram Bot API credentials live in `/bot<token>/...` path segments rather
+// than userinfo or query params. Keep this shape aligned with logging/redact.ts.
+const TELEGRAM_BOT_TOKEN_PATH_RE = /\/bot\d{6,}(?::|%3[aA])[A-Za-z0-9_-]{20,}(?=\/|$)/giu;
+
+function redactSensitiveUrlPath(value: string): string {
+  return value.replace(TELEGRAM_BOT_TOKEN_PATH_RE, "/bot***");
+}
+
 function normalizeUrlQueryParamName(name: string): string {
   const stripped = name.replace(URL_QUERY_NAME_SEPARATOR_RE, "");
   try {
@@ -82,6 +90,11 @@ export function redactSensitiveUrl(value: string): string {
   try {
     const parsed = new URL(value);
     let mutated = false;
+    const redactedPath = redactSensitiveUrlPath(parsed.pathname);
+    if (redactedPath !== parsed.pathname) {
+      parsed.pathname = redactedPath;
+      mutated = true;
+    }
     if (parsed.username || parsed.password) {
       parsed.username = parsed.username ? "***" : "";
       parsed.password = parsed.password ? "***" : "";
@@ -105,9 +118,10 @@ export function redactSensitiveUrlLikeString(value: string): string {
   if (redactedUrl !== value) {
     return redactedUrl;
   }
-  return value
+  const redactedFallback = value
     .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
     .replace(/([?&])([^=&]+)=([^&]*)/g, (match, prefix: string, key: string) =>
       isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
     );
+  return redactSensitiveUrlPath(redactedFallback);
 }

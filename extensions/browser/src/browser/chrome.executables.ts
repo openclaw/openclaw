@@ -24,6 +24,7 @@ const CHROME_VERSION_RE = /\b(\d+)(?:\.\d+){1,3}\b/g;
 const PLAYWRIGHT_BROWSERS_PATH_ENV = "PLAYWRIGHT_BROWSERS_PATH";
 const BROWSER_VERSION_TIMEOUT_MS = 6000;
 const MAC_PLISTBUDDY_TIMEOUT_MS = 800;
+const WINDOWS_FILE_METADATA_TIMEOUT_MS = 4000;
 
 const CHROMIUM_BUNDLE_IDS = new Set([
   "com.google.Chrome",
@@ -743,13 +744,19 @@ export function resolveGoogleChromeExecutableForPlatform(
   return null;
 }
 
-/** Read a browser executable version string using its command-line flag. */
+/** Read a browser executable version from platform metadata or a command-line probe. */
 export function readBrowserVersion(executablePath: string): string | null {
   if (process.platform === "darwin") {
     const bundleVersion = readMacBundleBrowserVersion(executablePath);
     if (bundleVersion) {
       return bundleVersion;
     }
+  }
+
+  if (process.platform === "win32") {
+    // Windows GUI browsers do not report `--version` to inherited stdout.
+    // Read PE metadata first, then use the install layout only as a safe fallback.
+    return readWindowsBrowserVersion(executablePath);
   }
 
   const output = execText(executablePath, ["--version"], BROWSER_VERSION_TIMEOUT_MS);
@@ -770,6 +777,50 @@ function readMacBundleBrowserVersion(executablePath: string): string | null {
     ["-c", "Print :CFBundleShortVersionString", plistPath],
     MAC_PLISTBUDDY_TIMEOUT_MS,
   );
+}
+
+const WINDOWS_VERSION_DIR_RE = /^\d+(?:\.\d+){1,3}$/;
+
+function readWindowsBrowserVersion(executablePath: string): string | null {
+  // Read the inspected executable's authoritative PE metadata. Pass the path as
+  // data so a configured path cannot become part of the PowerShell program.
+  const configuredSystemRoot = normalizeOptionalString(process.env.SystemRoot);
+  const systemRoot =
+    configuredSystemRoot && path.win32.isAbsolute(configuredSystemRoot)
+      ? configuredSystemRoot
+      : "C:\\Windows";
+  const powershellPath = path.win32.join(
+    systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  const metadataVersion = execText(
+    powershellPath,
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($args[0]).ProductVersion",
+      executablePath,
+    ],
+    WINDOWS_FILE_METADATA_TIMEOUT_MS,
+  );
+  if (metadataVersion) {
+    return metadataVersion.replace(/\s+/g, " ").trim();
+  }
+
+  // Standard Chromium installers also keep a versioned child directory. Only
+  // trust that layout when it is unambiguous; updates may leave two builds.
+  try {
+    const versionDirs = fs
+      .readdirSync(path.win32.dirname(executablePath), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && WINDOWS_VERSION_DIR_RE.test(entry.name));
+    return versionDirs.length === 1 ? (versionDirs[0]?.name ?? null) : null;
+  } catch {
+    return null;
+  }
 }
 
 function resolveMacAppBundlePath(executablePath: string): string | null {

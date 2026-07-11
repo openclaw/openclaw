@@ -32,20 +32,13 @@ import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
   "base64",
 );
-const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
-  "minLength",
-  "maxLength",
-  "minItems",
-  "maxItems",
-  "minContains",
-  "maxContains",
-]);
-
+const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set(["minContains", "maxContains"]);
 function collectActionValues(schema: unknown, values: Set<string>): void {
   if (!schema || typeof schema !== "object") {
     return;
@@ -440,6 +433,83 @@ describe("createOpenClawCodingTools", () => {
     expect(toolNameList(tools)).toContain("message");
   });
 
+  it("preserves configured media tools through local model lean filtering", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+          list: [
+            {
+              id: "artist",
+              tools: {
+                alsoAllow: ["video_generate"],
+                byProvider: {
+                  ollama: {
+                    alsoAllow: ["tts"],
+                  },
+                },
+              },
+            },
+          ],
+        },
+        tools: {
+          alsoAllow: ["pdf"],
+          byProvider: {
+            "ollama/qwen3.5:9b": {
+              alsoAllow: ["image_generate"],
+            },
+          },
+        },
+      },
+      agentId: "artist",
+      modelProvider: "ollama",
+      modelId: "qwen3.5:9b",
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toEqual(
+      expect.arrayContaining(["image_generate", "pdf", "tts", "video_generate"]),
+    );
+  });
+
+  it("does not treat built-in profile tools as lean-mode overrides", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+        tools: {
+          profile: "coding",
+        },
+      },
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).not.toEqual(
+      expect.arrayContaining(["image_generate", "video_generate"]),
+    );
+  });
+
   it("preserves forced message through local model lean filtering without runtime allowlist", () => {
     const tools = createOpenClawCodingTools({
       config: {
@@ -522,6 +592,53 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
+  it("passes configured filesystem policy to OpenClaw tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { fs: { workspaceOnly: true } } },
+    });
+
+    expect(latestCreateOpenClawToolsOptions().fsPolicy).toEqual({ workspaceOnly: true });
+  });
+
+  it("uses the canonical spawn workspace for follow-up task suggestions", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const sandboxDir = "/sandbox/workspace";
+
+    createOpenClawCodingTools({
+      sandbox: createAgentToolsSandboxContext({
+        workspaceDir: sandboxDir,
+        workspaceAccess: "ro",
+        fsBridge: createHostSandboxFsBridge(sandboxDir),
+      }),
+      workspaceDir: "/agent/workspace",
+      cwd: sandboxDir,
+      spawnWorkspaceDir: "/host/project",
+    });
+
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      workspaceDir: "/agent/workspace",
+      spawnWorkspaceDir: "/host/project",
+      cwd: "/host/project",
+    });
+  });
+
+  it("keeps an unsandboxed task repo as the follow-up suggestion cwd", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      workspaceDir: "/agent/workspace",
+      cwd: "/task/repo",
+      spawnWorkspaceDir: "/agent/workspace",
+    });
+
+    expect(latestCreateOpenClawToolsOptions().cwd).toBe("/task/repo");
+  });
+
   it("skips unrelated tool families when construction is planned from a narrow allowlist", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
@@ -587,7 +704,7 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).not.toHaveBeenCalled();
   });
 
-  it("forwards active model metadata to plugin-only tool construction", () => {
+  it("forwards prepared run facts to plugin-only tool construction", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
     const resolvePluginToolsSpy = vi
@@ -601,6 +718,7 @@ describe("createOpenClawCodingTools", () => {
         runtimeToolAllowlist: ["memory_search"],
         modelProvider: "openrouter",
         modelId: "openrouter/auto",
+        nativeChannelId: "oc_native_chat",
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: false,
@@ -615,9 +733,107 @@ describe("createOpenClawCodingTools", () => {
       const pluginToolOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
       expect(pluginToolOptions?.modelProvider).toBe("openrouter");
       expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
+      expect(pluginToolOptions?.nativeChannelId).toBe("oc_native_chat");
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }
+  });
+
+  it("wraps plugin-only tools with trusted caller routing context", async () => {
+    let observedIdentity: unknown;
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([
+        {
+          name: "file_fetch",
+          label: "File fetch",
+          description: "Fetch a file",
+          parameters: { type: "object", properties: {} },
+          execute: async () => {
+            observedIdentity = getGatewayToolCallerIdentity();
+            return { content: [{ type: "text" as const, text: "ok" }], details: {} };
+          },
+        },
+      ]);
+
+    try {
+      const tools = createOpenClawCodingTools({
+        config: testConfig,
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:alice",
+        messageProvider: "discord-voice",
+        messageChannel: "discord",
+        messageTo: "channel:123",
+        agentAccountId: "work",
+        messageThreadId: "42",
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["file_fetch"],
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      await requireTool(tools, "file_fetch").execute?.("tool-call-1", {});
+      expect(observedIdentity).toEqual({
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:alice",
+        turnSourceChannel: "discord",
+        turnSourceTo: "channel:123",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "42",
+      });
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
+  it("forwards owner identity to plugin-only tool construction", () => {
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([]);
+
+    try {
+      createOpenClawCodingTools({
+        config: testConfig,
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["codex_threads"],
+        senderIsOwner: true,
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
+      expect(resolvePluginToolsSpy.mock.calls[0]?.[0].options?.senderIsOwner).toBe(true);
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
+  it("forwards the native channel id through standard tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      chatType: "group",
+      nativeChannelId: "oc_native_chat",
+      messageActionTurnCapability: "turn-capability-1",
+    });
+
+    expect(latestCreateOpenClawToolsOptions().nativeChannelId).toBe("oc_native_chat");
+    expect(latestCreateOpenClawToolsOptions().currentChatType).toBe("group");
+    expect(latestCreateOpenClawToolsOptions().messageActionTurnCapability).toBe(
+      "turn-capability-1",
+    );
   });
 
   it("forwards auth profiles to plugin-only tool construction", () => {
@@ -1369,12 +1585,7 @@ describe("createOpenClawCodingTools", () => {
         `${tool.name}.parameters`,
         XAI_UNSUPPORTED_SCHEMA_KEYWORDS,
       );
-      expect(
-        violations.filter((violation) => {
-          const keyword = violation.split(".").at(-1) ?? "";
-          return XAI_UNSUPPORTED_SCHEMA_KEYWORDS.has(keyword);
-        }),
-      ).toStrictEqual([]);
+      expect(violations).toStrictEqual([]);
     }
   });
 

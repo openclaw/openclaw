@@ -1,6 +1,6 @@
 // Zalo tests cover monitor.pairing.lifecycle plugin behavior.
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
@@ -8,6 +8,7 @@ import {
   settleAsyncWork,
 } from "./test-support/lifecycle-test-support.js";
 import {
+  loadCachedLifecycleMonitorModule,
   resetLifecycleTestState,
   sendMessageMock,
   setLifecycleRuntimeCore,
@@ -17,6 +18,10 @@ import {
 describe("Zalo pairing lifecycle", () => {
   const readAllowFromStoreMock = vi.fn(async () => [] as string[]);
   const upsertPairingRequestMock = vi.fn(async () => ({ code: "PAIRCODE", created: true }));
+
+  beforeAll(async () => {
+    await loadCachedLifecycleMonitorModule("zalo-pairing-lifecycle");
+  });
 
   beforeEach(async () => {
     await resetLifecycleTestState();

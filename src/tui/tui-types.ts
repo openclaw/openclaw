@@ -1,6 +1,7 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines shared TUI state, backend, and event types.
 import type { SessionGoal } from "../config/sessions/types.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { GatewayAgentRuntime } from "../shared/session-types.js";
 
 export type TuiOptions = {
   local?: boolean;
@@ -26,6 +27,10 @@ export type TuiResult = {
   exitReason: TuiExitReason;
   crestodianMessage?: string;
 };
+
+export type TuiHistoryLoadResult =
+  | { loaded: true; inFlightRunId: string | null }
+  | { loaded: false };
 
 export type ChatEvent = {
   runId: string;
@@ -80,6 +85,7 @@ export type SessionInfo = {
   reasoningLevel?: string;
   model?: string;
   modelProvider?: string;
+  agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
@@ -92,6 +98,8 @@ export type SessionInfo = {
   totalTokensFresh?: boolean;
   goal?: SessionGoal;
   responseUsage?: ResponseUsageMode;
+  /** Resolved effective usage mode (session override → channel config → default → off). Set by the gateway; the TUI uses this for no-arg toggle cycles so the cycle starts from the effective visible mode rather than the raw session value. */
+  effectiveResponseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;
 };

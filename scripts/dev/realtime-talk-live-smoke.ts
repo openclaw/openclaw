@@ -3,10 +3,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { GoogleGenAI, Modality } from "@google/genai";
-import { chromium, type Browser } from "playwright";
-import { createServer } from "vite";
-import { buildOpenAIRealtimeVoiceProvider } from "../../extensions/openai/realtime-voice-provider.ts";
 import { readBoundedResponseText } from "../lib/bounded-response.ts";
 import {
   parseStrictIntegerOption,
@@ -15,20 +11,24 @@ import {
 } from "../lib/dev-tooling-safety.ts";
 
 const OPENAI_REALTIME_MODEL =
-  process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2";
+  process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2.1";
 const OPENAI_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_OPENAI_VOICE?.trim() || "alloy";
 const DEFAULT_OPENAI_HTTP_TIMEOUT_MS = 30_000;
 const OPENAI_HTTP_RESPONSE_MAX_BYTES = 256 * 1024;
 const GOOGLE_REALTIME_MODEL =
-  process.env.OPENCLAW_REALTIME_GOOGLE_MODEL?.trim() ||
-  "gemini-2.5-flash-native-audio-preview-12-2025";
+  process.env.OPENCLAW_REALTIME_GOOGLE_MODEL?.trim() || "gemini-3.1-flash-live-preview";
 const GOOGLE_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_GOOGLE_VOICE?.trim() || "Kore";
 const GOOGLE_LIVE_WS_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 
 type RealtimeSmokeCliOptions = {
   help: boolean;
+  openAIOnly: boolean;
 };
+
+// Keep live stacks behind their owning smoke paths so help and safety helpers stay lightweight.
+type Browser = import("playwright").Browser;
+type ViteDevServer = Awaited<ReturnType<(typeof import("vite"))["createServer"]>>;
 
 type SmokeResult = {
   name: string;
@@ -66,7 +66,8 @@ function usage(): string {
     "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts [options]",
     "",
     "Options:",
-    "  -h, --help    Show this help",
+    "  --openai-only  Run only the OpenAI backend and browser legs",
+    "  -h, --help     Show this help",
     "",
     "Environment:",
     "  OPENAI_API_KEY",
@@ -76,12 +77,15 @@ function usage(): string {
 
 function parseRealtimeSmokeArgs(argv = process.argv.slice(2)): RealtimeSmokeCliOptions {
   for (const arg of argv) {
-    if (arg === "--help" || arg === "-h") {
+    if (arg === "--help" || arg === "-h" || arg === "--openai-only") {
       continue;
     }
     throw new CliArgumentError(`Unknown argument: ${arg}`);
   }
-  return { help: argv.includes("--help") || argv.includes("-h") };
+  return {
+    help: argv.includes("--help") || argv.includes("-h"),
+    openAIOnly: argv.includes("--openai-only"),
+  };
 }
 
 function getEnv(name: string): string | undefined {
@@ -269,6 +273,8 @@ async function createOpenAIClientSecret(
 }
 
 async function smokeOpenAIBackendBridge(apiKey: string): Promise<SmokeResult> {
+  const { buildOpenAIRealtimeVoiceProvider } =
+    await import("../../extensions/openai/realtime-voice-provider.ts");
   const provider = buildOpenAIRealtimeVoiceProvider();
   const events: string[] = [];
   const bridge = provider.createBridge({
@@ -445,6 +451,7 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
 }
 
 async function createGoogleLiveToken(apiKey: string): Promise<string> {
+  const { GoogleGenAI, Modality } = await import("@google/genai");
   const ai = new GoogleGenAI({
     apiKey,
     httpOptions: { apiVersion: "v1alpha" },
@@ -574,9 +581,10 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
 }
 
 async function smokeGatewayRelayBrowser(browser: Browser): Promise<SmokeResult> {
-  let server: Awaited<ReturnType<typeof createServer>> | undefined;
+  let server: ViteDevServer | undefined;
   const dir = await mkdtemp(path.join(tmpdir(), "openclaw-realtime-talk-"));
   try {
+    const { createServer } = await import("vite");
     const repoRoot = process.cwd().replaceAll("\\", "/");
     const relayModulePath = JSON.stringify(
       `/@fs/${repoRoot}/ui/src/ui/chat/realtime-talk-gateway-relay.ts`,
@@ -766,6 +774,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     console.log(usage());
     return;
   }
+  const { chromium } = await import("playwright");
   const openAIKey = getEnv("OPENAI_API_KEY");
   const googleKey = getEnv("GEMINI_API_KEY") ?? getEnv("GOOGLE_API_KEY");
   const browser = await chromium.launch({
@@ -794,16 +803,18 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
       results.push(await smokeOpenAIBackendBridge(openAIKey));
       results.push(await smokeOpenAIWebRtc(browser, openAIKey));
     }
-    if (!googleKey) {
-      results.push({
-        name: "google-live-browser-ws",
-        ok: false,
-        details: { error: "GEMINI_API_KEY or GOOGLE_API_KEY missing" },
-      });
-    } else {
-      results.push(await smokeGoogleLiveBrowserWs(browser, googleKey));
+    if (!cli.openAIOnly) {
+      if (!googleKey) {
+        results.push({
+          name: "google-live-browser-ws",
+          ok: false,
+          details: { error: "GEMINI_API_KEY or GOOGLE_API_KEY missing" },
+        });
+      } else {
+        results.push(await smokeGoogleLiveBrowserWs(browser, googleKey));
+      }
+      results.push(await smokeGatewayRelayBrowser(browser));
     }
-    results.push(await smokeGatewayRelayBrowser(browser));
   } finally {
     await browser.close();
   }

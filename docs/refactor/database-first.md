@@ -524,8 +524,8 @@ The branch already has a real shared SQLite base:
   shape into SQLite before normal runtime use.
 - QQBot credential recovery snapshots now live in SQLite plugin state under
   `qqbot/credential-backups`. Runtime no longer writes
-  `qqbot/data/credential-backup*.json`; doctor imports and removes those
-  legacy backup files with the other QQBot state inputs.
+  `qqbot/data/credential-backup*.json`; the QQBot doctor contract imports and
+  archives those legacy backup files from the active state directory.
 - Gateway reload planning compares SQLite installed-plugin index snapshots under
   an internal `installedPluginIndex.installRecords.*` diff namespace. Runtime
   reload decisions no longer wrap those rows in fake `plugins.installs` config
@@ -1129,9 +1129,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   now use shared SQLite plugin state. The old `imessage/catchup/*.json`,
   `imessage/reply-cache.jsonl`, and `imessage/sent-echoes.jsonl` files are
   doctor inputs only.
-- Feishu message dedupe rows now use shared SQLite plugin state instead of
-  `feishu/dedup/*.json` files. Its legacy JSON import plan lives in the Feishu
-  plugin setup/doctor migration surface, not in core migration code.
+- Feishu message dedupe rows now ride the core claimable dedupe
+  (`feishu.dedup.*` namespaces in shared SQLite plugin state) instead of
+  `feishu/dedup/*.json` files or the retired hand-rolled `dedup.*` store, with
+  no legacy import because replay-protection cache rebuilds after upgrade.
 - Microsoft Teams conversations, polls, pending upload buffers, and feedback
   learnings now use shared SQLite plugin state/blob tables. The pending upload
   path uses `plugin_blob_entries` so media buffers are stored as SQLite BLOBs
@@ -1302,7 +1303,11 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   credentials, and recovery keys now use shared SQLite plugin state/blob
   tables. Runtime path structs no longer expose a `storage-meta.json` metadata
   path; that filename is a legacy migration input only. Their legacy JSON import
-  plan lives in the Matrix plugin setup/doctor migration surface.
+  plan lives in the Matrix plugin setup/doctor migration surface. Inbound
+  dedupe markers ride the core claimable dedupe (`matrix.inbound-dedupe.*`
+  namespaces in the shared state DB); the Matrix doctor state migration imports
+  the retired per-root `inbound-dedupe` rows and `inbound-dedupe.json` once,
+  then the runtime reads only the claimable-dedupe store.
 - Matrix startup no longer scans, reports, or completes legacy Matrix file
   state. Matrix file detection, legacy crypto snapshot creation, room-key
   restore migration state, import, and source removal are all doctor-owned.
@@ -1576,10 +1581,9 @@ Move these into the global database:
   `voice-call` / `calls` namespace instead of `calls.jsonl`; the plugin CLI
   tails and summarizes SQLite-backed call history.
 - QQBot gateway sessions, known-user records, and ref-index quote cache now use
-  SQLite plugin state under `qqbot` namespaces (`sessions`, `known-users`,
-  `ref-index`) instead of `session-*.json`, `known-users.json`, and
-  `ref-index.jsonl`; the QQBot doctor/setup migration imports and removes the
-  legacy files.
+  SQLite plugin state under `qqbot` namespaces (`gateway-sessions`,
+  `known-users`, `ref-index`) instead of `session-*.json`, `known-users.json`,
+  and `ref-index.jsonl`. Those legacy files are caches and are not migrated.
 - Discord model-picker preferences, command-deploy hashes, and thread bindings
   now use SQLite plugin state under `discord` namespaces
   (`model-picker-preferences`, `command-deploy-hashes`, `thread-bindings`)
@@ -1615,13 +1619,14 @@ Move these into the global database:
 - Matrix sync cache, storage metadata, thread bindings, inbound dedupe markers,
   startup verification cooldown state, credentials, recovery keys, and SDK
   IndexedDB crypto snapshots now use SQLite plugin state/blob namespaces under
-  `matrix` (`sync-store`, `storage-meta`, `thread-bindings`, `inbound-dedupe`,
+  `matrix` (`sync-store`, `storage-meta`, `thread-bindings`,
+  `matrix.inbound-dedupe.*` via the core claimable dedupe,
   `startup-verification`, `credentials`, `recovery-key`, `idb-snapshots`)
   instead of `bot-storage.json`, `storage-meta.json`, `thread-bindings.json`,
   `inbound-dedupe.json`, `startup-verification.json`, `credentials.json`,
   `recovery-key.json`, and `crypto-idb-snapshot.json`; the Matrix doctor/setup
-  migration imports and removes those legacy files from account-scoped Matrix
-  storage roots.
+  migration imports and removes those legacy files (and the retired per-root
+  `inbound-dedupe` SQLite rows) from account-scoped Matrix storage roots.
 - Nostr bus cursors and profile publish state now use SQLite plugin state under
   `nostr` namespaces (`bus-state`, `profile-state`) instead of
   `bus-state-*.json` and `profile-state-*.json`; the Nostr doctor/setup
@@ -2144,11 +2149,11 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `cron/jobs.json`
 - `jobs-state.json`
 - `device-pair-notify.json`
-- `devices/pending.json`
-- `devices/paired.json`
-- `devices/bootstrap.json`
-- `nodes/pending.json`
-- `nodes/paired.json`
+- `devices/pending.json` / `devices/paired.json` / `devices/bootstrap.json`
+  (retired 2026.7: runtime store is `device_pairing_*` /
+  `device_bootstrap_tokens` in the shared state DB; paired records import at
+  gateway startup, transient pending/bootstrap rows are dropped)
+- `nodes/pending.json` / `nodes/paired.json` (retired 2026.7: folded into paired device records at gateway startup)
 - `identity/device.json`
 - `identity/device-auth.json`
 - `push/web-push-subscriptions.json`

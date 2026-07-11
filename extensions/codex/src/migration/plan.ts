@@ -43,7 +43,7 @@ export type CodexPluginMigrationConfigEntry = {
   configKey: string;
   pluginName: string;
   enabled: boolean;
-  allowDestructiveActions?: "auto";
+  allowDestructiveActions?: "auto" | "ask";
 };
 
 type CodexPluginMigrationBlockSkipDetails = {
@@ -168,15 +168,18 @@ function isLegacyDestructivePolicyRepair(
   );
 }
 
-function isLegacyDestructivePolicyConfigEntryRepair(
+function readExistingPluginAllowDestructiveActions(
   existing: unknown,
   pluginName: string,
-): boolean {
+): "auto" | "ask" | undefined {
   const existingEntry = isRecord(existing) ? existing : undefined;
-  return (
-    existingEntry?.allow_destructive_actions === "on-request" &&
-    existingEntry.pluginName === pluginName
+  if (existingEntry?.pluginName !== pluginName) {
+    return undefined;
+  }
+  const normalized = normalizeExistingAllowDestructiveActions(
+    existingEntry.allow_destructive_actions,
   );
+  return normalized === "auto" || normalized === "ask" ? normalized : undefined;
 }
 
 function buildPluginItems(
@@ -203,12 +206,15 @@ function buildPluginItems(
         enabled: true,
         marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
         pluginName: plugin.pluginName,
-        ...(isLegacyDestructivePolicyConfigEntryRepair(
-          existingPluginEntries[configKey],
-          plugin.pluginName,
-        )
-          ? { allow_destructive_actions: "auto" }
-          : {}),
+        ...(() => {
+          const allowDestructiveActions = readExistingPluginAllowDestructiveActions(
+            existingPluginEntries[configKey],
+            plugin.pluginName,
+          );
+          return allowDestructiveActions
+            ? { allow_destructive_actions: allowDestructiveActions }
+            : {};
+        })(),
       };
       const conflict =
         !ctx.overwrite &&
@@ -234,8 +240,9 @@ function buildPluginItems(
             pluginName: plugin.pluginName,
             sourceInstalled: plugin.installed === true,
             sourceEnabled: plugin.enabled === true,
-            ...(plannedEntry.allow_destructive_actions === "auto"
-              ? { allowDestructiveActions: "auto" }
+            ...(plannedEntry.allow_destructive_actions === "auto" ||
+            plannedEntry.allow_destructive_actions === "ask"
+              ? { allowDestructiveActions: plannedEntry.allow_destructive_actions }
               : {}),
             ...(plugin.apps && plugin.apps.length > 0 && !shouldVerifyPluginApps(ctx)
               ? { sourceAppVerification: CODEX_PLUGIN_SOURCE_APP_VERIFICATION_UNVERIFIED }
@@ -310,13 +317,15 @@ export function readCodexPluginMigrationConfigEntry(
     configKey,
     pluginName,
     enabled,
-    ...(allowDestructiveActions === "auto" ? { allowDestructiveActions: "auto" } : {}),
+    ...(allowDestructiveActions === "auto" || allowDestructiveActions === "ask"
+      ? { allowDestructiveActions }
+      : {}),
   };
 }
 
 function readExistingAllowDestructiveActions(
   config: MigrationProviderContext["config"],
-): boolean | "auto" | undefined {
+): boolean | "auto" | "ask" | undefined {
   const value = readMigrationConfigPath(config as Record<string, unknown>, [
     ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
     "allow_destructive_actions",
@@ -324,8 +333,16 @@ function readExistingAllowDestructiveActions(
   return normalizeExistingAllowDestructiveActions(value);
 }
 
-function normalizeExistingAllowDestructiveActions(value: unknown): boolean | "auto" | undefined {
-  return value === "auto" || value === "on-request" ? "auto" : asBoolean(value);
+function normalizeExistingAllowDestructiveActions(
+  value: unknown,
+): boolean | "auto" | "ask" | undefined {
+  if (value === "auto" || value === "on-request") {
+    return "auto";
+  }
+  if (value === "ask") {
+    return "ask";
+  }
+  return asBoolean(value);
 }
 
 function readExistingPluginPolicyRepairs(

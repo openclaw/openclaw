@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readRuntimeToolCoverageMetadata } from "./runtime-tool-metadata.js";
+import {
+  type QaRuntimeToolCoverageMetadata,
+  readRuntimeToolCoverageMetadata,
+} from "./runtime-tool-metadata.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -13,6 +16,7 @@ type QaRuntimeToolFixtureConfig = Record<string, unknown> & {
   failurePrompt?: unknown;
   promptSnippet?: unknown;
   failurePromptSnippet?: unknown;
+  happyPathOutputRequired?: unknown;
   ensureImageGeneration?: unknown;
   expectedAvailable?: unknown;
   toolCoverage?: unknown;
@@ -554,6 +558,37 @@ function formatCodexNativeWorkspaceDetails(params: {
     .join("\n");
 }
 
+function formatReportOnlyMockDetails(params: {
+  toolName: string;
+  happyRequest: QaRuntimeToolFixtureRequest;
+  failureRequest: QaRuntimeToolFixtureRequest;
+}) {
+  return [
+    `${params.toolName} mock provider report-only: direct tool output is not required by this fixture`,
+    `${params.toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs(params.happyRequest.plannedToolArgs)}`,
+    `${params.toolName} mock provider failure planned args (diagnostic only): ${formatPlannedToolArgs(params.failureRequest.plannedToolArgs)}`,
+  ].join("\n");
+}
+
+function isAsyncReportOnlyMockCoverage(metadata: QaRuntimeToolCoverageMetadata) {
+  return !metadata.required && /\basync\b/iu.test(metadata.action ?? "");
+}
+
+function plannedRequestHasDeniedInputFailure(request: QaRuntimeToolFixtureRequest) {
+  return (
+    isRecord(request.plannedToolArgs) &&
+    request.plannedToolArgs["__qaFailureMode"] === "denied-input"
+  );
+}
+
+function plannedRequestHasPrompt(request: QaRuntimeToolFixtureRequest) {
+  return (
+    isRecord(request.plannedToolArgs) &&
+    typeof request.plannedToolArgs.prompt === "string" &&
+    request.plannedToolArgs.prompt.trim().length > 0
+  );
+}
+
 function formatKnownHarnessGapDetails(toolName: string, config: QaRuntimeToolFixtureConfig) {
   const knownHarnessGap = isKnownHarnessGap(config.knownHarnessGap) ? config.knownHarnessGap : {};
   const issue = readString(knownHarnessGap.issue);
@@ -627,6 +662,7 @@ export async function runRuntimeToolFixture(
     config.failurePromptSnippet,
     `failure target=${toolName}`,
   );
+  const happyPathOutputRequired = readBoolean(config.happyPathOutputRequired, true);
   const requestCountBefore = env.mock
     ? readQaRuntimeToolFixtureRequests(await deps.fetchJson(`${env.mock.baseUrl}/debug/requests`))
         .length
@@ -650,16 +686,22 @@ export async function runRuntimeToolFixture(
       toolName,
     });
     if (!happyRequest.outputRequest) {
-      if (isKnownHarnessGap(config.knownHarnessGap)) {
-        return formatKnownHarnessGapDetails(toolName, config);
+      const happyPlannedOnly = happyRequest.plannedRequest && !happyPathOutputRequired;
+      if (happyPlannedOnly) {
+        // Async runtime tools prove the start call here; completion is covered
+        // by their task lifecycle scenarios.
+      } else {
+        if (isKnownHarnessGap(config.knownHarnessGap)) {
+          return formatKnownHarnessGapDetails(toolName, config);
+        }
+        throw new Error(
+          happyRequest.plannedRequest
+            ? `expected live happy-path tool output for ${toolName}`
+            : `expected live happy-path tool call for ${toolName}`,
+        );
       }
-      throw new Error(
-        happyRequest.plannedRequest
-          ? `expected live happy-path tool output for ${toolName}`
-          : `expected live happy-path tool call for ${toolName}`,
-      );
     }
-    if (happyRequest.outputRequest.structuredFailure) {
+    if (happyRequest.outputRequest?.structuredFailure) {
       if (isKnownHarnessGap(config.knownHarnessGap)) {
         return formatKnownHarnessGapDetails(toolName, config);
       }
@@ -688,8 +730,13 @@ export async function runRuntimeToolFixture(
     }
     return [
       `${toolName} live provider happy planned args (diagnostic only): ${JSON.stringify(happyRequest.plannedRequest?.args ?? {})}`,
+      happyPathOutputRequired
+        ? undefined
+        : `${toolName} live provider happy direct output not required for this async fixture`,
       `${toolName} live provider failure planned args (diagnostic only): ${JSON.stringify(failureRequest.plannedRequest?.args ?? {})}`,
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   const requests = readQaRuntimeToolFixtureRequests(
@@ -709,7 +756,43 @@ export async function runRuntimeToolFixture(
     excludedPromptSnippet: failurePromptSnippet,
     toolName,
   });
-  if (!happyRequest) {
+  const failurePlannedRequest = findPlannedRequest({
+    requests,
+    requestCountBefore,
+    promptSnippet: failurePromptSnippet,
+    toolName,
+  });
+  const failureRequest = findExecutedRequest({
+    requests,
+    requestCountBefore,
+    promptSnippet: failurePromptSnippet,
+    toolName,
+  });
+  if (
+    isAsyncReportOnlyMockCoverage(metadata) &&
+    happyPlannedRequest &&
+    failurePlannedRequest &&
+    !happyRequest
+  ) {
+    if (!plannedRequestHasPrompt(happyPlannedRequest)) {
+      throw new Error(`expected mock happy-path prompt args for ${toolName}`);
+    }
+    if (!plannedRequestHasDeniedInputFailure(failurePlannedRequest)) {
+      throw new Error(`expected mock failure-path denied-input args for ${toolName}`);
+    }
+    if (failureRequest && !requestHasFailureLikeToolOutput(failureRequest.outputRequest)) {
+      throw new Error(`expected mock failure-path tool failure output for ${toolName}`);
+    }
+    return formatReportOnlyMockDetails({
+      toolName,
+      happyRequest: happyPlannedRequest,
+      failureRequest: failurePlannedRequest,
+    });
+  }
+  // Async runtime tools prove the start call here; completion is covered by
+  // their task lifecycle scenarios.
+  const happyPlannedOnly = Boolean(happyPlannedRequest && !happyPathOutputRequired);
+  if (!happyRequest && !happyPlannedOnly) {
     if (dynamicExposureIntentionallyExcluded) {
       return formatCodexNativeWorkspaceDetails({
         toolName,
@@ -727,24 +810,12 @@ export async function runRuntimeToolFixture(
         : `expected mock happy-path request for ${toolName}`,
     );
   }
-  if (requestHasHappyPathFailureToolOutput(happyRequest.outputRequest)) {
+  if (happyRequest && requestHasHappyPathFailureToolOutput(happyRequest.outputRequest)) {
     if (isKnownHarnessGap(config.knownHarnessGap)) {
       return formatKnownHarnessGapDetails(toolName, config);
     }
     throw new Error(`expected mock happy-path successful tool output for ${toolName}`);
   }
-  const failurePlannedRequest = findPlannedRequest({
-    requests,
-    requestCountBefore,
-    promptSnippet: failurePromptSnippet,
-    toolName,
-  });
-  const failureRequest = findExecutedRequest({
-    requests,
-    requestCountBefore,
-    promptSnippet: failurePromptSnippet,
-    toolName,
-  });
   if (!failureRequest) {
     if (dynamicExposureIntentionallyExcluded) {
       return formatCodexNativeWorkspaceDetails({
@@ -776,13 +847,18 @@ export async function runRuntimeToolFixture(
       toolName,
       tools,
       reason: metadata.reason,
-      happyRequest: happyRequest.plannedRequest,
+      happyRequest: happyRequest?.plannedRequest ?? happyPlannedRequest,
       failureRequest: failureRequest.plannedRequest,
     });
   }
 
   return [
-    `${toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs(happyRequest.plannedRequest.plannedToolArgs)}`,
+    `${toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs((happyRequest?.plannedRequest ?? happyPlannedRequest)?.plannedToolArgs)}`,
+    happyPathOutputRequired
+      ? undefined
+      : `${toolName} mock provider happy direct output not required for this async fixture`,
     `${toolName} mock provider failure planned args (diagnostic only): ${formatPlannedToolArgs(failureRequest.plannedRequest.plannedToolArgs)}`,
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }

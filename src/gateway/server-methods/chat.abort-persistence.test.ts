@@ -2,10 +2,11 @@
  * Tests persistence effects when chat abort requests complete.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   createActiveRun,
@@ -164,22 +165,34 @@ function setMockSessionEntry(transcriptPath: string, sessionId: string, hasEntry
   sessionEntryState.loadCalls = [];
 }
 
+const abortTempDirs: string[] = [];
+
 async function createTranscriptFixture(prefix: string) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const dir = makeTempDir(abortTempDirs, prefix);
   const sessionId = "sess-main";
   const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
   await writeTranscriptHeader(transcriptPath, sessionId);
+  // The accessor resolves transcript targets from the persisted store, so the
+  // fixture seeds a real entry instead of relying on the mocked gateway wrapper.
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: "main", storePath: path.join(dir, "sessions.json") },
+    { sessionId, sessionFile: transcriptPath, updatedAt: Date.now() },
+  );
   setMockSessionEntry(transcriptPath, sessionId);
   return { transcriptPath, sessionId };
 }
 
 async function createMissingEntryFixture(prefix: string) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const dir = makeTempDir(abortTempDirs, prefix);
   const transcriptPath = path.join(dir, "missing.jsonl");
   const sessionId = "client-supplied-session";
   setMockSessionEntry(transcriptPath, sessionId, false);
   return { sessionId };
 }
+
+afterAll(() => {
+  cleanupTempDirs(abortTempDirs);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -393,6 +406,44 @@ describe("chat abort transcript persistence", () => {
       runId: "run-a",
     });
     expect(runBPersisted).toBeUndefined();
+  });
+
+  it("does not persist partials from finalizing runs that reject a session abort", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-finalizing-",
+    );
+    const respond = vi.fn();
+    const finalizingRun = {
+      ...createActiveRun("main", { sessionId }),
+      isAbortable: () => false,
+    };
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        ["run-aborted", createActiveRun("main", { sessionId })],
+        ["run-finalizing", finalizingRun],
+      ]),
+      chatRunBuffers: new Map([
+        ["run-aborted", "Aborted partial"],
+        ["run-finalizing", "Completed reply"],
+      ]),
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main" },
+      respond,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: ["run-aborted"] });
+    expect(finalizingRun.controller.signal.aborted).toBe(false);
+    expect(context.chatAbortControllers.get("run-finalizing")).toBe(finalizingRun);
+
+    const lines = await readTranscriptLines(transcriptPath);
+    expect(findMessageWithIdempotencyKey(lines, "run-aborted:assistant")).toBeDefined();
+    expect(findMessageWithIdempotencyKey(lines, "run-finalizing:assistant")).toBeUndefined();
   });
 
   it("persists /stop partials with stop-command metadata", async () => {
@@ -1210,5 +1261,53 @@ describe("chat abort transcript persistence", () => {
     const lines = await readTranscriptLines(transcriptPath);
     const persisted = findMessageWithIdempotencyKey(lines, `${runId}:assistant`);
     expect(persisted).toBeUndefined();
+  });
+});
+
+describe("chat.abort session identity matching", () => {
+  it("matches an active run by stored sessionId when sessionKey differs", async () => {
+    const storedSessionId = "sess-stored-abc";
+    setMockSessionEntry("", storedSessionId);
+    const runId = "embedded-run-1";
+    const active = createActiveRun("agent:main:embedded-key", { sessionId: storedSessionId });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, active]]),
+    });
+    const respond = vi.fn();
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main" },
+      respond,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: [runId] });
+    expect(active.controller.signal.aborted).toBe(true);
+    expect(sessionEntryState.loadCalls).toContainEqual({ sessionKey: "main", opts: undefined });
+  });
+
+  it("does not match a run whose sessionId differs from the stored entry", async () => {
+    setMockSessionEntry("", "sess-stored-xyz");
+    const runId = "embedded-run-2";
+    const active = createActiveRun("agent:main:other-key", { sessionId: "sess-different" });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, active]]),
+    });
+    const respond = vi.fn();
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main" },
+      respond,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expect(payload).toEqual({ ok: true, aborted: false, runIds: [] });
+    expect(active.controller.signal.aborted).toBe(false);
   });
 });

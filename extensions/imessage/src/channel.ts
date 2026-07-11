@@ -136,6 +136,19 @@ function buildIMessageBaseSessionKey(params: {
   return buildOutboundBaseSessionKey({ ...params, channel: "imessage" });
 }
 
+function isCanonicalIMessageDirectHandle(raw: string, normalized: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed || !normalized) {
+    return false;
+  }
+  // Inbound DMs key sessions by normalized phone number or email. Names and
+  // other bridge aliases can deliver, but cannot prove the reply identity.
+  if (normalized.startsWith("+")) {
+    return /^[+\d\s().-]+$/.test(trimmed);
+  }
+  return /^[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+$/.test(trimmed);
+}
+
 function resolveIMessageOutboundSessionRoute(params: {
   cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];
   agentId: string;
@@ -166,6 +179,7 @@ function resolveIMessageOutboundSessionRoute(params: {
     return {
       sessionKey: baseSessionKey,
       baseSessionKey,
+      recipientSessionExact: isCanonicalIMessageDirectHandle(parsed.to, handle),
       peer,
       chatType: "direct" as const,
       from: directTarget,
@@ -198,6 +212,7 @@ function resolveIMessageOutboundSessionRoute(params: {
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
+    recipientSessionExact: false,
     peer,
     chatType: "group" as const,
     from: `imessage:group:${peerId}`,

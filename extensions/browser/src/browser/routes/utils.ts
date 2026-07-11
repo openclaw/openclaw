@@ -4,6 +4,7 @@
  * Wraps async handlers, profile lookup, JSON errors, and route value coercion
  * shared across browser control endpoints.
  */
+import type { BrowserErrorResponse } from "../errors.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteHandler } from "./types.js";
 
@@ -52,25 +53,21 @@ export function jsonError(res: BrowserResponse, status: number, message: string)
   res.status(status).json({ error: message });
 }
 
+/** Send a mapped browser-domain error while preserving validated metadata. */
+export function jsonBrowserError(res: BrowserResponse, error: BrowserErrorResponse) {
+  const body =
+    "reason" in error
+      ? { error: error.message, reason: error.reason, details: error.details }
+      : { error: error.message };
+  res.status(error.status).json(body);
+}
+
 /** Coerce route values to strings while treating nullish values as empty. */
 export function toStringOrEmpty(value: unknown) {
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return normalizeOptionalString(String(value)) ?? "";
   }
   return "";
-}
-
-/** Coerce route numeric values from numbers or decimal strings. */
-export function toNumber(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  const normalized = typeof value === "string" ? normalizeOptionalString(value) : undefined;
-  if (normalized) {
-    const parsed = Number(normalized);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
 }
 
 /** Coerce route boolean values from booleans or common string forms. */

@@ -65,6 +65,7 @@ type RuntimeSessionStoreReadParams = {
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
   sessionKey: string;
+  readConsistency?: "latest";
   storePath?: string;
 };
 type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">>;
@@ -72,9 +73,46 @@ type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;
   entry: RuntimeSessionEntry;
 };
+type RuntimeCreateSessionEntryResult = {
+  key: string;
+  agentId: string;
+  sessionId: string;
+  entry: RuntimeSessionEntry;
+};
+type RuntimeCreateSessionEntryFinalPatch = {
+  pluginExtensions: RuntimeSessionEntry["pluginExtensions"];
+};
+type RuntimeCreateSessionEntryBaseParams = {
+  cfg: import("../../config/types.openclaw.js").OpenClawConfig;
+  key: string;
+  agentId?: string;
+  label?: string;
+  spawnedCwd?: string;
+  initialEntry: {
+    agentHarnessId: string;
+    modelSelectionLocked?: true;
+    pluginExtensions?: RuntimeSessionEntry["pluginExtensions"];
+  };
+};
+type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
+  (
+    | {
+        /** Retry an interrupted initializer only when persisted trusted state matches exactly. */
+        recoverMatchingInitialEntry: true;
+        afterCreate: (
+          created: RuntimeCreateSessionEntryResult,
+        ) => Promise<RuntimeCreateSessionEntryFinalPatch>;
+      }
+    | {
+        recoverMatchingInitialEntry?: never;
+        afterCreate?: (
+          created: RuntimeCreateSessionEntryResult,
+        ) => Promise<RuntimeCreateSessionEntryFinalPatch | void>;
+      }
+  );
 type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
   fallbackEntry?: RuntimeSessionEntry;
-  maintenanceConfig?: import("../../config/sessions/store.js").ResolvedSessionMaintenanceConfig;
+  maintenanceConfig?: import("../../config/sessions/store.js").ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
   replaceEntry?: boolean;
   update: (
@@ -84,6 +122,11 @@ type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
 };
 type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
   entry: RuntimeSessionEntry;
+};
+type RuntimeSessionWorkAdmissionParams = {
+  storePath: string;
+  sessionKey: string;
+  signal?: AbortSignal;
 };
 type RuntimeSessionStoreEntryUpdateParams = {
   storePath: string;
@@ -99,6 +142,7 @@ export type PluginRuntimeThinkingPolicyRequest = {
   provider?: string | null;
   model?: string | null;
   catalog?: import("../../auto-reply/thinking.js").ThinkingCatalogEntry[];
+  agentRuntime?: string | null;
 };
 export type PluginRuntimeThinkingPolicyLevel = {
   id: import("../../auto-reply/thinking.js").ThinkLevel;
@@ -241,6 +285,9 @@ export type PluginRuntimeCore = {
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+      createSessionEntry: (
+        params: RuntimeCreateSessionEntryParams,
+      ) => Promise<RuntimeCreateSessionEntryResult>;
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
@@ -249,6 +296,10 @@ export type PluginRuntimeCore = {
         params: RuntimeSessionStoreEntryPatchParams,
       ) => Promise<RuntimeSessionEntry | null>;
       upsertSessionEntry: (params: RuntimeUpsertSessionEntryParams) => Promise<void>;
+      runWithWorkAdmission: <T>(
+        params: RuntimeSessionWorkAdmissionParams,
+        run: (signal: AbortSignal) => Promise<T>,
+      ) => Promise<T>;
       /**
        * @deprecated Use getSessionEntry/listSessionEntries for reads and
        * patchSessionEntry/upsertSessionEntry for writes. This whole-store
@@ -398,6 +449,14 @@ export type PluginRuntimeCore = {
   taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
+    acquireLocalService: (
+      target: {
+        providerId: string;
+        baseUrl: string;
+        headers?: HeadersInit;
+      },
+      signal?: AbortSignal | null,
+    ) => Promise<{ release: () => void } | undefined>;
   };
   modelAuth: {
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */

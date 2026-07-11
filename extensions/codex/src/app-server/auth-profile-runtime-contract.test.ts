@@ -8,21 +8,28 @@ import {
 } from "openclaw/plugin-sdk/agent-harness";
 import { AUTH_PROFILE_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodexAppServerClientFactory } from "./client-factory.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
 import {
   readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
-} from "./session-binding.js";
-import { createCodexTestModel } from "./test-support.js";
+} from "./session-binding.test-helpers.js";
+import {
+  adaptCodexTestClientFactory,
+  createCodexTestModel,
+  type CodexTestAppServerClientFactory,
+} from "./test-support.js";
 
-let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
+let codexAppServerClientFactoryForTest: CodexTestAppServerClientFactory | undefined;
 
-type RunCodexAppServerAttemptOptions = NonNullable<
-  Parameters<typeof runCodexAppServerAttemptImpl>[1]
+type RunCodexAppServerAttemptOptions = Omit<
+  NonNullable<Parameters<typeof runCodexAppServerAttemptImpl>[1]>,
+  "bindingStore"
 >;
 
-function setCodexAppServerClientFactoryForTest(factory: CodexAppServerClientFactory): void {
+function setCodexAppServerClientFactoryForTest(factory: CodexTestAppServerClientFactory): void {
   codexAppServerClientFactoryForTest = factory;
 }
 
@@ -34,14 +41,24 @@ function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: RunCodexAppServerAttemptOptions = {},
 ) {
-  const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
-  return runCodexAppServerAttemptImpl(
-    params,
-    clientFactory ? { ...options, clientFactory } : options,
-  );
+  const clientFactory =
+    options.clientFactory ??
+    (codexAppServerClientFactoryForTest
+      ? adaptCodexTestClientFactory(codexAppServerClientFactoryForTest)
+      : undefined);
+  return runCodexAppServerAttemptImpl(params, {
+    ...options,
+    bindingStore: testCodexAppServerBindingStore,
+    ...(clientFactory ? { clientFactory } : {}),
+  });
 }
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
+  registerCodexTestSessionIdentity(
+    sessionFile,
+    AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
+    AUTH_PROFILE_RUNTIME_CONTRACT.sessionKey,
+  );
   return {
     prompt: AUTH_PROFILE_RUNTIME_CONTRACT.workspacePrompt,
     sessionId: AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
@@ -147,7 +164,12 @@ function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "
   const seenAuthProfileIds: Array<string | undefined> = [];
   const seenAgentDirs: Array<string | undefined> = [];
   const requests: Array<{ method: string; params: unknown }> = [];
-  let notify: (notification: unknown) => Promise<void> = async () => undefined;
+  const notificationHandlers = new Set<(notification: unknown) => Promise<void> | void>();
+  const notify = async (notification: unknown) => {
+    await Promise.all(
+      [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
+    );
+  };
   setCodexAppServerClientFactoryForTest(async (_startOptions, authProfileId, agentDir) => {
     seenAuthProfileIds.push(authProfileId);
     seenAgentDirs.push(agentDir);
@@ -163,11 +185,12 @@ function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "
         }
         throw new Error(`unexpected method: ${method}`);
       }),
-      addNotificationHandler: (handler: (notification: unknown) => Promise<void>) => {
-        notify = handler;
-        return () => undefined;
+      addNotificationHandler: (handler: (notification: unknown) => Promise<void> | void) => {
+        notificationHandlers.add(handler);
+        return () => notificationHandlers.delete(handler);
       },
       addRequestHandler: () => () => undefined,
+      addCloseHandler: () => () => undefined,
     } as never;
   });
   return {
@@ -195,6 +218,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
+    resetCodexTestBindingStore();
     vi.useRealTimers();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-auth-contract-"));
   });

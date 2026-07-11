@@ -2,7 +2,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { applyBootstrapHookOverrides } from "../agents/bootstrap-hooks.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
@@ -1264,7 +1266,7 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    expect(registry.trustedToolPolicies ?? []).toHaveLength(0);
+    expect(registry.trustedToolPolicies).toHaveLength(0);
     const loaded = registry.plugins.find((entry) => entry.id === "trusted-policy-register-fail");
     expect(loaded?.status).toBe("error");
     expect(loaded?.error).toContain("register boom");
@@ -1274,6 +1276,38 @@ describe("loadOpenClawPlugins", () => {
       pluginId: "trusted-policy-register-fail",
       message: "plugin failed during register: Error: register boom",
     });
+  });
+
+  it("rolls back worker providers when plugin register fails", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "worker-provider-register-fail",
+      filename: "worker-provider-register-fail.cjs",
+      body: `module.exports = { id: "worker-provider-register-fail", register(api) {
+  api.registerWorkerProvider({
+    id: "failed-worker",
+    provision: async () => { throw new Error("not called"); },
+    inspect: async () => ({ status: "unknown" }),
+    destroy: async () => {}
+  });
+  throw new Error("register boom");
+} };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { workerProviders: ["failed-worker"] },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["worker-provider-register-fail"],
+      },
+    });
+
+    expect(registry.workerProviders.size).toBe(0);
+    const loaded = registry.plugins.find((entry) => entry.id === "worker-provider-register-fail");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).toContain("register boom");
   });
 
   it("loads declared installed trusted policies through plugin manifests", () => {
@@ -1300,9 +1334,9 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    expect(
-      (registry.trustedToolPolicies ?? []).map((entry) => [entry.pluginId, entry.policy.id]),
-    ).toEqual([["trusted-policy-success", "declared-policy"]]);
+    expect(registry.trustedToolPolicies.map((entry) => [entry.pluginId, entry.policy.id])).toEqual([
+      ["trusted-policy-success", "declared-policy"],
+    ]);
     expect(registry.diagnostics).not.toContainEqual(
       expect.objectContaining({
         pluginId: "trusted-policy-success",
@@ -1345,9 +1379,9 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadRegistryFromAllowedPlugins([stablePlugin, failingPlugin]);
 
-    expect(
-      (registry.trustedToolPolicies ?? []).map((entry) => [entry.pluginId, entry.policy.id]),
-    ).toEqual([["stable-trusted-policy", "stable-policy"]]);
+    expect(registry.trustedToolPolicies.map((entry) => [entry.pluginId, entry.policy.id])).toEqual([
+      ["stable-trusted-policy", "stable-policy"],
+    ]);
     const failed = registry.plugins.find(
       (entry) => entry.id === "later-trusted-policy-register-fail",
     );
@@ -2973,6 +3007,163 @@ module.exports = { id: "throws-after-import", register() {} };`,
     clearInternalHooks();
   });
 
+  it("preserves plugin hook context mutations for bootstrap hooks", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-bootstrap-mutation",
+      filename: "hook-bootstrap-mutation.cjs",
+      body: `module.exports = {
+        id: "hook-bootstrap-mutation",
+        register(api) {
+          api.registerHook(
+            "agent:bootstrap",
+            (event) => {
+              event.context.bootstrapFiles = [
+                {
+                  name: "AGENTS.md",
+                  path: "/tmp/override-AGENTS.md",
+                  content: "override bootstrap rules",
+                  missing: false,
+                },
+              ];
+            },
+            { name: "hook-bootstrap-mutation" },
+          );
+        },
+      };`,
+    });
+
+    clearInternalHooks();
+
+    loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-bootstrap-mutation"],
+      },
+      options: {
+        onlyPluginIds: ["hook-bootstrap-mutation"],
+      },
+    });
+
+    const updated = await applyBootstrapHookOverrides({
+      files: [
+        {
+          name: "AGENTS.md",
+          path: "/tmp/base-AGENTS.md",
+          content: "base bootstrap rules",
+          missing: false,
+        } satisfies WorkspaceBootstrapFile,
+      ],
+      workspaceDir: "/tmp",
+      sessionKey: "agent:main:subagent:test-bootstrap",
+    });
+
+    expect(updated).toEqual([
+      {
+        name: "AGENTS.md",
+        path: "/tmp/override-AGENTS.md",
+        content: "override bootstrap rules",
+        missing: false,
+      },
+    ]);
+
+    clearInternalHooks();
+  });
+
+  it("runs consecutive plugin hook handlers with shared mutable context but isolated plugin config", async () => {
+    useNoBundledPlugins();
+    const first = writePlugin({
+      id: "hook-context-first",
+      filename: "hook-context-first.cjs",
+      body: `module.exports = {
+        id: "hook-context-first",
+        register(api) {
+          api.registerHook(
+            "gateway:startup",
+            (event) => {
+              event.messages.push("first-config=" + event.context.pluginConfig?.marker);
+              event.context.note = "mutation-from-first";
+            },
+            { name: "hook-context-first" },
+          );
+        },
+      };`,
+    });
+    const second = writePlugin({
+      id: "hook-context-second",
+      filename: "hook-context-second.cjs",
+      body: `module.exports = {
+        id: "hook-context-second",
+        register(api) {
+          api.registerHook(
+            "gateway:startup",
+            (event) => {
+              event.messages.push(
+                "second-config=" + String(event.context.pluginConfig?.marker ?? "none"),
+              );
+              event.messages.push("note=" + String(event.context.note ?? "missing-note"));
+            },
+            { name: "hook-context-second" },
+          );
+        },
+      };`,
+    });
+    for (const plugin of [first, second]) {
+      fs.writeFileSync(
+        path.join(plugin.dir, "openclaw.plugin.json"),
+        JSON.stringify(
+          {
+            id: plugin.id,
+            configSchema: { type: "object" },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+    }
+
+    clearInternalHooks();
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: first.dir,
+      onlyPluginIds: ["hook-context-first", "hook-context-second"],
+      config: {
+        plugins: {
+          load: { paths: [first.file, second.file] },
+          allow: ["hook-context-first", "hook-context-second"],
+          entries: {
+            "hook-context-first": {
+              config: {
+                marker: "visible-to-first",
+              },
+            },
+            "hook-context-second": {
+              config: {
+                marker: "visible-to-second",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
+    await triggerInternalHook(event);
+
+    expect(event.messages).toEqual([
+      "first-config=visible-to-first",
+      "second-config=visible-to-second",
+      "note=mutation-from-first",
+    ]);
+    expect(event.context).toEqual({
+      note: "mutation-from-first",
+    });
+
+    clearInternalHooks();
+  });
+
   it("rolls back global side effects when registration fails", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -3049,6 +3240,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(registry.nodeHostCommands).toStrictEqual([]);
     expect(registry.nodeInvokePolicies).toStrictEqual([]);
     expect(registry.securityAuditCollectors).toStrictEqual([]);
+    expect(registry.interactiveHandlers).toStrictEqual([]);
     expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
     expect(getContextEngineFactory("failme-context")).toBeUndefined();
     expect(listContextEngineIds()).not.toContain("failme-context");
@@ -3669,9 +3861,16 @@ module.exports = { id: "throws-after-import", register() {} };`,
       onlyPluginIds: ["cached-command-interactive"],
     } satisfies Parameters<typeof loadOpenClawPlugins>[0];
 
-    loadOpenClawPlugins(loadOptions);
+    const registry = loadOpenClawPlugins(loadOptions);
     expect(getPluginCommandSpecs()).toEqual([
       { name: "hue", description: "Control Hue lights", acceptsArgs: false },
+    ]);
+    expect(registry.interactiveHandlers).toEqual([
+      expect.objectContaining({
+        channel: "telegram",
+        namespace: "hue",
+        pluginId: "cached-command-interactive",
+      }),
     ]);
     const match = resolvePluginInteractiveNamespaceMatch("telegram", "hue:on");
     expect(match?.namespace).toBe("hue");
@@ -3913,6 +4112,61 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
     expect((globalThis as Record<string, unknown>)[marker]).toEqual(["discovery", "full"]);
     delete (globalThis as Record<string, unknown>)[marker];
+  });
+
+  it("ignores plugin-supplied conversation-read authority claims", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "conversation-read-provenance-test",
+      filename: "conversation-read-provenance-test.cjs",
+      body: `module.exports = {
+        id: "conversation-read-provenance-test",
+        register(api) {
+          const createTool = (name) => () => ({
+            name,
+            description: name,
+            parameters: {},
+            execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+          });
+          api.registerTool(createTool("attested_tool"), {
+            name: "attested_tool",
+            conversationReadPolicy: "current-or-configured-v1",
+            supportsConversationReadPolicyV1: true,
+          });
+          api.registerTool(createTool("unknown_policy_tool"), {
+            name: "unknown_policy_tool",
+            conversationReadPolicy: "future-policy",
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { tools: ["attested_tool", "unknown_policy_tool"] },
+    });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["conversation-read-provenance-test"],
+        },
+      },
+    });
+
+    expect(registry.tools).toHaveLength(2);
+    expect(registry.tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ names: ["attested_tool"], origin: "config" }),
+        expect.objectContaining({ names: ["unknown_policy_tool"], origin: "config" }),
+      ]),
+    );
+    for (const entry of registry.tools) {
+      expect(entry).not.toHaveProperty("conversationReadPolicy");
+      expect(entry).not.toHaveProperty("supportsConversationReadPolicyV1");
+    }
   });
 
   it("rejects plugin tool registration without manifest tool ownership", () => {
@@ -8625,6 +8879,28 @@ module.exports = {
         label: scenario.label,
       });
     });
+  });
+
+  it("stays quiet when every non-bundled plugin is explicitly enabled", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-explicitly-enabled-plugin",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+          entries: { "warn-explicitly-enabled-plugin": { enabled: true } },
+        },
+      },
+    });
+
+    expect(warnings.join("\n")).not.toContain("plugins.allow is empty");
   });
 
   it("warns when plugins.allow entries do not match any discovered plugin ids", () => {
