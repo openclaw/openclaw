@@ -249,7 +249,7 @@ function selectBoundedCodexHistoryTail(
     selected.push(candidate);
     selectedBytes += candidate.textBytes;
   }
-  return selected.reverse();
+  return selected.toReversed();
 }
 
 /** Projects one terminal Codex history prefix into transcript and Responses API items. */

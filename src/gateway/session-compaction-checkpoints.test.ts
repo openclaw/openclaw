@@ -761,7 +761,7 @@ describe("session-compaction-checkpoints", () => {
         },
       ],
     });
-    const filesBefore = (await fs.readdir(dir)).sort();
+    const filesBefore = (await fs.readdir(dir)).toSorted();
     const store = createFileBackedCompactionCheckpointStore();
 
     await expect(
@@ -780,7 +780,7 @@ describe("session-compaction-checkpoints", () => {
       }),
     ).resolves.toEqual({ status: "model-selection-locked" });
 
-    expect((await fs.readdir(dir)).sort()).toEqual(filesBefore);
+    expect((await fs.readdir(dir)).toSorted()).toEqual(filesBefore);
     expect(await readSessionStore(storePath)).toEqual({
       [MAIN_SESSION_KEY]: expect.objectContaining({
         modelSelectionLocked: true,

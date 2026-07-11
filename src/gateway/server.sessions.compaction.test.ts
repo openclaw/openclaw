@@ -374,7 +374,7 @@ test("sessions.compaction.branch rejects model-selection-locked session identiti
       }),
     },
   });
-  const filesBefore = (await fs.readdir(dir)).sort();
+  const filesBefore = (await fs.readdir(dir)).toSorted();
   const { ws } = await openClient();
 
   try {
@@ -400,7 +400,7 @@ test("sessions.compaction.branch rejects model-selection-locked session identiti
         sessionId: fixture.sessionId,
       }),
     });
-    expect((await fs.readdir(dir)).sort()).toEqual(filesBefore);
+    expect((await fs.readdir(dir)).toSorted()).toEqual(filesBefore);
   } finally {
     ws.close();
   }

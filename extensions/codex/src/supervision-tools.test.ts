@@ -20,7 +20,7 @@ vi.mock("./app-server/request.js", () => ({
 
 type RecordedRequest = { method: string; params?: unknown };
 type EndpointRequest = NonNullable<CodexSupervisionToolsOptions["request"]>;
-type EndpointRequestHandler = (...args: Parameters<EndpointRequest>) => unknown | Promise<unknown>;
+type EndpointRequestHandler = (...args: Parameters<EndpointRequest>) => unknown;
 
 function createEndpointRequest(handler: EndpointRequestHandler): EndpointRequest {
   return async <T>(...args: Parameters<EndpointRequest>) => (await handler(...args)) as T;

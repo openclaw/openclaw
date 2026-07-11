@@ -564,7 +564,7 @@ export async function noteSessionSnapshotHealth(params?: {
 
     for (const [storePath, findings] of findingsByStore) {
       try {
-        const result = await updateSessionStore(
+        const repairResult = await updateSessionStore(
           storePath,
           async (store) => {
             const raw = fs.readFileSync(storePath, "utf-8");
@@ -590,8 +590,8 @@ export async function noteSessionSnapshotHealth(params?: {
           },
         );
 
-        if (result.replacements > 0) {
-          totalReplacements += result.replacements;
+        if (repairResult.replacements > 0) {
+          totalReplacements += repairResult.replacements;
           repairedStores++;
 
           // Rescan to report leftover findings

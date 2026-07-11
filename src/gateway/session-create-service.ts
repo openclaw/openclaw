@@ -514,7 +514,7 @@ export async function createGatewaySession(params: {
         }
         if (
           params.initialEntry?.modelSelectionLocked !== undefined &&
-          params.initialEntry.modelSelectionLocked !== true
+          !params.initialEntry.modelSelectionLocked
         ) {
           return {
             ok: false,

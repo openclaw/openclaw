@@ -292,13 +292,13 @@ export function createCodexSessionCatalogControl(params: {
           });
         },
       };
-      let pinnedControl: CodexSessionCatalogControl;
-      pinnedControl = createCodexSessionCatalogControlFromRequests({
-        assertEnabled,
-        createRequestSnapshot: () => requests,
-        now,
-        withPinnedConnection: async (nestedRun) => await nestedRun(pinnedControl),
-      });
+      const pinnedControl: CodexSessionCatalogControl =
+        createCodexSessionCatalogControlFromRequests({
+          assertEnabled,
+          createRequestSnapshot: () => requests,
+          now,
+          withPinnedConnection: async (nestedRun) => await nestedRun(pinnedControl),
+        });
       return await run(pinnedControl);
     } finally {
       releaseLeasedSharedCodexAppServerClient(client);

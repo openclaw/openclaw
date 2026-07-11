@@ -482,7 +482,7 @@ export async function archiveCodexSession(
       threadId,
       confirmNoOtherRunner: true,
     });
-    if (result?.archived !== true) {
+    if (!result?.archived) {
       throw new Error("Codex archive response did not confirm the archive");
     }
     if (state.actionGeneration === pending.generation) {

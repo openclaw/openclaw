@@ -1,4 +1,5 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
+/* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
@@ -84,11 +85,10 @@ function idleThread(overrides: Partial<CodexThread> = {}): CodexThread {
 }
 
 function createControl(overrides: Partial<CodexSessionCatalogControl> = {}) {
-  let control: CodexSessionCatalogControl;
   const withPinnedConnection = vi.fn(
     async (run: (value: CodexSessionCatalogControl) => Promise<unknown>) => await run(control),
   ) as unknown as CodexSessionCatalogControl["withPinnedConnection"];
-  control = {
+  const control: CodexSessionCatalogControl = {
     assertEnabled: vi.fn(),
     withPinnedConnection,
     listPage: vi.fn(async () => ({ sessions: [] })),
@@ -2006,7 +2006,7 @@ describe("Codex supervision actions", () => {
   });
 
   it("clears a committed pending binding when session finalization fails", async () => {
-    const { runtime, createSessionEntry } = createRuntime({ failAfterCreate: () => true });
+    const { runtime } = createRuntime({ failAfterCreate: () => true });
     const { api } = createGatewayApi(runtime);
     const bindingStore = createCodexTestBindingStore();
     const control = createEligibleControl();

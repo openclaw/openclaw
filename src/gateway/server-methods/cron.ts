@@ -248,9 +248,10 @@ function assertCronDoesNotTargetAgentHarness(input: {
     return;
   }
 
-  const loaded = loadSessionEntry(targetSessionKey, {
-    ...(input.agentId?.trim() ? { agentId: input.agentId.trim() } : {}),
-  });
+  const loaded = loadSessionEntry(
+    targetSessionKey,
+    input.agentId?.trim() ? { agentId: input.agentId.trim() } : {},
+  );
   const reservedKey =
     isAgentHarnessSessionKey(targetSessionKey) || isAgentHarnessSessionKey(loaded.canonicalKey);
   if (loaded.entry?.modelSelectionLocked === true) {
@@ -331,7 +332,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     const sessionKey = p.sessionKey?.trim() || undefined;
     const agentId = p.agentId?.trim() || undefined;
     if (sessionKey && isAgentHarnessSessionKey(sessionKey)) {
-      const loaded = loadSessionEntry(sessionKey, { ...(agentId ? { agentId } : {}) });
+      const loaded = loadSessionEntry(sessionKey, agentId ? { agentId } : {});
       const harnessSessionError = loaded.entry
         ? resolveAgentHarnessSessionStoreEntryError(loaded.canonicalKey, loaded.entry)
         : AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE;

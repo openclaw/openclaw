@@ -517,7 +517,9 @@ export function createCodexAppServerBindingStore(
     if (activeBindingMutations === 0) {
       return;
     }
-    await new Promise<void>((resolve) => bindingMutationsDrained.push(resolve));
+    await new Promise<void>((resolve) => {
+      bindingMutationsDrained.push(resolve);
+    });
   };
 
   const runBindingMutation = async <T>(run: () => Promise<T>): Promise<T> => {

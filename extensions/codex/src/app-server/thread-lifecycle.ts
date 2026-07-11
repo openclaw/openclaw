@@ -1441,6 +1441,7 @@ async function materializePendingSupervisionBranch(
       throw new AggregateError(
         [error, cleanupStateError],
         "Codex supervised branch cleanup state could not be recorded",
+        { cause },
       );
     }
     if (cleanup.remaining.length > 0) {

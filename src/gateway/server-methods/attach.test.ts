@@ -79,7 +79,9 @@ describe("attach gateway methods", () => {
     await attachHandlers["attach.grant"](grantOpts(sessionKey, respond));
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    const token = (respond.mock.calls[0]?.[1] as { token: string }).token;
+    const response = respond.mock.calls[0]?.[1] as { token: string } | undefined;
+    expect(response).toBeDefined();
+    const token = response?.token ?? "";
     expect(resolveAttachGrant(token)?.sessionKey).toBe(sessionKey);
   });
 
