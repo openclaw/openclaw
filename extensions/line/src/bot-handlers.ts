@@ -1,3 +1,4 @@
+import path from "node:path";
 // Line plugin module implements bot handlers behavior.
 import type { webhook } from "@line/bot-sdk";
 import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/channel-inbound";
@@ -10,6 +11,8 @@ import {
   resolvePairingIdLabel,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { deleteMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -24,6 +27,7 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
@@ -48,7 +52,7 @@ type PostbackEvent = webhook.PostbackEvent;
 type UnfollowEvent = webhook.UnfollowEvent;
 type WebhookEvent = webhook.Event;
 
-interface MediaRef {
+export interface MediaRef {
   path: string;
   contentType?: string;
 }
@@ -75,6 +79,87 @@ interface LineHandlerContext {
   replayCache?: LineWebhookReplayCache;
   groupHistories?: Map<string, HistoryEntry[]>;
   historyLimit?: number;
+  pendingMediaQueues?: Map<string, MediaRef[]>;
+}
+
+const DEFAULT_LINE_PENDING_MEDIA_LIMIT = 3;
+
+// `downloadLineMedia` always persists into the shared media store's "inbound"
+// subdir (see download.ts), and `MediaRef.path` is the store's absolute path
+// for that saved file (dir + id, see buildSavedMediaResult in
+// src/media/store.ts). `deleteMediaBuffer` re-derives its own scoped path
+// from a bare `id` under that same subdir, so recovering the id here is just
+// the path's basename -- no separate id needs to be threaded through the
+// queue.
+const PENDING_MEDIA_STORE_SUBDIR = "inbound";
+
+function pendingMediaStoreIdFromPath(mediaPath: string): string {
+  return path.basename(mediaPath);
+}
+
+/**
+ * Best-effort delete the underlying media-store files for pending-media
+ * entries evicted from a group's bounded queue.
+ *
+ * `pushBoundedPendingMedia` only bounds the in-memory queue: `downloadLineMedia`
+ * has already persisted every entry to disk before it is ever pushed here, so
+ * once an entry is evicted (dropped for being older than the `limit` most
+ * recent), nothing else refers to its file again. Without this cleanup, a
+ * busy opted-in group with `media.ttlHours` unset accumulates unbounded
+ * orphaned files on disk even though the in-memory queue itself stays
+ * correctly bounded. See PR #103761 review (confidence 0.98): "disk leak on
+ * queue eviction", extensions/line/src/bot-handlers.ts:579-584.
+ *
+ * Reuses the same `deleteMediaBuffer` media-store helper the gateway's
+ * `media.ttlHours` cleanup path and other offload-cleanup call sites already
+ * use (see src/gateway/chat-attachments.ts, src/gateway/server-methods/chat.ts),
+ * rather than calling `fs.unlink` directly, so eviction cleanup stays
+ * consistent with the store's existing path-safety guards. Deletion failures
+ * are logged at verbose level and never thrown -- an already-missing file
+ * (e.g. previously swept by `media.ttlHours`) is an expected, harmless race,
+ * not an error, and one failed deletion must not block cleanup of the other
+ * evicted entries.
+ */
+async function deleteEvictedPendingMedia(evicted: readonly MediaRef[]): Promise<void> {
+  await Promise.all(
+    evicted.map(async (media) => {
+      try {
+        await deleteMediaBuffer(
+          pendingMediaStoreIdFromPath(media.path),
+          PENDING_MEDIA_STORE_SUBDIR,
+        );
+      } catch (err) {
+        logVerbose(
+          `line: failed to delete evicted pending media file ${media.path}: ${String(err)}`,
+        );
+      }
+    }),
+  );
+}
+
+/**
+ * Push a media ref onto a group's pending queue, capped at `limit`, dropping
+ * the oldest entries when over the cap so the N most recent are kept.
+ *
+ * Evicted entries' underlying media-store files are deleted best-effort (see
+ * `deleteEvictedPendingMedia`) so the bounded in-memory queue doesn't leave
+ * unbounded orphaned files behind on disk.
+ */
+export function pushBoundedPendingMedia(params: {
+  queues: Map<string, MediaRef[]>;
+  key: string;
+  media: MediaRef;
+  limit: number;
+}): MediaRef[] {
+  const { queues, key, media, limit } = params;
+  const queue = queues.get(key) ?? [];
+  queue.push(media);
+  if (queue.length > limit) {
+    const evicted = queue.splice(0, queue.length - limit);
+    void deleteEvictedPendingMedia(evicted);
+  }
+  queues.set(key, queue);
+  return queue;
 }
 
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
@@ -276,7 +361,8 @@ async function shouldProcessLineEvent(
     const wasMentionedByPattern =
       event.message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;
     return {
-      canDetectMention: event.message.type === "text",
+      canDetectMention:
+        event.message.type === "text" || groupConfig?.requireMentionForNonText === true,
       wasMentioned: wasMentionedByNative || wasMentionedByPattern,
       hasAnyMention: hasAnyLineMention(event.message),
     };
@@ -437,6 +523,31 @@ function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
   return "";
 }
 
+// Serializes read-modify-write access to a group's pending-media queue by
+// the queue Map's own identity, so overlapping webhook deliveries for the
+// same LINE group cannot race on the same queue snapshot. LINE launches
+// `handleWebhook` per HTTP request (see bot.ts's `createLineBot`), so two
+// nearly-simultaneous requests for the same group can otherwise both read
+// the queue before either has cleared/updated it, or a concurrent "write"
+// (queueing a skipped message's media) can be clobbered by a concurrent
+// "read+clear" (a mentioned message flushing and then deleting the queue).
+// Keying the lock off the queue Map's identity (rather than a separate
+// context field) means locking is automatically active whenever a
+// `pendingMediaQueues` map is supplied, with no separate wiring to forget.
+// Different groups (different Map keys) still run fully in parallel; only
+// same-group callers queue behind each other. See PR #103761 review:
+// "Concurrent webhook entry" / "Non-atomic pending-media consumption".
+const pendingMediaLocksByQueueMap = new WeakMap<Map<string, MediaRef[]>, KeyedAsyncQueue>();
+
+function getPendingMediaLock(queues: Map<string, MediaRef[]>): KeyedAsyncQueue {
+  let lock = pendingMediaLocksByQueueMap.get(queues);
+  if (!lock) {
+    lock = new KeyedAsyncQueue();
+    pendingMediaLocksByQueueMap.set(queues, lock);
+  }
+  return lock;
+}
+
 async function handleMessageEvent(event: MessageEvent, context: LineHandlerContext): Promise<void> {
   const { cfg, account, runtime, mediaMaxBytes, processMessage } = context;
   const message = event.message;
@@ -447,78 +558,234 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   }
 
   const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
+  const groupQueueKey = isGroup ? (groupId ?? roomId) : undefined;
+
+  // Resolve the group's config up front (same pattern as
+  // `shouldProcessLineEvent`) so the lock only engages for groups that
+  // actually use the pending-media feature. Without this, every LINE group
+  // -- including ones that never opted into `requireMentionForNonText` /
+  // `pendingMediaLimit` -- would be routed through the per-group keyed lock,
+  // serializing all webhook deliveries for that group by default. See PR
+  // #103761 review (confidence 0.98): "pendingMediaQueues always constructed
+  // + lock guard doesn't check whether the feature is enabled",
+  // extensions/line/src/bot-handlers.ts:507-509.
+  const groupConfig = groupQueueKey
+    ? resolveLineGroupConfig({ config: account.config, groupId, roomId })
+    : undefined;
+  const pendingMediaFeatureActive = Boolean(
+    (groupConfig?.requireMention === true && groupConfig?.requireMentionForNonText === true) ||
+    (groupQueueKey && (context.pendingMediaQueues?.get(groupQueueKey)?.length ?? 0) > 0),
+  );
+
+  // Runs `fn` serialized behind this group's pending-media lock only when
+  // the pending-media feature is actually active for this group (opted in
+  // via both requireMention and requireMentionForNonText, or the group
+  // already has media queued from before for safe draining); runs it
+  // directly (no serialization) for DMs, or for default/unconfigured groups,
+  // so unrelated traffic never pays for a lock it doesn't need.
+  const runPendingMediaGuarded = <T>(fn: () => Promise<T>): Promise<T> => {
+    if (groupQueueKey && context.pendingMediaQueues && pendingMediaFeatureActive) {
+      return getPendingMediaLock(context.pendingMediaQueues).enqueue(groupQueueKey, fn);
+    }
+    return fn();
+  };
+
   if (isGroup && decision.activationAccess.shouldSkip) {
     const rawText = message.type === "text" ? message.text : "";
     const sourceInfo = getLineSourceInfo(event.source);
     logVerbose(`line: skipping group message (requireMention, not mentioned)`);
     const historyKey = groupId ?? roomId;
     const senderId = sourceInfo.userId ?? "unknown";
-    if (historyKey && context.groupHistories) {
-      createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
-        historyKey,
-        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-        entry: {
-          sender: `user:${senderId}`,
-          body: rawText || `<${message.type}>`,
-          timestamp: event.timestamp,
-        },
-      });
-    }
+    // Guarded: recording this skipped message into group history and (when
+    // applicable) queuing its media must be serialized with any other
+    // concurrent handler for this same group -- in particular the
+    // mentioned-turn flush below, which clears both the pending-media queue
+    // and group history once `processMessage` succeeds. Recording the
+    // history entry outside this lock let a just-recorded `<image>`
+    // placeholder be wiped by a concurrent flush's history clear while its
+    // media was still sitting in the (separately locked) pending-media
+    // queue, leaving media queued with no corresponding history entry.
+    // See PR #103761 review (confidence 0.97): "pending history and pending
+    // media queue not sharing the same per-group lock".
+    await runPendingMediaGuarded(async () => {
+      if (historyKey && context.groupHistories) {
+        createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
+          historyKey,
+          limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+          entry: {
+            sender: `user:${senderId}`,
+            body: rawText || `<${message.type}>`,
+            timestamp: event.timestamp,
+          },
+        });
+      }
+      if (
+        !historyKey ||
+        !context.pendingMediaQueues ||
+        !isDownloadableLineMessageType(message.type)
+      ) {
+        return;
+      }
+      const pendingMediaQueues = context.pendingMediaQueues;
+      try {
+        const originalFilename =
+          message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
+        const media = await downloadLineMedia(
+          message.id,
+          account.channelAccessToken,
+          mediaMaxBytes,
+          { originalFilename },
+        );
+        pushBoundedPendingMedia({
+          queues: pendingMediaQueues,
+          key: historyKey,
+          media: { path: media.path, contentType: media.contentType },
+          limit: groupConfig?.pendingMediaLimit ?? DEFAULT_LINE_PENDING_MEDIA_LIMIT,
+        });
+      } catch (err) {
+        const errMsg = String(err);
+        if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
+          logVerbose(`line: pending media exceeds size limit for message ${message.id}`);
+        } else {
+          runtime.error?.(danger(`line: failed to download pending media: ${errMsg}`));
+        }
+      }
+    });
     return;
   }
 
-  const allMedia: MediaRef[] = [];
-  let mediaUnavailable = false;
+  // Guarded: reading the queue snapshot, awaiting `processMessage`, and
+  // clearing the queue afterward must all happen atomically with respect to
+  // any other concurrent handler for this same group (whether that handler
+  // is also flushing the queue, or is writing new pending media into it).
+  // See PR #103761 review.
+  await runPendingMediaGuarded(async () => {
+    const allMedia: MediaRef[] = [];
+    let mediaUnavailable = false;
+    // Only clear the pending-media queue once processMessage has completed
+    // successfully; keeping the key around until then means a webhook retry
+    // (or any failure before dispatch) can still recover the queued media
+    // instead of losing it. See PR #103761 review Bug 1.
+    let pendingMediaKeyToClear: string | undefined;
 
-  if (isDownloadableLineMessageType(message.type)) {
-    try {
-      const originalFilename =
-        message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
-      const media = await downloadLineMedia(message.id, account.channelAccessToken, mediaMaxBytes, {
-        originalFilename,
-      });
-      allMedia.push({
-        path: media.path,
-        contentType: media.contentType,
-      });
-    } catch (err) {
-      mediaUnavailable = true;
-      const errMsg = String(err);
-      if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
-        logVerbose(`line: media exceeds size limit for message ${message.id}`);
-      } else {
-        runtime.error?.(danger(`line: failed to download media: ${errMsg}`));
+    if (
+      isGroup &&
+      context.pendingMediaQueues &&
+      // Only flush queued media when this event was actually triggered by a
+      // real @mention. A control-command that merely bypassed requireMention
+      // (shouldBypassMention === true) must not pull in media someone else
+      // posted earlier for this group. See PR #103761 review Bug 2.
+      decision.activationAccess.shouldBypassMention !== true
+    ) {
+      const pendingKey = groupId ?? roomId;
+      if (pendingKey) {
+        const pending = context.pendingMediaQueues.get(pendingKey);
+        if (pending && pending.length > 0) {
+          // A queued media path can go stale between being downloaded and
+          // being flushed here: the gateway's independent media.ttlHours
+          // cleanup sweep doesn't know about this queue and can delete the
+          // underlying file first. Verify each queued entry still exists on
+          // disk before surfacing it into context, and silently drop (never
+          // throw on) any entry whose file is already gone so the flush of
+          // the remaining valid entries still proceeds. See PR #103761
+          // review: stale media path after media.ttlHours cleanup,
+          // extensions/line/src/bot-handlers.ts:578-583.
+          const validPending: MediaRef[] = [];
+          for (const media of pending) {
+            if (await pathExists(media.path)) {
+              validPending.push(media);
+            } else {
+              logVerbose(
+                `line: dropping stale pending media path (file no longer exists): ${media.path}`,
+              );
+            }
+          }
+          if (validPending.length !== pending.length) {
+            // Prune stale entries from the queue immediately so they are not
+            // re-surfaced (or indefinitely retried) on a later flush attempt,
+            // even if this turn's processMessage subsequently fails and the
+            // remaining valid entries are preserved for retry.
+            if (validPending.length > 0) {
+              context.pendingMediaQueues.set(pendingKey, validPending);
+            } else {
+              context.pendingMediaQueues.delete(pendingKey);
+            }
+          }
+          if (validPending.length > 0) {
+            allMedia.push(...validPending);
+            pendingMediaKeyToClear = pendingKey;
+          }
+        }
       }
     }
-  }
 
-  const messageContext = await buildLineMessageContext({
-    event,
-    allMedia,
-    mediaUnavailable,
-    cfg,
-    account,
-    commandAuthorized: decision.commandAccess.authorized,
-    groupHistories: context.groupHistories,
-    historyLimit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-  });
-
-  if (!messageContext) {
-    logVerbose("line: skipping empty message");
-    return;
-  }
-
-  await processMessage(messageContext);
-
-  if (isGroup && context.groupHistories) {
-    const historyKey = groupId ?? roomId;
-    if (historyKey && context.groupHistories.has(historyKey)) {
-      createChannelHistoryWindow({ historyMap: context.groupHistories }).clear({
-        historyKey,
-        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-      });
+    if (isDownloadableLineMessageType(message.type)) {
+      try {
+        const originalFilename =
+          message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
+        const media = await downloadLineMedia(
+          message.id,
+          account.channelAccessToken,
+          mediaMaxBytes,
+          {
+            originalFilename,
+          },
+        );
+        allMedia.push({
+          path: media.path,
+          contentType: media.contentType,
+        });
+      } catch (err) {
+        mediaUnavailable = true;
+        const errMsg = String(err);
+        if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
+          logVerbose(`line: media exceeds size limit for message ${message.id}`);
+        } else {
+          runtime.error?.(danger(`line: failed to download media: ${errMsg}`));
+        }
+      }
     }
-  }
+
+    const messageContext = await buildLineMessageContext({
+      event,
+      allMedia,
+      mediaUnavailable,
+      cfg,
+      account,
+      commandAuthorized: decision.commandAccess.authorized,
+      groupHistories: context.groupHistories,
+      historyLimit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+    });
+
+    if (!messageContext) {
+      logVerbose("line: skipping empty message");
+      return;
+    }
+
+    await processMessage(messageContext);
+
+    // Only clear the pending-media queue after processMessage has resolved
+    // successfully (an exception above skips this and preserves the queue for
+    // retry). See PR #103761 review Bug 1.
+    if (pendingMediaKeyToClear && context.pendingMediaQueues) {
+      context.pendingMediaQueues.delete(pendingMediaKeyToClear);
+    }
+
+    // Clearing group history must happen inside the same guarded section as
+    // the pending-media queue clear above: both are shared per-group state,
+    // and clearing history outside this lock let it race with a concurrent
+    // skipped-message handler recording a new placeholder entry for the
+    // same group. See PR #103761 review (confidence 0.97).
+    if (isGroup && context.groupHistories) {
+      const historyKey = groupId ?? roomId;
+      if (historyKey && context.groupHistories.has(historyKey)) {
+        createChannelHistoryWindow({ historyMap: context.groupHistories }).clear({
+          historyKey,
+          limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+        });
+      }
+    }
+  });
 }
 
 async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {

@@ -42,6 +42,8 @@ const LineGroupConfigSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     requireMention: z.boolean().optional(),
+    requireMentionForNonText: z.boolean().optional(),
+    pendingMediaLimit: z.number().int().positive().optional(),
     systemPrompt: z.string().optional(),
     skills: z.array(z.string()).optional(),
   })

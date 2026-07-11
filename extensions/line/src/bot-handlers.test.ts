@@ -126,6 +126,8 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   upsertPairingRequestMock: vi.fn(async (_args: unknown) => ({ code: "CODE", created: true })),
 }));
 const downloadLineMediaMock = vi.hoisted(() => vi.fn());
+const pathExistsMock = vi.hoisted(() => vi.fn(async (_path: string) => true));
+const deleteMediaBufferMock = vi.hoisted(() => vi.fn(async (_id: string, _subdir?: string) => {}));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   resolvePairingIdLabel: () => "lineUserId",
@@ -135,6 +137,14 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
 
 vi.mock("./download.js", () => ({
   downloadLineMedia: downloadLineMediaMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
+  pathExists: pathExistsMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  deleteMediaBuffer: deleteMediaBufferMock,
 }));
 
 vi.mock("./send.js", () => ({
@@ -147,7 +157,7 @@ vi.mock("./send.js", () => ({
 }));
 
 const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted(() => ({
-  buildLineMessageContextMock: vi.fn(async () => ({
+  buildLineMessageContextMock: vi.fn(async (_params: { event: MessageEvent }) => ({
     ctxPayload: { From: "line:group:group-1" },
     replyToken: "reply-token",
     route: { agentId: "default" },
@@ -226,7 +236,10 @@ function createLineWebhookTestContext(params: {
   allowFrom?: LineAccountConfig["allowFrom"];
   groupAllowFrom?: LineAccountConfig["groupAllowFrom"];
   requireMention?: boolean;
+  requireMentionForNonText?: boolean;
+  pendingMediaLimit?: number;
   groupHistories?: Map<string, HistoryEntry[]>;
+  pendingMediaQueues?: Map<string, { path: string; contentType?: string }[]>;
   replayCache?: ReturnType<typeof createLineWebhookReplayCache>;
   accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
 }): Parameters<typeof handleLineWebhookEvents>[1] {
@@ -237,6 +250,10 @@ function createLineWebhookTestContext(params: {
     ...(allowFrom ? { allowFrom } : {}),
     ...(params.groupAllowFrom ? { groupAllowFrom: params.groupAllowFrom } : {}),
   };
+  const hasGroupOverride =
+    params.requireMention !== undefined ||
+    params.requireMentionForNonText !== undefined ||
+    params.pendingMediaLimit !== undefined;
   return {
     cfg: {
       ...(params.accessGroups ? { accessGroups: params.accessGroups } : {}),
@@ -250,15 +267,30 @@ function createLineWebhookTestContext(params: {
       tokenSource: "config",
       config: {
         ...lineConfig,
-        ...(params.requireMention === undefined
-          ? {}
-          : { groups: { "*": { requireMention: params.requireMention } } }),
+        ...(hasGroupOverride
+          ? {
+              groups: {
+                "*": {
+                  ...(params.requireMention === undefined
+                    ? {}
+                    : { requireMention: params.requireMention }),
+                  ...(params.requireMentionForNonText === undefined
+                    ? {}
+                    : { requireMentionForNonText: params.requireMentionForNonText }),
+                  ...(params.pendingMediaLimit === undefined
+                    ? {}
+                    : { pendingMediaLimit: params.pendingMediaLimit }),
+                },
+              },
+            }
+          : {}),
       },
     },
     runtime: createRuntime(),
     mediaMaxBytes: 1,
     processMessage: params.processMessage,
     ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
+    ...(params.pendingMediaQueues ? { pendingMediaQueues: params.pendingMediaQueues } : {}),
     ...(params.replayCache ? { replayCache: params.replayCache } : {}),
   };
 }
@@ -331,6 +363,7 @@ describe("handleLineWebhookEvents", () => {
     vi.doUnmock("./download.js");
     vi.doUnmock("./send.js");
     vi.doUnmock("./bot-message-context.js");
+    vi.doUnmock("openclaw/plugin-sdk/security-runtime");
     vi.resetModules();
   });
 
@@ -353,6 +386,10 @@ describe("handleLineWebhookEvents", () => {
     downloadLineMediaMock.mockImplementation(async () => {
       throw new Error("downloadLineMedia should not be called from bot-handlers tests");
     });
+    pathExistsMock.mockReset();
+    pathExistsMock.mockImplementation(async () => true);
+    deleteMediaBufferMock.mockReset();
+    deleteMediaBufferMock.mockImplementation(async () => {});
   });
   it("blocks group messages when groupPolicy is disabled", async () => {
     const processMessage = vi.fn();
@@ -1092,6 +1129,460 @@ describe("handleLineWebhookEvents", () => {
     await expectRequireMentionGroupMessageProcessed(event);
   });
 
+  it("skips unmentioned non-text group messages when requireMentionForNonText is set", async () => {
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockImplementation(async () => ({
+      path: "/media/skip-1.jpg",
+      contentType: "image/jpeg",
+    }));
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-nontext-gate",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-nontext-gate",
+      },
+      source: { type: "group", groupId: "group-1", userId: "user-nontext-gate" },
+      webhookEventId: "evt-nontext-gate",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+        requireMentionForNonText: true,
+      }),
+    );
+
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+  });
+
+  it("caps the pending media queue at pendingMediaLimit, keeping only the most recent entries", async () => {
+    const processMessage = vi.fn();
+    let counter = 0;
+    downloadLineMediaMock.mockImplementation(async () => {
+      counter += 1;
+      return { path: `/media/pending-${counter}.jpg`, contentType: "image/jpeg" };
+    });
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaLimit: 2,
+      pendingMediaQueues,
+    });
+
+    for (let i = 1; i <= 3; i += 1) {
+      const event = createTestMessageEvent({
+        message: {
+          id: `m-pending-${i}`,
+          type: "image",
+          contentProvider: { type: "line" },
+          quoteToken: `q-pending-${i}`,
+        },
+        source: { type: "group", groupId: "group-pending", userId: "user-pending" },
+        webhookEventId: `evt-pending-${i}`,
+      });
+      await handleLineWebhookEvents([event], context);
+    }
+
+    expect(processMessage).not.toHaveBeenCalled();
+    const queue = pendingMediaQueues.get("group-pending");
+    expect(queue).toHaveLength(2);
+    expect(queue?.map((m) => m.path)).toEqual(["/media/pending-2.jpg", "/media/pending-3.jpg"]);
+  });
+
+  it("deletes evicted pending media files from disk when the queue exceeds pendingMediaLimit", async () => {
+    // Regression test for PR #103761 review (confidence 0.98): "disk leak on
+    // queue eviction", extensions/line/src/bot-handlers.ts:579-584.
+    // `pushBoundedPendingMedia` only bounded the in-memory queue by splicing
+    // out the oldest entries; the corresponding downloaded files on disk were
+    // never deleted, so a busy opted-in group with `media.ttlHours` unset
+    // would accumulate unbounded orphaned files. Assert the evicted (oldest)
+    // entries' underlying files get deleted via the shared media-store
+    // `deleteMediaBuffer` helper, while the retained entries' files are
+    // left untouched.
+    const processMessage = vi.fn();
+    let counter = 0;
+    downloadLineMediaMock.mockImplementation(async () => {
+      counter += 1;
+      return { path: `/media/inbound/pending-evict-${counter}.jpg`, contentType: "image/jpeg" };
+    });
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaLimit: 2,
+      pendingMediaQueues,
+    });
+
+    for (let i = 1; i <= 3; i += 1) {
+      const event = createTestMessageEvent({
+        message: {
+          id: `m-pending-evict-${i}`,
+          type: "image",
+          contentProvider: { type: "line" },
+          quoteToken: `q-pending-evict-${i}`,
+        },
+        source: { type: "group", groupId: "group-pending-evict", userId: "user-pending-evict" },
+        webhookEventId: `evt-pending-evict-${i}`,
+      });
+      await handleLineWebhookEvents([event], context);
+    }
+
+    expect(processMessage).not.toHaveBeenCalled();
+    const queue = pendingMediaQueues.get("group-pending-evict");
+    expect(queue).toHaveLength(2);
+    expect(queue?.map((m) => m.path)).toEqual([
+      "/media/inbound/pending-evict-2.jpg",
+      "/media/inbound/pending-evict-3.jpg",
+    ]);
+
+    // Eviction cleanup is fired without being awaited by the push path, so
+    // let pending microtasks (the deleteMediaBuffer call inside
+    // deleteEvictedPendingMedia) flush before asserting.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    // The oldest (evicted) entry's file must have been deleted.
+    expect(deleteMediaBufferMock).toHaveBeenCalledWith("pending-evict-1.jpg", "inbound");
+    // The retained entries' files must not have been touched.
+    expect(deleteMediaBufferMock).not.toHaveBeenCalledWith("pending-evict-2.jpg", "inbound");
+    expect(deleteMediaBufferMock).not.toHaveBeenCalledWith("pending-evict-3.jpg", "inbound");
+    expect(deleteMediaBufferMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes queued pending media into allMedia when a later mentioned message triggers processing, then clears the queue", async () => {
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockImplementation(async () => ({
+      path: "/media/queued-1.jpg",
+      contentType: "image/jpeg",
+    }));
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaQueues,
+    });
+
+    const skippedEvent = createTestMessageEvent({
+      message: {
+        id: "m-flush-img",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-flush-img",
+      },
+      source: { type: "group", groupId: "group-flush", userId: "user-flush" },
+      webhookEventId: "evt-flush-img",
+    });
+    await handleLineWebhookEvents([skippedEvent], context);
+    expect(pendingMediaQueues.get("group-flush")).toHaveLength(1);
+
+    const mentionedEvent = createTestMessageEvent({
+      message: {
+        id: "m-flush-text",
+        type: "text",
+        text: "@bot check this out",
+        mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+      } as unknown as MessageEvent["message"],
+      source: { type: "group", groupId: "group-flush", userId: "user-flush" },
+      webhookEventId: "evt-flush-text",
+    });
+    await handleLineWebhookEvents([mentionedEvent], context);
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allMedia: [{ path: "/media/queued-1.jpg", contentType: "image/jpeg" }],
+      }),
+    );
+    expect(pendingMediaQueues.has("group-flush")).toBe(false);
+  });
+
+  it("drops a queued pending media entry whose file no longer exists (media.ttlHours cleanup raced the flush) instead of surfacing a stale path, and still flushes remaining valid entries (PR #103761 review, confidence 0.94)", async () => {
+    const processMessage = vi.fn();
+    let counter = 0;
+    downloadLineMediaMock.mockImplementation(async () => {
+      counter += 1;
+      return { path: `/media/stale-check-${counter}.jpg`, contentType: "image/jpeg" };
+    });
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaQueues,
+    });
+
+    // Queue two media entries from two earlier unmentioned messages.
+    for (let i = 1; i <= 2; i += 1) {
+      const skippedEvent = createTestMessageEvent({
+        message: {
+          id: `m-stale-img-${i}`,
+          type: "image",
+          contentProvider: { type: "line" },
+          quoteToken: `q-stale-img-${i}`,
+        },
+        source: { type: "group", groupId: "group-stale", userId: "user-stale" },
+        webhookEventId: `evt-stale-img-${i}`,
+      });
+      await handleLineWebhookEvents([skippedEvent], context);
+    }
+    expect(pendingMediaQueues.get("group-stale")).toHaveLength(2);
+
+    // Simulate the gateway's independent media.ttlHours cleanup sweep having
+    // deleted the first queued file from disk before the mention arrives:
+    // the existence check must report false only for that stale path.
+    pathExistsMock.mockImplementation(async (path: string) => path !== "/media/stale-check-1.jpg");
+
+    const mentionedEvent = createTestMessageEvent({
+      message: {
+        id: "m-stale-text",
+        type: "text",
+        text: "@bot check this out",
+        mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+      } as unknown as MessageEvent["message"],
+      source: { type: "group", groupId: "group-stale", userId: "user-stale" },
+      webhookEventId: "evt-stale-text",
+    });
+    await handleLineWebhookEvents([mentionedEvent], context);
+
+    // The flush must proceed without throwing, silently dropping the stale
+    // entry and surfacing only the still-existing one.
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allMedia: [{ path: "/media/stale-check-2.jpg", contentType: "image/jpeg" }],
+      }),
+    );
+    // The dangling entry must not be retried indefinitely: the queue is fully
+    // cleared after a successful flush of the remaining valid entry.
+    expect(pendingMediaQueues.has("group-stale")).toBe(false);
+  });
+
+  it("drops all queued pending media entries when every underlying file has been cleaned up, without surfacing any stale path or throwing", async () => {
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockImplementation(async () => ({
+      path: "/media/all-stale-1.jpg",
+      contentType: "image/jpeg",
+    }));
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaQueues,
+    });
+
+    const skippedEvent = createTestMessageEvent({
+      message: {
+        id: "m-all-stale-img",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-all-stale-img",
+      },
+      source: { type: "group", groupId: "group-all-stale", userId: "user-all-stale" },
+      webhookEventId: "evt-all-stale-img",
+    });
+    await handleLineWebhookEvents([skippedEvent], context);
+    expect(pendingMediaQueues.get("group-all-stale")).toHaveLength(1);
+
+    // The only queued file has since been deleted by media.ttlHours cleanup.
+    pathExistsMock.mockImplementation(async () => false);
+
+    const mentionedEvent = createTestMessageEvent({
+      message: {
+        id: "m-all-stale-text",
+        type: "text",
+        text: "@bot check this out",
+        mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+      } as unknown as MessageEvent["message"],
+      source: { type: "group", groupId: "group-all-stale", userId: "user-all-stale" },
+      webhookEventId: "evt-all-stale-text",
+    });
+    await handleLineWebhookEvents([mentionedEvent], context);
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allMedia: [] }),
+    );
+    expect(pendingMediaQueues.has("group-all-stale")).toBe(false);
+  });
+
+  it("does not flush queued pending media into a control-command that only bypassed requireMention (no real mention)", async () => {
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockImplementation(async () => ({
+      path: "/media/bypass-1.jpg",
+      contentType: "image/jpeg",
+    }));
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      groupAllowFrom: ["accessGroup:line-operators"],
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaQueues,
+      accessGroups: {
+        "line-operators": {
+          type: "message.senders",
+          members: { line: ["user-bypass"] },
+        },
+      },
+    });
+
+    // First, an unmentioned image from an allowed sender gets queued (group is
+    // "open" so any sender can post, but requireMention blocks dispatch).
+    const skippedEvent = createTestMessageEvent({
+      message: {
+        id: "m-bypass-img",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-bypass-img",
+      },
+      source: { type: "group", groupId: "group-bypass", userId: "user-bypass" },
+      webhookEventId: "evt-bypass-img",
+    });
+    await handleLineWebhookEvents([skippedEvent], context);
+    expect(pendingMediaQueues.get("group-bypass")).toHaveLength(1);
+
+    // Then a control command with no actual @mention arrives from an
+    // authorized sender. requireMention is bypassed for control-command
+    // authorization, but that bypass must not also flush someone else's
+    // queued media into this command's context (PR #103761 review Bug 2).
+    const controlCommandEvent = createTestMessageEvent({
+      message: { id: "m-bypass-cmd", type: "text", text: "!status", quoteToken: "q-bypass-cmd" },
+      source: { type: "group", groupId: "group-bypass", userId: "user-bypass" },
+      webhookEventId: "evt-bypass-cmd",
+    });
+    await handleLineWebhookEvents([controlCommandEvent], context);
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allMedia: [] }),
+    );
+    // The queued media must survive untouched since it was never flushed.
+    expect(pendingMediaQueues.get("group-bypass")).toHaveLength(1);
+  });
+
+  it("keeps queued pending media when processMessage fails, so it can be retried", async () => {
+    const processMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("downstream processing failed"))
+      .mockResolvedValueOnce(undefined);
+    downloadLineMediaMock.mockImplementation(async () => ({
+      path: "/media/retry-1.jpg",
+      contentType: "image/jpeg",
+    }));
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaQueues,
+    });
+
+    const skippedEvent = createTestMessageEvent({
+      message: {
+        id: "m-retry-img",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-retry-img",
+      },
+      source: { type: "group", groupId: "group-retry-media", userId: "user-retry-media" },
+      webhookEventId: "evt-retry-img",
+    });
+    await handleLineWebhookEvents([skippedEvent], context);
+    expect(pendingMediaQueues.get("group-retry-media")).toHaveLength(1);
+
+    const mentionedEvent = createTestMessageEvent({
+      message: {
+        id: "m-retry-text",
+        type: "text",
+        text: "@bot check this out",
+        mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+      } as unknown as MessageEvent["message"],
+      source: { type: "group", groupId: "group-retry-media", userId: "user-retry-media" },
+      webhookEventId: "evt-retry-text",
+    });
+
+    // First attempt: processMessage throws. The queue must be preserved so a
+    // LINE webhook retry can recover the media (PR #103761 review Bug 1).
+    await expect(handleLineWebhookEvents([mentionedEvent], context)).rejects.toThrow(
+      "downstream processing failed",
+    );
+    expect(pendingMediaQueues.get("group-retry-media")).toHaveLength(1);
+
+    // Retry (same webhookEventId reused conceptually as a distinct retry event):
+    // second attempt succeeds and the queue is now cleared.
+    const retryEvent = createTestMessageEvent({
+      message: mentionedEvent.message,
+      source: mentionedEvent.source,
+      webhookEventId: "evt-retry-text-2",
+    });
+    await handleLineWebhookEvents([retryEvent], context);
+
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(buildLineMessageContextMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        allMedia: [{ path: "/media/retry-1.jpg", contentType: "image/jpeg" }],
+      }),
+    );
+    expect(pendingMediaQueues.has("group-retry-media")).toBe(false);
+  });
+
+  it("defaults pendingMediaLimit to 3 when unset", async () => {
+    const processMessage = vi.fn();
+    let counter = 0;
+    downloadLineMediaMock.mockImplementation(async () => {
+      counter += 1;
+      return { path: `/media/default-${counter}.jpg`, contentType: "image/jpeg" };
+    });
+    const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      requireMentionForNonText: true,
+      pendingMediaQueues,
+    });
+
+    for (let i = 1; i <= 4; i += 1) {
+      const event = createTestMessageEvent({
+        message: {
+          id: `m-default-${i}`,
+          type: "image",
+          contentProvider: { type: "line" },
+          quoteToken: `q-default-${i}`,
+        },
+        source: { type: "group", groupId: "group-default", userId: "user-default" },
+        webhookEventId: `evt-default-${i}`,
+      });
+      await handleLineWebhookEvents([event], context);
+    }
+
+    const queue = pendingMediaQueues.get("group-default");
+    expect(queue).toHaveLength(3);
+    expect(queue?.map((m) => m.path)).toEqual([
+      "/media/default-2.jpg",
+      "/media/default-3.jpg",
+      "/media/default-4.jpg",
+    ]);
+  });
+
   it("does not bypass mention gating when non-bot mention is present with control command", async () => {
     const processMessage = vi.fn();
     // Text message mentions another user (not bot) together with a control command.
@@ -1162,5 +1653,500 @@ describe("handleLineWebhookEvents", () => {
 
     expect(buildLineMessageContextMock).toHaveBeenCalledTimes(2);
     expect(processMessage).toHaveBeenCalledTimes(2);
+  });
+
+  describe("pending-media queue concurrency (PR #103761 review)", () => {
+    function createMentionedTextEvent(params: {
+      groupId: string;
+      userId: string;
+      messageId: string;
+      webhookEventId: string;
+    }) {
+      return createTestMessageEvent({
+        message: {
+          id: params.messageId,
+          type: "text",
+          text: "@bot check this out",
+          mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+        } as unknown as MessageEvent["message"],
+        source: { type: "group", groupId: params.groupId, userId: params.userId },
+        webhookEventId: params.webhookEventId,
+      });
+    }
+
+    function createSkippedImageEvent(params: {
+      groupId: string;
+      userId: string;
+      messageId: string;
+      webhookEventId: string;
+    }) {
+      return createTestMessageEvent({
+        message: {
+          id: params.messageId,
+          type: "image",
+          contentProvider: { type: "line" },
+          quoteToken: `q-${params.messageId}`,
+        },
+        source: { type: "group", groupId: params.groupId, userId: params.userId },
+        webhookEventId: params.webhookEventId,
+      });
+    }
+
+    it("serializes overlapping webhook deliveries for the same group so pending media is consumed only once", async () => {
+      // Two *separate* handleLineWebhookEvents calls simulate two concurrent
+      // HTTP webhook deliveries for the same LINE group (handleWebhook is
+      // invoked once per HTTP request in bot.ts). A single batch's events are
+      // already processed sequentially by the existing for-of loop, so this
+      // is the scenario that actually needs the lock.
+      let releaseFirst: (() => void) | undefined;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let callCount = 0;
+      const processMessage = vi.fn(async () => {
+        callCount += 1;
+        if (callCount === 1) {
+          await firstGate;
+        }
+      });
+      const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>([
+        ["group-race", [{ path: "/media/queued-race.jpg", contentType: "image/jpeg" }]],
+      ]);
+      const context = createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+        pendingMediaQueues,
+      });
+
+      const firstRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-race",
+            userId: "user-race",
+            messageId: "m-race-1",
+            webhookEventId: "evt-race-1",
+          }),
+        ],
+        context,
+      );
+      await vi.waitFor(() => {
+        expect(processMessage).toHaveBeenCalledTimes(1);
+      });
+      const secondRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-race",
+            userId: "user-race",
+            messageId: "m-race-2",
+            webhookEventId: "evt-race-2",
+          }),
+        ],
+        context,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // The second delivery must be queued behind the first's critical
+      // section (lock held), not racing into it: processMessage must not
+      // have been called a second time yet.
+      expect(processMessage).toHaveBeenCalledTimes(1);
+
+      releaseFirst?.();
+      await Promise.all([firstRun, secondRun]);
+
+      expect(processMessage).toHaveBeenCalledTimes(2);
+      const calls = buildLineMessageContextMock.mock.calls as unknown as Array<
+        [{ allMedia: Array<{ path: string }> }]
+      >;
+      const callsThatSawQueuedMedia = calls.filter((call) =>
+        call[0].allMedia.some((m) => m.path === "/media/queued-race.jpg"),
+      );
+      // Exactly one of the two overlapping deliveries may have consumed the
+      // queued media snapshot; without the lock both could observe it before
+      // either cleared the queue.
+      expect(callsThatSawQueuedMedia).toHaveLength(1);
+      expect(pendingMediaQueues.has("group-race")).toBe(false);
+    });
+
+    it("does not serialize unrelated groups: a slow group does not block a different group", async () => {
+      let releaseSlow: (() => void) | undefined;
+      const slowGate = new Promise<void>((resolve) => {
+        releaseSlow = resolve;
+      });
+      const callOrder: string[] = [];
+      const processMessage = vi.fn(async (ctx: { ctxPayload?: { From?: string } }) => {
+        const from = ctx?.ctxPayload?.From ?? "unknown";
+        if (from.includes("group-slow")) {
+          callOrder.push("slow-start");
+          await slowGate;
+          callOrder.push("slow-end");
+        } else {
+          callOrder.push("fast-start");
+          callOrder.push("fast-end");
+        }
+      });
+      buildLineMessageContextMock.mockImplementation(async (params: { event: MessageEvent }) => {
+        const source = params.event.source as { groupId?: string };
+        return {
+          ctxPayload: { From: `line:group:${source.groupId}` },
+          replyToken: "reply-token",
+          route: { agentId: "default" },
+          isGroup: true,
+          accountId: "default",
+        };
+      });
+      const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+      const context = createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+        pendingMediaQueues,
+      });
+
+      const slowRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-slow",
+            userId: "user-slow",
+            messageId: "m-slow-1",
+            webhookEventId: "evt-slow-1",
+          }),
+        ],
+        context,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // A different group's delivery must complete without waiting on the
+      // still-in-flight "group-slow" delivery's lock.
+      const fastRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-fast",
+            userId: "user-fast",
+            messageId: "m-fast-1",
+            webhookEventId: "evt-fast-1",
+          }),
+        ],
+        context,
+      );
+      await fastRun;
+
+      expect(callOrder).toEqual(["slow-start", "fast-start", "fast-end"]);
+
+      releaseSlow?.();
+      await slowRun;
+      expect(callOrder).toEqual(["slow-start", "fast-start", "fast-end", "slow-end"]);
+    });
+
+    it("guards concurrent queue writes against a concurrent flush for the same group (no lost update)", async () => {
+      let releaseMentioned: (() => void) | undefined;
+      const mentionedGate = new Promise<void>((resolve) => {
+        releaseMentioned = resolve;
+      });
+      const processMessage = vi.fn(async () => {
+        await mentionedGate;
+      });
+      downloadLineMediaMock.mockImplementation(async () => ({
+        path: "/media/write-race.jpg",
+        contentType: "image/jpeg",
+      }));
+      const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+      const context = createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+        requireMentionForNonText: true,
+        pendingMediaQueues,
+      });
+
+      // A mentioned event acquires the group's pending-media lock first and
+      // blocks (inside processMessage) while holding it.
+      const mentionedRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-write-race",
+            userId: "user-write-race",
+            messageId: "m-write-race-mentioned",
+            webhookEventId: "evt-write-race-mentioned",
+          }),
+        ],
+        context,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // While the lock is held, an unrelated skipped (non-mentioned) image in
+      // the same group tries to enqueue pending media. This write path must
+      // also be guarded by the lock, so it cannot run concurrently with (and
+      // have its write lost to) the in-flight flush/clear above.
+      const skippedRun = handleLineWebhookEvents(
+        [
+          createSkippedImageEvent({
+            groupId: "group-write-race",
+            userId: "user-write-race",
+            messageId: "m-write-race-skip",
+            webhookEventId: "evt-write-race-skip",
+          }),
+        ],
+        context,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(downloadLineMediaMock).not.toHaveBeenCalled();
+      expect(pendingMediaQueues.has("group-write-race")).toBe(false);
+
+      releaseMentioned?.();
+      await Promise.all([mentionedRun, skippedRun]);
+
+      // The skipped image's write only happens after the mentioned flush's
+      // critical section fully released the lock, so it is not lost.
+      expect(downloadLineMediaMock).toHaveBeenCalledTimes(1);
+      expect(pendingMediaQueues.get("group-write-race")).toEqual([
+        { path: "/media/write-race.jpg", contentType: "image/jpeg" },
+      ]);
+    });
+
+    it("keeps group history and pending media queue consistent when a skipped media event races a mentioned turn's completion (PR #103761 review, confidence 0.97)", async () => {
+      // Pre-existing conversation history for this group, as if earlier
+      // skipped messages had already been recorded before this race begins.
+      const groupHistories = new Map<string, HistoryEntry[]>([
+        [
+          "group-history-race",
+          [{ sender: "user:someone-else", body: "earlier message", timestamp: Date.now() - 1000 }],
+        ],
+      ]);
+      const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+
+      let releaseMentioned: (() => void) | undefined;
+      const mentionedGate = new Promise<void>((resolve) => {
+        releaseMentioned = resolve;
+      });
+      const processMessage = vi.fn(async () => {
+        await mentionedGate;
+      });
+      downloadLineMediaMock.mockImplementation(async () => ({
+        path: "/media/history-race.jpg",
+        contentType: "image/jpeg",
+      }));
+      const context = createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+        requireMentionForNonText: true,
+        groupHistories,
+        pendingMediaQueues,
+      });
+
+      // A mentioned event acquires the group's lock first and blocks (inside
+      // processMessage) while holding it. Once processMessage resolves, the
+      // guarded section clears both the pending-media queue and the group
+      // history for this group as its final step.
+      const mentionedRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-history-race",
+            userId: "user-history-race",
+            messageId: "m-history-race-mentioned",
+            webhookEventId: "evt-history-race-mentioned",
+          }),
+        ],
+        context,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // While the lock is held, an unrelated skipped (non-mentioned) image in
+      // the same group tries to record a pending-history placeholder entry
+      // *and* enqueue its media. Both operations must be guarded by the same
+      // lock as the mentioned turn's history-clear + queue-clear, so neither
+      // can interleave with it.
+      const skippedRun = handleLineWebhookEvents(
+        [
+          createSkippedImageEvent({
+            groupId: "group-history-race",
+            userId: "user-history-race",
+            messageId: "m-history-race-skip",
+            webhookEventId: "evt-history-race-skip",
+          }),
+        ],
+        context,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Serialized: the skipped event's write must not have happened yet,
+      // and the pre-existing history must still be intact (not yet cleared
+      // by the still-in-flight mentioned turn).
+      expect(downloadLineMediaMock).not.toHaveBeenCalled();
+      expect(pendingMediaQueues.has("group-history-race")).toBe(false);
+      expect(groupHistories.get("group-history-race")).toEqual([
+        { sender: "user:someone-else", body: "earlier message", timestamp: expect.any(Number) },
+      ]);
+
+      releaseMentioned?.();
+      await Promise.all([mentionedRun, skippedRun]);
+
+      // After both complete: the mentioned turn's clear ran first (it held
+      // the lock first), then the skipped image's write ran strictly after,
+      // inside the same lock. So the final state must show the skipped
+      // image's own history placeholder *together with* its queued media --
+      // never one without the other, and never the pre-existing history
+      // surviving alongside a queue write that raced past it.
+      expect(downloadLineMediaMock).toHaveBeenCalledTimes(1);
+      const finalHistory = groupHistories.get("group-history-race");
+      const finalQueue = pendingMediaQueues.get("group-history-race");
+      expect(finalQueue).toEqual([{ path: "/media/history-race.jpg", contentType: "image/jpeg" }]);
+      expect(finalHistory).toBeDefined();
+      expect(finalHistory?.some((entry) => entry.body === "<image>")).toBe(true);
+      // The stale pre-race entry must be gone: it was cleared by the
+      // mentioned turn's completion before the skipped image's write ran.
+      expect(finalHistory?.some((entry) => entry.body === "earlier message")).toBe(false);
+    });
+
+    it("does not engage the pending-media lock for a default group, so overlapping deliveries run concurrently (PR #103761 review, confidence 0.98)", async () => {
+      // Default group: no requireMentionForNonText, no pendingMediaLimit,
+      // and no pre-existing queued media for this group. The lock must not
+      // engage at all here -- two overlapping handleLineWebhookEvents calls
+      // for the SAME group must interleave (not serialize), proving the fix
+      // for extensions/line/src/bot-handlers.ts:507-509 (lock previously
+      // engaged for every group regardless of feature opt-in).
+      let releaseFirst: (() => void) | undefined;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const callOrder: string[] = [];
+      let callCount = 0;
+      const processMessage = vi.fn(async () => {
+        callCount += 1;
+        if (callCount === 1) {
+          callOrder.push("first-start");
+          await firstGate;
+          callOrder.push("first-end");
+        } else {
+          callOrder.push("second-start");
+          callOrder.push("second-end");
+        }
+      });
+      // Note: no requireMentionForNonText, no pendingMediaLimit -- this is a
+      // fully default/unconfigured group.
+      const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+      const context = createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+        pendingMediaQueues,
+      });
+
+      const firstRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-default-concurrent",
+            userId: "user-default-concurrent",
+            messageId: "m-default-concurrent-1",
+            webhookEventId: "evt-default-concurrent-1",
+          }),
+        ],
+        context,
+      );
+      await vi.waitFor(() => {
+        expect(processMessage).toHaveBeenCalledTimes(1);
+      });
+      const secondRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-default-concurrent",
+            userId: "user-default-concurrent",
+            messageId: "m-default-concurrent-2",
+            webhookEventId: "evt-default-concurrent-2",
+          }),
+        ],
+        context,
+      );
+
+      // Without the lock engaging, the second delivery for the same default
+      // group must run to completion even while the first is still blocked
+      // -- proving no serialization happened.
+      await secondRun;
+      expect(callOrder).toEqual(["first-start", "second-start", "second-end"]);
+
+      releaseFirst?.();
+      await firstRun;
+      expect(callOrder).toEqual(["first-start", "second-start", "second-end", "first-end"]);
+      expect(processMessage).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not engage the pending-media lock when requireMention is false even if requireMentionForNonText is true (P2 regression)", async () => {
+      // requireMentionForNonText is a sub-setting that only applies when
+      // requireMention is ALSO true. A group with requireMention: false but
+      // requireMentionForNonText: true (and no pre-existing queued media)
+      // must NOT have its overlapping webhook deliveries serialized behind
+      // the per-group lock -- the feature is not active for this group.
+      let releaseFirst: (() => void) | undefined;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const callOrder: string[] = [];
+      let callCount = 0;
+      const processMessage = vi.fn(async () => {
+        callCount += 1;
+        if (callCount === 1) {
+          callOrder.push("first-start");
+          await firstGate;
+          callOrder.push("first-end");
+        } else {
+          callOrder.push("second-start");
+          callOrder.push("second-end");
+        }
+      });
+      // requireMention: false, requireMentionForNonText: true, no queued media.
+      const pendingMediaQueues = new Map<string, { path: string; contentType?: string }[]>();
+      const context = createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: false,
+        requireMentionForNonText: true,
+        pendingMediaQueues,
+      });
+
+      const firstRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-no-require-mention",
+            userId: "user-no-require-mention",
+            messageId: "m-no-require-mention-1",
+            webhookEventId: "evt-no-require-mention-1",
+          }),
+        ],
+        context,
+      );
+      await vi.waitFor(() => {
+        expect(processMessage).toHaveBeenCalledTimes(1);
+      });
+      const secondRun = handleLineWebhookEvents(
+        [
+          createMentionedTextEvent({
+            groupId: "group-no-require-mention",
+            userId: "user-no-require-mention",
+            messageId: "m-no-require-mention-2",
+            webhookEventId: "evt-no-require-mention-2",
+          }),
+        ],
+        context,
+      );
+
+      // Without the lock engaging, the second delivery must run to completion
+      // even while the first is still blocked -- proving no serialization.
+      await secondRun;
+      expect(callOrder).toEqual(["first-start", "second-start", "second-end"]);
+
+      releaseFirst?.();
+      await firstRun;
+      expect(callOrder).toEqual(["first-start", "second-start", "second-end", "first-end"]);
+      expect(processMessage).toHaveBeenCalledTimes(2);
+    });
   });
 });

@@ -141,9 +141,63 @@ Allowlists and policies:
 - `channels.line.allowFrom`: allowlisted LINE user IDs for DMs; `dmPolicy: "open"` requires `["*"]`
 - `channels.line.groupPolicy`: `allowlist | open | disabled` (default `allowlist`)
 - `channels.line.groupAllowFrom`: allowlisted LINE user IDs for groups
-- Per-group overrides: `channels.line.groups.<groupId>.allowFrom` (plus `enabled`, `requireMention`, `systemPrompt`, `skills`)
+- Per-group overrides: `channels.line.groups.<groupId>.allowFrom` (plus `enabled`, `requireMention`, `requireMentionForNonText`, `pendingMediaLimit`, `systemPrompt`, `skills`)
 - Static sender access groups can be referenced from `allowFrom`, `groupAllowFrom`, and per-group `allowFrom` with `accessGroup:<name>`; see [Access groups](/channels/access-groups).
 - Runtime note: if `channels.line` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
+
+### Mention gating for non-text messages
+
+LINE's Messaging API only carries mention metadata (`mention.mentionees`) on
+`text` messages. When a group has `requireMention: true`, non-text messages
+(image/video/audio/file/sticker/location) bypass the mention gate by default
+since the bot has no way to tell whether they were addressed to it — this
+preserves prior behavior for deployments that rely on unaddressed media
+reaching the bot for analysis.
+
+Set `requireMentionForNonText: true` on a group (alongside `requireMention:
+true`) to opt in to gating non-text messages the same way as text: they are
+skipped unless the group is mentioned in the same turn. Since LINE never
+reports a mention on the non-text message itself, use `pendingMediaLimit` to
+retain the most recent skipped photo/video/audio/file messages (stickers are
+not retained) until a later `@mention` arrives in the same group — the queued
+media is then attached to that mentioned message's context. `pendingMediaLimit`
+defaults to `3` when unset; older entries are dropped once the limit is
+exceeded.
+
+Pending-media retention is best-effort, not a durable delivery guarantee:
+
+- The queue is in-memory and process-local — it is lost on gateway restart,
+  so media skipped just before a restart will not be recovered even if a
+  mention arrives afterward.
+- The gateway's independent `media.ttlHours` cleanup sweep doesn't know about
+  this queue and can delete a saved file before it is flushed; the flush path
+  checks each queued entry still exists on disk and silently drops any that
+  are already gone.
+- When older entries are evicted for exceeding `pendingMediaLimit`, their
+  underlying downloaded files are deleted from disk as well.
+
+Don't rely on stronger guarantees than "delivered if the gateway stays up and
+the file survives until the next mention."
+
+```json5
+{
+  channels: {
+    line: {
+      accounts: {
+        default: {
+          groups: {
+            G0123456789abcdef: {
+              requireMention: true,
+              requireMentionForNonText: true,
+              pendingMediaLimit: 3,
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
 
 LINE IDs are case-sensitive. Valid IDs look like:
 
