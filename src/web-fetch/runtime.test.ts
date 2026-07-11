@@ -193,6 +193,7 @@ describe("web fetch runtime", () => {
           ...args,
           runtimeProviderConfigured: runtimeMetadata?.providerConfigured,
           runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+          runtimeSelectedProviderKeySource: runtimeMetadata?.selectedProviderKeySource,
         }),
       }),
     });
@@ -226,8 +227,10 @@ describe("web fetch runtime", () => {
       maxChars: 1000,
       runtimeProviderConfigured: "removed-provider",
       runtimeSelectedProvider: "firecrawl",
+      runtimeSelectedProviderKeySource: undefined,
     });
     expect(runtimeWebFetch.selectedProvider).toBe("removed-provider");
+    expect(runtimeWebFetch.selectedProviderKeySource).toBe("missing");
   });
 
   it("auto-detects providers from provider-declared env vars", () => {

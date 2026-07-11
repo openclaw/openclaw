@@ -191,6 +191,45 @@ describe("resolveWebProviderDefinition", () => {
     });
   });
 
+  it("clears stale provider credential metadata after runtime metadata fallback", () => {
+    const staleRuntimeMetadata = {
+      selectedProvider: "removed-provider",
+      selectedProviderKeySource: "missing",
+    };
+    const resolved = resolveWebProviderDefinition({
+      config: {},
+      toolConfig: { enabled: true },
+      runtimeMetadata: staleRuntimeMetadata,
+      providers: [
+        {
+          id: "custom",
+        },
+      ],
+      resolveEnabled: () => true,
+      resolveAutoProviderId: () => "custom",
+      createTool: ({ provider, runtimeMetadata }) => ({
+        name: provider.id,
+        runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+        runtimeSelectedProviderKeySource: runtimeMetadata?.selectedProviderKeySource,
+      }),
+    });
+
+    expect(resolved).toEqual({
+      provider: {
+        id: "custom",
+      },
+      definition: {
+        name: "custom",
+        runtimeSelectedProvider: "custom",
+        runtimeSelectedProviderKeySource: undefined,
+      },
+    });
+    expect(staleRuntimeMetadata).toEqual({
+      selectedProvider: "removed-provider",
+      selectedProviderKeySource: "missing",
+    });
+  });
+
   it("does not replace an unavailable explicit provider id with auto-detect", () => {
     const resolved = resolveWebProviderDefinition({
       config: {},
