@@ -158,6 +158,13 @@ describe("trajectory cleanup", () => {
 
       await expectTombstoned(safeExternalRuntime, "deleted");
       await expectTombstoned(pointerPath, "deleted");
+      // The first disposal above left a retired (but still sessionId-owned)
+      // registry entry for safeExternalRuntime's now-vacant canonical path —
+      // findTrajectoryPathOwnedBySession does not distinguish retired from
+      // live. Clear it so the second scenario below genuinely exercises "no
+      // registry owner at all", matching a real maintenance sweep running
+      // long after any writer process for this session exited.
+      clearTrajectoryWriterLifecycleRegistryForTest();
 
       await fs.writeFile(pointerPath, pointerFile(sessionId, unsafeExternalRuntime), "utf8");
       await removeSessionTrajectoryArtifacts({
@@ -169,6 +176,51 @@ describe("trajectory cleanup", () => {
       });
 
       expect((await fs.stat(unsafeExternalRuntime)).isFile()).toBe(true);
+      // Round 5 P1: an unprovable external target must not cost the pointer
+      // either — disposing it here would orphan unsafeExternalRuntime with
+      // no discovery path left, even though the runtime itself was (rightly)
+      // left untouched above.
+      expect((await fs.stat(pointerPath)).isFile()).toBe(true);
+    });
+  });
+
+  it("tombstones a proven external trajectory pair together, in its own directory, with no live registry owner", async () => {
+    // Reproduces the maintenance-driven shape of the round-5 P1 finding: the
+    // writer process is long gone (no acquireTrajectoryWriterLease call in
+    // this test at all, so the registry has no owner record), and only the
+    // persisted pointer + external runtime file on disk remain — exactly
+    // what a per-save maintenance sweep discovers well after a session goes
+    // idle under a configured OPENCLAW_TRAJECTORY_DIR.
+    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+      const sessionId = "session-11";
+      const sessionsDir = path.join(dir, "sessions");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+      const externalDir = path.join(dir, "external");
+      await fs.mkdir(sessionsDir);
+      await fs.mkdir(externalDir);
+      const externalRuntime = path.join(externalDir, `${sessionId}.jsonl`);
+      await fs.writeFile(externalRuntime, runtimeEvent(sessionId), "utf8");
+      const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
+      await fs.writeFile(pointerPath, pointerFile(sessionId, externalRuntime), "utf8");
+
+      const removed = await removeSessionTrajectoryArtifacts({
+        sessionId,
+        sessionFile,
+        storePath,
+        restrictToStoreDir: true,
+        disposal: { mode: "tombstone", reason: "deleted" },
+      });
+
+      const runtimeTombstone = await expectTombstoned(externalRuntime, "deleted");
+      const pointerTombstone = await expectTombstoned(pointerPath, "deleted");
+      // The pair stays coupled in the EXTERNAL directory, not the co-located
+      // (nonexistent) default candidate's — this is what closes the P1 gap.
+      expect(path.dirname(runtimeTombstone)).toBe(externalDir);
+      expect(removed.map((entry) => entry.kind).toSorted()).toEqual(["pointer", "runtime"]);
+      expect(removed.map((entry) => entry.path).toSorted()).toEqual(
+        [runtimeTombstone, pointerTombstone].toSorted(),
+      );
     });
   });
 
