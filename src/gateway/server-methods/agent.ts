@@ -125,6 +125,11 @@ import {
 } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
+  AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
+  resolveAgentHarnessSessionContextError,
+  resolveAgentHarnessSessionIdMismatchError,
+} from "../../sessions/agent-harness-session-key.js";
+import {
   annotateInterSessionPromptText,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
@@ -286,6 +291,8 @@ function respondDeletedAgentSession(params: {
 
 function respondUnavailableAgentSessionForKey(params: {
   sessionKey: string;
+  requestedSessionId?: string;
+  isRawModelRun: boolean;
   agentId?: string;
   respond: GatewayRequestHandlerOptions["respond"];
 }): boolean {
@@ -302,6 +309,27 @@ function respondUnavailableAgentSessionForKey(params: {
       respond: params.respond,
     })
   ) {
+    return true;
+  }
+  const harnessSessionError = resolveAgentHarnessSessionContextError(canonicalKey, entry);
+  if (harnessSessionError) {
+    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, harnessSessionError));
+    return true;
+  }
+  const harnessSessionIdError = resolveAgentHarnessSessionIdMismatchError(
+    entry,
+    params.requestedSessionId,
+  );
+  if (harnessSessionIdError) {
+    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, harnessSessionIdError));
+    return true;
+  }
+  if (params.isRawModelRun && entry?.modelSelectionLocked === true) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE),
+    );
     return true;
   }
   const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
@@ -1328,6 +1356,17 @@ export const agentHandlers: GatewayRequestHandlers = {
     const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;
     const isOneShotModelRun = request.modelRun === true;
     const isRawModelRun = isOneShotModelRun || request.promptMode === "none";
+    if (request.promptMode === "none" && !isOneShotModelRun) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          'promptMode="none" requires modelRun=true so the run cannot mutate a durable session.',
+        ),
+      );
+      return;
+    }
     if (requestedModelOverride && !allowModelOverride) {
       respond(
         false,
@@ -1723,7 +1762,13 @@ export const agentHandlers: GatewayRequestHandlers = {
     // and dispatch so agent RPC shares the chat.send / sessions.send boundary.
     if (
       requestedSessionKey &&
-      respondUnavailableAgentSessionForKey({ sessionKey: requestedSessionKey, agentId, respond })
+      respondUnavailableAgentSessionForKey({
+        sessionKey: requestedSessionKey,
+        requestedSessionId,
+        isRawModelRun,
+        agentId,
+        respond,
+      })
     ) {
       clearUnacceptedAgentDedupe();
       return;
@@ -2592,6 +2637,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           : undefined;
         const skipImplicitExpiry =
           restoredCronContinuationIdentity !== undefined ||
+          entry?.modelSelectionLocked === true ||
           (resetPolicy.configured !== true && hasProviderOwnedSession(entry));
         let freshness = entry
           ? skipImplicitExpiry
@@ -2788,6 +2834,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             : undefined;
           const freshSkipImplicitExpiry =
             restoredCronContinuationIdentity !== undefined ||
+            freshEntry?.modelSelectionLocked === true ||
             (resetPolicy.configured !== true && hasProviderOwnedSession(freshEntry));
           const freshFreshness = freshEntry
             ? freshSkipImplicitExpiry

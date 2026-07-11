@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
 
@@ -224,6 +225,48 @@ describe("gateway sessions patch", () => {
     acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReset();
     resetProviderAuthAliasMapCacheForTest();
     resetPluginRuntimeStateForTest();
+  });
+
+  test("rejects creating a missing agent harness session through patch", async () => {
+    const key = "agent:main:harness:codex:supervision:missing";
+    const store: Record<string, SessionEntry> = {};
+
+    expectPatchError(
+      await runPatch({
+        store,
+        storeKey: key,
+        patch: { key, label: "squat" },
+      }),
+      AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+    );
+    expect(store[key]).toBeUndefined();
+  });
+
+  test("allows patching an existing agent harness session", async () => {
+    const key = "agent:main:harness:codex:supervision:existing";
+    const store: Record<string, SessionEntry> = {
+      [key]: {
+        sessionId: "harness-session",
+        updatedAt: 1,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    };
+
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        storeKey: key,
+        patch: { key, label: "kept" },
+      }),
+    );
+    expect(entry.label).toBe("kept");
+    expect(store[key]).toMatchObject({
+      sessionId: "harness-session",
+      label: "kept",
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    });
   });
 
   test("archives and restores sessions without retaining a pin", async () => {

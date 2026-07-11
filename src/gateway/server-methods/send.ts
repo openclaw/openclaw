@@ -50,6 +50,10 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizePollInput } from "../../polls.js";
 import {
+  isAgentHarnessSessionKey,
+  resolveMissingAgentHarnessSessionError,
+} from "../../sessions/agent-harness-session-key.js";
+import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
@@ -61,6 +65,7 @@ import {
 } from "../../utils/message-channel.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
+import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -813,6 +818,21 @@ export const sendHandlers: GatewayRequestHandlers = {
                 }
             : derivedRoute
           : null;
+        const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
+        if (outboundSessionKey && isAgentHarnessSessionKey(outboundSessionKey)) {
+          const { canonicalKey, entry } = loadSessionEntry(outboundSessionKey);
+          const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
+            canonicalKey,
+            entry,
+          );
+          if (missingHarnessSessionError) {
+            return {
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError),
+              meta: { channel },
+            };
+          }
+        }
         if (outboundRoute) {
           await ensureOutboundSessionEntry({
             cfg,
@@ -821,7 +841,6 @@ export const sendHandlers: GatewayRequestHandlers = {
             route: outboundRoute,
           });
         }
-        const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
         const outboundSession = buildOutboundSessionContext({
           cfg,
           agentId: effectiveAgentId,
