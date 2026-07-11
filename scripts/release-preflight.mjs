@@ -27,7 +27,7 @@ const releaseTasks = [
   {
     id: "npm-shrinkwraps",
     name: "npm shrinkwraps",
-    scopes: ["dependencies", "version"],
+    scopes: ["dependencies", "plugins", "version"],
     fix: nodeCommand("scripts/generate-npm-shrinkwrap.mjs", "--changed"),
     fixAfter: ["plugin-versions", "plugin-sdk-exports"],
     check: nodeCommand("scripts/generate-npm-shrinkwrap.mjs", "--all", "--check"),

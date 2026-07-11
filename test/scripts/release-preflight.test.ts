@@ -216,6 +216,25 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.stdout).toContain("(version, jobs=4)");
   });
 
+  it("keeps plugin shrinkwraps aligned during plugin-only prep", () => {
+    const fakePnpm = makeFakePnpm();
+    const root = makeReleaseFixture();
+    const result = runPreflight(["--fix", "--scope", "plugins"], fakePnpm, {}, root);
+
+    expect(result.status).toBe(0);
+    expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
+      [
+        "node --import tsx scripts/sync-plugin-versions.ts",
+        "node scripts/generate-npm-shrinkwrap.mjs --changed",
+        "node scripts/generate-plugin-inventory-doc.mjs --write",
+        "node --import tsx scripts/sync-plugin-versions.ts --check",
+        "node scripts/generate-npm-shrinkwrap.mjs --all --check",
+        "node scripts/generate-plugin-inventory-doc.mjs --check",
+      ].toSorted(),
+    );
+    expect(result.stdout).toContain("(plugins, jobs=4)");
+  });
+
   it("checks non-version scopes without requiring macOS source metadata", () => {
     const fakePnpm = makeFakePnpm();
     const root = makeTempDir(tempDirs, "openclaw-release-preflight-config-");
