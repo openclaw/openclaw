@@ -113,6 +113,7 @@ function addLoadedPlugin(
 function createLookUpTableForTest(params: {
   manifestRegistry?: PluginLookUpTable["manifestRegistry"];
   pluginIds?: readonly string[];
+  workerProviderIds?: readonly string[];
 }): PluginLookUpTable {
   return {
     policyHash: "test",
@@ -148,7 +149,7 @@ function createLookUpTableForTest(params: {
       configuredDeferredChannelPluginIds: [],
       pluginIds: params.pluginIds ?? [],
     },
-    workerProviderIds: [],
+    workerProviderIds: params.workerProviderIds ?? [],
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,
@@ -562,19 +563,27 @@ describe("loadGatewayPlugins", () => {
 
     loadGatewayStartupPluginsForTest({
       pluginIds: ["qa-lab"],
-      pluginLookUpTable: {
+      pluginLookUpTable: createLookUpTableForTest({
         manifestRegistry: {
           plugins: [
             {
               id: "qa-lab",
               origin: "bundled",
+              channels: [],
+              providers: [],
+              cliBackends: [],
+              skills: [],
+              hooks: [],
+              rootDir: "/tmp/qa-lab",
+              source: "/tmp/qa-lab/index.js",
+              manifestPath: "/tmp/qa-lab/openclaw.plugin.json",
               contracts: { workerProviders: ["static-ssh"] },
             },
           ],
           diagnostics: [],
         },
         workerProviderIds: ["static-ssh"],
-      } as PluginLookUpTable,
+      }),
     });
 
     expect(getLastPluginLoadOption("autoEnabledReasons")).toEqual({

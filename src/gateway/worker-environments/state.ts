@@ -1,6 +1,6 @@
-import type { WorkerEnvironmentState } from "../../../packages/gateway-protocol/src/index.js";
+import type { WorkerEnvironmentState } from "../../../packages/gateway-protocol/src/schema/environments.js";
 
-export type { WorkerEnvironmentState } from "../../../packages/gateway-protocol/src/index.js";
+export type { WorkerEnvironmentState } from "../../../packages/gateway-protocol/src/schema/environments.js";
 export type WorkerEnvironmentUnleasedState = "requested" | "provisioning" | "failed";
 export type WorkerEnvironmentLeasedState = Exclude<
   WorkerEnvironmentState,

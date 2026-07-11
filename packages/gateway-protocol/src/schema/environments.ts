@@ -1,5 +1,5 @@
 // Gateway Protocol schema module defines protocol validation shapes.
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
 /**
@@ -95,3 +95,16 @@ export const EnvironmentsDestroyParamsSchema = Type.Object(
 
 /** Destroy result exposes the terminal worker lifecycle state. */
 export const EnvironmentsDestroyResultSchema = createEnvironmentSummarySchema();
+
+export type EnvironmentStatus = Static<typeof EnvironmentStatusSchema>;
+export type WorkerEnvironmentState = Static<typeof WorkerEnvironmentStateSchema>;
+export type WorkerEnvironmentMetadata = Static<typeof WorkerEnvironmentMetadataSchema>;
+export type EnvironmentSummary = Static<typeof EnvironmentSummarySchema>;
+export type EnvironmentsCreateParams = Static<typeof EnvironmentsCreateParamsSchema>;
+export type EnvironmentsCreateResult = Static<typeof EnvironmentsCreateResultSchema>;
+export type EnvironmentsDestroyParams = Static<typeof EnvironmentsDestroyParamsSchema>;
+export type EnvironmentsDestroyResult = Static<typeof EnvironmentsDestroyResultSchema>;
+export type EnvironmentsListParams = Static<typeof EnvironmentsListParamsSchema>;
+export type EnvironmentsListResult = Static<typeof EnvironmentsListResultSchema>;
+export type EnvironmentsStatusParams = Static<typeof EnvironmentsStatusParamsSchema>;
+export type EnvironmentsStatusResult = Static<typeof EnvironmentsStatusResultSchema>;

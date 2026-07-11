@@ -1,4 +1,5 @@
 // QA Lab tests cover deterministic static-SSH worker provider behavior.
+import type { WorkerProfile } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import {
   createStaticSshWorkerProvider,
@@ -47,7 +48,7 @@ describe("QA Lab static-SSH worker provider", () => {
     ).resolves.toMatchObject({ ssh: { port: 2222 } });
   });
 
-  it.each([
+  it.each<{ label: string; profile: WorkerProfile }>([
     { label: "host", profile: { host: " ", user: "openclaw", keyRef: KEY_REF } },
     { label: "user", profile: { host: "worker.example.test", user: "", keyRef: KEY_REF } },
     {

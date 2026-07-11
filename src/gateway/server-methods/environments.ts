@@ -12,8 +12,8 @@ import { listDevicePairing } from "../../infra/device-pairing.js";
 import { listNodePairing } from "../../infra/node-pairing.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
+import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentState } from "../worker-environments/state.js";
-import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -61,7 +61,7 @@ function summarizeNodeEnvironment(node: NodeListNode): EnvironmentSummary {
 }
 /** Projects a durable worker row without exposing its SSH credential reference. */
 export function summarizeWorkerEnvironment(
-  record: WorkerEnvironmentRecord,
+  record: WorkerEnvironmentServiceRecord,
   now = Date.now(),
 ): EnvironmentSummary {
   return {
@@ -89,7 +89,7 @@ async function listEnvironments(context: GatewayRequestContext): Promise<Environ
   });
   return [GATEWAY_ENVIRONMENT, ...listKnownNodes(catalog).map(summarizeNodeEnvironment)];
 }
-function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironmentRecord[] {
+function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironmentServiceRecord[] {
   try {
     return context.workerEnvironmentService?.list() ?? [];
   } catch {
@@ -99,7 +99,7 @@ function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironme
 }
 async function respondWorkerMutation(
   respond: RespondFn,
-  run: () => Promise<WorkerEnvironmentRecord>,
+  run: () => Promise<WorkerEnvironmentServiceRecord>,
   invalidCodes: readonly string[],
   unavailableMessage: string,
 ) {
@@ -118,8 +118,9 @@ async function respondWorkerMutation(
 }
 export const environmentsHandlers: GatewayRequestHandlers = {
   "environments.list": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsListParams(params))
+    if (!validateEnvironmentsListParams(params)) {
       return rejectInvalid(respond, "environments.list", validateEnvironmentsListParams);
+    }
     await respondUnavailableOnThrow(respond, async () => {
       const environments = await listEnvironments(context);
       const workers = listWorkerEnvironments(context);
@@ -131,8 +132,9 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     });
   },
   "environments.status": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsStatusParams(params))
+    if (!validateEnvironmentsStatusParams(params)) {
       return rejectInvalid(respond, "environments.status", validateEnvironmentsStatusParams);
+    }
     await respondUnavailableOnThrow(respond, async () => {
       const environment = (await listEnvironments(context)).find(
         (entry) => entry.id === params.environmentId,
@@ -141,9 +143,9 @@ export const environmentsHandlers: GatewayRequestHandlers = {
         respond(true, environment, undefined);
         return;
       }
-      let worker: WorkerEnvironmentRecord | undefined;
+      let worker: WorkerEnvironmentServiceRecord | undefined;
       try {
-        worker = await context.workerEnvironmentService?.get(params.environmentId);
+        worker = context.workerEnvironmentService?.get(params.environmentId);
       } catch {
         respond(
           false,
@@ -160,8 +162,9 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     });
   },
   "environments.create": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsCreateParams(params))
+    if (!validateEnvironmentsCreateParams(params)) {
       return rejectInvalid(respond, "environments.create", validateEnvironmentsCreateParams);
+    }
     const service = context.workerEnvironmentService;
     if (!service) {
       respond(
@@ -179,8 +182,9 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     );
   },
   "environments.destroy": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsDestroyParams(params))
+    if (!validateEnvironmentsDestroyParams(params)) {
       return rejectInvalid(respond, "environments.destroy", validateEnvironmentsDestroyParams);
+    }
     const service = context.workerEnvironmentService;
     if (!service) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"));
