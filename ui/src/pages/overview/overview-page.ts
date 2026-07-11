@@ -16,12 +16,7 @@ import {
   type ApplicationGateway,
 } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
-import {
-  loadGatewaySessionSelection,
-  loadSettings,
-  patchSettings,
-  type UiSettings,
-} from "../../app/settings.ts";
+import { loadGatewaySessionSelection, loadSettings, type UiSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { createInitialCronState, loadCronJobsPage, loadCronStatus } from "../../lib/cron/index.ts";
