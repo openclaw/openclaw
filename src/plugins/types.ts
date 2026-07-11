@@ -1272,6 +1272,8 @@ export type WorkerSshEndpoint = {
   host: string;
   port: number;
   user: string;
+  /** OpenSSH public host-key line obtained from trusted provisioning output. */
+  hostKey: string;
   /** Secret reference only; providers must never return plaintext key material. */
   keyRef: SecretRef;
 };

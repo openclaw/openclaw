@@ -27,6 +27,7 @@ describe("captured plugin registration", () => {
               host: "worker.example",
               port: 22,
               user: "worker",
+              hostKey: ["ssh-ed25519", "AAAA"].join(" "),
               keyRef: { source: "env", provider: "default", id: "WORKER_SSH_KEY" },
             },
           }),

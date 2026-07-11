@@ -12,18 +12,44 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import type { WorkerInstallationArtifact } from "./bundle.js";
 import {
   createWorkerEnvironmentService,
   WorkerEnvironmentServiceError,
+  type WorkerEnvironmentServiceOptions,
   type WorkerEnvironmentService,
 } from "./service.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 
+const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
 const SSH_ENDPOINT: WorkerSshEndpoint = {
   host: "worker.example.test",
   port: 22,
   user: "openclaw",
+  hostKey: HOST_KEY,
   keyRef: { source: "file", provider: "worker-keys", id: "/development-key" },
+};
+const BUNDLE_HASH = "a".repeat(64);
+const BUNDLE_ARTIFACT: WorkerInstallationArtifact = {
+  install: "bundle",
+  bundleHash: BUNDLE_HASH,
+  openclawVersion: "2026.7.2",
+  protocolFeatures: [],
+  tarballSha256: "b".repeat(64),
+  tarballPath: "/gateway/cache/worker-bundle.tgz",
+};
+const NPM_ARTIFACT: WorkerInstallationArtifact = {
+  install: "npm",
+  bundleHash: BUNDLE_HASH,
+  openclawVersion: "2026.7.2",
+  packageIntegrity: `sha512-${Buffer.alloc(64).toString("base64")}`,
+  protocolFeatures: [],
+  packageSpec: "openclaw@2026.7.2",
+};
+const BOOTSTRAP_RECEIPT = {
+  bundleHash: BUNDLE_HASH,
+  openclawVersion: "2026.7.2",
+  protocolFeatures: [],
 };
 
 type WorkerLifecycleLease = Parameters<WorkerProvider["inspect"]>[0];
@@ -35,6 +61,8 @@ describe("worker environment service", () => {
   let config: OpenClawConfig;
   let nowMs: number;
   let providersEnabled: boolean;
+  let prepareInstallation: WorkerEnvironmentServiceOptions["prepareInstallation"];
+  let bootstrapWorker: WorkerEnvironmentServiceOptions["bootstrapWorker"];
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-service-"));
@@ -53,6 +81,14 @@ describe("worker environment service", () => {
         },
       },
     };
+    prepareInstallation = vi.fn(async (install) =>
+      install === "bundle" ? BUNDLE_ARTIFACT : NPM_ARTIFACT,
+    );
+    bootstrapWorker = vi.fn(async ({ installation }) => ({
+      bundleHash: installation.bundleHash,
+      openclawVersion: installation.openclawVersion,
+      protocolFeatures: [...installation.protocolFeatures],
+    }));
   });
 
   afterEach(async () => {
@@ -62,13 +98,19 @@ describe("worker environment service", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  function createService(provider: WorkerProvider) {
+  function createService(
+    provider: WorkerProvider,
+    serviceOptions: Pick<WorkerEnvironmentServiceOptions, "bootstrapCallTimeoutMs"> = {},
+  ) {
     service = createWorkerEnvironmentService({
       store,
       getConfig: () => config,
       resolveProvider: (providerId) =>
         providersEnabled && providerId === "fake" ? provider : undefined,
+      prepareInstallation,
+      bootstrapWorker,
       reconcileIntervalMs: 25,
+      ...serviceOptions,
     });
     return service;
   }
@@ -85,12 +127,15 @@ describe("worker environment service", () => {
     };
   }
 
-  function seedBootstrapping(environmentId: string) {
+  function seedBootstrapping(
+    environmentId: string,
+    install?: WorkerInstallationArtifact["install"],
+  ) {
     const intent = store.createIntent({
       environmentId,
       providerId: "fake",
       profileId: "development",
-      profileSnapshot: { settings: { region: "test" } },
+      profileSnapshot: { ...(install ? { install } : {}), settings: { region: "test" } },
       provisionOperationId: `provision:${environmentId}`,
     });
     const provisioning = store.transition({
@@ -106,12 +151,13 @@ describe("worker environment service", () => {
     });
   }
 
-  function seedReady(environmentId: string) {
-    const bootstrapping = seedBootstrapping(environmentId);
+  function seedReady(environmentId: string, install?: WorkerInstallationArtifact["install"]) {
+    const bootstrapping = seedBootstrapping(environmentId, install);
     return store.transition({
       environmentId,
       from: bootstrapping.state,
       to: "ready",
+      patch: { bootstrapReceipt: BOOTSTRAP_RECEIPT },
     });
   }
 
@@ -124,6 +170,7 @@ describe("worker environment service", () => {
           state: "provisioning",
           provisionOperationId: operationId,
           profileSnapshot: {
+            install: "bundle",
             settings: { region: "test" },
             lifetime: { idleTimeoutMinutes: 10 },
           },
@@ -143,6 +190,175 @@ describe("worker environment service", () => {
     expect(operationIds).toHaveLength(1);
     expect(operationIds[0]).toMatch(/^provision:[a-f0-9]{64}$/u);
     expect(result.profileSnapshot).toMatchObject({ settings: { region: "test" } });
+  });
+
+  it("stays bootstrapping until the SSH install receipt is durable", async () => {
+    let finishBootstrap: (() => void) | undefined;
+    const bootstrapPending = new Promise<void>((resolve) => {
+      finishBootstrap = resolve;
+    });
+    bootstrapWorker = vi.fn(async () => {
+      await bootstrapPending;
+      return BOOTSTRAP_RECEIPT;
+    });
+    const creation = createService(createProvider()).create("development", "request-bootstrap");
+
+    await vi.waitFor(() =>
+      expect(store.list()[0]).toMatchObject({
+        state: "bootstrapping",
+        bootstrapReceipt: null,
+      }),
+    );
+    finishBootstrap?.();
+
+    await expect(creation).resolves.toMatchObject({
+      state: "ready",
+      bootstrapReceipt: BOOTSTRAP_RECEIPT,
+    });
+  });
+
+  it("records installation preparation failure before allocating a lease", async () => {
+    prepareInstallation = vi.fn(async () => {
+      throw new Error("npm install requires a released gateway package");
+    });
+    const provision = vi.fn(createProvider().provision);
+    const workerService = createService(createProvider({ provision }));
+
+    await expect(
+      workerService.create("development", "request-preparation-failure"),
+    ).rejects.toMatchObject({
+      code: "bootstrap_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+
+    expect(provision).not.toHaveBeenCalled();
+    expect(store.list()[0]).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      lastError: "npm install requires a released gateway package",
+    });
+  });
+
+  it("keeps a remotely bootstrapped lease retryable when receipt persistence fails", async () => {
+    const durableStore = store;
+    let persistenceFails = true;
+    store = {
+      ...store,
+      transition(input) {
+        if (persistenceFails && input.from === "bootstrapping" && input.to === "ready") {
+          persistenceFails = false;
+          throw new Error("receipt database write failed");
+        }
+        return durableStore.transition(input);
+      },
+    };
+    const destroy = vi.fn(async () => {});
+    const workerService = createService(createProvider({ destroy }));
+
+    await expect(
+      workerService.create("development", "request-receipt-write-failure"),
+    ).rejects.toThrow("receipt database write failed");
+    expect(store.list()[0]).toMatchObject({ state: "bootstrapping", leaseId: "lease-1" });
+    expect(destroy).not.toHaveBeenCalled();
+
+    await workerService.reconcileOnce();
+    expect(store.list()[0]).toMatchObject({ state: "ready", bootstrapReceipt: BOOTSTRAP_RECEIPT });
+    expect(bootstrapWorker).toHaveBeenCalledTimes(2);
+  });
+
+  it("tears down the lease and records a bounded bootstrap failure", async () => {
+    // Assembled at runtime so review-bundle secret scanners do not flag a key-shaped literal.
+    const secret = ["sk", "proj", "bootstrap", "abcdefghijklmnopqrstuvwxyz"].join("-");
+    bootstrapWorker = vi.fn(async () => {
+      throw new Error(`remote bootstrap rejected ${secret}`);
+    });
+    const destroy = vi.fn(async () => {});
+    const workerService = createService(createProvider({ destroy }));
+
+    await expect(
+      workerService.create("development", "request-bootstrap-failure"),
+    ).rejects.toMatchObject({
+      code: "bootstrap_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(store.list()[0]).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      bootstrapReceipt: null,
+      lastError: expect.stringContaining("remote bootstrap rejected"),
+    });
+    expect(store.list()[0]?.lastError).not.toContain(secret);
+  });
+
+  it("keeps an indeterminate bootstrap teardown retryable", async () => {
+    bootstrapWorker = vi.fn(async () => {
+      throw new Error("remote bootstrap failed");
+    });
+    let teardownFails = true;
+    const workerService = createService(
+      createProvider({
+        destroy: async () => {
+          if (teardownFails) {
+            throw new Error("provider teardown timed out");
+          }
+        },
+      }),
+    );
+
+    await expect(
+      workerService.create("development", "request-bootstrap-cleanup"),
+    ).rejects.toMatchObject({
+      code: "bootstrap_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(store.list()[0]).toMatchObject({
+      state: "destroying",
+      leaseId: "lease-1",
+      destroyRequestedAtMs: expect.any(Number),
+      teardownTerminalState: "failed",
+      lastError: "remote bootstrap failed",
+    });
+
+    teardownFails = false;
+    await workerService.reconcileOnce();
+    expect(store.list()[0]).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      lastError: expect.stringContaining("remote bootstrap failed"),
+    });
+  });
+
+  it("aborts a timed-out SSH bootstrap before tearing down its lease", async () => {
+    const events: string[] = [];
+    bootstrapWorker = vi.fn(
+      async ({ signal }) =>
+        await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              events.push("abort");
+              reject(new Error("SSH bootstrap aborted"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const destroy = vi.fn(async () => {
+      events.push("destroy");
+    });
+    const workerService = createService(createProvider({ destroy }), {
+      bootstrapCallTimeoutMs: 10,
+    });
+
+    await expect(
+      workerService.create("development", "request-bootstrap-timeout"),
+    ).rejects.toMatchObject({
+      code: "bootstrap_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+
+    expect(events).toEqual(["abort", "destroy"]);
+    expect(store.list()[0]).toMatchObject({ state: "failed", leaseId: null });
   });
 
   it("replays an indeterminate provision failure with the same operation id", async () => {
@@ -181,6 +397,51 @@ describe("worker environment service", () => {
     });
     expect(calls).toHaveLength(2);
     expect(new Set(calls).size).toBe(1);
+  });
+
+  it("adopts an indeterminate allocation before a replay preparation failure", async () => {
+    const events: string[] = [];
+    let preparationFails = false;
+    prepareInstallation = vi.fn(async () => {
+      events.push("prepare");
+      if (preparationFails) {
+        throw new Error("persisted bundle is unavailable");
+      }
+      return BUNDLE_ARTIFACT;
+    });
+    let provisionCalls = 0;
+    const operationIds: string[] = [];
+    const provider = createProvider({
+      provision: async (_profile, operationId) => {
+        events.push("provision");
+        provisionCalls += 1;
+        operationIds.push(operationId);
+        if (provisionCalls === 1) {
+          throw new Error("provision response was lost");
+        }
+        return { leaseId: "lease-replayed", ssh: SSH_ENDPOINT };
+      },
+      destroy: async () => void events.push("destroy"),
+    });
+    const workerService = createService(provider);
+
+    await expect(
+      workerService.create("development", "request-lost-provision"),
+    ).rejects.toMatchObject({
+      code: "provider_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    preparationFails = true;
+    await workerService.reconcileOnce();
+
+    expect(events).toEqual(["prepare", "provision", "provision", "prepare", "destroy"]);
+    expect(new Set(operationIds).size).toBe(1);
+    expect(store.list()[0]).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      teardownTerminalState: "failed",
+      lastError: "persisted bundle is unavailable",
+    });
   });
 
   it.each([
@@ -294,6 +555,197 @@ describe("worker environment service", () => {
     expect(inspected).toEqual([{ leaseId: "lease:worker-crash", profile: { region: "test" } }]);
     expect(store.get("worker-crash")).toMatchObject({
       state: "ready",
+      bootstrapReceipt: BOOTSTRAP_RECEIPT,
+    });
+    expect(prepareInstallation).toHaveBeenCalledWith("bundle");
+    expect(bootstrapWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips an active lease whose durable receipt matches the lifecycle bundle", async () => {
+    seedReady("worker-current");
+
+    await createService(createProvider()).reconcileOnce();
+
+    expect(store.get("worker-current")).toMatchObject({
+      state: "ready",
+      bootstrapReceipt: BOOTSTRAP_RECEIPT,
+    });
+    expect(prepareInstallation).toHaveBeenCalledWith("bundle");
+    expect(bootstrapWorker).not.toHaveBeenCalled();
+  });
+
+  it("re-enters bootstrapping when the durable receipt has a stale bundle hash", async () => {
+    const bootstrapping = seedBootstrapping("worker-stale");
+    store.transition({
+      environmentId: bootstrapping.environmentId,
+      from: "bootstrapping",
+      to: "ready",
+      patch: {
+        bootstrapReceipt: { ...BOOTSTRAP_RECEIPT, bundleHash: "b".repeat(64) },
+      },
+    });
+
+    await createService(createProvider()).reconcileOnce();
+
+    expect(store.get("worker-stale")).toMatchObject({
+      state: "ready",
+      bootstrapReceipt: BOOTSTRAP_RECEIPT,
+    });
+    expect(bootstrapWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not resolve npm while an admitted receipt matches the local bundle", async () => {
+    const environmentId = "worker-current-npm";
+    seedReady(environmentId, "npm");
+    prepareInstallation = vi.fn(async (install) => {
+      if (install === "bundle") {
+        return BUNDLE_ARTIFACT;
+      }
+      throw new Error("npm registry is unavailable");
+    });
+    const destroy = vi.fn(async () => {});
+
+    await createService(createProvider({ destroy })).reconcileOnce();
+
+    expect(prepareInstallation).toHaveBeenCalledTimes(1);
+    expect(prepareInstallation).toHaveBeenCalledWith("bundle");
+    expect(destroy).not.toHaveBeenCalled();
+    expect(store.get(environmentId)).toMatchObject({
+      state: "ready",
+      leaseId: `lease:${environmentId}`,
+      bootstrapReceipt: BOOTSTRAP_RECEIPT,
+      lastError: null,
+    });
+  });
+
+  it("keeps an admitted lease retryable when local bundle identity is unavailable", async () => {
+    const environmentId = "worker-current-bundle-unavailable";
+    seedReady(environmentId, "npm");
+    prepareInstallation = vi.fn(async () => {
+      throw new Error("local bundle identity is unavailable");
+    });
+    const destroy = vi.fn(async () => {});
+
+    await createService(createProvider({ destroy })).reconcileOnce();
+
+    expect(destroy).not.toHaveBeenCalled();
+    expect(store.get(environmentId)).toMatchObject({
+      state: "ready",
+      leaseId: `lease:${environmentId}`,
+      bootstrapReceipt: BOOTSTRAP_RECEIPT,
+      lastError: "local bundle identity is unavailable",
+    });
+  });
+
+  it.each(["bootstrapping", "ready", "idle"] as const)(
+    "tears down a persisted %s lease when mismatched npm preparation fails",
+    async (state) => {
+      const environmentId = `worker-prepare-${state}`;
+      const bootstrapping = seedBootstrapping(environmentId, "npm");
+      if (state !== "bootstrapping") {
+        const ready = store.transition({
+          environmentId,
+          from: bootstrapping.state,
+          to: "ready",
+          patch: { bootstrapReceipt: { ...BOOTSTRAP_RECEIPT, bundleHash: "c".repeat(64) } },
+        });
+        if (state === "idle") {
+          store.transition({ environmentId, from: ready.state, to: "idle" });
+        }
+      }
+      prepareInstallation = vi.fn(async (install) => {
+        if (install === "bundle") {
+          return BUNDLE_ARTIFACT;
+        }
+        throw new Error("released npm artifact is unavailable");
+      });
+      const destroy = vi.fn(async () => {});
+
+      await createService(createProvider({ destroy })).reconcileOnce();
+
+      expect(destroy).toHaveBeenCalledWith({
+        leaseId: `lease:${environmentId}`,
+        profile: { region: "test" },
+      });
+      expect(store.get(environmentId)).toMatchObject({
+        state: "failed",
+        leaseId: null,
+        sshEndpoint: null,
+        teardownTerminalState: "failed",
+        lastError: "released npm artifact is unavailable",
+      });
+      expect(prepareInstallation).toHaveBeenCalledWith("bundle");
+      expect(prepareInstallation).toHaveBeenCalledWith("npm");
+      expect(bootstrapWorker).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retries indeterminate teardown after a reconcile preparation failure and restart", async () => {
+    const environmentId = "worker-prepare-teardown-retry";
+    const bootstrapping = seedBootstrapping(environmentId, "npm");
+    store.transition({
+      environmentId,
+      from: bootstrapping.state,
+      to: "ready",
+      patch: { bootstrapReceipt: { ...BOOTSTRAP_RECEIPT, bundleHash: "c".repeat(64) } },
+    });
+    prepareInstallation = vi.fn(async (install) => {
+      if (install === "bundle") {
+        return BUNDLE_ARTIFACT;
+      }
+      throw new Error("released npm artifact is unavailable");
+    });
+    let teardownFails = true;
+    const destroy = vi.fn(async () => {
+      if (teardownFails) {
+        throw new Error("provider teardown timed out");
+      }
+    });
+    const provider = createProvider({ destroy });
+    const workerService = createService(provider);
+
+    await workerService.reconcileOnce();
+    expect(store.get(environmentId)).toMatchObject({
+      state: "destroying",
+      leaseId: `lease:${environmentId}`,
+      teardownTerminalState: "failed",
+      lastError: "released npm artifact is unavailable",
+    });
+
+    await workerService.stop();
+    teardownFails = false;
+    await createService(provider).reconcileOnce();
+
+    expect(destroy).toHaveBeenCalledTimes(2);
+    expect(store.get(environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      teardownTerminalState: "failed",
+      lastError: "released npm artifact is unavailable",
+    });
+  });
+
+  it("uses the snapshotted npm selection after live config changes", async () => {
+    config.cloudWorkers!.profiles!.development.install = "npm";
+    const provider = createProvider({
+      provision: async () => {
+        config.cloudWorkers!.profiles!.development.install = "bundle";
+        return { leaseId: "lease-npm", ssh: SSH_ENDPOINT };
+      },
+    });
+
+    const result = await createService(provider).create("development", "request-npm");
+
+    expect(result).toMatchObject({
+      state: "ready",
+      profileSnapshot: { install: "npm" },
+    });
+    expect(prepareInstallation).toHaveBeenCalledWith("npm");
+    expect(bootstrapWorker).toHaveBeenCalledWith({
+      sshEndpoint: SSH_ENDPOINT,
+      installation: NPM_ARTIFACT,
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -384,6 +836,53 @@ describe("worker environment service", () => {
     }
   });
 
+  it("adopts a provider-proven bootstrap teardown as failed after restart", async () => {
+    const bootstrapping = seedBootstrapping("worker-bootstrap-teardown-crash");
+    const requested = store.requestDestroy({
+      environmentId: bootstrapping.environmentId,
+      state: bootstrapping.state,
+      terminalState: "failed",
+      lastError: "remote bootstrap failed",
+    });
+    const draining = store.transition({
+      environmentId: requested.environmentId,
+      from: requested.state,
+      to: "draining",
+      patch: { lastError: requested.lastError },
+    });
+    store.transition({
+      environmentId: draining.environmentId,
+      from: draining.state,
+      to: "destroying",
+      patch: { lastError: draining.lastError },
+    });
+    const destroy = vi.fn(async () => {});
+    const provider = createProvider({
+      inspect: async () => ({ status: "destroyed" }),
+      destroy,
+    });
+    providersEnabled = false;
+    const workerService = createService(provider);
+
+    await workerService.reconcileOnce();
+    expect(store.get(bootstrapping.environmentId)).toMatchObject({
+      state: "destroying",
+      lastError: "remote bootstrap failed",
+    });
+
+    providersEnabled = true;
+    await workerService.reconcileOnce();
+
+    expect(destroy).not.toHaveBeenCalled();
+    expect(store.get(bootstrapping.environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      teardownTerminalState: "failed",
+      lastError: "remote bootstrap failed",
+    });
+  });
+
   it("keeps a failed destroy retryable and makes completed destroy idempotent", async () => {
     seedReady("worker-destroy");
     config.cloudWorkers!.profiles = {};
@@ -446,6 +945,9 @@ describe("worker environment service", () => {
   });
 
   it("retains teardown intent across an indeterminate provision failure", async () => {
+    prepareInstallation = vi.fn(async () => {
+      throw new Error("bundle preparation must not block teardown adoption");
+    });
     const intent = store.createIntent({
       environmentId: "worker-pending-destroy-retry",
       providerId: "fake",
@@ -490,6 +992,7 @@ describe("worker environment service", () => {
     await workerService.reconcileOnce();
     expect(store.get(intent.environmentId)?.state).toBe("destroyed");
     expect(destroyed).toEqual([{ leaseId: "lease-retried", profile: { region: "test" } }]);
+    expect(prepareInstallation).not.toHaveBeenCalled();
   });
 
   it("reconciles unrelated leases concurrently", async () => {
@@ -533,6 +1036,99 @@ describe("worker environment service", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("rejects a create queued before service shutdown once its lock is acquired", async () => {
+    let finishBootstrap: (() => void) | undefined;
+    const bootstrapPending = new Promise<void>((resolve) => {
+      finishBootstrap = resolve;
+    });
+    bootstrapWorker = vi.fn(async () => {
+      await bootstrapPending;
+      return BOOTSTRAP_RECEIPT;
+    });
+    const provision = vi.fn(createProvider().provision);
+    const workerService = createService(createProvider({ provision }));
+    const first = workerService.create("development", "request-queued-before-stop");
+    await vi.waitFor(() => expect(bootstrapWorker).toHaveBeenCalledTimes(1));
+    const queued = workerService.create("development", "request-queued-before-stop");
+    const queuedResult = expect(queued).rejects.toMatchObject({
+      code: "invalid_state",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+
+    const stopping = workerService.stop();
+    finishBootstrap?.();
+
+    await expect(first).resolves.toMatchObject({ state: "ready" });
+    await queuedResult;
+    await stopping;
+    expect(provision).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains a destroy accepted before service shutdown while it waits for the lock", async () => {
+    let finishBootstrap: (() => void) | undefined;
+    const bootstrapPending = new Promise<void>((resolve) => {
+      finishBootstrap = resolve;
+    });
+    bootstrapWorker = vi.fn(async () => {
+      await bootstrapPending;
+      return BOOTSTRAP_RECEIPT;
+    });
+    const destroy = vi.fn(async () => {});
+    const workerService = createService(createProvider({ destroy }));
+    const creation = workerService.create("development", "request-destroy-before-stop");
+    await vi.waitFor(() => expect(bootstrapWorker).toHaveBeenCalledTimes(1));
+    const environmentId = store.list()[0]?.environmentId;
+    expect(environmentId).toBeTruthy();
+    const teardown = workerService.destroy(environmentId!);
+    const teardownResult = expect(teardown).resolves.toMatchObject({ state: "destroyed" });
+
+    const stopping = workerService.stop();
+    finishBootstrap?.();
+
+    await expect(creation).resolves.toMatchObject({ state: "ready" });
+    await teardownResult;
+    await stopping;
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains accepted operations after reconciliation rejects during shutdown", async () => {
+    const durableStore = store;
+    store = {
+      ...store,
+      listForReconcile() {
+        throw new Error("reconcile database read failed");
+      },
+    };
+    let finishBootstrap: (() => void) | undefined;
+    const bootstrapPending = new Promise<void>((resolve) => {
+      finishBootstrap = resolve;
+    });
+    bootstrapWorker = vi.fn(async () => {
+      await bootstrapPending;
+      return BOOTSTRAP_RECEIPT;
+    });
+    const workerService = createService(createProvider());
+    const creation = workerService.create("development", "request-stop-after-reconcile-failure");
+    await vi.waitFor(() => expect(bootstrapWorker).toHaveBeenCalledTimes(1));
+    const reconciliation = workerService.reconcileOnce();
+    const reconciliationResult = expect(reconciliation).rejects.toThrow(
+      "reconcile database read failed",
+    );
+    let stopped = false;
+    const stopping = workerService.stop().then(() => {
+      stopped = true;
+    });
+
+    await reconciliationResult;
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    finishBootstrap?.();
+
+    await expect(creation).resolves.toMatchObject({ state: "ready" });
+    await stopping;
+    expect(stopped).toBe(true);
+    expect(durableStore.list()).toHaveLength(1);
+  });
+
   it("starts without blocking gateway startup and drains reconciliation on stop", async () => {
     seedReady("worker-slow-inspection");
     let finishInspection: (() => void) | undefined;
@@ -557,5 +1153,11 @@ describe("worker environment service", () => {
     finishInspection?.();
     await stopping;
     expect(stopped).toBe(true);
+    await expect(workerService.create("development", "request-after-stop")).rejects.toMatchObject({
+      code: "invalid_state",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    await expect(workerService.destroy("worker-slow-inspection")).rejects.toMatchObject({
+      code: "invalid_state",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
   });
 });
