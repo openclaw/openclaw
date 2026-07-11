@@ -11,7 +11,9 @@ import {
   isGatewayRestartDraining,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { getGatewayClientAuthorizationDomain } from "./authorization/client-domain.js";
 import { authorizeGatewayAccess } from "./authorization/kernel.js";
+import { withGatewayAuthorizationContext } from "./authorization/request-context.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import {
@@ -863,6 +865,7 @@ export async function handleGatewayRequest(
     runtime: context.authorization,
     policy: methodRegistry.getAccessPolicy(req.method),
     principal: client?.principal,
+    domain: getGatewayClientAuthorizationDomain(client),
     method: req.method,
     params: req.params,
     getConfig: context.getRuntimeConfig,
@@ -979,9 +982,8 @@ export async function handleGatewayRequest(
   // during tool execution) can dispatch back into the gateway.
   // The scope also carries caller identity into plugin-owned gateway methods.
   const invokeWithRequestScope = async () =>
-    await withPluginRuntimeGatewayRequestScope(
-      { context, client, isWebchatConnect },
-      invokeHandler,
+    await withGatewayAuthorizationContext(access.security, () =>
+      withPluginRuntimeGatewayRequestScope({ context, client, isWebchatConnect }, invokeHandler),
     );
   if (!rootWorkAdmission) {
     await invokeWithRequestScope();

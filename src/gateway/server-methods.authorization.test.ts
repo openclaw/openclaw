@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { bindGatewayClientAuthorizationDomain } from "./authorization/client-domain.js";
 import type {
   GatewayAuthorizationRuntime,
   GatewayMethodAccessPolicy,
   GatewayRbacDenialReason,
 } from "./authorization/contracts.js";
+import { getGatewayAuthorizationContext } from "./authorization/request-context.js";
 import { testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
 import { NODE_GATEWAY_METHOD_SCOPE } from "./methods/descriptor.js";
 import {
@@ -22,6 +24,7 @@ const PRINCIPAL = {
   subject: "member@example.com",
   kind: "human",
 } as const;
+const DOMAIN = { id: "domain-1" } as const;
 const ACCESS_POLICY: GatewayMethodAccessPolicy = {
   kind: "resource",
   permission: "workboard.card.read",
@@ -87,6 +90,7 @@ describe("gateway method authorization", () => {
     role?: "operator" | "node";
     scopes?: string[];
     principal?: typeof PRINCIPAL;
+    domain?: typeof DOMAIN;
     access?: GatewayMethodAccessPolicy;
     authorization: GatewayAuthorizationRuntime;
     getRuntimeConfig?: () => Record<string, unknown>;
@@ -94,7 +98,11 @@ describe("gateway method authorization", () => {
     unavailableMethods?: ReadonlySet<string>;
     controlPlaneWrite?: boolean;
   }) {
-    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
+    const authorizationContexts: Array<ReturnType<typeof getGatewayAuthorizationContext>> = [];
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
+      authorizationContexts.push(getGatewayAuthorizationContext());
+      respond(true, { ok: true });
+    });
     const method = params.role === "node" ? "node.event" : METHOD;
     const descriptor =
       params.role === "node"
@@ -118,22 +126,26 @@ describe("gateway method authorization", () => {
           };
     const methodRegistry = createGatewayMethodRegistry([descriptor]);
     const respond = vi.fn();
+    const client = {
+      connId: "conn-isolated",
+      connect: {
+        role: params.role ?? "operator",
+        scopes: params.scopes ?? ["operator.write"],
+        client: { id: "test", version: "1", platform: "test", mode: "test" },
+        minProtocol: 1,
+        maxProtocol: 1,
+      },
+      ...(params.principal ? { principal: params.principal } : {}),
+      ...(params.synthetic ? { internal: { pluginRuntimeOwnerId: "trusted-plugin-owner" } } : {}),
+    } as NonNullable<Parameters<typeof handleGatewayRequest>[0]["client"]>;
+    if (params.domain) {
+      bindGatewayClientAuthorizationDomain(client, params.domain);
+    }
 
     await handleGatewayRequest({
       req: { type: "req", id: "req-isolated", method },
       respond,
-      client: {
-        connId: "conn-isolated",
-        connect: {
-          role: params.role ?? "operator",
-          scopes: params.scopes ?? ["operator.write"],
-          client: { id: "test", version: "1", platform: "test", mode: "test" },
-          minProtocol: 1,
-          maxProtocol: 1,
-        },
-        ...(params.principal ? { principal: params.principal } : {}),
-        ...(params.synthetic ? { internal: { pluginRuntimeOwnerId: "trusted-plugin-owner" } } : {}),
-      } as Parameters<typeof handleGatewayRequest>[0]["client"],
+      client,
       isWebchatConnect: () => false,
       context: {
         authorization: params.authorization,
@@ -146,7 +158,7 @@ describe("gateway method authorization", () => {
       methodRegistry,
     });
 
-    return { handler, respond };
+    return { authorizationContexts, handler, respond };
   }
 
   it("does not call an unclassified handler in isolated mode", async () => {
@@ -154,6 +166,7 @@ describe("gateway method authorization", () => {
     const { handler, respond } = await dispatchIsolated({
       authorization: { mode: "isolated", authorize },
       principal: PRINCIPAL,
+      domain: DOMAIN,
     });
 
     expect(handler).not.toHaveBeenCalled();
@@ -187,6 +200,7 @@ describe("gateway method authorization", () => {
     const { respond } = await dispatchIsolated({
       authorization: { mode: "isolated", authorize: vi.fn() },
       principal: PRINCIPAL,
+      domain: DOMAIN,
       unavailableMethods: new Set([METHOD]),
     });
 
@@ -204,6 +218,7 @@ describe("gateway method authorization", () => {
       const denied = await dispatchIsolated({
         authorization: { mode: "isolated", authorize: vi.fn() },
         principal: PRINCIPAL,
+        domain: DOMAIN,
         controlPlaneWrite: true,
       });
 
@@ -233,6 +248,7 @@ describe("gateway method authorization", () => {
         role,
         scopes,
         principal: PRINCIPAL,
+        domain: DOMAIN,
         access: ACCESS_POLICY,
         authorization: { mode: "isolated", authorize },
       });
@@ -248,19 +264,22 @@ describe("gateway method authorization", () => {
       principalId: "principal-1",
       domain: { id: "domain-1" },
     }));
-    const { handler, respond } = await dispatchIsolated({
+    const { authorizationContexts, handler, respond } = await dispatchIsolated({
       principal: PRINCIPAL,
+      domain: DOMAIN,
       access: ACCESS_POLICY,
       authorization: { mode: "isolated", authorize },
     });
 
     expect(authorize).toHaveBeenCalledWith({
       principal: PRINCIPAL,
+      domain: DOMAIN,
       method: METHOD,
       permission: "workboard.card.read",
       resources: [{ namespace: "plugin:workboard", type: "card", id: "card-1" }],
     });
     expect(handler).toHaveBeenCalledOnce();
+    expect(authorizationContexts).toEqual([{ principalId: "principal-1", domain: DOMAIN }]);
     expect(respond).toHaveBeenCalledWith(true, { ok: true });
   });
 
@@ -288,6 +307,7 @@ describe("gateway method authorization", () => {
     ] satisfies GatewayRbacDenialReason[]) {
       const { respond } = await dispatchIsolated({
         principal: PRINCIPAL,
+        domain: DOMAIN,
         access: ACCESS_POLICY,
         authorization: {
           mode: "isolated",

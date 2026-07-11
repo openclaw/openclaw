@@ -76,6 +76,7 @@ function authorizeFromState(
         "membership.role as membership_role",
         "grant.permission as granted_permission",
       ])
+      .where("resource.domain_id", "=", request.domain.id)
       .where("resource.retired_at", "is", null)
       .where((eb) =>
         eb.or(
@@ -92,15 +93,6 @@ function authorizeFromState(
   if (bindings.length !== resources.length) {
     return { allowed: false, reason: "unbound-resource" };
   }
-  const domainIds = new Set(bindings.map((binding) => binding.domain_id));
-  if (domainIds.size !== 1) {
-    return { allowed: false, reason: "cross-domain" };
-  }
-  const domainId = [...domainIds][0];
-  if (!domainId) {
-    return { allowed: false, reason: "indeterminate" };
-  }
-
   if (bindings.some((binding) => !binding.membership_role)) {
     return { allowed: false, reason: "cross-domain" };
   }
@@ -118,7 +110,7 @@ function authorizeFromState(
   return {
     allowed: true,
     principalId: principal.principal_id,
-    domain: { id: domainId },
+    domain: request.domain,
   };
 }
 
