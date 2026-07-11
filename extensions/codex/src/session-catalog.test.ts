@@ -284,8 +284,8 @@ function createRuntime(
     agent: {
       session: {
         createSessionEntry,
-        listSessionEntries: vi.fn((params) => {
-          const agentPrefix = params?.agentId ? `agent:${params.agentId}:` : undefined;
+        listSessionEntries: vi.fn((listParams) => {
+          const agentPrefix = listParams?.agentId ? `agent:${listParams.agentId}:` : undefined;
           return entries.filter(
             ({ sessionKey }) => !agentPrefix || sessionKey.startsWith(agentPrefix),
           );

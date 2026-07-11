@@ -3,6 +3,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { VERSION } from "../version.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
@@ -59,7 +60,7 @@ export async function connectToolsMcpServerToStdio(
         resolveShutdown?.();
       }
       if (shutdownError) {
-        process.stderr.write(`MCP stdio shutdown failed: ${String(shutdownError)}\n`);
+        process.stderr.write(`MCP stdio shutdown failed: ${formatErrorMessage(shutdownError)}\n`);
       }
     })();
   };
