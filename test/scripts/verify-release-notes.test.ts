@@ -8,6 +8,7 @@ import {
   countTopLevelSectionBullets,
   createGithubSnapshotState,
   cumulativeShippedPullRequests,
+  defaultGithubSnapshotPath,
   githubApiWithSnapshot,
   highlightCountError,
   persistGithubSnapshot,
@@ -36,6 +37,17 @@ function git(cwd: string, args: string[]): string {
 }
 
 describe("release-note verification", () => {
+  it("stores default GitHub snapshots in the shared Git common directory", () => {
+    const commonDir = resolve("/tmp/openclaw-shared-git");
+    expect(defaultGithubSnapshotPath("a".repeat(40), "b".repeat(40), commonDir)).toBe(
+      join(
+        commonDir,
+        "openclaw-release-cache",
+        `verify-release-notes-${"a".repeat(40)}-${"b".repeat(40)}.json`,
+      ),
+    );
+  });
+
   it("reuses exact-range GitHub GraphQL snapshots without caching REST reads", () => {
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-snapshot-"));
     try {
@@ -81,6 +93,33 @@ describe("release-note verification", () => {
       expect(second.hits).toBe(1);
       expect(second.misses).toBe(0);
       expect(fetches).toBe(2);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("checkpoints successful GraphQL responses during long verification runs", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-snapshot-"));
+    try {
+      const filePath = join(cwd, "snapshot.json");
+      const state = createGithubSnapshotState({
+        base: "a".repeat(40),
+        checkpointEvery: 2,
+        filePath,
+        target: "b".repeat(40),
+      });
+      const fetchApi = (args: string[]) => ({ data: { request: args } });
+
+      githubApiWithSnapshot(["graphql", "-f", "query=one"], fetchApi, state);
+      expect(state.dirty).toBe(true);
+      expect(state.writesSincePersist).toBe(1);
+      githubApiWithSnapshot(["graphql", "-f", "query=two"], fetchApi, state);
+
+      expect(state.dirty).toBe(false);
+      expect(state.writesSincePersist).toBe(0);
+      expect(JSON.parse(readFileSync(filePath, "utf8")).responses).toHaveProperty(
+        JSON.stringify(["graphql", "-f", "query=two"]),
+      );
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
