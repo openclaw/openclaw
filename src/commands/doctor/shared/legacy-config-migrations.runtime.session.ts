@@ -91,17 +91,25 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
     legacyRules: [SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_ZERO_RULE],
     apply: (raw, changes) => {
       const maintenance = getRecord(getRecord(raw.session)?.maintenance);
-      if (!maintenance || !Object.hasOwn(maintenance, "resetArchiveRetention")) return;
+      if (!maintenance || !Object.hasOwn(maintenance, "resetArchiveRetention")) {
+        return;
+      }
       const val = maintenance.resetArchiveRetention;
-      if (val === false) return;
-      if (typeof val !== "string") return;
+      if (val === false) {
+        return;
+      }
+      if (typeof val !== "string") {
+        return;
+      }
       let ms: number;
       try {
         ms = parseDurationMs(val, { defaultUnit: "d" });
       } catch {
         return;
       }
-      if (ms > 0) return;
+      if (ms > 0) {
+        return;
+      }
       delete maintenance.resetArchiveRetention;
       changes.push(
         `Removed session.maintenance.resetArchiveRetention "${val}" (zero duration); documented pruneAfter default applies.`,
