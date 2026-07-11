@@ -2064,6 +2064,13 @@ describe("exec approvals store helpers", () => {
       }),
     });
 
+    // Snapshot deliberately matches the post-tightening policy so the denylist
+    // provenance gate, not the snapshot comparison, is the code under test.
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+
     await expect(
       commitExecAuthorization({
         agentId: "main",
@@ -2074,6 +2081,7 @@ describe("exec approvals store helpers", () => {
           security: "full",
           ask: "off",
           allowlistSatisfied: false,
+          policySnapshot,
           denylistBinding,
         },
       }),
@@ -2096,6 +2104,10 @@ describe("exec approvals store helpers", () => {
       configDenylist: [],
       approvedRuleKeys: [buildExecDenylistRuleKey({ pattern: "printf*" })],
     };
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
 
     await expect(
       commitExecAuthorization({
@@ -2107,6 +2119,7 @@ describe("exec approvals store helpers", () => {
           security: "full",
           ask: "off",
           allowlistSatisfied: false,
+          policySnapshot,
           denylistBinding,
         },
       }),
@@ -2136,6 +2149,13 @@ describe("exec approvals store helpers", () => {
       }),
     });
 
+    // Snapshot deliberately matches the post-tightening policy so the denylist
+    // provenance gate, not the snapshot comparison, is the code under test.
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+
     await expect(
       commitExecAuthorization({
         agentId: "main",
@@ -2146,6 +2166,7 @@ describe("exec approvals store helpers", () => {
           security: "full",
           ask: "off",
           allowlistSatisfied: false,
+          policySnapshot,
           denylistBinding,
         },
       }),
