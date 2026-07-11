@@ -3,7 +3,8 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { updateSessionStoreEntry, type SessionEntry } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   codexChannelLoginRuntime,
   type ModelsAuthLoginFlowOptions,
@@ -184,12 +185,12 @@ async function switchLoginSessionProfile(params: {
     let persistedEntry: SessionEntry = nextEntry;
     if (commandParams.storePath) {
       let snapshotMatched = false;
-      const persisted = await updateSessionStoreEntry({
-        storePath: commandParams.storePath,
-        sessionKey: commandParams.sessionKey,
-        requireWriteSuccess: true,
-        skipMaintenance: true,
-        update: (entry) => {
+      const persisted = await updateSessionEntry(
+        {
+          storePath: commandParams.storePath,
+          sessionKey: commandParams.sessionKey,
+        },
+        (entry) => {
           if (!matchesLoginSnapshot(entry)) {
             return null;
           }
@@ -202,7 +203,11 @@ async function switchLoginSessionProfile(params: {
               }
             : null;
         },
-      });
+        {
+          requireWriteSuccess: true,
+          skipMaintenance: true,
+        },
+      );
       if (
         !snapshotMatched ||
         !persisted ||

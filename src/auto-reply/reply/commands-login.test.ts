@@ -1,24 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelsAuthLoginFlowOptions } from "../../commands/models/auth.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const runModelsAuthLoginFlowMock = vi.hoisted(() => vi.fn());
-const updateSessionStoreEntryMock = vi.hoisted(() => vi.fn());
+const updateSessionEntryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/models/auth.js", () => ({
   runModelsAuthLoginFlow: (opts: unknown) => runModelsAuthLoginFlowMock(opts),
 }));
-vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
+vi.mock("../../config/sessions/session-accessor.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
+    "../../config/sessions/session-accessor.js",
   );
   return {
     ...actual,
-    updateSessionStoreEntry: (params: unknown) => updateSessionStoreEntryMock(params),
+    updateSessionEntry: (
+      scope: { storePath?: string; sessionKey: string },
+      update: unknown,
+      options: unknown,
+    ) => updateSessionEntryMock({ ...scope, update, ...options }),
   };
 });
 
@@ -259,7 +263,7 @@ describe("handleLoginCommand", () => {
       sessionId: "sess-owner",
       updatedAt: 1,
     };
-    updateSessionStoreEntryMock.mockImplementationOnce(
+    updateSessionEntryMock.mockImplementationOnce(
       async (params: {
         update: (
           entry: SessionEntry,
@@ -284,7 +288,7 @@ describe("handleLoginCommand", () => {
       authProfileOverride: "openai:new-owner@example.com",
       authProfileOverrideSource: "user",
     });
-    expect(updateSessionStoreEntryMock).toHaveBeenCalledWith(
+    expect(updateSessionEntryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:slack:channel:C123",
         storePath: "/tmp/openclaw-login-sessions.json",
@@ -395,7 +399,7 @@ describe("handleLoginCommand", () => {
 
   it("reports partial success and restores the session when profile persistence fails", async () => {
     mockSuccessfulLoginFlow("openai:new-owner@example.com");
-    updateSessionStoreEntryMock.mockRejectedValueOnce(new Error("write failed"));
+    updateSessionEntryMock.mockRejectedValueOnce(new Error("write failed"));
     const previousEntry = {
       authProfileOverride: "openai:old-owner@example.com",
       authProfileOverrideSource: "user" as const,
@@ -442,7 +446,7 @@ describe("handleLoginCommand", () => {
       authProfileOverride: "openai:concurrent-owner@example.com",
       updatedAt: 2,
     };
-    updateSessionStoreEntryMock.mockImplementationOnce(
+    updateSessionEntryMock.mockImplementationOnce(
       async (params: { update: (entry: SessionEntry) => Partial<SessionEntry> | null }) => {
         const patch = params.update({ ...concurrentlySelectedEntry });
         return patch ? { ...concurrentlySelectedEntry, ...patch } : concurrentlySelectedEntry;
@@ -480,7 +484,7 @@ describe("handleLoginCommand", () => {
       authProfileOverride: "openai:concurrent-owner@example.com",
       updatedAt: 2,
     };
-    updateSessionStoreEntryMock.mockImplementationOnce(
+    updateSessionEntryMock.mockImplementationOnce(
       async (params: { update: (entry: SessionEntry) => Partial<SessionEntry> | null }) => {
         const patch = params.update({ ...concurrentlySelectedEntry });
         return patch ? { ...concurrentlySelectedEntry, ...patch } : concurrentlySelectedEntry;
