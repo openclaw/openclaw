@@ -664,6 +664,59 @@ function schemaPrefersArrayAtPath(
   return undefined;
 }
 
+/**
+ * Validate that a value's runtime type matches the schema-defined type at a config path.
+ * Only validates leaf types (string/boolean/number/null/integer).
+ * Object/array types are matched permissively to avoid deep structural false positives.
+ * Skips validation when the schema provides no type constraint or the path is unknown.
+ */
+function validateValueTypeAtPath(
+  schema: JsonSchemaRecord | undefined,
+  path: readonly PathSegment[],
+  value: unknown,
+): { ok: true } | { ok: false; message: string } {
+  const leafSchemas = schemasAtPath(schema, path);
+  if (leafSchemas.length === 0) {
+    // Path not in schema — skip validation so unknown/invalid keys are not blocked.
+    return { ok: true };
+  }
+
+  const expectedTypes = new Set<string>();
+  for (const leaf of leafSchemas) {
+    for (const alternative of schemaAlternatives(leaf)) {
+      for (const t of schemaTypes(alternative)) {
+        expectedTypes.add(t);
+      }
+    }
+  }
+
+  if (expectedTypes.size === 0) {
+    // No type constraint at this path — skip validation.
+    return { ok: true };
+  }
+
+  const actualType = typeof value;
+
+  for (const t of expectedTypes) {
+    // null check first: typeof null === "object" in JS, but JSON Schema uses "null"
+    if (t === "null" && value === null) return { ok: true };
+    if (t === "string" && actualType === "string") return { ok: true };
+    if (t === "boolean" && actualType === "boolean") return { ok: true };
+    if (t === "number" && actualType === "number") return { ok: true };
+    if (t === "integer" && actualType === "number" && Number.isInteger(value)) return { ok: true };
+    // Object/array: permissive match to avoid deep-structure false positives.
+    if ((t === "object" || t === "array") && actualType === "object" && value !== null)
+      return { ok: true };
+  }
+
+  const dotPath = toDotPath(path);
+  const expected = [...expectedTypes].join("|");
+  return {
+    ok: false,
+    message: `Type mismatch for "${dotPath}": expected ${expected}, got ${actualType}.`,
+  };
+}
+
 function shouldCreateArrayForMissingPathSegment(params: {
   path: readonly PathSegment[];
   segmentIndex: number;
@@ -2145,6 +2198,14 @@ async function runConfigOperations(params: {
       continue;
     }
     explicitSetPaths.push(operation.setPath);
+
+    // Validate value type against schema before writing to prevent silent
+    // type mismatches (e.g. "ture" stored as string for a boolean path).
+    const typeCheck = validateValueTypeAtPath(mutationSchema, operation.setPath, operation.value);
+    if (!typeCheck.ok) {
+      throw new Error(typeCheck.message);
+    }
+
     if (operation.mutation === "merge" || (options.merge && operation.mutation !== "replace")) {
       mergeAtPath(next, operation.setPath, operation.value, {
         numericObjectKeys: params.successMode === "patch",

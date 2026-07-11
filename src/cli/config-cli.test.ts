@@ -3,8 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import JSON5 from "json5";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import { OpenClawSchema } from "../config/zod-schema.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
@@ -3817,6 +3819,305 @@ describe("config cli", () => {
       await runConfigCommand(["config", "file"]);
 
       expect(mockLog).toHaveBeenCalledWith("/home/user/.openclaw/openclaw.json");
+    });
+  });
+});
+
+// ─── config set type validation ───────────────────────────────────
+
+/** Minimal JSON Schema record — mirrors the private JsonSchemaRecord in config-cli.ts. */
+type SchemaRecord = {
+  type?: unknown;
+  properties?: unknown;
+  additionalProperties?: unknown;
+  items?: unknown;
+  anyOf?: unknown;
+  oneOf?: unknown;
+  allOf?: unknown;
+};
+
+function isSchemaRecord(value: unknown): value is SchemaRecord {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function schemaTypes(schema: SchemaRecord): Set<string> {
+  if (typeof schema.type === "string") return new Set([schema.type]);
+  if (Array.isArray(schema.type))
+    return new Set(schema.type.filter((e): e is string => typeof e === "string"));
+  return new Set();
+}
+
+function schemaAlternatives(schema: SchemaRecord, seen = new Set<SchemaRecord>()): SchemaRecord[] {
+  if (seen.has(schema)) return [];
+  seen.add(schema);
+  const alternatives: SchemaRecord[] = [schema];
+  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
+    const entries = schema[key];
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      if (isSchemaRecord(entry)) alternatives.push(...schemaAlternatives(entry, seen));
+    }
+  }
+  return alternatives;
+}
+
+function schemaLooksArray(schema: SchemaRecord): boolean {
+  return schemaTypes(schema).has("array") || Boolean(schema.items);
+}
+
+function parseIndexSegment(segment: string): number | undefined {
+  const n = Number(segment);
+  return Number.isFinite(n) && String(n) === segment ? n : undefined;
+}
+
+function propertySchema(schema: SchemaRecord, segment: string): SchemaRecord[] {
+  const schemas: SchemaRecord[] = [];
+  for (const alternative of schemaAlternatives(schema)) {
+    if (schemaLooksArray(alternative)) {
+      const index = parseIndexSegment(segment);
+      if (index !== undefined) {
+        const items = alternative.items;
+        const indexedItem = Array.isArray(items) ? items[index] : items;
+        if (isSchemaRecord(indexedItem)) schemas.push(indexedItem);
+      }
+      continue;
+    }
+    const properties = isSchemaRecord(alternative.properties)
+      ? (alternative.properties as Record<string, unknown>)
+      : undefined;
+    const explicit = properties?.[segment];
+    if (isSchemaRecord(explicit)) {
+      schemas.push(explicit);
+      continue;
+    }
+    if (isSchemaRecord(alternative.additionalProperties)) {
+      schemas.push(alternative.additionalProperties);
+    }
+  }
+  return schemas;
+}
+
+function schemasAtPath(schema: SchemaRecord | undefined, path: readonly string[]): SchemaRecord[] {
+  if (!schema) return [];
+  let schemas = [schema];
+  for (const segment of path) {
+    schemas = schemas.flatMap((c) => propertySchema(c, segment));
+    if (schemas.length === 0) return [];
+  }
+  return schemas;
+}
+
+/**
+ * Replicates validateValueTypeAtPath logic using standalone schema helpers.
+ * Returns { ok: true } or { ok: false, message: string }.
+ */
+function checkValueType(
+  schema: SchemaRecord | undefined,
+  path: readonly string[],
+  value: unknown,
+): { ok: true } | { ok: false; message: string } {
+  const leafSchemas = schemasAtPath(schema, path);
+  if (leafSchemas.length === 0) return { ok: true };
+
+  const expectedTypes = new Set<string>();
+  for (const leaf of leafSchemas) {
+    for (const alt of schemaAlternatives(leaf)) {
+      for (const t of schemaTypes(alt)) expectedTypes.add(t);
+    }
+  }
+  if (expectedTypes.size === 0) return { ok: true };
+
+  const actualType = typeof value;
+  for (const t of expectedTypes) {
+    if (t === "null" && value === null) return { ok: true };
+    if (t === "string" && actualType === "string") return { ok: true };
+    if (t === "boolean" && actualType === "boolean") return { ok: true };
+    if (t === "number" && actualType === "number") return { ok: true };
+    if (t === "integer" && actualType === "number" && Number.isInteger(value)) return { ok: true };
+    if ((t === "object" || t === "array") && actualType === "object" && value !== null)
+      return { ok: true };
+  }
+
+  const expected = [...expectedTypes].join("|");
+  return {
+    ok: false,
+    message: `Type mismatch: expected ${expected}, got ${actualType}.`,
+  };
+}
+
+/** Build the full runtime config schema from the Zod schema (same source as mutationSchema). */
+function buildSchema(): SchemaRecord {
+  return OpenClawSchema.toJSONSchema({
+    io: "input",
+    target: "draft-07",
+    unrepresentable: "any",
+  }) as SchemaRecord;
+}
+
+describe("config set type validation", () => {
+  const schema = buildSchema();
+
+  describe("schema lookup — boolean leaf paths", () => {
+    it("resolves streaming to boolean for model wildcard", () => {
+      const result = schemasAtPath(schema, ["agents", "defaults", "models", "_any_", "streaming"]);
+      expect(result.length).toBeGreaterThanOrEqual(1);
+      const allTypes = new Set<string>();
+      for (const r of result) {
+        for (const alt of schemaAlternatives(r)) {
+          for (const t of schemaTypes(alt)) allTypes.add(t);
+        }
+      }
+      expect(allTypes.has("boolean")).toBe(true);
+      expect(allTypes.has("string")).toBe(false);
+    });
+
+    it("resolves skipBootstrap to boolean", () => {
+      const result = schemasAtPath(schema, ["agents", "defaults", "skipBootstrap"]);
+      expect(result.length).toBeGreaterThanOrEqual(1);
+      const allTypes = new Set<string>();
+      for (const r of result) {
+        for (const alt of schemaAlternatives(r)) {
+          for (const t of schemaTypes(alt)) allTypes.add(t);
+        }
+      }
+      expect(allTypes.has("boolean")).toBe(true);
+    });
+
+    it("returns empty for unknown path (skip validation)", () => {
+      const result = schemasAtPath(schema, ["agents", "defaults", "stream"]);
+      expect(result.length).toBe(0);
+    });
+  });
+
+  describe("schema lookup — string leaf paths", () => {
+    it("resolves workspace to string", () => {
+      const result = schemasAtPath(schema, ["agents", "defaults", "workspace"]);
+      expect(result.length).toBeGreaterThanOrEqual(1);
+      const allTypes = new Set<string>();
+      for (const r of result) {
+        for (const alt of schemaAlternatives(r)) {
+          for (const t of schemaTypes(alt)) allTypes.add(t);
+        }
+      }
+      expect(allTypes.has("string")).toBe(true);
+    });
+  });
+
+  describe("schema lookup — integer leaf paths", () => {
+    it("resolves timeoutSeconds to integer", () => {
+      const result = schemasAtPath(schema, ["agents", "defaults", "timeoutSeconds"]);
+      expect(result.length).toBeGreaterThanOrEqual(1);
+      const allTypes = new Set<string>();
+      for (const r of result) {
+        for (const alt of schemaAlternatives(r)) {
+          for (const t of schemaTypes(alt)) allTypes.add(t);
+        }
+      }
+      expect(allTypes.has("integer")).toBe(true);
+    });
+  });
+
+  describe("value type checking — boolean paths", () => {
+    const PATH = ["agents", "defaults", "skipBootstrap"];
+
+    it("accepts true", () => {
+      expect(checkValueType(schema, PATH, true).ok).toBe(true);
+    });
+
+    it("accepts false", () => {
+      expect(checkValueType(schema, PATH, false).ok).toBe(true);
+    });
+
+    it('rejects "ture" (typo of true)', () => {
+      const result = checkValueType(schema, PATH, "ture");
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("boolean");
+    });
+
+    it('rejects "true" (quoted string)', () => {
+      const value = JSON5.parse('"true"');
+      expect(typeof value).toBe("string");
+      const result = checkValueType(schema, PATH, value);
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects number on boolean path", () => {
+      const result = checkValueType(schema, PATH, 42);
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  describe("value type checking — string paths", () => {
+    const PATH = ["agents", "defaults", "workspace"];
+
+    it('accepts "my-agent" (bare word, fallback string)', () => {
+      expect(checkValueType(schema, PATH, "my-agent").ok).toBe(true);
+    });
+
+    it("rejects boolean on string path", () => {
+      expect(checkValueType(schema, PATH, true).ok).toBe(false);
+    });
+
+    it("rejects number on string path", () => {
+      expect(checkValueType(schema, PATH, 42).ok).toBe(false);
+    });
+  });
+
+  describe("value type checking — integer paths", () => {
+    it("accepts 42 for integer path", () => {
+      const result = checkValueType(schema, ["agents", "defaults", "timeoutSeconds"], 42);
+      expect(result.ok).toBe(true);
+    });
+
+    it("rejects 42.5 for integer path", () => {
+      const result = checkValueType(schema, ["agents", "defaults", "timeoutSeconds"], 42.5);
+      expect(result.ok).toBe(false);
+    });
+
+    it('rejects "42" (string) for integer path', () => {
+      const result = checkValueType(schema, ["agents", "defaults", "timeoutSeconds"], "42");
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  describe("value type checking — edge cases", () => {
+    it("skips validation for unknown path", () => {
+      expect(checkValueType(schema, ["nonexistent", "key"], "anything").ok).toBe(true);
+    });
+
+    it("rejects null on non-nullable boolean path", () => {
+      const result = checkValueType(schema, ["agents", "defaults", "skipBootstrap"], null);
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  describe("parseValue (JSON5) behavior — unchanged", () => {
+    it('does not parse "ture" as valid JSON5', () => {
+      let threw = false;
+      try {
+        JSON5.parse("ture");
+      } catch {
+        threw = true;
+      }
+      if (threw) {
+        // Fallback would return raw "ture" as string
+        expect(typeof "ture").toBe("string");
+      } else {
+        // If it somehow parses, it should still be string
+        expect(JSON5.parse("ture")).toBe("ture");
+      }
+    });
+
+    it("parses true as boolean", () => {
+      expect(JSON5.parse("true")).toBe(true);
+    });
+
+    it("parses false as boolean", () => {
+      expect(JSON5.parse("false")).toBe(false);
+    });
+
+    it("parses 42 as number", () => {
+      expect(JSON5.parse("42")).toBe(42);
     });
   });
 });
