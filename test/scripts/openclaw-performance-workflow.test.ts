@@ -153,9 +153,7 @@ describe("OpenClaw performance workflow", () => {
 
     expect(baseline.if).toBeUndefined();
     expect(baseline.env?.CLAWGRIT_REPORTS_TOKEN).toBeUndefined();
-    expect(run).toContain(
-      'remote add origin "https://github.com/openclaw/clawgrit-reports.git"',
-    );
+    expect(run).toContain('remote add origin "https://github.com/openclaw/clawgrit-reports.git"');
     expect(run).toContain("fetch --filter=blob:none --depth=1 origin main");
     expect(run).toContain('cat-file -e "FETCH_HEAD:${pointer}"');
     expect(run).toContain('show "FETCH_HEAD:${pointer}"');
