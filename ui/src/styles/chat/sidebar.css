@@ -1693,29 +1693,6 @@
   min-height: 160px;
 }
 
-/* The background-tasks rail has no narrow presentation yet; hide it with its
-   toggles on narrow viewports (the workspace rail adapts instead). The hidden
-   rail must also release its reserved grid track, so the tasks-open templates
-   collapse back to the workspace-only shapes here. */
-@media (max-width: 1120px) {
-  .chat-tasks-rail {
-    display: none;
-  }
-
-  .chat-workbench--tasks-open.chat-workbench--workspace-collapsed,
-  .chat-workbench--tasks-open.chat-workbench--dock-bottom {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  /* Mirrors the three-column selector's specificity so the two-column shape
-     wins while the tasks rail is hidden. */
-  .chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
-    .chat-workbench--dock-bottom
-  ) {
-    grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
-  }
-}
-
 /* Mobile: Full-screen modal */
 @media (max-width: 768px) {
   .chat-split-container--open {
@@ -1878,4 +1855,46 @@
   padding: 2px 2px 4px;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
+}
+
+.chat-workbench--tasks-dock-bottom {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px);
+}
+
+.chat-workbench--dock-bottom.chat-workbench--tasks-dock-bottom {
+  grid-template-rows: minmax(0, 1fr) minmax(100px, 200px) minmax(100px, 200px);
+}
+
+.chat-workbench--tasks-dock-bottom .chat-tasks-rail {
+  grid-column: 1 / -1;
+  grid-row: -1; /* Bottom-most row */
+  border-left: none;
+  border-top: 1px solid var(--border);
+}
+
+/* Background-tasks rail becomes a horizontal scrolling strip */
+.chat-workbench--tasks-dock-bottom .chat-tasks-rail__scroll {
+  display: flex;
+  flex-direction: row;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.chat-workbench--tasks-dock-bottom .chat-tasks-rail__section {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 260px;
+  min-width: 0;
+}
+
+.chat-workbench--tasks-dock-bottom .chat-tasks-rail__section + .chat-tasks-rail__section {
+  border-top: none;
+  border-left: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
+}
+
+/* Let the empty states align to the top */
+.chat-workbench--tasks-dock-bottom .chat-tasks-rail__state {
+  flex: 0 0 auto;
+  align-self: flex-start;
 }
