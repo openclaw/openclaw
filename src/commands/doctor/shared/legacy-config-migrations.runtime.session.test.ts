@@ -77,6 +77,30 @@ describe("session.maintenance.resetArchiveRetention zero-duration migration", ()
     expect(rule.match?.({ resetArchiveRetention: "" }, {} as Record<string, unknown>)).toBe(false);
   });
 
+  // ── Numeric rule match ─────────────────────────────────────
+
+  it("detects numeric zero for resetArchiveRetention", () => {
+    expect(rule.match?.({ resetArchiveRetention: 0 }, {} as Record<string, unknown>)).toBe(true);
+    expect(rule.match?.({ resetArchiveRetention: 0.0 }, {} as Record<string, unknown>)).toBe(true);
+  });
+
+  it("does not match numeric positive resetArchiveRetention", () => {
+    expect(rule.match?.({ resetArchiveRetention: 30 }, {} as Record<string, unknown>)).toBe(false);
+    expect(rule.match?.({ resetArchiveRetention: 7 }, {} as Record<string, unknown>)).toBe(false);
+  });
+
+  // ── pruneAfter fallback rule match ──────────────────────────
+
+  it("detects zero pruneAfter when resetArchiveRetention is absent (fallback)", () => {
+    expect(rule.match?.({ pruneAfter: "0h" }, {} as Record<string, unknown>)).toBe(true);
+    expect(rule.match?.({ pruneAfter: 0 }, {} as Record<string, unknown>)).toBe(true);
+  });
+
+  it("does not match positive pruneAfter fallback", () => {
+    expect(rule.match?.({ pruneAfter: "30d" }, {} as Record<string, unknown>)).toBe(false);
+    expect(rule.match?.({ pruneAfter: 30 }, {} as Record<string, unknown>)).toBe(false);
+  });
+
   // ── Migration apply (doctor --fix): parser-backed ───────────
 
   it("removes zero-duration strings and reports change", () => {
@@ -115,6 +139,56 @@ describe("session.maintenance.resetArchiveRetention zero-duration migration", ()
     expect(changes).toHaveLength(0);
   });
 
+  it("removes numeric zero resetArchiveRetention and reports change", () => {
+    for (const val of [0, 0.0]) {
+      const changes: string[] = [];
+      const raw = { session: { maintenance: { resetArchiveRetention: val } } };
+      migration.apply(raw, changes);
+
+      expect(raw.session?.maintenance).not.toHaveProperty("resetArchiveRetention");
+      expect(changes).toHaveLength(1);
+      expect(changes[0]).toContain(String(val));
+    }
+  });
+
+  it("preserves numeric positive resetArchiveRetention values", () => {
+    for (const val of [30, 7]) {
+      const changes: string[] = [];
+      const raw = { session: { maintenance: { resetArchiveRetention: val } } };
+      migration.apply(raw, changes);
+
+      expect((raw.session as Record<string, unknown>)?.maintenance).toEqual({
+        resetArchiveRetention: val,
+      });
+      expect(changes).toHaveLength(0);
+    }
+  });
+
+  // ── pruneAfter fallback apply ───────────────────────────────
+
+  it("removes zero pruneAfter when resetArchiveRetention is absent", () => {
+    for (const val of ["0h", 0]) {
+      const changes: string[] = [];
+      const raw = { session: { maintenance: { pruneAfter: val } } };
+      migration.apply(raw, changes);
+
+      expect(raw.session?.maintenance).not.toHaveProperty("pruneAfter");
+      expect(changes).toHaveLength(1);
+      expect(changes[0]).toContain(String(val));
+    }
+  });
+
+  it("preserves positive pruneAfter when resetArchiveRetention is absent", () => {
+    const changes: string[] = [];
+    const raw = { session: { maintenance: { pruneAfter: "30d" } } };
+    migration.apply(raw, changes);
+
+    expect((raw.session as Record<string, unknown>)?.maintenance).toEqual({
+      pruneAfter: "30d",
+    });
+    expect(changes).toHaveLength(0);
+  });
+
   it("handles empty maintenance section", () => {
     const changes: string[] = [];
     const raw = { session: { maintenance: {} } };
@@ -146,6 +220,15 @@ describe("session.maintenance.resetArchiveRetention zero-duration migration", ()
 
   it("rule no longer matches after migration removed the zero value", () => {
     const raw = { session: { maintenance: { resetArchiveRetention: "0h" } } };
+    expect(rule.match?.(raw.session.maintenance, raw)).toBe(true);
+
+    migration.apply(raw, []);
+
+    expect(rule.match?.(raw.session?.maintenance, raw)).toBe(false);
+  });
+
+  it("rule no longer matches after migration removed zero pruneAfter fallback", () => {
+    const raw = { session: { maintenance: { pruneAfter: "0h" } } };
     expect(rule.match?.(raw.session.maintenance, raw)).toBe(true);
 
     migration.apply(raw, []);

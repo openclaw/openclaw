@@ -1,4 +1,5 @@
 // Legacy session runtime config migrations for retired maintenance/fork sizing keys.
+import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import {
   defineLegacyConfigMigration,
@@ -17,22 +18,45 @@ function hasLegacyParentForkMaxTokens(value: unknown): boolean {
   return Boolean(session && Object.hasOwn(session, "parentForkMaxTokens"));
 }
 
-/** Returns `true` when `resetArchiveRetention` is a string that `parseDurationMs` evaluates to ≤ 0. */
+/** Returns `true` when `resetArchiveRetention` or its `pruneAfter` fallback evaluates to ≤ 0. */
 function isZeroDurationResetArchiveRetention(raw: unknown): boolean {
   const maintenance = getRecord(raw);
-  if (!maintenance || !Object.hasOwn(maintenance, "resetArchiveRetention")) {
+  if (!maintenance) {
     return false;
   }
-  const val = maintenance.resetArchiveRetention;
-  if (typeof val !== "string") {
-    return false;
+  // Explicit resetArchiveRetention — normalise and check.
+  if (Object.hasOwn(maintenance, "resetArchiveRetention")) {
+    const val = maintenance.resetArchiveRetention;
+    if (val === false) {
+      return false;
+    }
+    const normalized = normalizeStringifiedOptionalString(val);
+    if (!normalized) {
+      return false;
+    }
+    try {
+      return parseDurationMs(normalized, { defaultUnit: "d" }) <= 0;
+    } catch {
+      return false;
+    }
   }
-  try {
-    const ms = parseDurationMs(val, { defaultUnit: "d" });
-    return ms <= 0;
-  } catch {
-    return false;
+  // Fallback: when resetArchiveRetention is absent the resolver uses pruneAfterMs.
+  if (Object.hasOwn(maintenance, "pruneAfter")) {
+    const val = maintenance.pruneAfter;
+    if (val === false) {
+      return false;
+    }
+    const normalized = normalizeStringifiedOptionalString(val);
+    if (!normalized) {
+      return false;
+    }
+    try {
+      return parseDurationMs(normalized, { defaultUnit: "d" }) <= 0;
+    } catch {
+      return false;
+    }
   }
+  return false;
 }
 
 const LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE: LegacyConfigRule = {
@@ -91,28 +115,43 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
     legacyRules: [SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_ZERO_RULE],
     apply: (raw, changes) => {
       const maintenance = getRecord(getRecord(raw.session)?.maintenance);
-      if (!maintenance || !Object.hasOwn(maintenance, "resetArchiveRetention")) {
+      if (!maintenance) {
         return;
       }
-      const val = maintenance.resetArchiveRetention;
+      // Target: explicit resetArchiveRetention first, then pruneAfter fallback.
+      const targetKey = Object.hasOwn(maintenance, "resetArchiveRetention")
+        ? "resetArchiveRetention"
+        : Object.hasOwn(maintenance, "pruneAfter")
+          ? "pruneAfter"
+          : null;
+      if (!targetKey) {
+        return;
+      }
+      const val = maintenance[targetKey];
       if (val === false) {
         return;
       }
-      if (typeof val !== "string") {
+      const normalized = normalizeStringifiedOptionalString(val);
+      if (!normalized) {
         return;
       }
       let ms: number;
       try {
-        ms = parseDurationMs(val, { defaultUnit: "d" });
+        ms = parseDurationMs(normalized, { defaultUnit: "d" });
       } catch {
         return;
       }
       if (ms > 0) {
         return;
       }
-      delete maintenance.resetArchiveRetention;
+      delete maintenance[targetKey];
+      const label = typeof val === "number" ? String(val) : val;
+      const fieldPath =
+        targetKey === "resetArchiveRetention"
+          ? "session.maintenance.resetArchiveRetention"
+          : "session.maintenance.pruneAfter";
       changes.push(
-        `Removed session.maintenance.resetArchiveRetention "${val}" (zero duration); documented pruneAfter default applies.`,
+        `Removed ${fieldPath} "${label}" (zero duration); documented pruneAfter default applies.`,
       );
     },
   }),
