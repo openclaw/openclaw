@@ -510,6 +510,7 @@ describe("runReplyAgent media path normalization", () => {
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
+        isActive: true,
         isStreaming: true,
         followupRun: createMockFollowupRun({
           prompt: "generate chart",

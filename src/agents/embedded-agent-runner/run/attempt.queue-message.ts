@@ -269,3 +269,19 @@ export function resolveQueuedRawBody(
 ): string | undefined {
   return options?.rawBody;
 }
+
+/**
+ * Delivers a queued injection and only then resolves the rawBody the run
+ * tracks for later before_prompt_build / agent_end hook events. Ordering is
+ * the contract: a rejected or timed-out steer was never accepted into the
+ * active run, so this rejects without returning a value and the caller keeps
+ * the previous turn's rawBody instead of reporting the failed message's.
+ */
+export async function steerQueuedMessageThenResolveRawBody(
+  activeSession: EmbeddedAgentActiveSessionSteerTarget,
+  text: string,
+  options: EmbeddedAgentQueueMessageOptions | undefined,
+): Promise<string | undefined> {
+  await steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options);
+  return resolveQueuedRawBody(options);
+}

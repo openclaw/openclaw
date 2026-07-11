@@ -434,10 +434,7 @@ import {
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
-import {
-  resolveQueuedRawBody,
-  steerActiveSessionWithOptionalDeliveryWait,
-} from "./attempt.queue-message.js";
+import { steerQueuedMessageThenResolveRawBody } from "./attempt.queue-message.js";
 import {
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
@@ -4134,13 +4131,13 @@ export async function runEmbeddedAttempt(
           if (options?.steeringMode) {
             activeSession.agent.steeringMode = options.steeringMode;
           }
-          // Clear by default: a queued injection is a new turn, so its rawBody
-          // is whatever the caller gates in. Direct-user steers pass their
-          // clean text; internal injections (sessions_send, Talk active-run
-          // control, subagent active wakes) pass nothing, which clears the
-          // previous direct-user rawBody so it is never reported as theirs.
-          currentRawBody = resolveQueuedRawBody(options);
-          await steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options);
+          // rawBody updates only after delivery succeeds: a rejected or
+          // timed-out steer was never accepted into the run, so the previous
+          // turn's value stays. On success, clear by default — direct-user
+          // steers gate their clean text in; internal injections
+          // (sessions_send, Talk active-run control, subagent active wakes)
+          // pass nothing, which clears the previous direct-user rawBody.
+          currentRawBody = await steerQueuedMessageThenResolveRawBody(activeSession, text, options);
         },
         isStreaming: () => activeSession.isStreaming,
         isStopped: () => !acceptingSteerMessages || aborted || runAbortController.signal.aborted,

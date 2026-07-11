@@ -6,6 +6,7 @@ import {
   resolveQueuedRawBody,
   steerActiveSessionWithOptionalDeliveryWait,
   steerAndWaitForTranscriptCommit,
+  steerQueuedMessageThenResolveRawBody,
   type EmbeddedAgentActiveSessionSteerTarget,
 } from "./attempt.queue-message.js";
 
@@ -295,5 +296,65 @@ describe("resolveQueuedRawBody", () => {
 
   it("clears rawBody when a provenance-gated steer passes an explicit undefined", () => {
     expect(resolveQueuedRawBody({ steeringMode: "all", rawBody: undefined })).toBeUndefined();
+  });
+});
+
+// The rawBody tracker may only change after queue delivery succeeds. A
+// rejected or timed-out steer was never accepted into the active run, so its
+// rawBody must not surface on later before_prompt_build / agent_end events.
+describe("steerQueuedMessageThenResolveRawBody", () => {
+  it("resolves the queued turn's rawBody after successful delivery", async () => {
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer: async () => {},
+      subscribe: () => () => {},
+    };
+
+    await expect(
+      steerQueuedMessageThenResolveRawBody(activeSession, "steered text", {
+        steeringMode: "all",
+        rawBody: "steered text",
+      }),
+    ).resolves.toBe("steered text");
+  });
+
+  it("rejects without resolving a rawBody when steering fails", async () => {
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer: async () => {
+        throw new Error("steer rejected");
+      },
+      subscribe: () => () => {},
+    };
+
+    await expect(
+      steerQueuedMessageThenResolveRawBody(activeSession, "rejected text", {
+        steeringMode: "all",
+        rawBody: "rejected text",
+      }),
+    ).rejects.toThrow("steer rejected");
+  });
+
+  it("rejects when the transcript-commit wait times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+        getSteeringMessages: () => [],
+        steer: async () => {},
+        subscribe: () => () => {},
+      };
+
+      const pending = steerQueuedMessageThenResolveRawBody(activeSession, "timed out text", {
+        steeringMode: "all",
+        waitForTranscriptCommit: true,
+        deliveryTimeoutMs: 50,
+        rawBody: "timed out text",
+      });
+      const outcome = expect(pending).rejects.toThrow(
+        "queued steering message was not committed to the transcript before timeout",
+      );
+      await vi.advanceTimersByTimeAsync(60);
+      await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
