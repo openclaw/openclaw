@@ -2,6 +2,7 @@
  * Amazon Bedrock Mantle discovery and bearer-token handling. It resolves
  * explicit tokens, IAM-generated tokens, model catalogs, and implicit provider config.
  */
+import { createHash } from "node:crypto";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -289,6 +290,15 @@ type MantleDiscoveryConfig = {
 
 const discoveryCache = new Map<string, MantleCacheEntry>();
 
+/** Stable non-reversible cache identity; never log or export this value. */
+function fingerprintMantleBearerToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+function buildMantleDiscoveryCacheKey(region: string, bearerToken: string): string {
+  return `${normalizeLowercaseStringOrEmpty(region)}:${fingerprintMantleBearerToken(bearerToken)}`;
+}
+
 /** Clear the Mantle discovery cache for tests. */
 export function resetMantleDiscoveryCacheForTest(): void {
   discoveryCache.clear();
@@ -306,7 +316,8 @@ export function resetMantleDiscoveryCacheForTest(): void {
  * { "data": [{ "id": "anthropic.claude-sonnet-4-6", "object": "model", "owned_by": "anthropic" }] }
  * ```
  *
- * Results are cached per region for `DEFAULT_REFRESH_INTERVAL_SECONDS`.
+ * Results are cached per region + credential fingerprint for
+ * `DEFAULT_REFRESH_INTERVAL_SECONDS` (token plaintext is never stored in the key).
  * Returns an empty array if the request fails (no permission, network error, etc.).
  */
 /** Discover Mantle models for one region/config. */
@@ -318,8 +329,8 @@ export async function discoverMantleModels(params: {
 }): Promise<ModelDefinitionConfig[]> {
   const { region, bearerToken, fetchFn = fetch, now = Date.now } = params;
 
-  // Check cache
-  const cacheKey = region;
+  // Check cache (region alone is not an authorization boundary).
+  const cacheKey = buildMantleDiscoveryCacheKey(region, bearerToken);
   const cached = discoveryCache.get(cacheKey);
   if (cached && now() - cached.fetchedAt < DEFAULT_REFRESH_INTERVAL_SECONDS * 1000) {
     return cached.models;

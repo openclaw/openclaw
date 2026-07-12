@@ -466,6 +466,48 @@ describe("bedrock mantle discovery", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2); // Re-fetched
   });
 
+  it("isolates discovery cache entries by bearer token within a region", async () => {
+    let now = 1000000;
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        modelDiscoveryResponse({
+          data: [{ id: "model-from-token-a", object: "model" }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        modelDiscoveryResponse({
+          data: [{ id: "model-from-token-b", object: "model" }],
+        }),
+      );
+
+    const tokenA = "mantle-token-account-a"; // pragma: allowlist secret
+    const tokenB = "mantle-token-account-b"; // pragma: allowlist secret
+
+    const first = await discoverMantleModels({
+      region: "us-east-1",
+      bearerToken: tokenA,
+      fetchFn: mockFetch as unknown as typeof fetch,
+      now: () => now,
+    });
+    expect(first.map((model) => model.id)).toEqual(["model-from-token-a"]);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    now += 60_000;
+    const second = await discoverMantleModels({
+      region: "us-east-1",
+      bearerToken: tokenB,
+      fetchFn: mockFetch as unknown as typeof fetch,
+      now: () => now,
+    });
+    expect(second.map((model) => model.id)).toEqual(["model-from-token-b"]);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    const serialized = JSON.stringify({ first, second });
+    expect(serialized).not.toContain(tokenA);
+    expect(serialized).not.toContain(tokenB);
+  });
+
   it("returns stale cache on fetch failure", async () => {
     let now = 1000000;
     const mockFetch = vi
