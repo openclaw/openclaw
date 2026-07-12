@@ -3242,6 +3242,7 @@ async function runRecallSubagent(params: {
       sessionKey: subagentSessionKey,
       storePath,
       entry: {
+        pluginOwnerId: params.api.id,
         sessionId: subagentSessionId,
         sessionFile: runtimeSessionFile,
         updatedAt: Date.now(),
@@ -3393,7 +3394,7 @@ async function runRecallSubagent(params: {
       await params.api.runtime.subagent
         .deleteSession({
           sessionKey: subagentSessionKey,
-          deleteTranscript: true,
+          deleteTranscript: false,
         })
         .catch((error: unknown) => {
           const message = toSingleLineLogValue(

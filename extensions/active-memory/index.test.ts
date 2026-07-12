@@ -641,12 +641,13 @@ describe("active-memory plugin", () => {
       storePath: path.join(stateDir, "sessions.json"),
     });
     expect(persistedEntryAtRun).toMatchObject({
+      pluginOwnerId: "active-memory",
       sessionId,
       sessionFile: runtimeSessionFile,
     });
     expect(deleteSession).toHaveBeenCalledWith({
       sessionKey,
-      deleteTranscript: true,
+      deleteTranscript: false,
     });
     expect(hoisted.sessionStore[sessionKey]).toBeUndefined();
     expectPrependContextContains(result, "lemon pepper wings");
