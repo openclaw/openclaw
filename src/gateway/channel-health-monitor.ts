@@ -124,6 +124,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           continue;
         }
         for (const [accountId, status] of Object.entries(accounts)) {
+          if (stopped) {
+            return;
+          }
           if (!status) {
             continue;
           }

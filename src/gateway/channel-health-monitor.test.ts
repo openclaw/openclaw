@@ -655,6 +655,35 @@ describe("channel-health-monitor", () => {
     },
   );
 
+  it("does not process later accounts after a retired monitor's stop rejects", async () => {
+    let rejectStop: (() => void) | undefined;
+    const stopGate = new Promise<void>((_resolve, reject) => {
+      rejectStop = () => reject(new Error("stop failed"));
+    });
+    const staleAccount = disconnectedAccount(Date.now() - 300_000);
+    const manager = createSnapshotManager(
+      { slack: { first: staleAccount, second: staleAccount } },
+      {
+        stopChannel: vi.fn(async () => {
+          await stopGate;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
+
+    await vi.advanceTimersByTimeAsync(101);
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+
+    monitor.stop();
+    rejectStop?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+  });
+
   it("stops cleanly", async () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager);
