@@ -101,43 +101,43 @@ let workboardReturnFocusTarget: Element | null = null;
 
 const WORKBOARD_TEMPLATES: Array<{
   id: WorkboardTemplateId;
-  title: string;
-  notes: string;
+  titleKey: string;
+  notesKey: string;
   labels: string;
   priority: WorkboardPriority;
 }> = [
   {
     id: "bugfix",
-    title: "Fix: ",
-    notes: "Symptom:\nCause:\nAcceptance:\nProof:",
+    titleKey: "workboard.templateDraft.bugfixTitle",
+    notesKey: "workboard.templateDraft.bugfixNotes",
     labels: "fix, test",
     priority: "high",
   },
   {
     id: "docs",
-    title: "Docs: ",
-    notes: "Page:\nChange:\nSource proof:",
+    titleKey: "workboard.templateDraft.docsTitle",
+    notesKey: "workboard.templateDraft.docsNotes",
     labels: "docs",
     priority: "normal",
   },
   {
     id: "release",
-    title: "Release: ",
-    notes: "Scope:\nVerification:\nCloseout:",
+    titleKey: "workboard.templateDraft.releaseTitle",
+    notesKey: "workboard.templateDraft.releaseNotes",
     labels: "release",
     priority: "urgent",
   },
   {
     id: "pr_review",
-    title: "Review PR ",
-    notes: "Surface:\nRisks:\nProof:",
+    titleKey: "workboard.templateDraft.prReviewTitle",
+    notesKey: "workboard.templateDraft.prReviewNotes",
     labels: "review",
     priority: "normal",
   },
   {
     id: "plugin",
-    title: "Plugin: ",
-    notes: "Boundary:\nConfig/docs:\nTests:",
+    titleKey: "workboard.templateDraft.pluginTitle",
+    notesKey: "workboard.templateDraft.pluginNotes",
     labels: "plugin",
     priority: "normal",
   },
@@ -282,7 +282,7 @@ function focusWorkboardDialog(root: HTMLElement, initialFocusSelector?: string) 
       preferred && isFocusableWorkboardElement(preferred)
         ? preferred
         : initialFocusSelector
-          ? getFocusableWorkboardElements(root)[0]
+          ? (getFocusableWorkboardElements(root)[0] ?? root)
           : root;
     focusElement(target);
   });
@@ -323,6 +323,9 @@ function trapWorkboardDialogFocus(event: KeyboardEvent, root: HTMLElement) {
   const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
+  if (!first || !last) {
+    return;
+  }
   const focusInside = active ? root.contains(active) : false;
 
   if (event.shiftKey && (!focusInside || active === first || active === root)) {
@@ -907,7 +910,10 @@ function focusRelativeWorkboardSelectOption(
         ? (activeIndex + 1) % options.length
         : (activeIndex - 1 + options.length) % options.length;
   }
-  focusWorkboardSelectOption(details, options[nextIndex] ?? options[0]);
+  const option = options[nextIndex] ?? options[0];
+  if (option) {
+    focusWorkboardSelectOption(details, option);
+  }
 }
 
 function focusWorkboardSelectTypeaheadOption(details: HTMLDetailsElement, key: string) {
@@ -1434,8 +1440,8 @@ function applyTemplate(state: WorkboardUiState, templateId: WorkboardTemplateId)
     return;
   }
   state.draftTemplateId = template.id;
-  state.draftTitle = template.title;
-  state.draftNotes = template.notes;
+  state.draftTitle = t(template.titleKey);
+  state.draftNotes = t(template.notesKey);
   state.draftLabels = template.labels;
   state.draftPriority = template.priority;
 }

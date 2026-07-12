@@ -1,4 +1,5 @@
 // Test Extension tests cover test extension script behavior.
+/* oxlint-disable typescript/no-unnecessary-type-parameters -- explicit call-site result types keep mock tuple extraction precise. */
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +16,7 @@ import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestShards,
   resolveExtensionBatchPlan,
+  resolveExtensionTestConfig,
   resolveExtensionTestPlan,
 } from "../../scripts/lib/extension-test-plan.mjs";
 import { relativizeExtensionVitestArgs } from "../../scripts/lib/extension-vitest-paths.mjs";
@@ -26,6 +28,7 @@ import {
   runExtensionBatchPlan,
 } from "../../scripts/test-extension-batch.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.config.ts";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
 const posixIt = process.platform === "win32" ? it.skip : it;
@@ -43,7 +46,7 @@ function runScriptResult(args: string[], cwd = process.cwd()) {
   });
 }
 
-function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> } }): T {
+function requireFirstMockArg<T>(mock: { mock: { calls: readonly (readonly unknown[])[] } }): T {
   const [call] = mock.mock.calls;
   if (!call) {
     throw new Error("expected first mock call argument");
@@ -52,7 +55,7 @@ function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> 
   if (arg === undefined) {
     throw new Error("expected first mock call argument");
   }
-  return arg;
+  return arg as T;
 }
 
 function findExtensionWithoutTests() {
@@ -85,6 +88,13 @@ describe("scripts/test-extension.mjs", () => {
         resolveExtensionTestPlan({ cwd: process.cwd(), targetArg: extensionId }).hasTests,
     );
   });
+
+  it.each(extensionCatchAllExcludedTestRoots)(
+    "routes catch-all-excluded extension root %s to a dedicated config",
+    (root) => {
+      expect(resolveExtensionTestConfig(root)).not.toBe("test/vitest/vitest.extensions.config.ts");
+    },
+  );
 
   it("resolves split channel extensions onto their own vitest configs", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "slack", cwd: process.cwd() });
@@ -513,7 +523,7 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(shards).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
     expect(shards.map((shard) => shard.checkName)).toEqual(
-      shards.map((shard, index) => `checks-node-extensions-shard-${index + 1}`),
+      shards.map((_shard, index) => `checks-node-extensions-shard-${index + 1}`),
     );
 
     const assigned = shards.flatMap((shard) => shard.extensionIds);
@@ -584,7 +594,9 @@ describe("scripts/test-extension.mjs", () => {
       },
       {
         env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
-        runGroup,
+        runGroup: runGroup as NonNullable<
+          NonNullable<Parameters<typeof runExtensionBatchPlan>[1]>["runGroup"]
+        >,
         vitestArgs: ["--reporter=dot"],
       },
     );

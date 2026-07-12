@@ -1,6 +1,9 @@
 // Routing session key tests cover route-derived session key behavior.
 import { describe, expect, it } from "vitest";
-import { resolveSessionStoreAgentId } from "../gateway/session-store-key.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+} from "../gateway/session-store-key.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
   getSubagentDepth,
@@ -87,6 +90,22 @@ describe("agentSessionKeysMatchByRequestKey", () => {
   });
 });
 
+describe("resolveSessionStoreKey", () => {
+  it("scopes unprefixed explicit-agent keys to the requested store agent", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+      session: { mainKey: "primary" },
+    };
+
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main", storeAgentId: "ops" })).toBe(
+      "agent:ops:primary",
+    );
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:dm:U1", storeAgentId: "ops" })).toBe(
+      "agent:ops:discord:dm:u1",
+    );
+  });
+});
+
 describe("session key backward compatibility", () => {
   function expectBackwardCompatibleDirectSessionKey(key: string) {
     expect(classifySessionKeyShape(key)).toBe("agent");
@@ -114,7 +133,6 @@ describe("getSubagentDepth", () => {
     { key: "subagent:parent:subagent:child", expected: 2 },
   ] as const)("returns $expected for session key %j", ({ key, expected }) => {
     expect(getSubagentDepth(key)).toBe(expected);
-
   });
 });
 

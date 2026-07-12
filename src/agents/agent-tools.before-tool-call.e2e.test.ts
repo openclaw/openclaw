@@ -19,6 +19,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import { MAX_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
+import { PluginApprovalResolutions } from "../plugins/hook-before-tool-call-result.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -974,6 +975,41 @@ describe("before_tool_call loop detection behavior", () => {
       expect(JSON.stringify(emitted[1])).not.toContain(skillFilePath);
       expect(JSON.stringify(emitted)).not.toContain(os.homedir());
       expect(privateData[0]?.skillUsage?.skillFile).toBe(skillFilePath);
+    });
+  });
+
+  it("emits skill usage diagnostics for node skill locators", async () => {
+    const locator = "node://node-1/skills/remote-skill/SKILL.md";
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "skill" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      skillsSnapshot: {
+        prompt: "",
+        skills: [{ name: "remote-skill" }],
+        resolvedSkills: [
+          createCanonicalFixtureSkill({
+            name: "remote-skill",
+            description: "Remote skill",
+            filePath: locator,
+            baseDir: "node://node-1/skills/remote-skill",
+            source: "openclaw-node",
+          }),
+        ],
+      },
+      loopDetection: { enabled: false },
+    });
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _privateData, flush) => {
+      await tool.execute("tool-call-node-skill", { path: locator }, undefined, undefined);
+      await flush();
+
+      expectEventFields(emitted[1], {
+        type: "skill.used",
+        skillName: "remote-skill",
+        activation: "read",
+        toolName: "read",
+      });
     });
   });
 
@@ -2002,18 +2038,25 @@ describe("before_tool_call requireApproval handling", () => {
     );
   });
 
-  it("allows on timeout when timeoutBehavior is allow and preserves hook params", async () => {
+  it.each([
+    ["a timeout", null],
+    ["an explicit timeout decision", PluginApprovalResolutions.TIMEOUT],
+    ["an unknown decision", "approved"],
+    ["a malformed truthy decision", true as unknown as string],
+  ])("blocks on %s even when deprecated timeoutBehavior is allow", async (_label, decision) => {
+    const onResolution = vi.fn();
     hookRunner.runBeforeToolCall.mockResolvedValue({
       params: { command: "safe-command" },
       requireApproval: {
         title: "Lenient timeout",
-        description: "Should allow on timeout",
+        description: "Must fail closed",
         timeoutBehavior: "allow",
+        onResolution,
       },
     });
 
     mockCallGateway.mockResolvedValueOnce({ id: "server-id-4", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-4", decision: null });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-4", decision });
 
     const result = await runBeforeToolCallHook({
       toolName: "bash",
@@ -2021,10 +2064,78 @@ describe("before_tool_call requireApproval handling", () => {
       ctx: { agentId: "main", sessionKey: "main" },
     });
 
-    expect(result.blocked).toBe(false);
-    if (!result.blocked) {
-      expect(result.params).toEqual({ command: "safe-command" });
-    }
+    expect(result).toMatchObject({
+      blocked: true,
+      kind: "failure",
+      disposition: "timed_out",
+      deniedReason: "plugin-approval",
+      reason: "Approval timed out",
+      params: { command: "rm -rf /" },
+    });
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.TIMEOUT);
+  });
+
+  it("blocks exact allow decisions excluded by the request", async () => {
+    const onResolution = vi.fn();
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      params: { command: "safe-command" },
+      requireApproval: {
+        title: "Restricted approval",
+        description: "Allow once only",
+        allowedDecisions: ["allow-once", "deny"],
+        onResolution,
+      },
+    });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-restricted", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id-restricted",
+      decision: "allow-always",
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "unsafe-command" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toMatchObject({
+      blocked: true,
+      disposition: "timed_out",
+      reason: "Approval timed out",
+      params: { command: "unsafe-command" },
+    });
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.TIMEOUT);
+  });
+
+  it("blocks a wait decision bound to another approval id", async () => {
+    const onResolution = vi.fn();
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      params: { command: "safe-command" },
+      requireApproval: {
+        title: "Bound approval",
+        description: "Must match the request id",
+        onResolution,
+      },
+    });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-bound", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id-other",
+      decision: "allow-once",
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "unsafe-command" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toMatchObject({
+      blocked: true,
+      disposition: "timed_out",
+      reason: "Approval timed out",
+      params: { command: "unsafe-command" },
+    });
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.TIMEOUT);
   });
 
   it("falls back to block on gateway error", async () => {

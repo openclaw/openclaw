@@ -6,6 +6,7 @@ import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 
 export const GATEWAY_SERVER_CAPS = {
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
+  CRESTODIAN_SETUP_MODEL_REF: "crestodian-setup-model-ref",
 } as const;
 
 /**
@@ -224,3 +225,8 @@ export type RequestFrame = Static<typeof RequestFrameSchema>;
 export type ResponseFrame = Static<typeof ResponseFrameSchema>;
 export type EventFrame = Static<typeof EventFrameSchema>;
 export type GatewayFrame = Static<typeof GatewayFrameSchema>;
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type TickEvent = Static<typeof TickEventSchema>;
+export type ShutdownEvent = Static<typeof ShutdownEventSchema>;

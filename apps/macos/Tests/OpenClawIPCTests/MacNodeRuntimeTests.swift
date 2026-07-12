@@ -57,7 +57,7 @@ struct MacNodeRuntimeTests {
 
         func refresh() -> String? {
             self.calls += 1
-            return "http://127.0.0.1:18789/refreshed"
+            return "http://127.0.0.1:18789/__openclaw__/cap/refreshed-token"
         }
     }
 
@@ -183,6 +183,69 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @Test func `file system list directory returns only sorted directories`() async throws {
+        struct Entry: Decodable, Equatable {
+            var name: String
+            var path: String
+            var hidden: Bool?
+        }
+        struct Payload: Decodable {
+            var path: String
+            var parent: String?
+            var home: String
+            var entries: [Entry]
+        }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacNodeRuntimeTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let projects = root.appendingPathComponent("Projects", isDirectory: true)
+        let hidden = root.appendingPathComponent(".hidden", isDirectory: true)
+        try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: hidden, withIntermediateDirectories: false)
+        try Data("not a directory".utf8).write(to: root.appendingPathComponent("notes.txt"))
+
+        let paramsJSON = try String(
+            decoding: JSONEncoder().encode(["path": root.path]),
+            as: UTF8.self)
+        let response = await MacNodeRuntime().handleInvoke(BridgeInvokeRequest(
+            id: "req-fs-list-dir",
+            command: OpenClawFileSystemCommand.listDir.rawValue,
+            paramsJSON: paramsJSON))
+        let payloadJSON = try #require(response.payloadJSON)
+        let payload = try JSONDecoder().decode(Payload.self, from: Data(payloadJSON.utf8))
+
+        #expect(response.ok)
+        #expect(payload.path == root.path)
+        #expect(payload.parent == root.deletingLastPathComponent().path)
+        #expect(payload.home == FileManager.default.homeDirectoryForCurrentUser.path)
+        let listedRoot = URL(fileURLWithPath: payload.path, isDirectory: true)
+        #expect(payload.entries == [
+            Entry(
+                name: "Projects",
+                path: listedRoot.appendingPathComponent("Projects", isDirectory: true).path,
+                hidden: nil),
+            Entry(
+                name: ".hidden",
+                path: listedRoot.appendingPathComponent(".hidden", isDirectory: true).path,
+                hidden: true),
+        ])
+    }
+
+    @Test func `file system list directory rejects relative paths`() async throws {
+        let paramsJSON = try String(
+            decoding: JSONEncoder().encode(["path": "Projects"]),
+            as: UTF8.self)
+        let response = await MacNodeRuntime().handleInvoke(BridgeInvokeRequest(
+            id: "req-fs-list-dir-relative",
+            command: OpenClawFileSystemCommand.listDir.rawValue,
+            paramsJSON: paramsJSON))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .invalidRequest)
+    }
+
     @Test func `handle invoke returns injected Codex thread catalog`() async {
         let payload = #"{"sessions":[]}"#
         let runtime = MacNodeRuntime(
@@ -216,18 +279,100 @@ struct MacNodeRuntimeTests {
         #expect(response.error?.message == "UNAVAILABLE: Codex session catalog is disabled")
     }
 
+    @Test func `handle invoke returns an injected Codex transcript turn page`() async {
+        let payload = #"{"data":[{"id":"item-1","type":"agentMessage","text":"answer"}],"nextCursor":"page-2"}"#
+        let runtime = MacNodeRuntime(
+            codexThreadCatalogEnabled: { true },
+            codexThreadTurnsRequest: { paramsJSON in
+                #expect(paramsJSON == #"{"threadId":"thread-1","limit":50}"#)
+                return payload
+            })
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-codex-items",
+            command: MacNodeCodexThreadCatalogContract.turnsCommand,
+            paramsJSON: #"{"threadId":"thread-1","limit":50}"#))
+
+        #expect(response.ok)
+        #expect(response.payloadJSON == payload)
+    }
+
+    @Test func `handle invoke returns injected Claude session pages`() async {
+        let listPayload = #"{"sessions":[]}"#
+        let readPayload = #"{"threadId":"thread-1","items":[]}"#
+        let runtime = MacNodeRuntime(
+            claudeSessionCatalogEnabled: { true },
+            claudeSessionListRequest: { paramsJSON in
+                #expect(paramsJSON == #"{"limit":7}"#)
+                return listPayload
+            },
+            claudeSessionReadRequest: { paramsJSON in
+                #expect(paramsJSON == #"{"threadId":"thread-1","limit":20}"#)
+                return readPayload
+            })
+
+        let list = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-claude-list",
+            command: MacNodeClaudeSessionCatalogContract.listCommand,
+            paramsJSON: #"{"limit":7}"#))
+        let read = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-claude-read",
+            command: MacNodeClaudeSessionCatalogContract.readCommand,
+            paramsJSON: #"{"threadId":"thread-1","limit":20}"#))
+
+        #expect(list.ok)
+        #expect(list.payloadJSON == listPayload)
+        #expect(read.ok)
+        #expect(read.payloadJSON == readPayload)
+    }
+
+    @Test func `handle invoke enforces local Claude catalog policy`() async {
+        let runtime = MacNodeRuntime(
+            claudeSessionCatalogEnabled: { false },
+            claudeSessionListRequest: { _ in
+                Issue.record("disabled Claude catalog request must not execute")
+                return #"{"sessions":[]}"#
+            })
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-claude-disabled",
+            command: MacNodeClaudeSessionCatalogContract.listCommand))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .unavailable)
+        #expect(response.error?.message == "UNAVAILABLE: Claude session catalog is disabled")
+    }
+
     @Test func `A2UI host capability refresh uses injected node session refresher`() async {
         let probe = CanvasRefreshProbe()
-        let runtime = MacNodeRuntime(
-            canvasSurfaceUrl: { "http://127.0.0.1:18789/current" },
-            refreshCanvasSurfaceUrl: { await probe.refresh() })
+        let resolver = MacNodeCanvasHostedSurfaceResolver(
+            currentSurfaceURL: { "http://127.0.0.1:18789/__openclaw__/cap/current-token" },
+            refreshSurfaceURL: { await probe.refresh() })
 
-        let current = await runtime.resolveA2UIHostUrlWithCapabilityRefresh()
-        #expect(current == "http://127.0.0.1:18789/current/__openclaw__/a2ui/?platform=macos")
+        let current = await resolver.resolveA2UIURL()
+        #expect(current ==
+            "http://127.0.0.1:18789/__openclaw__/cap/current-token/__openclaw__/a2ui/?platform=macos")
         #expect(await probe.calls == 0)
 
-        let refreshed = await runtime.resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: true)
-        #expect(refreshed == "http://127.0.0.1:18789/refreshed/__openclaw__/a2ui/?platform=macos")
+        let refreshed = await resolver.resolveA2UIURL(forceRefresh: true)
+        #expect(refreshed ==
+            "http://127.0.0.1:18789/__openclaw__/cap/refreshed-token/__openclaw__/a2ui/?platform=macos")
+        #expect(await probe.calls == 1)
+    }
+
+    @Test func `hosted Canvas commands refresh capability and preserve target components`() async throws {
+        let probe = CanvasRefreshProbe()
+        let resolver = MacNodeCanvasHostedSurfaceResolver(
+            currentSurfaceURL: { "http://127.0.0.1:18789/__openclaw__/cap/current-token" },
+            refreshSurfaceURL: { await probe.refresh() })
+
+        let resolved = try await resolver.resolveTarget(
+            "/__openclaw__/canvas/demo%20page.html?mode=proof#result")
+        #expect(resolved?.url.absoluteString ==
+            "http://127.0.0.1:18789/__openclaw__/cap/refreshed-token/__openclaw__/canvas/demo%20page.html?mode=proof#result")
+        #expect(resolved?.allowsA2UIActions == false)
+        #expect(await probe.calls == 1)
+
+        let external = try await resolver.resolveTarget("https://example.com/")
+        #expect(external == nil)
         #expect(await probe.calls == 1)
     }
 
@@ -305,6 +450,10 @@ struct MacNodeRuntimeTests {
         let home = root.appendingPathComponent("home", isDirectory: true)
         let stateDir = root.appendingPathComponent("state", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
+        try FileManager().createDirectory(at: stateDir, withIntermediateDirectories: true)
+        let initial = ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+        try JSONEncoder().encode(initial)
+            .write(to: stateDir.appendingPathComponent("exec-approvals.json"))
 
         try await TestIsolation.withEnvValues([
             "OPENCLAW_HOME": home.path,

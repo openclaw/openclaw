@@ -126,9 +126,14 @@ describe("gateway/node-catalog", () => {
           caps: ["camera", "screen"],
           declaredCommands: ["screen.snapshot", "system.run"],
           commands: ["screen.snapshot", "system.run"],
+          declaredNodePluginTools: [],
+          nodePluginTools: [],
+          nodeSkills: [],
           remoteIp: "100.0.0.11",
           pathEnv: "/usr/bin:/bin",
           connectedAtMs,
+          lastActiveAtMs: 120,
+          presenceUpdatedAtMs: 125,
         },
       ],
     });
@@ -148,6 +153,8 @@ describe("gateway/node-catalog", () => {
     expect(node?.pathEnv).toBe("/usr/bin:/bin");
     expect(node?.approvedAtMs).toBe(100);
     expect(node?.connectedAtMs).toBe(connectedAtMs);
+    expect(node?.lastActiveAtMs).toBe(120);
+    expect(node?.presenceUpdatedAtMs).toBe(125);
     expect(node?.lastSeenAtMs).toBe(connectedAtMs);
     expect(node?.lastSeenReason).toBe("connect");
     expect(node?.paired).toBe(true);
@@ -235,6 +242,9 @@ describe("gateway/node-catalog", () => {
           caps: ["canvas"],
           declaredCommands: ["canvas.snapshot"],
           commands: ["canvas.snapshot"],
+          declaredNodePluginTools: [],
+          nodePluginTools: [],
+          nodeSkills: [],
           connectedAtMs: 1,
         },
       ],
@@ -326,6 +336,9 @@ describe("gateway/node-catalog", () => {
           caps: [],
           declaredCommands: ["screen.snapshot", "system.run"],
           commands: [],
+          declaredNodePluginTools: [],
+          nodePluginTools: [],
+          nodeSkills: [],
           connectedAtMs: 1,
         },
       ],
@@ -360,6 +373,9 @@ describe("gateway/node-catalog", () => {
           caps: ["camera"],
           declaredCommands: ["screen.snapshot", "system.run"],
           commands: ["screen.snapshot"],
+          declaredNodePluginTools: [],
+          nodePluginTools: [],
+          nodeSkills: [],
           declaredPermissions: { camera: true, screen: true },
           permissions: { camera: true },
           connectedAtMs: 1,
@@ -400,6 +416,9 @@ describe("gateway/node-catalog", () => {
           caps: ["camera"],
           declaredCommands: ["screen.snapshot"],
           commands: ["screen.snapshot"],
+          declaredNodePluginTools: [],
+          nodePluginTools: [],
+          nodeSkills: [],
           declaredPermissions: { camera: true },
           permissions: { camera: true },
           connectedAtMs: 1,
@@ -500,6 +519,9 @@ describe("gateway/node-catalog", () => {
           caps: [],
           declaredCommands: [],
           commands: [],
+          declaredNodePluginTools: [],
+          nodePluginTools: [],
+          nodeSkills: [],
           connectedAtMs: 1,
         },
       ],

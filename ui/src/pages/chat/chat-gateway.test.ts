@@ -1,5 +1,6 @@
 // Control UI tests cover chat behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
 import {
   registerChatAttachmentPayload,
   resetChatAttachmentPayloadStoreForTest,
@@ -30,7 +31,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatSending: false,
     chatStream: null,
     chatStreamStartedAt: null,
-    chatSideResult: null,
+    chatSideChatTurns: [],
     chatSideResultTerminalRuns: new Set<string>(),
     chatThinkingLevel: null,
     chatVerboseLevel: null,
@@ -153,7 +154,8 @@ describe("chat side result gateway events", () => {
       }),
     ).toBe(true);
 
-    expect(state.chatSideResult).toMatchObject({
+    expect(state.chatSideChatTurns).toHaveLength(1);
+    expect(state.chatSideChatTurns?.[0]).toMatchObject({
       kind: "btw",
       runId: "btw-run-1",
       sessionKey: "main",
@@ -181,7 +183,7 @@ describe("chat side result gateway events", () => {
       }),
     ).toBe(true);
 
-    expect(state.chatSideResult).toMatchObject({
+    expect(state.chatSideChatTurns?.[0]).toMatchObject({
       kind: "btw",
       runId: "btw-work-global",
       sessionKey: "global",
@@ -210,8 +212,184 @@ describe("chat side result gateway events", () => {
       }),
     ).toBe(false);
 
-    expect(state.chatSideResult).toBeNull();
+    expect(state.chatSideChatTurns).toEqual([]);
     expect(state.chatSideResultTerminalRuns?.has("btw-main-global")).toBe(false);
+  });
+
+  it("clears the pending side question when its result arrives", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "what changed?", ts: 1, runId: "btw-run-1" };
+
+    handleChatSideResultGatewayEvent(state, {
+      kind: "btw",
+      runId: "btw-run-1",
+      sessionKey: "main",
+      question: "what changed?",
+      text: "Answer.",
+      ts: 123,
+    });
+
+    expect(state.chatSideResultPending).toBeNull();
+    expect(state.chatSideChatTurns).toHaveLength(1);
+  });
+
+  it("accumulates follow-up answers as turns and reopens a hidden panel", () => {
+    const state = createState();
+    state.chatSideChatTurns = [
+      {
+        kind: "btw",
+        runId: "btw-run-1",
+        sessionKey: "main",
+        question: "what changed?",
+        text: "First answer.",
+        isError: false,
+        ts: 123,
+      },
+    ];
+    state.chatSideChatHidden = true;
+    state.chatSideResultPending = { question: "and why?", ts: 2, runId: "btw-run-2" };
+
+    handleChatSideResultGatewayEvent(state, {
+      kind: "btw",
+      runId: "btw-run-2",
+      sessionKey: "main",
+      // Follow-up commands embed prior-turn context; the server echoes the
+      // whole blob back as the question.
+      question:
+        'Context — the previous side question "what changed?" was answered: "First answer." Follow-up question: and why?',
+      text: "Second answer.",
+      ts: 124,
+    });
+
+    expect(state.chatSideChatTurns).toHaveLength(2);
+    // The correlated pending record supplies the user's typed question.
+    expect(state.chatSideChatTurns?.[1]).toMatchObject({
+      runId: "btw-run-2",
+      question: "and why?",
+      text: "Second answer.",
+    });
+    expect(state.chatSideResultPending).toBeNull();
+    // An arriving answer reopens a panel hidden via X/Escape.
+    expect(state.chatSideChatHidden).toBe(false);
+  });
+
+  it("converts a resultless terminal BTW run into an error turn and swallows the event", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "what changed?", ts: 1, runId: "btw-run-3" };
+
+    const result = handleChatGatewayEvent(state, {
+      runId: "btw-run-3",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "⚠️ /btw requires an active session with existing context." },
+        ],
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(state.chatSideResultPending).toBeNull();
+    expect(state.chatSideChatTurns?.[0]).toMatchObject({
+      kind: "btw",
+      runId: "btw-run-3",
+      question: "what changed?",
+      text: "⚠️ /btw requires an active session with existing context.",
+      isError: true,
+    });
+    // Swallowed: the detached failure must not be adopted into the transcript.
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("ignores side results from retired (superseded or dismissed) runs", () => {
+    const state = createState();
+    // A newer question retired the old pending run before its result arrived.
+    state.chatSideResultPending = { question: "older question", ts: 1, runId: "btw-run-old" };
+    retirePendingChatSideQuestion(state);
+    state.chatSideResultPending = { question: "newer question", ts: 2, runId: "btw-run-new" };
+
+    expect(
+      handleChatSideResultGatewayEvent(state, {
+        kind: "btw",
+        runId: "btw-run-old",
+        sessionKey: "main",
+        question: "older question",
+        text: "Stale answer.",
+        ts: 123,
+      }),
+    ).toBe(true);
+
+    expect(state.chatSideChatTurns).toEqual([]);
+    expect(state.chatSideResultPending).toMatchObject({ runId: "btw-run-new" });
+    // The entry stays so the retired run's terminal chat event is swallowed too.
+    expect(state.chatSideResultTerminalRuns?.has("btw-run-old")).toBe(true);
+  });
+
+  it("keeps this pane's pending card when another run's result arrives", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "my question", ts: 1, runId: "btw-run-mine" };
+
+    // Same session, different run (e.g. a split pane) that was never retired
+    // here: it must not replace the live pending card, but its terminal chat
+    // event must still be swallowed in this pane.
+    expect(
+      handleChatSideResultGatewayEvent(state, {
+        kind: "btw",
+        runId: "btw-run-other-pane",
+        sessionKey: "main",
+        question: "other pane question",
+        text: "Other pane answer.",
+        ts: 123,
+      }),
+    ).toBe(true);
+
+    expect(state.chatSideChatTurns).toEqual([]);
+    expect(state.chatSideResultPending).toMatchObject({ runId: "btw-run-mine" });
+    expect(state.chatSideResultTerminalRuns?.has("btw-run-other-pane")).toBe(true);
+
+    // This pane's own run still resolves its pending card.
+    handleChatSideResultGatewayEvent(state, {
+      kind: "btw",
+      runId: "btw-run-mine",
+      sessionKey: "main",
+      question: "my question",
+      text: "My answer.",
+      ts: 124,
+    });
+    expect(state.chatSideChatTurns?.at(-1)).toMatchObject({ runId: "btw-run-mine" });
+    expect(state.chatSideResultPending).toBeNull();
+  });
+
+  it("keeps a dismissed pending run's terminal reply out of the transcript", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "dismissed question", ts: 1, runId: "btw-run-5" };
+    retirePendingChatSideQuestion(state);
+    expect(state.chatSideResultPending).toBeNull();
+
+    const result = handleChatGatewayEvent(state, {
+      runId: "btw-run-5",
+      sessionKey: "main",
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "Late reply." }] },
+    });
+
+    expect(result).toBeNull();
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatSideChatTurns).toEqual([]);
+  });
+
+  it("keeps the pending side question when an unrelated run terminates", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "what changed?", ts: 1, runId: "btw-run-4" };
+
+    handleChatGatewayEvent(state, {
+      runId: "main-run-9",
+      sessionKey: "main",
+      state: "final",
+    });
+
+    expect(state.chatSideResultPending).toMatchObject({ runId: "btw-run-4" });
   });
 
   it("ignores tracked BTW terminal events without touching the active run", () => {

@@ -12,13 +12,11 @@ import {
   type PluginManifestToolOwnerRecord,
 } from "../plugins/manifest-command-aliases.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { hasFlag } from "./argv.js";
 import {
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
 import { isReservedNonPluginCommandRoot } from "./command-registration-policy.js";
-import { resolvePrecomputedSubcommandHelpCommand } from "./precomputed-help.js";
 import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
 import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
 
@@ -28,10 +26,6 @@ const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
   ...getSubCliParentDefaultHelpCommands(),
 ]);
-
-function hasHelpFlag(argv: string[]): boolean {
-  return hasFlag(argv, "-h") || hasFlag(argv, "--help");
-}
 
 function isBareParentDefaultHelpArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
@@ -57,7 +51,7 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   if (
     invocation.hasHelpOrVersion ||
-    shouldStartCrestodianForBareRoot(argv) ||
+    shouldHandleBareRoot(argv) ||
     isBareParentDefaultHelpArgv(argv)
   ) {
     return false;
@@ -82,51 +76,6 @@ export function shouldUseRootHelpFastPath(
   );
 }
 
-export function shouldUseBrowserHelpFastPath(
-  argv: string[],
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
-    return false;
-  }
-  const invocation = resolveCliArgvInvocation(argv);
-  return (
-    invocation.commandPath.length === 1 &&
-    invocation.commandPath[0] === "browser" &&
-    hasHelpFlag(argv)
-  );
-}
-
-export function shouldUseSecretsHelpFastPath(
-  argv: string[],
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
-    return false;
-  }
-  const invocation = resolveCliArgvInvocation(argv);
-  return (
-    invocation.commandPath.length === 1 &&
-    invocation.commandPath[0] === "secrets" &&
-    hasHelpFlag(argv)
-  );
-}
-
-export function shouldUseNodesHelpFastPath(
-  argv: string[],
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
-    return false;
-  }
-  const invocation = resolveCliArgvInvocation(argv);
-  return (
-    invocation.commandPath.length === 1 &&
-    invocation.commandPath[0] === "nodes" &&
-    hasHelpFlag(argv)
-  );
-}
-
 export function shouldUseSetupOnboardConfigureHelpFastPath(
   argv: string[],
   env: NodeJS.ProcessEnv = process.env,
@@ -142,28 +91,9 @@ export function shouldUseSetupOnboardConfigureHelpFastPath(
   );
 }
 
-export function resolvePrecomputedSubcommandHelpFastPath(
-  argv: string[],
-  env: NodeJS.ProcessEnv = process.env,
-): string | null {
-  if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
-    return null;
-  }
-  return resolvePrecomputedSubcommandHelpCommand(argv);
-}
-
-export function shouldStartCrestodianForBareRoot(argv: string[]): boolean {
+export function shouldHandleBareRoot(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   return invocation.commandPath.length === 0 && !invocation.hasHelpOrVersion;
-}
-
-export function shouldStartCrestodianForModernOnboard(argv: string[]): boolean {
-  const invocation = resolveCliArgvInvocation(argv);
-  return (
-    invocation.commandPath[0] === "onboard" &&
-    argv.includes("--modern") &&
-    !invocation.hasHelpOrVersion
-  );
 }
 
 export function shouldStartProxyForCli(argv: string[]): boolean {

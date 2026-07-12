@@ -75,6 +75,43 @@ afterEach(() => {
 });
 
 describe("SkillWorkshopPage lifecycle", () => {
+  it("renders truncated Today previews without dangling surrogates", async () => {
+    const previewText = `${"a".repeat(118)}😀trailing`;
+    const proposal = {
+      key: "proposal-utf16-preview",
+      slug: "proposal-utf16-preview",
+      name: "UTF-16 preview",
+      oneLine: "Preview boundary coverage",
+      body: `## Workflow\n- ${previewText}`,
+      status: "pending",
+      version: 1,
+      createdAt: 0,
+      updatedAt: 0,
+      recencyGroup: "today",
+      ageLabel: "now",
+      supportFiles: [],
+      isNew: false,
+      origin: {
+        agentId: "research",
+        sessionKey: "agent:research:proposal-utf16-preview",
+      },
+    } satisfies SkillWorkshopProposal;
+    const loadedState = createSkillWorkshopState();
+    loadedState.skillWorkshopAgentId = "research";
+    loadedState.skillWorkshopLoaded = true;
+    loadedState.skillWorkshopProposals = [proposal];
+    loadedState.skillWorkshopSelectedKey = proposal.key;
+    const page = document.createElement(
+      "openclaw-skill-workshop-page",
+    ) as SkillWorkshopPageTestElement;
+    page.data = skillWorkshopRouteData(loadedState);
+    page.context = createContext(vi.fn(async () => ({})));
+    document.body.append(page);
+    await page.updateComplete;
+
+    expect(page.querySelector(".sw-today__does li")?.textContent).toBe(`${"a".repeat(118)}…`);
+  });
+
   it("forces a fresh proposal load when the gateway source changes", async () => {
     const firstRequest = vi.fn(async () => ({}));
     const secondRequest = vi.fn(async () => ({
@@ -105,6 +142,53 @@ describe("SkillWorkshopPage lifecycle", () => {
         agentId: "research",
       }),
     );
+  });
+
+  it("does not issue duplicate list requests while a load is in flight", async () => {
+    const manifest = deferred<unknown>();
+    const request = vi.fn(() => manifest.promise);
+    const page = document.createElement(
+      "openclaw-skill-workshop-page",
+    ) as SkillWorkshopPageTestElement;
+    page.context = createContext(request);
+    document.body.append(page);
+    await page.updateComplete;
+
+    // Extra update cycles during the pending load used to re-enter
+    // loadProposals, whose early-return finally scheduled the next update and
+    // spun the page at 100% CPU until the request settled.
+    page.requestUpdate();
+    await page.updateComplete;
+    page.requestUpdate();
+    await page.updateComplete;
+    expect(request).toHaveBeenCalledTimes(1);
+
+    manifest.resolve({
+      schema: "openclaw.skill-workshop.proposals-manifest.v1",
+      updatedAt: "2026-07-08T00:00:00.000Z",
+      proposals: [],
+    });
+    await vi.waitFor(() => expect(page.state?.skillWorkshopLoaded).toBe(true));
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops auto-retrying after a failed proposal load", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("gateway offline");
+    });
+    const page = document.createElement(
+      "openclaw-skill-workshop-page",
+    ) as SkillWorkshopPageTestElement;
+    page.context = createContext(request);
+    document.body.append(page);
+    await page.updateComplete;
+    await vi.waitFor(() => expect(page.state?.skillWorkshopError).toContain("gateway offline"));
+
+    page.requestUpdate();
+    await page.updateComplete;
+    page.requestUpdate();
+    await page.updateComplete;
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("detaches an in-flight proposal load on a same-client disconnect", async () => {

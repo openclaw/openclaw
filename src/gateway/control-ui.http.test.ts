@@ -29,6 +29,13 @@ import {
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
+// Keeps bootstrap payload tests deterministic: the real resolver reports the
+// git branch of this checkout, which varies across CI and dev machines.
+const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
+vi.mock("../infra/dev-install-branch.js", () => ({
+  resolveDevInstallGitBranch: async () => devInstallBranchMock.branch,
+}));
+
 const REAL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
@@ -77,6 +84,7 @@ describe("handleControlUiHttpRequest", () => {
       assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
       assistantAvatarReason?: string | null;
       assistantAgentId: string;
+      devGitBranch?: string;
       localMediaPreviewRoots?: string[];
       chatMessageMaxWidth?: string;
       seamColor?: string;
@@ -389,12 +397,17 @@ describe("handleControlUiHttpRequest", () => {
         )?.[1];
         expect(typeof csp).toBe("string");
         expect(String(csp)).toContain("frame-ancestors 'none'");
+        expect(String(csp)).toContain("frame-src 'self'");
         expect(String(csp)).toContain("script-src 'self'");
         expect(String(csp)).toContain(
           "connect-src 'self' ws: wss: https://api.openai.com https://tweakcn.com",
         );
         expect(String(csp)).not.toContain("https://*.tweakcn.com");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
+        expect(setHeader).toHaveBeenCalledWith(
+          "Permissions-Policy",
+          "camera=*, microphone=*, geolocation=*, clipboard-write=*",
+        );
         expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
       },
     });
@@ -995,9 +1008,30 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.seamColor).toBe("#1A2b3C");
         expect(parsed.timeFormat).toBe("24");
         expect(parsed.terminalEnabled).toBe(false);
+        expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
+  });
+
+  it("includes the dev checkout branch in bootstrap config", async () => {
+    devInstallBranchMock.branch = "feat/dev-branch-badge";
+    try {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+            res,
+            { root: { kind: "resolved", path: tmp }, config: {} },
+          );
+          expect(handled).toBe(true);
+          expect(parseBootstrapPayload(end).devGitBranch).toBe("feat/dev-branch-badge");
+        },
+      });
+    } finally {
+      devInstallBranchMock.branch = null;
+    }
   });
 
   it("inlines a workspace-local assistant avatar in bootstrap config (#97602)", async () => {
@@ -1809,6 +1843,89 @@ describe("handleControlUiHttpRequest", () => {
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
         expect(firstEndCallLength(end)).toBe(0);
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: "root-mounted",
+      basePath: undefined,
+      url: "/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
+    },
+    {
+      name: "configured-base-path",
+      basePath: "/openclaw",
+      url: "/openclaw/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
+    },
+    {
+      name: "asset-like-id",
+      basePath: undefined,
+      url: "/approve/plugin%3Arequest.json",
+    },
+    {
+      name: "configured-base-asset-like-id",
+      basePath: "/openclaw",
+      url: "/openclaw/approve/plugin%3Arequest.js",
+    },
+  ])("serves $name approval deep links through the SPA fallback", async ({ basePath, url }) => {
+    await withControlUiRoot({
+      indexHtml: "<html><body>approval-spa</body></html>\n",
+      fn: async (tmp) => {
+        for (const method of ["GET", "HEAD"] as const) {
+          const { res, end, handled } = await runControlUiRequest({
+            url,
+            method,
+            rootPath: tmp,
+            basePath,
+          });
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          if (method === "HEAD") {
+            expect(firstEndCallLength(end)).toBe(0);
+          } else {
+            expect(responseBody(end)).toContain("approval-spa");
+            if (basePath) {
+              expect(responseBody(end)).toContain('data-openclaw-control-ui-base-path="/openclaw"');
+            }
+          }
+        }
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: "root-mounted",
+      basePath: undefined,
+      url: "/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
+    },
+    {
+      name: "configured-base-path",
+      basePath: "/openclaw",
+      url: "/openclaw/approve/Approval%3AMobile%2F%E6%9D%B1%E4%BA%AC%20100%25%20%F0%9F%A6%9E",
+    },
+    {
+      name: "asset-like-id",
+      basePath: undefined,
+      url: "/approve/plugin%3Arequest.json",
+    },
+  ])("declines POST to $name approval deep links at the UI module", async ({ basePath, url }) => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { handled, end } = await runControlUiRequest({
+          url,
+          method: "POST",
+          rootPath: tmp,
+          basePath,
+        });
+
+        // The UI module only serves reads; the gateway's approval-document
+        // stage (server-http.ts) owns the terminal 404 for write methods, so
+        // these requests never reach plugin HTTP handlers in production.
+        expect(handled).toBe(false);
+        expect(end).not.toHaveBeenCalled();
       },
     });
   });
