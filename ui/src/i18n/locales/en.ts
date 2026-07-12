@@ -1248,7 +1248,10 @@ export const en: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
-    allowAlwaysUnavailable: "Allow Always is unavailable for this command.",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    allowAlwaysNonPersistable:
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
     deny: "Deny",
     labels: {
       host: "Host",

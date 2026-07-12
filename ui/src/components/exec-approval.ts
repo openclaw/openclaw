@@ -161,9 +161,15 @@ function renderUnavailableDecisionWarning(
   active: ExecApprovalRequest,
   decisions: readonly ExecApprovalDecision[],
 ) {
-  return active.kind !== "exec" || decisions.includes("allow-always")
-    ? nothing
-    : html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`;
+  if (active.kind !== "exec" || decisions.includes("allow-always")) {
+    return nothing;
+  }
+  const normalizedAskPolicy = (active.request.ask ?? "").trim().toLowerCase();
+  const isPolicyAlways = !normalizedAskPolicy || normalizedAskPolicy === "always";
+  const key = isPolicyAlways
+    ? "execApproval.allowAlwaysUnavailable"
+    : "execApproval.allowAlwaysNonPersistable";
+  return html`<div class="exec-approval-warning">${t(key)}</div>`;
 }
 
 function renderExecApprovalPrompt(props: ExecApprovalProps) {
