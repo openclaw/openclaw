@@ -72,7 +72,6 @@ export type PluginsViewProps = {
   mcpMessage: PluginRowMessage | null;
   mcpBusy: boolean;
   mcpFormOpen: boolean;
-  onTabChange: (tab: PluginsTab) => void;
   onQueryChange: (query: string) => void;
   onFilterChange: (filter: InstalledFilter) => void;
   onRefresh: () => void;
@@ -91,20 +90,7 @@ export type PluginsViewProps = {
   onMcpAdd: (form: McpServerForm) => void;
 };
 
-const PLUGIN_TABS: readonly PluginsTab[] = ["installed", "discover"];
-
 const INSTALLED_FILTERS: readonly InstalledFilter[] = ["all", "enabled", "disabled", "issues"];
-
-function tabLabel(tab: PluginsTab): string {
-  switch (tab) {
-    case "installed":
-      return t("pluginsPage.installedTab");
-    case "discover":
-      return t("pluginsPage.discoverTab");
-    default:
-      return tab satisfies never;
-  }
-}
 
 function filterLabel(filter: InstalledFilter): string {
   switch (filter) {
@@ -134,39 +120,6 @@ function connectorGroupLabel(group: ConnectorGroup): string {
     default:
       return group satisfies never;
   }
-}
-
-function handleTabKeydown(
-  event: KeyboardEvent,
-  tab: PluginsTab,
-  onTabChange: PluginsViewProps["onTabChange"],
-) {
-  const currentIndex = PLUGIN_TABS.indexOf(tab);
-  let nextIndex: number;
-  switch (event.key) {
-    case "ArrowRight":
-      nextIndex = (currentIndex + 1) % PLUGIN_TABS.length;
-      break;
-    case "ArrowLeft":
-      nextIndex = (currentIndex - 1 + PLUGIN_TABS.length) % PLUGIN_TABS.length;
-      break;
-    case "Home":
-      nextIndex = 0;
-      break;
-    case "End":
-      nextIndex = PLUGIN_TABS.length - 1;
-      break;
-    default:
-      return;
-  }
-  event.preventDefault();
-  const nextTab = PLUGIN_TABS[nextIndex];
-  if (!nextTab) {
-    return;
-  }
-  onTabChange(nextTab);
-  const tablist = (event.currentTarget as HTMLElement).closest('[role="tablist"]');
-  tablist?.querySelector<HTMLElement>(`#plugins-tab-${nextTab}`)?.focus();
 }
 
 export function pluginRowKey(pluginId: string): string {
@@ -205,7 +158,7 @@ function matchesConnector(connector: ConnectorSuggestion, query: string): boolea
   if (!needle) {
     return true;
   }
-  return [connector.id, connector.name, connector.description].some((value) =>
+  return [connector.id, connector.name, t(connector.descriptionKey)].some((value) =>
     value.toLocaleLowerCase().includes(needle),
   );
 }
@@ -469,7 +422,7 @@ function pluginMenuItems(
   rowKey: string,
   options: { details: boolean },
 ): PluginMenuItem[] {
-  const blocked = !props.canMutate || props.busy[rowKey];
+  const blocked = !props.canMutate || (props.busy[rowKey] ?? false);
   const items: PluginMenuItem[] = [];
   if (options.details) {
     items.push({
@@ -667,7 +620,7 @@ function renderInventoryPulse(props: PluginsViewProps) {
 
 function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps): TemplateResult {
   const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   return html`
     <article
       class="plugins-row plugins-row--${plugin.state} plugins-row--clickable"
@@ -798,8 +751,10 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
       <div class="plugins-row__copy">
         <div class="plugins-row__title">
           <h3>${server.name}</h3>
-          <span class="plugins-badge plugins-badge--mcp">MCP</span>
-          ${server.auth === "oauth" ? html`<span class="plugins-badge">OAuth</span>` : nothing}
+          <span class="plugins-badge plugins-badge--mcp">${t("pluginsPage.mcp")}</span>
+          ${server.auth === "oauth"
+            ? html`<span class="plugins-badge">${t("pluginsPage.oauth")}</span>`
+            : nothing}
         </div>
         <p class="plugins-row__target">${server.target}</p>
         <div class="plugins-row__meta"><span>${server.transport}</span></div>
@@ -902,7 +857,7 @@ function renderInstalled(props: PluginsViewProps) {
 
 function renderCatalogCard(plugin: PluginCatalogItem, props: PluginsViewProps): TemplateResult {
   const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   return html`
     <article
       class="plugins-card plugins-card--clickable"
@@ -947,7 +902,7 @@ function renderConnectorCard(
   props: PluginsViewProps,
 ): TemplateResult {
   const key = connectorRowKey(connector.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   const isMcp = connector.action.kind === "mcp";
   const installed =
     isMcp &&
@@ -968,10 +923,10 @@ function renderConnectorCard(
         <div class="plugins-card__title-row">
           <h3>${connector.name}</h3>
         </div>
-        <p>${connector.description}</p>
+        <p>${t(connector.descriptionKey)}</p>
         <div class="plugins-card__meta">
           ${isMcp
-            ? html`<span class="plugins-badge plugins-badge--mcp">MCP</span>
+            ? html`<span class="plugins-badge plugins-badge--mcp">${t("pluginsPage.mcp")}</span>
                 <span>${t("pluginsPage.connectorMcpNote")}</span>`
             : html`<span>${t("pluginsPage.connectorClawHubNote")}</span>`}
         </div>
@@ -1053,7 +1008,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
   const pkg = item.package;
   const installed = findInstalledSearchPlugin(item, props.result?.plugins ?? []);
   const key = clawHubRowKey(pkg.name);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   const artSlug = pkg.runtimeId ?? pkg.name;
   return html`
     <article
@@ -1239,7 +1194,7 @@ function renderDetailOverlay(props: PluginsViewProps) {
     return nothing;
   }
   const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   return html`
     <div
       class="plugins-detail-backdrop"
@@ -1366,7 +1321,6 @@ function renderActivePanel(props: PluginsViewProps) {
 }
 
 export function renderPlugins(props: PluginsViewProps) {
-  const installedCount = props.result?.plugins.filter((plugin) => plugin.installed).length ?? 0;
   const canShowCatalog = Boolean(props.result);
   return html`
     <section class="plugins-workspace" aria-label=${t("tabs.plugins")}>
@@ -1403,29 +1357,6 @@ export function renderPlugins(props: PluginsViewProps) {
             <span>${props.mutationBlockedReason}</span>
           </div>`
         : nothing}
-
-      <div class="plugins-tabs" role="tablist" aria-label=${t("pluginsPage.tablistLabel")}>
-        ${PLUGIN_TABS.map((tab) => {
-          const selected = props.activeTab === tab;
-          const count = tab === "installed" ? installedCount : null;
-          return html`
-            <button
-              id=${`plugins-tab-${tab}`}
-              type="button"
-              role="tab"
-              aria-selected=${selected ? "true" : "false"}
-              aria-controls="plugins-tabpanel"
-              .tabIndex=${selected ? 0 : -1}
-              class=${selected ? "active" : ""}
-              @click=${() => props.onTabChange(tab)}
-              @keydown=${(event: KeyboardEvent) => handleTabKeydown(event, tab, props.onTabChange)}
-            >
-              ${tabLabel(tab)} ${count === null ? nothing : html`<span>${count}</span>`}
-            </button>
-          `;
-        })}
-      </div>
-
       ${props.error
         ? html`<div class="plugins-page-error" role="alert">
             <span>${props.error}</span>
@@ -1445,7 +1376,7 @@ export function renderPlugins(props: PluginsViewProps) {
         : nothing}
 
       <div
-        id="plugins-tabpanel"
+        id="plugins-hub-panel"
         class="plugins-panel"
         role="tabpanel"
         aria-labelledby=${`plugins-tab-${props.activeTab}`}

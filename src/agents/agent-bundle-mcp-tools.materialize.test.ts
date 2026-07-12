@@ -1,7 +1,7 @@
 /** Tests materializing MCP catalog tools into agent tool definitions and results. */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   buildBundleMcpToolsFromCatalog,
@@ -11,6 +11,19 @@ import {
 import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
 import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
+
+const mcpAppMocks = vi.hoisted(() => ({ fetchMcpAppView: vi.fn() }));
+
+vi.mock("./mcp-ui-resource.js", () => ({
+  fetchMcpAppView: mcpAppMocks.fetchMcpAppView,
+  buildMcpAppCanvasPayload: (view: { viewId: string; title: string }) => ({
+    kind: "canvas",
+    view: { id: view.viewId, title: view.title },
+    presentation: { target: "assistant_message", sandbox: "scripts" },
+    mcpApp: { viewId: view.viewId },
+  }),
+}));
 
 function expectTextContentBlock(block: unknown, text: string) {
   const content = block as { type?: string; text?: string } | undefined;
@@ -84,6 +97,89 @@ function makeToolRuntime(
 }
 
 describe("createBundleMcpToolRuntime", () => {
+  beforeEach(() => {
+    mcpAppMocks.fetchMcpAppView.mockReset();
+  });
+
+  it("keeps app-only MCP tools out of the model tool catalog", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        tools: [
+          {
+            serverName: "demo",
+            safeServerName: "demo",
+            toolName: "model_tool",
+            inputSchema: { type: "object" },
+            fallbackDescription: "model",
+            uiVisibility: ["model"],
+          },
+          {
+            serverName: "demo",
+            safeServerName: "demo",
+            toolName: "app_tool",
+            inputSchema: { type: "object" },
+            fallbackDescription: "app",
+            uiVisibility: ["app"],
+          },
+          {
+            serverName: "demo",
+            safeServerName: "demo",
+            toolName: "hidden_tool",
+            inputSchema: { type: "object" },
+            fallbackDescription: "hidden",
+            uiVisibility: [],
+          },
+        ],
+      }),
+    });
+
+    expect(runtime.tools.map((tool) => tool.name)).toEqual(["demo__model_tool"]);
+    expect(runtime.appTools?.map((tool) => tool.name)).toEqual([
+      "demo__app_tool",
+      "demo__hidden_tool",
+      "demo__model_tool",
+    ]);
+    expect(
+      applyEmbeddedAttemptToolsAllow(runtime.appTools ?? [], ["demo__model_tool"], {
+        toolMeta: (tool) => getPluginToolMeta(tool),
+      }).map((tool) => tool.name),
+    ).toEqual(["demo__model_tool"]);
+  });
+
+  it("attaches app previews without converting typed image results to text", async () => {
+    mcpAppMocks.fetchMcpAppView.mockResolvedValue({
+      viewId: "cv_app",
+      title: "Demo UI",
+    });
+    const tool: McpCatalogTool = {
+      serverName: "demo",
+      safeServerName: "demo",
+      toolName: "show",
+      inputSchema: { type: "object" },
+      fallbackDescription: "show",
+      uiResourceUri: "ui://demo/app",
+    };
+    const sessionRuntime = makeToolRuntime({
+      tools: [tool],
+      serverName: "demo",
+      result: {
+        content: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+      },
+    });
+    sessionRuntime.mcpAppsEnabled = true;
+    const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
+    materialized.restrictAppTools?.(materialized.tools);
+
+    const result = await materialized.tools[0].execute("call-1", {}, undefined, undefined);
+    expect(result.content).toEqual([{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]);
+    expect(result.details).toMatchObject({
+      mcpAppPreview: { mcpApp: { viewId: "cv_app" } },
+    });
+    expect(mcpAppMocks.fetchMcpAppView).toHaveBeenCalledWith(
+      expect.objectContaining({ allowedAppToolNames: new Set(["show"]) }),
+    );
+  });
+
   it("materializes bundle MCP tools and executes them", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: makeToolRuntime(),
@@ -229,6 +325,31 @@ describe("createBundleMcpToolRuntime", () => {
     });
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
+  });
+
+  it("reuses one-shot reserved names for App-only policy projections", async () => {
+    function* reservedToolNames() {
+      yield "demo__app_tool";
+    }
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        serverName: "demo",
+        tools: [
+          {
+            serverName: "demo",
+            safeServerName: "demo",
+            toolName: "app_tool",
+            inputSchema: { type: "object" },
+            fallbackDescription: "app",
+            uiVisibility: ["app"],
+          },
+        ],
+      }),
+      reservedToolNames: reservedToolNames(),
+    });
+
+    expect(runtime.tools).toEqual([]);
+    expect(runtime.appTools?.map((tool) => tool.name)).toEqual(["demo__app_tool-2"]);
   });
 
   it("preserves catalog diagnostics when MCP servers fail tool listing", async () => {
