@@ -18,7 +18,10 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
+import {
+  createSubagentRegistryLifecycleController,
+  maskRunId,
+} from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-manager.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -3404,5 +3407,35 @@ describe("subagent registry lifecycle hardening", () => {
     expect(runSubagentAnnounceFlow.mock.calls[0]?.[0]).toMatchObject({
       outcome: { status: "timeout" },
     });
+  });
+});
+
+describe("maskRunId", () => {
+  it.each([
+    ["run-1234567890", "run-…7890"],
+    ["short", "***"],
+    ["", "unknown"],
+    ["  spaced  ", "***"],
+  ])("masks ASCII run ID %p", (runId, expected) => {
+    expect(maskRunId(runId)).toBe(expected);
+  });
+
+  it("does not split UTF-16 surrogate pairs at mask boundaries", () => {
+    // Head boundary lands inside a surrogate pair.
+    const headSplit = "abc😀" + "x".repeat(10);
+    expect(maskRunId(headSplit)).toBe("abc…xxxx");
+
+    // Tail boundary lands inside a surrogate pair.
+    const tailSplit = "x".repeat(10) + "😀abc";
+    expect(maskRunId(tailSplit)).toBe("xxxx…abc");
+
+    // Short value gets fully masked.
+    expect(maskRunId("a😀b")).toBe("***");
+
+    // No isolated surrogates are emitted anywhere.
+    const all = [headSplit, tailSplit, "a😀b"].map(maskRunId).join("");
+    expect(() => encodeURIComponent(all)).not.toThrow();
+    expect(all).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(all).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
   });
 });
