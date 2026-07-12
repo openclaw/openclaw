@@ -95,32 +95,99 @@ function timestampForStatus(
   };
 }
 
-function updateWakeOutcome(params: {
+function finalizeAttemptAndWakeOutcome(params: {
   store: DurableRuntimeStore;
   wake: DurableWake;
+  deliveryAttemptId: string;
   status: DurableWakeDeliveryAttemptStatus;
+  expectedClaimedBy?: string;
+  evidence?: Record<string, unknown>;
   error?: string;
+  attemptedAt: number;
+  metadata: Record<string, unknown>;
   now: number;
-}): void {
+}): DurableWakeDeliveryAttempt | undefined {
   if (params.status === "delivered") {
-    params.store.updateDurableWake({
-      wakeId: params.wake.wakeId,
+    return params.store.finalizeWakeDeliveryAttempt({
+      deliveryAttemptId: params.deliveryAttemptId,
       status: "delivered",
-      attemptCount: params.wake.attemptCount + 1,
-      lastAttemptAt: params.now,
+      ...(params.expectedClaimedBy ? { expectedClaimedBy: params.expectedClaimedBy } : {}),
+      ...(params.evidence ? { evidence: params.evidence } : {}),
+      attemptedAt: params.attemptedAt,
+      deliveredAt: params.now,
+      metadata: params.metadata,
+      wakeStatus: "delivered",
+      wakeAttemptCount: params.wake.attemptCount + 1,
+      wakeLastAttemptAt: params.now,
       now: params.now,
     });
   }
   if (params.status === "failed") {
-    params.store.updateDurableWake({
-      wakeId: params.wake.wakeId,
+    return params.store.finalizeWakeDeliveryAttempt({
+      deliveryAttemptId: params.deliveryAttemptId,
       status: "failed",
-      attemptCount: params.wake.attemptCount + 1,
-      lastAttemptAt: params.now,
-      failedReason: params.error ?? "delivery_failed",
+      ...(params.expectedClaimedBy ? { expectedClaimedBy: params.expectedClaimedBy } : {}),
+      ...(params.evidence ? { evidence: params.evidence } : {}),
+      ...(params.error ? { error: params.error } : {}),
+      attemptedAt: params.attemptedAt,
+      failedAt: params.now,
+      metadata: params.metadata,
+      wakeStatus: "failed",
+      wakeAttemptCount: params.wake.attemptCount + 1,
+      wakeLastAttemptAt: params.now,
+      wakeFailedReason: params.error ?? "delivery_failed",
       now: params.now,
     });
   }
+  return undefined;
+}
+
+function repairWakeOutcomeForTerminalAttempt(params: {
+  store: DurableRuntimeStore;
+  wake: DurableWake;
+  attempt: DurableWakeDeliveryAttempt;
+  now: number;
+}): DurableWakeDeliveryAttempt {
+  const outcomeAt =
+    params.attempt.deliveredAt ??
+    params.attempt.failedAt ??
+    params.attempt.attemptedAt ??
+    params.now;
+  if (params.attempt.status === "delivered") {
+    return (
+      params.store.finalizeWakeDeliveryAttempt({
+        deliveryAttemptId: params.attempt.deliveryAttemptId,
+        status: "delivered",
+        ...(params.attempt.evidence ? { evidence: params.attempt.evidence } : {}),
+        ...(params.attempt.attemptedAt ? { attemptedAt: params.attempt.attemptedAt } : {}),
+        ...(params.attempt.deliveredAt ? { deliveredAt: params.attempt.deliveredAt } : {}),
+        ...(params.attempt.metadata ? { metadata: params.attempt.metadata } : {}),
+        wakeStatus: "delivered",
+        wakeAttemptCount: params.wake.attemptCount + 1,
+        wakeLastAttemptAt: outcomeAt,
+        now: params.now,
+      }) ?? params.attempt
+    );
+  }
+  if (params.attempt.status === "failed") {
+    return (
+      params.store.finalizeWakeDeliveryAttempt({
+        deliveryAttemptId: params.attempt.deliveryAttemptId,
+        status: "failed",
+        ...(params.attempt.evidence ? { evidence: params.attempt.evidence } : {}),
+        ...(params.attempt.error ? { error: params.attempt.error } : {}),
+        ...(params.attempt.attemptedAt ? { attemptedAt: params.attempt.attemptedAt } : {}),
+        ...(params.attempt.failedAt ? { failedAt: params.attempt.failedAt } : {}),
+        ...(params.attempt.metadata ? { metadata: params.attempt.metadata } : {}),
+        wakeStatus: "failed",
+        wakeAttemptCount: params.wake.attemptCount + 1,
+        wakeLastAttemptAt: outcomeAt,
+        wakeFailedReason: params.attempt.error ?? "delivery_failed",
+        now: params.now,
+      }) ?? params.attempt
+    );
+  }
+  return params.attempt;
 }
 
 /**
@@ -211,35 +278,48 @@ async function applyDeliveryHook(params: {
       attempt: claimed,
     });
     const outcomeAt = params.now ?? Date.now();
+    const metadata = {
+      deliveryContract: "durable_wake_delivery_replay_v1",
+      replayPassId: params.replayPassId,
+    };
     const attempt =
-      params.store.updateWakeDeliveryAttempt({
-        deliveryAttemptId: claimed.deliveryAttemptId,
-        status: hookResult.status,
-        expectedClaimedBy: params.replayPassId,
-        ...(hookResult.evidence ? { evidence: hookResult.evidence } : {}),
-        ...(hookResult.error ? { error: hookResult.error } : {}),
-        ...timestampForStatus(hookResult.status, outcomeAt),
-        metadata: {
-          deliveryContract: "durable_wake_delivery_replay_v1",
-          replayPassId: params.replayPassId,
-        },
-        now: outcomeAt,
-      }) ?? params.store.getWakeDeliveryAttempt(claimed.deliveryAttemptId) ?? claimed;
-    if (attempt.status === hookResult.status && attempt.replayPassId === params.replayPassId) {
-      updateWakeOutcome({
-        store: params.store,
-        wake: params.wake,
-        status: hookResult.status,
-        ...(hookResult.error ? { error: hookResult.error } : {}),
-        now: outcomeAt,
-      });
-    }
+      (hookResult.status === "delivered" || hookResult.status === "failed"
+        ? finalizeAttemptAndWakeOutcome({
+            store: params.store,
+            wake: params.wake,
+            deliveryAttemptId: claimed.deliveryAttemptId,
+            status: hookResult.status,
+            expectedClaimedBy: params.replayPassId,
+            ...(hookResult.evidence ? { evidence: hookResult.evidence } : {}),
+            ...(hookResult.error ? { error: hookResult.error } : {}),
+            attemptedAt: outcomeAt,
+            metadata,
+            now: outcomeAt,
+          })
+        : params.store.updateWakeDeliveryAttempt({
+            deliveryAttemptId: claimed.deliveryAttemptId,
+            status: hookResult.status,
+            expectedClaimedBy: params.replayPassId,
+            ...(hookResult.evidence ? { evidence: hookResult.evidence } : {}),
+            ...(hookResult.error ? { error: hookResult.error } : {}),
+            ...timestampForStatus(hookResult.status, outcomeAt),
+            metadata,
+            now: outcomeAt,
+          })) ??
+      params.store.getWakeDeliveryAttempt(claimed.deliveryAttemptId) ??
+      claimed;
     return attempt;
   } catch (err) {
     const failedAt = params.now ?? Date.now();
     const error = err instanceof Error ? err.message : String(err);
+    const metadata = {
+      deliveryContract: "durable_wake_delivery_replay_v1",
+      replayPassId: params.replayPassId,
+    };
     const attempt =
-      params.store.updateWakeDeliveryAttempt({
+      finalizeAttemptAndWakeOutcome({
+        store: params.store,
+        wake: params.wake,
         deliveryAttemptId: claimed.deliveryAttemptId,
         status: "failed",
         expectedClaimedBy: params.replayPassId,
@@ -248,22 +328,11 @@ async function applyDeliveryHook(params: {
         },
         error,
         attemptedAt: failedAt,
-        failedAt,
-        metadata: {
-          deliveryContract: "durable_wake_delivery_replay_v1",
-          replayPassId: params.replayPassId,
-        },
+        metadata,
         now: failedAt,
-      }) ?? params.store.getWakeDeliveryAttempt(claimed.deliveryAttemptId) ?? claimed;
-    if (attempt.status === "failed" && attempt.replayPassId === params.replayPassId) {
-      updateWakeOutcome({
-        store: params.store,
-        wake: params.wake,
-        status: "failed",
-        error,
-        now: failedAt,
-      });
-    }
+      }) ??
+      params.store.getWakeDeliveryAttempt(claimed.deliveryAttemptId) ??
+      claimed;
     return attempt;
   } finally {
     stopClaimRenewal();
@@ -306,8 +375,14 @@ export async function replayDurableWakeDeliveryAttempts(params: {
       limit: 1,
     })[0];
     if (existing && !isReclaimableAttempt(existing)) {
+      const repaired = repairWakeOutcomeForTerminalAttempt({
+        store: params.store,
+        wake,
+        attempt: existing,
+        now,
+      });
       result.deduped += 1;
-      result.attempts.push(existing);
+      result.attempts.push(repaired);
       continue;
     }
 

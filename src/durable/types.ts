@@ -673,6 +673,13 @@ export type UpdateDurableWakeDeliveryAttemptInput = {
   now?: number;
 };
 
+export type FinalizeDurableWakeDeliveryAttemptInput = UpdateDurableWakeDeliveryAttemptInput & {
+  wakeStatus: Extract<DurableWakeStatus, "delivered" | "failed">;
+  wakeAttemptCount?: number;
+  wakeLastAttemptAt?: number | null;
+  wakeFailedReason?: string | null;
+};
+
 export type ClaimDurableWakeDeliveryAttemptInput = {
   deliveryAttemptId: string;
   replayPassId: string;
@@ -830,6 +837,9 @@ export type DurableRuntimeStore = {
   ): DurableWakeDeliveryAttempt | undefined;
   updateWakeDeliveryAttempt(
     input: UpdateDurableWakeDeliveryAttemptInput,
+  ): DurableWakeDeliveryAttempt | undefined;
+  finalizeWakeDeliveryAttempt(
+    input: FinalizeDurableWakeDeliveryAttemptInput,
   ): DurableWakeDeliveryAttempt | undefined;
   getWakeDeliveryAttempt(deliveryAttemptId: string): DurableWakeDeliveryAttempt | undefined;
   listWakeDeliveryAttempts(options?: {

@@ -67,6 +67,7 @@ import type {
   DurableUnresolvedObligation,
   DurableWakeDeliveryAttempt,
   DurableWakeDeliveryAttemptStatus,
+  FinalizeDurableWakeDeliveryAttemptInput,
   UpdateDurableRuntimeRunInput,
   UpdateDurableRuntimeLinkInput,
   RecordDurableContinuationCleanupInput,
@@ -1066,6 +1067,116 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       if (affected !== 1) {
         return undefined;
       }
+      const row = queryFirst<DurableWakeDeliveryAttemptRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_wake_delivery_attempts")
+          .selectAll()
+          .where("delivery_attempt_id", "=", input.deliveryAttemptId),
+      );
+      return rowToWakeDeliveryAttempt(row!);
+    });
+  };
+
+  const finalizeWakeDeliveryAttemptRecord = (
+    input: FinalizeDurableWakeDeliveryAttemptInput,
+  ): DurableWakeDeliveryAttempt | undefined => {
+    const now = input.now ?? Date.now();
+    return runSqliteImmediateTransactionSync(db, () => {
+      const current = queryFirst<DurableWakeDeliveryAttemptRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_wake_delivery_attempts")
+          .selectAll()
+          .where("delivery_attempt_id", "=", input.deliveryAttemptId),
+      );
+      if (!current) {
+        return undefined;
+      }
+      if (input.status !== input.wakeStatus) {
+        return undefined;
+      }
+      const wake = queryFirst<DurableParentWakeRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_parent_wakes")
+          .selectAll()
+          .where("wake_id", "=", current.wake_id),
+      );
+      if (!wake) {
+        return undefined;
+      }
+      const nextWakeAttemptCount = input.wakeAttemptCount ?? wake.attempt_count;
+      const nextWakeLastAttemptAt =
+        input.wakeLastAttemptAt === undefined ? wake.last_attempt_at : input.wakeLastAttemptAt;
+      const nextWakeFailedReason =
+        input.wakeFailedReason === undefined
+          ? wake.failed_reason
+          : optionalText(input.wakeFailedReason ?? undefined);
+      if (isTerminalWakeStatus(wake.status)) {
+        const isNoOp =
+          input.wakeStatus === wake.status &&
+          isSameSqlValue(nextWakeAttemptCount, wake.attempt_count) &&
+          isSameSqlValue(nextWakeLastAttemptAt, wake.last_attempt_at) &&
+          isSameSqlValue(nextWakeFailedReason, wake.failed_reason);
+        if (!isNoOp) {
+          return undefined;
+        }
+      } else if (!isAllowedWakeStatusTransition(wake.status, input.wakeStatus)) {
+        return undefined;
+      }
+
+      const nextEvidenceJson =
+        input.evidence === undefined ? current.evidence_json : serializeJson(input.evidence);
+      const nextError =
+        input.error === undefined ? current.error_message : optionalText(input.error ?? undefined);
+      const nextAttemptedAt =
+        input.attemptedAt === undefined ? current.attempted_at : input.attemptedAt;
+      const nextDeliveredAt =
+        input.deliveredAt === undefined ? current.delivered_at : input.deliveredAt;
+      const nextFailedAt = input.failedAt === undefined ? current.failed_at : input.failedAt;
+      const nextUnknownAt = input.unknownAt === undefined ? current.unknown_at : input.unknownAt;
+      const nextMetadataJson =
+        input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata);
+      const expectedClaimedBy = optionalText(input.expectedClaimedBy);
+      const affected = executeQuery(
+        db,
+        durableDb
+          .updateTable("durable_runtime_wake_delivery_attempts")
+          .set({
+            status: input.status,
+            evidence_json: nextEvidenceJson,
+            error_message: nextError,
+            attempted_at: nextAttemptedAt == null ? null : Number(nextAttemptedAt),
+            delivered_at: nextDeliveredAt == null ? null : Number(nextDeliveredAt),
+            failed_at: nextFailedAt == null ? null : Number(nextFailedAt),
+            unknown_at: nextUnknownAt == null ? null : Number(nextUnknownAt),
+            delivery_claimed_by: null,
+            delivery_claim_expires_at: null,
+            updated_at: now,
+            metadata_json: nextMetadataJson,
+          })
+          .where("delivery_attempt_id", "=", input.deliveryAttemptId)
+          .$if(Boolean(expectedClaimedBy), (qb) =>
+            qb.where("delivery_claimed_by", "=", expectedClaimedBy!),
+          ),
+      );
+      if (affected !== 1) {
+        return undefined;
+      }
+      executeQuery(
+        db,
+        durableDb
+          .updateTable("durable_runtime_parent_wakes")
+          .set({
+            status: input.wakeStatus,
+            attempt_count: Number(nextWakeAttemptCount),
+            last_attempt_at: nextWakeLastAttemptAt == null ? null : Number(nextWakeLastAttemptAt),
+            failed_reason: nextWakeFailedReason,
+            updated_at: now,
+          })
+          .where("wake_id", "=", current.wake_id),
+      );
       const row = queryFirst<DurableWakeDeliveryAttemptRow>(
         db,
         durableDb
@@ -2529,6 +2640,12 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       input: UpdateDurableWakeDeliveryAttemptInput,
     ): DurableWakeDeliveryAttempt | undefined {
       return updateWakeDeliveryAttemptRecord(input);
+    },
+
+    finalizeWakeDeliveryAttempt(
+      input: FinalizeDurableWakeDeliveryAttemptInput,
+    ): DurableWakeDeliveryAttempt | undefined {
+      return finalizeWakeDeliveryAttemptRecord(input);
     },
 
     getWakeDeliveryAttempt(deliveryAttemptId: string): DurableWakeDeliveryAttempt | undefined {

@@ -548,6 +548,137 @@ describe("durable runtime sqlite store", () => {
     }
   });
 
+  it("finalizes wake delivery attempts and parent wake outcomes atomically", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const store = openDurableRuntimeSqliteStore({
+      path: path.join(dir, "openclaw.sqlite"),
+    });
+    try {
+      const deliveredWake = store.createParentWake({
+        parentSessionKey: "agent:atomic-delivered",
+        reason: "child_terminal",
+        dedupeKey: "wake:atomic-delivered",
+        now: 100,
+      });
+      const deliveredAttempt = store.recordWakeDeliveryAttempt({
+        wakeId: deliveredWake.wakeId,
+        dedupeKey: "wake-delivery:atomic-delivered",
+        replayPassId: "pass:schedule",
+        routeKind: "channel_route",
+        routeRef: "discord:thread:atomic-delivered",
+        now: 110,
+      });
+      expect(
+        store.claimWakeDeliveryAttempt({
+          deliveryAttemptId: deliveredAttempt.deliveryAttemptId,
+          replayPassId: "pass:deliver",
+          claimTtlMs: 1_000,
+          now: 120,
+        }),
+      ).toMatchObject({
+        status: "attempted",
+        deliveryClaimedBy: "pass:deliver",
+      });
+
+      expect(
+        store.finalizeWakeDeliveryAttempt({
+          deliveryAttemptId: deliveredAttempt.deliveryAttemptId,
+          status: "delivered",
+          expectedClaimedBy: "pass:deliver",
+          evidence: { kind: "atomic_delivered" },
+          attemptedAt: 130,
+          deliveredAt: 130,
+          wakeStatus: "delivered",
+          wakeAttemptCount: 2,
+          wakeLastAttemptAt: 130,
+          now: 130,
+        }),
+      ).toMatchObject({
+        status: "delivered",
+        deliveredAt: 130,
+        evidence: { kind: "atomic_delivered" },
+      });
+      expect(store.getParentWake(deliveredWake.wakeId)).toMatchObject({
+        status: "delivered",
+        attemptCount: 2,
+        lastAttemptAt: 130,
+      });
+
+      const ackedWake = store.createParentWake({
+        parentSessionKey: "agent:atomic-abort",
+        reason: "child_terminal",
+        dedupeKey: "wake:atomic-abort",
+        now: 200,
+      });
+      const abortAttempt = store.recordWakeDeliveryAttempt({
+        wakeId: ackedWake.wakeId,
+        dedupeKey: "wake-delivery:atomic-abort",
+        replayPassId: "pass:schedule-abort",
+        routeKind: "channel_route",
+        routeRef: "discord:thread:atomic-abort",
+        now: 210,
+      });
+      expect(
+        store.claimWakeDeliveryAttempt({
+          deliveryAttemptId: abortAttempt.deliveryAttemptId,
+          replayPassId: "pass:abort",
+          claimTtlMs: 1_000,
+          now: 220,
+        }),
+      ).toMatchObject({ status: "attempted" });
+      expect(
+        store.updateParentWake({
+          wakeId: ackedWake.wakeId,
+          status: "delivered",
+          attemptCount: 1,
+          lastAttemptAt: 230,
+          now: 230,
+        }),
+      ).toMatchObject({ status: "delivered" });
+      expect(
+        store.updateParentWake({
+          wakeId: ackedWake.wakeId,
+          status: "acked",
+          ackedAt: 240,
+          now: 240,
+        }),
+      ).toMatchObject({ status: "acked" });
+
+      expect(
+        store.finalizeWakeDeliveryAttempt({
+          deliveryAttemptId: abortAttempt.deliveryAttemptId,
+          status: "failed",
+          expectedClaimedBy: "pass:abort",
+          evidence: { kind: "should_not_commit" },
+          error: "parent already acked",
+          attemptedAt: 250,
+          failedAt: 250,
+          wakeStatus: "failed",
+          wakeAttemptCount: 2,
+          wakeLastAttemptAt: 250,
+          wakeFailedReason: "parent already acked",
+          now: 250,
+        }),
+      ).toBeUndefined();
+      expect(store.getWakeDeliveryAttempt(abortAttempt.deliveryAttemptId)).toMatchObject({
+        status: "attempted",
+        deliveryClaimedBy: "pass:abort",
+      });
+      expect(store.getWakeDeliveryAttempt(abortAttempt.deliveryAttemptId)).not.toHaveProperty(
+        "failedAt",
+      );
+      expect(store.getParentWake(ackedWake.wakeId)).toMatchObject({
+        status: "acked",
+        attemptCount: 1,
+        lastAttemptAt: 230,
+        ackedAt: 240,
+      });
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("lists parent wakes by parent session key with an independent limit binding", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
     const store = openDurableRuntimeSqliteStore({
