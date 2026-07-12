@@ -636,15 +636,23 @@ function readLimit(value: unknown, fallback: number, max: number): number {
   return value as number;
 }
 
+function readRequiredCursor(value: unknown, message: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > MAX_CURSOR_LENGTH ||
+    value !== value.trim()
+  ) {
+    throw new ClaudeCatalogParamsError(message);
+  }
+  return value;
+}
+
 function readOptionalCursor(value: unknown, label: string): string | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const cursor = optionalString(value, MAX_CURSOR_LENGTH);
-  if (!cursor) {
-    throw new ClaudeCatalogParamsError(`${label} cursor is invalid`);
-  }
-  return cursor;
+  return readRequiredCursor(value, `${label} cursor is invalid`);
 }
 
 function readListParams(value: unknown): {
@@ -962,11 +970,7 @@ function parseGatewayQuery(value: unknown): {
     }
     cursors = Object.fromEntries(
       Object.entries(value.cursors).map(([hostId, cursor]) => {
-        const normalized = optionalString(cursor, MAX_CURSOR_LENGTH);
-        if (!normalized) {
-          throw new ClaudeCatalogParamsError(`cursor for ${hostId} is invalid`);
-        }
-        return [hostId, normalized];
+        return [hostId, readRequiredCursor(cursor, `cursor for ${hostId} is invalid`)];
       }),
     );
   }

@@ -864,6 +864,19 @@ describe("Claude session catalog", () => {
       }),
     ]);
     expect(first.nextCursor).toEqual(expect.any(String));
+    await expect(
+      listLocalClaudeSessionPage({ limit: 1, cursor: ` ${first.nextCursor} ` }, home),
+    ).rejects.toThrow("catalog cursor is invalid");
+    const runtime = { nodes: { list: vi.fn() } } as unknown as PluginRuntime;
+    await expect(
+      listClaudeSessionCatalog({
+        runtime,
+        query: {
+          hostIds: ["gateway:local"],
+          cursors: { "gateway:local": ` ${first.nextCursor} ` },
+        },
+      }),
+    ).rejects.toThrow("cursor for gateway:local is invalid");
 
     const second = await listLocalClaudeSessionPage({ limit: 1, cursor: first.nextCursor }, home);
     expect(second.sessions).toEqual([
@@ -1109,6 +1122,12 @@ describe("Claude session catalog", () => {
     );
     expect(older.items.map((item) => item.text)).toEqual(["old assistant", oldUser]);
     expect(older.nextCursor).toBeUndefined();
+    await expect(
+      readLocalClaudeTranscriptPage(
+        { threadId: sessionId, limit: 1, cursor: ` ${latest.nextCursor} ` },
+        home,
+      ),
+    ).rejects.toThrow("transcript cursor is invalid");
     await expect(
       readLocalClaudeTranscriptPage({ threadId: sessionId, cursor: " ", limit: 1 }, home),
     ).rejects.toThrow("transcript cursor is invalid");
