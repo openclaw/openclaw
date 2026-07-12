@@ -489,10 +489,11 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
             speaking: self.talkSpeaking)
         self.talkStatusText = talkStatusText ?? Self.legacyText(for: self.talkStatus)
         let chatStatusText = try container.decodeIfPresent(String.self, forKey: .chatStatusText)
+        let chatStatusCode = try container.decodeIfPresent(String.self, forKey: .chatStatusCode)
         self.chatStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
             forKey: .chatStatus)) ?? Self.decodeLegacyChatStatus(
-            code: container.decodeIfPresent(String.self, forKey: .chatStatusCode),
+            code: chatStatusCode,
             text: chatStatusText)
         self.chatStatusText = chatStatusText ?? self.chatStatus.map(Self.legacyText)
     }
