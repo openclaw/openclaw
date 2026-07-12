@@ -39,7 +39,7 @@ restart. "External plugin" channels are maintained outside the OpenClaw repo.
 - [Voice Call](/plugins/voice-call) - Telephony via Plivo, Telnyx, or Twilio (official plugin).
 - [WebChat](/web/webchat) - Included in core. Gateway WebChat UI over WebSocket.
 - [WeChat](/channels/wechat) - Tencent iLink bot via QR login; private chats only (external plugin).
-- [WhatsApp](/channels/whatsapp) - Most popular; uses Baileys and requires QR pairing (official plugin).
+- [WhatsApp](/channels/whatsapp) - Most popular; uses Baileys with QR or phone-code pairing (official plugin).
 - [Yuanbao](/channels/yuanbao) - Tencent Yuanbao bot (external plugin).
 - [Zalo](/channels/zalo) - Zalo Bot API; Vietnam's popular messenger (official plugin).
 - [Zalo ClawBot](/channels/zaloclawbot) - Personal Zalo assistant via QR login; owner-bound (external plugin).
@@ -65,7 +65,7 @@ restart. "External plugin" channels are maintained outside the OpenClaw repo.
 
 - Channels can run simultaneously; configure multiple and OpenClaw will route per chat.
 - Fastest setup is usually **Telegram** (simple bot token, no plugin install). WhatsApp
-  requires QR pairing and stores more state on disk.
+  pairing stores more state on disk.
 - Group behavior varies by channel; see [Groups](/channels/groups).
 - DM pairing and allowlists are enforced for safety; see [Security](/gateway/security).
 - Troubleshooting: [Channel troubleshooting](/channels/troubleshooting).

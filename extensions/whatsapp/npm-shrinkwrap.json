@@ -10,6 +10,7 @@
       "dependencies": {
         "audio-decode": "2.2.3",
         "baileys": "7.0.0-rc13",
+        "libphonenumber-js": "1.13.8",
         "typebox": "1.3.3"
       },
       "peerDependencies": {
@@ -528,6 +529,12 @@
       "dependencies": {
         "@keyv/serialize": "^1.1.1"
       }
+    },
+    "node_modules/libphonenumber-js": {
+      "version": "1.13.8",
+      "resolved": "https://registry.npmjs.org/libphonenumber-js/-/libphonenumber-js-1.13.8.tgz",
+      "integrity": "sha512-80xal1m93rADejw2pMp2MSzFhHCPLEspjHxnH2UtqI+DgAmElsbmLMiqk9niwH9NWAfjsRtaJI+qBrOEmRx9nQ==",
+      "license": "MIT"
     },
     "node_modules/libsignal": {
       "version": "6.0.0",

@@ -14,7 +14,7 @@ describeChannelCatalogEntryContract({
 const whatsappMeta = {
   id: "whatsapp",
   label: "WhatsApp",
-  selectionLabel: "WhatsApp (QR link)",
+  selectionLabel: "WhatsApp Web",
   detailLabel: "WhatsApp Web",
   docsPath: "/channels/whatsapp",
   blurb: "works with your own number; recommend a separate phone + eSIM.",

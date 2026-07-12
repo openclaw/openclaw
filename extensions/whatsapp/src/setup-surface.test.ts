@@ -27,10 +27,6 @@ import {
 } from "./setup-test-helpers.js";
 
 const hoisted = vi.hoisted(() => ({
-  detectWhatsAppLinked: vi.fn<(cfg: OpenClawConfig, accountId: string) => Promise<boolean>>(
-    async () => false,
-  ),
-  hasWebCredsSync: vi.fn(() => false),
   loginModuleState: { loaded: false },
   loginWeb: vi.fn(async () => {}),
   pathExists: vi.fn(async () => false),
@@ -47,22 +43,6 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("./login.js", () => {
   hoisted.loginModuleState.loaded = true;
   return { loginWeb: hoisted.loginWeb };
-});
-
-vi.mock("./setup-finalize.js", async () => {
-  const actual = await vi.importActual<typeof import("./setup-finalize.js")>("./setup-finalize.js");
-  return {
-    ...actual,
-    detectWhatsAppLinked: hoisted.detectWhatsAppLinked,
-  };
-});
-
-vi.mock("./creds-files.js", async () => {
-  const actual = await vi.importActual<typeof import("./creds-files.js")>("./creds-files.js");
-  return {
-    ...actual,
-    hasWebCredsSync: hoisted.hasWebCredsSync,
-  };
 });
 
 vi.mock("openclaw/plugin-sdk/setup", async () => {
@@ -154,10 +134,6 @@ async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues
 
 describe("whatsapp setup wizard", () => {
   beforeEach(() => {
-    hoisted.detectWhatsAppLinked.mockReset();
-    hoisted.detectWhatsAppLinked.mockResolvedValue(false);
-    hoisted.hasWebCredsSync.mockReset();
-    hoisted.hasWebCredsSync.mockReturnValue(false);
     hoisted.loginWeb.mockReset().mockImplementation(async (...args: unknown[]) => {
       const loginOptions = args[4] as
         | { beforeCredentialPersistence?: () => Promise<void> }
@@ -421,7 +397,7 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("skips relink note when already linked and relink is declined", async () => {
-    hoisted.hasWebCredsSync.mockReturnValue(true);
+    hoisted.readWebAuthState.mockResolvedValue("linked");
     const harness = createSeparatePhoneHarness({
       selectValues: ["separate", "disabled"],
     });

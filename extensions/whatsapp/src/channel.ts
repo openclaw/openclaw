@@ -199,9 +199,14 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             accountId?.trim() ||
             whatsappPlugin.config.defaultAccountId?.(cfg) ||
             DEFAULT_ACCOUNT_ID;
-          await (
-            await loadWhatsAppChannelRuntime()
-          ).loginWeb(Boolean(verbose), undefined, runtime, resolvedAccountId);
+          const { createClackPrompter } = await import("openclaw/plugin-sdk/setup-runtime");
+          const runtimeApi = await loadWhatsAppChannelRuntime();
+          await runtimeApi.runWhatsAppLogin({
+            accountId: resolvedAccountId,
+            prompter: createClackPrompter(),
+            runtime,
+            verbose: Boolean(verbose),
+          });
         },
       },
       lifecycle: {

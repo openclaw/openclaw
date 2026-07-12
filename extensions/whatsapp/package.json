@@ -10,6 +10,7 @@
   "dependencies": {
     "audio-decode": "2.2.3",
     "baileys": "7.0.0-rc13",
+    "libphonenumber-js": "1.13.8",
     "typebox": "1.3.3"
   },
   "devDependencies": {
@@ -36,7 +37,7 @@
     "channel": {
       "id": "whatsapp",
       "label": "WhatsApp",
-      "selectionLabel": "WhatsApp (QR link)",
+      "selectionLabel": "WhatsApp Web",
       "detailLabel": "WhatsApp Web",
       "docsPath": "/channels/whatsapp",
       "docsLabel": "whatsapp",

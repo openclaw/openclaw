@@ -1787,6 +1787,9 @@ importers:
       baileys:
         specifier: 7.0.0-rc13
         version: 7.0.0-rc13(audio-decode@2.2.3)
+      libphonenumber-js:
+        specifier: 1.13.8
+        version: 1.13.8
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -6005,6 +6008,9 @@ packages:
   kysely@0.29.2:
     resolution: {integrity: sha512-s6WVJyEZrbm6jhBpiKHsGHyePMrVQKJ85wZCFCr9W4QHv6WTjWIrdvTmO9hDEA3bNK0xkrE2DqrHsXMLWuZpQg==}
     engines: {node: '>=22.0.0'}
+
+  libphonenumber-js@1.13.8:
+    resolution: {integrity: sha512-80xal1m93rADejw2pMp2MSzFhHCPLEspjHxnH2UtqI+DgAmElsbmLMiqk9niwH9NWAfjsRtaJI+qBrOEmRx9nQ==}
 
   libopus-wasm@0.2.0:
     resolution: {integrity: sha512-x/2Gu1/C6L3IICY09zyfp984AWiOYjn53u4WfdY3yh+3KTzMN8Xkm77q3lenWMVIk5SnSzjGEkQT+VQMFHLBHQ==}
@@ -12204,6 +12210,8 @@ snapshots:
   klona@2.0.6: {}
 
   kysely@0.29.2: {}
+
+  libphonenumber-js@1.13.8: {}
 
   libopus-wasm@0.2.0: {}
 

@@ -17,6 +17,7 @@ import {
   webAuthExists as webAuthExistsImpl,
 } from "./auth-store.js";
 import { monitorWebChannel as monitorWebChannelImpl } from "./auto-reply/monitor.js";
+import { runWhatsAppLogin as runWhatsAppLoginImpl } from "./login-flow.js";
 import { loginWeb as loginWebImpl } from "./login.js";
 import { whatsappSetupWizard as whatsappSetupWizardImpl } from "./setup-surface.js";
 
@@ -32,6 +33,7 @@ type ReadWebAuthSnapshotBestEffort = typeof import("./auth-store.js").readWebAut
 type ReadWebSelfId = typeof import("./auth-store.js").readWebSelfId;
 type WebAuthExists = typeof import("./auth-store.js").webAuthExists;
 type LoginWeb = typeof import("./login.js").loginWeb;
+type RunWhatsAppLogin = typeof import("./login-flow.js").runWhatsAppLogin;
 type StartWebLoginWithQr = typeof import("../login-qr-runtime.js").startWebLoginWithQr;
 type WaitForWebLogin = typeof import("../login-qr-runtime.js").waitForWebLogin;
 type WhatsAppSetupWizard = typeof import("./setup-surface.js").whatsappSetupWizard;
@@ -95,6 +97,12 @@ export function webAuthExists(...args: Parameters<WebAuthExists>): ReturnType<We
 
 export function loginWeb(...args: Parameters<LoginWeb>): ReturnType<LoginWeb> {
   return loginWebImpl(...args);
+}
+
+export function runWhatsAppLogin(
+  ...args: Parameters<RunWhatsAppLogin>
+): ReturnType<RunWhatsAppLogin> {
+  return runWhatsAppLoginImpl(...args);
 }
 
 export async function startWebLoginWithQr(

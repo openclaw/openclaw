@@ -49,13 +49,15 @@ Use the bare npm package (`@openclaw/whatsapp`) only for the registry fallback; 
 
   </Step>
 
-  <Step title="Link WhatsApp (QR)">
+  <Step title="Link WhatsApp">
 
 ```bash
 openclaw channels login --channel whatsapp
 ```
 
-    Login is QR-only. On remote or headless hosts, have a reliable path to deliver the live QR to the phone before starting login; terminal-rendered QRs, screenshots, or chat attachments can expire in transit.
+    Choose **Scan QR code** to print a QR in the terminal. On remote or headless hosts, have a reliable path to deliver the live QR to the phone before starting login; terminal-rendered QRs, screenshots, or chat attachments can expire in transit.
+
+    If QR scanning is unreliable, choose **Link with phone number**, then enter the account's phone number with country code. OpenClaw prints a pairing code to enter in WhatsApp's Linked Devices flow.
 
     For a specific account:
 
@@ -521,7 +523,7 @@ Notes: `channels.whatsapp.ackReaction` still controls eligibility for direct mes
 ## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title="Not linked (QR required)">
+  <Accordion title="Not linked">
     Symptom: channel status reports not linked.
 
 ```bash

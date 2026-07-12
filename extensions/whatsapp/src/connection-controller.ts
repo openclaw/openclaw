@@ -13,7 +13,7 @@ import {
   createWaSocket,
   formatError,
   getStatusCode,
-  logoutWeb,
+  prepareWebAuthForLogin,
   readWebAuthExistsForDecision,
   waitForWaConnection,
   WhatsAppAuthUnstableError,
@@ -44,6 +44,7 @@ export const WHATSAPP_WATCHDOG_TIMEOUT_ERROR = "watchdog-timeout";
 
 type TimerHandle = ReturnType<typeof setInterval>;
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
+type LoginSocketPrepareReason = "initial" | "post-pairing" | "timeout" | "logged-out";
 
 export type ManagedWhatsAppListener = ActiveWebListener & {
   close?: () => Promise<void>;
@@ -262,6 +263,11 @@ export async function waitForWhatsAppLoginResult(params: {
   createSocket?: typeof createWaSocket;
   socketTiming?: WhatsAppSocketTimingOptions;
   onQr?: (qr: string) => void;
+  beforeCreateLoginSocket?: (context: { reason: LoginSocketPrepareReason }) => Promise<void> | void;
+  prepareLoginSocket?: (
+    sock: WaSocket,
+    context: { reason: LoginSocketPrepareReason },
+  ) => Promise<void>;
   onSocketReplaced?: (sock: WaSocket) => void;
   beforeCredentialPersistence?: () => Promise<void>;
   onCredentialPersistenceError?: (error: unknown) => void;
@@ -276,6 +282,7 @@ export async function waitForWhatsAppLoginResult(params: {
   let postPairingRestarted = false;
   let timeoutRestarted = false;
   let loggedOutRestarted = false;
+  let prepareReason: LoginSocketPrepareReason = "initial";
 
   const replaceLoginSocket = async (
     opts: { closeCurrent?: boolean } = {},
@@ -284,6 +291,7 @@ export async function waitForWhatsAppLoginResult(params: {
       closeWaSocket(currentSock);
     }
     try {
+      await params.beforeCreateLoginSocket?.({ reason: prepareReason });
       currentSock = await createSocket(false, params.verbose, {
         authDir: params.authDir,
         ...params.socketTiming,
@@ -307,7 +315,10 @@ export async function waitForWhatsAppLoginResult(params: {
   while (true) {
     try {
       await waitForLoginSocket({
-        wait: async () => await wait(currentSock, { timeout: "none" }),
+        wait: async () => {
+          await params.prepareLoginSocket?.(currentSock, { reason: prepareReason });
+          await wait(currentSock, { timeout: "none" });
+        },
         credentialPersistenceFailure: params.credentialPersistenceFailure,
       });
       await params.waitForCredentialPersistence?.();
@@ -346,6 +357,7 @@ export async function waitForWhatsAppLoginResult(params: {
         } else {
           timeoutRestarted = true;
         }
+        prepareReason = restartKind;
         params.runtime.log(info(getLoginSocketRestartMessage(restartKind)));
         const replacementFailure = await replaceLoginSocket();
         if (replacementFailure) {
@@ -364,30 +376,29 @@ export async function waitForWhatsAppLoginResult(params: {
           };
         }
         closeWaSocket(currentSock);
-        const cleared = await logoutWeb({
+        const preparation = await prepareWebAuthForLogin({
           authDir: params.authDir,
           isLegacyAuthDir: params.isLegacyAuthDir,
+          mode: "clear-existing",
           runtime: params.runtime,
           beforeCredentialPersistence: params.beforeCredentialPersistence,
         });
-        if (!cleared) {
-          const existingAuth = await readWebAuthExistsForDecision(params.authDir);
-          if (existingAuth.outcome === "unstable") {
-            return {
-              outcome: "failed",
-              message: WHATSAPP_LOGIN_AUTH_UNSTABLE_MESSAGE,
-              error: new WhatsAppAuthUnstableError(WHATSAPP_LOGIN_AUTH_UNSTABLE_MESSAGE),
-            };
-          }
-          if (existingAuth.exists) {
-            return {
-              outcome: "failed",
-              message: WHATSAPP_LOGIN_AUTH_NOT_CLEARED_MESSAGE,
-              error: err,
-            };
-          }
+        if (preparation === "unstable") {
+          return {
+            outcome: "failed",
+            message: WHATSAPP_LOGIN_AUTH_UNSTABLE_MESSAGE,
+            error: new WhatsAppAuthUnstableError(WHATSAPP_LOGIN_AUTH_UNSTABLE_MESSAGE),
+          };
+        }
+        if (preparation === "not-cleared") {
+          return {
+            outcome: "failed",
+            message: WHATSAPP_LOGIN_AUTH_NOT_CLEARED_MESSAGE,
+            error: err,
+          };
         }
         loggedOutRestarted = true;
+        prepareReason = "logged-out";
         const replacementFailure = await replaceLoginSocket({ closeCurrent: false });
         if (replacementFailure) {
           return replacementFailure;

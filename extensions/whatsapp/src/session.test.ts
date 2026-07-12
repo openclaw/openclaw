@@ -156,6 +156,7 @@ function readLastSocketOptions(): {
   printQRInTerminal?: boolean;
   waWebSocketUrl?: string | URL;
   logger?: { level?: string; trace?: unknown };
+  browser?: [string, string, string];
 } {
   const [options] = firstMockCall(
     baileys.makeWASocket as ReturnType<typeof vi.fn>,
@@ -173,6 +174,7 @@ function readLastSocketOptions(): {
     printQRInTerminal?: boolean;
     waWebSocketUrl?: string | URL;
     logger?: { level?: string; trace?: unknown };
+    browser?: [string, string, string];
   };
 }
 
@@ -264,6 +266,7 @@ describe("web session", () => {
     expect(passed.keepAliveIntervalMs).toBe(DEFAULT_WHATSAPP_SOCKET_TIMING.keepAliveIntervalMs);
     expect(passed.connectTimeoutMs).toBe(DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs);
     expect(passed.defaultQueryTimeoutMs).toBe(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
+    expect(passed.browser).toEqual(["openclaw", "Chrome", expect.any(String)]);
     const passedLogger = (passed as { logger?: { level?: string; trace?: unknown } }).logger;
     expect(passedLogger?.level).toBe("silent");
     if (typeof passedLogger?.trace !== "function") {
@@ -765,6 +768,28 @@ describe("web session", () => {
     expect(sock.ws.close).toHaveBeenCalledTimes(1);
   });
 
+  it("reports credential save failures without a persistence authority hook", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-observed-creds");
+    const persistenceError = new Error("simulated credential save failure");
+    const onCredentialPersistenceError = vi.fn();
+    const openMock = mockFsOpenForCredsWrites();
+    const renameSpy = vi.spyOn(fs, "rename").mockRejectedValue(persistenceError);
+
+    try {
+      await createWaSocket(false, false, {
+        authDir,
+        onCredentialPersistenceError,
+      });
+      await emitCredsUpdate(authDir);
+
+      expect(onCredentialPersistenceError).toHaveBeenCalledWith(persistenceError);
+      expect(getLastSocket().ws.close).toHaveBeenCalledTimes(1);
+    } finally {
+      openMock.restore();
+      renameSpy.mockRestore();
+    }
+  });
+
   it("revalidates setup ownership before Baileys persists signal keys", async () => {
     const authDir = createTempAuthDir("openclaw-wa-guarded-keys");
     const guardError = new Error("verified inference route changed");
@@ -796,6 +821,43 @@ describe("web session", () => {
     expect(beforeCredentialPersistence).toHaveBeenCalledTimes(2);
     expect(onCredentialPersistenceError).toHaveBeenCalledWith(guardError);
     expect(onCredentialPersistenceTask).toHaveBeenCalledTimes(1);
+    expect(getLastSocket().ws.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("observes signal persistence without a persistence authority hook", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-observed-keys");
+    const persistenceError = new Error("simulated signal key failure");
+    const onCredentialPersistenceError = vi.fn();
+    const onCredentialPersistenceTask = vi.fn();
+    useMultiFileAuthStateMock.mockResolvedValueOnce({
+      state: {
+        creds: {} as never,
+        keys: {
+          get: vi.fn(async () => ({})),
+          set: vi.fn(async () => {
+            throw persistenceError;
+          }),
+        },
+      } as never,
+      saveCreds: vi.fn(),
+    });
+
+    await createWaSocket(false, false, {
+      authDir,
+      onCredentialPersistenceError,
+      onCredentialPersistenceTask,
+    });
+    const socketOptions = readLastSocketOptions() as ReturnType<typeof readLastSocketOptions> & {
+      auth: { keys: { set: (data: unknown) => Promise<void> } };
+      makeSignalRepository?: unknown;
+    };
+
+    await expect(socketOptions.auth.keys.set({ "pre-key": { test: {} } })).rejects.toBe(
+      persistenceError,
+    );
+    expect(onCredentialPersistenceError).toHaveBeenCalledWith(persistenceError);
+    expect(onCredentialPersistenceTask).toHaveBeenCalledTimes(1);
+    expect(socketOptions.makeSignalRepository).toBeTypeOf("function");
     expect(getLastSocket().ws.close).toHaveBeenCalledTimes(1);
   });
 
