@@ -183,10 +183,46 @@ function branchCreateUrl(context: SessionPullRequestGitContext): string {
 
 const SHORTSTAT_INSERTIONS = /(\d+) insertion/;
 const SHORTSTAT_DELETIONS = /(\d+) deletion/;
+// Matches sessions-diff's untracked scan bound; stats degrade to an
+// undercount past it instead of stalling the request.
+const MAX_UNTRACKED_STAT_FILES = 100;
+
+async function untrackedAdditions(root: string): Promise<number> {
+  const listing = await gitOutput(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+  if (!listing) {
+    return 0;
+  }
+  const paths = listing.split("\0").filter(Boolean);
+  let additions = 0;
+  // Counts only, never patch content, so the hardlink/symlink content guards
+  // in sessions-diff are unnecessary here; binary files count as 0 lines.
+  for (const filePath of paths.slice(0, MAX_UNTRACKED_STAT_FILES)) {
+    try {
+      const result = await runGit(root, [
+        "diff",
+        "--shortstat",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-index",
+        "--",
+        "/dev/null",
+        filePath,
+      ]);
+      // Exit code 1 is git's "files differ" for --no-index, not a failure.
+      if (result.code === 0 || result.code === 1) {
+        additions += Number(SHORTSTAT_INSERTIONS.exec(result.stdout.trim())?.[1] ?? 0);
+      }
+    } catch {
+      // Unreadable paths just do not count toward the size.
+    }
+  }
+  return additions;
+}
 
 /**
- * Working-tree diff counts vs the merge base with the remote default branch:
- * the size the PR would have if the current work were committed and pushed.
+ * Working-tree diff counts vs the merge base with the remote default branch,
+ * untracked files included: the size the PR would have if the current work
+ * were committed and pushed.
  */
 async function loadBranchDiffStats(
   root: string,
@@ -208,7 +244,8 @@ async function loadBranchDiffStats(
     // Empty output means an empty diff, not a failure.
     const summary = result.stdout.trim();
     return {
-      additions: Number(SHORTSTAT_INSERTIONS.exec(summary)?.[1] ?? 0),
+      additions:
+        Number(SHORTSTAT_INSERTIONS.exec(summary)?.[1] ?? 0) + (await untrackedAdditions(root)),
       deletions: Number(SHORTSTAT_DELETIONS.exec(summary)?.[1] ?? 0),
     };
   } catch {
@@ -216,22 +253,40 @@ async function loadBranchDiffStats(
   }
 }
 
+/**
+ * GitHub's pull/new page only has something to offer once the pushed branch
+ * carries commits the default branch lacks; unpushed or fully-merged remote
+ * branches get "nothing to compare" (or a 404), so the row stays hidden.
+ * Rename-only or zero-line-delta commits still count — visibility keys on
+ * commits, not on line counts.
+ */
+async function branchHasCreatablePullRequest(
+  root: string,
+  context: SessionPullRequestGitContext,
+): Promise<boolean> {
+  const remoteRef = `refs/remotes/origin/${context.branch}`;
+  const pushed = await gitOutput(root, ["rev-parse", "--verify", "--quiet", remoteRef]);
+  if (!pushed) {
+    return false;
+  }
+  if (!context.defaultBranch) {
+    return true;
+  }
+  const ahead = await gitOutput(root, [
+    "rev-list",
+    "--count",
+    `refs/remotes/origin/${context.defaultBranch}..${remoteRef}`,
+  ]);
+  // A failed count keeps the row: rev-list errors must not hide a valid branch.
+  return ahead === null || Number(ahead) > 0;
+}
+
 async function resolveSessionBranch(
   context: SessionPullRequestGitContext,
 ): Promise<ControlUiSessionBranch | undefined> {
-  if (context.root) {
-    // GitHub's pull/new page 404s for branches it has never seen, so the
-    // Create PR row only exists once the branch's remote-tracking ref does
-    // (push from this checkout updates it). Stubbed test contexts skip this.
-    const pushed = await gitOutput(context.root, [
-      "rev-parse",
-      "--verify",
-      "--quiet",
-      `refs/remotes/origin/${context.branch}`,
-    ]);
-    if (!pushed) {
-      return undefined;
-    }
+  // Stubbed test contexts without a root skip the local-git gate.
+  if (context.root && !(await branchHasCreatablePullRequest(context.root, context))) {
+    return undefined;
   }
   const stats =
     context.root && context.defaultBranch

@@ -60,15 +60,12 @@ describe("createPullRequestBranch", () => {
     ).toBeUndefined();
   });
 
-  it("hides the row for a known-empty diff but keeps it for unknown stats", () => {
+  it("does not second-guess diff counts; the gateway owns branch emptiness", () => {
     expect(
       createPullRequestBranch([], sessionBranch({ additions: 0, deletions: 0 })),
-    ).toBeUndefined();
-    expect(
-      createPullRequestBranch([], sessionBranch({ additions: undefined, deletions: undefined })),
     ).toBeDefined();
     expect(
-      createPullRequestBranch([], sessionBranch({ additions: 0, deletions: 1 })),
+      createPullRequestBranch([], sessionBranch({ additions: undefined, deletions: undefined })),
     ).toBeDefined();
     expect(createPullRequestBranch([], undefined)).toBeUndefined();
   });

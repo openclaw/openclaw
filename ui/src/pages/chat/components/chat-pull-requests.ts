@@ -151,9 +151,9 @@ function formatDiffCount(value: number): string {
 }
 
 /**
- * The pre-PR "Create PR" row shows only while it would not invite a duplicate
- * PR: live PRs (even dismissed ones) hide it, and a known-empty diff means
- * there is nothing to open a PR from. Decided on the undismissed PR list.
+ * The pre-PR "Create PR" row must not invite a duplicate PR, so live PRs
+ * (even dismissed ones) hide it — decided on the undismissed PR list. The
+ * gateway already omits branches with nothing to open a PR from.
  */
 export function createPullRequestBranch(
   pullRequests: readonly ControlUiSessionPullRequest[],
@@ -163,9 +163,6 @@ export function createPullRequestBranch(
     return undefined;
   }
   if (pullRequests.some((item) => item.state === "open" || item.state === "draft")) {
-    return undefined;
-  }
-  if (branch.additions === 0 && branch.deletions === 0) {
     return undefined;
   }
   return branch;

@@ -428,6 +428,8 @@ describe("session branch diff stats", () => {
     await git("update-ref", "refs/remotes/origin/feature", "HEAD");
     // Uncommitted work counts too: the row sizes the PR the push would open.
     await fs.appendFile(path.join(root, "b.txt"), "pending\n");
+    // Untracked files count toward additions as well.
+    await fs.writeFile(path.join(root, "c.txt"), "brand new\n");
 
     const fetchImpl = routedFetch([
       { match: "/pulls?head=", response: () => githubJson([]) },
@@ -445,13 +447,13 @@ describe("session branch diff stats", () => {
       owner: "openclaw",
       repo: "openclaw",
       branch: context.branch,
-      additions: 3,
+      additions: 4,
       deletions: 1,
       createUrl: "https://github.com/openclaw/openclaw/pull/new/claude/browser-tabs-tighter-header",
     });
   });
 
-  it("reports a zero diff for a branch with no changes", async () => {
+  it("omits the branch payload when the remote branch has nothing to compare", async () => {
     await git("init", "--initial-branch=main", ".");
     await fs.writeFile(path.join(root, "a.txt"), "one\n");
     await git("add", "a.txt");
@@ -472,7 +474,8 @@ describe("session branch diff stats", () => {
       },
     );
 
-    expect(result.branch).toMatchObject({ additions: 0, deletions: 0 });
+    // origin/feature == origin/main: GitHub would answer "nothing to compare".
+    expect(result.branch).toBeUndefined();
   });
 
   it("omits the branch payload until the branch exists on origin", async () => {
