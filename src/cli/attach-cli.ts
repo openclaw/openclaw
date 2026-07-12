@@ -35,7 +35,10 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
     .command("attach")
     .description("Attach Claude Code to a gateway session with scoped MCP tools")
     .option("--session <key>", "Gateway session key to bind (default: main session)")
-    .option("--ttl <ms>", "Grant TTL in milliseconds (default: gateway policy)")
+    .option(
+      "--ttl <ms>",
+      "Grant TTL in positive base-10 integer milliseconds (default: gateway policy)",
+    )
     .option("--bin <path>", "Claude Code binary to spawn", "claude")
     .option(
       "--print-config",
