@@ -184,6 +184,26 @@ describe("gradium tts diagnostics", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("rejects hostname suffix lookalikes before sending the API key", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(Buffer.from("audio"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      gradiumTTS({
+        text: "hello",
+        apiKey: "gsk_test123",
+        baseUrl: "https://api.gradium.ai.example.com",
+        voiceId: "YTpq7expH9539ERJ",
+        outputFormat: "wav",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Gradium baseUrl must target api.gradium.ai");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
     const streamed = createStreamingAudioResponse({
       chunkCount: 20,
