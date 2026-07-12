@@ -2062,6 +2062,16 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     }
   });
 
+  it("lets upgrade survivor fixture registries resolve transitive public packages", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+
+    for (const script of [runner, publishedRunner]) {
+      expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
+      expect(script).toContain("node scripts/e2e/lib/plugins/npm-registry-server.mjs");
+    }
+  });
+
   it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {
     const paths = [
       CODEX_ON_DEMAND_DOCKER_E2E_PATH,
@@ -3371,7 +3381,9 @@ printf "container output\\n" >"$run_log"
 docker_e2e_sample_stats_until_exit demo sampled-docker-pid "$stats_log" "$run_log" "Docker stats" 08 >"$sampler_log" 2>&1
 output="$(cat "$sampler_log")"
 
-[[ "$output" = *"Docker stats still running (8s elapsed,"* ]]
+[[ "$output" =~ Docker\\ stats\\ still\\ running\\ \\(([0-9]+)s\\ elapsed, ]]
+heartbeat_elapsed="\${BASH_REMATCH[1]}"
+(( heartbeat_elapsed >= 8 ))
 [[ "$output" != *"value too great for base"* ]]
 [[ -s "$stats_log" ]]
 `;
@@ -3869,6 +3881,7 @@ output="$(cat "$sampler_log")"
   it("mounts root helper modules imported by bare Docker E2E scripts", () => {
     const helper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
 
+    expect(helper).toContain("--allow-unreleased-changelog");
     expect(helper).toContain(
       '-v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
     );
@@ -3879,6 +3892,7 @@ output="$(cat "$sampler_log")"
   it("preserves pnpm lookup paths for scheduled Docker child lanes", () => {
     const scheduler = readFileSync(DOCKER_ALL_SCHEDULER_PATH, "utf8");
 
+    expect(scheduler).toContain("--allow-unreleased-changelog");
     expect(scheduler).toContain("env.PNPM_HOME");
     expect(scheduler).toContain("env.npm_execpath ? path.dirname(env.npm_execpath)");
     expect(scheduler).toContain("path.dirname(process.execPath)");

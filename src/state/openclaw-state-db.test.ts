@@ -14,6 +14,8 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForPath,
@@ -440,6 +442,67 @@ describe("openclaw state database", () => {
     });
   });
 
+  it("normalizes obsolete task delivery statuses in existing state databases", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-state-task-delivery-status-" },
+      async ({ stateDir }) => {
+        const database = openOpenClawStateDatabase({
+          env: { OPENCLAW_STATE_DIR: stateDir },
+        });
+        const insert = database.db.prepare(
+          `INSERT INTO task_runs (
+            task_id, runtime, requester_session_key, owner_key, scope_kind, task, status,
+            delivery_status, notify_policy, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        for (const [taskId, deliveryStatus] of [
+          ["obsolete", "not-requested"],
+          ["canonical", "not_applicable"],
+          ["pending", "pending"],
+        ] as const) {
+          insert.run(
+            taskId,
+            "cron",
+            "",
+            `system:cron:${taskId}`,
+            "system",
+            `Task ${taskId}`,
+            "cancelled",
+            deliveryStatus,
+            "silent",
+            100,
+          );
+        }
+        closeOpenClawStateDatabaseForTest();
+
+        const readStatuses = () =>
+          openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })
+            .db.prepare("SELECT task_id, delivery_status FROM task_runs ORDER BY task_id")
+            .all();
+        const expectedStatuses = [
+          { task_id: "canonical", delivery_status: "not_applicable" },
+          { task_id: "obsolete", delivery_status: "not_applicable" },
+          { task_id: "pending", delivery_status: "pending" },
+        ];
+
+        expect(readStatuses()).toEqual(expectedStatuses);
+        expect(
+          [...loadTaskRegistryStateFromSqlite().tasks.values()].map((task) => ({
+            taskId: task.taskId,
+            deliveryStatus: task.deliveryStatus,
+          })),
+        ).toEqual([
+          { taskId: "canonical", deliveryStatus: "not_applicable" },
+          { taskId: "obsolete", deliveryStatus: "not_applicable" },
+          { taskId: "pending", deliveryStatus: "pending" },
+        ]);
+
+        closeOpenClawStateDatabaseForTest();
+        expect(readStatuses()).toEqual(expectedStatuses);
+        closeOpenClawStateDatabaseForTest();
+      },
+    );
+  });
   it("rolls back the requester attribution column when its backfill fails", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({

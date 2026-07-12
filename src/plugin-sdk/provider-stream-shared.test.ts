@@ -231,6 +231,14 @@ describe("normalizeOpenAICompatibleReasoningPayload", () => {
 
     expect(payload).toEqual({});
   });
+
+  it("defensively normalizes logical Ultra for generic compatible payloads", () => {
+    const payload: Record<string, unknown> = {};
+
+    normalizeOpenAICompatibleReasoningPayload(payload, "ultra");
+
+    expect(payload).toEqual({ reasoning: { effort: "xhigh" } });
+  });
 });
 
 describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
@@ -372,8 +380,15 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(events.map((event) => (event as { type?: string }).type)).toEqual([
       "toolcall_start",
       "toolcall_delta",
+      "toolcall_end",
       "done",
     ]);
+    const toolCallEnd = requireRecord(events.at(-2), "tool call end");
+    expect(requireRecord(toolCallEnd.toolCall, "completed tool call")).toMatchObject({
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/tmp/file.txt" },
+    });
     const done = events.at(-1) as { message?: { content?: unknown; stopReason?: unknown } };
     expect(done.message?.stopReason).toBe("toolUse");
     expect(done.message?.content).toEqual([
@@ -621,6 +636,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       "thinking_delta",
       "toolcall_start",
       "toolcall_delta",
+      "toolcall_end",
       "done",
     ]);
     const thinkingEvent = requireRecord(events[0], "thinking event");
@@ -679,6 +695,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       "thinking_delta",
       "toolcall_start",
       "toolcall_delta",
+      "toolcall_end",
       "done",
     ]);
     const thinkingEvent = requireRecord(events[0], "thinking event");

@@ -246,6 +246,14 @@ type DispatchTelegramMessageParams = {
   opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
+  /** Fires after recovery-relevant session/run state is durably persisted. */
+  onTurnAdopted?: () => void | Promise<void>;
+  /** Marks a queued follow-up that is waiting for reply-lane admission. */
+  onTurnDeferred?: () => void;
+  /** Releases a deferred turn that completed without ever owning the reply lane. */
+  onTurnAbandoned?: () => void;
+  /** Cancels queued/model work when ingress ownership fails before adoption. */
+  turnAbortSignal?: AbortSignal;
 };
 
 type TelegramDispatchResult = { kind: "completed" } | { kind: "failed-retryable"; error: unknown };
@@ -785,6 +793,10 @@ export const dispatchTelegramMessage = async ({
   opts,
   retryDispatchErrors = false,
   suppressFailureFallback = false,
+  onTurnAdopted,
+  onTurnDeferred,
+  onTurnAbandoned,
+  turnAbortSignal,
 }: DispatchTelegramMessageParams): Promise<TelegramDispatchResult> => {
   const dispatchStartedAt = Date.now();
   const dispatchContext = resolveDispatchTelegramContext({ context });
@@ -869,14 +881,21 @@ export const dispatchTelegramMessage = async ({
   let activeReplyFenceKey = replyFenceKey.activeKey;
   let replyFenceGeneration: number | undefined;
   const replyAbortController = new AbortController();
+  const replyAbortSignal = turnAbortSignal
+    ? AbortSignal.any([replyAbortController.signal, turnAbortSignal])
+    : replyAbortController.signal;
   let replyAbortControllerQueued = false;
+  let queuedTurnAdopted = false;
   let dispatchWasSuperseded;
+  // Queued source dispatches release their generation before admission but retain this controller.
+  // Its aborted bit preserves supersession across the later async adoption handoff.
   const isDispatchSuperseded = () =>
-    replyFenceGeneration !== undefined &&
-    isTelegramReplyFenceSuperseded({
-      key: activeReplyFenceKey,
-      generation: replyFenceGeneration,
-    });
+    replyAbortController.signal.aborted ||
+    (replyFenceGeneration !== undefined &&
+      isTelegramReplyFenceSuperseded({
+        key: activeReplyFenceKey,
+        generation: replyFenceGeneration,
+      }));
   const releaseReplyFence = () => {
     if (replyFenceGeneration === undefined) {
       return;
@@ -886,6 +905,14 @@ export const dispatchTelegramMessage = async ({
       replyAbortControllerQueued ? undefined : replyAbortController,
     );
     replyFenceGeneration = undefined;
+  };
+  const adoptReplyTurn = async () => {
+    // Fence abort and supersession authority end at adoption. Core (queue
+    // interrupt mode / reply-run registry abort) owns adopted runs.
+    await onTurnAdopted?.();
+    queuedTurnAdopted = true;
+    releaseReplyFence();
+    releaseTelegramReplyFenceAbortController(activeReplyFenceKey, replyAbortController);
   };
   // Block mode sizes preview rotation steps from streaming.preview.chunk (same
   // contract as Discord's block chunker). Other modes keep one growing rich
@@ -1505,7 +1532,9 @@ export const dispatchTelegramMessage = async ({
         activeKey: replyFenceKey.activeKey,
         laneKey: scopedReplyFenceLaneKey,
       });
-  if (!isRoomEvent && supersedeReplyFence) {
+  // Ambient room-event work uses a separate fence key. Any non-room-event
+  // inbound may cancel it without owning abort authority over adopted user turns.
+  if (!isRoomEvent) {
     supersedeTelegramReplyFence(replyFenceKey.roomEventKey);
   }
   replyFenceGeneration = beginTelegramReplyFence({
@@ -2612,25 +2641,39 @@ export const dispatchTelegramMessage = async ({
                 replyOptions: {
                   skillFilter,
                   disableBlockStreaming,
-                  abortSignal: replyAbortController.signal,
+                  abortSignal: replyAbortSignal,
+                  onTurnAdopted: adoptReplyTurn,
                   sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
                   queuedDeliveryCorrelations: isRoomEvent
                     ? [{ begin: beginDeliveryCorrelation }]
                     : undefined,
-                  queuedFollowupLifecycle: isRoomEvent
-                    ? {
-                        onEnqueued: () => {
-                          replyAbortControllerQueued = true;
-                        },
-                        onComplete: () => {
-                          replyAbortControllerQueued = false;
-                          releaseTelegramReplyFenceAbortController(
-                            activeReplyFenceKey,
-                            replyAbortController,
-                          );
-                        },
-                      }
-                    : undefined,
+                  queuedFollowupLifecycle:
+                    isRoomEvent || onTurnAdopted || onTurnDeferred || onTurnAbandoned
+                      ? {
+                          onEnqueued: () => {
+                            replyAbortControllerQueued = true;
+                            onTurnDeferred?.();
+                          },
+                          onAdmitted: () => {
+                            // Reply-lane ownership retires Telegram's pre-run abort authority,
+                            // but ingress stays replayable until recovery state is durable.
+                            releaseTelegramReplyFenceAbortController(
+                              activeReplyFenceKey,
+                              replyAbortController,
+                            );
+                          },
+                          onComplete: () => {
+                            replyAbortControllerQueued = false;
+                            releaseTelegramReplyFenceAbortController(
+                              activeReplyFenceKey,
+                              replyAbortController,
+                            );
+                            if (!queuedTurnAdopted) {
+                              onTurnAbandoned?.();
+                            }
+                          },
+                        }
+                      : undefined,
                   suppressTyping: isRoomEvent,
                   onPartialReply:
                     answerLane.stream || reasoningLane.stream

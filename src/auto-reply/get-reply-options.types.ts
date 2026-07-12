@@ -50,7 +50,7 @@ export type QueuedReplyLifecycle = {
   /** Retires this source's cancellation ownership while retaining its live identity. */
   onCancellationRetired?: () => void;
   /** Called after the queued turn owns the reply lane, before model/tool execution. */
-  onAdmitted?: () => void;
+  onAdmitted?: () => void | Promise<void>;
   onComplete?: () => void;
 };
 
@@ -85,6 +85,12 @@ export type GetReplyOptions = {
   imageOrder?: PromptImageOrderEntry[];
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;
+  /**
+   * Called after the restart-recovery delivery-context persist attempt
+   * completes (context may be absent when source delivery is suppressed).
+   * Channels may complete ingress ownership here without waiting for settle.
+   */
+  onTurnAdopted?: () => void | Promise<void>;
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onReplyStart?: () => Promise<void> | void;

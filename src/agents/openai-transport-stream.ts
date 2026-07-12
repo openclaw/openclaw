@@ -12,6 +12,7 @@ import {
   isOpenAICompatibleAzureResponsesBaseUrl,
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
+  isOpenAIGpt56Model,
   isResponsesTextContentPartType,
   isResponsesTextDeltaEventType,
   mapOpenAIStopReason,
@@ -3166,6 +3167,18 @@ async function processOpenAICompletionsStream(
         }
       }
     }
+    // Chat Completions can put safety/structured-output refusals in a top-level
+    // `refusal` field with content null. Surface that as visible text so the
+    // assistant turn is not empty (Responses path already routes refusal deltas).
+    const refusalText = typeof choiceDelta.refusal === "string" ? choiceDelta.refusal : "";
+    if (refusalText) {
+      const routedDeltas = hasMirroredReasoning
+        ? reasoningTagTextPartitioner.push(refusalText)
+        : reasoningTagTextPartitioner.pushVisible(refusalText);
+      for (const routedDelta of routedDeltas) {
+        appendPartitionedVisibleDelta(routedDelta);
+      }
+    }
     for (const reasoningDelta of reasoningDeltas) {
       if (reasoningDelta.kind === "thinking" && !emitReasoning) {
         continue;
@@ -4438,6 +4451,11 @@ export function buildOpenAICompletionsParams(
     params.tools.length > 0 &&
     (isOpenAIGpt54MiniModel(model) ||
       (isOpenAIGpt55Model(model) && isKnownOpenAICompletionsEndpoint(model)));
+  const disableChatCompletionsToolReasoning =
+    Array.isArray(params.tools) &&
+    params.tools.length > 0 &&
+    isOpenAIGpt56Model(model) &&
+    isKnownOpenAICompletionsEndpoint(model);
   const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
@@ -4450,7 +4468,11 @@ export function buildOpenAICompletionsParams(
     payload: params,
     requestedEffort: completionsReasoningEffort,
   });
-  if (
+  if (disableChatCompletionsToolReasoning) {
+    // GPT-5.6 Chat Completions defaults reasoning on, but rejects function
+    // tools unless reasoning is explicitly disabled.
+    params.reasoning_effort = "none";
+  } else if (
     compat.thinkingFormat === "openrouter" &&
     model.reasoning &&
     resolvedCompletionsReasoningEffort

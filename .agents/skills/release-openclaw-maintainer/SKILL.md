@@ -176,6 +176,19 @@ Stable publication is not complete until `main` carries the actual shipped relea
 
 ## Handle versions and release files consistently
 
+Use the release preparation controller before manual version edits:
+
+```bash
+pnpm release:prepare -- --version YYYY.M.PATCH-beta.N --shadow
+pnpm release:prepare -- --version YYYY.M.PATCH-beta.N --write
+pnpm release:prepare -- --version YYYY.M.PATCH-beta.N --check
+```
+
+Shadow mode is the default and never runs mutating commands. Write mode aligns
+the root and macOS versions, optionally Android with `--android`, then runs only
+the version-owned generated metadata DAG. Every mode writes an exact
+HEAD/worktree-bound manifest under git metadata for cutover review.
+
 - Version locations include:
   - `package.json`
   - `apps/android/app/build.gradle.kts`
@@ -667,10 +680,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - The npm workflow and the release-ops mac publish workflow accept
   `preflight_only=true` to run validation/build/package steps without uploading
   public release assets.
-- Real npm publish requires a prior successful npm preflight run id and the
-  successful Full Release Validation run id for the same tag/SHA so the publish
-  job promotes the prepared tarball instead of rebuilding it and attaches the
-  correct release evidence.
+- Real npm publish requires a prior successful npm preflight run id plus the
+  successful Full Release Validation run id and exact run attempt for the same
+  tag/SHA so the publish job promotes the prepared tarball instead of rebuilding
+  it and attaches the correct release evidence.
 - Real release-ops mac publish requires a prior successful release-ops mac
   preflight run id so the publish job promotes the prepared artifacts instead of
   rebuilding or renotarizing them again.
@@ -821,10 +834,13 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     and choose the intended `npm_dist_tag` (`beta` default; `latest` only for
     an intentional direct stable publish). Wait for it to pass. Save that run id
     because the real publish requires it to reuse the prepared npm tarball.
-17. Before real publish, review the early performance run if it has completed.
-    Compare against earlier release evidence or clawgrit reports where
-    available. Call out minor regressions in the release proof; block on major
-    regressions unless waived or proven noisy.
+17. Before real publish, run Full Release Validation through the trusted
+    current-`main` SHA-pinned helper for the exact release SHA with evidence
+    reuse disabled. Save the successful run ID and exact attempt as
+    `full_release_validation_run_attempt=<saved-attempt>`. Review the early
+    performance run if it has completed. Compare against earlier release
+    evidence or clawgrit reports where available. Call out minor regressions in
+    the release proof; block on major regressions unless waived or proven noisy.
 18. For stable releases, start `.github/workflows/macos-release.yml` in
     `openclaw/openclaw` and wait for the public validation-only run to pass.
 19. For stable releases, start
@@ -849,7 +865,8 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     the same tag for the real publish, choose `npm_dist_tag` (`beta` default,
     `latest` only when you intentionally want direct stable publish), keep it
     the same as the preflight run, and pass the successful npm
-    `preflight_run_id` plus the successful `full_release_validation_run_id`.
+    `preflight_run_id` plus the successful `full_release_validation_run_id` and
+    its exact `full_release_validation_run_attempt`.
     For stable publish, also pass the exact non-prerelease
     `openclaw/openclaw-windows-node` tag as `windows_node_tag` and its
     candidate-approved installer digest map as `windows_node_installer_digests`.

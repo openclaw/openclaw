@@ -103,12 +103,22 @@ on:
           - stable
           - full
       use_github_hosted_runners:
-        description: Use GitHub-hosted runners instead of Blacksmith runners
+        description: Use GitHub-hosted runners where supported; OpenWebUI always uses a large-disk Blacksmith runner
         required: false
         default: false
         type: boolean
       advisory:
         description: Treat failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
+      live_advisory:
+        description: Treat only live-provider suite failures as advisory for the caller; repo and Docker E2E stay blocking
+        required: false
+        default: false
+        type: boolean
+      allow_unreleased_changelog:
+        description: Allow current-tree QA packaging to use Unreleased notes when no exact version section exists
         required: false
         default: false
         type: boolean
@@ -116,6 +126,16 @@ on:
     inputs:
       advisory:
         description: Treat failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
+      live_advisory:
+        description: Treat only live-provider suite failures as advisory for the caller; repo and Docker E2E stay blocking
+        required: false
+        default: false
+        type: boolean
+      allow_unreleased_changelog:
+        description: Allow current-tree QA packaging to use Unreleased notes when no exact version section exists
         required: false
         default: false
         type: boolean
@@ -214,7 +234,7 @@ on:
         default: stable
         type: string
       use_github_hosted_runners:
-        description: Use GitHub-hosted runners instead of Blacksmith runners
+        description: Use GitHub-hosted runners where supported; OpenWebUI always uses a large-disk Blacksmith runner
         required: false
         default: true
         type: boolean
@@ -320,6 +340,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
+  OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
 
 jobs:
   validate_selected_ref:
@@ -429,6 +450,8 @@ jobs:
               add_profile_suite native-live-src-gateway-profiles-google "stable full"
               add_profile_suite native-live-src-gateway-profiles-minimax "stable full"
               add_profile_suite native-live-src-gateway-profiles-openai "beta minimum stable full"
+              add_profile_suite native-live-src-gateway-profiles-openai-api-default "stable full"
+              add_profile_suite native-live-src-gateway-profiles-openai-gpt56-ultra "stable full"
               add_profile_suite native-live-src-gateway-profiles-fireworks "full"
               add_profile_suite native-live-src-gateway-profiles-deepseek "full"
               add_profile_suite native-live-src-gateway-profiles-opencode-go "full"
@@ -457,6 +480,10 @@ jobs:
               add_profile_suite live-cli-backend-docker "stable full"
               add_profile_suite live-acp-bind-docker "stable full"
               add_profile_suite live-codex-harness-docker "stable full"
+              add_profile_suite live-codex-harness-gpt56-sol-docker "stable full"
+              add_profile_suite live-codex-harness-gpt56-terra-docker "stable full"
+              add_profile_suite live-codex-harness-gpt56-luna-docker "stable full"
+              add_profile_suite live-codex-harness-gpt56-docker "stable full"
               add_profile_suite live-subagent-announce-docker "stable full"
 
               add_profile_suite native-live-extensions-a-k "full"
@@ -514,7 +541,7 @@ jobs:
   validate_release_live_cache:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 20
     env:
@@ -1236,10 +1263,10 @@ jobs:
 
   validate_docker_openwebui:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
-    if: inputs.include_openwebui && !inputs.include_release_path_suites && inputs.docker_lanes == ''
+    if: inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')
     name: Docker E2E (openwebui)
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1250,6 +1277,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
+      OPENCLAW_DOCKER_ALL_RELEASE_PROFILE: ${{ inputs.release_test_profile }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
     steps:
       - name: Checkout selected ref
@@ -1275,7 +1303,9 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
+          install-bun: "false"
+          install-deps: "false"
+          use-actions-cache: "false"
 
       - name: Validate Open WebUI credentials
         shell: bash
@@ -1454,13 +1484,21 @@ jobs:
 
       - name: Pack OpenClaw package for Docker E2E
         if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == ''
+        env:
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p .artifacts/docker-e2e-package
-          node scripts/package-openclaw-for-docker.mjs \
-            --output-dir .artifacts/docker-e2e-package \
+          package_args=(
+            --output-dir .artifacts/docker-e2e-package
             --output-name openclaw-current.tgz
+          )
+          # Only current-tree QA callers opt in; release and package-candidate callers stay strict.
+          if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+            package_args+=(--allow-unreleased-changelog)
+          fi
+          node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
 
       - name: Validate OpenClaw Docker E2E package
         id: package
@@ -1642,7 +1680,7 @@ jobs:
   prepare_live_test_image:
     needs: validate_selected_ref
     if: inputs.include_live_suites && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-') || startsWith(inputs.live_suite_filter, 'docker-live-models'))
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     permissions:
@@ -1718,7 +1756,7 @@ jobs:
     name: Docker live models (${{ matrix.provider_label }})
     needs: [validate_selected_ref, prepare_live_test_image, plan_release_workflow_matrices]
     if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models') && needs.plan_release_workflow_matrices.outputs.live_models_count != '0'
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
@@ -1846,7 +1884,7 @@ jobs:
     name: Docker live models (selected providers)
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && inputs.live_model_providers != '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     env:
@@ -2021,7 +2059,7 @@ jobs:
   validate_live_provider_suites:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || (startsWith(inputs.live_suite_filter, 'native-live-') && !startsWith(inputs.live_suite_filter, 'native-live-extensions-media') && inputs.live_suite_filter != 'native-live-extensions-a-k'))
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -2087,6 +2125,18 @@ jobs:
             timeout_minutes: 60
             profile_env_only: false
             profiles: beta minimum stable full
+          - suite_id: native-live-src-gateway-profiles-openai-api-default
+            label: Native live gateway fresh OpenAI API-key default
+            command: OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT=1 OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 60
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: native-live-src-gateway-profiles-openai-gpt56-ultra
+            label: Native live gateway OpenAI GPT-5.6 Ultra
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=ultra OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-sol,openai/gpt-5.6-terra,openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=300000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=900000 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 75
+            profile_env_only: false
+            profiles: stable full
           - suite_id: native-live-src-gateway-profiles-fireworks
             label: Native live gateway profiles Fireworks
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=fireworks node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
@@ -2096,7 +2146,7 @@ jobs:
             profiles: full
           - suite_id: native-live-src-gateway-profiles-deepseek
             label: Native live gateway profiles DeepSeek
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek OPENCLAW_LIVE_GATEWAY_MODELS=deepseek/deepseek-v4-flash,deepseek/deepseek-v4-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             advisory: true
@@ -2120,7 +2170,7 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-opencode-go-mimo
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go MiMo
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2-omni,opencode-go/mimo-v2-pro,opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             advisory: true
@@ -2309,7 +2359,7 @@ jobs:
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
               ;;
-            live-codex-harness-docker)
+            live-codex-harness*-docker)
               # Keep CI on the API-key path for now. The staged Codex auth secret
               # is currently stale, but the wrapper still supports codex-auth for
               # local maintainer reruns without changing Peter's flow.
@@ -2359,7 +2409,7 @@ jobs:
     name: Docker live suites (${{ matrix.label }})
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-'))
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -2438,6 +2488,27 @@ jobs:
           - suite_id: live-codex-harness-docker
             label: Docker live Codex harness
             command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
+            timeout_minutes: 40
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: live-codex-harness-gpt56-sol-docker
+            suite_group: live-codex-harness-gpt56-docker
+            label: Docker live Codex GPT-5.6 Sol Ultra
+            command: OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=openai/gpt-5.6-sol=ultra OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
+            timeout_minutes: 40
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: live-codex-harness-gpt56-terra-docker
+            suite_group: live-codex-harness-gpt56-docker
+            label: Docker live Codex GPT-5.6 Terra Ultra
+            command: OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=openai/gpt-5.6-terra=ultra OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
+            timeout_minutes: 40
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: live-codex-harness-gpt56-luna-docker
+            suite_group: live-codex-harness-gpt56-docker
+            label: Docker live Codex GPT-5.6 Luna Max
+            command: OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=openai/gpt-5.6-luna=max OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
             timeout_minutes: 40
             profile_env_only: false
             profiles: stable full
@@ -2552,7 +2623,7 @@ jobs:
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
               ;;
-            live-codex-harness-docker)
+            live-codex-harness*-docker)
               echo "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key" >> "$GITHUB_ENV"
               echo "OPENCLAW_LIVE_CODEX_HARNESS_DEBUG=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
@@ -2596,7 +2667,7 @@ jobs:
     name: Live media suites (${{ matrix.label }})
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'native-live-extensions-media') || inputs.live_suite_filter == 'native-live-extensions-a-k')
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     container:
       image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04

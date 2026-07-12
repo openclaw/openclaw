@@ -13,7 +13,10 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "./provider-thinking.types.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
+import {
+  loadBundledPluginPublicArtifactModuleSync,
+  loadPluginPublicArtifactModuleSync,
+} from "./public-surface-loader.js";
 
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
 const providerPolicySurfaceByPluginId = new Map<string, BundledProviderPolicySurface | null>();
@@ -41,36 +44,64 @@ function hasProviderPolicyHook(
   );
 }
 
-function tryLoadBundledProviderPolicySurface(
-  pluginId: string,
-): BundledProviderPolicySurface | null {
-  const cacheKey = `${resolveBundledPluginsDir() ?? ""}\0${pluginId}`;
-  const cached = providerPolicySurfaceByPluginId.get(cacheKey);
+function resolveCachedProviderPolicySurface(params: {
+  cacheKey: string;
+  loadModule: (artifactBasename: string) => Record<string, unknown>;
+  missingSurfacePrefix: string;
+}): BundledProviderPolicySurface | null {
+  const cached = providerPolicySurfaceByPluginId.get(params.cacheKey);
   if (cached !== undefined) {
     return cached;
   }
   for (const artifactBasename of PROVIDER_POLICY_ARTIFACT_CANDIDATES) {
     try {
-      const mod = loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
-        dirName: pluginId,
-        artifactBasename,
-      });
+      const mod = params.loadModule(artifactBasename);
       if (hasProviderPolicyHook(mod)) {
-        providerPolicySurfaceByPluginId.set(cacheKey, mod);
+        providerPolicySurfaceByPluginId.set(params.cacheKey, mod);
         return mod;
       }
     } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      ) {
+      if (error instanceof Error && error.message.startsWith(params.missingSurfacePrefix)) {
         continue;
       }
       throw error;
     }
   }
-  providerPolicySurfaceByPluginId.set(cacheKey, null);
+  providerPolicySurfaceByPluginId.set(params.cacheKey, null);
   return null;
+}
+
+function resolveDirectBundledProviderPolicySurface(
+  pluginId: string,
+): BundledProviderPolicySurface | null {
+  return resolveCachedProviderPolicySurface({
+    cacheKey: `${resolveBundledPluginsDir() ?? ""}\0${pluginId}`,
+    loadModule: (artifactBasename) =>
+      loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
+        dirName: pluginId,
+        artifactBasename,
+      }),
+    missingSurfacePrefix: "Unable to resolve bundled plugin public surface ",
+  });
+}
+
+function resolveTrustedExternalProviderPolicySurface(params: {
+  pluginId: string;
+  pluginRoot: string;
+  trustedOfficialInstall?: boolean;
+}): BundledProviderPolicySurface | null {
+  if (params.trustedOfficialInstall !== true) {
+    return null;
+  }
+  return resolveCachedProviderPolicySurface({
+    cacheKey: `${params.pluginRoot}\0${params.pluginId}`,
+    loadModule: (artifactBasename) =>
+      loadPluginPublicArtifactModuleSync<Record<string, unknown>>({
+        pluginRoot: params.pluginRoot,
+        artifactBasename,
+      }),
+    missingSurfacePrefix: "Unable to resolve plugin public surface ",
+  });
 }
 
 function resolveBundledProviderPolicyPluginId(
@@ -134,7 +165,7 @@ export function resolveBundledProviderPolicySurface(
   if (!normalizedProviderId) {
     return null;
   }
-  const directSurface = tryLoadBundledProviderPolicySurface(normalizedProviderId);
+  const directSurface = resolveDirectBundledProviderPolicySurface(normalizedProviderId);
   if (directSurface) {
     return directSurface;
   }
@@ -142,5 +173,38 @@ export function resolveBundledProviderPolicySurface(
   if (!ownerPluginId || ownerPluginId === normalizedProviderId) {
     return null;
   }
-  return tryLoadBundledProviderPolicySurface(ownerPluginId);
+  return resolveDirectBundledProviderPolicySurface(ownerPluginId);
+}
+
+/** Resolves provider policy hooks from bundled or trusted official plugin artifacts. */
+export function resolveProviderPolicySurface(
+  providerId: string,
+  options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
+): BundledProviderPolicySurface | null {
+  const bundledSurface = resolveBundledProviderPolicySurface(providerId, options);
+  if (bundledSurface) {
+    return bundledSurface;
+  }
+  const normalizedProviderId = normalizeProviderId(providerId);
+  if (!normalizedProviderId || !options.manifestRegistry) {
+    return null;
+  }
+  for (const plugin of options.manifestRegistry.plugins.toSorted((left, right) =>
+    left.id.localeCompare(right.id),
+  )) {
+    if (
+      pluginOwnsProviderPolicyRef(plugin, normalizedProviderId) &&
+      plugin.trustedOfficialInstall === true
+    ) {
+      const surface = resolveTrustedExternalProviderPolicySurface({
+        pluginId: plugin.id,
+        pluginRoot: plugin.rootDir,
+        trustedOfficialInstall: plugin.trustedOfficialInstall,
+      });
+      if (surface) {
+        return surface;
+      }
+    }
+  }
+  return null;
 }

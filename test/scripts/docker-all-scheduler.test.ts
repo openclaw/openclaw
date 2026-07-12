@@ -149,6 +149,30 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(result.stderr).not.toContain("at ");
   });
 
+  it("preserves ephemeral package intent in generated failure reruns", async () => {
+    const logDir = createTempDir("openclaw-docker-all-rerun-intent-");
+    try {
+      await writeRunSummary(
+        logDir,
+        {
+          failures: [{ name: "install-e2e", status: 1 }],
+          lanes: [],
+          status: "failed",
+        },
+        {
+          ...process.env,
+          GITHUB_SHA: "c".repeat(40),
+          OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "true",
+        },
+      );
+
+      const failureIndex = JSON.parse(readFileSync(path.join(logDir, "failures.json"), "utf8"));
+      expect(failureIndex.combinedGhWorkflowCommand).toContain("allow_unreleased_changelog=true");
+    } finally {
+      rmSync(logDir, { force: true, recursive: true });
+    }
+  });
+
   it("rejects loose numeric resource limit env vars before scheduling lanes", () => {
     const logDir = mkdtempSync(`${tmpdir()}/openclaw-docker-all-`);
     try {

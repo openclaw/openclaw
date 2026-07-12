@@ -37,6 +37,8 @@ import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
@@ -77,7 +79,6 @@ import {
   buildCommandOutputFromToolResultEvent,
   buildPreflightCompactionFailureText,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
-  resolveSessionRuntimeOverrideForProvider,
 } from "./agent-runner-execution.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
@@ -99,6 +100,7 @@ import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
+  admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
   FollowupRunDeferredError,
   isFollowupRunAborted,
@@ -682,7 +684,12 @@ export function createFollowupRunner(params: {
       replyOperation.retainFailureUntilComplete();
       // Multi-source collected turns become atomic at reply-lane admission.
       // Their queue owner uses this boundary to retire source cancellation ids.
-      effectiveQueued.queuedLifecycle?.onAdmitted?.();
+      await admitFollowupRunLifecycle(effectiveQueued);
+      // Admission can await transport-owned durability. Supersession during that handoff is
+      // sticky; stop before preflight can emit notices or start provider work for the stale turn.
+      if (isFollowupRunAborted(effectiveQueued)) {
+        return;
+      }
       if (replyOperation.sessionId !== run.sessionId) {
         run = { ...run, sessionId: replyOperation.sessionId };
         effectiveQueued = { ...effectiveQueued, run };
@@ -1004,6 +1011,15 @@ export function createFollowupRunner(params: {
             const suppressAssistantErrorPersistenceForCandidate =
               assistantErrorPersistedAcrossFallback;
             const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const candidateThinkLevel = resolveCandidateThinkingLevel({
+              cfg: runtimeConfig,
+              provider,
+              modelId: model,
+              level: run.thinkLevel,
+              agentId: run.agentId,
+              sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
+              sessionEntry: activeSessionEntry,
+            });
             const candidateFastMode = resolveRunFastModeForFallbackCandidate({
               run: candidateRun,
               config: runtimeConfig,
@@ -1193,7 +1209,7 @@ export function createFollowupRunner(params: {
                     ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
                       config: runtimeConfig,
                     }),
-                    thinkLevel: run.thinkLevel,
+                    thinkLevel: candidateThinkLevel,
                     fastMode: candidateFastMode.fastMode,
                     fastModeStartedAtMs,
                     fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
@@ -1321,7 +1337,7 @@ export function createFollowupRunner(params: {
                 provider,
                 model,
                 ...selectedAuthProfile,
-                thinkLevel: run.thinkLevel,
+                thinkLevel: candidateThinkLevel,
                 fastMode: candidateFastMode.fastMode,
                 fastModeStartedAtMs,
                 fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,

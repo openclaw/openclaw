@@ -1725,6 +1725,8 @@ type SessionsPatchResult = {
     modelProvider?: string;
     model?: string;
     agentRuntime?: GatewayAgentRuntime;
+    thinkingLevel?: string;
+    thinkingLevels?: Array<{ id: string; label: string }>;
   };
 };
 

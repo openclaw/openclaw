@@ -3872,6 +3872,26 @@ describe("qa mock openai server", () => {
     expect(String(toolPlanOutput.arguments)).toContain("current");
   });
 
+  it("plans the explicit web_fetch fixture prompt as the canonical direct call", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Call web_fetch exactly once with URL https://example.com/ and maxChars 500, wait for its result, then summarize. If web_fetch is already callable, call it directly without tool_search. Otherwise use tool_search to locate it first, then call web_fetch. A tool_search result alone does not complete the task; do not finish before web_fetch returns. QA routing marker: tool search qa check target=web_fetch.";
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [makeUserInput(prompt)],
+    });
+
+    expect(response.status).toBe(200);
+    const toolPlanOutput = outputItem(await response.json());
+    expect(toolPlanOutput.type).toBe("function_call");
+    expect(toolPlanOutput.name).toBe("web_fetch");
+    expect(JSON.parse(String(toolPlanOutput.arguments))).toEqual({
+      url: "https://example.com/",
+      maxChars: 500,
+    });
+  });
+
   it("summarizes QA tool-search bridge outputs with the nested plugin result marker", async () => {
     const server = await startMockServer();
     const targetTool = "fake_plugin_tool_17";

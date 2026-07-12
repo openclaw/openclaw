@@ -142,6 +142,23 @@ function buildSubagentDelegationPreferenceSection(params: {
   ].filter(Boolean);
 }
 
+function buildProactiveSubagentOrchestrationSection(params: {
+  enabled: boolean;
+  hasSessionsSpawn: boolean;
+}): string[] {
+  if (!params.enabled || !params.hasSessionsSpawn) {
+    return [];
+  }
+  return [
+    "## Proactive Sub-Agent Orchestration",
+    "Ultra mode is active. Proactively use `sessions_spawn` for independent workstreams when it materially improves speed or quality.",
+    "- Parallelize independent investigation, implementation, and verification when useful.",
+    "- Keep simple or tightly coupled work local; do not delegate just to delegate.",
+    "- Give each child a clear, bounded objective, then synthesize its result before replying.",
+    "",
+  ];
+}
+
 const stablePromptPrefixCache = new Map<string, StablePromptPrefixCacheEntry>();
 
 function cacheStablePromptPrefix(key: string, build: () => string): string {
@@ -740,6 +757,8 @@ export function buildAgentSystemPrompt(params: {
   subagentDelegationMode?: SubagentDelegationMode;
   /** Prompt hint for when to keep work local versus fan out. Defaults to env/auto. */
   durableOrchestrationPolicy?: DurableOrchestrationPolicy;
+  /** Run-scoped Ultra behavior; independent from configured delegation preference. */
+  proactiveSubagentOrchestration?: boolean;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
   /** Prompt surface controls runtime-specific fallback fragments. Defaults to OpenClaw main. */
@@ -957,6 +976,7 @@ export function buildAgentSystemPrompt(params: {
   const durableOrchestrationPolicy = resolvePromptDurableOrchestrationPolicy(
     params.durableOrchestrationPolicy,
   );
+  const proactiveSubagentOrchestration = params.proactiveSubagentOrchestration === true;
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const messageChannelOptions = availableTools.has("message")
     ? buildMessageChannelOptions(runtimeChannel)
@@ -1052,6 +1072,7 @@ export function buildAgentSystemPrompt(params: {
     silentReplyPromptMode,
     subagentDelegationMode,
     durableOrchestrationPolicy,
+    proactiveSubagentOrchestration,
     sandboxInfo: params.sandboxInfo,
     displayWorkspaceDir,
     workspaceGuidance,
@@ -1128,8 +1149,12 @@ export function buildAgentSystemPrompt(params: {
           ]
         : []),
       "",
+      ...buildProactiveSubagentOrchestrationSection({
+        enabled: proactiveSubagentOrchestration,
+        hasSessionsSpawn,
+      }),
       ...buildSubagentDelegationPreferenceSection({
-        mode: subagentDelegationMode,
+        mode: proactiveSubagentOrchestration ? "suggest" : subagentDelegationMode,
         durableOrchestrationPolicy: durableOrchestrationPolicy ?? "parallel_first",
         isMinimal,
         hasSessionsSpawn,

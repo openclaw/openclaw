@@ -230,7 +230,27 @@ function compactReleaseNotes(section, repository, tag) {
   ].join("\n");
 }
 
+export function dedicatedSectionVersionForTag(tag) {
+  // Correction (vX-N) and alpha tags may carry their own exact changelog
+  // heading; beta and stable bodies must come from the stable base section.
+  const taggedVersion = tag.replace(/^v/u, "");
+  if (/-beta\.[1-9][0-9]*$/u.test(taggedVersion)) {
+    return undefined;
+  }
+  return /-(?:alpha\.)?[1-9][0-9]*$/u.test(taggedVersion) ? taggedVersion : undefined;
+}
+
 export function releaseNotesSectionForTag(changelog, version, tag) {
+  // Alpha and correction tags prefer their own exact heading when the
+  // changelog carries one; otherwise they fall back to the base version.
+  const dedicatedVersion = dedicatedSectionVersionForTag(tag);
+  if (dedicatedVersion && dedicatedVersion !== version) {
+    try {
+      return extractChangelogSection(changelog, dedicatedVersion);
+    } catch {
+      // No dedicated section; use the base version below.
+    }
+  }
   try {
     return extractChangelogSection(changelog, version);
   } catch (error) {

@@ -1,7 +1,7 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 // System prompt tests cover the main prompt facade, prompt-surface routing, and
 // user-visible sections for owners, tools, safety, skills, and subagents.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
@@ -14,6 +14,27 @@ import {
   buildAgentSystemPrompt,
   buildRuntimeLine,
 } from "./system-prompt.js";
+
+const originalDurableRuntime = process.env.OPENCLAW_DURABLE_RUNTIME;
+const originalDurableOrchestrationPolicy = process.env.OPENCLAW_DURABLE_ORCHESTRATION_POLICY;
+
+beforeEach(() => {
+  delete process.env.OPENCLAW_DURABLE_RUNTIME;
+  delete process.env.OPENCLAW_DURABLE_ORCHESTRATION_POLICY;
+});
+
+afterEach(() => {
+  if (originalDurableRuntime === undefined) {
+    delete process.env.OPENCLAW_DURABLE_RUNTIME;
+  } else {
+    process.env.OPENCLAW_DURABLE_RUNTIME = originalDurableRuntime;
+  }
+  if (originalDurableOrchestrationPolicy === undefined) {
+    delete process.env.OPENCLAW_DURABLE_ORCHESTRATION_POLICY;
+  } else {
+    process.env.OPENCLAW_DURABLE_ORCHESTRATION_POLICY = originalDurableOrchestrationPolicy;
+  }
+});
 
 describe("buildAgentSystemPrompt", () => {
   it("resolves helper session keys to scoped prompt surfaces", () => {
@@ -984,6 +1005,49 @@ describe("buildAgentSystemPrompt", () => {
     expect(preferPrompt).toContain(
       "Use `subagents(action=list)` only when explicitly asked for sub-agent status",
     );
+  });
+
+  it("adds run-scoped Ultra orchestration only when sessions_spawn is callable", () => {
+    const base = {
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn"],
+      subagentDelegationMode: "prefer",
+    } satisfies Parameters<typeof buildAgentSystemPrompt>[0];
+    const maxPrompt = buildAgentSystemPrompt(base);
+    const ultraPrompt = buildAgentSystemPrompt({
+      ...base,
+      proactiveSubagentOrchestration: true,
+    });
+    const deferredUltraPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["tool_search"],
+      capabilityToolNames: ["sessions_spawn"],
+      proactiveSubagentOrchestration: true,
+    });
+    const minimalUltraPrompt = buildAgentSystemPrompt({
+      ...base,
+      promptMode: "minimal",
+      proactiveSubagentOrchestration: true,
+    });
+    const unavailablePrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["subagents"],
+      proactiveSubagentOrchestration: true,
+    });
+    const rawPrompt = buildAgentSystemPrompt({
+      ...base,
+      promptMode: "none",
+      proactiveSubagentOrchestration: true,
+    });
+
+    expect(maxPrompt).not.toContain("## Proactive Sub-Agent Orchestration");
+    expect(ultraPrompt).toContain("## Proactive Sub-Agent Orchestration");
+    expect(ultraPrompt).toContain("Ultra mode is active");
+    expect(ultraPrompt).not.toContain("Mode: prefer");
+    expect(deferredUltraPrompt).toContain("## Proactive Sub-Agent Orchestration");
+    expect(minimalUltraPrompt).toContain("## Proactive Sub-Agent Orchestration");
+    expect(unavailablePrompt).not.toContain("## Proactive Sub-Agent Orchestration");
+    expect(rawPrompt).not.toContain("## Proactive Sub-Agent Orchestration");
   });
 
   it("omits prefer delegation guidance when sessions_spawn is unavailable", () => {

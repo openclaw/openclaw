@@ -32,8 +32,6 @@ import {
   validateSessionsResolveParams,
   validateSessionsSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   abortEmbeddedAgentRun,
@@ -41,6 +39,7 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
+import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
@@ -115,6 +114,7 @@ import {
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
+  resolveGatewaySessionThinkingProjection,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
@@ -1986,6 +1986,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    let patchModelCatalog: Awaited<ReturnType<typeof context.loadGatewayModelCatalog>> | undefined;
+    const loadPatchModelCatalog = async () => {
+      const catalog = await context.loadGatewayModelCatalog();
+      patchModelCatalog = catalog;
+      return catalog;
+    };
     const applyPatch = async () => {
       const currentLifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
       // A reset queued ahead of archive can rotate the row before this mutation starts.
@@ -2060,7 +2066,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             storeKey: primaryKey,
             agentId: requestedAgentId,
             patch: p,
-            loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+            loadGatewayModelCatalog: loadPatchModelCatalog,
           }),
       });
     };
@@ -2097,16 +2103,22 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       provider: resolved.provider,
       model: resolved.model,
     });
-    const acpMeta = readAcpSessionMeta({ sessionKey: target.canonicalKey ?? key });
-    const agentRuntime = resolveModelAgentRuntimeMetadata({
+    const thinkingProjection = resolveGatewaySessionThinkingProjection({
       cfg,
       agentId,
-      provider: resolvedDisplayModel.provider,
-      model: resolvedDisplayModel.model,
+      provider: resolvedDisplayModel.provider ?? resolved.provider,
+      model: resolvedDisplayModel.model ?? resolved.model,
       sessionKey: target.canonicalKey ?? key,
-      acpRuntime: acpMeta != null,
-      acpBackend: acpMeta?.backend,
+      entry: applied.entry,
+      modelCatalog: patchModelCatalog,
     });
+    const resolvedThinkingMetadata =
+      patchModelCatalog === undefined
+        ? {}
+        : {
+            thinkingLevel: thinkingProjection.effectiveThinkingLevel,
+            thinkingLevels: thinkingProjection.thinkingLevels,
+          };
     const result: SessionsPatchResult = {
       ok: true,
       path: storePath,
@@ -2115,7 +2127,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       resolved: {
         modelProvider: resolvedDisplayModel.provider,
         model: resolvedDisplayModel.model,
-        agentRuntime,
+        agentRuntime: thinkingProjection.agentRuntime,
+        ...resolvedThinkingMetadata,
       },
     };
     respond(true, result, undefined);
@@ -2817,8 +2830,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
           const resolvedModel = resolveSessionModelRef(cfg, latestEntry, target.agentId);
           const workspaceDir =
-            normalizeOptionalString(latestEntry.spawnedWorkspaceDir) ||
-            resolveAgentWorkspaceDir(cfg, target.agentId);
+            resolveIngressWorkspaceOverrideForSpawnedRun({
+              spawnedBy: latestEntry.spawnedBy,
+              workspaceDir: latestEntry.spawnedWorkspaceDir,
+            }) ?? resolveAgentWorkspaceDir(cfg, target.agentId);
           const operationId = randomUUID();
           emitSessionOperation(context, {
             operationId,

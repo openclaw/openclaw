@@ -820,6 +820,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
           local: isLocalMode,
           provider: sessionInfo.modelProvider,
           model: sessionInfo.model,
+          agentRuntime: sessionInfo.agentRuntime?.id,
           thinkingLevels: sessionInfo.thinkingLevels,
           dynamicCommands: dynamicSlashCommandsKey === dynamicKey ? dynamicSlashCommands : [],
         }),

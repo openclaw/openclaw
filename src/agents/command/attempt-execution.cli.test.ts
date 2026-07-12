@@ -3083,6 +3083,55 @@ describe("embedded attempt harness pinning", () => {
     });
   });
 
+  it("honors an explicit OpenClaw session runtime override", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "explicit-openclaw-session",
+      updatedAt: Date.now(),
+      agentRuntimeOverride: "openclaw",
+      agentHarnessId: "codex",
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.6-luna",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      agentHarnessRuntimeOverride: "openclaw",
+      sessionId: sessionEntry.sessionId,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "continue",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "ultra",
+      timeoutMs: 1_000,
+      runId: "run-explicit-openclaw-runtime",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionHasHistory: true,
+    });
+
+    expectMockArgFields(runEmbeddedAgentMock, {
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      agentHarnessId: "openclaw",
+      agentHarnessRuntimeOverride: "openclaw",
+      thinkLevel: "ultra",
+    });
+  });
+
   it("routes explicit OpenAI native runs with legacy Codex OAuth through OpenClaw", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "explicit-agent-codex-oauth-session",

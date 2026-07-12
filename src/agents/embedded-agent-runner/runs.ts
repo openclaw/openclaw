@@ -441,6 +441,15 @@ function prepareEmbeddedAgentQueueMessage(
 ): PreparedEmbeddedAgentQueueMessage {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
+    if (options?.waitForTranscriptCommit === true) {
+      diag.debug(
+        `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
+      );
+      return {
+        kind: "complete",
+        outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
+      };
+    }
     const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text, options);
     if (queuedReplyRunMessage) {
       logMessageQueued({ sessionId, source: "embedded-agent-runner" });
@@ -453,15 +462,6 @@ function prepareEmbeddedAgentQueueMessage(
           gatewayHealth: "live",
           enqueuedAtMs: Date.now(),
         },
-      };
-    }
-    if (options?.waitForTranscriptCommit === true) {
-      diag.debug(
-        `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
-      );
-      return {
-        kind: "complete",
-        outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
       };
     }
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);

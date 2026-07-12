@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/types.js";
 import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../../../plugins/clawhub-error-codes.js";
 import {
@@ -160,6 +161,21 @@ vi.mock("../../../plugins/clawhub.js", () => ({
 vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+}));
+
+vi.mock("../../../plugins/manifest-contract-eligibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/manifest-contract-eligibility.js")>()),
+  loadManifestMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+}));
+
+vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/doctor-contract-registry.js")>()),
+  // Plugin-owned compatibility is outside this install-repair suite. Avoid scanning
+  // the real plugin registry when the legacy-config fixture reaches that follow-up pass.
+  applyPluginDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
+    config: cfg,
+    changes: [],
+  }),
 }));
 
 vi.mock("../../../plugins/official-external-plugin-catalog.js", () => ({

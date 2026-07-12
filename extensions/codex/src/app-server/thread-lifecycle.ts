@@ -62,6 +62,7 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import {
+  hashCodexAppServerBindingFingerprint,
   isCodexAppServerNativeAuthProfile,
   normalizeCodexAppServerBindingModelProvider,
   reclaimCurrentCodexSessionGeneration,
@@ -349,8 +350,12 @@ export async function startOrResumeThread(params: {
       ...params.timing,
       enabled: params.timing?.enabled ?? isCodexAppServerProfilerEnabled(params.params.config),
     });
+    const legacyDynamicToolsFingerprint = lifecycleTiming.measureSync(
+      "legacy-dynamic-tools-fingerprint",
+      () => legacyFingerprintDynamicTools(params.dynamicTools),
+    );
     const dynamicToolsFingerprint = lifecycleTiming.measureSync("dynamic-tools-fingerprint", () =>
-      fingerprintDynamicTools(params.dynamicTools),
+      hashCodexAppServerBindingFingerprint(legacyDynamicToolsFingerprint),
     );
     const dynamicToolsContainDeferred = flattenCodexDynamicToolFunctions(params.dynamicTools).some(
       (tool) => tool.deferLoading === true,
@@ -375,6 +380,8 @@ export async function startOrResumeThread(params: {
         : buildCodexUserMcpServersThreadConfigPatch(params.params.config, {
             agentId: params.agentId ?? params.params.agentId,
           });
+    const legacyUserMcpServersFingerprint =
+      legacyFingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
     const userMcpServersFingerprint =
       fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
     const environmentSelectionFingerprint = fingerprintEnvironmentSelection(
@@ -437,6 +444,26 @@ export async function startOrResumeThread(params: {
         connectionClass: params.appServer.connectionClass,
       });
       await clearCurrentBinding("rotating a stale thread binding");
+      binding = undefined;
+    }
+    if (
+      binding?.threadId &&
+      shouldRotateCodexGpt56MultiAgentBinding({
+        bindingModel: binding.model,
+        requestedModel: params.params.modelId,
+      })
+    ) {
+      // Codex locks the model-selected multi-agent version on the first turn.
+      // Sol/Terra (V2) and Luna (V1) therefore cannot share one resumed thread.
+      embeddedAgentLog.debug(
+        "codex app-server GPT-5.6 multi-agent version changed; starting a new thread",
+        {
+          threadId: binding.threadId,
+          bindingModel: binding.model,
+          requestedModel: params.params.modelId,
+        },
+      );
+      await clearCurrentBinding("rotating a GPT-5.6 multi-agent thread binding");
       binding = undefined;
     }
     const startModelSelection = resolveCodexAppServerThreadModelSelection({
@@ -576,7 +603,14 @@ export async function startOrResumeThread(params: {
         rotatedContextEngineBinding = true;
       }
     }
-    if (binding?.threadId && binding.userMcpServersFingerprint !== userMcpServersFingerprint) {
+    if (
+      binding?.threadId &&
+      !areUserMcpServersFingerprintsCompatible({
+        previous: binding.userMcpServersFingerprint,
+        next: userMcpServersFingerprint,
+        nextLegacy: legacyUserMcpServersFingerprint,
+      })
+    ) {
       embeddedAgentLog.debug("codex app-server user MCP config changed; starting a new thread", {
         threadId: binding.threadId,
       });
@@ -674,11 +708,12 @@ export async function startOrResumeThread(params: {
         !areDynamicToolFingerprintsCompatible(
           binding.dynamicToolsFingerprint,
           dynamicToolsFingerprint,
+          legacyDynamicToolsFingerprint,
         )
       ) {
         preserveExistingBinding = shouldStartTransientNoToolThread({
           previous: binding.dynamicToolsFingerprint,
-          next: dynamicToolsFingerprint,
+          nextHasDynamicTools: params.dynamicTools.length > 0,
         });
         if (preserveExistingBinding) {
           embeddedAgentLog.debug(
@@ -1019,6 +1054,38 @@ export function shouldRotateCodexAppServerBindingForRuntime(params: {
     return false;
   }
   return params.connectionClass === "remote" || Boolean(params.binding);
+}
+
+type CodexGpt56MultiAgentVersion = "v1" | "v2";
+
+function resolveCodexGpt56MultiAgentVersion(
+  modelRef: string | undefined,
+): CodexGpt56MultiAgentVersion | undefined {
+  let modelId = modelRef?.trim().toLowerCase();
+  if (!modelId) {
+    return undefined;
+  }
+  const slashIndex = modelId.indexOf("/");
+  if (slashIndex > 0) {
+    const provider = modelId.slice(0, slashIndex);
+    if (provider !== "openai" && provider !== "codex") {
+      return undefined;
+    }
+    modelId = modelId.slice(slashIndex + 1);
+  }
+  if (modelId === "gpt-5.6-sol" || modelId === "gpt-5.6-terra") {
+    return "v2";
+  }
+  return modelId === "gpt-5.6-luna" ? "v1" : undefined;
+}
+
+function shouldRotateCodexGpt56MultiAgentBinding(params: {
+  bindingModel?: string;
+  requestedModel: string;
+}): boolean {
+  const bindingVersion = resolveCodexGpt56MultiAgentVersion(params.bindingModel);
+  const requestedVersion = resolveCodexGpt56MultiAgentVersion(params.requestedModel);
+  return Boolean(bindingVersion && requestedVersion && bindingVersion !== requestedVersion);
 }
 
 function isTransientWebSearchRestriction(
@@ -1663,23 +1730,40 @@ export function codexDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[
   return fingerprintDynamicTools(dynamicTools);
 }
 
+export function codexLegacyDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[]): string {
+  return legacyFingerprintDynamicTools(dynamicTools);
+}
+
 export function areCodexDynamicToolFingerprintsCompatible(params: {
   previous?: string;
   next: string;
+  nextLegacy?: string;
 }): boolean {
-  return areDynamicToolFingerprintsCompatible(params.previous, params.next);
+  return areDynamicToolFingerprintsCompatible(params.previous, params.next, params.nextLegacy);
 }
 
 function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
+  return hashCodexAppServerBindingFingerprint(legacyFingerprintDynamicTools(dynamicTools));
+}
+
+function legacyFingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
   return JSON.stringify(
     dynamicTools.map(fingerprintDynamicToolSpec).toSorted(compareJsonFingerprint),
   );
 }
 
-function fingerprintUserMcpServersConfigPatch(
+function legacyFingerprintUserMcpServersConfigPatch(
   configPatch: JsonObject | undefined,
 ): string | undefined {
   return configPatch ? JSON.stringify(stabilizeJsonValue(configPatch)) : undefined;
+}
+
+function fingerprintUserMcpServersConfigPatch(
+  configPatch: JsonObject | undefined,
+): string | undefined {
+  return configPatch
+    ? hashCodexAppServerBindingFingerprint(JSON.stringify(stabilizeJsonValue(configPatch)))
+    : undefined;
 }
 
 function fingerprintJsonObject(value: JsonObject): string {
@@ -1740,20 +1824,49 @@ function readActiveCodexTurnIds(thread: unknown): string[] {
     .filter((turnId) => turnId.trim().length > 0);
 }
 
-const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = JSON.stringify([]);
+const LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT = legacyFingerprintDynamicTools([]);
+const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = hashCodexAppServerBindingFingerprint(
+  LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT,
+);
 
-function areDynamicToolFingerprintsCompatible(previous: string | undefined, next: string): boolean {
-  return !previous || previous === next;
+function areDynamicToolFingerprintsCompatible(
+  previous: string | undefined,
+  next: string,
+  nextLegacy?: string,
+): boolean {
+  return !previous || previous === next || previous === nextLegacy;
+}
+
+function areUserMcpServersFingerprintsCompatible(params: {
+  previous?: string;
+  next?: string;
+  nextLegacy?: string;
+}): boolean {
+  // Beta 5 stored raw stabilized JSON, while doctor hashes those exact bytes.
+  // A successful resume rewrites either legacy form to the current bounded hash.
+  return (
+    params.previous === params.next ||
+    params.previous === params.nextLegacy ||
+    (params.nextLegacy !== undefined &&
+      params.previous === hashCodexAppServerBindingFingerprint(params.nextLegacy))
+  );
 }
 
 function shouldStartTransientNoToolThread(params: {
   previous: string | undefined;
-  next: string;
+  nextHasDynamicTools: boolean;
 }): boolean {
   return Boolean(
     params.previous &&
-    params.previous !== EMPTY_DYNAMIC_TOOLS_FINGERPRINT &&
-    params.next === EMPTY_DYNAMIC_TOOLS_FINGERPRINT,
+    !isEmptyDynamicToolsFingerprint(params.previous) &&
+    !params.nextHasDynamicTools,
+  );
+}
+
+function isEmptyDynamicToolsFingerprint(fingerprint: string): boolean {
+  return (
+    fingerprint === EMPTY_DYNAMIC_TOOLS_FINGERPRINT ||
+    fingerprint === LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT
   );
 }
 
@@ -1875,7 +1988,7 @@ export function resolveCodexAppServerModelProvider(params: {
 // Other modern models translate `minimal` to `low`. (#71946)
 // Exported for unit-test coverage of the model-aware translation path.
 export function resolveReasoningEffort(
-  thinkLevel: EmbeddedRunAttemptParams["thinkLevel"],
+  thinkLevel: EmbeddedRunAttemptParams["thinkLevel"] | "ultra",
   modelId: string,
   supportedReasoningEfforts?: readonly string[],
 ): CodexReasoningEffort | null {

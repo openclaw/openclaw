@@ -49,11 +49,20 @@ const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64
 type WorkflowStep = {
   "continue-on-error"?: boolean | string;
   env?: Record<string, string>;
+  id?: string;
   if?: string;
   name?: string;
   run?: string;
   uses?: string;
   with?: Record<string, string>;
+};
+
+type WorkflowMatrixEntry = {
+  advisory?: boolean;
+  command?: string;
+  profiles?: string;
+  suite_group?: string;
+  suite_id?: string;
 };
 
 type WorkflowJob = {
@@ -65,8 +74,14 @@ type WorkflowJob = {
   if?: string;
   name?: string;
   needs?: string | string[];
+  outputs?: Record<string, string>;
   permissions?: Record<string, string>;
   "runs-on"?: string;
+  strategy?: {
+    matrix?: {
+      include?: WorkflowMatrixEntry[];
+    };
+  };
   "timeout-minutes"?: number | string;
   steps?: WorkflowStep[];
 };
@@ -106,6 +121,16 @@ function workflowStep(job: WorkflowJob, stepName: string): WorkflowStep {
   return step;
 }
 
+function workflowMatrixEntry(path: string, jobName: string, suiteId: string): WorkflowMatrixEntry {
+  const entry = workflowJob(path, jobName).strategy?.matrix?.include?.find(
+    (candidate) => candidate.suite_id === suiteId,
+  );
+  if (!entry) {
+    throw new Error(`Expected workflow matrix entry ${suiteId} in ${jobName}`);
+  }
+  return entry;
+}
+
 function expectTextToIncludeAll(text: string | undefined, snippets: string[]): void {
   if (text === undefined) {
     throw new Error("Expected text to be defined before checking snippets");
@@ -118,6 +143,10 @@ function expectTextToIncludeAll(text: string | undefined, snippets: string[]): v
 describe("package acceptance workflow", () => {
   it("verifies immutable postpublish evidence before stable closeout reads it", () => {
     const workflow = readFileSync(STABLE_MAIN_CLOSEOUT_WORKFLOW, "utf8");
+    const evidenceStep = workflowStep(
+      workflowJob(STABLE_MAIN_CLOSEOUT_WORKFLOW, "verify"),
+      "Verify release workflow evidence",
+    );
     const checksumIndex = workflow.indexOf(
       'sha256sum --strict --status -c "$evidence_checksum_asset"',
     );
@@ -197,6 +226,35 @@ describe("package acceptance workflow", () => {
       'awk -v asset="openclaw-${release_version}-stable-main-closeout.json"',
     );
     expect(workflow).toContain("attach_or_verify \\");
+    expect(workflow).toContain(
+      "full_release_validation_run_attempt: ${{ steps.inputs.outputs.full_release_validation_run_attempt }}",
+    );
+    expect(workflow).toContain("(.[0].runAttempt == null) or");
+    expect(workflow).toContain(
+      'release_manifest_asset="openclaw-${evidence_version}-release-manifest.json"',
+    );
+    expect(workflow).toContain('sha256sum --strict --status -c "$release_manifest_checksum_asset"');
+    expect(workflow).toContain(
+      '"$existing_closeout_full_release_validation_run_attempt" != "$full_release_validation_run_attempt"',
+    );
+    expect(evidenceStep.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
+      "${{ needs.resolve.outputs.full_release_validation_run_attempt }}",
+    );
+    expect(evidenceStep.run).toContain(
+      "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
+    );
+    expect(evidenceStep.run).toContain(
+      'String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT',
+    );
+    expect(evidenceStep.run).toContain(
+      'manifest_asset="openclaw-${evidence_version}-release-manifest.json"',
+    );
+    expect(evidenceStep.run).toContain('gh_with_retry release download "$EVIDENCE_TAG"');
+    expect(evidenceStep.run).toContain(".runId == $run_id");
+    expect(evidenceStep.run).toContain(".runAttempt == $run_attempt");
+    expect(workflow).toContain(
+      '--full-release-validation-run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT"',
+    );
     expect(checksumIndex).toBeGreaterThan(-1);
     expect(evidenceReadIndex).toBeGreaterThan(checksumIndex);
     expect(existingCloseoutEvidenceMatchIndex).toBeGreaterThan(evidenceReadIndex);
@@ -554,18 +612,16 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       '[[ ( "$CHILD_WORKFLOW_REF" == release-ci/* || "$CHILD_WORKFLOW_REF" =~ ^extended-stable/[0-9]{4}\\.([1-9]|1[0-2])\\.33$ ) && -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]',
     );
-    expect(workflow).toContain(
-      'gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
-    );
+    expect(workflow).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1');
     expect(performanceJob).toContain(
       'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
     );
     expect(performanceJob).toContain('-f dispatch_id="$dispatch_id"');
     expect(performanceJob).toContain(
-      'DISPATCH_RUN_NAME="$dispatch_run_name" gh_with_retry api -X GET',
+      'DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF"',
     );
     expect(performanceJob).toContain(".display_title == env.DISPATCH_RUN_NAME");
-    expect(performanceJob).toContain("Could not find dispatched run for ${dispatch_run_name}.");
+    expect(performanceJob).toContain("Could not find exact dispatched run ${dispatch_run_name}");
     expect(performanceJob).not.toContain("BEFORE_IDS=");
     expect(performanceJob).not.toContain(
       "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
@@ -702,10 +758,10 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}");
     expect(workflow).toContain("name: docker-e2e-${{ steps.plan.outputs.artifact_suffix }}");
     expect(scheduler).toContain(
-      "published_upgrade_survivor_baseline=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}",
+      "published_upgrade_survivor_baseline=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}",
     );
     expect(scheduler).toContain(
-      "published_upgrade_survivor_baselines=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}",
+      "published_upgrade_survivor_baselines=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}",
     );
     expect(scheduler).toContain(
       '["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC]',
@@ -960,8 +1016,6 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_group: native-live-extensions-media-video");
     expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax");
     expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai");
-    expect(workflow).toContain("suite_group: native-live-src-gateway-profiles-opencode-go");
-    expect(workflow).toContain("opencode-go/mimo-v2-omni");
     expect(workflow).toContain(
       "inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic'",
     );
@@ -983,11 +1037,66 @@ describe("package artifact reuse", () => {
     ).toHaveLength(2);
   });
 
+  it("pins DeepSeek live profiles to both current V4 model refs", () => {
+    const deepSeek = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-deepseek",
+    );
+    const openCodeGo = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-opencode-go-deepseek-glm",
+    );
+
+    expect(deepSeek).toMatchObject({
+      advisory: true,
+      command:
+        "OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek OPENCLAW_LIVE_GATEWAY_MODELS=deepseek/deepseek-v4-flash,deepseek/deepseek-v4-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
+      profiles: "full",
+    });
+    expect(openCodeGo.command).toContain(
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash,opencode-go/deepseek-v4-pro",
+    );
+  });
+
+  it("pins OpenCode Go MiMo live profiles to both current V2.5 model refs", () => {
+    const mimo = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-opencode-go-mimo",
+    );
+
+    expect(mimo).toMatchObject({
+      advisory: true,
+      command:
+        "OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
+      profiles: "full",
+      suite_group: "native-live-src-gateway-profiles-opencode-go",
+    });
+    expect(mimo.command).not.toContain("opencode-go/mimo-v2-omni");
+    expect(mimo.command).not.toContain("opencode-go/mimo-v2-pro");
+  });
+
+  it("runs the fresh OpenAI API-key default without hard-coding a model filter", () => {
+    const openaiDefault = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-openai-api-default",
+    );
+
+    expect(openaiDefault).toMatchObject({ profiles: "stable full" });
+    expect(openaiDefault.command).toContain("OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT=1");
+    expect(openaiDefault.command).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai");
+    expect(openaiDefault.command).not.toContain("OPENCLAW_LIVE_GATEWAY_MODELS=");
+  });
+
   it("runs Docker live harnesses from trusted helper scripts", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const scenarios = readFileSync("scripts/lib/docker-e2e-scenarios.mjs", "utf8");
     const scheduler = readFileSync("scripts/test-docker-all.mjs", "utf8");
     const harness = readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8");
+    const codexLiveTest = readFileSync("src/gateway/gateway-codex-harness.live.test.ts", "utf8");
     const liveDockerAuth = readFileSync("scripts/lib/live-docker-auth.sh", "utf8");
     const sharedLiveScripts = [
       readFileSync("scripts/test-live-models-docker.sh", "utf8"),
@@ -1017,6 +1126,28 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
     );
+    for (const [model, thinking] of [
+      ["sol", "ultra"],
+      ["terra", "ultra"],
+      ["luna", "max"],
+    ]) {
+      expect(workflow).toContain(
+        `OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=openai/gpt-5.6-${model}=${thinking}`,
+      );
+    }
+    expect(workflow.match(/live-codex-harness\*-docker\)/gu)).toHaveLength(2);
+    for (const suiteId of [
+      "native-live-src-gateway-profiles-openai-api-default",
+      "native-live-src-gateway-profiles-openai-gpt56-ultra",
+      "live-codex-harness-gpt56-sol-docker",
+      "live-codex-harness-gpt56-terra-docker",
+      "live-codex-harness-gpt56-luna-docker",
+      "live-codex-harness-gpt56-docker",
+    ]) {
+      expect(workflow).toContain(`add_profile_suite ${suiteId} "stable full"`);
+    }
+    expect(codexLiveTest).toContain("command: `/model ${modelKey} --runtime codex`");
+    expect(codexLiveTest).toContain("thinkingLevel: CODEX_HARNESS_THINKING");
     expect(workflow).toContain(
       'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 20m bash .release-harness/scripts/test-live-subagent-announce-docker.sh',
     );
@@ -1157,7 +1288,7 @@ describe("package artifact reuse", () => {
       "run_setup_command bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'",
     );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
-      "OPENCLAW_LIVE_CODEX_HARNESS_DOCKER_RUN_TIMEOUT:-2100s",
+      "OPENCLAW_LIVE_CODEX_HARNESS_DOCKER_RUN_TIMEOUT:-$((2100 * CODEX_HARNESS_TARGET_COUNT))s",
     );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
       'CODEX_HARNESS_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS 180)"',
@@ -1707,9 +1838,7 @@ describe("package artifact reuse", () => {
     const dispatchStep = workflowStep(npmTelegramJob, "Dispatch and monitor npm Telegram E2E");
 
     expect(workflow).toContain("CHILD_WORKFLOW_REF: ${{ github.ref_name }}");
-    expect(workflow).toContain(
-      'gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
-    );
+    expect(workflow).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1');
     expect(npmTelegramJob.name).toBe("Run package Telegram E2E");
     expect(npmTelegramJob.needs).toEqual(["resolve_target"]);
     expect(npmTelegramJob["timeout-minutes"]).toBe(
@@ -1729,9 +1858,10 @@ describe("package artifact reuse", () => {
       TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
     });
     expectTextToIncludeAll(dispatchStep.run, [
-      'dispatch_output="$(gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}")"',
-      "sed -nE 's#.*actions/runs/([0-9]+).*#\\1#p'",
-      "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
+      'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-npm-telegram"',
+      'dispatch_output="$(gh workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}" 2>&1)"',
+      ".display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF",
+      "The dispatch was not retried to avoid creating a duplicate child.",
       '-f harness_ref="$TARGET_SHA"',
       'args=(-f package_spec="$PACKAGE_SPEC"',
       'args+=(-f scenario="$SCENARIO")',
@@ -1744,7 +1874,7 @@ describe("package artifact reuse", () => {
       'args+=(-f cross_os_suite_filter="$CROSS_OS_SUITE_FILTER")',
       'case "$RERUN_GROUP" in',
       "release-checks|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)",
-      "cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') }}",
+      "cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') || startsWith(inputs.ref, 'release/') }}",
       "Verify release checks accepted Tideclaw alpha advisory lanes",
       "release_checks_advisory_only",
       "release_check_blocking_job",
@@ -1970,7 +2100,26 @@ describe("package artifact reuse", () => {
   it("keeps release publish creation compatible with gh api and prerelease notes", () => {
     const workflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const npmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
+    const maintainerSkill = readFileSync(
+      ".agents/skills/release-openclaw-maintainer/SKILL.md",
+      "utf8",
+    );
     const fullReleaseWorkflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+    const resolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+    const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const resolveFullRun = workflowStep(resolveJob, "Resolve full release validation run");
+    const resolveDownload = workflowStep(resolveJob, "Download full release validation manifest");
+    const trustedTooling = workflowStep(resolveJob, "Download trusted release validation tooling");
+    const validateManifest = workflowStep(resolveJob, "Validate full release validation manifest");
+    const publishDownload = workflowStep(publishJob, "Download full release validation manifest");
+    const publishOrchestration = workflowStep(publishJob, "Dispatch publish workflows");
+    const npmPublishJob = workflowJob(
+      ".github/workflows/openclaw-npm-release.yml",
+      "publish_openclaw_npm",
+    );
+    const npmFullRun = workflowStep(npmPublishJob, "Verify full release validation run metadata");
+    const npmDownload = workflowStep(npmPublishJob, "Download full release validation manifest");
+    const npmTarget = workflowStep(npmPublishJob, "Verify full release validation target");
 
     expect(workflow).toContain("timeout-minutes: 120");
     expect(workflow).toContain("environment: npm-release");
@@ -1978,7 +2127,68 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("Validate OpenClaw npm preflight manifest");
     expect(workflow).toContain("Download full release validation manifest");
     expect(workflow).toContain("Validate full release validation manifest");
+    expect(workflow).toContain("scripts/validate-full-release-validation-evidence.mjs");
+    expect(workflow).toContain("+refs/heads/main:refs/remotes/origin/main");
+    expect(workflow).toContain("full_release_validation_run_attempt");
     expect(workflow).toContain("full_release_validation_run_id");
+    expect(resolveFullRun.id).toBe("full_run");
+    expect(resolveFullRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
+      "${{ inputs.full_release_validation_run_attempt }}",
+    );
+    expect(resolveFullRun.run).toContain(
+      'run_endpoint+="/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"',
+    );
+    expect(resolveFullRun.run).toContain('gh api "$run_endpoint"');
+    expect(resolveJob.outputs?.full_release_validation_run_attempt).toBe(
+      "${{ steps.full_run.outputs.attempt }}",
+    );
+    expect(resolveDownload.with?.name).toBe(
+      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
+    );
+    expect(trustedTooling.env?.WORKFLOW_SHA).toBe("${{ github.sha }}");
+    expect(trustedTooling.run).toContain("validate-full-release-validation-evidence.mjs");
+    expect(trustedTooling.run).toContain("release-ci-summary.mjs");
+    expect(trustedTooling.run).toContain("scripts/lib/plain-gh.mjs");
+    expect(validateManifest.env).toMatchObject({
+      RUN_JSON_FILE: "${{ runner.temp }}/full-release-validation-run.json",
+      TRUSTED_MAIN_REF: "refs/remotes/origin/main",
+      VALIDATOR_FILE:
+        "${{ runner.temp }}/release-validation-tooling/validate-full-release-validation-evidence.mjs",
+      STRICT_VALIDATOR_FILE: "${{ runner.temp }}/release-validation-tooling/release-ci-summary.mjs",
+    });
+    expect(validateManifest.run).toContain(
+      'MANIFEST_FILE="$manifest" node "$VALIDATOR_FILE" < "$RUN_JSON_FILE"',
+    );
+    expect(publishDownload.with?.name).toBe(
+      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
+    );
+    expect(publishOrchestration.run).not.toContain("--full-release-validation-workflow-ref");
+    expect(publishOrchestration.run).not.toContain("--full-release-validation-run");
+    expect(publishOrchestration.run).toContain('pnpm "${verify_args[@]}"');
+    expect(publishOrchestration.run).toContain(".workflowRuns += [");
+    expect(publishOrchestration.run).toContain('label: "Full Release Validation"');
+    expect(publishOrchestration.run).toContain('"${validation_target_sha}" != "${TARGET_SHA}"');
+    expect(publishOrchestration.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
+      "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
+    );
+    expect(publishOrchestration.run).toContain(
+      '-f full_release_validation_run_attempt="${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"',
+    );
+    expect(npmFullRun.id).toBe("full_run");
+    expect(npmFullRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
+      "${{ inputs.full_release_validation_run_attempt }}",
+    );
+    expect(npmFullRun.run).toContain(
+      "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
+    );
+    expect(npmFullRun.run).toContain('"$run_attempt" != "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT"');
+    expect(npmDownload.with?.name).toBe(
+      "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
+    );
+    expect(npmTarget.env).toMatchObject({
+      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ steps.full_run.outputs.attempt }}",
+    });
     expect(workflow).toContain(
       "Full release validation must run rerun_group=all before npm publish",
     );
@@ -1999,12 +2209,13 @@ describe("package artifact reuse", () => {
     expect(fullReleaseWorkflow).toContain('OPENCLAW_EXTENSIONS="diagnostics-otel,codex"');
     expect(fullReleaseWorkflow).not.toContain("/app/src/agents/templates/HEARTBEAT.md");
     expect(fullReleaseWorkflow).toContain("inputs.rerun_group == 'all'");
-    expect(fullReleaseWorkflow).toContain(
-      "needs.docker_runtime_assets_preflight.result == 'success'",
-    );
+    // The preflight no longer gates lane dispatch; the umbrella verifier
+    // enforces its result instead.
+    expect(fullReleaseWorkflow).toContain('"$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" != "success"');
     expect(npmWorkflow).toContain("full_release_validation_run_id");
     expect(npmWorkflow).toContain("release_publish_run_id");
     expect(npmWorkflow).toContain("Real publish requires full_release_validation_run_id");
+    expect(maintainerSkill).toContain("full_release_validation_run_attempt=<saved-attempt>");
     expect(npmWorkflow).toContain(
       "Workflow-dispatched real publish requires release_publish_run_id",
     );

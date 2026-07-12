@@ -24,6 +24,7 @@ import type { CodexServiceTier } from "./protocol.js";
 const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
 const BINDING_LEASE_RETRY_INTERVAL_MS = 1_000;
+const BOUNDED_BINDING_FINGERPRINT_PATTERN = /^sha256:[a-f0-9]{64}$/i;
 
 export {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -243,6 +244,57 @@ const storedBindingSchema = z.discriminatedUnion("state", [
 // id fences delayed lifecycle cleanup so an old generation cannot clear its successor.
 export type StoredCodexAppServerBinding = z.infer<typeof storedBindingSchema>;
 
+export function hashCodexAppServerBindingFingerprint(canonical: string): string {
+  return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+}
+
+function normalizeLegacyBindingFingerprint(value: unknown): unknown {
+  if (
+    typeof value !== "string" ||
+    value === "" ||
+    value === "[]" ||
+    BOUNDED_BINDING_FINGERPRINT_PATTERN.test(value)
+  ) {
+    return value;
+  }
+  return hashCodexAppServerBindingFingerprint(value);
+}
+
+function normalizeLegacyBindingFingerprints(
+  record: Record<string, unknown>,
+): Record<string, unknown> {
+  // Shipped sidecars can contain unbounded canonical JSON fingerprints. Bound
+  // them at the legacy encoder so plugin-state registration cannot reject the row.
+  let normalized = record;
+  for (const key of ["dynamicToolsFingerprint", "userMcpServersFingerprint"] as const) {
+    const value = record[key];
+    const next = normalizeLegacyBindingFingerprint(value);
+    if (next === value) {
+      continue;
+    }
+    if (normalized === record) {
+      normalized = { ...record };
+    }
+    normalized[key] = next;
+  }
+  return normalized;
+}
+
+export function normalizeStoredCodexAppServerBindingFingerprints(
+  value: unknown,
+): StoredCodexAppServerBinding | undefined {
+  const stored = readStoredCodexAppServerBinding(value);
+  if (!stored || stored.state !== "active") {
+    return stored;
+  }
+  const binding = normalizeLegacyBindingFingerprints(
+    stored.binding as unknown as Record<string, unknown>,
+  );
+  return binding === stored.binding
+    ? stored
+    : readStoredCodexAppServerBinding({ ...stored, binding });
+}
+
 /** Encodes a migrated sidecar binding as one canonical plugin-state row. */
 export function createStoredCodexAppServerBinding(
   value: unknown,
@@ -251,10 +303,11 @@ export function createStoredCodexAppServerBinding(
     lookup?: Omit<CodexAppServerAuthProfileLookup, "authProfileId">;
   } = {},
 ): Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined {
-  const record = asRecord(value);
-  if (!record) {
+  const rawRecord = asRecord(value);
+  if (!rawRecord) {
     return undefined;
   }
+  const record = normalizeLegacyBindingFingerprints(rawRecord);
   if (record.schemaVersion !== 1 && record.schemaVersion !== 2) {
     return undefined;
   }
@@ -379,7 +432,7 @@ export function createCodexAppServerBindingStore(
     try {
       let renewed = false;
       const stored = update(key, (raw) => {
-        const current = readStoredBinding(raw);
+        const current = readStoredCodexAppServerBinding(raw);
         if (raw !== undefined && !current) {
           throw new Error(`Invalid Codex app-server binding row: ${key}`);
         }
@@ -426,7 +479,7 @@ export function createCodexAppServerBindingStore(
       update(
         key,
         (raw) => {
-          const current = readStoredBinding(raw);
+          const current = readStoredCodexAppServerBinding(raw);
           if (raw !== undefined && !current) {
             throw new Error(`Invalid Codex app-server binding row: ${key}`);
           }
@@ -470,7 +523,7 @@ export function createCodexAppServerBindingStore(
     async read(identity) {
       const key = bindingStoreKey(identity);
       const raw = state.lookup(key);
-      const stored = readStoredBinding(raw);
+      const stored = readStoredCodexAppServerBinding(raw);
       if (raw !== undefined && !stored) {
         throw new Error(`Invalid Codex app-server binding row: ${key}`);
       }
@@ -482,7 +535,7 @@ export function createCodexAppServerBindingStore(
     async prepareSessionGenerationReclaim(identity) {
       const key = bindingStoreKey(identity);
       const raw = state.lookup(key);
-      const current = readStoredBinding(raw);
+      const current = readStoredCodexAppServerBinding(raw);
       if (raw !== undefined && !current) {
         throw new Error(`Invalid Codex app-server binding row: ${key}`);
       }
@@ -723,7 +776,7 @@ export function createCodexAppServerBindingStore(
             raw: unknown,
             matches: (current: StoredCodexAppServerBinding) => boolean,
           ) => {
-            const current = readStoredBinding(raw);
+            const current = readStoredCodexAppServerBinding(raw);
             if (!current || !matches(current) || current.lease?.token !== token) {
               return undefined;
             }
@@ -789,7 +842,9 @@ export function bindingStoreKey(identity: CodexAppServerBindingIdentity): string
   return `conversation:${bindingId}`;
 }
 
-function readStoredBinding(value: unknown): StoredCodexAppServerBinding | undefined {
+export function readStoredCodexAppServerBinding(
+  value: unknown,
+): StoredCodexAppServerBinding | undefined {
   const result = storedBindingSchema.safeParse(value);
   return result.success
     ? (stripUndefinedValue(result.data) as StoredCodexAppServerBinding)

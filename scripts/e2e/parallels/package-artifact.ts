@@ -1,6 +1,6 @@
 // Package Artifact script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { sleep as delay } from "../../lib/sleep.mjs";
@@ -158,24 +158,29 @@ export async function packOpenClaw(input: {
       checkDirty: true,
       requireControlUi: input.requireControlUi,
     });
-    run("node", [
-      "--import",
-      "tsx",
-      "--input-type=module",
-      "--eval",
-      "import { writePackageDistInventory } from './src/infra/package-dist-inventory.ts'; await writePackageDistInventory(process.cwd());",
-    ]);
     const shortHead = run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim();
-    const output = run(
-      "npm",
-      ["pack", "--ignore-scripts", "--json", "--pack-destination", input.destination],
-      {
-        quiet: true,
-      },
-    ).stdout;
-    const packed = resolveNpmPackTarballFilename(JSON.parse(output).at(-1)?.filename);
     const tgzPath = path.join(input.destination, `openclaw-main-${shortHead}.tgz`);
-    await copyFile(path.join(input.destination, packed), tgzPath);
+    // The canonical helper inventories the package, bundles private workspace runtime code,
+    // and rejects tarballs that still depend on unpublished workspace packages.
+    const packedPath = run(
+      "node",
+      [
+        "scripts/package-openclaw-for-docker.mjs",
+        "--allow-unreleased-changelog",
+        "--skip-build",
+        "--source-dir",
+        repoRoot,
+        "--output-dir",
+        input.destination,
+        "--output-name",
+        path.basename(tgzPath),
+        "--pnpm-pack",
+      ],
+      { quiet: true },
+    ).stdout.trim();
+    if (path.resolve(packedPath) !== path.resolve(tgzPath)) {
+      die(`package helper wrote an unexpected tarball: ${packedPath}`);
+    }
     const buildCommit = await packageBuildCommitFromTgz(tgzPath);
     if (!buildCommit) {
       die(`failed to read packed build commit from ${tgzPath}`);

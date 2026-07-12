@@ -374,8 +374,17 @@ describe("createOllamaStreamFn thinking events", () => {
       "start",
       "toolcall_start",
       "toolcall_delta",
+      "toolcall_end",
       "done",
     ]);
+    const toolCallEnd = events.find((event) => event.type === "toolcall_end") as {
+      toolCall?: Record<string, unknown>;
+    };
+    expect(toolCallEnd.toolCall).toMatchObject({
+      type: "toolCall",
+      name: "mempalace_mempalace_search",
+      arguments: { query: "codename", wing: "personal", room: "identities" },
+    });
     const done = events.find((event) => event.type === "done") as {
       message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
       reason?: string;
@@ -422,6 +431,7 @@ describe("createOllamaStreamFn thinking events", () => {
       "start",
       "toolcall_start",
       "toolcall_delta",
+      "toolcall_end",
       "done",
     ]);
     const done = events.find((event) => event.type === "done") as {

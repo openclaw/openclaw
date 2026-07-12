@@ -630,6 +630,24 @@ describe("runCliAgent spawn path", () => {
     expect(requireArgAfter(input.argv, "--effort")).toBe("high");
   });
 
+  it("maps Ultra to the strongest generic CLI backend level", async () => {
+    mockSuccessfulClaudeJsonlRun();
+    const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-ultra-args",
+        thinkLevel: "ultra",
+        resolveExecutionArgs,
+      }),
+    );
+
+    const resolveArgsInput = requireRecord(mockCallArg(resolveExecutionArgs), "resolved args");
+    expect(resolveArgsInput.thinkingLevel).toBe("max");
+  });
+
   it("passes prepared backend env to the spawned CLI process", async () => {
     mockSuccessfulCliRun();
 

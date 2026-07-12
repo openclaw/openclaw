@@ -321,6 +321,12 @@ import {
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import {
+  cloneToolResultPromptProjectionState,
+  getEmbeddedSessionPromptState,
+  hasSessionUserTurnBeenSent,
+  markSessionUserTurnsSent,
+} from "../session-prompt-state.js";
+import {
   describeEmbeddedAgentStreamStrategy,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentApiKey,
@@ -347,13 +353,11 @@ import {
 import {
   resolveLiveToolResultMaxChars,
   resolveLiveToolResultAggregateMaxChars,
-  createToolResultPromptProjectionState,
   truncateOversizedToolResultsInMessages,
-  type ToolResultPromptProjectionState,
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
 import { splitSdkTools } from "../tool-split.js";
-import { mapThinkingLevel } from "../utils.js";
+import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
@@ -852,6 +856,11 @@ export async function runEmbeddedAttempt(
 ): Promise<EmbeddedRunAttemptResult> {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const runAbortController = new AbortController();
+  // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
+  // prompt/status surfaces, then lower only at agent-core and provider boundaries.
+  const agentCoreThinkingLevel = mapThinkingLevel(params.thinkLevel);
+  const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel);
+  const proactiveSubagentOrchestration = params.thinkLevel === "ultra";
   configureEmbeddedAttemptHttpRuntime({ timeoutMs: params.timeoutMs });
 
   log.debug(
@@ -2085,6 +2094,7 @@ export async function runEmbeddedAttempt(
         promptMode: effectivePromptMode,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
         silentReplyPromptMode: params.silentReplyPromptMode,
+        proactiveSubagentOrchestration,
         acpEnabled: isAcpRuntimeSpawnAvailable({
           config: params.config,
           sandboxed: sandboxInfo?.enabled === true,
@@ -2555,7 +2565,7 @@ export async function runEmbeddedAttempt(
           authStorage: params.authStorage,
           modelRegistry: params.modelRegistry,
           model: params.model,
-          thinkingLevel: mapThinkingLevel(params.thinkLevel),
+          thinkingLevel: agentCoreThinkingLevel,
           tools: sessionToolAllowlist,
           customTools: allCustomTools,
           sessionManager,
@@ -2656,8 +2666,10 @@ export async function runEmbeddedAttempt(
           );
       }
       let prePromptMessageCount = activeSession.messages.length;
-      const toolResultPromptProjectionState: ToolResultPromptProjectionState =
-        createToolResultPromptProjectionState();
+      // Session-owned projections survive attempt teardown so already-sent tool results
+      // cannot rewrite the provider prompt-cache tail between turns (#99495).
+      const sessionPromptState = getEmbeddedSessionPromptState(params.sessionId);
+      const toolResultPromptProjectionState = sessionPromptState.toolResults;
       let contextEngineAfterTurnCheckpoint: number | null = null;
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
       let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
@@ -2898,7 +2910,7 @@ export async function runEmbeddedAttempt(
       };
       const preparedRuntimeExtraParams = params.runtimePlan?.transport.resolveExtraParams({
         extraParamsOverride: streamExtraParamsOverride,
-        thinkingLevel: params.thinkLevel,
+        thinkingLevel: providerThinkingLevel,
         agentId: sessionAgentId,
         workspaceDir: effectiveWorkspace,
         model: params.model,
@@ -2917,7 +2929,7 @@ export async function runEmbeddedAttempt(
           provider: params.provider,
           modelId: params.modelId,
           extraParamsOverride: streamExtraParamsOverride,
-          thinkingLevel: params.thinkLevel,
+          thinkingLevel: providerThinkingLevel,
           agentId: sessionAgentId,
           agentDir,
           workspaceDir: effectiveWorkspace,
@@ -2982,7 +2994,7 @@ export async function runEmbeddedAttempt(
         params.provider,
         params.modelId,
         streamExtraParamsOverride,
-        params.thinkLevel,
+        providerThinkingLevel,
         sessionAgentId,
         effectiveWorkspace,
         params.model,
@@ -4363,7 +4375,7 @@ export async function runEmbeddedAttempt(
             contextTokenBudget,
             promptToolResultMaxChars,
             promptToolResultAggregateMaxChars,
-            toolResultPromptProjectionState,
+            cloneToolResultPromptProjectionState(toolResultPromptProjectionState),
           );
           const promptHistoryChanged =
             promptToolResultTruncation.messages !== activeSession.messages;
@@ -4989,9 +5001,21 @@ export async function runEmbeddedAttempt(
                     promptToolResultAggregateMaxChars,
                     toolResultPromptProjectionState,
                   );
-                  return providerPromptHistoryTruncation.messages !== messages
-                    ? providerPromptHistoryTruncation.messages
-                    : messages;
+                  const providerMessages =
+                    providerPromptHistoryTruncation.messages !== messages
+                      ? providerPromptHistoryTruncation.messages
+                      : messages;
+                  // This provider-dispatch transform marks the current turn sent so late
+                  // media appends instead of rewriting its prompt-cache slot (#99495).
+                  markSessionUserTurnsSent(sessionPromptState, providerMessages);
+                  const recorder = params.userTurnTranscriptRecorder;
+                  if (
+                    recorder &&
+                    hasSessionUserTurnBeenSent(sessionPromptState, recorder.message) !== false
+                  ) {
+                    recorder.markSentToProvider?.();
+                  }
+                  return providerMessages;
                 },
               );
               activeSession.agent.streamFn = providerPromptStreamFn;

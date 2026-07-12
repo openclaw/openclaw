@@ -131,9 +131,11 @@ function resolvePackedOpenClawFileName(value) {
 
 export function parseArgs(argv) {
   const options = {
+    allowUnreleasedChangelog: false,
     outputDir: "",
     outputName: "",
     packJson: "",
+    pnpmPack: false,
     skipBuild: false,
     sourceDir: ROOT_DIR,
   };
@@ -147,7 +149,9 @@ export function parseArgs(argv) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--output-dir") {
+    if (arg === "--allow-unreleased-changelog") {
+      setOnce(arg, "allowUnreleasedChangelog", true);
+    } else if (arg === "--output-dir") {
       setOnce("--output-dir", "outputDir", readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg?.startsWith("--output-dir=")) {
@@ -174,6 +178,8 @@ export function parseArgs(argv) {
         "packJson",
         readEqualsOptionValue(arg.slice("--pack-json=".length), "--pack-json"),
       );
+    } else if (arg === "--pnpm-pack") {
+      setOnce(arg, "pnpmPack", true);
     } else if (arg === "--skip-build") {
       setOnce(arg, "skipBuild", true);
     } else if (arg === "--source-dir") {
@@ -191,6 +197,9 @@ export function parseArgs(argv) {
   }
   if (options.outputName) {
     validateOutputName(options.outputName);
+  }
+  if (options.packJson && options.pnpmPack) {
+    throw new Error("--pack-json cannot be combined with --pnpm-pack");
   }
   return options;
 }
@@ -635,9 +644,18 @@ export async function prepareBundledAiRuntimePackage(
 
 export async function packOpenClawPackageForDocker(sourceDir, outputDir, options = {}) {
   const runCaptureImpl = options.runCaptureImpl ?? runCapture;
-  const prepareChangelog = options.prepareChangelog ?? preparePackageChangelog;
+  const prepareChangelog =
+    options.prepareChangelog ??
+    ((cwd) =>
+      preparePackageChangelog(cwd, {
+        allowUnreleased: options.allowUnreleasedChangelog,
+      }));
   const restoreChangelog = options.restoreChangelog ?? restorePackageChangelog;
   const prepareBundledAiRuntime = options.prepareBundledAiRuntime ?? prepareBundledAiRuntimePackage;
+  const packTool = options.pnpmPack ? "pnpm" : "npm";
+  if (options.packJsonPath && options.pnpmPack) {
+    throw new Error("packJsonPath cannot be combined with pnpmPack");
+  }
   console.error("==> Packing OpenClaw package");
   await prepareChangelog(sourceDir);
   let packOutput;
@@ -645,26 +663,24 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
   try {
     await cleanPackedOpenClawTarballs(outputDir);
     cleanupBundledAiRuntime = await prepareBundledAiRuntime(sourceDir, outputDir, runCaptureImpl);
-    const packArgs = [
-      "pack",
-      ...(options.packJsonPath ? ["--json"] : []),
-      "--silent",
-      "--ignore-scripts",
-      "--pack-destination",
-      outputDir,
-    ];
-    packOutput = await runCaptureImpl(
-      "npm",
-      packArgs,
-      sourceDir,
-      {
-        deferForwardedSignalExit: true,
-        timeoutMs: resolveTimeoutMs(
-          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-        ),
-      },
-    );
+    const packArgs =
+      packTool === "pnpm"
+        ? ["pack", "--silent", "--config.ignore-scripts=true", "--pack-destination", outputDir]
+        : [
+            "pack",
+            ...(options.packJsonPath ? ["--json"] : []),
+            "--silent",
+            "--ignore-scripts",
+            "--pack-destination",
+            outputDir,
+          ];
+    packOutput = await runCaptureImpl(packTool, packArgs, sourceDir, {
+      deferForwardedSignalExit: true,
+      timeoutMs: resolveTimeoutMs(
+        "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+        DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+      ),
+    });
   } finally {
     try {
       await cleanupBundledAiRuntime();
@@ -672,7 +688,9 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
       await restoreChangelog(sourceDir);
     }
   }
-  let tarball = await newestOpenClawTarball(outputDir, packOutput);
+  // pnpm reports an absolute destination path. Scan the freshly emptied output directory
+  // instead of accepting that command output as an artifact path.
+  let tarball = await newestOpenClawTarball(outputDir, options.pnpmPack ? "" : packOutput);
   if (options.outputName) {
     const target = path.join(outputDir, options.outputName);
     if (target !== tarball) {
@@ -718,8 +736,10 @@ async function main() {
   );
 
   const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+    allowUnreleasedChangelog: options.allowUnreleasedChangelog,
     outputName: options.outputName,
     packJsonPath: options.packJson,
+    pnpmPack: options.pnpmPack,
   });
 
   console.error("==> Checking OpenClaw package tarball");

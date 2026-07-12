@@ -259,7 +259,7 @@ describe("Docker E2E helper CLIs", () => {
             lanes: [
               {
                 ghWorkflowCommand:
-                  "gh workflow run 'openclaw-live-and-e2e-checks-reusable.yml' --ref 'release/2026.6' -f package_artifact_run_id='12345' -f package_artifact_name='docker-e2e-package' -f docker_e2e_bare_image='ghcr.io/openclaw/openclaw-bare:test' -f published_upgrade_survivor_baselines='openclaw@2026.5.3' -f published_upgrade_survivor_scenarios='plugin-dependency-cleanup' -f unsafe_input='do-not-copy'",
+                  "gh workflow run 'openclaw-live-and-e2e-checks-reusable.yml' --ref 'release/2026.6' -f package_artifact_run_id='12345' -f package_artifact_name='docker-e2e-package' -f docker_e2e_bare_image='ghcr.io/openclaw/openclaw-bare:test' -f published_upgrade_survivor_baselines='openclaw@2026.5.3' -f published_upgrade_survivor_scenarios='plugin-dependency-cleanup' -f allow_unreleased_changelog=true -f unsafe_input='do-not-copy'",
                 name: "published-upgrade-survivor-openclaw-2026-5-3",
                 status: 1,
               },
@@ -288,6 +288,7 @@ describe("Docker E2E helper CLIs", () => {
       expect(combinedCommand).toContain(
         "published_upgrade_survivor_scenarios='plugin-dependency-cleanup'",
       );
+      expect(combinedCommand).toContain("allow_unreleased_changelog=true");
       expect(combinedCommand).not.toContain("unsafe_input");
       expect(result.stdout).toContain("package_artifact_run_id='12345'");
       expect(result.stdout).toContain(
@@ -317,7 +318,7 @@ describe("Docker E2E helper CLIs", () => {
             lanes: [
               {
                 ghWorkflowCommand:
-                  "gh workflow run 'openclaw-live-and-e2e-checks-reusable.yml' --ref 'release/2026.6' -f published_upgrade_survivor_baselines='openclaw@2026.5.3'",
+                  "gh workflow run 'openclaw-live-and-e2e-checks-reusable.yml' --ref 'release/2026.6' -f published_upgrade_survivor_baselines='openclaw@2026.5.3' -f allow_unreleased_changelog=1",
                 name: "published-upgrade-survivor-openclaw-2026-5-3",
                 status: 1,
               },
@@ -356,6 +357,7 @@ describe("Docker E2E helper CLIs", () => {
       expect(result.stdout).not.toContain(
         "docker_lanes='published-upgrade-survivor-openclaw-2026-5-3 published-upgrade-survivor-openclaw-2026-5-2'",
       );
+      expect(result.stdout).not.toContain("allow_unreleased_changelog");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

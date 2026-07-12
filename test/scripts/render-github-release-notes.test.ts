@@ -214,6 +214,33 @@ describe("GitHub release-note rendering", () => {
     ).toThrow("cannot be compacted without a complete contribution record");
   });
 
+  it("prefers an alpha tag's exact changelog heading over the Unreleased fallback", () => {
+    // Shipped alpha tags carry their own heading with no base section,
+    // matching the tagged CHANGELOG.md shape of v2026.6.20-alpha.1.
+    const changelog = [
+      "# Changelog",
+      "",
+      "## 2026.7.1-alpha.2",
+      "",
+      "- Alpha-only fix.",
+      "",
+      "## 2026.6.11",
+      "",
+      "- Previous release.",
+      "",
+    ].join("\n");
+    const rendered = renderGithubReleaseNotes({
+      changelog,
+      version,
+      tag: "v2026.7.1-alpha.2",
+      repository,
+    });
+
+    expect(rendered.body).toContain("## 2026.7.1-alpha.2");
+    expect(rendered.body).toContain("Alpha-only fix.");
+    expect(rendered.body).not.toContain("Previous release.");
+  });
+
   it("permits the Unreleased fallback only for alpha tags", () => {
     const changelog = changelogFor("- **PR #123** fix: example.").replace(
       "## 2026.7.1",

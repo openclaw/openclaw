@@ -17,6 +17,7 @@ import {
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
   parseCommandArgs,
+  resolveEffectiveAgentRuntime,
   resolveCommandArgMenu,
   resolveFastModeState,
   resolveStoredModelOverride,
@@ -44,6 +45,7 @@ import {
   getSessionEntry,
   resolveStorePath,
   type SessionEntry,
+  updateSessionStoreEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveSessionTranscriptLegacyFileTarget } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
@@ -181,17 +183,20 @@ function buildTelegramCodexLoginFlowKey(params: {
   ].join(":");
 }
 
+type TelegramCommandMenuModelContext = {
+  provider?: string;
+  model?: string;
+  agentRuntime?: string;
+  thinkingLevel?: string;
+  fastMode?: SessionEntry["fastMode"];
+};
+
 function buildTelegramCommandMenuModelContext(params: {
   provider: string;
   model: string;
   thinkingLevel?: string;
   fastMode?: SessionEntry["fastMode"];
-}): {
-  provider: string;
-  model: string;
-  thinkingLevel?: string;
-  fastMode?: SessionEntry["fastMode"];
-} {
+}): TelegramCommandMenuModelContext {
   return {
     provider: params.provider,
     model: params.model,
@@ -264,12 +269,7 @@ function resolveTelegramCommandMenuModelContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
-}): {
-  provider?: string;
-  model?: string;
-  thinkingLevel?: string;
-  fastMode?: SessionEntry["fastMode"];
-} {
+}): TelegramCommandMenuModelContext {
   if (!params.sessionKey.trim()) {
     return {};
   }
@@ -282,38 +282,52 @@ function resolveTelegramCommandMenuModelContext(params: {
     const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
     const thinkingLevel = normalizeOptionalString(entry?.thinkingLevel);
     const fastMode = entry?.fastMode;
+    let context: TelegramCommandMenuModelContext;
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
-      return buildTelegramCommandMenuModelContext({
+      context = buildTelegramCommandMenuModelContext({
         provider: defaultModel.provider,
         model: defaultModel.model,
         ...(thinkingLevel ? { thinkingLevel } : {}),
         ...(fastMode !== undefined ? { fastMode } : {}),
       });
-    }
-    const override = resolveStoredModelOverride({
-      sessionEntry: entry,
-      loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
-      sessionKey: params.sessionKey,
-      defaultProvider: defaultModel.provider,
-    });
-    if (override?.model) {
-      return buildTelegramCommandMenuModelContext({
-        provider: override.provider || defaultModel.provider,
-        model: override.model,
-        ...(thinkingLevel ? { thinkingLevel } : {}),
-        ...(fastMode !== undefined ? { fastMode } : {}),
+    } else {
+      const override = resolveStoredModelOverride({
+        sessionEntry: entry,
+        loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
+        sessionKey: params.sessionKey,
+        defaultProvider: defaultModel.provider,
       });
+      if (override?.model) {
+        context = buildTelegramCommandMenuModelContext({
+          provider: override.provider || defaultModel.provider,
+          model: override.model,
+          ...(thinkingLevel ? { thinkingLevel } : {}),
+          ...(fastMode !== undefined ? { fastMode } : {}),
+        });
+      } else {
+        const provider =
+          normalizeOptionalString(entry?.providerOverride) ??
+          normalizeOptionalString(entry?.modelProvider);
+        const model =
+          normalizeOptionalString(entry?.modelOverride) ?? normalizeOptionalString(entry?.model);
+        context = {
+          ...(provider ? { provider } : {}),
+          ...(model ? { model } : {}),
+          ...(thinkingLevel ? { thinkingLevel } : {}),
+          ...(fastMode !== undefined ? { fastMode } : {}),
+        };
+      }
     }
-    const provider =
-      normalizeOptionalString(entry?.providerOverride) ??
-      normalizeOptionalString(entry?.modelProvider);
-    const model =
-      normalizeOptionalString(entry?.modelOverride) ?? normalizeOptionalString(entry?.model);
     return {
-      ...(provider ? { provider } : {}),
-      ...(model ? { model } : {}),
-      ...(thinkingLevel ? { thinkingLevel } : {}),
-      ...(fastMode !== undefined ? { fastMode } : {}),
+      ...context,
+      agentRuntime: resolveEffectiveAgentRuntime({
+        cfg: params.cfg,
+        provider: context.provider ?? defaultModel.provider,
+        modelId: context.model ?? defaultModel.model,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionEntry: entry,
+      }),
     };
   } catch {
     return {};
@@ -405,6 +419,7 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
   agentId: string;
   provider?: string;
   model?: string;
+  agentRuntime?: string;
   thinkingLevel?: string;
   catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
 }): Promise<string> {
@@ -426,6 +441,7 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
     cfg: params.cfg,
     provider: params.provider ?? defaultModel.provider,
     model: params.model ?? defaultModel.model,
+    agentRuntime: params.agentRuntime,
     loadModelCatalog: async () => params.catalog,
   });
 }
@@ -1306,21 +1322,88 @@ export const registerTelegramNativeCommands = ({
               agentId: route.agentId,
               sessionKey: targetSessionKey,
             });
-            const profileId = codexChannelLoginRuntime.resolveProviderScopedProfileId(
-              targetSessionEntry?.authProfileOverride,
-              loginProvider,
-            );
-            await codexChannelLoginRuntime.runDeviceLoginFlow({
+            const loginResult = await codexChannelLoginRuntime.runDeviceLoginFlow({
               runLoginFlow: loginFlow,
               provider: loginProvider,
               agentId: route.agentId,
-              ...(profileId ? { profileId } : {}),
               config: runtimeCfg,
               runtime,
               sendMessage: sendLoginMessage,
               unsupportedPromptMessage:
                 "Telegram /login supports only fixed Codex device-code auth.",
             });
+            const nextProfileId = loginResult.profiles.find(
+              (profile) => profile.provider === loginProvider,
+            )?.profileId;
+            if (!nextProfileId) {
+              await sendLoginMessage(
+                "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+              );
+              return;
+            }
+            const needsSessionUpdate =
+              targetSessionEntry &&
+              (targetSessionEntry.authProfileOverride !== nextProfileId ||
+                targetSessionEntry.authProfileOverrideSource !== "user" ||
+                targetSessionEntry.authProfileOverrideCompactionCount !== undefined);
+            if (targetSessionEntry) {
+              try {
+                const storePath = resolveStorePath(runtimeCfg.session?.store, {
+                  agentId: route.agentId,
+                });
+                let snapshotMatched = false;
+                const persisted = await updateSessionStoreEntry({
+                  sessionKey: targetSessionKey,
+                  storePath,
+                  requireWriteSuccess: true,
+                  skipMaintenance: true,
+                  update: (entry) => {
+                    if (
+                      entry.sessionId !== targetSessionEntry.sessionId ||
+                      entry.authProfileOverride !== targetSessionEntry.authProfileOverride ||
+                      entry.authProfileOverrideSource !==
+                        targetSessionEntry.authProfileOverrideSource ||
+                      entry.authProfileOverrideCompactionCount !==
+                        targetSessionEntry.authProfileOverrideCompactionCount
+                    ) {
+                      return null;
+                    }
+                    snapshotMatched = true;
+                    return needsSessionUpdate
+                      ? {
+                          authProfileOverride: nextProfileId,
+                          authProfileOverrideSource: "user",
+                          authProfileOverrideCompactionCount: undefined,
+                        }
+                      : null;
+                  },
+                });
+                if (
+                  !snapshotMatched ||
+                  !persisted ||
+                  persisted.authProfileOverride !== nextProfileId ||
+                  persisted.authProfileOverrideSource !== "user" ||
+                  persisted.authProfileOverrideCompactionCount !== undefined
+                ) {
+                  await sendLoginMessage(
+                    "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+                  );
+                  return;
+                }
+              } catch (error) {
+                runtime.error?.(
+                  danger(
+                    `telegram /login codex completed but failed to update session auth profile: ${String(
+                      error,
+                    )}`,
+                  ),
+                );
+                await sendLoginMessage(
+                  "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+                );
+                return;
+              }
+            }
             await sendLoginMessage("Codex login complete. Try your request again now.");
           } catch {
             runtime.error?.(danger("telegram /login codex failed"));
