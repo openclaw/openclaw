@@ -59,4 +59,23 @@ describe("buildBotLogsResult", () => {
     expect(fs.readFileSync(first.filePath, "utf8")).toContain("line 1");
     expect(fs.readFileSync(second.filePath, "utf8")).toContain("line 2");
   });
+
+  it("does not count a trailing newline as an exported log line", () => {
+    const logDir = path.join(tempHome, ".openclaw", "logs");
+    fs.mkdirSync(logDir, { recursive: true });
+    const lines = Array.from({ length: 1001 }, (_, i) => `entry-${String(i + 1).padStart(4, "0")}`);
+    fs.writeFileSync(path.join(logDir, "gateway.log"), `${lines.join("\n")}\n`, "utf8");
+
+    const result = buildBotLogsResult();
+
+    expect(typeof result).toBe("object");
+    if (!result || typeof result === "string") {
+      throw new Error("expected file upload result");
+    }
+    const exported = fs.readFileSync(result.filePath, "utf8");
+    expect(exported).toContain("gateway.log (last 1000 of 1001 lines)");
+    expect(exported).not.toContain("entry-0001");
+    expect(exported).toContain("entry-0002");
+    expect(exported.endsWith("entry-1001")).toBe(true);
+  });
 });

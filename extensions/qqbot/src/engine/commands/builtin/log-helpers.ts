@@ -242,7 +242,9 @@ function tailFileLines(
     }
 
     const tailContent = Buffer.concat(chunks).toString("utf8");
-    const allLines = tailContent.split("\n");
+    const allLines = (tailContent.endsWith("\n") ? tailContent.slice(0, -1) : tailContent).split(
+      "\n",
+    );
 
     const tail = allLines.slice(-maxLines);
 
