@@ -384,6 +384,53 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         self.snapshotId = snapshotId
     }
 
+    public init(
+        gatewayStatusText: String,
+        gatewayConnected: Bool,
+        agentName: String,
+        agentAvatarURL: String? = nil,
+        agentAvatarText: String? = nil,
+        sessionKey: String,
+        gatewayStableID: String? = nil,
+        talkStatusText: String,
+        talkEnabled: Bool,
+        talkListening: Bool,
+        talkSpeaking: Bool,
+        pendingApprovalCount: Int,
+        chatItems: [OpenClawWatchChatItem]? = nil,
+        chatStatusText: String? = nil,
+        sentAtMs: Int64? = nil,
+        snapshotId: String? = nil)
+    {
+        // Preserve the shipped source API while producers migrate to semantic statuses.
+        self.init(
+            gatewayStatus: Self.decodeLegacyGatewayStatus(
+                text: gatewayStatusText,
+                connected: gatewayConnected),
+            gatewayStatusText: gatewayStatusText,
+            gatewayConnected: gatewayConnected,
+            agentName: agentName,
+            agentAvatarURL: agentAvatarURL,
+            agentAvatarText: agentAvatarText,
+            sessionKey: sessionKey,
+            gatewayStableID: gatewayStableID,
+            talkStatus: Self.decodeLegacyTalkStatus(
+                text: talkStatusText,
+                enabled: talkEnabled,
+                listening: talkListening,
+                speaking: talkSpeaking),
+            talkStatusText: talkStatusText,
+            talkEnabled: talkEnabled,
+            talkListening: talkListening,
+            talkSpeaking: talkSpeaking,
+            pendingApprovalCount: pendingApprovalCount,
+            chatItems: chatItems,
+            chatStatus: Self.decodeLegacyChatStatus(code: nil, text: chatStatusText),
+            chatStatusText: chatStatusText,
+            sentAtMs: sentAtMs,
+            snapshotId: snapshotId)
+    }
+
     private enum CodingKeys: String, CodingKey {
         case type
         case gatewayStatus
@@ -426,25 +473,25 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         self.snapshotId = try container.decodeIfPresent(String.self, forKey: .snapshotId)
 
         let gatewayStatusText = try container.decodeIfPresent(String.self, forKey: .gatewayStatusText)
-        self.gatewayStatus = try container.decodeIfPresent(
+        self.gatewayStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
-            forKey: .gatewayStatus) ?? Self.decodeLegacyGatewayStatus(
+            forKey: .gatewayStatus)) ?? Self.decodeLegacyGatewayStatus(
             text: gatewayStatusText,
             connected: self.gatewayConnected)
         self.gatewayStatusText = gatewayStatusText ?? Self.legacyText(for: self.gatewayStatus)
         let talkStatusText = try container.decodeIfPresent(String.self, forKey: .talkStatusText)
-        self.talkStatus = try container.decodeIfPresent(
+        self.talkStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
-            forKey: .talkStatus) ?? Self.decodeLegacyTalkStatus(
+            forKey: .talkStatus)) ?? Self.decodeLegacyTalkStatus(
             text: talkStatusText,
             enabled: self.talkEnabled,
             listening: self.talkListening,
             speaking: self.talkSpeaking)
         self.talkStatusText = talkStatusText ?? Self.legacyText(for: self.talkStatus)
         let chatStatusText = try container.decodeIfPresent(String.self, forKey: .chatStatusText)
-        self.chatStatus = try container.decodeIfPresent(
+        self.chatStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
-            forKey: .chatStatus) ?? Self.decodeLegacyChatStatus(
+            forKey: .chatStatus)) ?? Self.decodeLegacyChatStatus(
             code: container.decodeIfPresent(String.self, forKey: .chatStatusCode),
             text: chatStatusText)
         self.chatStatusText = chatStatusText ?? self.chatStatus.map(Self.legacyText)

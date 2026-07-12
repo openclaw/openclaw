@@ -436,6 +436,42 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
     var sentAtMs: Int64?
     var snapshotId: String?
 
+    private init(
+        gatewayStatus: OpenClawWatchAppStatus,
+        gatewayConnected: Bool,
+        agentName: String,
+        agentAvatarURL: String?,
+        agentAvatarText: String?,
+        sessionKey: String,
+        gatewayStableID: String?,
+        talkStatus: OpenClawWatchAppStatus,
+        talkEnabled: Bool,
+        talkListening: Bool,
+        talkSpeaking: Bool,
+        pendingApprovalCount: Int,
+        chatItems: [WatchChatItem]?,
+        chatStatus: OpenClawWatchAppStatus?,
+        sentAtMs: Int64?,
+        snapshotId: String?)
+    {
+        self.gatewayStatus = gatewayStatus
+        self.gatewayConnected = gatewayConnected
+        self.agentName = agentName
+        self.agentAvatarURL = agentAvatarURL
+        self.agentAvatarText = agentAvatarText
+        self.sessionKey = sessionKey
+        self.gatewayStableID = gatewayStableID
+        self.talkStatus = talkStatus
+        self.talkEnabled = talkEnabled
+        self.talkListening = talkListening
+        self.talkSpeaking = talkSpeaking
+        self.pendingApprovalCount = pendingApprovalCount
+        self.chatItems = chatItems
+        self.chatStatus = chatStatus
+        self.sentAtMs = sentAtMs
+        self.snapshotId = snapshotId
+    }
+
     static func parsePayload(_ payload: [String: Any]) -> Self? {
         guard let type = payload["type"] as? String,
               type == WatchPayloadType.appSnapshot.rawValue
@@ -548,21 +584,21 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         self.chatItems = try container.decodeIfPresent([WatchChatItem].self, forKey: .chatItems)
         self.sentAtMs = try container.decodeIfPresent(Int64.self, forKey: .sentAtMs)
         self.snapshotId = try container.decodeIfPresent(String.self, forKey: .snapshotId)
-        self.gatewayStatus = try container.decodeIfPresent(
+        self.gatewayStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
-            forKey: .gatewayStatus) ?? Self.decodeLegacyGatewayStatus(
+            forKey: .gatewayStatus)) ?? Self.decodeLegacyGatewayStatus(
             text: container.decodeIfPresent(String.self, forKey: .gatewayStatusText),
             connected: self.gatewayConnected)
-        self.talkStatus = try container.decodeIfPresent(
+        self.talkStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
-            forKey: .talkStatus) ?? Self.decodeLegacyTalkStatus(
+            forKey: .talkStatus)) ?? Self.decodeLegacyTalkStatus(
             text: container.decodeIfPresent(String.self, forKey: .talkStatusText),
             enabled: self.talkEnabled,
             listening: self.talkListening,
             speaking: self.talkSpeaking)
-        self.chatStatus = try container.decodeIfPresent(
+        self.chatStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
-            forKey: .chatStatus) ?? Self.decodeLegacyChatStatus(
+            forKey: .chatStatus)) ?? Self.decodeLegacyChatStatus(
             code: container.decodeIfPresent(String.self, forKey: .chatStatusCode),
             text: container.decodeIfPresent(String.self, forKey: .chatStatusText))
     }

@@ -29,4 +29,55 @@ struct WatchCommandsTests {
         #expect(object["chatStatus"] != nil)
         #expect(object["chatStatusText"] as? String == "No chat messages yet")
     }
+
+    @Test func `shipped snapshot initializer remains available`() {
+        let message = OpenClawWatchAppSnapshotMessage(
+            gatewayStatusText: "Connected",
+            gatewayConnected: true,
+            agentName: "Main",
+            sessionKey: "main",
+            talkStatusText: "Off",
+            talkEnabled: false,
+            talkListening: false,
+            talkSpeaking: false,
+            pendingApprovalCount: 0)
+
+        #expect(message.gatewayStatus.code == .gatewayConnected)
+        #expect(message.talkStatus.code == .talkOff)
+    }
+
+    @Test func `unknown semantic statuses fall back to legacy text`() throws {
+        let json = """
+        {
+          "type": "watch.appSnapshot",
+          "gatewayStatus": {"code": "futureGateway", "arguments": []},
+          "gatewayStatusText": "Future gateway state",
+          "gatewayConnected": false,
+          "agentName": "Main",
+          "sessionKey": "main",
+          "talkStatus": {"code": "futureTalk", "arguments": []},
+          "talkStatusText": "Future Talk state",
+          "talkEnabled": true,
+          "talkListening": false,
+          "talkSpeaking": false,
+          "pendingApprovalCount": 0,
+          "chatStatus": {"code": "futureChat", "arguments": []},
+          "chatStatusText": "Future chat state"
+        }
+        """
+
+        let message = try JSONDecoder().decode(
+            OpenClawWatchAppSnapshotMessage.self,
+            from: Data(json.utf8))
+
+        #expect(message.gatewayStatus == OpenClawWatchAppStatus(
+            code: .legacy,
+            verbatim: "Future gateway state"))
+        #expect(message.talkStatus == OpenClawWatchAppStatus(
+            code: .legacy,
+            verbatim: "Future Talk state"))
+        #expect(message.chatStatus == OpenClawWatchAppStatus(
+            code: .legacy,
+            verbatim: "Future chat state"))
+    }
 }
