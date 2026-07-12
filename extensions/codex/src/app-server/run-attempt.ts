@@ -244,6 +244,7 @@ import {
   buildTurnCollaborationMode,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
+  codexLegacyDynamicToolsFingerprint,
   resolveCodexAppServerThreadModelSelection,
   type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
@@ -1077,6 +1078,7 @@ export async function runCodexAppServerAttempt(
           ),
           projection: contextEngineProjection,
           dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
+          legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
         })
       : { project: true, reason: "per-turn-projection" };
     embeddedAgentLog.info("codex app-server context-engine projection decision", {
