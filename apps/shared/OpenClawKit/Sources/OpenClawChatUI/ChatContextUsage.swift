@@ -237,7 +237,7 @@ struct ChatContextUsageIndicator: View {
             .frame(width: 13, height: 13)
 
             if let percent = self.usage.percentUsed {
-                Text(verbatim: "\(percent.formatted())%")
+                Text(Double(percent) / 100, format: .percent.precision(.fractionLength(0)))
                     .font(OpenClawChatTypography.captionSemiBold)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -257,9 +257,13 @@ struct ChatContextUsageIndicator: View {
 
     private var accessibilityValue: String {
         if let percent = self.usage.percentUsed {
-            return "\(percent) percent of the context window used"
+            return String(
+                format: String(localized: "%@ percent of the context window used"),
+                percent.formatted())
         }
-        return "\(self.usage.usedTokens) tokens used"
+        return String(
+            format: String(localized: "%@ tokens used"),
+            self.usage.usedTokens.formatted())
     }
 }
 
