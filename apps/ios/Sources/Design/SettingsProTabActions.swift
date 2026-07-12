@@ -1066,10 +1066,30 @@ extension SettingsProTab {
         let setupApplied = String(localized: "Setup code applied. Connecting...").lowercased()
         let checkingReachability = String(localized: "Checking gateway reachability...").lowercased()
         let qrFormat = String(localized: "QR loaded. Connecting to %@:%@...").lowercased()
-        let qrPrefix = qrFormat.components(separatedBy: "%@").first ?? qrFormat
         return lower == setupApplied
-            || (!qrPrefix.isEmpty && lower.hasPrefix(qrPrefix))
+            || Self.localizedFormat(qrFormat, matches: lower)
             || lower == checkingReachability
+    }
+
+    private static func localizedFormat(_ format: String, matches value: String) -> Bool {
+        guard let placeholder = try? NSRegularExpression(pattern: #"%(\d+\$)?@"#) else {
+            return format == value
+        }
+        let formatRange = NSRange(format.startIndex..., in: format)
+        let matches = placeholder.matches(in: format, range: formatRange)
+        guard !matches.isEmpty else { return format == value }
+
+        var pattern = "^"
+        var cursor = format.startIndex
+        for match in matches {
+            guard let range = Range(match.range, in: format) else { return false }
+            pattern += NSRegularExpression.escapedPattern(for: String(format[cursor..<range.lowerBound]))
+            pattern += #"[\s\S]+?"#
+            cursor = range.upperBound
+        }
+        pattern += NSRegularExpression.escapedPattern(for: String(format[cursor...]))
+        pattern += "$"
+        return value.range(of: pattern, options: .regularExpression) != nil
     }
 
     var shouldShowRealtimeVoicePicker: Bool {

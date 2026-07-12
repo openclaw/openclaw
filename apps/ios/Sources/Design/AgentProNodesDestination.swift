@@ -193,19 +193,19 @@ struct AgentProNodesDestination: View {
 
                     ProCard {
                         VStack(spacing: 0) {
-                            self.nodeDetailRow("Instance", value: entry.instanceid)
+                            self.nodeDetailRow("Instance", copyLabel: "Copy instance", value: entry.instanceid)
                             Divider()
-                            self.nodeDetailRow("Device", value: entry.deviceid)
+                            self.nodeDetailRow("Device", copyLabel: "Copy device", value: entry.deviceid)
                             Divider()
-                            self.nodeDetailRow("Host", value: entry.host)
+                            self.nodeDetailRow("Host", copyLabel: "Copy host", value: entry.host)
                             Divider()
-                            self.nodeDetailRow("IP", value: entry.ip)
+                            self.nodeDetailRow("IP", copyLabel: "Copy IP", value: entry.ip)
                             Divider()
-                            self.nodeDetailRow("Platform", value: entry.platform)
+                            self.nodeDetailRow("Platform", copyLabel: "Copy platform", value: entry.platform)
                             Divider()
-                            self.nodeDetailRow("Version", value: entry.version)
+                            self.nodeDetailRow("Version", copyLabel: "Copy version", value: entry.version)
                             Divider()
-                            self.nodeDetailRow("Mode", value: entry.mode)
+                            self.nodeDetailRow("Mode", copyLabel: "Copy mode", value: entry.mode)
                         }
                     }
                     .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -223,7 +223,11 @@ struct AgentProNodesDestination: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    private func nodeDetailRow(_ title: OpenClawTextValue, value: String?) -> some View {
+    private func nodeDetailRow(
+        _ title: OpenClawTextValue,
+        copyLabel: LocalizedStringKey,
+        value: String?) -> some View
+    {
         let normalized = Self.normalized(value) ?? "n/a"
         return HStack(spacing: 10) {
             title.text
@@ -241,7 +245,7 @@ struct AgentProNodesDestination: View {
             }
             .buttonStyle(.plain)
             .disabled(normalized == "n/a")
-            .accessibilityLabel("Copy value")
+            .accessibilityLabel(copyLabel)
         }
         .font(OpenClawType.subhead)
         .padding(.vertical, 10)
