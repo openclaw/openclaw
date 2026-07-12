@@ -1632,6 +1632,31 @@ CREATE TABLE IF NOT EXISTS worker_transcript_commits (
   )
 );
 
+-- Pending rows preserve a claimed inference turn across gateway restarts.
+-- Terminal rows cache the exact outcome returned for deterministic replay.
+CREATE TABLE IF NOT EXISTS worker_inference_turns (
+  session_id TEXT NOT NULL,
+  run_epoch INTEGER NOT NULL CHECK (run_epoch >= 0),
+  run_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  environment_id TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'terminal')),
+  terminal_json TEXT,
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+  PRIMARY KEY (session_id, run_epoch, run_id, turn_id),
+  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE,
+  CHECK (
+    (state = 'pending' AND terminal_json IS NULL) OR
+    (state = 'terminal' AND terminal_json IS NOT NULL)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_inference_turns_pending_run
+  ON worker_inference_turns(session_id, run_epoch, run_id)
+  WHERE state = 'pending';
+
 CREATE TABLE IF NOT EXISTS fleet_cells (
   tenant_id TEXT NOT NULL PRIMARY KEY,
   created_at_ms INTEGER NOT NULL,

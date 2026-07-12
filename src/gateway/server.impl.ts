@@ -154,6 +154,9 @@ const loadGatewayModelCatalogModule = createLazyRuntimeModule(
 const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
   () => import("./worker-environments/runtime.js"),
 );
+const loadWorkerInferenceRuntimeModule = createLazyRuntimeModule(
+  () => import("./worker-environments/inference-runtime.js"),
+);
 const loadWorkerTunnelRuntimeModule = createLazyRuntimeModule(
   () => import("./worker-environments/tunnel.js"),
 );
@@ -828,6 +831,10 @@ export async function startGatewayServer(
           applyTranscriptCommit: createWorkerTranscriptCommitter({
             getConfig: getRuntimeConfig,
           }).commit,
+          executeInference: async (params) => {
+            const workerInferenceRuntime = await loadWorkerInferenceRuntimeModule();
+            return await workerInferenceRuntime.executeWorkerInference(params);
+          },
           ...(workerLiveEvents ? { liveEvents: workerLiveEvents } : {}),
           resolveSshIdentity: async ({ provider, leaseId, profile, keyRef }) => {
             const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();

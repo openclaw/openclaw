@@ -6,14 +6,16 @@ import "../components/tooltip.ts";
 import { t } from "../i18n/index.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../lib/string-coerce.ts";
+  hasConfigSearchCriteria as hasSearchCriteria,
+  matchesNodeSearch,
+  matchesNodeSelf,
+  resolveConfigFieldMeta as resolveFieldMeta,
+  type ConfigSearchCriteria,
+} from "./config-form.search.ts";
 import {
   defaultValue,
   hasSensitiveConfigData,
   hintForPath,
-  humanize,
   pathKey,
   REDACTED_PLACEHOLDER,
   schemaType,
@@ -128,12 +130,6 @@ const icons = {
   `,
 };
 
-type FieldMeta = {
-  label: string;
-  help?: string;
-  tags: string[];
-};
-
 function isSecretRefObject(value: unknown): value is {
   source: string;
   id: string;
@@ -162,11 +158,6 @@ type SensitiveRenderState = {
   isRedacted: boolean;
   isRevealed: boolean;
   canReveal: boolean;
-};
-
-type ConfigSearchCriteria = {
-  text: string;
-  tags: string[];
 };
 
 function getSensitiveRenderState(params: SensitiveRenderParams): SensitiveRenderState {
@@ -212,212 +203,6 @@ function renderSensitiveToggleButton(params: {
       </button>
     </openclaw-tooltip>
   `;
-}
-
-function hasSearchCriteria(criteria: ConfigSearchCriteria | undefined): boolean {
-  return Boolean(criteria && (criteria.text.length > 0 || criteria.tags.length > 0));
-}
-
-export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
-  const tags: string[] = [];
-  const seen = new Set<string>();
-  const raw = query.trim();
-  const stripped = raw.replace(/(^|\s)tag:([^\s]+)/gi, (_, leading: string, token: string) => {
-    const normalized = normalizeLowercaseStringOrEmpty(token);
-    if (normalized && !seen.has(normalized)) {
-      seen.add(normalized);
-      tags.push(normalized);
-    }
-    return leading;
-  });
-  return {
-    text: normalizeLowercaseStringOrEmpty(stripped),
-    tags,
-  };
-}
-
-function normalizeTags(raw: unknown): string[] {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const tags: string[] = [];
-  for (const value of raw) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const tag = value.trim();
-    if (!tag) {
-      continue;
-    }
-    const key = normalizeLowercaseStringOrEmpty(tag);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    tags.push(tag);
-  }
-  return tags;
-}
-
-function resolveFieldMeta(
-  path: Array<string | number>,
-  schema: JsonSchema,
-  hints: ConfigUiHints,
-): FieldMeta {
-  const hint = hintForPath(path, hints);
-  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
-  const help = hint?.help ?? schema.description;
-  const schemaTags = normalizeTags(schema["x-tags"] ?? schema.tags);
-  const hintTags = normalizeTags(hint?.tags);
-  return {
-    label,
-    help,
-    tags: hintTags.length > 0 ? hintTags : schemaTags,
-  };
-}
-
-function matchesText(text: string, candidates: Array<string | undefined>): boolean {
-  if (!text) {
-    return true;
-  }
-  for (const candidate of candidates) {
-    if (normalizeOptionalLowercaseString(candidate)?.includes(text)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function matchesTags(filterTags: string[], fieldTags: string[]): boolean {
-  if (filterTags.length === 0) {
-    return true;
-  }
-  const normalized = new Set(fieldTags.map((tag) => normalizeLowercaseStringOrEmpty(tag)));
-  return filterTags.every((tag) => normalized.has(tag));
-}
-
-function matchesNodeSelf(params: {
-  schema: JsonSchema;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  criteria: ConfigSearchCriteria;
-}): boolean {
-  const { schema, path, hints, criteria } = params;
-  if (!hasSearchCriteria(criteria)) {
-    return true;
-  }
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  if (!matchesTags(criteria.tags, tags)) {
-    return false;
-  }
-
-  if (!criteria.text) {
-    return true;
-  }
-
-  const pathLabel = path
-    .filter((segment): segment is string => typeof segment === "string")
-    .join(".");
-  const enumText =
-    schema.enum && schema.enum.length > 0
-      ? schema.enum.map((value) => String(value)).join(" ")
-      : "";
-
-  return matchesText(criteria.text, [
-    label,
-    help,
-    schema.title,
-    schema.description,
-    pathLabel,
-    enumText,
-  ]);
-}
-
-export function matchesNodeSearch(params: {
-  schema: JsonSchema;
-  value: unknown;
-  path: Array<string | number>;
-  hints: ConfigUiHints;
-  criteria: ConfigSearchCriteria;
-}): boolean {
-  const { schema, value, path, hints, criteria } = params;
-  if (!hasSearchCriteria(criteria)) {
-    return true;
-  }
-  if (matchesNodeSelf({ schema, path, hints, criteria })) {
-    return true;
-  }
-
-  const type = schemaType(schema);
-  if (type === "object") {
-    const fallback = value ?? schema.default;
-    const obj =
-      fallback && typeof fallback === "object" && !Array.isArray(fallback)
-        ? (fallback as Record<string, unknown>)
-        : {};
-    const props = schema.properties ?? {};
-    for (const [propKey, node] of Object.entries(props)) {
-      if (
-        matchesNodeSearch({
-          schema: node,
-          value: obj[propKey],
-          path: [...path, propKey],
-          hints,
-          criteria,
-        })
-      ) {
-        return true;
-      }
-    }
-    const additional = schema.additionalProperties;
-    if (additional && typeof additional === "object") {
-      const reserved = new Set(Object.keys(props));
-      for (const [entryKey, entryValue] of Object.entries(obj)) {
-        if (reserved.has(entryKey)) {
-          continue;
-        }
-        if (
-          matchesNodeSearch({
-            schema: additional,
-            value: entryValue,
-            path: [...path, entryKey],
-            hints,
-            criteria,
-          })
-        ) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  if (type === "array") {
-    const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
-    if (!itemsSchema) {
-      return false;
-    }
-    const arr = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
-    if (arr.length === 0) {
-      return false;
-    }
-    for (let idx = 0; idx < arr.length; idx += 1) {
-      if (
-        matchesNodeSearch({
-          schema: itemsSchema,
-          value: arr[idx],
-          path: [...path, idx],
-          hints,
-          criteria,
-        })
-      ) {
-        return true;
-      }
-    }
-  }
-
-  return false;
 }
 
 function renderTags(tags: string[]): TemplateResult | typeof nothing {
