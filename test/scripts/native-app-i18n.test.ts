@@ -733,6 +733,52 @@ describe("native app i18n inventory", () => {
         translate: async (pending) => new Map(pending.map((entry) => [entry.id, "Försök igen"])),
       });
       expect(retried).toEqual({ changed: true, translated: 1 });
+
+      const ambiguousEntries = [
+        {
+          id: "native.apple.ambiguous.current",
+          kind: "ui-call",
+          line: 1,
+          path: "apps/ios/example.swift",
+          source: "Open",
+          surface: "apple",
+        },
+      ] satisfies NativeI18nEntry[];
+      await writeFile(
+        artifactPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            locale: "sv",
+            glossaryHash: refreshedArtifact.glossaryHash,
+            entries: [
+              {
+                id: "native.apple.ambiguous.action",
+                source: "Open",
+                translated: "Öppna",
+              },
+              {
+                id: "native.apple.ambiguous.state",
+                source: "Open",
+                translated: "Öppen",
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const ambiguous = await syncNativeLocale("sv", ambiguousEntries, {
+        glossary: [{ source: "Request", target: "Begäran" }],
+        translationsDir,
+        translate: async (pending) =>
+          new Map(pending.map((entry) => [entry.id, "Öppna i aktuell kontext"])),
+      });
+      expect(ambiguous).toEqual({ changed: true, translated: 1 });
+      const ambiguousArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
+        entries: Array<{ translated: string }>;
+      };
+      expect(ambiguousArtifact.entries[0]?.translated).toBe("Öppna i aktuell kontext");
     } finally {
       cleanupTempDirs(tempDirs);
     }

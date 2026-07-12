@@ -435,8 +435,11 @@ export function selectInfoPlistTranslation(
   candidates: readonly string[],
   existingValue?: string,
 ): string {
-  if (candidates.length > 0) {
-    return chooseTranslation(source, candidates);
+  const translatedCandidates = candidates.filter(
+    (candidate) => candidate.trim() && candidate.trim() !== source.trim(),
+  );
+  if (translatedCandidates.length > 0) {
+    return chooseTranslation(source, translatedCandidates);
   }
   return existingValue?.trim() ? existingValue : source;
 }

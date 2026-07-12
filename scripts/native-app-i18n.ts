@@ -1530,16 +1530,14 @@ function choosePreviousTranslation(
   source: string,
   entries: readonly { translated: string }[],
 ): string | undefined {
-  const counts = new Map<string, number>();
+  const translations = new Set<string>();
   for (const entry of entries) {
     if (!entry.translated.trim() || entry.translated === source) {
       continue;
     }
-    counts.set(entry.translated, (counts.get(entry.translated) ?? 0) + 1);
+    translations.add(entry.translated);
   }
-  return [...counts].toSorted(([leftValue, leftCount], [rightValue, rightCount]) => {
-    return rightCount - leftCount || compareCodePoints(leftValue, rightValue);
-  })[0]?.[0];
+  return translations.size === 1 ? translations.values().next().value : undefined;
 }
 
 export async function syncNativeLocale(

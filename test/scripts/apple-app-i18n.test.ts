@@ -306,6 +306,13 @@ describe("Apple app i18n catalogs", () => {
     expect(selectInfoPlistTranslation("OpenClaw Share", [], "OpenClaw Partager")).toBe(
       "OpenClaw Partager",
     );
+    expect(
+      selectInfoPlistTranslation(
+        "Use the camera to scan setup codes.",
+        ["Use the camera to scan setup codes."],
+        "Utilisez l’appareil photo pour scanner les codes de configuration.",
+      ),
+    ).toBe("Utilisez l’appareil photo pour scanner les codes de configuration.");
   });
 
   it("compiles macOS catalogs into app-bundle localization directories", async () => {
