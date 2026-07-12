@@ -25,6 +25,7 @@ import {
   CONTROL_UI_MCP_APP_RESOURCE_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE,
+  CONTROL_UI_MCP_APP_TICKET_HEADER,
 } from "./control-ui-contract.js";
 import {
   CONTROL_UI_MCP_APP_SANDBOX_PROXY_HTML,
@@ -960,20 +961,9 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("serves the ticketed MCP App sandbox proxy with its own CSP", async () => {
+  it("serves the fixed MCP App sandbox proxy without putting a ticket in its URL", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const indexResponse = makeMockHttpResponse();
-        await handleControlUiHttpRequest(
-          { url: "/", method: "GET" } as IncomingMessage,
-          indexResponse.res,
-          { root: { kind: "resolved", path: tmp } },
-        );
-        const ticket = responseBody(indexResponse.end).match(
-          new RegExp(`${CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE}="([^"]+)"`),
-        )?.[1];
-        expect(ticket).toBeTruthy();
-
         const csp = encodeURIComponent(
           JSON.stringify({
             connectDomains: ["https://api.example.com", "https://safe.example; script-src *"],
@@ -983,7 +973,7 @@ describe("handleControlUiHttpRequest", () => {
         const { res, end, setHeader } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
           {
-            url: `${CONTROL_UI_MCP_APP_SANDBOX_PATH}?ticket=${encodeURIComponent(ticket ?? "")}&csp=${csp}`,
+            url: `${CONTROL_UI_MCP_APP_SANDBOX_PATH}?csp=${csp}`,
             method: "GET",
           } as IncomingMessage,
           res,
@@ -1013,24 +1003,7 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("rejects invalid MCP App sandbox tickets", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const { res, end } = makeMockHttpResponse();
-        const handled = await handleControlUiHttpRequest(
-          {
-            url: `${CONTROL_UI_MCP_APP_SANDBOX_PATH}?ticket=invalid`,
-            method: "GET",
-          } as IncomingMessage,
-          res,
-          { root: { kind: "resolved", path: tmp } },
-        );
-        expectNotFoundResponse({ handled, res, end });
-      },
-    });
-  });
-
-  it("serves a ticketed MCP App view without caching or framing it", async () => {
+  it("serves a header-ticketed MCP App view without caching or framing it", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const indexResponse = makeMockHttpResponse();
@@ -1047,12 +1020,12 @@ describe("handleControlUiHttpRequest", () => {
         const { res, end, setHeader } = makeMockHttpResponse();
         const viewId = "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ";
         serveControlUiMcpAppResource(
-          { method: "GET" } as IncomingMessage,
+          {
+            method: "GET",
+            headers: { [CONTROL_UI_MCP_APP_TICKET_HEADER]: ticket },
+          } as IncomingMessage,
           res,
-          new URL(
-            `${CONTROL_UI_MCP_APP_RESOURCE_PATH}?ticket=${encodeURIComponent(ticket ?? "")}&viewId=${viewId}`,
-            "http://localhost",
-          ),
+          new URL(`${CONTROL_UI_MCP_APP_RESOURCE_PATH}?viewId=${viewId}`, "http://localhost"),
           (requestedViewId) =>
             requestedViewId === viewId
               ? {
@@ -1078,6 +1051,19 @@ describe("handleControlUiHttpRequest", () => {
         expect(setHeader).toHaveBeenCalledWith("Cross-Origin-Resource-Policy", "same-origin");
       },
     });
+  });
+
+  it("rejects an MCP App resource ticket supplied only in the URL", () => {
+    const { res, end } = makeMockHttpResponse();
+    serveControlUiMcpAppResource(
+      { method: "GET" } as IncomingMessage,
+      res,
+      new URL(
+        `${CONTROL_UI_MCP_APP_RESOURCE_PATH}?ticket=logged-ticket&viewId=mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ`,
+        "http://localhost",
+      ),
+    );
+    expectNotFoundResponse({ handled: true, res, end });
   });
 
   it("rewrites public asset hrefs in index.html when Control UI uses a configured base path (#94157)", async () => {

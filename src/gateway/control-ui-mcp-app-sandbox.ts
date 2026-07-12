@@ -2,6 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { loadMcpAppView } from "../agents/mcp-app-view-store.js";
 import type { McpAppViewPayload } from "../agents/mcp-apps.js";
+import { CONTROL_UI_MCP_APP_TICKET_HEADER } from "./control-ui-contract.js";
 import { buildControlUiCspHeader } from "./control-ui-csp.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 
@@ -174,6 +175,11 @@ function verifyTicket(ticket: string | null, now = Date.now()): boolean {
   }
 }
 
+function readTicketHeader(req: IncomingMessage): string | null {
+  const value = req.headers?.[CONTROL_UI_MCP_APP_TICKET_HEADER];
+  return typeof value === "string" ? value : null;
+}
+
 function applyRejectedRequestHeaders(res: ServerResponse): void {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
@@ -186,11 +192,6 @@ export function serveControlUiMcpAppSandboxProxy(
   res: ServerResponse,
   url: URL,
 ): void {
-  if (!verifyTicket(url.searchParams.get("ticket"))) {
-    applyRejectedRequestHeaders(res);
-    respondNotFound(res);
-    return;
-  }
   const csp = parseCsp(url.searchParams.get("csp"));
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -213,7 +214,7 @@ export function serveControlUiMcpAppResource(
   url: URL,
   loadView: (viewId: string) => McpAppViewPayload | undefined = loadMcpAppView,
 ): void {
-  if (!verifyTicket(url.searchParams.get("ticket"))) {
+  if (!verifyTicket(readTicketHeader(req))) {
     applyRejectedRequestHeaders(res);
     respondNotFound(res);
     return;

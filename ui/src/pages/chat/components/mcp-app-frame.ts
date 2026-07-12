@@ -14,6 +14,7 @@ import {
   CONTROL_UI_MCP_APP_RESOURCE_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE,
+  CONTROL_UI_MCP_APP_TICKET_HEADER,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { McpAppToolPreview, ResolvedMcpAppToolPreview } from "../../../lib/chat/chat-types.ts";
 import { resolveMcpAppPreviewPayload } from "../../../lib/chat/mcp-app.ts";
@@ -171,10 +172,9 @@ function installAppHostListener() {
 
 export function buildMcpAppSandboxUrl(params: {
   basePath: string;
-  ticket: string;
   csp?: ResolvedMcpAppToolPreview["csp"];
 }): string {
-  const search = new URLSearchParams({ ticket: params.ticket });
+  const search = new URLSearchParams();
   if (params.csp) {
     let remainingDomains = APP_CSP_MAX_TOTAL_DOMAINS;
     const sanitize = (origins: string[] | undefined): string[] | undefined => {
@@ -207,12 +207,8 @@ export function buildMcpAppSandboxUrl(params: {
   return `${params.basePath}${CONTROL_UI_MCP_APP_SANDBOX_PATH}?${search.toString()}`;
 }
 
-export function buildMcpAppResourceUrl(params: {
-  basePath: string;
-  ticket: string;
-  viewId: string;
-}): string {
-  const search = new URLSearchParams({ ticket: params.ticket, viewId: params.viewId });
+export function buildMcpAppResourceUrl(params: { basePath: string; viewId: string }): string {
+  const search = new URLSearchParams({ viewId: params.viewId });
   return `${params.basePath}${CONTROL_UI_MCP_APP_RESOURCE_PATH}?${search.toString()}`;
 }
 
@@ -238,10 +234,13 @@ function loadMcpAppView(
   return fetch(
     buildMcpAppResourceUrl({
       basePath: access.basePath,
-      ticket: access.ticket,
       viewId: preview.viewId,
     }),
-    { cache: "no-store", credentials: "same-origin" },
+    {
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { [CONTROL_UI_MCP_APP_TICKET_HEADER]: access.ticket },
+    },
   )
     .then(async (response) => {
       if (!response.ok) {
@@ -305,7 +304,6 @@ function renderResolvedMcpAppPreview(
 ) {
   const sandboxUrl = buildMcpAppSandboxUrl({
     basePath: access.basePath,
-    ticket: access.ticket,
     csp: preview.csp,
   });
   return html`

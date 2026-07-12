@@ -6,14 +6,17 @@ export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
 /** Carries the gateway-configured Control UI mount path into browser bootstrap. */
 export const CONTROL_UI_BASE_PATH_ATTRIBUTE = "data-openclaw-control-ui-base-path";
 
-/** Ticketed route used by the MCP Apps sandbox proxy. */
+/** Route used by the fixed MCP Apps sandbox proxy document. */
 export const CONTROL_UI_MCP_APP_SANDBOX_PATH = "/__openclaw__/mcp-app-sandbox";
 
 /** Ticketed route used to resolve one durable MCP App view snapshot. */
 export const CONTROL_UI_MCP_APP_RESOURCE_PATH = "/__openclaw__/mcp-app-resource";
 
-/** Carries the process-scoped MCP Apps sandbox ticket into browser bootstrap. */
+/** Carries the process-scoped MCP Apps resource ticket into browser bootstrap. */
 export const CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE = "data-openclaw-mcp-app-sandbox-ticket";
+
+/** Carries the MCP Apps resource ticket outside access-logged request URLs. */
+export const CONTROL_UI_MCP_APP_TICKET_HEADER = "x-openclaw-mcp-app-ticket";
 
 /** Marks whether the served document CSP permits the terminal WASM runtime. */
 export const CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE = "data-openclaw-terminal-enabled";

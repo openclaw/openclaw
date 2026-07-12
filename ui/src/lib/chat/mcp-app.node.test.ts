@@ -82,17 +82,16 @@ describe("resolveMcpAppPreviewPayload", () => {
 });
 
 describe("buildMcpAppSandboxUrl", () => {
-  it("builds a ticketed resource URL without embedding app data", () => {
+  it("builds a resource URL without embedding its ticket or app data", () => {
     const url = new URL(
       buildMcpAppResourceUrl({
         basePath: "/openclaw",
-        ticket: "signed.ticket",
         viewId: "mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ",
       }),
       "https://gateway.example",
     );
     expect(url.pathname).toBe("/openclaw/__openclaw__/mcp-app-resource");
-    expect(url.searchParams.get("ticket")).toBe("signed.ticket");
+    expect(url.searchParams.get("ticket")).toBeNull();
     expect(url.searchParams.get("viewId")).toBe("mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ");
   });
 
@@ -100,7 +99,6 @@ describe("buildMcpAppSandboxUrl", () => {
     const url = new URL(
       buildMcpAppSandboxUrl({
         basePath: "/openclaw",
-        ticket: "signed.ticket",
         csp: {
           connectDomains: ["https://api.example.com"],
           resourceDomains: ["https://cdn.example.com"],
@@ -109,7 +107,7 @@ describe("buildMcpAppSandboxUrl", () => {
       "https://gateway.example",
     );
     expect(url.pathname).toBe("/openclaw/__openclaw__/mcp-app-sandbox");
-    expect(url.searchParams.get("ticket")).toBe("signed.ticket");
+    expect(url.searchParams.get("ticket")).toBeNull();
     expect(JSON.parse(url.searchParams.get("csp") ?? "{}")).toEqual({
       connectDomains: ["https://api.example.com"],
       resourceDomains: ["https://cdn.example.com"],
@@ -120,7 +118,6 @@ describe("buildMcpAppSandboxUrl", () => {
     const url = new URL(
       buildMcpAppSandboxUrl({
         basePath: "",
-        ticket: "signed.ticket",
         csp: {
           connectDomains: [
             "https://api.example.com",

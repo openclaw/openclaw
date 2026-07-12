@@ -5,6 +5,7 @@ import {
   CONTROL_UI_MCP_APP_RESOURCE_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_PATH,
   CONTROL_UI_MCP_APP_SANDBOX_TICKET_ATTRIBUTE,
+  CONTROL_UI_MCP_APP_TICKET_HEADER,
 } from "../../../src/gateway/control-ui-contract.ts";
 import {
   buildControlUiCspHeader,
@@ -153,7 +154,8 @@ describeControlUiE2e("MCP App sandbox proxy", () => {
     await page.route(resourceRoutePattern, async (route) => {
       resourceRequestCount += 1;
       const url = new URL(route.request().url());
-      expect(url.searchParams.get("ticket")).toBe(sandboxTicket);
+      expect(url.searchParams.get("ticket")).toBeNull();
+      expect(route.request().headers()[CONTROL_UI_MCP_APP_TICKET_HEADER]).toBe(sandboxTicket);
       expect(url.searchParams.get("viewId")).toBe("mcpview_0123456789ABCDEFGHJKMNPQRSTVWXYZ");
       await route.fulfill({
         contentType: "application/json; charset=utf-8",
@@ -177,7 +179,7 @@ describeControlUiE2e("MCP App sandbox proxy", () => {
     });
     await page.route(`**${CONTROL_UI_MCP_APP_SANDBOX_PATH}?*`, async (route) => {
       const url = new URL(route.request().url());
-      expect(url.searchParams.get("ticket")).toBe(sandboxTicket);
+      expect(url.searchParams.get("ticket")).toBeNull();
       const csp = JSON.parse(url.searchParams.get("csp") ?? "{}") as ControlUiMcpAppCsp;
       const sandboxCsp = buildControlUiMcpAppSandboxCspHeader(csp);
       expect(sandboxCsp).toContain("frame-src 'none'");
