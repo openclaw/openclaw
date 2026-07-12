@@ -155,21 +155,16 @@ function appendCachedChatMessage(
   appendChatMessageToCache(state.chatMessagesBySession, state, { sessionKey, agentId }, message);
 }
 
-function chatEventDedupeKey(state: ChatState, payload: ChatEventPayload): string | null {
+function chatEventDedupeKey(payload: ChatEventPayload): string | null {
   if (typeof payload.runId !== "string" || !payload.runId.trim()) {
     return null;
   }
   if (typeof payload.seq !== "number" || !Number.isFinite(payload.seq)) {
     return null;
   }
-  // Gateway chat frames are ordered per run; use frame identity so legitimate
-  // repeated assistant text from later turns is still rendered. Include the
-  // selected UI surface and blocking active run so a frame ignored before a
-  // session/run switch can still be consumed when that surface becomes active.
-  const blockingRunId = state.chatRunId && state.chatRunId !== payload.runId ? state.chatRunId : "";
+  // Gateway chat frames are ordered per run; use stable frame identity so a
+  // consumed frame stays consumed when the selected surface or active run changes.
   return [
-    state.sessionKey,
-    blockingRunId,
     payload.sessionKey,
     typeof payload.agentId === "string" ? payload.agentId : "",
     payload.runId,
@@ -178,8 +173,26 @@ function chatEventDedupeKey(state: ChatState, payload: ChatEventPayload): string
   ].join("\0");
 }
 
+function shouldConsumeChatEventFrame(state: ChatState, payload: ChatEventPayload): boolean {
+  const sessionMatches = chatEventSessionMatches(state, payload);
+  const activeRunMatches =
+    state.chatRunId !== null &&
+    typeof payload.runId === "string" &&
+    payload.runId === state.chatRunId;
+  if (!sessionMatches && !activeRunMatches) {
+    // Inactive finals are still consumed into the per-session cache.
+    return payload.state === "final";
+  }
+  if (state.chatRunId && payload.runId !== state.chatRunId) {
+    // Another run's final is rendered in the active transcript; its other
+    // frames remain eligible for replay after the blocking run finishes.
+    return payload.state === "final";
+  }
+  return true;
+}
+
 function acceptChatEventFrame(state: ChatState, payload: ChatEventPayload): boolean {
-  const key = chatEventDedupeKey(state, payload);
+  const key = chatEventDedupeKey(payload);
   if (!key) {
     return true;
   }
@@ -334,7 +347,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
-  if (!acceptChatEventFrame(state, payload)) {
+  if (shouldConsumeChatEventFrame(state, payload) && !acceptChatEventFrame(state, payload)) {
     return null;
   }
   return handleChatEventInner(state, payload);

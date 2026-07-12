@@ -736,6 +736,31 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("external reply");
   });
 
+  it("does not let another selected global agent suppress a later replay", () => {
+    const state = createState({
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-main-global",
+      seq: 5,
+      sessionKey: "global",
+      agentId: "main",
+      state: "delta",
+      deltaText: "main reply",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatStream).toBe(null);
+
+    state.assistantAgentId = "main";
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatRunId).toBe("run-main-global");
+    expect(state.chatStream).toBe("main reply");
+  });
+
   it("uses the cumulative snapshot when the first observed delta joins mid-stream", () => {
     const state = createState({
       sessionKey: "main",
@@ -1178,6 +1203,42 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Working...");
     expect(state.chatStreamStartedAt).toBe(123);
     expect(state.chatMessages).toEqual([payload.message]);
+  });
+
+  it("keeps another run's consumed final deduped after the active run finishes", () => {
+    const state = createActiveStreamingState();
+    const announcePayload: ChatEventPayload = {
+      runId: "run-announce",
+      seq: 10,
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Sub-agent findings" }],
+      },
+    };
+
+    expect(handleChatEvent(state, announcePayload)).toBe(null);
+    expect(
+      handleChatEvent(state, {
+        runId: "run-user",
+        seq: 11,
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "User run result" }],
+        },
+      }),
+    ).toBe("final");
+    expect(handleChatEvent(state, announcePayload)).toBe(null);
+    expect(state.chatMessages).toEqual([
+      announcePayload.message,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "User run result" }],
+      },
+    ]);
   });
 
   it("drops NO_REPLY final payload from another run without clearing active stream", () => {
