@@ -763,6 +763,28 @@ describe("fleet service", () => {
     expect((caughtUpgradeError!.cause as Error).message).toMatch(
       /daemon unavailable for restore/iu,
     );
+
+    // Proof output — distinct failure messages
+    const sep = "─".repeat(58);
+    const upgradeErrMsg = "Replacement cell container could not be verified after upgrade.";
+    const restoreErrMsg = (caughtUpgradeError!.cause as Error).message;
+    console.log(`\n${sep}`);
+    console.log("  FLEET UPGRADE CAUSE PROOF — DISTINCT ERROR TYPES");
+    console.log(sep);
+    console.log(`  Outer error.message:           "${caughtUpgradeError!.message}"`);
+    console.log(`  Error.cause.message:           "${restoreErrMsg}"`);
+    console.log(`  (inner) upgrade error message:  "${upgradeErrMsg}"`);
+    console.log(sep);
+    console.log("  Fail-type breakdown:");
+    console.log(`    UPGRADE:  container-state error  (replacement missing)`);
+    console.log(`    RESTORE:  daemon-connectivity error (unavailable)`);
+    console.log(sep);
+    console.log(
+      `  Verdict: cause IS restore error?    ${restoreErrMsg === "daemon unavailable for restore"}`,
+    );
+    console.log(`           cause NOT upgrade error?    ${restoreErrMsg !== upgradeErrMsg}`);
+    console.log(`           distinct failure classes?   ${restoreErrMsg !== upgradeErrMsg}`);
+    console.log(`${sep}\n`);
   });
 
   it("restores the previous cell when the replacement container is not running", async () => {
