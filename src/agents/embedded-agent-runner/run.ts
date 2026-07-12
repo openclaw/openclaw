@@ -3578,7 +3578,10 @@ async function runEmbeddedAgentInternal(
                   continueFromCurrentTranscript();
                 } else {
                   await waitForCurrentUserMessagePersistence();
-                  if (
+                  if (incompleteTurnContinuationPrompt !== null) {
+                    // Compaction must not suppress a continuation that never reached JSONL.
+                    suppressNextUserMessagePersistence = activePromptPersisted;
+                  } else if (
                     params.currentMessageId !== undefined &&
                     params.currentMessageId === lastPersistedCurrentMessageId
                   ) {
@@ -4813,6 +4816,7 @@ async function runEmbeddedAgentInternal(
             nextAttemptPromptOverride = buildBeforeAgentFinalizeRetryPrompt(
               beforeAgentFinalizeRevisionReason,
             );
+            incompleteTurnContinuationPrompt = null;
             suppressNextUserMessagePersistence = true;
             compactionContinuationRetryInstruction = null;
             log.warn(
