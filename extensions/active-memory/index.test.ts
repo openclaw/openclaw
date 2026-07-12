@@ -1035,9 +1035,9 @@ describe("active-memory plugin", () => {
 
   it.each([
     {
-      label: "a reserved Codex harness key",
+      label: "a missing reserved Codex harness key",
       sessionKey: "agent:main:harness:codex:supervision:thread-1",
-      entry: { sessionId: "codex-1", updatedAt: 1 },
+      entry: undefined,
     },
     {
       label: "a model-locked session",
@@ -1052,7 +1052,9 @@ describe("active-memory plugin", () => {
   ])(
     "skips recall before state or model side effects for $label",
     async ({ sessionKey, entry }) => {
-      hoisted.sessionStore[sessionKey] = entry;
+      if (entry) {
+        hoisted.sessionStore[sessionKey] = entry;
+      }
       const openKeyedStore = vi.spyOn(api.runtime.state, "openKeyedStore");
 
       const result = await hooks.before_prompt_build(
