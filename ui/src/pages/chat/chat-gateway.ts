@@ -297,9 +297,7 @@ function handleChatEventInner(state: ChatState, payload: ChatEventPayload) {
         });
         clearToolStreamSegments(state);
       }
-      state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage, {
-        replacementTexts: typeof state.chatStream === "string" ? [state.chatStream] : [],
-      });
+      state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage);
     } else {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }

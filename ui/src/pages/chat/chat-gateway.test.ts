@@ -1535,7 +1535,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe(null);
   });
 
-  it("does not append an identical transcript assistant final already present in the current turn", () => {
+  it("keeps distinct same-turn assistant finals with identical text", () => {
     const user = {
       role: "user",
       content: [{ type: "text", text: "repeat" }],
@@ -1565,7 +1565,7 @@ describe("handleChatEvent", () => {
     };
 
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([user, finalAssistant]);
+    expect(state.chatMessages).toEqual([user, existingAssistant, finalAssistant]);
   });
 
   it("keeps same-turn repeated assistant text without transcript provenance", () => {
@@ -1600,7 +1600,7 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([user, firstAssistant, secondAssistant]);
   });
 
-  it("does not append a final whose visible text is already present from refreshed history", () => {
+  it("keeps a distinct final whose text matches refreshed history", () => {
     const user = {
       role: "user",
       content: [{ type: "text", text: "repeat" }],
@@ -1630,7 +1630,7 @@ describe("handleChatEvent", () => {
     };
 
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([user, finalAssistant]);
+    expect(state.chatMessages).toEqual([user, historyAssistant, finalAssistant]);
   });
 
   it("keeps repeated assistant final text from a later turn", () => {
@@ -3912,7 +3912,7 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatMessages).toEqual([historyUser, historyAssistant]);
   });
 
-  it("does not append a live assistant tail already present in the current history turn", async () => {
+  it("keeps a distinct late assistant tail that repeats current history text", async () => {
     const historyUser = {
       role: "user",
       content: [{ type: "text", text: "latest ask" }],
@@ -3945,7 +3945,7 @@ describe("loadChatHistory retry handling", () => {
     });
     await loadPromise;
 
-    expect(state.chatMessages).toEqual([historyUser, historyAssistant]);
+    expect(state.chatMessages).toEqual([historyUser, historyAssistant, liveAssistant]);
   });
 
   it("keeps a late assistant tail when a new user turn repeats the latest history answer", async () => {
