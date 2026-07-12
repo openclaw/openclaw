@@ -26,6 +26,8 @@ import {
   launchChromeMeetOnNode,
   leaveChromeMeet,
   leaveChromeMeetOnNode,
+  readChromeMeetTranscript,
+  readChromeMeetTranscriptOnNode,
   recoverCurrentMeetTab,
   recoverCurrentMeetTabOnNode,
 } from "./transports/chrome.js";
@@ -34,12 +36,15 @@ import {
   normalizeDialInNumber,
   prefixDtmfWait,
 } from "./transports/twilio.js";
+import { GOOGLE_MEET_TRANSCRIPT_MAX_LINES } from "./transports/types.js";
 import type {
   GoogleMeetBrowserTab,
   GoogleMeetChromeHealth,
   GoogleMeetJoinRequest,
   GoogleMeetJoinResult,
   GoogleMeetSession,
+  GoogleMeetTranscriptLine,
+  GoogleMeetTranscriptSnapshot,
 } from "./transports/types.js";
 import {
   createVoiceCallGateway,
@@ -72,6 +77,13 @@ type RetainedBrowserTab = {
   session: GoogleMeetSession;
   tab: GoogleMeetBrowserTab;
 };
+
+type RetainedTranscriptSnapshot = GoogleMeetTranscriptSnapshot & {
+  pageEpoch?: string;
+  pageNextIndex: number;
+};
+
+const GOOGLE_MEET_ENDED_TRANSCRIPTS_MAX = 4;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -270,6 +282,10 @@ export class GoogleMeetRuntime {
   readonly #sessionStops = new Map<string, () => Promise<void>>();
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
   readonly #sessionHealth = new Map<string, () => GoogleMeetChromeHealth>();
+  readonly #transcripts = new Map<string, RetainedTranscriptSnapshot>();
+  readonly #transcriptCaptures = new Map<string, Promise<void>>();
+  readonly #transcriptFinalizing = new Set<string>();
+  readonly #retiredTranscripts = new Set<string>();
   readonly #voiceCallGateway: VoiceCallGateway;
 
   constructor(
@@ -306,6 +322,45 @@ export class GoogleMeetRuntime {
       await this.#refreshStatusHealthForSession(session);
     }
     return session ? { found: true, session } : { found: false };
+  }
+
+  async transcript(
+    sessionId: string,
+    options: { sinceIndex?: number } = {},
+  ): Promise<{
+    found: boolean;
+    sessionId?: string;
+    startIndex?: number;
+    nextIndex?: number;
+    droppedLines?: number;
+    evicted?: boolean;
+    lines?: GoogleMeetTranscriptLine[];
+  }> {
+    const session = this.#sessions.get(sessionId);
+    if (!session) {
+      return { found: false };
+    }
+    if (session.mode !== "transcribe") {
+      throw new Error("transcript is only available for transcribe-mode sessions");
+    }
+    const sinceIndex = options.sinceIndex ?? 0;
+    if (!Number.isSafeInteger(sinceIndex) || sinceIndex < 0) {
+      throw new Error("sinceIndex must be a non-negative safe integer");
+    }
+    if (session.state === "active" && !this.#transcriptFinalizing.has(session.id)) {
+      await this.#captureTranscriptSnapshot(session);
+    }
+    const snapshot = this.#transcripts.get(sessionId) ?? { droppedLines: 0, lines: [] };
+    const startIndex = Math.max(sinceIndex, snapshot.droppedLines);
+    return {
+      found: true,
+      sessionId,
+      startIndex,
+      nextIndex: snapshot.droppedLines + snapshot.lines.length,
+      droppedLines: snapshot.droppedLines,
+      ...(session.transcriptEvicted ? { evicted: true } : {}),
+      lines: snapshot.lines.slice(startIndex - snapshot.droppedLines),
+    };
   }
 
   async setupStatus(
@@ -781,6 +836,16 @@ export class GoogleMeetRuntime {
     session: GoogleMeetSession,
     opts?: { keepBrowserTab?: boolean },
   ): Promise<GoogleMeetLeaveResult> {
+    // #leaveUnlocked publishes this promise in #sessionLeaves before another
+    // event can re-enter, so the final snapshot remains inside one teardown.
+    if (session.mode === "transcribe") {
+      this.#transcriptFinalizing.add(session.id);
+      await this.#captureTranscriptSnapshot(session, { finalize: true }).catch((error) => {
+        this.params.logger.debug?.(
+          `[google-meet] final transcript snapshot ignored: ${formatErrorMessage(error)}`,
+        );
+      });
+    }
     session.state = "ended";
     session.updatedAt = nowIso();
     const stop = this.#sessionStops.get(session.id);
@@ -791,12 +856,124 @@ export class GoogleMeetRuntime {
     try {
       await stop?.();
     } finally {
-      // A bridge teardown failure must not leave the browser participant behind.
-      if (!opts?.keepBrowserTab) {
-        browserLeft = await this.#releaseBrowserTab(session);
+      try {
+        // A bridge teardown failure must not leave the browser participant behind.
+        if (!opts?.keepBrowserTab) {
+          browserLeft = await this.#releaseBrowserTab(session);
+        }
+      } finally {
+        this.#retireTranscript(session.id);
+        this.#transcriptFinalizing.delete(session.id);
       }
     }
     return { found: true, session, ...(browserLeft === undefined ? {} : { browserLeft }) };
+  }
+
+  async #captureTranscriptSnapshot(
+    session: GoogleMeetSession,
+    options: { finalize?: boolean } = {},
+  ): Promise<void> {
+    // Preserve browser-read order so an older response cannot regress the cursor
+    // or overwrite the final snapshot queued by leave.
+    const previous = this.#transcriptCaptures.get(session.id) ?? Promise.resolve();
+    const capture = previous
+      .catch(() => {})
+      .then(async () => {
+        if (!isBrowserTransport(session.transport) || session.mode !== "transcribe") {
+          return;
+        }
+        const tab = session.chrome?.browserTab;
+        if (!tab) {
+          return;
+        }
+        const snapshot =
+          session.transport === "chrome-node"
+            ? await readChromeMeetTranscriptOnNode({
+                runtime: this.params.runtime,
+                nodeId: session.chrome?.nodeId,
+                config: this.params.config,
+                ...(options.finalize === undefined ? {} : { finalize: options.finalize }),
+                meetingUrl: session.url,
+                meetingSessionId: session.id,
+                tab,
+              })
+            : await readChromeMeetTranscript({
+                runtime: this.params.runtime,
+                config: this.params.config,
+                ...(options.finalize === undefined ? {} : { finalize: options.finalize }),
+                meetingUrl: session.url,
+                meetingSessionId: session.id,
+                tab,
+              });
+        this.#mergeTranscriptSnapshot(session.id, snapshot);
+      });
+    this.#transcriptCaptures.set(session.id, capture);
+    try {
+      await capture;
+    } finally {
+      if (this.#transcriptCaptures.get(session.id) === capture) {
+        this.#transcriptCaptures.delete(session.id);
+      }
+    }
+  }
+
+  #mergeTranscriptSnapshot(sessionId: string, snapshot: GoogleMeetTranscriptSnapshot): void {
+    const pageNextIndex = snapshot.droppedLines + snapshot.lines.length;
+    const retained = this.#transcripts.get(sessionId);
+    if (!retained) {
+      this.#transcripts.set(sessionId, {
+        droppedLines: snapshot.droppedLines,
+        lines: snapshot.lines,
+        pageEpoch: snapshot.epoch,
+        pageNextIndex,
+      });
+      return;
+    }
+
+    // A page reload starts a new epoch, but the runtime cursor stays absolute
+    // so already delivered captions remain addressable.
+    if (retained.pageEpoch !== snapshot.epoch) {
+      retained.droppedLines += snapshot.droppedLines;
+      retained.lines.push(...snapshot.lines);
+      retained.pageEpoch = snapshot.epoch;
+      retained.pageNextIndex = pageNextIndex;
+    } else if (pageNextIndex > retained.pageNextIndex) {
+      const appendFrom = Math.max(retained.pageNextIndex, snapshot.droppedLines);
+      retained.droppedLines += Math.max(0, snapshot.droppedLines - retained.pageNextIndex);
+      retained.lines.push(...snapshot.lines.slice(appendFrom - snapshot.droppedLines));
+      retained.pageNextIndex = pageNextIndex;
+    }
+
+    const excess = retained.lines.length - GOOGLE_MEET_TRANSCRIPT_MAX_LINES;
+    if (excess > 0) {
+      retained.lines.splice(0, excess);
+      retained.droppedLines += excess;
+    }
+  }
+
+  #retireTranscript(sessionId: string): void {
+    const snapshot = this.#transcripts.get(sessionId);
+    if (snapshot) {
+      this.#transcripts.delete(sessionId);
+      this.#transcripts.set(sessionId, snapshot);
+      this.#retiredTranscripts.delete(sessionId);
+      this.#retiredTranscripts.add(sessionId);
+    }
+    const retainedIds = [...this.#retiredTranscripts]
+      .filter((id) => this.#transcripts.has(id))
+      .toSorted((a, b) =>
+        (this.#sessions.get(a)?.updatedAt ?? "").localeCompare(
+          this.#sessions.get(b)?.updatedAt ?? "",
+        ),
+      );
+    for (const id of retainedIds.slice(0, -GOOGLE_MEET_ENDED_TRANSCRIPTS_MAX)) {
+      this.#transcripts.delete(id);
+      this.#retiredTranscripts.delete(id);
+      const session = this.#sessions.get(id);
+      if (session) {
+        session.transcriptEvicted = true;
+      }
+    }
   }
 
   #inheritBrowserTabOwnership(params: {
