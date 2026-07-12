@@ -25,6 +25,7 @@ import {
   type WidgetBridge,
   type WidgetOutboundMessage,
 } from "../lib/workspace/bridge.ts";
+import type { WorkspaceWidgetBus } from "../lib/workspace/bus.ts";
 import type {
   WorkspaceBinding,
   WorkspaceWidget,
@@ -55,6 +56,10 @@ export type CustomWidgetHostContext = {
   basePath: string;
   /** Session key for prompt dispatch via chat.send. */
   sessionKey: string;
+  /** Parent-owned broker scoped to this Workspaces view. */
+  widgetBus: WorkspaceWidgetBus;
+  /** Parent-resolved tab identity; never accepted from child messages. */
+  tabSlug: string;
   /** Operator confirm dialog quoting the prompt text; resolves true to send. */
   confirmPrompt?: (text: string) => Promise<boolean> | boolean;
   /** Read theme tokens; defaults to computed styles of the document root. */
@@ -160,7 +165,8 @@ export async function loadWidgetManifestView(
       bindings[parsedBinding.id] = parsedBinding.binding;
     }
     const capabilities = (Array.isArray(record.capabilities) ? record.capabilities : []).filter(
-      (cap): cap is WorkspaceWidgetCapability => cap === "data:read" || cap === "prompt:send",
+      (cap): cap is WorkspaceWidgetCapability =>
+        cap === "data:read" || cap === "prompt:send" || cap === "bus:pubsub",
     );
     // The approval gate hashes the manifest's declared entrypoint. Loading a
     // different file would mount code the operator never approved.
@@ -193,11 +199,13 @@ export function attachWidgetBridge(params: {
   let bridge: WidgetBridge | null = null;
   let port: MessagePort | null = null;
   let disposed = false;
+  const busConnection = context.widgetBus.connect(context.tabSlug);
 
   const createBridge = (connectedPort: MessagePort): WidgetBridge =>
     createWidgetBridge({
       manifest,
       post: (message: WidgetOutboundMessage): void => connectedPort.postMessage(message, []),
+      bus: busConnection,
       assertBindingAllowed: (bindingId) => {
         // Agent-authored frames can navigate themselves despite their sandbox/CSP.
         // Never place privileged RPC/file data in them; built-in widgets own those
@@ -270,6 +278,7 @@ export function attachWidgetBridge(params: {
     window.removeEventListener("message", onBootstrap);
     port?.close();
     bridge?.dispose();
+    busConnection.dispose();
     port = null;
     bridge = null;
   };
@@ -301,7 +310,9 @@ class CustomWidgetFrameDirective extends AsyncDirective {
       name,
       params.manifest.entrypoint,
     );
-    const nextKey = `${params.widget.id}::${assetUrl}`;
+    // A move between tabs must rebind the frame to a fresh parent-owned bus
+    // connection; retaining the old iframe would retain its previous tab identity.
+    const nextKey = `${params.context.tabSlug}::${params.widget.id}::${assetUrl}`;
     if (this.iframe && this.key === nextKey) {
       return this.iframe;
     }

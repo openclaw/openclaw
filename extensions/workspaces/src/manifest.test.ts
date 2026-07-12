@@ -102,6 +102,14 @@ describe("validateWidgetManifest", () => {
     expect(manifest.capabilities).toEqual(["data:read", "prompt:send"]);
   });
 
+  it("accepts the bus:pubsub capability", () => {
+    const manifest = validateWidgetManifest({
+      ...VALID_MANIFEST,
+      capabilities: ["data:read", "bus:pubsub"],
+    });
+    expect(manifest.capabilities).toEqual(["data:read", "bus:pubsub"]);
+  });
+
   it("rejects duplicate binding ids", () => {
     expect(() =>
       validateWidgetManifest({

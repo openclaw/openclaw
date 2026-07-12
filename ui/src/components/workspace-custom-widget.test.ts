@@ -1,5 +1,6 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createWorkspaceWidgetBus } from "../lib/workspace/bus.ts";
 import type { WorkspaceWidget, WidgetManifestView } from "../lib/workspace/types.ts";
 import {
   attachWidgetBridge,
@@ -36,7 +37,14 @@ function manifest(overrides?: Partial<WidgetManifestView>): WidgetManifestView {
 }
 
 function host(overrides?: Partial<CustomWidgetHostContext>): CustomWidgetHostContext {
-  return { client: null, basePath: "", sessionKey: "main", ...overrides };
+  return {
+    client: null,
+    basePath: "",
+    sessionKey: "main",
+    tabSlug: "main",
+    widgetBus: createWorkspaceWidgetBus(),
+    ...overrides,
+  };
 }
 
 function renderToContainer(template: unknown): HTMLElement {
@@ -70,7 +78,7 @@ describe("loadWidgetManifestView", () => {
       manifest: {
         entrypoint: "index.html",
         bindings: [{ id: "value", source: "static", value: 1 }],
-        capabilities: ["data:read", "prompt:send"],
+        capabilities: ["data:read", "prompt:send", "bus:pubsub"],
       },
     }));
     const view = await loadWidgetManifestView({ request } as never, "revenue-chart");
@@ -80,7 +88,7 @@ describe("loadWidgetManifestView", () => {
       frameExpiresAt: FRAME_EXPIRES_AT,
       entrypoint: "index.html",
       bindings: { value: { source: "static", value: 1 } },
-      capabilities: ["data:read", "prompt:send"],
+      capabilities: ["data:read", "prompt:send", "bus:pubsub"],
     });
   });
 
@@ -137,6 +145,29 @@ describe("renderCustomWidgetHost DOM", () => {
     expect(iframe?.getAttribute("src")).toMatch(
       new RegExp(`^/gw/plugins/workspaces/widgets/${BRIDGE_TOKEN}/revenue-chart/index\\.html$`),
     );
+  });
+
+  it("recreates the frame when the host moves a widget to another tab", () => {
+    const bus = createWorkspaceWidgetBus();
+    const container = renderToContainer(
+      renderCustomWidgetHost({
+        widget: widget(),
+        manifest: manifest(),
+        context: host({ tabSlug: "a", widgetBus: bus }),
+      }),
+    );
+    const original = container.querySelector("iframe");
+
+    render(
+      renderCustomWidgetHost({
+        widget: widget(),
+        manifest: manifest(),
+        context: host({ tabSlug: "b", widgetBus: bus }),
+      }),
+      container,
+    );
+
+    expect(container.querySelector("iframe")).not.toBe(original);
   });
 });
 
@@ -304,6 +335,80 @@ describe("attachWidgetBridge document-bound channel", () => {
     childPort.close();
     replacement.port1.close();
     detach();
+  });
+});
+
+describe("attachWidgetBridge parent-brokered pub/sub", () => {
+  function connected(params: {
+    id: string;
+    tabSlug: string;
+    bus: ReturnType<typeof createWorkspaceWidgetBus>;
+  }) {
+    const iframe = document.createElement("iframe");
+    document.body.appendChild(iframe);
+    return connectWidgetBridge({
+      iframe,
+      widget: widget({ id: params.id }),
+      manifest: manifest({ capabilities: ["bus:pubsub"] }),
+      context: host({ tabSlug: params.tabSlug, widgetBus: params.bus }),
+    });
+  }
+
+  it("delivers same-tab messages and isolates an identical channel on another tab", async () => {
+    const bus = createWorkspaceWidgetBus();
+    const filter = connected({ id: "filter", tabSlug: "a", bus });
+    const chart = connected({ id: "chart", tabSlug: "a", bus });
+    const otherTab = connected({ id: "other", tabSlug: "b", bus });
+    chart.childPort.postMessage({ v: 1, type: "workspace:subscribe", channel: "selection" });
+    otherTab.childPort.postMessage({ v: 1, type: "workspace:subscribe", channel: "selection" });
+    // MessagePorts are ordered individually, not across distinct ports. Let both
+    // subscriptions reach the parent before publishing from the third port.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    filter.childPort.postMessage({
+      v: 1,
+      type: "workspace:publish",
+      channel: "selection",
+      payload: { region: "eu" },
+    });
+
+    await vi.waitFor(() => expect(chart.posts).toHaveLength(1));
+    expect(chart.posts[0]).toEqual({
+      v: 1,
+      type: "workspace:message",
+      channel: "selection",
+      payload: { region: "eu" },
+    });
+    expect(otherTab.posts).toHaveLength(0);
+    filter.detach();
+    chart.detach();
+    otherTab.detach();
+    filter.childPort.close();
+    chart.childPort.close();
+    otherTab.childPort.close();
+  });
+
+  it("stops delivery after widget, tab, and workspace teardown", async () => {
+    const bus = createWorkspaceWidgetBus();
+    const publisher = connected({ id: "publisher", tabSlug: "removed", bus });
+    const subscriber = connected({ id: "subscriber", tabSlug: "removed", bus });
+    subscriber.childPort.postMessage({ v: 1, type: "workspace:subscribe", channel: "updates" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    subscriber.detach();
+    publisher.childPort.postMessage({
+      v: 1,
+      type: "workspace:publish",
+      channel: "updates",
+      payload: 1,
+    });
+    bus.retainTabs(new Set());
+    bus.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(subscriber.posts).toHaveLength(0);
+    publisher.detach();
+    publisher.childPort.close();
+    subscriber.childPort.close();
   });
 });
 

@@ -1,5 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { createWorkspaceWidgetBus } from "../lib/workspace/bus.ts";
 import type { WorkspaceWidget, WidgetManifestView } from "../lib/workspace/types.ts";
 import type { BuiltinWidgetContext } from "../lib/workspace/widgets/index.ts";
 import {
@@ -216,7 +217,13 @@ function customContext(
     status: "approved",
     createdBy: "user",
     manifest: customManifest(),
-    host: { client: null, basePath: "", sessionKey: "main" },
+    host: {
+      client: null,
+      basePath: "",
+      sessionKey: "main",
+      tabSlug: "main",
+      widgetBus: createWorkspaceWidgetBus(),
+    },
     onApprove: vi.fn(),
     onReject: vi.fn(),
     ...overrides,
