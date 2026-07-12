@@ -604,6 +604,26 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
     security: signalSecurityAdapter,
     threading: {
       resolveReplyToMode: (params) => resolveSignalReplyToMode(params),
+      buildToolContext: ({ cfg, accountId, context, hasRepliedRef }) => {
+        const currentMessagingTarget = normalizeOptionalString(context.To);
+        const currentChatType =
+          context.ChatType === "direct" || context.ChatType === "group"
+            ? context.ChatType
+            : undefined;
+        return {
+          currentChannelId:
+            normalizeOptionalString(context.NativeChannelId) ?? currentMessagingTarget,
+          currentChatType,
+          currentMessagingTarget,
+          currentMessageId: context.CurrentMessageId,
+          replyToMode: resolveSignalReplyToMode({
+            cfg,
+            accountId,
+            chatType: currentChatType,
+          }),
+          hasRepliedRef,
+        };
+      },
     },
     outbound: {
       base: {

@@ -591,6 +591,41 @@ describe("signal outbound", () => {
     expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("first");
   });
 
+  it("builds same-conversation reply context for message tool sends", () => {
+    const buildToolContext = signalPlugin.threading?.buildToolContext;
+    if (!buildToolContext) {
+      throw new Error("signal threading.buildToolContext unavailable");
+    }
+
+    const hasRepliedRef = { value: false };
+    const context = buildToolContext({
+      cfg: {
+        channels: {
+          signal: {
+            replyToModeByChatType: { direct: "first" },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "default",
+      context: {
+        Channel: "signal",
+        To: "signal:+15550001111",
+        ChatType: "direct",
+        CurrentMessageId: "1783831798122",
+      },
+      hasRepliedRef,
+    });
+
+    expect(context).toEqual({
+      currentChannelId: "signal:+15550001111",
+      currentChatType: "direct",
+      currentMessagingTarget: "signal:+15550001111",
+      currentMessageId: "1783831798122",
+      replyToMode: "first",
+      hasRepliedRef,
+    });
+  });
+
   it("chunks outbound text without requiring Signal runtime initialization", () => {
     clearSignalRuntime();
     const chunker = signalPlugin.outbound?.chunker;
