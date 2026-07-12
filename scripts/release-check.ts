@@ -111,6 +111,7 @@ const requiredPathGroups = [
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
   "dist/audit/audit-event-writer.worker.js",
+  "dist/config/sessions/session-transcript-reconcile.worker.js",
   "dist/task-registry-control.runtime.js",
   "dist/telegram-ingress-worker.runtime.js",
   "dist/build-info.json",

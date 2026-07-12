@@ -40,6 +40,7 @@ type TranscriptIndexWatermark = {
   indexedSeq: number;
   leafEventId: string | null;
   needsRebuild: boolean;
+  updatedAt?: number;
 };
 
 function getIndexKysely(db: DatabaseSync) {
@@ -120,7 +121,7 @@ function readWatermark(db: DatabaseSync, sessionId: string): TranscriptIndexWate
     db,
     getIndexKysely(db)
       .selectFrom("session_transcript_index_state")
-      .select(["indexed_seq", "leaf_event_id", "needs_rebuild"])
+      .select(["indexed_seq", "leaf_event_id", "needs_rebuild", "updated_at"])
       .where("session_id", "=", sessionId),
   );
   if (!row) {
@@ -130,6 +131,7 @@ function readWatermark(db: DatabaseSync, sessionId: string): TranscriptIndexWate
     indexedSeq: row.indexed_seq,
     leafEventId: row.leaf_event_id,
     needsRebuild: row.needs_rebuild !== 0,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -272,8 +274,10 @@ function applyForwardIndex(
 
 /** Marks one session for lazy rebuild without touching its FTS rows. */
 function markSessionTranscriptIndexDirtyInTransaction(db: DatabaseSync, sessionId: string): void {
-  const now = Date.now();
   const watermark = readWatermark(db, sessionId);
+  // Claim generations also live in needs_rebuild. Advancing updated_at
+  // monotonically ensures a mutation can never recreate an older claim token.
+  const now = Math.max(Date.now(), (watermark?.updatedAt ?? 0) + 1);
   writeWatermark(
     db,
     sessionId,

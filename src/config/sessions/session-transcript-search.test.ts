@@ -16,8 +16,17 @@ import {
   appendSqliteTranscriptMessage,
   replaceSqliteTranscriptEvents,
 } from "./session-accessor.sqlite.js";
-import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
-import { searchSessionTranscripts } from "./session-transcript-search.js";
+import {
+  extractTranscriptIndexEntry,
+  listSessionsNeedingTranscriptIndexReconcile,
+} from "./session-transcript-index.js";
+import {
+  resetSessionTranscriptSearchForTest,
+  searchSessionTranscripts,
+  sessionTranscriptSearchTesting,
+  waitForSessionTranscriptReconcileActiveForTest,
+  waitForSessionTranscriptReconcileForTest,
+} from "./session-transcript-search.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
@@ -96,6 +105,17 @@ function agentKysely() {
       >
     >(database.db),
   };
+}
+
+async function finishReconcile(query: string) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await waitForSessionTranscriptReconcileForTest();
+    const result = search(query);
+    if (!result.indexing) {
+      return result;
+    }
+  }
+  throw new Error("transcript index did not converge");
 }
 
 describe("searchSessionTranscripts", () => {
@@ -218,6 +238,231 @@ describe("searchSessionTranscripts", () => {
     const result = search("historic");
     expect(result.indexing).toBe(false);
     expect(result.hits).toHaveLength(1);
+  });
+
+  it("returns before a dirty rebuild and keeps the event loop responsive", async () => {
+    const events = Array.from({ length: 512 }, (_, index) => ({
+      type: "message",
+      id: `m-${index}`,
+      parentId: index === 0 ? null : `m-${index - 1}`,
+      message: { role: "user", content: [{ type: "text", text: `responsive needle ${index}` }] },
+    })) as unknown as TranscriptEvent[];
+    await replaceSqliteTranscriptEvents(transcriptScope("session-1", "agent:main:main"), events);
+    const { db, kysely } = agentKysely();
+    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_fts"));
+    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_index_state"));
+
+    const dirty = search("needle");
+    expect(dirty).toMatchObject({ hits: [], indexing: true });
+    await waitForSessionTranscriptReconcileActiveForTest();
+    let heartbeats = 0;
+    const heartbeat = setInterval(() => {
+      heartbeats += 1;
+    }, 0);
+    const result = await finishReconcile("needle");
+    clearInterval(heartbeat);
+    expect(heartbeats).toBeGreaterThan(1);
+    expect(result.hits).toHaveLength(10);
+  });
+
+  it("serializes concurrent worker claims without duplicate FTS rows", async () => {
+    const events = Array.from({ length: 192 }, (_, index) => ({
+      type: "message",
+      id: `claim-${index}`,
+      parentId: index === 0 ? null : `claim-${index - 1}`,
+      message: { role: "user", content: [{ type: "text", text: `claim payload ${index}` }] },
+    })) as unknown as TranscriptEvent[];
+    await replaceSqliteTranscriptEvents(transcriptScope("session-1", "agent:main:main"), events);
+    const { db, kysely } = agentKysely();
+    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_fts"));
+    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_index_state"));
+
+    await Promise.all([
+      sessionTranscriptSearchTesting.runReconcileWorker({
+        agentId: "main",
+        stateDir: paths.stateDir,
+      }),
+      sessionTranscriptSearchTesting.runReconcileWorker({
+        agentId: "main",
+        stateDir: paths.stateDir,
+      }),
+    ]);
+
+    const rows = executeSqliteQuerySync(
+      db,
+      kysely.selectFrom("session_transcript_fts").select("message_id"),
+    ).rows;
+    expect(new Set(rows.map((row) => row.message_id)).size).toBe(192);
+    expect(rows).toHaveLength(192);
+    expect(search("claim").indexing).toBe(false);
+  });
+
+  it("reclaims an abandoned worker generation after its lease expires", async () => {
+    await appendUserMessage("session-1", "agent:main:main", "abandoned claim payload");
+    const { db, kysely } = agentKysely();
+    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_fts"));
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .updateTable("session_transcript_index_state")
+        .set({ needs_rebuild: 42, updated_at: 1 })
+        .where("session_id", "=", "session-1"),
+    );
+
+    await sessionTranscriptSearchTesting.runReconcileWorker({
+      agentId: "main",
+      stateDir: paths.stateDir,
+    });
+
+    expect(search("abandoned")).toMatchObject({ indexing: false });
+    expect(search("abandoned").hits).toHaveLength(1);
+  });
+
+  it("does not hold a write lock while scanning a large unrelated FTS corpus", async () => {
+    await appendUserMessage("session-1", "agent:main:main", "target dirty");
+    const { db, kysely } = agentKysely();
+    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_index_state"));
+    const insert = db.prepare(
+      /* sqlite-allow-raw: focused FTS lock-latency fixture */
+      "INSERT INTO session_transcript_fts(text, session_id, message_id, role, timestamp) VALUES (?, ?, ?, 'user', 1)",
+    );
+    for (let index = 0; index < 10_000; index += 1) {
+      insert.run("unrelated", "unrelated-session", `unrelated-${index}`);
+    }
+
+    expect(search("target").indexing).toBe(true);
+    await waitForSessionTranscriptReconcileActiveForTest();
+    const append = appendUserMessage(
+      "session-1",
+      "agent:main:main",
+      "append stays responsive",
+    ).then(() => "append" as const);
+    const reconcile = waitForSessionTranscriptReconcileForTest().then(() => "reconcile" as const);
+    expect(await Promise.race([append, reconcile])).toBe("append");
+    await reconcile;
+  });
+
+  it("resolves source and dist worker URLs and times out a silent worker", async () => {
+    expect(
+      sessionTranscriptSearchTesting.resolveReconcileWorkerUrl(
+        "file:///repo/src/config/sessions/session-transcript-search.ts",
+      ).pathname,
+    ).toBe("/repo/src/config/sessions/session-transcript-reconcile.worker.ts");
+    expect(
+      sessionTranscriptSearchTesting.resolveReconcileWorkerUrl(
+        "file:///repo/dist/chunks/session-transcript-search-ABC123.js",
+      ).pathname,
+    ).toBe("/repo/dist/config/sessions/session-transcript-reconcile.worker.js");
+    await expect(
+      sessionTranscriptSearchTesting.runReconcileWorker({
+        agentId: "main",
+        stateDir: paths.stateDir,
+        timeoutMs: 25,
+        workerUrl: new URL("data:text/javascript,setInterval(() => {}, 1000)"),
+      }),
+    ).rejects.toThrow(/timed out/);
+    await expect(
+      sessionTranscriptSearchTesting.runReconcileWorker({
+        agentId: "main",
+        stateDir: paths.stateDir,
+        planningTimeoutMs: 25,
+        workerUrl: new URL(
+          "data:text/javascript,import { parentPort } from 'node:worker_threads'; parentPort.postMessage({ status: 'ready' }); setInterval(() => {}, 1000)",
+        ),
+      }),
+    ).rejects.toThrow(/timed out/);
+    const progressingWorker = encodeURIComponent(`
+      import { parentPort } from "node:worker_threads";
+      const timer = setInterval(() => parentPort.postMessage({ status: "progress" }), 100);
+      setTimeout(() => {
+        clearInterval(timer);
+        parentPort.postMessage({ status: "ok" });
+      }, 2500);
+    `);
+    await expect(
+      sessionTranscriptSearchTesting.runReconcileWorker({
+        agentId: "main",
+        stateDir: paths.stateDir,
+        timeoutMs: 1000,
+        workerUrl: new URL(`data:text/javascript,${progressingWorker}`),
+      }),
+    ).resolves.toBeUndefined();
+    const multiSessionWorker = encodeURIComponent(`
+      import { parentPort } from "node:worker_threads";
+      parentPort.postMessage({ status: "ready" });
+      setTimeout(() => parentPort.postMessage({ status: "started" }), 50);
+      setTimeout(() => parentPort.postMessage({ status: "progress" }), 100);
+      setTimeout(() => parentPort.postMessage({ status: "ready" }), 150);
+      setTimeout(() => parentPort.postMessage({ status: "ok" }), 1500);
+    `);
+    await expect(
+      sessionTranscriptSearchTesting.runReconcileWorker({
+        agentId: "main",
+        stateDir: paths.stateDir,
+        timeoutMs: 1000,
+        planningTimeoutMs: 3000,
+        workerUrl: new URL(`data:text/javascript,${multiSessionWorker}`),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps dirty state authoritative across append and rewind races", async () => {
+    const scope = transcriptScope("session-1", "agent:main:main");
+    await replaceSqliteTranscriptEvents(scope, [
+      {
+        type: "message",
+        id: "m1",
+        parentId: null,
+        message: { role: "user", content: [{ type: "text", text: "race origin" }] },
+      },
+      {
+        type: "message",
+        id: "m2",
+        parentId: "m1",
+        message: { role: "assistant", content: [{ type: "text", text: "race appended" }] },
+      },
+    ] as unknown as TranscriptEvent[]);
+    const { db, kysely } = agentKysely();
+    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_fts"));
+    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_index_state"));
+
+    expect(search("race").indexing).toBe(true);
+    await appendUserMessage("session-1", "agent:main:main", "race later");
+    expect((await finishReconcile("appended")).hits).toHaveLength(1);
+
+    await appendSqliteTranscriptEvent(scope, {
+      type: "leaf",
+      id: "rewind",
+      parentId: "m2",
+      targetId: "m1",
+    } as unknown as TranscriptEvent);
+    expect(search("appended").hits).toHaveLength(0);
+    expect((await finishReconcile("appended")).hits).toHaveLength(0);
+  });
+
+  it("does not publish stale same-count replacements or deleted transcripts", async () => {
+    const scope = transcriptScope("session-1", "agent:main:main");
+    await appendUserMessage("session-1", "agent:main:main", "before replacement");
+    const { db, kysely } = agentKysely();
+    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_fts"));
+    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_index_state"));
+    expect(search("before").indexing).toBe(true);
+    await replaceSqliteTranscriptEvents(scope, [
+      {
+        type: "message",
+        id: "replacement",
+        parentId: null,
+        message: { role: "user", content: [{ type: "text", text: "after replacement" }] },
+      },
+    ] as unknown as TranscriptEvent[]);
+    expect((await finishReconcile("after")).hits).toHaveLength(1);
+    expect(search("before").hits).toHaveLength(0);
+
+    executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_index_state"));
+    expect(search("after").indexing).toBe(true);
+    await deleteSqliteTranscript({ agentId: "main", env: env(), sessionId: "session-1" });
+    await waitForSessionTranscriptReconcileForTest();
+    expect(search("after").hits).toHaveLength(0);
   });
 
   it("detects missing, dirty, and lagging transcript index watermarks", async () => {

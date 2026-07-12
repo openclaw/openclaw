@@ -270,6 +270,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "audit/audit-event-writer.worker": "src/audit/audit-event-writer.worker.ts",
+    "config/sessions/session-transcript-reconcile.worker":
+      "src/config/sessions/session-transcript-reconcile.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
