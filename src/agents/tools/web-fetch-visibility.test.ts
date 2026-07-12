@@ -65,6 +65,24 @@ describe("sanitizeHtml", () => {
     expect(result).not.toContain("Scaled");
   });
 
+  it("strips transform:scale(0, 0) multi-dimensional elements", async () => {
+    const html = '<p>Show</p><div style="transform:scale(0, 0)">Scaled2d</div>';
+    const result = await sanitizeHtml(html);
+    expect(result).not.toContain("Scaled2d");
+  });
+
+  it("strips transform:scale3d(0, 0, 0) elements", async () => {
+    const html = '<p>Show</p><div style="transform:scale3d(0, 0, 0)">Scaled3d</div>';
+    const result = await sanitizeHtml(html);
+    expect(result).not.toContain("Scaled3d");
+  });
+
+  it("preserves transform:scale(1, 0) non-zero-axis elements", async () => {
+    const html = '<p>Show</p><div style="transform:scale(1, 0)">Partial</div>';
+    const result = await sanitizeHtml(html);
+    expect(result).toContain("Partial");
+  });
+
   it("strips transform:translateX far-offscreen elements", async () => {
     const html = '<p>Show</p><div style="transform:translateX(-9999px)">Translated</div>';
     const result = await sanitizeHtml(html);
