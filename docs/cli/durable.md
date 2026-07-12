@@ -73,7 +73,6 @@ queries.
 | Variable                                     | Default    | Purpose                                                                                                        |
 | -------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------- |
 | `OPENCLAW_DURABLE_RUNTIME`                   | disabled   | Enables the durable runtime when set to `1`, `true`, `yes`, or `on`.                                           |
-| `OPENCLAW_DURABLE_RUNTIME_STORE`             | `sqlite`   | Selects the durable store backend. Only `sqlite` is supported in this slice.                                   |
 | `OPENCLAW_DURABLE_WORKER`                    | disabled   | Starts the recovery worker only when the durable runtime is also enabled.                                      |
 | `OPENCLAW_DURABLE_WORKER_POLL_INTERVAL_MS`   | `1000`     | Worker poll interval.                                                                                          |
 | `OPENCLAW_DURABLE_WORKER_CLAIM_TTL_MS`       | `300000`   | Claim lease time for worker-owned runs or steps.                                                               |
