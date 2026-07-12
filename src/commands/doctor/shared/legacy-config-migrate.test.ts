@@ -110,6 +110,26 @@ describe("legacy MCP server config migrate", () => {
       "Removed mcp.servers.example.disabled true because enabled is already set to true.",
     ]);
   });
+
+  it("migrates node-host MCP server disabled flags", () => {
+    const res = migrateLegacyConfigForTest({
+      nodeHost: {
+        mcp: {
+          servers: {
+            example: { command: "example-mcp", disabled: true },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.nodeHost?.mcp?.servers?.example).toEqual({
+      command: "example-mcp",
+      enabled: false,
+    });
+    expect(res.changes).toEqual([
+      "Moved nodeHost.mcp.servers.example.disabled true → enabled false.",
+    ]);
+  });
 });
 
 describe("legacy memory search config migrate", () => {

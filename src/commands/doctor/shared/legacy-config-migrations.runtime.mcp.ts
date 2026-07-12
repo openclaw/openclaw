@@ -28,36 +28,58 @@ const MCP_SERVER_DISABLED_RULE: LegacyConfigRule = {
     Object.values(value).some((server) => isRecord(server) && typeof server.disabled === "boolean"),
 };
 
+const NODE_HOST_MCP_SERVER_DISABLED_RULE: LegacyConfigRule = {
+  path: ["nodeHost", "mcp", "servers"],
+  message:
+    'nodeHost.mcp.servers uses the unsupported "disabled" key; use "enabled: false" instead. Run "openclaw doctor --fix" to migrate it.',
+  match: (value) =>
+    isRecord(value) &&
+    Object.values(value).some((server) => isRecord(server) && typeof server.disabled === "boolean"),
+};
+
+function migrateMcpServerDisabledFlags(
+  servers: Record<string, unknown> | undefined,
+  pathPrefix: string,
+  changes: string[],
+): void {
+  if (!servers) {
+    return;
+  }
+
+  for (const [serverName, rawServer] of Object.entries(servers)) {
+    if (!isRecord(rawServer) || typeof rawServer.disabled !== "boolean") {
+      continue;
+    }
+    const disabled = rawServer.disabled;
+    if (typeof rawServer.enabled !== "boolean") {
+      rawServer.enabled = !disabled;
+      changes.push(
+        `Moved ${pathPrefix}.${serverName}.disabled ${disabled} → enabled ${!disabled}.`,
+      );
+    } else {
+      changes.push(
+        `Removed ${pathPrefix}.${serverName}.disabled ${disabled} because enabled is already set to ${rawServer.enabled}.`,
+      );
+    }
+    delete rawServer.disabled;
+  }
+}
+
 /** Legacy config migration specs for MCP server config compatibility. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "mcp.servers.disabled->enabled",
     describe: "Move unsupported MCP disabled flags to canonical enabled flags",
-    legacyRules: [MCP_SERVER_DISABLED_RULE],
+    legacyRules: [MCP_SERVER_DISABLED_RULE, NODE_HOST_MCP_SERVER_DISABLED_RULE],
     apply: (raw, changes) => {
       const mcp = isRecord(raw.mcp) ? raw.mcp : undefined;
       const servers = isRecord(mcp?.servers) ? mcp?.servers : undefined;
-      if (!servers) {
-        return;
-      }
+      migrateMcpServerDisabledFlags(servers, "mcp.servers", changes);
 
-      for (const [serverName, rawServer] of Object.entries(servers)) {
-        if (!isRecord(rawServer) || typeof rawServer.disabled !== "boolean") {
-          continue;
-        }
-        const disabled = rawServer.disabled;
-        if (typeof rawServer.enabled !== "boolean") {
-          rawServer.enabled = !disabled;
-          changes.push(
-            `Moved mcp.servers.${serverName}.disabled ${disabled} → enabled ${!disabled}.`,
-          );
-        } else {
-          changes.push(
-            `Removed mcp.servers.${serverName}.disabled ${disabled} because enabled is already set to ${rawServer.enabled}.`,
-          );
-        }
-        delete rawServer.disabled;
-      }
+      const nodeHost = isRecord(raw.nodeHost) ? raw.nodeHost : undefined;
+      const nodeHostMcp = isRecord(nodeHost?.mcp) ? nodeHost.mcp : undefined;
+      const nodeHostServers = isRecord(nodeHostMcp?.servers) ? nodeHostMcp.servers : undefined;
+      migrateMcpServerDisabledFlags(nodeHostServers, "nodeHost.mcp.servers", changes);
     },
   }),
   defineLegacyConfigMigration({

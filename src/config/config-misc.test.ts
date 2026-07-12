@@ -78,6 +78,29 @@ describe("boolean config validation", () => {
       }),
     );
   });
+
+  it('rejects node-host MCP server "disabled" with the canonical replacement', () => {
+    const result = validateConfigObjectRaw({
+      nodeHost: {
+        mcp: {
+          servers: {
+            example: { command: "example-mcp", disabled: true },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected disabled node-host MCP server config to fail validation");
+    }
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        path: "nodeHost.mcp.servers.example.disabled",
+        message: expect.stringContaining('use "enabled: false" instead'),
+      }),
+    );
+  });
 });
 
 describe("agent timeoutSeconds config", () => {
