@@ -1376,20 +1376,12 @@ async function finalizeCronRun(params: {
     delivered?: boolean;
     deliveryAttempted?: boolean;
     delivery?: CronDeliveryTrace;
-    deliveryDiagnostics?: RunCronAgentTurnResult["diagnostics"];
-    deliveryError?: string;
   }) =>
     prepared.withRunSession({
       status: hasFatalErrorPayload ? "error" : "ok",
       ...(hasFatalErrorPayload
         ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
         : {}),
-      // A delivery dispatch failure on an otherwise successful run keeps
-      // `status: "ok"` (#94058); surface the delivery error separately so the
-      // service can persist it as `lastDeliveryError` and emit it on the
-      // finished event for CLI/UI/API run logs (#95419) without mislabeling
-      // the run-level `error`.
-      ...(result?.deliveryError ? { deliveryError: result.deliveryError } : {}),
       summary,
       outputText,
       delivered: result?.delivered,
@@ -1398,13 +1390,12 @@ async function finalizeCronRun(params: {
       diagnostics: hasFatalErrorPayload
         ? mergeCronRunDiagnostics(
             runDiagnostics,
-            result?.deliveryDiagnostics,
             createCronRunDiagnosticsFromError(
               "agent-run",
               embeddedRunError ?? "cron isolated run returned an error payload",
             ),
           )
-        : mergeCronRunDiagnostics(runDiagnostics, result?.deliveryDiagnostics),
+        : runDiagnostics,
       ...telemetry,
     });
   const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
@@ -1536,16 +1527,18 @@ async function finalizeCronRun(params: {
         deliveryResult.result.errorKind !== "delivery-target" &&
         !params.isAborted()
       ) {
-        return resolveRunOutcome({
+        const deliveryError = resultWithDeliveryMeta.error;
+        const successfulResult: RunCronAgentTurnResult = {
+          ...resultWithDeliveryMeta,
+          status: "ok",
           delivered: resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
-          deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
-          delivery: deliveryTrace,
-          deliveryDiagnostics: resultWithDeliveryMeta.diagnostics,
-          // Carry the delivery dispatch error so it persists as
-          // `lastDeliveryError` and reaches CLI/UI/API run logs (#95419)
-          // instead of being dropped when status is kept `ok`.
-          deliveryError: deliveryResult.result.error,
-        });
+          ...(deliveryError ? { deliveryError } : {}),
+        };
+        // Preserve the dispatcher's final summary and diagnostics, but keep the
+        // downstream send failure out of execution-only status and error fields.
+        delete successfulResult.error;
+        delete successfulResult.errorKind;
+        return successfulResult;
       }
       return resultWithDeliveryMeta;
     }

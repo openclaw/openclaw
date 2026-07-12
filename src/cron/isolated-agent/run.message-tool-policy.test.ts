@@ -1877,13 +1877,20 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     // recorded separately so the outer scheduled run keeps `status=ok` while
     // the run log records the delivery as not-delivered.
     mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [
+        { text: "Interim cron report" },
+        { text: "Recoverable tool warning", isError: true, toolName: "exec" },
+      ],
+      meta: { agentMeta: {} },
+    });
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
     resolveCronPayloadOutcomeMock.mockReturnValue({
-      summary: "Final cron report",
-      outputText: "Final cron report",
-      synthesizedText: "Final cron report",
-      deliveryPayload: { text: "Final cron report" },
-      deliveryPayloads: [{ text: "Final cron report" }],
+      summary: "Interim cron report",
+      outputText: "Interim cron report",
+      synthesizedText: "Interim cron report",
+      deliveryPayload: { text: "Interim cron report" },
+      deliveryPayloads: [{ text: "Interim cron report" }],
       deliveryPayloadHasStructuredContent: false,
       hasFatalErrorPayload: false,
       hasFatalStructuredErrorPayload: false,
@@ -1926,6 +1933,8 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     // Execution succeeded: status stays ok despite the delivery failure.
     expect(result.status).toBe("ok");
     expect(result.error).toBeUndefined();
+    expect(result.summary).toBe("Final cron report");
+    expect(result.outputText).toBe("Final cron report");
     // The delivery dispatch error is surfaced on a dedicated `deliveryError`
     // field (not the run-level `error`) so the service can persist it as
     // `lastDeliveryError` and emit it on the finished event for CLI/UI/API run
@@ -1941,14 +1950,13 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       delivered: false,
     });
     // The delivery error remains visible to operators via run diagnostics.
-    expect(result.diagnostics?.entries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          source: "delivery",
-          severity: "error",
-          message: "Message failed",
-        }),
-      ]),
-    );
+    expect(result.diagnostics?.entries.map((entry) => entry.message)).toEqual([
+      "Recoverable tool warning",
+      "Message failed",
+    ]);
+    expect(result.diagnostics?.entries.at(-1)).toMatchObject({
+      source: "delivery",
+      severity: "error",
+    });
   });
 });

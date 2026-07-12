@@ -187,18 +187,6 @@ export type CronRunDiagnostics = {
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
-  /**
-   * Post-run delivery dispatch failure recorded on an otherwise successful run.
-   *
-   * A successful isolated agent turn keeps `status: "ok"` even when the
-   * post-run delivery phase fails (#94058). The execution `error` field stays
-   * empty in that case so the run is not mislabeled as a failure, but the
-   * delivery diagnostic must still reach `lastDeliveryError` and the finished
-   * event so CLI/UI/API run logs can surface why delivery did not land
-   * (#95419). This field carries that delivery error across the cron boundary
-   * without conflating it with a run-level `error`.
-   */
-  deliveryError?: string;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   summary?: string;
