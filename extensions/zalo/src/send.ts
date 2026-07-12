@@ -155,8 +155,9 @@ export async function sendMessageZalo(
   }
   const { context } = resolved;
 
-  if (options.mediaUrl) {
-    return sendPhotoZalo(context.chatId, options.mediaUrl, {
+  const mediaUrl = options.mediaUrl?.trim();
+  if (mediaUrl) {
+    return sendPhotoZalo(context.chatId, mediaUrl, {
       ...options,
       token: context.token,
       caption: text || options.caption,

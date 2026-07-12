@@ -106,6 +106,53 @@ describe("zalo send", () => {
     expect(successful.receipt.parts[0]?.kind).toBe("media");
   });
 
+  it("treats a blank media URL on message sends as absent", async () => {
+    sendMessageMock.mockResolvedValueOnce({
+      ok: true,
+      result: { message_id: "z-msg-blank-media" },
+    });
+
+    const result = await sendMessageZalo("dm-chat-blank-media", "hello text", {
+      token: "zalo-token",
+      mediaUrl: "   ",
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      "zalo-token",
+      {
+        chat_id: "dm-chat-blank-media",
+        text: "hello text",
+      },
+      undefined,
+    );
+    expect(sendPhotoMock).not.toHaveBeenCalled();
+    requireSuccessfulSend(result, "z-msg-blank-media");
+  });
+
+  it("trims media URLs before routing message sends through the photo API", async () => {
+    sendPhotoMock.mockResolvedValueOnce({
+      ok: true,
+      result: { message_id: "z-photo-trimmed" },
+    });
+
+    const result = await sendMessageZalo("dm-chat-trimmed-media", "caption text", {
+      token: "zalo-token",
+      mediaUrl: "  https://example.com/photo.jpg  ",
+    });
+
+    expect(sendPhotoMock).toHaveBeenCalledWith(
+      "zalo-token",
+      {
+        chat_id: "dm-chat-trimmed-media",
+        photo: "https://example.com/photo.jpg",
+        caption: "caption text",
+      },
+      undefined,
+    );
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    requireSuccessfulSend(result, "z-photo-trimmed");
+  });
+
   it("fails fast for missing token or blank photo URLs", async () => {
     const missingToken = await sendMessageZalo("dm-chat-3", "hello", {});
     expectFailedSend(missingToken, "No Zalo bot token configured");
