@@ -1482,8 +1482,7 @@ function lastChildAssistantMessage(childState: ChildState, turnId: string): stri
   if (!messages) {
     return undefined;
   }
-  for (let index = messages.order.length - 1; index >= 0; index -= 1) {
-    const itemId = messages.order[index];
+  for (const itemId of messages.order.toReversed()) {
     if (messages.finalMessageIds.has(itemId) && !messages.commentaryIds.has(itemId)) {
       const text = normalizeOptionalString(messages.texts.get(itemId));
       if (text) {

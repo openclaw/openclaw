@@ -66,6 +66,7 @@ import { createPdfTool } from "./tools/pdf-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
+import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
@@ -568,6 +569,13 @@ export function createOpenClawTools(
       callGateway: effectiveCallGateway,
     }),
     createSessionsHistoryTool({
+      agentSessionKey: options?.agentSessionKey,
+      sandboxed: options?.sandboxed,
+      config: resolvedConfig,
+      callGateway: effectiveCallGateway,
+    }),
+    createSessionsSearchTool({
+      agentId: sessionAgentId,
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
       config: resolvedConfig,
