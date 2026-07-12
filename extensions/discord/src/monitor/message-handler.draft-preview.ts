@@ -1,4 +1,5 @@
 // Discord plugin module implements message handlerraft preview behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
 import {
   type ChannelProgressDraftLine,
@@ -213,7 +214,7 @@ export function createDiscordDraftPreviewController(params: {
       if (chunks.length !== 1) {
         return undefined;
       }
-      const trimmed = chunks[0].trim();
+      const trimmed = expectDefined(chunks.at(0), "single Discord preview chunk").trim();
       if (!trimmed) {
         return undefined;
       }

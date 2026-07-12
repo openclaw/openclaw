@@ -1,4 +1,5 @@
 // Telegram rich message helpers isolate Bot API 10.1 calls until grammY types catch up.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Bot } from "grammy";
 import type {
   ForceReply,
@@ -300,8 +301,8 @@ function parseRichMarkdownFenceSpans(markdown: string): RichMarkdownFenceSpan[] 
     const line = markdown.slice(offset, lineEnd);
     const match = line.match(/^( {0,3})(`{3,}|~{3,})/);
     if (match) {
-      const marker = match[2];
-      const markerChar = marker[0];
+      const marker = expectDefined(match[2], "Markdown fence marker capture");
+      const markerChar = marker.charAt(0);
       if (!open) {
         open = { start: offset, markerChar, markerLength: marker.length };
       } else if (open.markerChar === markerChar && marker.length >= open.markerLength) {

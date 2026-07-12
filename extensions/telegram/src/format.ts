@@ -1,4 +1,5 @@
 // Telegram helper module supports format behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -1097,7 +1098,10 @@ function normalizeTelegramRichMarkdownMedia(
       );
       continue;
     }
-    const [, indent, alt, src, caption] = match;
+    const indent = expectDefined(match[1], "rich Markdown media indent capture");
+    const alt = match[2];
+    const src = expectDefined(match[3], "rich Markdown media source capture");
+    const caption = match[4];
     const img = `<img src="${escapeHtmlAttr(src)}"${alt ? ` alt="${escapeHtmlAttr(alt)}"` : ""}/>`;
     const figcaption = caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : "";
     const placeholder = buildTelegramRichMarkdownMediaPlaceholder(mediaBlocks.length);

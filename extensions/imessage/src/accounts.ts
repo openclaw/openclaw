@@ -1,4 +1,5 @@
 // Imessage plugin module implements accounts behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   createAccountListHelpers,
@@ -219,11 +220,12 @@ export function collectIMessageDuplicateAccountSourceWarnings(params: {
     if (collisions.length < 2) {
       continue;
     }
+    const firstCollision = expectDefined(collisions[0], "duplicate iMessage account source");
     const ownerId = resolveIMessageAccountSourceOwner({
       cfg: params.cfg,
-      signature: resolveIMessageAccountSourceSignature(collisions[0]),
+      signature: resolveIMessageAccountSourceSignature(firstCollision),
     });
-    const owner = collisions.find((a) => a.accountId === ownerId) ?? collisions[0];
+    const owner = collisions.find((a) => a.accountId === ownerId) ?? firstCollision;
     const duplicates = collisions.filter((a) => a.accountId !== owner.accountId);
     const dupIds = duplicates.map((a) => `"${a.accountId}"`).join(", ");
     const cliPath = normalizeIMessageCliPath(owner.config.cliPath);

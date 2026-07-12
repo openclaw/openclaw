@@ -1,5 +1,6 @@
 // Tlon plugin module implements channel behavior.
 import crypto from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -67,7 +68,7 @@ async function createHttpPokeApi(params: {
           method: "PUT",
           headers: {
             "Content-Type": "application/json",
-            Cookie: cookie.split(";")[0],
+            Cookie: expectDefined(cookie.split(";").at(0), "cookie first segment"),
           },
           body: JSON.stringify([pokeData]),
         },

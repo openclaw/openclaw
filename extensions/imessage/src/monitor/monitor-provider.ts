@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
@@ -772,7 +773,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       };
 
       if (entries.length === 1) {
-        await dispatchUnit(entries, entries[0].message);
+        await dispatchUnit(
+          entries,
+          expectDefined(entries[0], "single iMessage dispatch entry").message,
+        );
         return;
       }
 

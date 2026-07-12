@@ -1,5 +1,6 @@
 // Telegram plugin module implements bot handlers behavior.
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -770,7 +771,7 @@ export const registerTelegramHandlers = ({
           settleSpooledReplayParticipants(spooledReplayParticipants, { kind: "skipped" });
           return;
         }
-        const first = entries[0];
+        const first = expectDefined(entries.at(0), "multi-entry Telegram debounce batch");
         const promptContextMinTimestampMs = latestPromptContextMinTimestampMs(
           ...entries.map((entry) => entry.promptContextMinTimestampMs),
         );

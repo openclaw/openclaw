@@ -13,6 +13,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   parseFfprobeCodecAndSampleRate,
@@ -168,7 +169,7 @@ async function generateWaveformFromPcm(filePath: string): Promise<string> {
       let sum = 0;
       let count = 0;
       for (let j = 0; j < step && i * step + j < samples.length; j++) {
-        sum += Math.abs(samples[i * step + j]);
+        sum += Math.abs(expectDefined(samples.at(i * step + j), "bounded PCM waveform sample"));
         count++;
       }
       const avg = count > 0 ? sum / count : 0;

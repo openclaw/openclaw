@@ -1,4 +1,5 @@
 // Line plugin module implements card command behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -144,13 +145,14 @@ function parseCardArgs(argsStrInput: string): {
   const quotedRegex = /"([^"]*?)"/g;
   let match;
   while ((match = quotedRegex.exec(argsStr)) !== null) {
-    result.args.push(match[1]);
+    result.args.push(expectDefined(match[1], "quoted card argument capture"));
   }
 
   // Extract flags (--key value or --key "value")
   const flagRegex = /--(\w+)\s+(?:"([^"]*?)"|(\S+))/g;
   while ((match = flagRegex.exec(argsStr)) !== null) {
-    result.flags[match[1]] = match[2] ?? match[3];
+    const key = expectDefined(match[1], "card flag name capture");
+    result.flags[key] = expectDefined(match[2] ?? match[3], "card flag value capture");
   }
 
   return result;

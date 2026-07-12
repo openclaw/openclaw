@@ -1,4 +1,5 @@
 // Zalouser plugin module implements monitor behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from";
 import {
   implicitMentionKindWhen,
@@ -891,7 +892,10 @@ export async function monitorZalouserProvider(
         const cleaned = normalizeZalouserAllowEntry(entry);
         if (/^\d+$/.test(cleaned)) {
           if (!nextGroups[cleaned]) {
-            nextGroups[cleaned] = groupsConfig[entry];
+            nextGroups[cleaned] = expectDefined(
+              groupsConfig[entry],
+              "enumerated Zalouser group config",
+            );
           }
           mapping.push(`${entry}→${cleaned}`);
           continue;
@@ -901,7 +905,7 @@ export async function monitorZalouserProvider(
         const id = match?.groupId;
         if (id) {
           if (!nextGroups[id]) {
-            nextGroups[id] = groupsConfig[entry];
+            nextGroups[id] = expectDefined(groupsConfig[entry], "enumerated Zalouser group config");
           }
           mapping.push(`${entry}→${id}`);
         } else {

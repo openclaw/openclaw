@@ -1,4 +1,5 @@
 // Matrix plugin module implements verification manager behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   VerificationPhase,
   VerificationRequestEvent,
@@ -341,7 +342,7 @@ export class MatrixVerificationManager {
       return txId === id;
     });
     if (transactionMatches.length === 1) {
-      return transactionMatches[0];
+      return expectDefined(transactionMatches[0], "single Matrix verification session");
     }
     if (transactionMatches.length > 1) {
       throw new Error(
