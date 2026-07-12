@@ -81,17 +81,54 @@ struct RuntimeLocalizationSourceGuardTests {
         #expect(watchInbox.contains("case localized(LocalizedStringResource)"))
         #expect(!watchInbox.contains("WatchTextValue: ExpressibleByStringLiteral"))
         #expect(watchInbox.contains("accessory: .verbatim(self.store.talkSummaryText)"))
-        #expect(rootTabs.contains("String(localized: \"Needs attention\")"))
-        #expect(rootTabsNavigation.contains("case .gateway: String(localized: \"Settings / Gateway\")"))
-        #expect(phoneControlHub.contains("case .error: String(localized: \"Attention\")"))
+        for status in ["Online", "Connecting", "Needs attention", "Offline"] {
+            #expect(rootTabs.contains("String(localized: \"\(status)\")"))
+        }
+        let destinationTitles = [
+            "Chat",
+            "Talk",
+            "Overview",
+            "Activity",
+            "Agents",
+            "Workboard",
+            "Skill Workshop",
+            "Instances",
+            "Sessions",
+            "Files",
+            "Dreaming",
+            "Usage",
+            "Cron Jobs",
+            "Terminal",
+            "Docs",
+            "Settings",
+            "Settings / Gateway",
+        ]
+        for title in destinationTitles {
+            #expect(rootTabsNavigation.contains("String(localized: \"\(title)\")"))
+        }
+        #expect(rootTabsNavigation.contains("case .gateway: String(localized: \"Connection\")"))
+        for status in ["Online", "Connecting", "Attention", "Offline"] {
+            #expect(phoneControlHub.contains("String(localized: \"\(status)\")"))
+            #expect(proComponents.contains("String(localized: \"\(status)\")"))
+        }
         #expect(phoneControlHub.contains("String(localized: \"Default Agent\")"))
         #expect(proComponents.contains("OpenClawStatusBadge(label: .verbatim(self.title)"))
-        #expect(proComponents.contains("String(localized: \"Online\")"))
         #expect(skillWorkshop.contains("String(localized: \"Default agent\")"))
+        #expect(workboard.components(separatedBy: "String(localized: \"Default agent\")").count - 1 == 2)
         #expect(!workboard.contains("?? \"Default agent\""))
         #expect(talkPro.contains("if title.isEmpty { return String(localized: \"Not active\") }"))
-        #expect(talkManager.contains("String(localized: \"iOS Speech fallback\")"))
-        #expect(talkManager.contains("String(localized: \"Realtime unavailable\")"))
+        #expect(talkManager.contains(
+            "var gatewayTalkActiveModeTitle: String = .init(localized: \"Not active\")"))
+        for title in [
+            "Not active",
+            "Paused",
+            "Realtime unavailable",
+            "iOS Speech + TTS",
+            "iOS Speech fallback",
+        ] {
+            #expect(talkManager.contains("localized: \"\(title)\""))
+        }
+        #expect(!talkManager.contains("gatewayTalkActiveModeTitle: String = \""))
         #expect(!talkManager.contains("gatewayTalkActiveModeTitle = \""))
     }
 
