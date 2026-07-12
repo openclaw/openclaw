@@ -89,12 +89,18 @@ function buildSignalSetupPatch(input: {
   httpHost?: string;
   httpPort?: string;
 }) {
+  const httpPort =
+    input.httpPort !== undefined && input.httpPort !== ""
+      ? Number(input.httpPort)
+      : undefined;
   return {
     ...(input.signalNumber ? { account: input.signalNumber } : {}),
     ...(input.cliPath ? { cliPath: input.cliPath } : {}),
     ...(input.httpUrl ? { httpUrl: input.httpUrl } : {}),
     ...(input.httpHost ? { httpHost: input.httpHost } : {}),
-    ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
+    ...(httpPort !== undefined && Number.isInteger(httpPort) && httpPort >= 1 && httpPort <= 65535
+      ? { httpPort }
+      : {}),
   };
 }
 
