@@ -733,6 +733,8 @@ describe("openai image generation provider", () => {
     mockGeneratedPngResponse();
 
     const provider = buildOpenAIImageGenerationProvider();
+    // Plugin-scoped runtime snapshots can carry a built-in provider overlay
+    // before its model catalog is present.
     const cfg = {
       models: {
         providers: {
@@ -741,7 +743,7 @@ describe("openai image generation provider", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
     const result = await provider.generateImage({
       provider: "openai",
       model: "gpt-image-2",
