@@ -3949,7 +3949,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/gateway/session-utils.ts: readSessionTitleFieldsFromTranscriptAsync",
   "src/gateway/session-utils.ts: resolveSessionModelIdentityRef",
   "src/gateway/session-utils.ts: SessionTranscriptReadScope",
-  "src/gateway/session-utils.ts: visitSessionMessagesAsync",
   "src/gateway/session-utils.types.ts: SessionCompactionCheckpointPreview",
   "src/gateway/startup-auth.ts: assertGatewayAuthNotKnownWeak",
   "src/gateway/talk-handoff.ts: clearTalkHandoffsForTest",

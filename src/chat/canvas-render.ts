@@ -9,7 +9,7 @@ import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 type CanvasSurface = "assistant_message";
 type CanvasSandbox = "strict" | "scripts";
 
-export type McpAppPreviewDescriptor = {
+type McpAppPreviewDescriptor = {
   viewId: string;
   serverName?: string;
   toolName?: string;

@@ -162,45 +162,8 @@ function readTranscriptResult(value: unknown, viewId: string): TranscriptResultR
   };
 }
 
-/** Finds a server-authored descriptor and its canonical tool call/result pair. */
-export function findMcpAppReconstructionData(
-  messages: unknown[],
-  viewId: string,
-): ReconstructionData | undefined {
-  for (let resultIndex = messages.length - 1; resultIndex >= 0; resultIndex -= 1) {
-    const read = readTranscriptResult(messages[resultIndex], viewId);
-    if (!read) {
-      continue;
-    }
-    if (read.kind === "unavailable") {
-      return undefined;
-    }
-    const result = read.value;
-    let input: { found: true; input: unknown } | undefined;
-    for (let inputIndex = resultIndex - 1; inputIndex >= 0; inputIndex -= 1) {
-      input = readToolInputFromMessage(
-        messages[inputIndex],
-        result.descriptor.toolCallId,
-        result.modelToolName,
-      );
-      if (input) {
-        break;
-      }
-    }
-    if (!input) {
-      return undefined;
-    }
-    const { modelToolName: _modelToolName, ...reconstruction } = result;
-    return {
-      ...reconstruction,
-      toolInput: input.input,
-    };
-  }
-  return undefined;
-}
-
 /** Searches the full active transcript without retaining its messages in memory. */
-export async function findMcpAppReconstructionDataByVisit(
+async function findMcpAppReconstructionDataByVisit(
   visitTranscript: TranscriptVisit,
   viewId: string,
 ): Promise<ReconstructionData | undefined> {

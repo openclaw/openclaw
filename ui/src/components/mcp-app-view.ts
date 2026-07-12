@@ -32,7 +32,7 @@ type HostSandboxCsp = NonNullable<NonNullable<HostCapabilities["sandbox"]>["csp"
 type ScheduleFrame = (callback: FrameRequestCallback) => number;
 type ScheduleFallback = (callback: () => void, delayMs: number) => number;
 
-export async function waitForMcpAppHandlerRegistration(
+async function waitForMcpAppHandlerRegistration(
   scheduleFrame: ScheduleFrame = window.requestAnimationFrame.bind(window),
   scheduleFallback: ScheduleFallback = window.setTimeout.bind(window),
 ): Promise<void> {
