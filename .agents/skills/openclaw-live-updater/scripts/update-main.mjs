@@ -69,6 +69,47 @@ function gitText(checkout, args) {
   return git(checkout, args).trim();
 }
 
+function snapshotGitArgs(args) {
+  return [
+    "-c",
+    "core.fsmonitor=",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "credential.helper=",
+    ...args,
+  ];
+}
+
+function snapshotGitEnv(env = process.env) {
+  return {
+    ...env,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+}
+
+function snapshotGitText(checkout, args) {
+  return execFileSync("git", snapshotGitArgs(["-C", checkout, ...args]), {
+    encoding: "utf8",
+    env: snapshotGitEnv(),
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+function snapshotSpawnSync(command, args, options = {}) {
+  if (command !== "git") {
+    throw new UpdateInvariantError(
+      "gateway_snapshot_inspection_failed",
+      `refusing to execute ${command} while inspecting a runtime snapshot`,
+    );
+  }
+  return spawnSync("git", snapshotGitArgs(args), {
+    ...options,
+    env: snapshotGitEnv(options.env),
+  });
+}
+
 function configValue(checkout, key, bool = false) {
   try {
     return gitText(checkout, ["config", ...(bool ? ["--bool"] : ["--get"]), key]);
@@ -168,14 +209,14 @@ function readStampHead(checkout, stampFile) {
   }
 }
 
-function canonicalBuildRequirements(checkout) {
+function canonicalBuildRequirements(checkout, spawnSyncImpl = spawnSync) {
   const distRoot = path.join(checkout, "dist");
   const fsImpl = { existsSync, readFileSync, readdirSync, statSync };
   const deps = {
     cwd: checkout,
     env: process.env,
     fs: fsImpl,
-    spawnSync,
+    spawnSync: spawnSyncImpl,
     distRoot,
     distEntry: path.join(distRoot, "entry.js"),
     buildStampPath: path.join(distRoot, BUILD_STAMP_FILE),
@@ -229,7 +270,7 @@ function missingControlUiAssets(checkout) {
   return [...new Set(missing)].toSorted();
 }
 
-export function inspectBuildState(checkout, expectedSha) {
+export function inspectBuildState(checkout, expectedSha, spawnSyncImpl = spawnSync) {
   const buildInfoPath = path.join(checkout, "dist/build-info.json");
   const uiPath = path.join(checkout, "dist/control-ui/index.html");
   let commit = null;
@@ -244,7 +285,7 @@ export function inspectBuildState(checkout, expectedSha) {
   }
   const buildStampHead = readStampHead(checkout, BUILD_STAMP_FILE);
   const runtimePostBuildStampHead = readStampHead(checkout, RUNTIME_POSTBUILD_STAMP_FILE);
-  const requirements = canonicalBuildRequirements(checkout);
+  const requirements = canonicalBuildRequirements(checkout, spawnSyncImpl);
   const missingUiAssets = missingControlUiAssets(checkout);
   const requiredFilesPresent =
     existsSync(buildInfoPath) && existsSync(uiPath) && missingUiAssets.length === 0;
@@ -552,23 +593,23 @@ export function isOwnedGatewayEntrypoint(checkout, home, entrypoint) {
     if (
       realpathSync(snapshotRoot) !== snapshotRoot ||
       realpathSync(entrypoint) !== entrypoint ||
-      !originMatches(gitText(snapshotRoot, ["remote", "get-url", "origin"])) ||
-      gitText(snapshotRoot, ["status", "--porcelain"]) !== ""
+      !originMatches(snapshotGitText(snapshotRoot, ["remote", "get-url", "origin"])) ||
+      snapshotGitText(snapshotRoot, ["status", "--porcelain"]) !== ""
     ) {
       return false;
     }
     try {
-      git(snapshotRoot, ["symbolic-ref", "-q", "HEAD"]);
+      snapshotGitText(snapshotRoot, ["symbolic-ref", "-q", "HEAD"]);
       return false;
     } catch {
       // Immutable runtime snapshots are detached from every mutable branch.
     }
-    const snapshotHead = gitText(snapshotRoot, ["rev-parse", "HEAD"]);
+    const snapshotHead = snapshotGitText(snapshotRoot, ["rev-parse", "HEAD"]);
     if (
       !FULL_SHA_RE.test(snapshotHead) ||
       snapshotName !== `gateway-${snapshotHead.slice(0, 7)}` ||
       !commitExists(checkout, snapshotHead) ||
-      !inspectBuildState(snapshotRoot, snapshotHead).current
+      !inspectBuildState(snapshotRoot, snapshotHead, snapshotSpawnSync).current
     ) {
       return false;
     }
@@ -1326,6 +1367,15 @@ function restartGateway(
   return startedAtMs;
 }
 
+function isManagedGatewayLoaded(deployment) {
+  const result = spawnSync(
+    "/bin/launchctl",
+    ["print", `gui/${process.getuid()}/${deployment.label}`],
+    { encoding: "utf8" },
+  );
+  return result.status === 0;
+}
+
 function verifyGateway(runCommand, checkout, expectedSha, deployment = null) {
   assertExactBuild(checkout, expectedSha);
   if (deployment) {
@@ -1555,6 +1605,9 @@ export function maintainMain(options, dependencies = {}) {
     const replaceGatewayEntrypoint =
       dependencies.replaceGatewayEntrypoint ?? replaceLaunchAgentEntrypoint;
     const verifyGatewayRuntime = dependencies.verifyGatewayRuntime ?? verifyManagedGatewayRuntime;
+    const verifyGatewayProbe = dependencies.verifyGateway ?? verifyGateway;
+    const verifyGatewayAfterRestart = dependencies.verifyAndAuditGateway ?? verifyAndAuditGateway;
+    const isGatewayLoaded = dependencies.isGatewayLoaded ?? isManagedGatewayLoaded;
     const prepareSuspension =
       dependencies.prepareGatewaySuspension ??
       ((checkout, deployment) =>
@@ -1760,7 +1813,7 @@ export function maintainMain(options, dependencies = {}) {
         gatewayDeployment,
         gatewayDeployment !== null,
       );
-      gatewayLogAudit = verifyAndAuditGateway({
+      gatewayLogAudit = verifyGatewayAfterRestart({
         runCommand,
         auditGatewayLogs,
         checkout: update.checkout,
@@ -1772,19 +1825,22 @@ export function maintainMain(options, dependencies = {}) {
       gatewayRuntime = verifyGatewayRuntime(update.checkout, update.afterSha);
     } else {
       try {
-        verifyGateway(runCommand, update.checkout, update.afterSha, gatewayControlDeployment);
+        verifyGatewayProbe(runCommand, update.checkout, update.afterSha, gatewayControlDeployment);
         gatewayRuntime = verifyGatewayRuntime(update.checkout, update.afterSha);
       } catch {
         actions.gatewayRestart = true;
         actions.gatewaySelfHeal = true;
+        const bootstrap =
+          gatewayControlDeployment !== null && !isGatewayLoaded(gatewayControlDeployment);
         const restartStartedAt = restartGateway(
           runCommand,
           update.checkout,
           update.afterSha,
           Date.now(),
           gatewayControlDeployment,
+          bootstrap,
         );
-        gatewayLogAudit = verifyAndAuditGateway({
+        gatewayLogAudit = verifyGatewayAfterRestart({
           runCommand,
           auditGatewayLogs,
           checkout: update.checkout,
@@ -1821,7 +1877,7 @@ export function maintainMain(options, dependencies = {}) {
           update.checkout,
         );
         const macTarget = verifyMacTarget(update.checkout);
-        verifyGateway(
+        verifyGatewayProbe(
           runCommand,
           update.checkout,
           update.afterSha,
