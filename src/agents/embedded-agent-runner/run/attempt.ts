@@ -4822,7 +4822,7 @@ export async function runEmbeddedAttempt(
             );
           }
 
-          const llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
+          let llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
             prompt: promptForModel,
             ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
             ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
@@ -4871,6 +4871,16 @@ export async function runEmbeddedAttempt(
 
               if (llmInputResult?.prompt !== undefined) {
                 promptForModel = llmInputResult.prompt;
+                // Recompute the boundary precheck prompt so preemptive
+                // compaction uses the post-hook prompt length, not stale.
+                llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
+                  prompt: promptForModel,
+                  ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
+                  ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
+                  ...(typeof preparedUserTurnMessage?.timestamp === "number"
+                    ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
+                    : {}),
+                });
               }
               if (llmInputResult?.systemPrompt !== undefined) {
                 systemPromptForHook = llmInputResult.systemPrompt;

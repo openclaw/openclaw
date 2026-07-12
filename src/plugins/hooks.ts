@@ -239,6 +239,11 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   // unresolved; timeout fail-opens with the original final answer.
   before_agent_finalize: 15_000,
   before_prompt_build: 15_000,
+  // llm_input/llm_output are awaited modifying hooks that sit on the model
+  // call hot path. A hung handler must not freeze prompt submission or
+  // response delivery; timeout fail-opens with the unmodified payload.
+  llm_input: 15_000,
+  llm_output: 15_000,
   resolve_exec_env: 15_000,
 };
 
