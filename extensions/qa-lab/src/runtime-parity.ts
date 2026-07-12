@@ -799,11 +799,16 @@ function resolveRuntimeParityToolCalls(params: {
     selected = params.mockToolCalls;
   }
   const mediaEvidence = params.scenarioEvidence?.match(/\bMEDIA:\S+/giu) ?? [];
-  const missingImageCalls = selected.filter(
-    (toolCall) =>
-      toolCall.tool === "image_generate" && toolCall.errorClass === TOOL_RESULT_MISSING_ERROR_CLASS,
+  const imageCalls = selected.filter((toolCall) => toolCall.tool === "image_generate");
+  const missingImageCalls = imageCalls.filter(
+    (toolCall) => toolCall.errorClass === TOOL_RESULT_MISSING_ERROR_CLASS,
   );
-  if (params.scenarioPassed && mediaEvidence.length === 1 && missingImageCalls.length === 1) {
+  if (
+    params.scenarioPassed &&
+    mediaEvidence.length === 1 &&
+    imageCalls.length === 1 &&
+    missingImageCalls.length === 1
+  ) {
     let resolvedMissingImage = false;
     selected = selected.map((toolCall) => {
       if (

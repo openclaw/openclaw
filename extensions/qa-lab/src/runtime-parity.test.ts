@@ -258,14 +258,13 @@ describe("runtime parity", () => {
     expect(resolved[0]?.errorClass).toBeUndefined();
   });
 
-  it("preserves ambiguous missing image results despite MEDIA evidence", () => {
+  it("preserves a missing image result when MEDIA may belong to another call", () => {
     const resolved = __testing.resolveRuntimeParityToolCalls({
       mockToolCalls: [
         {
           tool: "image_generate",
           argsHash: "first-args",
-          resultHash: "first-missing",
-          errorClass: "tool-result-missing",
+          resultHash: "first-success",
         },
         {
           tool: "image_generate",
@@ -280,7 +279,7 @@ describe("runtime parity", () => {
     });
 
     expect(resolved.map((toolCall) => toolCall.errorClass)).toEqual([
-      "tool-result-missing",
+      undefined,
       "tool-result-missing",
     ]);
   });
