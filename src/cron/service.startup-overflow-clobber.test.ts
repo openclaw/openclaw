@@ -121,9 +121,7 @@ describe("CronService startup catch-up repair scoping", () => {
     await start(firstState);
 
     const deferredSlot = startNow + 5_000;
-    expect(
-      firstState.store?.jobs.find((job) => job.id === "daily-overflow")?.state,
-    ).toMatchObject({
+    expect(firstState.store?.jobs.find((job) => job.id === "daily-overflow")?.state).toMatchObject({
       nextRunAtMs: deferredSlot,
       pendingCatchupDeferral: true,
     });
@@ -136,9 +134,7 @@ describe("CronService startup catch-up repair scoping", () => {
     const restartedState = createState();
     await start(restartedState);
 
-    const afterRestart = restartedState.store?.jobs.find(
-      (job) => job.id === "daily-overflow",
-    );
+    const afterRestart = restartedState.store?.jobs.find((job) => job.id === "daily-overflow");
     expect(afterRestart?.state).toMatchObject({
       nextRunAtMs: deferredSlot,
       pendingCatchupDeferral: true,
@@ -147,9 +143,7 @@ describe("CronService startup catch-up repair scoping", () => {
     now = deferredSlot + 5;
     await onTimer(restartedState);
 
-    const completed = restartedState.store?.jobs.find(
-      (job) => job.id === "daily-overflow",
-    );
+    const completed = restartedState.store?.jobs.find((job) => job.id === "daily-overflow");
     expect(completed?.state.lastRunStatus).toBe("ok");
     expect(completed?.state.pendingCatchupDeferral).toBeUndefined();
 

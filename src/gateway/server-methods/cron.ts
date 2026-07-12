@@ -86,10 +86,7 @@ class CronJobConfigRevisionConflictError extends Error {
 }
 
 function publicCronJobState(job: CronJob): CronJob["state"] {
-  const {
-    pendingCatchupDeferral: _pendingCatchupDeferral,
-    ...state
-  } = job.state;
+  const { pendingCatchupDeferral: _pendingCatchupDeferral, ...state } = job.state;
   return state;
 }
 

@@ -1170,7 +1170,7 @@ function applyOutcomeToStoredJob(
       triggerEval: result.triggerEval,
     });
     job.state.pendingCatchupDeferral = undefined;
-    return;
+    return undefined;
   }
 
   const shouldDelete = applyJobResult(state, job, {
