@@ -51,8 +51,9 @@ function sleep(ms: number): Promise<void> {
 
 type LiveSubagentModelConfig = {
   modelKey: string;
-  provider: "openai" | "google";
-  requiredEnv: "OPENAI_API_KEY" | "GEMINI_API_KEY" | "GOOGLE_API_KEY";
+  provider: "openai" | "google" | "ninerouter";
+  requiredEnv: "OPENAI_API_KEY" | "GEMINI_API_KEY" | "GOOGLE_API_KEY" | "NINEROUTER_API_KEY";
+  baseUrl?: string;
 };
 type LiveSubagentModelProviders = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
 
@@ -63,6 +64,14 @@ function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
       modelKey,
       provider: "google",
       requiredEnv: process.env.GEMINI_API_KEY?.trim() ? "GEMINI_API_KEY" : "GOOGLE_API_KEY",
+    };
+  }
+  if (modelKey.startsWith("9router/") || modelKey.startsWith("ninerouter/")) {
+    return {
+      modelKey,
+      provider: "ninerouter",
+      requiredEnv: "NINEROUTER_API_KEY",
+      baseUrl: process.env.NINEROUTER_BASE_URL?.trim() || "http://localhost:20128/v1",
     };
   }
   return { modelKey, provider: "openai", requiredEnv: "OPENAI_API_KEY" };
@@ -85,7 +94,7 @@ function liveSubagentConfig(
   },
 ): OpenClawConfig {
   const providerConfig = resolveLiveSubagentModelConfig();
-  const modelId = modelKey.replace(/^(openai|google)\//u, "");
+  const modelId = modelKey.replace(/^(openai|google|9router|ninerouter)\//u, "");
   const providers: LiveSubagentModelProviders = {};
   if (providerConfig.provider === "google") {
     providers.google = {
@@ -107,6 +116,32 @@ function liveSubagentConfig(
           input: ["text" as const],
           reasoning: true,
           contextWindow: 1_048_576,
+          maxTokens: 8_192,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+    };
+  } else if (providerConfig.provider === "ninerouter") {
+    providers.ninerouter = {
+      api: "openai-completions" as const,
+      agentRuntime: { id: "openclaw" },
+      apiKey: {
+        source: "env" as const,
+        provider: "default" as const,
+        id: "NINEROUTER_API_KEY",
+      },
+      baseUrl: providerConfig.baseUrl ?? "http://localhost:20128/v1",
+      request: { allowPrivateNetwork: true },
+      timeoutSeconds: 300,
+      models: [
+        {
+          id: modelId,
+          name: modelId,
+          api: "openai-completions" as const,
+          agentRuntime: { id: "openclaw" },
+          input: ["text" as const, "image" as const],
+          reasoning: true,
+          contextWindow: 200_000,
           maxTokens: 8_192,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         },
