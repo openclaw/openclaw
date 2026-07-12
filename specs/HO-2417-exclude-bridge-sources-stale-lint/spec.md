@@ -36,3 +36,23 @@ In scope: `extensions/memory-wiki/src/lint.ts` and its regression tests.
 
 Out of scope: repairing claim-level evidence, reviewing genuinely stale entity
 pages, resolving open questions, or changing source timestamps.
+
+## Clarification
+
+No [NEEDS CLARIFICATION] markers remain. The source-sync entry `group` is the
+authoritative distinction: only `bridge` is immutable bridge evidence;
+`unsafe-local` and untracked pages remain ordinary freshness-review candidates.
+
+## UI applicability
+
+UI N/A. This is a backend-only memory-wiki lint-policy change with no route,
+screen, visual component, Figma source, mockscreen, or Playwright snapshot
+surface. The phrase `stale-page` names a lint code, not a user-facing page.
+
+## Repo Reality Notes
+
+`rg` confirms `lintMemoryWikiVault` reads source-sync state in
+`extensions/memory-wiki/src/lint.ts`; the entry exposes both `group` and
+`pagePath`, and `lint.test.ts` already uses `writeMemoryWikiSourceSyncState`.
+The implementation is therefore limited to this collector predicate and its
+local regression fixture.

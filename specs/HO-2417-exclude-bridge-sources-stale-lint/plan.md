@@ -1,5 +1,10 @@
 # Implementation Plan: HO-2417
 
+## Summary
+
+Exclude only source-sync-managed `bridge` paths from the `stale-page` branch
+while preserving all ordinary page and claim freshness checks.
+
 ## Technical Context
 
 - Package: bundled `extensions/memory-wiki` plugin.
@@ -15,6 +20,13 @@ Build a second normalized path set from source-sync entries whose group is
 from the existing stale-page branch. Do not key the exemption on page metadata,
 because a manually authored page must not gain the exemption merely by claiming
 a bridge source type.
+
+## Implementation Approach
+
+Use the persisted source-sync state already loaded by the lint entry point to
+derive a normalized bridge-only path set. Thread that set into the existing
+page-issue collector and add one predicate to the stale-page emission branch.
+Do not write markdown, mutate timestamps, or alter compile/report generation.
 
 ## Validation
 

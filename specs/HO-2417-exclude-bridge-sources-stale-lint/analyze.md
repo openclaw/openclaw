@@ -17,3 +17,5 @@
 - UI evidence: N/A. This change has no UI, route, or snapshot surface.
 - Async lifecycle ownership: N/A. The lint operation is bounded local analysis
   and does not acquire or transfer pipeline ownership.
+- UI applicability: UI N/A. `stale-page` is a lint rule identifier; there is
+  no assignee-visible screen or visual-review surface.
