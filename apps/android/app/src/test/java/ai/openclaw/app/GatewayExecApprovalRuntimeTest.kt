@@ -728,24 +728,31 @@ class GatewayExecApprovalRuntimeTest {
     }
 
   @Test
-  fun legacyAlreadyResolvedRacingMethodsEpochBumpLeavesWriteReconcilable() =
+  fun legacyAlreadyResolvedRacingMethodsEpochBumpReconcilesWrite() =
     runBlocking {
       val runtime = createTestRuntime()
       seedConnectedRuntime(runtime, legacyMethods)
       seedApproval(runtime)
       val resolveStarted = CompletableDeferred<Unit>()
       val releaseResolve = CompletableDeferred<Unit>()
+      val methods = mutableListOf<String>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
-        check(method == "exec.approval.resolve")
-        resolveStarted.complete(Unit)
-        releaseResolve.await()
-        throw GatewayRequestRejected(
-          GatewaySession.ErrorShape(
-            code = "INVALID_REQUEST",
-            message = "approval rejected",
-            details = gatewayErrorDetails("APPROVAL_ALREADY_RESOLVED"),
-          ),
-        )
+        methods += method
+        when (method) {
+          "exec.approval.resolve" -> {
+            resolveStarted.complete(Unit)
+            releaseResolve.await()
+            throw GatewayRequestRejected(
+              GatewaySession.ErrorShape(
+                code = "INVALID_REQUEST",
+                message = "approval rejected",
+                details = gatewayErrorDetails("APPROVAL_ALREADY_RESOLVED"),
+              ),
+            )
+          }
+          "exec.approval.get" -> legacyGet()
+          else -> error("unexpected method $method")
+        }
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
@@ -754,20 +761,9 @@ class GatewayExecApprovalRuntimeTest {
       // already-resolved publish a no-op, leaving only the pending-write record.
       invokeReplaceGatewayMethods(runtime, legacyMethods)
       releaseResolve.complete(Unit)
-      delay(100)
 
-      // The settled rejection must not strand the write as requestInFlight; the next
-      // refresh reconciles it through canonical readback instead of freezing forever.
-      val reconcileMethods = mutableListOf<String>()
-      runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
-        reconcileMethods += method
-        when (method) {
-          "exec.approval.list" -> "[]"
-          "exec.approval.get" -> legacyGet()
-          else -> error("unexpected method $method")
-        }
-      }
-      runtime.refreshExecApprovals()
+      // The settled rejection must reconcile through current canonical state instead
+      // of freezing until a perfectly timed manual refresh.
       waitUntil {
         runtime.execApprovals.value.singleOrNull()?.let { row ->
           row.resolvingDecision == null &&
@@ -775,7 +771,7 @@ class GatewayExecApprovalRuntimeTest {
         } == true
       }
 
-      assertTrue(reconcileMethods.contains("exec.approval.get"))
+      assertEquals(listOf("exec.approval.resolve", "exec.approval.get"), methods)
     }
 
   @Test

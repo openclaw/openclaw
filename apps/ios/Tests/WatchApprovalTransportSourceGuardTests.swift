@@ -12,6 +12,27 @@ private struct TestSnapshotCorrelation: Hashable {
 }
 
 struct WatchApprovalTransportSourceGuardTests {
+    @Test func `watch approval loading and screenshot proof are visible`() throws {
+        let appSource = try Self.readWatchSource("OpenClawWatchApp.swift")
+        let viewSource = try Self.readWatchSource("WatchInboxView.swift")
+        let approvalFace = try Self.extract(
+            viewSource,
+            from: "private var approvalsFace: some View",
+            to: "private var connectionFace: some View")
+
+        #expect(appSource.contains("--openclaw-watch-approval-screenshot-mode"))
+        #expect(appSource.contains("includeApproval: WatchScreenshotMode.approvals"))
+        #expect(viewSource.contains("selectedFace = WatchScreenshotMode.approvals ? 2 : 0"))
+        #expect(appSource.contains("id: \"watch-screenshot-approval\""))
+        #expect(appSource.contains("pendingApprovalCount: approvals.count"))
+        #expect(approvalFace.contains("self.store.isExecApprovalReviewLoading"))
+        #expect(approvalFace.contains("title: \"Loading approval\""))
+        #expect(approvalFace.contains("self.approvalCount > 0"))
+        #expect(approvalFace.contains("title: \"Approval not loaded\""))
+        #expect(approvalFace.contains("Approval details have not loaded"))
+        #expect(approvalFace.contains("WatchSecondaryButton(title: \"Review again\")"))
+    }
+
     @Test func `watch distinguishes unsent approval from uncertain delivery`() throws {
         let source = try Self.readWatchSource("OpenClawWatchApp.swift")
         let storeSource = try Self.readWatchSource("WatchInboxStore.swift")

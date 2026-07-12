@@ -36,7 +36,7 @@ private struct WatchControlSurfaceView: View {
     var onRefreshAppSnapshot: (() -> Void)?
     var onAppCommand: ((WatchAppCommand) -> Void)?
     var onSendChatMessage: ((String) -> String?)?
-    @State private var selectedFace = 0
+    @State private var selectedFace = WatchScreenshotMode.approvals ? 2 : 0
 
     var body: some View {
         TabView(selection: self.$selectedFace) {
@@ -268,18 +268,28 @@ private struct WatchControlSurfaceView: View {
                     .buttonStyle(.plain)
                     .accessibilityHint("Opens the full command before decisions are available")
                 }
+            } else if self.store.isExecApprovalReviewLoading {
+                WatchHeroCard(
+                    label: "Loading",
+                    title: "Loading approval",
+                    subtitle: self.store.execApprovalReviewStatusText ?? "Waiting for your iPhone",
+                    accessory: "Syncing")
+            } else if self.approvalCount > 0 {
+                WatchHeroCard(
+                    label: "Unavailable",
+                    title: "Approval not loaded",
+                    subtitle: self.store.execApprovalReviewStatusText ?? "Approval details have not loaded",
+                    accessory: "Retry")
+
+                WatchSecondaryButton(title: "Review again") {
+                    self.onRefreshExecApprovalReview?()
+                }
             } else {
                 WatchHeroCard(
                     label: "Clear",
                     title: "No approvals waiting",
                     subtitle: self.store.lastExecApprovalOutcomeText ?? "You are caught up",
                     accessory: "Ready")
-
-                if self.store.shouldShowExecApprovalReviewStatus {
-                    WatchSecondaryButton(title: "Review again") {
-                        self.onRefreshExecApprovalReview?()
-                    }
-                }
             }
 
             if self.approvalCount > 1 {

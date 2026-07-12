@@ -182,9 +182,11 @@ internal enum class GatewayApprovalRpcFamily {
   Unavailable,
 }
 
-/** Selects one read/write family for the lifetime of a Gateway hello catalog. */
-// Legacy exec.approval.* fallback serves shipped Gateway v4 peers; remove when the
-// minimum supported gateway advertises approval.get/approval.resolve.
+/**
+ * Selects one read/write family for the lifetime of a Gateway hello catalog.
+ * Legacy exec.approval.* serves shipped Gateway v4 peers until the minimum supported
+ * Gateway advertises approval.get/approval.resolve.
+ */
 internal fun selectGatewayApprovalRpcFamily(methods: Set<String>): GatewayApprovalRpcFamily {
   val hasCanonicalGet = "approval.get" in methods
   val hasCanonicalResolve = "approval.resolve" in methods

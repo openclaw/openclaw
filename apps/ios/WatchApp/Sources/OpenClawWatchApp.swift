@@ -13,21 +13,26 @@ private final class WatchNotificationPresentationDelegate: NSObject, UNUserNotif
     }
 }
 
+enum WatchScreenshotMode {
+    private static let defaultsKey = "openclaw.watch.screenshotMode"
+    static let approvals = ProcessInfo.processInfo.arguments.contains(
+        "--openclaw-watch-approval-screenshot-mode")
+        || ProcessInfo.processInfo.environment["OPENCLAW_WATCH_APPROVAL_SCREENSHOT_MODE"] == "1"
+    static let enabled = ProcessInfo.processInfo.arguments.contains("--openclaw-watch-screenshot-mode")
+        || ProcessInfo.processInfo.environment["OPENCLAW_WATCH_SCREENSHOT_MODE"] == "1"
+        || UserDefaults.standard.bool(forKey: WatchScreenshotMode.defaultsKey)
+        || WatchScreenshotMode.approvals
+}
+
 @main
 struct OpenClawWatchApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var inboxStore = WatchInboxStore(
-        requestNotificationAuthorization: !OpenClawWatchApp.isScreenshotMode)
+        requestNotificationAuthorization: !WatchScreenshotMode.enabled)
     @State private var directNode = WatchDirectNode()
     @State private var notificationDelegate = WatchNotificationPresentationDelegate()
     @State private var receiver: WatchConnectivityReceiver?
     @State private var execApprovalRefreshTask: Task<Void, Never>?
-
-    private static let screenshotModeDefaultsKey = "openclaw.watch.screenshotMode"
-    private static let isScreenshotMode = ProcessInfo.processInfo.arguments.contains(
-        "--openclaw-watch-screenshot-mode")
-        || ProcessInfo.processInfo.environment["OPENCLAW_WATCH_SCREENSHOT_MODE"] == "1"
-        || UserDefaults.standard.bool(forKey: OpenClawWatchApp.screenshotModeDefaultsKey)
 
     var body: some Scene {
         WindowGroup {
@@ -83,8 +88,9 @@ struct OpenClawWatchApp: App {
                 })
                 .task {
                     UNUserNotificationCenter.current().delegate = self.notificationDelegate
-                    if OpenClawWatchApp.isScreenshotMode {
-                        self.inboxStore.configureScreenshotFixture()
+                    if WatchScreenshotMode.enabled {
+                        self.inboxStore.configureScreenshotFixture(
+                            includeApproval: WatchScreenshotMode.approvals)
                         return
                     }
                     if self.receiver == nil {
@@ -226,15 +232,33 @@ struct OpenClawWatchApp: App {
 
 @MainActor
 extension WatchInboxStore {
-    fileprivate func configureScreenshotFixture() {
+    fileprivate func configureScreenshotFixture(includeApproval: Bool = false) {
         let sentAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let approvals: [WatchExecApprovalItem] = if includeApproval {
+            [
+                WatchExecApprovalItem(
+                    id: "watch-screenshot-approval",
+                    gatewayStableID: "watch-screenshot-gateway",
+                    commandText: "curl --request POST https://deploy.example.invalid/releases",
+                    commandPreview: "Deploy the latest release",
+                    warningText: "This command can change a production service.",
+                    host: "deploy-runner",
+                    nodeId: "release-node",
+                    agentId: "main",
+                    expiresAtMs: sentAtMs + 10 * 60 * 1000,
+                    allowedDecisions: [.allowOnce, .deny],
+                    risk: .high),
+            ]
+        } else {
+            []
+        }
         greetingTextOverride = "Good morning"
         self.consume(
             execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
-                approvals: [],
+                approvals: approvals,
                 gatewayStableID: "watch-screenshot-gateway",
                 sentAtMs: sentAtMs,
-                snapshotId: nil),
+                snapshotId: includeApproval ? "watch-screenshot-approval-face" : nil),
             transport: "screenshot")
         self.consume(
             appSnapshot: WatchAppSnapshotMessage(
@@ -249,7 +273,7 @@ extension WatchInboxStore {
                 talkEnabled: true,
                 talkListening: false,
                 talkSpeaking: false,
-                pendingApprovalCount: 0,
+                pendingApprovalCount: approvals.count,
                 chatItems: [
                     WatchChatItem(
                         id: "watch-screenshot-user-chat",

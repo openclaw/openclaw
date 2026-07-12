@@ -5040,6 +5040,12 @@ class NodeRuntime private constructor(
         // epoch bump, and a write left requestInFlight would never reconcile.
         markExecApprovalWriteRequestFinished(pendingWrite)
         handleLegacyExecApprovalAlreadyResolved(gatewayScope, methodsSnapshot, pendingWrite)
+        if (pendingExecApprovalWrite(id, gatewayScope.stableId) === pendingWrite) {
+          // A same-endpoint method-catalog replacement rejects stale publishes but does
+          // not invalidate the write owner. Read current canonical state so the card
+          // cannot remain frozen until a later manual refresh.
+          reconcileExecApprovalWriteOutcome(gatewayScope, pendingWrite)
+        }
       } else {
         handleExecApprovalResolveFailure(
           gatewayScope = gatewayScope,
