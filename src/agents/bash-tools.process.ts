@@ -599,7 +599,7 @@ export function createProcessTool(
           }
           return runningSessionResult(
             resolved.session,
-            `Wrote ${(params.data ?? "").length} bytes to session ${params.sessionId}${
+            `Wrote ${Buffer.byteLength(params.data ?? "", "utf8")} bytes to session ${params.sessionId}${
               params.eof ? " (stdin closed)" : ""
             }.`,
           );
