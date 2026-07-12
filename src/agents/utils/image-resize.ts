@@ -3,7 +3,6 @@
  *
  * Downscales base64 image content for provider payload limits using the configured image processor.
  */
-import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import type { ImageContent } from "../../llm/types.js";
 import {
   convertImageToPng,
@@ -150,10 +149,6 @@ export async function resizeImage(
   options?: ImageResizeOptions,
 ): Promise<ResizedImage | null> {
   const opts = { ...DEFAULT_OPTIONS, ...options };
-  const estimatedSize = estimateBase64DecodedBytes(img.data);
-  if (estimatedSize > opts.maxBytes) {
-    return null;
-  }
   const inputBuffer = Buffer.from(img.data, "base64");
   const inputBase64Size = Buffer.byteLength(img.data, "utf-8");
   const processor = createImageProcessor();
