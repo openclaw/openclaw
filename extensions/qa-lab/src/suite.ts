@@ -1704,6 +1704,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       alternateModel,
       fastMode,
       thinkingDefault: params?.thinkingDefault,
+      forcedRuntime: params?.forcedRuntime,
       claudeCliAuthMode: params?.claudeCliAuthMode,
       controlUiEnabled: params?.controlUiEnabled ?? true,
       enabledPluginIds,
