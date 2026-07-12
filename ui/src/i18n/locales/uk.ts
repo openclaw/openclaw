@@ -3471,9 +3471,12 @@ export const uk: TranslationMap = {
       refresh: "Оновити",
       refreshing: "Оновлення...",
       paused: "Призупинено",
+      tasksTab: "Автоматизації",
+      activityTab: "Історія запусків",
     },
     suggestions: {
       title: "Ідеї для автоматизації",
+      add: "Додати",
       schedules: {
         weekdayMornings: "У будні о 9:00",
         everyMorning: "Щодня о 8:00",
@@ -3522,16 +3525,18 @@ export const uk: TranslationMap = {
     stats: {
       scheduler: "Планувальник",
       tasks: "Завдання",
+      failing: "З помилками",
       nextWake: "Наступне пробудження",
     },
     detail: {
       newTitle: "Нове заплановане завдання",
       newSubtitle: "Опишіть, що має зробити OpenClaw, потім виберіть час запуску.",
-      overviewTitle: "Остання активність",
-      overviewSubtitle: "Останні запуски всіх запланованих завдань.",
+      back: "Усі автоматизації",
+      settingsTab: "Налаштування",
       historyTitle: "Історія запусків",
       detailsSection: "Деталі",
       frequencySection: "Частота",
+      active: "Активні",
       paused: "Призупинено",
     },
     actions: {
@@ -3568,6 +3573,8 @@ export const uk: TranslationMap = {
       allStatuses: "Усі статуси",
       allDelivery: "Уся доставка",
       noMatching: "Немає відповідних запусків.",
+      emptyTitle: "Запусків ще немає",
+      emptyHint: "Запуски з’являться тут після спрацювання автоматизації.",
       loadMore: "Завантажити більше запусків",
       runStatusOk: "OK",
       runStatusError: "Помилка",

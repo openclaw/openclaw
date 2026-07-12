@@ -3498,9 +3498,12 @@ export const it: TranslationMap = {
       refresh: "Aggiorna",
       refreshing: "Aggiornamento...",
       paused: "In pausa",
+      tasksTab: "Automazioni",
+      activityTab: "Cronologia esecuzioni",
     },
     suggestions: {
       title: "Idee di automazione",
+      add: "Aggiungi",
       schedules: {
         weekdayMornings: "Giorni feriali alle 9:00",
         everyMorning: "Ogni giorno alle 8:00",
@@ -3549,16 +3552,18 @@ export const it: TranslationMap = {
     stats: {
       scheduler: "Pianificatore",
       tasks: "Attività",
+      failing: "Con errori",
       nextWake: "Prossima attivazione",
     },
     detail: {
       newTitle: "Nuova attività pianificata",
       newSubtitle: "Descrivi cosa deve fare OpenClaw, poi scegli quando eseguirla.",
-      overviewTitle: "Attività recente",
-      overviewSubtitle: "Ultime esecuzioni di tutte le attività pianificate.",
+      back: "Tutte le automazioni",
+      settingsTab: "Impostazioni",
       historyTitle: "Cronologia esecuzioni",
       detailsSection: "Dettagli",
       frequencySection: "Frequenza",
+      active: "Attive",
       paused: "In pausa",
     },
     actions: {
@@ -3595,6 +3600,8 @@ export const it: TranslationMap = {
       allStatuses: "Tutti gli stati",
       allDelivery: "Tutte le consegne",
       noMatching: "Nessuna esecuzione corrispondente.",
+      emptyTitle: "Ancora nessuna esecuzione",
+      emptyHint: "Le esecuzioni verranno visualizzate qui quando si attiva un'automazione.",
       loadMore: "Carica altre esecuzioni",
       runStatusOk: "OK",
       runStatusError: "Errore",

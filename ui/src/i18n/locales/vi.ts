@@ -3454,9 +3454,12 @@ export const vi: TranslationMap = {
       refresh: "Làm mới",
       refreshing: "Đang làm mới...",
       paused: "Đã tạm dừng",
+      tasksTab: "Tự động hóa",
+      activityTab: "Lịch sử chạy",
     },
     suggestions: {
       title: "Ý tưởng tự động hóa",
+      add: "Thêm",
       schedules: {
         weekdayMornings: "Ngày trong tuần lúc 9:00 AM",
         everyMorning: "Hằng ngày lúc 8:00 AM",
@@ -3505,16 +3508,18 @@ export const vi: TranslationMap = {
     stats: {
       scheduler: "Bộ lập lịch",
       tasks: "Tác vụ",
+      failing: "Đang lỗi",
       nextWake: "Lần chạy tiếp theo",
     },
     detail: {
       newTitle: "Tác vụ theo lịch mới",
       newSubtitle: "Mô tả những gì OpenClaw nên làm, sau đó chọn thời điểm chạy.",
-      overviewTitle: "Hoạt động gần đây",
-      overviewSubtitle: "Các lần chạy mới nhất trên tất cả tác vụ theo lịch.",
+      back: "Tất cả tác vụ tự động",
+      settingsTab: "Cài đặt",
       historyTitle: "Lịch sử chạy",
       detailsSection: "Chi tiết",
       frequencySection: "Tần suất",
+      active: "Đang hoạt động",
       paused: "Đã tạm dừng",
     },
     actions: {
@@ -3551,6 +3556,8 @@ export const vi: TranslationMap = {
       allStatuses: "Tất cả trạng thái",
       allDelivery: "Tất cả trạng thái gửi",
       noMatching: "Không có lần chạy khớp.",
+      emptyTitle: "Chưa có lần chạy nào",
+      emptyHint: "Các lần chạy sẽ xuất hiện tại đây khi một tác vụ tự động được kích hoạt.",
       loadMore: "Tải thêm lần chạy",
       runStatusOk: "OK",
       runStatusError: "Lỗi",

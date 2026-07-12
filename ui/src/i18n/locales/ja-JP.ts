@@ -3473,9 +3473,12 @@ export const ja_JP: TranslationMap = {
       refresh: "更新",
       refreshing: "更新中...",
       paused: "一時停止中",
+      tasksTab: "自動化",
+      activityTab: "実行履歴",
     },
     suggestions: {
       title: "自動化のアイデア",
+      add: "追加",
       schedules: {
         weekdayMornings: "平日の午前9:00",
         everyMorning: "毎日午前8:00",
@@ -3524,16 +3527,18 @@ export const ja_JP: TranslationMap = {
     stats: {
       scheduler: "スケジューラー",
       tasks: "タスク",
+      failing: "失敗中",
       nextWake: "次回の起動",
     },
     detail: {
       newTitle: "新規スケジュールタスク",
       newSubtitle: "OpenClaw に何をさせるかを記述し、実行するタイミングを選択します。",
-      overviewTitle: "最近のアクティビティ",
-      overviewSubtitle: "すべてのスケジュールタスクにおける最新の実行。",
+      back: "すべての自動化",
+      settingsTab: "設定",
       historyTitle: "実行履歴",
       detailsSection: "詳細",
       frequencySection: "頻度",
+      active: "アクティブ",
       paused: "一時停止中",
     },
     actions: {
@@ -3570,6 +3575,8 @@ export const ja_JP: TranslationMap = {
       allStatuses: "すべてのステータス",
       allDelivery: "すべての配信",
       noMatching: "一致する実行履歴はありません。",
+      emptyTitle: "実行履歴はまだありません",
+      emptyHint: "自動化が実行されると、ここに実行履歴が表示されます。",
       loadMore: "さらに実行履歴を読み込む",
       runStatusOk: "OK",
       runStatusError: "エラー",

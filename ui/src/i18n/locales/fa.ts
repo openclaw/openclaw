@@ -3459,9 +3459,12 @@ export const fa: TranslationMap = {
       refresh: "تازه‌سازی",
       refreshing: "در حال به‌روزرسانی...",
       paused: "متوقف‌شده",
+      tasksTab: "خودکارسازی‌ها",
+      activityTab: "تاریخچهٔ اجرا",
     },
     suggestions: {
       title: "ایده‌های خودکارسازی",
+      add: "افزودن",
       schedules: {
         weekdayMornings: "روزهای کاری ساعت ۹:۰۰ صبح",
         everyMorning: "روزانه ساعت ۸:۰۰ صبح",
@@ -3510,16 +3513,18 @@ export const fa: TranslationMap = {
     stats: {
       scheduler: "زمان‌بند",
       tasks: "وظایف",
+      failing: "ناموفق",
       nextWake: "بیداری بعدی",
     },
     detail: {
       newTitle: "وظیفهٔ زمان‌بندی‌شدهٔ جدید",
       newSubtitle: "توضیح دهید OpenClaw چه کاری باید انجام دهد، سپس زمان اجرای آن را انتخاب کنید.",
-      overviewTitle: "فعالیت اخیر",
-      overviewSubtitle: "آخرین اجراها در تمام وظایف زمان‌بندی‌شده.",
+      back: "همه خودکارسازی‌ها",
+      settingsTab: "تنظیمات",
       historyTitle: "تاریخچهٔ اجرا",
       detailsSection: "جزئیات",
       frequencySection: "دفعات تکرار",
+      active: "فعال",
       paused: "متوقف‌شده",
     },
     actions: {
@@ -3556,6 +3561,8 @@ export const fa: TranslationMap = {
       allStatuses: "همه وضعیت‌ها",
       allDelivery: "همه تحویل‌ها",
       noMatching: "اجرای منطبقی وجود ندارد.",
+      emptyTitle: "هنوز اجرایی انجام نشده است",
+      emptyHint: "پس از فعال شدن یک خودکارسازی، اجراها اینجا نمایش داده می‌شوند.",
       loadMore: "بارگیری اجراهای بیشتر",
       runStatusOk: "تأیید",
       runStatusError: "خطا",

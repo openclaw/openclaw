@@ -208,8 +208,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 55232,
-    "roughTokens": 13808
+    "chars": 52086,
+    "roughTokens": 13022
   },
   "openClawDeveloperInstructions": {
     "chars": 3262,
@@ -220,8 +220,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6947
   },
   "totalWithDynamicToolsJson": {
-    "chars": 83021,
-    "roughTokens": 20756
+    "chars": 79875,
+    "roughTokens": 19969
   },
   "userInputText": {
     "chars": 1442,
@@ -554,7 +554,7 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
 ```json
 [
   {
-    "description": "Send/delete/manage channel messages. Supports actions: send.",
+    "description": "Send/manage channel messages. Supports actions: send.",
     "inputSchema": {
       "properties": {
         "accountId": {
@@ -572,7 +572,7 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "boolean"
         },
         "attachments": {
-          "description": "Structured attachments; each entry uses media.",
+          "description": "Attachments; each uses media.",
           "items": {
             "properties": {
               "media": {
@@ -594,7 +594,7 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "array"
         },
         "buffer": {
-          "description": "Base64 attachment payload; data URL ok.",
+          "description": "Base64/data-URL attachment.",
           "type": "string"
         },
         "caption": {
@@ -614,14 +614,14 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "string"
         },
         "effectId": {
-          "description": "Effect id/name for sendWithEffect.",
+          "description": "sendWithEffect id/name.",
           "type": "string"
         },
         "filename": {
           "type": "string"
         },
         "forceDocument": {
-          "description": "Send image/GIF/video as document; avoids compression.",
+          "description": "Send media as document; no compression.",
           "type": "boolean"
         },
         "gatewayToken": {

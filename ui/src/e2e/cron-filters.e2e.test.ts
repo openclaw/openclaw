@@ -81,7 +81,7 @@ type PageDiagnostics = {
 };
 
 function jobTitle(page: Page, name: string) {
-  return page.locator(".cron-task__name-text", { hasText: new RegExp(`^${name}$`, "u") });
+  return page.locator(".cron-table__name-text", { hasText: new RegExp(`^${name}$`, "u") });
 }
 
 async function waitForJobTitle(
@@ -256,12 +256,14 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}cron`);
       await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
 
-      // Selecting the task loads its stored model override into the editor.
+      // Selecting the task opens the detail view with its stored model override.
       await jobTitle(page, existingJob.name).click();
       await expect
         .poll(async () => page.locator("#cron-payload-model").inputValue())
         .toBe(configuredModel);
 
+      // The create button lives on the list view; navigate back first.
+      await page.locator('[data-test-id="cron-back"]').click();
       await page.locator('[data-test-id="cron-new-task"]').click();
       await page.locator("#cron-payload-text").fill("Run with a selected model");
       await page.locator("#cron-name").fill("Model override task");

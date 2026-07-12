@@ -3395,9 +3395,12 @@ export const zh_CN: TranslationMap = {
       refresh: "刷新",
       refreshing: "刷新中...",
       paused: "已暂停",
+      tasksTab: "自动化",
+      activityTab: "运行历史",
     },
     suggestions: {
       title: "自动化灵感",
+      add: "添加",
       schedules: {
         weekdayMornings: "工作日上午 9:00",
         everyMorning: "每天上午 8:00",
@@ -3446,16 +3449,18 @@ export const zh_CN: TranslationMap = {
     stats: {
       scheduler: "调度器",
       tasks: "任务",
+      failing: "失败",
       nextWake: "下次唤醒",
     },
     detail: {
       newTitle: "新建计划任务",
       newSubtitle: "描述 OpenClaw 应该做什么，然后选择运行时间。",
-      overviewTitle: "近期活动",
-      overviewSubtitle: "所有计划任务的最新运行情况。",
+      back: "所有自动化",
+      settingsTab: "设置",
       historyTitle: "运行历史",
       detailsSection: "详情",
       frequencySection: "频率",
+      active: "活跃",
       paused: "已暂停",
     },
     actions: {
@@ -3492,6 +3497,8 @@ export const zh_CN: TranslationMap = {
       allStatuses: "全部状态",
       allDelivery: "全部投递",
       noMatching: "没有匹配的运行记录。",
+      emptyTitle: "暂无运行记录",
+      emptyHint: "自动化触发后，运行记录将显示在此处。",
       loadMore: "加载更多运行",
       runStatusOk: "成功",
       runStatusError: "错误",
