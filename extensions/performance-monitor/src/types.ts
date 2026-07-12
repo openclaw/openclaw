@@ -3,6 +3,8 @@
 export type PerformanceMonitorConfig = {
   maxRuns: number;
   maxEventsPerRun: number;
+  /** Write timing events to the shared OpenClaw file log under /tmp/openclaw by default. */
+  logTimingEvents: boolean;
 };
 
 export type PerformanceEventKind = "hook_handler" | "phase" | "tool" | "llm" | "run" | "harness";
@@ -35,6 +37,8 @@ export type PerformanceEvent = {
   phaseName?: string;
   callId?: string;
   toolCallId?: string;
+  traceId?: string;
+  spanId?: string;
   metadata?: Record<string, string | number | boolean>;
 };
 

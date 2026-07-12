@@ -189,6 +189,32 @@ describe("aggregate-run-timing", () => {
     expect(lines[1]).toContain("tool:core → read=88ms");
   });
 
+  it("parses perf timing lines from the shared OpenClaw file log", () => {
+    const record = parseOpenClawLogLine(
+      JSON.stringify({
+        time: "2026-07-12T01:00:01.000Z",
+        level: "info",
+        subsystem: "plugins/performance-monitor",
+        message:
+          "perf timing: kind=hook_handler pluginId=active-memory hookName=before_prompt_build handlerRef=hook:active-memory:before_prompt_build@buildPrompt durationMs=42 outcome=completed runId=run-abc traceId=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa sessionKey=agent:main:demo",
+        runId: "run-abc",
+        traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      }),
+    );
+    const events = extractEventsFromLogRecord(record);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      runId: "run-abc",
+      kind: "hook_handler",
+      extensionId: "active-memory",
+      hookName: "before_prompt_build",
+      handlerRef: "hook:active-memory:before_prompt_build@buildPrompt",
+      durationMs: 42,
+      source: "log",
+      correlation: "traceId",
+    });
+  });
+
   it("formats breakdown-tsv with hook/tool/llm rows per run", () => {
     const aggregated = {
       runs: [

@@ -22,6 +22,11 @@
         "maximum": 10000,
         "default": 500,
         "description": "Maximum timing events stored per run."
+      },
+      "logTimingEvents": {
+        "type": "boolean",
+        "default": true,
+        "description": "Write hook/tool/llm timing lines to the shared OpenClaw file log (/tmp/openclaw by default)."
       }
     }
   }

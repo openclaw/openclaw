@@ -1,5 +1,5 @@
 // Performance Monitor tests cover monitor and diagnostic ingestion behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createPerformanceMonitor, testApi as monitorTestApi } from "./monitor.js";
 import { createPerformanceMonitorService, testApi as serviceTestApi } from "./service.js";
 
@@ -140,6 +140,41 @@ describe("performance-monitor service", () => {
   it("ignores untrusted diagnostic events", () => {
     expect(serviceTestApi.shouldRecordDiagnosticEvent({ trusted: false })).toBe(false);
     expect(serviceTestApi.shouldRecordDiagnosticEvent(trusted)).toBe(true);
+  });
+
+  it("defaults logTimingEvents to true and allows disabling it", () => {
+    expect(serviceTestApi.parsePluginConfig(undefined).logTimingEvents).toBe(true);
+    expect(serviceTestApi.parsePluginConfig({ logTimingEvents: false }).logTimingEvents).toBe(
+      false,
+    );
+  });
+
+  it("writes perf timing logs when logTimingEvents is enabled", () => {
+    const timingLogger = { info: vi.fn() };
+    const { monitor } = createPerformanceMonitorService({ logTimingEvents: true });
+    serviceTestApi.recordDiagnosticEvent(
+      monitor,
+      {
+        type: "tool.execution.completed",
+        seq: 1,
+        ts: 1,
+        runId: "run-abc",
+        toolName: "read",
+        toolSource: "core",
+        handlerRef: "core:read",
+        durationMs: 88,
+        trace: { traceId: "f".repeat(32) },
+      },
+      { timingLogger, logTimingEvents: true },
+    );
+    expect(timingLogger.info).toHaveBeenCalledWith(
+      expect.stringContaining("perf timing:"),
+      expect.objectContaining({
+        perfTiming: true,
+        runId: "run-abc",
+        traceId: "f".repeat(32),
+      }),
+    );
   });
 });
 

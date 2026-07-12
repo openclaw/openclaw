@@ -70,7 +70,9 @@ const TIMING_EVENT_TYPES = new Set([
  * @property {string} [phaseName]
  * @property {string} [callId]
  * @property {string} [toolCallId]
- * @property {"log" | "stability"} source
+ * @property {string} [traceId]
+ * @property {Record<string, unknown>} [metadata]
+ * @property {"log" | "stability" | "performance-monitor" | "agent-jsonl"} source
  * @property {number} [seq]
  * @property {string} [correlation]
  * @property {string} [logMessage]
@@ -148,6 +150,60 @@ function extractKeyValues(text) {
     out[match[1]] = match[2];
   }
   return out;
+}
+
+const PERF_TIMING_PREFIX = "perf timing:";
+
+/**
+ * @param {Record<string, string>} kv
+ * @param {number} at
+ * @param {ReturnType<typeof collectContextFromRecord>} ctx
+ * @returns {TimingRow | undefined}
+ */
+function perfTimingKeyValuesToTimingRow(kv, at, ctx) {
+  const kind = kv.kind;
+  if (!kind) {
+    return undefined;
+  }
+  const durationRaw = kv.durationMs;
+  const durationMs =
+    durationRaw !== undefined && Number.isFinite(Number(durationRaw))
+      ? roundMs(Number(durationRaw))
+      : undefined;
+  /** @type {TimingRow} */
+  const row = {
+    runId: kv.runId ?? ctx.runId ?? "",
+    sessionKey: kv.sessionKey ?? ctx.sessionKey,
+    sessionId: kv.sessionId ?? ctx.sessionId,
+    kind: /** @type {TimingRow["kind"]} */ (kind),
+    at,
+    durationMs,
+    outcome: kv.outcome,
+    extensionId: kv.pluginId,
+    hookName: kv.hookName,
+    handlerName: kv.handlerName,
+    handlerSource: kv.handlerSource,
+    handlerRef: kv.handlerRef,
+    toolName: kv.toolName,
+    toolSource: kv.toolSource,
+    mcpServerName: kv.mcpServerName,
+    mcpToolName: kv.mcpToolName,
+    provider: kv.provider,
+    model: kv.model,
+    providerPluginId: kv.providerPluginId,
+    harnessId: kv.harnessId,
+    api: kv.api,
+    transport: kv.transport,
+    phaseName: kv.phaseName,
+    callId: kv.callId,
+    toolCallId: kv.toolCallId,
+    source: "log",
+    correlation: kv.traceId ? "traceId" : "perf-timing-log",
+    metadata: kv.traceId
+      ? { traceId: kv.traceId, ...(kv.spanId ? { spanId: kv.spanId } : {}) }
+      : undefined,
+  };
+  return row;
 }
 
 /**
@@ -228,7 +284,8 @@ function collectContextFromRecord(record) {
   const sessionKey = readFirstString(raw, ["sessionKey", "session_key"]) ?? kv.sessionKey;
   const sessionId = readFirstString(raw, ["sessionId", "session_id", "sessionKey"]) ?? kv.sessionId;
   const runId = readFirstString(raw, ["runId", "run_id"]) ?? kv.runId;
-  return { sessionKey, sessionId, runId, kv, message };
+  const traceId = readFirstString(raw, ["traceId", "trace_id"]) ?? kv.traceId;
+  return { sessionKey, sessionId, runId, traceId, kv, message };
 }
 
 /**
@@ -243,6 +300,20 @@ export function extractEventsFromLogRecord(record) {
   const ctx = collectContextFromRecord(record);
   const message = ctx.message ?? "";
   const out = [];
+
+  if (message.includes(PERF_TIMING_PREFIX)) {
+    const perfKv = extractKeyValues(message.slice(message.indexOf(PERF_TIMING_PREFIX)));
+    const perfRow = perfTimingKeyValuesToTimingRow(perfKv, at, ctx);
+    if (perfRow?.kind) {
+      if (!perfRow.runId && ctx.runId) {
+        perfRow.runId = ctx.runId;
+      }
+      if (perfRow.runId) {
+        out.push(perfRow);
+        return out;
+      }
+    }
+  }
 
   const startMatch = message.match(EMBEDDED_RUN_START_RE);
   if (startMatch) {
@@ -1284,6 +1355,7 @@ export function formatEventsTsv(aggregated) {
     "phaseName",
     "callId",
     "toolCallId",
+    "traceId",
     "durationMs",
     "outcome",
     "source",
@@ -1297,6 +1369,14 @@ export function formatEventsTsv(aggregated) {
     lines.push(
       columns
         .map((column) => {
+          if (column === "traceId") {
+            const value =
+              event.traceId ??
+              (event.metadata && typeof event.metadata.traceId === "string"
+                ? event.metadata.traceId
+                : undefined);
+            return value === undefined || value === null ? "" : String(value);
+          }
           const value = event[column];
           return value === undefined || value === null ? "" : String(value);
         })
@@ -1475,6 +1555,258 @@ export function formatRunSummaryTsv(aggregated) {
             return `${row.kind}:${formatEventLabel(row)}=${ms}${outcome}`;
           })
           .join(" | "),
+      ].join("\t"),
+    );
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+/**
+ * @param {TimingRow[]} events
+ */
+function computeRunStageTotals(events) {
+  /** @type {{ hook: number; tool: number; llm: number; phase: number; harness: number; measured: number; hookCount: number; toolCount: number; llmCount: number; phaseCount: number }} */
+  const totals = {
+    hook: 0,
+    tool: 0,
+    llm: 0,
+    phase: 0,
+    harness: 0,
+    measured: 0,
+    hookCount: 0,
+    toolCount: 0,
+    llmCount: 0,
+    phaseCount: 0,
+  };
+  for (const event of events) {
+    const ms = event.durationMs ?? 0;
+    if (ms <= 0 && event.kind !== "phase") {
+      continue;
+    }
+    switch (event.kind) {
+      case "hook_handler":
+        totals.hook = roundMs(totals.hook + ms);
+        totals.hookCount += 1;
+        break;
+      case "tool":
+        totals.tool = roundMs(totals.tool + ms);
+        totals.toolCount += 1;
+        break;
+      case "llm":
+        totals.llm = roundMs(totals.llm + ms);
+        totals.llmCount += 1;
+        break;
+      case "phase":
+        totals.phase = roundMs(totals.phase + ms);
+        totals.phaseCount += 1;
+        break;
+      case "harness":
+        totals.harness = roundMs(totals.harness + ms);
+        break;
+      default:
+        break;
+    }
+  }
+  totals.measured = roundMs(totals.hook + totals.tool + totals.llm + totals.phase + totals.harness);
+  return totals;
+}
+
+/**
+ * @param {{ runs: RunWindow[], events: TimingRow[] }} aggregated
+ * @param {Map<string, { queryIndex?: number; query?: string; wallMs?: number; agentDurationMs?: number }>} [runMeta]
+ */
+export function formatPerRunStageSummaryTsv(aggregated, runMeta = new Map()) {
+  /** @type {Map<string, TimingRow[]>} */
+  const byRun = new Map();
+  for (const event of aggregated.events) {
+    if (!event.runId) {
+      continue;
+    }
+    const bucket = byRun.get(event.runId) ?? [];
+    bucket.push(event);
+    byRun.set(event.runId, bucket);
+  }
+
+  const columns = [
+    "queryIndex",
+    "query",
+    "runId",
+    "sessionKey",
+    "startedAt",
+    "endedAt",
+    "wallMs",
+    "agentDurationMs",
+    "hookMs",
+    "toolMs",
+    "llmMs",
+    "phaseMs",
+    "harnessMs",
+    "measuredMs",
+    "hookCount",
+    "toolCount",
+    "llmCount",
+    "phaseCount",
+    "eventCount",
+    "outcome",
+  ];
+  const lines = [columns.join("\t")];
+
+  for (const run of aggregated.runs.toSorted((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))) {
+    const events = byRun.get(run.runId) ?? [];
+    const totals = computeRunStageTotals(events);
+    const meta = runMeta.get(run.runId) ?? {};
+    const wallMs =
+      meta.wallMs ??
+      (run.startedAt !== undefined && run.endedAt !== undefined
+        ? roundMs(run.endedAt - run.startedAt)
+        : undefined);
+    lines.push(
+      [
+        meta.queryIndex ?? "",
+        meta.query ?? "",
+        run.runId,
+        run.sessionKey ?? "",
+        run.startedAt ?? "",
+        run.endedAt ?? "",
+        wallMs ?? "",
+        meta.agentDurationMs ?? "",
+        totals.hook,
+        totals.tool,
+        totals.llm,
+        totals.phase,
+        totals.harness,
+        totals.measured,
+        totals.hookCount,
+        totals.toolCount,
+        totals.llmCount,
+        totals.phaseCount,
+        events.length,
+        run.outcome ?? "",
+      ].join("\t"),
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+/**
+ * @param {{ runs: RunWindow[], events: TimingRow[] }} aggregated
+ */
+export function formatStageAverageTsv(aggregated) {
+  /** @type {Map<string, TimingRow[]>} */
+  const byRun = new Map();
+  for (const event of aggregated.events) {
+    if (!event.runId) {
+      continue;
+    }
+    const bucket = byRun.get(event.runId) ?? [];
+    bucket.push(event);
+    byRun.set(event.runId, bucket);
+  }
+
+  const runTotals = aggregated.runs.map((run) => ({
+    runId: run.runId,
+    totals: computeRunStageTotals(byRun.get(run.runId) ?? []),
+  }));
+  const runCount = runTotals.length || 1;
+  const sum = { hook: 0, tool: 0, llm: 0, phase: 0, harness: 0, measured: 0 };
+  for (const row of runTotals) {
+    sum.hook += row.totals.hook;
+    sum.tool += row.totals.tool;
+    sum.llm += row.totals.llm;
+    sum.phase += row.totals.phase;
+    sum.harness += row.totals.harness;
+    sum.measured += row.totals.measured;
+  }
+
+  const lines = [
+    [
+      "scope",
+      "category",
+      "key",
+      "label",
+      "runCount",
+      "invocationCount",
+      "avgMsPerRun",
+      "avgMsPerInvocation",
+      "totalMs",
+      "maxMs",
+    ].join("\t"),
+  ];
+
+  const avg = (value) => roundMs(value / runCount);
+  for (const [category, totalMs] of [
+    ["hook", sum.hook],
+    ["tool", sum.tool],
+    ["llm", sum.llm],
+    ["phase", sum.phase],
+    ["harness", sum.harness],
+    ["measured", sum.measured],
+  ]) {
+    lines.push(
+      [
+        "all_runs",
+        category,
+        "",
+        `avg ${category} per run`,
+        runCount,
+        "",
+        avg(totalMs),
+        "",
+        roundMs(totalMs),
+        "",
+      ].join("\t"),
+    );
+  }
+
+  /** @type {Map<string, { category: string; key: string; label: string; runIds: Set<string>; count: number; totalMs: number; maxMs: number }>} */
+  const breakdown = new Map();
+  for (const run of aggregated.runs) {
+    const sections = buildBreakdownSections(byRun.get(run.runId) ?? []);
+    /** @type {Array<[string, any[]]>} */
+    const categories = [
+      ["hook", sections.hookHandlers],
+      ["tool", sections.tools],
+      ["llm", sections.llmCalls],
+      ["phase", sections.phases],
+    ];
+    for (const [category, entries] of categories) {
+      for (const entry of entries) {
+        const mapKey = `${category}\t${entry.key}`;
+        const existing = breakdown.get(mapKey) ?? {
+          category,
+          key: entry.key,
+          label: entry.label,
+          runIds: new Set(),
+          count: 0,
+          totalMs: 0,
+          maxMs: 0,
+        };
+        existing.runIds.add(run.runId);
+        existing.count += entry.count;
+        existing.totalMs = roundMs(existing.totalMs + entry.totalMs);
+        existing.maxMs = roundMs(Math.max(existing.maxMs, entry.maxMs));
+        breakdown.set(mapKey, existing);
+      }
+    }
+  }
+
+  for (const entry of [...breakdown.values()].sort(
+    (left, right) => right.totalMs - left.totalMs || left.label.localeCompare(right.label),
+  )) {
+    const runsWithKey = entry.runIds.size;
+    lines.push(
+      [
+        "breakdown",
+        entry.category,
+        entry.key,
+        entry.label,
+        runsWithKey,
+        entry.count,
+        runsWithKey > 0 ? roundMs(entry.totalMs / runsWithKey) : 0,
+        entry.count > 0 ? roundMs(entry.totalMs / entry.count) : 0,
+        entry.totalMs,
+        entry.maxMs,
       ].join("\t"),
     );
   }

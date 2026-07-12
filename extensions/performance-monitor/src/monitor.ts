@@ -106,9 +106,13 @@ export class PerformanceMonitor {
     harnessId?: string;
     api?: string;
     transport?: string;
+    traceId?: string;
+    spanId?: string;
     phaseName?: string;
     callId?: string;
     toolCallId?: string;
+    traceId?: string;
+    spanId?: string;
     metadata?: Record<string, string | number | boolean>;
   }): void {
     const runId = resolveRunId(params.runId, params.sessionKey);
@@ -144,6 +148,8 @@ export class PerformanceMonitor {
       ...(params.phaseName ? { phaseName: params.phaseName } : {}),
       ...(params.callId ? { callId: params.callId } : {}),
       ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+      ...(params.traceId ? { traceId: params.traceId } : {}),
+      ...(params.spanId ? { spanId: params.spanId } : {}),
       ...(params.metadata ? { metadata: params.metadata } : {}),
     };
     trace.events.push(event);

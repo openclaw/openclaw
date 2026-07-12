@@ -3,8 +3,8 @@
  * Run N agent turns on a dev Gateway with performance-monitor, export traces, print breakdown TSV.
  *
  * Usage:
- *   node extensions/performance-monitor/scripts/run-batch-with-monitor.mjs --count 10
- *   SKIP_BUILD=1 node extensions/performance-monitor/scripts/run-batch-with-monitor.mjs --count 3
+ *   node extensions/performance-monitor/scripts/run-batch-with-monitor.mjs --count=10
+ *   SKIP_BUILD=1 node extensions/performance-monitor/scripts/run-batch-with-monitor.mjs --count=3
  */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -14,14 +14,31 @@ import {
   aggregateRunTiming,
   formatBreakdownTsv,
   formatEventsTsv,
+  formatPerRunStageSummaryTsv,
+  formatStageAverageTsv,
 } from "./lib/aggregate-run-timing.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const count = Number(process.argv.find((a) => a.startsWith("--count="))?.slice(8) ?? "10");
+const countArg = process.argv.find((a) => a.startsWith("--count="))?.slice(8);
+const count = Number(countArg ?? "10");
 const gatewayPort = Number(process.argv.find((a) => a.startsWith("--port="))?.slice(7) ?? "18791");
 const sessionKey = "agent:main:perf-batch-monitor";
 const outDir = path.join(repoRoot, ".tmp/perf-batch-monitor");
 const tracesPath = path.join(outDir, "monitor-traces.json");
+const queriesPath = path.join(outDir, "queries.jsonl");
+
+const DEFAULT_QUERIES = [
+  "Reply with exactly: query-1-ok",
+  "What is 17 + 25? Reply with the number only.",
+  "Name one primary color. One word only.",
+  "Is water wet? Reply yes or no only.",
+  "Reply with exactly: query-5-pong",
+  "What is the capital of France? One word only.",
+  "Reply with exactly: query-7-ready",
+  "How many days are in a week? Reply with digit only.",
+  "Reply with exactly: query-9-done",
+  "What is 8 times 7? Reply with the number only.",
+];
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -30,6 +47,11 @@ function readJson(filePath) {
 function writeJson(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function writeText(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, value, "utf8");
 }
 
 async function waitForHttp(url, headers, timeoutMs = 180_000) {
@@ -70,7 +92,7 @@ async function main() {
     ...demoConfig.plugins,
     entries: {
       ...demoConfig.plugins?.entries,
-      "performance-monitor": { enabled: true },
+      "performance-monitor": { enabled: true, config: { logTimingEvents: true } },
     },
     load: { ...demoConfig.plugins?.load, paths: demoConfig.plugins?.load?.paths ?? [] },
   };
@@ -91,7 +113,8 @@ async function main() {
     }
   }
 
-  console.error(`Starting dev gateway on :${gatewayPort}...`);
+  const queries = DEFAULT_QUERIES.slice(0, count);
+  console.error(`Starting dev gateway on :${gatewayPort} for ${queries.length} queries...`);
   const gateway = spawn("pnpm", ["openclaw", "gateway", "run"], {
     cwd: repoRoot,
     env,
@@ -107,13 +130,18 @@ async function main() {
   });
 
   const authHeaders = { Authorization: `Bearer ${gatewayToken}` };
-  const runIds = [];
+  /** @type {Map<string, { queryIndex: number; query: string; wallMs?: number; agentDurationMs?: number }>} */
+  const runMeta = new Map();
+  const queryResults = [];
 
   try {
     await waitForHttp(`http://127.0.0.1:${gatewayPort}/health`, authHeaders);
 
-    for (let i = 1; i <= count; i += 1) {
-      console.error(`=== query ${i}/${count} ===`);
+    for (let i = 0; i < queries.length; i += 1) {
+      const query = queries[i];
+      console.error(`=== query ${i + 1}/${queries.length} ===`);
+      console.error(query);
+      const started = Date.now();
       const agent = spawnSync(
         "pnpm",
         [
@@ -122,46 +150,83 @@ async function main() {
           "--session-key",
           sessionKey,
           "--message",
-          `List only the filename README.md if it exists, else reply ok-${i}`,
+          query,
           "--timeout",
-          "120",
+          "180",
           "--json",
         ],
-        { cwd: repoRoot, env, encoding: "utf8" },
+        { cwd: repoRoot, env, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
       );
+      const wallMs = Date.now() - started;
       if (agent.status !== 0) {
-        console.error(agent.stderr?.slice(-800));
-        throw new Error(`agent query ${i} failed: ${agent.status}`);
+        console.error(agent.stderr?.slice(-1200));
+        throw new Error(`agent query ${i + 1} failed: ${agent.status}`);
       }
       const parsed = JSON.parse(agent.stdout.trim());
-      runIds.push(parsed.runId);
-      console.error(`runId=${parsed.runId} durationMs=${parsed.result?.meta?.durationMs}`);
+      const agentDurationMs = parsed.result?.meta?.durationMs;
+      runMeta.set(parsed.runId, {
+        queryIndex: i + 1,
+        query,
+        wallMs,
+        agentDurationMs,
+      });
+      queryResults.push({
+        queryIndex: i + 1,
+        query,
+        runId: parsed.runId,
+        wallMs,
+        agentDurationMs,
+        status: parsed.status,
+        sessionKey: parsed.sessionKey,
+        sessionId: parsed.sessionId,
+      });
+      console.error(
+        `runId=${parsed.runId} wallMs=${wallMs} agentDurationMs=${agentDurationMs ?? "n/a"}`,
+      );
     }
 
+    writeText(queriesPath, `${queryResults.map((row) => JSON.stringify(row)).join("\n")}\n`);
+
     const traces = [];
-    for (const runId of runIds) {
+    for (const row of queryResults) {
       const trace = await (
         await fetch(
-          `http://127.0.0.1:${gatewayPort}/api/performance-monitor/runs/${encodeURIComponent(runId)}`,
+          `http://127.0.0.1:${gatewayPort}/api/performance-monitor/runs/${encodeURIComponent(row.runId)}`,
           { headers: authHeaders },
         )
       ).json();
       if (trace?.runId) {
-        traces.push(trace);
+        traces.push({ ...trace, queryIndex: row.queryIndex, query: row.query, wallMs: row.wallMs });
       }
     }
 
-    writeJson(tracesPath, { runs: traces });
+    writeJson(tracesPath, { runs: traces, queries: queryResults });
     console.error(`Wrote ${traces.length} traces -> ${tracesPath}`);
 
     const aggregated = aggregateRunTiming({
       monitorTracePaths: [tracesPath],
       includeStability: false,
     });
-    console.log("=== breakdown-tsv (per runId × hook/tool/llm) ===");
-    process.stdout.write(formatBreakdownTsv(aggregated));
-    console.log("=== events-tsv (each hook/tool/llm invocation) ===");
-    process.stdout.write(formatEventsTsv(aggregated));
+
+    const perRunStageSummary = formatPerRunStageSummaryTsv(aggregated, runMeta);
+    const stageAverage = formatStageAverageTsv(aggregated);
+    const breakdownTsv = formatBreakdownTsv(aggregated);
+    const eventsTsv = formatEventsTsv(aggregated);
+
+    writeText(path.join(outDir, "per-run-stage-summary.tsv"), perRunStageSummary);
+    writeText(path.join(outDir, "stage-average.tsv"), stageAverage);
+    writeText(path.join(outDir, "breakdown.tsv"), breakdownTsv);
+    writeText(path.join(outDir, "events.tsv"), eventsTsv);
+
+    console.log("=== per-run-stage-summary.tsv (each query × stage totals) ===");
+    process.stdout.write(perRunStageSummary);
+    console.log("=== stage-average.tsv (cross-query averages by stage/breakdown key) ===");
+    process.stdout.write(stageAverage);
+    console.log("=== breakdown.tsv (per runId × hook/tool/llm/phase detail) ===");
+    process.stdout.write(breakdownTsv);
+    console.log("=== events.tsv (each hook/tool/llm invocation) ===");
+    process.stdout.write(eventsTsv);
+    console.error(`Artifacts: ${outDir}`);
   } finally {
     shutdown();
   }

@@ -8,6 +8,12 @@ import type {
 } from "../api.js";
 import { isInternalDiagnosticEventMetadata } from "../api.js";
 import { createPerformanceMonitor, type PerformanceMonitor } from "./monitor.js";
+import {
+  createPerformanceTimingLogger,
+  diagnosticEventToTimingLogFields,
+  logPerformanceTimingEvent,
+  type PerformanceTimingLogger,
+} from "./timing-log.js";
 import type { PerformanceMonitorConfig } from "./types.js";
 
 function shouldRecordDiagnosticEvent(metadata: DiagnosticEventMetadata): boolean {
@@ -23,10 +29,21 @@ function parsePluginConfig(raw: Record<string, unknown> | undefined): Performanc
     typeof raw?.maxEventsPerRun === "number" && Number.isFinite(raw.maxEventsPerRun)
       ? Math.min(10_000, Math.max(10, Math.floor(raw.maxEventsPerRun)))
       : 500;
-  return { maxRuns, maxEventsPerRun };
+  const logTimingEvents = raw?.logTimingEvents !== false;
+  return { maxRuns, maxEventsPerRun, logTimingEvents };
 }
 
-function recordDiagnosticEvent(monitor: PerformanceMonitor, event: DiagnosticEventPayload): void {
+function recordDiagnosticEvent(
+  monitor: PerformanceMonitor,
+  event: DiagnosticEventPayload,
+  options?: { timingLogger?: PerformanceTimingLogger; logTimingEvents?: boolean },
+): void {
+  const timingFields = diagnosticEventToTimingLogFields(event);
+  const trace = {
+    ...(timingFields?.traceId ? { traceId: timingFields.traceId } : {}),
+    ...(timingFields?.spanId ? { spanId: timingFields.spanId } : {}),
+  };
+
   switch (event.type) {
     case "hook.handler.completed":
       monitor.recordEvent({
@@ -41,8 +58,9 @@ function recordDiagnosticEvent(monitor: PerformanceMonitor, event: DiagnosticEve
         handlerRef: event.handlerRef ?? `hook:${event.pluginId}:${event.hookName}`,
         durationMs: event.durationMs,
         outcome: event.outcome,
+        ...trace,
       });
-      return;
+      break;
     case "diagnostic.phase.completed":
       monitor.recordEvent({
         runId: event.runId,
@@ -53,8 +71,9 @@ function recordDiagnosticEvent(monitor: PerformanceMonitor, event: DiagnosticEve
         at: event.endedAt ?? event.startedAt,
         durationMs: event.durationMs,
         metadata: event.details,
+        ...trace,
       });
-      return;
+      break;
     case "tool.execution.completed":
       monitor.recordEvent({
         runId: event.runId,
@@ -75,8 +94,9 @@ function recordDiagnosticEvent(monitor: PerformanceMonitor, event: DiagnosticEve
           source: "diagnostics",
           ...(event.toolSource ? { toolSource: event.toolSource } : {}),
         },
+        ...trace,
       });
-      return;
+      break;
     case "tool.execution.error":
       monitor.recordEvent({
         runId: event.runId,
@@ -98,8 +118,9 @@ function recordDiagnosticEvent(monitor: PerformanceMonitor, event: DiagnosticEve
           errorCategory: event.errorCategory,
           ...(event.toolSource ? { toolSource: event.toolSource } : {}),
         },
+        ...trace,
       });
-      return;
+      break;
     case "model.call.completed":
       monitor.recordEvent({
         runId: event.runId,
@@ -123,8 +144,9 @@ function recordDiagnosticEvent(monitor: PerformanceMonitor, event: DiagnosticEve
             ? { timeToFirstByteMs: event.timeToFirstByteMs }
             : {}),
         },
+        ...trace,
       });
-      return;
+      break;
     case "model.call.error":
       monitor.recordEvent({
         runId: event.runId,
@@ -146,16 +168,18 @@ function recordDiagnosticEvent(monitor: PerformanceMonitor, event: DiagnosticEve
           source: "diagnostics",
           errorCategory: event.errorCategory,
         },
+        ...trace,
       });
-      return;
+      break;
     case "run.started":
       monitor.recordEvent({
         runId: event.runId,
         sessionKey: event.sessionKey,
         sessionId: event.sessionId,
         kind: "run",
+        ...trace,
       });
-      return;
+      break;
     case "run.completed":
       monitor.recordEvent({
         runId: event.runId,
@@ -164,13 +188,14 @@ function recordDiagnosticEvent(monitor: PerformanceMonitor, event: DiagnosticEve
         kind: "run",
         durationMs: event.durationMs,
         outcome: event.outcome,
+        ...trace,
       });
       monitor.finalizeRun({
         runId: event.runId,
         durationMs: event.durationMs,
         outcome: event.outcome,
       });
-      return;
+      break;
     case "harness.run.completed":
       monitor.recordEvent({
         runId: event.runId,
@@ -183,8 +208,9 @@ function recordDiagnosticEvent(monitor: PerformanceMonitor, event: DiagnosticEve
         metadata: {
           harnessId: event.harnessId,
         },
+        ...trace,
       });
-      return;
+      break;
     case "harness.run.error":
       monitor.recordEvent({
         runId: event.runId,
@@ -199,10 +225,15 @@ function recordDiagnosticEvent(monitor: PerformanceMonitor, event: DiagnosticEve
           phase: event.phase,
           errorCategory: event.errorCategory,
         },
+        ...trace,
       });
-      return;
+      break;
     default:
-      return;
+      break;
+  }
+
+  if (timingFields && options?.logTimingEvents !== false && options?.timingLogger) {
+    logPerformanceTimingEvent(options.timingLogger, timingFields);
   }
 }
 
@@ -264,7 +295,9 @@ export function createPerformanceMonitorService(pluginConfig?: Record<string, un
   handler: OpenClawPluginHttpRouteHandler;
   service: OpenClawPluginService;
 } {
-  const monitor = createPerformanceMonitor(parsePluginConfig(pluginConfig));
+  const config = parsePluginConfig(pluginConfig);
+  const monitor = createPerformanceMonitor(config);
+  const timingLogger = config.logTimingEvents ? createPerformanceTimingLogger() : undefined;
   let unsubscribe: (() => void) | undefined;
 
   const service = {
@@ -281,7 +314,10 @@ export function createPerformanceMonitorService(pluginConfig?: Record<string, un
             return;
           }
           try {
-            recordDiagnosticEvent(monitor, event);
+            recordDiagnosticEvent(monitor, event, {
+              timingLogger,
+              logTimingEvents: config.logTimingEvents,
+            });
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             ctx.logger.error(
