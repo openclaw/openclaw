@@ -81,7 +81,7 @@ export type AuthorizeGatewayConnectParams = {
   rateLimitScope?: string;
   /** Trust X-Real-IP only when explicitly enabled. */
   allowRealIpFallback?: boolean;
-  /** Optional browser-origin policy for trusted-proxy HTTP requests. */
+  /** Optional browser-origin policy for HTTP requests that require Origin checks. */
   browserOriginPolicy?: {
     requestHost?: string;
     origin?: string;
@@ -360,9 +360,11 @@ function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolea
   return authSurface === "ws-control-ui";
 }
 
-function authorizeTrustedProxyBrowserOrigin(params: {
+function authorizeHttpBrowserOrigin(params: {
   authSurface: GatewayAuthSurface;
   browserOriginPolicy?: AuthorizeGatewayConnectParams["browserOriginPolicy"];
+  isLocalClient: boolean;
+  reason: string;
 }): { ok: false; reason: string } | null {
   if (params.authSurface !== "http") {
     return null;
@@ -378,12 +380,12 @@ function authorizeTrustedProxyBrowserOrigin(params: {
     origin,
     allowedOrigins: params.browserOriginPolicy?.allowedOrigins,
     allowHostHeaderOriginFallback: params.browserOriginPolicy?.allowHostHeaderOriginFallback,
-    isLocalClient: false,
+    isLocalClient: params.isLocalClient,
   });
   if (originCheck.ok) {
     return null;
   }
-  return { ok: false, reason: "trusted_proxy_origin_not_allowed" };
+  return { ok: false, reason: params.reason };
 }
 
 function authorizeTokenAuth(params: {
@@ -505,9 +507,11 @@ async function authorizeGatewayConnectCore(
     });
 
     if ("user" in result) {
-      const originResult = authorizeTrustedProxyBrowserOrigin({
+      const originResult = authorizeHttpBrowserOrigin({
         authSurface,
         browserOriginPolicy: params.browserOriginPolicy,
+        isLocalClient: false,
+        reason: "trusted_proxy_origin_not_allowed",
       });
       if (originResult) {
         return originResult;
@@ -530,25 +534,16 @@ async function authorizeGatewayConnectCore(
     return { ok: false, reason: result.reason };
   }
 
-  // Reject browser requests with a disallowed Origin under any auth mode before
-  // the none-mode success return, matching the WebSocket ingress invariant that
-  // checks any present Origin header independent of auth mode. Only applies to
-  // the HTTP surface (WS has its own origin check in message-handler.ts:881).
-  // Origin-less requests (headless proxy clients, curl, scripts) are unaffected.
-  if (authSurface === "http" && params.browserOriginPolicy?.origin) {
-    const originCheck = checkBrowserOrigin({
-      requestHost: params.browserOriginPolicy.requestHost,
-      origin: params.browserOriginPolicy.origin,
-      allowedOrigins: params.browserOriginPolicy.allowedOrigins,
-      allowHostHeaderOriginFallback: params.browserOriginPolicy.allowHostHeaderOriginFallback,
-      isLocalClient: localDirect,
-    });
-    if (!originCheck.ok) {
-      return { ok: false, reason: "origin_not_allowed" };
-    }
-  }
-
   if (auth.mode === "none") {
+    const originResult = authorizeHttpBrowserOrigin({
+      authSurface,
+      browserOriginPolicy: params.browserOriginPolicy,
+      isLocalClient: localDirect,
+      reason: "origin_not_allowed",
+    });
+    if (originResult) {
+      return originResult;
+    }
     return { ok: true, method: "none" };
   }
 

@@ -370,6 +370,27 @@ describe("gateway auth", () => {
     expect(res.method).toBe("none");
   });
 
+  it("does not apply the none-mode Origin policy to authenticated HTTP clients", async () => {
+    const res = await authorizeHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "secret" },
+      req: {
+        socket: { remoteAddress: "10.0.0.1" },
+        headers: {
+          host: "gateway.example.com",
+          origin: "https://app.example",
+        },
+      } as never,
+      browserOriginPolicy: {
+        requestHost: "gateway.example.com",
+        origin: "https://app.example",
+        allowedOrigins: ["https://control.example.com"],
+      },
+    });
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("token");
+  });
+
   it("keeps none mode authoritative even when token is present", async () => {
     const auth = resolveGatewayAuth({
       authConfig: { mode: "none", token: "configured-token" },
