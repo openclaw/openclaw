@@ -626,14 +626,11 @@ describe("channel-health-monitor", () => {
         releaseStop = resolve;
       });
       const abort = new AbortController();
-      const manager = createSlackSnapshotManager(
-        disconnectedAccount(Date.now() - 300_000),
-        {
-          stopChannel: vi.fn(async () => {
-            await stopGate;
-          }),
-        },
-      );
+      const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
+        stopChannel: vi.fn(async () => {
+          await stopGate;
+        }),
+      });
       const monitor = startDefaultMonitor(manager, {
         abortSignal: abort.signal,
         checkIntervalMs: 100,
